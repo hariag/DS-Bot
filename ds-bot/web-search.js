@@ -472,15 +472,6 @@ export const ENGINES = {
 
 const aborted = signal => new WebError('web search aborted', 'WEB_ABORTED', { cause: signal?.reason })
 
-// AbortSignal.timeout's wait is unref'd, so under Node 22's test runner a pending subtest
-// is cancelled as soon as nothing ref'd holds the loop — and a mocked fetch holds nothing.
-// A plain setTimeout keeps the loop honest; the abort reason stays a TimeoutError.
-const timeoutAfter = (ms) => {
-  const timeout = new AbortController()
-  const timer = setTimeout(() => timeout.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms)
-  return { timeout, timer }
-}
-
 function checkSearchApi(api, index) {
   const where = `web-search-auto: searchApis[${index}]`
   if (!isRecord(api)) throw new Error(`${where} must be an object`)
@@ -560,7 +551,7 @@ export function createAutoSearchProvider(deps, config = {}) {
 
   async function attempt(candidate, route, credential, request, signal, budget, known) {
     const call = candidate.request({ query: request.query, maxResults: request.maxResults })
-    const { timeout, timer } = timeoutAfter(budget)
+    const timeout = AbortSignal.timeout(budget)
     let response
     let text
     try {
@@ -570,14 +561,12 @@ export function createAutoSearchProvider(deps, config = {}) {
         redirect: 'error',
         headers: { 'content-type': 'application/json', accept: 'application/json', 'user-agent': USER_AGENT, ...route.headers, ...call.headers, ...credential.headers(candidate) },
         body: JSON.stringify(call.body),
-        signal: signal === undefined ? timeout.signal : AbortSignal.any([signal, timeout.signal]),
+        signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
       })
       text = await response.text()
     } catch (error) {
       if (signal?.aborted) throw aborted(signal)
-      return timeout.signal.aborted ? { reason: `timed out after ${seconds(budget)}`, timedOut: true } : { reason: `request failed: ${reasonOf(error)}` }
-    } finally {
-      clearTimeout(timer)
+      return { reason: timeout.aborted ? `timed out after ${seconds(budget)}` : `request failed: ${reasonOf(error)}` }
     }
     if (!response.ok) {
       const detail = errorDetail(text)
@@ -604,7 +593,7 @@ export function createAutoSearchProvider(deps, config = {}) {
     const keyOf = candidate => [route.provider, candidate.url, candidate.model ?? ''].join('\n')
     const works = candidate => memory.get(keyOf(candidate))?.works === true
     const ordered = [...plan.candidates.filter(works), ...plan.candidates.filter(candidate => !works(candidate))]
-    let deadline = now() + options.nativeTimeoutMs
+    const deadline = now() + options.nativeTimeoutMs
     const notes = []
     let credential
     for (const candidate of ordered) {
@@ -633,9 +622,6 @@ export function createAutoSearchProvider(deps, config = {}) {
       notes.push(`${where}: ${outcome.reason}`)
       if (outcome.skip !== undefined) memory.set(keyOf(candidate), { until: now() + SKIP_FOR[outcome.skip], reason: outcome.reason })
       if (outcome.final) break
-      // A timed-out attempt had all the time that was left, but the timer and now() use
-      // different clocks, so now() can still read a millisecond before the deadline.
-      if (outcome.timedOut) deadline = now()
     }
     return { reason: `route "${route.provider}": ${notes.join('; ')}` }
   }
@@ -665,16 +651,14 @@ export function createAutoSearchProvider(deps, config = {}) {
       const remaining = deadline - now()
       if (remaining <= 0) { attempts.push(`${host}: skipped, out of time`); continue }
       // Leave later engines a share of the budget when an earlier one hangs.
-      const { timeout, timer } = timeoutAfter(index === options.engines.length - 1 ? remaining : Math.min(remaining, Math.ceil(options.fallbackTimeoutMs / 2)))
+      const timeout = AbortSignal.timeout(index === options.engines.length - 1 ? remaining : Math.min(remaining, Math.ceil(options.fallbackTimeoutMs / 2)))
       let fetched
       try {
-        fetched = await fetchPage(engine, url, signal === undefined ? timeout.signal : AbortSignal.any([signal, timeout.signal]))
+        fetched = await fetchPage(engine, url, signal === undefined ? timeout : AbortSignal.any([signal, timeout]))
       } catch (error) {
         if (signal?.aborted) throw aborted(signal)
-        attempts.push(`${host}: ${timeout.signal.aborted ? 'timed out' : `${error?.code ? `${error.code} ` : ''}${reasonOf(error)}`}`)
+        attempts.push(`${host}: ${timeout.aborted ? 'timed out' : `${error?.code ? `${error.code} ` : ''}${reasonOf(error)}`}`)
         continue
-      } finally {
-        clearTimeout(timer)
       }
       const at = new URL(fetched.url).host
       if (fetched.page.statusCode !== 200) { attempts.push(`${at}: HTTP ${fetched.page.statusCode}`); continue }
@@ -720,20 +704,9 @@ export function createAutoSearchProvider(deps, config = {}) {
 
 const stringRecord = value => (isRecord(value) ? Object.fromEntries(Object.entries(value).filter(([, item]) => typeof item === 'string')) : {})
 
-// OpenCode's gateways turn away a request that does not name its conversation. DSH's
-// adapter names it by the Session id, so a search for that Session does the same,
-// unless the provider settings name one.
-const OPENCODE_SESSION = 'x-opencode-session'
-const OPENCODE_ROUTES = new Set(['opencode', 'opencode-go'])
-const withConversation = (provider, headers, sessionId) => (!OPENCODE_ROUTES.has(provider) || sessionId === undefined
-  || Object.keys(headers).some(name => name.toLowerCase() === OPENCODE_SESSION)
-  ? headers
-  : { ...headers, [OPENCODE_SESSION]: sessionId })
-
 /** The route of the Session that started the current tool call: protocol, endpoint, key name, and headers. */
 export function routeOf(ctx) {
-  const session = ctx.get('agents')?.currentInitiator()?.session
-  const request = session?.requestContext()
+  const request = ctx.get('agents')?.currentInitiator()?.session.requestContext()
   const provider = str(request?.provider)
   if (provider === undefined) return undefined
   let section
@@ -753,7 +726,7 @@ export function routeOf(ctx) {
     baseURL: str(section?.baseURL) ?? (DSH_DEEPSEEK_ROUTES.has(provider) ? str(envOf(ctx)('DEEPSEEK_BASE_URL')) : undefined) ?? catalogBase,
     apiKeyEnv: account ? undefined : str(section?.apiKeyEnv) ?? catalogKey,
     account,
-    headers: withConversation(provider, stringRecord(section?.headers), str(session.id)),
+    headers: stringRecord(section?.headers),
   }
 }
 

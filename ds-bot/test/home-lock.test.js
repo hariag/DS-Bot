@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
-import fs from 'node:fs'
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { syncBuiltinESMExports } from 'node:module'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { createRuntime } from '../index.js'
+import { apply } from '../index.js'
 import { homeLock } from '../src/host/home-lock.js'
 import { fakeContext } from './fake-ctx.js'
 
 const tempHome = (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-lock-'))
-  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
   return home
 }
 
@@ -31,7 +28,7 @@ test('the first host takes the lock and a second live host only reads', (t) => {
   assert.equal(second.owns(), true)
 })
 
-test('a lock whose same-host process has exited is taken over', (t) => {
+test('a lock whose process has exited, or that nobody keeps fresh, is taken over', (t) => {
   const path = join(tempHome(t), 'state.lock')
   writeFileSync(path, JSON.stringify({ pid: 101, host: hostname(), token: 'gone' }))
   const dead = homeLock(path, { pid: 202, isAlive: () => false })
@@ -39,66 +36,19 @@ test('a lock whose same-host process has exited is taken over', (t) => {
   assert.equal(dead.claim(), undefined)
   assert.equal(dead.owns(), true)
   dead.release()
-})
 
-test('a same-host lock without a fresh heartbeat is taken over even while its pid lives', (t) => {
-  const path = join(tempHome(t), 'state.lock')
+  // A live pid (maybe reused) on a lock not bumped for staleMs, and a lock from another host.
   writeFileSync(path, JSON.stringify({ pid: 101, host: hostname(), token: 'old' }))
   const old = new Date(Date.now() - 120_000)
   utimesSync(path, old, old)
-  // A crashed holder's pid may be reused by an unrelated process; the stopped heartbeat,
-  // not the pid, says the holder is gone.
   const late = homeLock(path, { pid: 202, isAlive: () => true })
   t.after(() => late.release())
   assert.equal(late.claim(), undefined)
-  assert.equal(late.owns(), true)
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).pid, 202)
-})
+  late.release()
 
-test('a fresh same-host lock stays live while its process is alive', (t) => {
-  const path = join(tempHome(t), 'state.lock')
-  writeFileSync(path, JSON.stringify({ pid: 101, host: hostname(), token: 'live' }))
-  const late = homeLock(path, { pid: 202, isAlive: () => true })
-  t.after(() => late.release())
-  assert.equal(late.claim().token, 'live')
-  assert.equal(late.owns(), false)
-})
-
-test('an old lock from another host is taken over', (t) => {
-  const path = join(tempHome(t), 'state.lock')
   writeFileSync(path, JSON.stringify({ pid: 101, host: 'elsewhere', token: 'far' }))
-  const old = new Date(Date.now() - 120_000)
-  utimesSync(path, old, old)
   const near = homeLock(path, { pid: 202, isAlive: () => false })
-  t.after(() => near.release())
-  assert.equal(near.claim(), undefined)
-  assert.equal(near.owns(), true)
-})
-
-test('a stale-lock recheck does not delete a new owner token', (t) => {
-  const path = join(tempHome(t), 'state.lock')
-  writeFileSync(path, JSON.stringify({ pid: 101, host: hostname(), token: 'stale' }))
-  const old = new Date(Date.now() - 120_000)
-  utimesSync(path, old, old)
-  const originalRead = fs.readFileSync
-  let reads = 0
-  fs.readFileSync = (file, ...args) => {
-    const contents = originalRead(file, ...args)
-    if (file === path && ++reads === 3) {
-      writeFileSync(path, JSON.stringify({ pid: 303, host: hostname(), token: 'new-owner' }))
-      return originalRead(file, ...args)
-    }
-    return contents
-  }
-  syncBuiltinESMExports()
-  const late = homeLock(path, { pid: 202, isAlive: pid => pid === 303 })
-  t.after(() => {
-    late.release()
-    fs.readFileSync = originalRead
-    syncBuiltinESMExports()
-  })
-  assert.equal(late.claim().token, 'new-owner')
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).token, 'new-owner')
+  assert.equal(near.claim().host, 'elsewhere')
 })
 
 test('a holder that finds another token in the file knows it lost the lock', (t) => {
@@ -123,7 +73,6 @@ const TEAM = {
   questions: {},
 }
 
-let rt
 function start(t, home) {
   const ctx = fakeContext()
   let route
@@ -132,7 +81,7 @@ function start(t, home) {
     route = options
     return register(options)
   }
-  rt = createRuntime(ctx, { home })
+  apply(ctx, { home })
   t.after(() => ctx.dispose())
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   call.ctx = ctx
@@ -184,7 +133,7 @@ test('a reading host follows the other host\'s keys, never writes them, and keep
 
   assert.deepEqual(await names(), ['FIRST_KEY'])
   assert.equal((await call('secret-set', { name: 'MINE', value: 'mine-value-1' })).error.code, 'bot/read-only')
-  const asked = await rt.teamTools.find(d => d.name === 'request_secret').execute({ name: 'MINE', purpose: 'x' }, { agent: { id: 'm1' } })
+  const asked = await call.ctx.registeredTools.get('request_secret').execute({ name: 'MINE', purpose: 'x' }, { agent: { id: 'm1' } })
   assert.match(asked, /^No card can be shown now\. The Bot team in .* is open in another dsh/)
   assert.deepEqual((await call('state', {})).value.secretRequests, {})
 
@@ -198,40 +147,4 @@ test('a reading host follows the other host\'s keys, never writes them, and keep
   assert.equal((await call('secret-set', { name: 'MINE', value: 'mine-value-1' })).ok, true)
   const saved = JSON.parse(readFileSync(secretsPath, 'utf8')).secrets.map(secret => secret.name).sort()
   assert.deepEqual(saved, ['FIRST_KEY', 'MINE', 'SECOND_KEY', 'THIRD_KEY'])
-})
-
-// A quit can end the process without the plugin's cleanup (a shutdown timeout, a
-// handler that calls exit). The lock must still go with this process — and only
-// while the file is still this host's.
-const lockModule = new URL('../src/host/home-lock.js', import.meta.url).href
-const runChild = code => new Promise((resolve, reject) => {
-  execFile(process.execPath, ['--input-type=module', '-e', code], (error, stdout, stderr) => {
-    if (error === null) resolve({ stdout, stderr })
-    else reject(Object.assign(error, { stderr }))
-  })
-})
-
-test('a host that exits without its cleanup leaves no lock behind', async (t) => {
-  const path = join(tempHome(t), 'state.lock')
-  await runChild(`
-    import { homeLock } from ${JSON.stringify(lockModule)}
-    const lock = homeLock(${JSON.stringify(path)})
-    if (lock.claim() !== undefined) { console.error('the lock was not free'); process.exit(3) }
-    process.exit(0)
-  `)
-  assert.equal(existsSync(path), false)
-})
-
-test('a host that lost the lock does not delete the new holder\'s file on exit', async (t) => {
-  const path = join(tempHome(t), 'state.lock')
-  const theirs = JSON.stringify({ pid: 4242, host: 'other-host', token: 'theirs', since: Date.now() })
-  await runChild(`
-    import { writeFileSync } from 'node:fs'
-    import { homeLock } from ${JSON.stringify(lockModule)}
-    const lock = homeLock(${JSON.stringify(path)})
-    if (lock.claim() !== undefined) { console.error('the lock was not free'); process.exit(3) }
-    writeFileSync(${JSON.stringify(path)}, ${JSON.stringify(theirs)})
-    process.exit(0)
-  `)
-  assert.equal(readFileSync(path, 'utf8'), theirs)
 })

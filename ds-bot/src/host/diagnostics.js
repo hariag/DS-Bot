@@ -16,7 +16,7 @@ const LOG_MAX_BYTES = 1 << 20
 const STACK_LINES = 8
 const TEXT_MAX = 2000
 export const REPORT_ENTRIES = 20
-export const ISSUES_URL = 'https://github.com/Fei2411/DS-Bot/issues/new'
+export const ISSUES_URL = 'https://github.com/FeiZhuLulu/DeepSeek-Bot/issues/new'
 
 const quote = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -98,7 +98,7 @@ const ownVersion = () => {
 }
 
 // DSH packages share one version; the LLM package is always beside the plugin.
-export const dshVersion = () => {
+const dshVersion = () => {
   try {
     let dir = dirname(fileURLToPath(import.meta.resolve('@deepseek-ai/dsh-llm')))
     for (let depth = 0; depth < 5; depth += 1, dir = dirname(dir)) {
@@ -118,14 +118,6 @@ export function install(rt) {
   let fresh = []
   let writing = Promise.resolve()
   let fileFailed = false
-  let stopped = false
-
-  // The log is written in the background. A stop waits for what is queued and writes
-  // nothing after it, so nothing changes in `home` once the plugin has stopped.
-  ctx.effect(() => () => {
-    stopped = true
-    return writing
-  }, 'ds-bot: diagnostics log')
 
   const clean = text => cleanText(text, { redact: rt.redactSecrets })
 
@@ -143,7 +135,7 @@ export function install(rt) {
   let cleared = 0
 
   const append = (entry) => {
-    if (!toFile || stopped) return
+    if (!toFile) return
     writing = writing.then(async () => {
       await mkdir(dirname(logPath), { recursive: true })
       const size = await stat(logPath).then(info => info.size, () => 0)
@@ -152,7 +144,7 @@ export function install(rt) {
     }).catch((error) => {
       if (fileFailed) return
       fileFailed = true
-      console.error('[ds-bot] diagnostics log not written:', error?.code ?? clean(error?.message ?? String(error)))
+      console.error('[ds-bot] diagnostics log not written:', error?.code ?? error?.message ?? error)
     })
   }
 
@@ -172,15 +164,13 @@ export function install(rt) {
   }
 
   const warn = (template, ...args) => {
+    ctx.logger.warn(template, ...args)
+    console.error(`[ds-bot] ${template}`, ...args.map(arg => arg?.stack ?? arg))
     const error = args.find(arg => arg instanceof Error)
-    const line = clean(format(template, ...args.map(arg => (arg instanceof Error ? errorText(arg) : arg))))
-    const frames = typeof error?.stack === 'string' ? error.stack.split('\n').filter(item => /^\s+at /.test(item)).slice(0, STACK_LINES).map(item => item.trim()) : []
-    ctx.logger.warn('%s', line)
-    console.error(`[ds-bot] ${line}${frames.length > 0 ? `\n${clean(frames.join('\n'))}` : ''}`)
     note({
       level: 'warn',
       source: 'host',
-      text: line.replace(/^ds-bot: /, ''),
+      text: format(template, ...args.map(arg => (arg instanceof Error ? errorText(arg) : arg))).replace(/^ds-bot: /, ''),
       code: typeof error?.code === 'string' ? error.code : undefined,
       stack: error?.stack,
     })
@@ -248,7 +238,7 @@ export function install(rt) {
   async function clear() {
     cleared = Date.now()
     fresh = []
-    if (!toFile || stopped) return
+    if (!toFile) return
     writing = writing.then(() => writeFile(logPath, '', 'utf8')).catch(() => {})
     await writing
   }

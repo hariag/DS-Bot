@@ -1,33 +1,6 @@
 import { createElement as h, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
-export const effectsTier = () => {
-  const tier = typeof document === 'undefined' ? undefined : (document.body?.dataset?.btEffects || document.documentElement?.dataset?.btEffects)
-  return tier === 'reduced' || tier === 'off' ? tier : 'full'
-}
-export const reducedMotion = () => effectsTier() === 'off' || (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true)
-export const reducedEffects = () => effectsTier() !== 'full' || (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true)
-// Touch devices never hover: controls revealed on hover need a tap path instead.
-export const noHover = () => window.matchMedia?.('(hover: none)').matches === true
-
-// The bottom edge of what the user can see: window.innerHeight, or the visible
-// region the visual viewport reports while the on-screen keyboard is open —
-// innerHeight does not shrink for it.
-export const viewBottom = () => (window.visualViewport ? window.visualViewport.height + window.visualViewport.offsetTop : window.innerHeight)
-
-// Re-renders whenever the visual viewport moves or resizes (keyboard opens, the
-// URL bar collapses), so anchored layers can re-read their anchor's rect.
-export function useViewport() {
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const viewport = window.visualViewport
-    if (!viewport) return undefined
-    const bump = () => setTick(value => value + 1)
-    viewport.addEventListener('resize', bump)
-    viewport.addEventListener('scroll', bump)
-    return () => { viewport.removeEventListener('resize', bump); viewport.removeEventListener('scroll', bump) }
-  }, [])
-  return tick
-}
+export const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
 
 // A damped spring (mass 1) sampled into a CSS linear() easing, for WAAPI glides
 // and CSS transitions alike.
@@ -42,11 +15,7 @@ export function springEasing(stiffness, damping) {
   let end = 0.05
   while (end < 2 && Math.abs(1 - at(end)) > 0.001) end += 0.01
   const points = Array.from({ length: 25 }, (_, index) => (index === 24 ? 1 : at(end * index / 24)).toFixed(4))
-  // `progress(ms)` is the same curve for a glide a script drives frame by frame, one
-  // that follows a target moving as it goes; it reads 1 once `duration` has passed.
-  const duration = Math.round(end * 1000)
-  const progress = ms => (ms >= duration ? 1 : ms <= 0 ? 0 : at(ms / 1000))
-  return { duration, easing: `linear(${points.join(',')})`, stiffness, damping, progress }
+  return { duration: Math.round(end * 1000), easing: `linear(${points.join(',')})`, stiffness, damping }
 }
 
 // The capsule's two springs: a gentle one (ω=20, ζ=0.78) reshapes surfaces, a
@@ -64,8 +33,6 @@ export const SPRING_POP = springEasing(500, 22)
 // within about a quarter second.
 export const SPRING_LEAD = springEasing(784, 48.2)
 export const SPRING_TRAIL = springEasing(289, 29.2)
-// Critically damped layout glide (ω≈31.6, ζ=1) for sidebar row reordering.
-export const SPRING_GLIDE = springEasing(1000, 63)
 // A highlight that follows the keyboard and pointer down a list keeps up on stiffer
 // edges (ω=30 and ω=20).
 export const QUICK_EDGES = { lead: springEasing(900, 51), trail: springEasing(400, 34) }
@@ -78,41 +45,35 @@ export const spring = (curve, ...properties) => properties.map(property => `${pr
 // page delays the thumb instead of slowing it down.
 function liveSprings(apply) {
   const values = new Map()
-  const current = {}
   let frame = 0
   let last = 0
+  const read = () => Object.fromEntries([...values].map(([key, value]) => [key, value.x]))
   const step = (now) => {
     const dt = Math.min(0.5, Math.max(0.001, (now - last) / 1000))
     last = now
     const steps = Math.ceil(dt * 240)
     const h = dt / steps
     let moving = false
-    for (const [key, value] of values) {
+    for (const value of values.values()) {
       for (let index = 0; index < steps; index += 1) {
         value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h
         value.x += value.v * h
       }
       if (Math.abs(value.x - value.to) < 0.05 && Math.abs(value.v) < 1) { value.x = value.to; value.v = 0 } else moving = true
-      current[key] = value.x
     }
-    apply(current)
+    apply(read())
     frame = moving ? requestAnimationFrame(step) : 0
   }
   return {
-    target: () => {
-      if (!values.size) return null
-      const out = {}
-      for (const [key, value] of values) out[key] = value.to
-      return out
-    },
+    target: () => (values.size ? Object.fromEntries([...values].map(([key, value]) => [key, value.to])) : null),
     set(targets, curves, jump) {
       for (const [key, to] of Object.entries(targets)) {
         const value = values.get(key)
         const { stiffness: k, damping: c } = curves[key]
-        if (!value || jump) { values.set(key, { x: to, v: 0, to, k, c }); current[key] = to }
+        if (!value || jump) values.set(key, { x: to, v: 0, to, k, c })
         else Object.assign(value, { to, k, c })
       }
-      if (jump) { cancelAnimationFrame(frame); frame = 0; apply(current); return }
+      if (jump) { cancelAnimationFrame(frame); frame = 0; apply(read()); return }
       if (!frame) { last = performance.now(); frame = requestAnimationFrame(step) }
     },
     stop: () => cancelAnimationFrame(frame),
@@ -205,8 +166,7 @@ export function useFlip(list, key, selector, id = node => node.dataset.flip) {
       if (!moving) continue
       const before = tops.current.get(name)
       if (before === undefined) {
-        const noBlur = reducedEffects()
-        node.animate([noBlur ? { opacity: 0 } : { opacity: 0, filter: 'blur(4px)' }, noBlur ? { opacity: 1 } : { opacity: 1, filter: 'blur(0)' }], { duration: 180, easing: 'ease-out' })
+        node.animate([{ opacity: 0, filter: 'blur(4px)' }, { opacity: 1, filter: 'blur(0)' }], { duration: 180, easing: 'ease-out' })
       } else if (Math.abs(before - top) > 0.5) {
         node.animate([{ transform: `translateY(${before - top}px)` }, { transform: 'none' }], { duration: SPRING_LIST.duration, easing: SPRING_LIST.easing })
       }
@@ -218,36 +178,27 @@ export function useFlip(list, key, selector, id = node => node.dataset.flip) {
 // `box` changes height on SPRING_SHAPE when a change of `key` changes its content, so
 // a surface reshapes around what it holds instead of jumping. A change that comes
 // mid-morph starts from the height on screen. The box clips its content meanwhile.
-// The resting height comes from a ResizeObserver: reading it on every render would lay
-// out the page once per render, the panel's whole first frame when it opens.
 export function useMorph(box, key) {
-  const last = useRef({ key, height: null, node: null, observer: null })
+  const last = useRef({ key, height: null })
   useLayoutEffect(() => {
     const node = box.current
     const state = last.current
-    if (node !== state.node) {
-      state.observer?.disconnect()
-      Object.assign(state, { key, height: null, node, observer: null })
-      if (!node || typeof ResizeObserver !== 'function') return
-      state.observer = new ResizeObserver(([entry]) => {
-        if (node.dataset.morph === undefined) state.height = entry.borderBoxSize?.[0]?.blockSize ?? node.offsetHeight
-      })
-      state.observer.observe(node)
+    if (!node) { last.current = { key, height: null }; return }
+    const running = node.getAnimations().filter(animation => animation.id === 'bt-morph')
+    if (key === state.key) {
+      if (running.length === 0) state.height = node.offsetHeight
       return
     }
-    if (!node || key === state.key) return
-    const running = node.getAnimations().filter(animation => animation.id === 'bt-morph')
     const from = running.length ? node.offsetHeight : state.height
     for (const animation of running) animation.cancel()
     const to = node.offsetHeight
-    Object.assign(state, { key, height: to })
-    if (from === null || Math.abs(from - to) < 1 || reducedEffects()) return
+    last.current = { key, height: to }
+    if (from === null || Math.abs(from - to) < 1 || reducedMotion()) return
     node.dataset.morph = ''
     const animation = node.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: SPRING_SHAPE.duration, easing: SPRING_SHAPE.easing, id: 'bt-morph' })
     animation.onfinish = () => { delete node.dataset.morph }
     animation.oncancel = () => { if (!node.getAnimations().some(other => other.id === 'bt-morph' && other !== animation)) delete node.dataset.morph }
   })
-  useEffect(() => () => last.current.observer?.disconnect(), [])
 }
 
 // The last truthy `value` for `ms` after it turns falsy, so a closing layer can play its
@@ -260,22 +211,4 @@ export function useLinger(value, ms) {
     return () => clearTimeout(timer)
   }, [value])
   return [value || kept, !value && Boolean(kept)]
-}
-
-// Moves keyboard focus through enabled menu items on ArrowDown, ArrowUp, Home and End.
-export function stepMenuFocus(menu, event, trigger) {
-  if (!menu || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return false
-  const items = Array.from(menu.querySelectorAll('button[role^="menuitem"]:not(:disabled)'))
-  if (items.length === 0) return false
-  const target = document.activeElement
-  const current = items.indexOf(target)
-  if (current === -1 && target !== menu && target !== trigger) return false
-  event.preventDefault()
-  event.stopPropagation()
-  const next = event.key === 'Home' ? 0
-    : event.key === 'End' ? items.length - 1
-      : event.key === 'ArrowDown' ? (current + 1) % items.length
-        : (current <= 0 ? items.length - 1 : current - 1)
-  items[next]?.focus()
-  return true
 }

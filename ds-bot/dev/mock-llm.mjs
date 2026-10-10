@@ -6,43 +6,27 @@
 // wrong if the round and older messages are not kept apart. Usage is estimated from the
 // request size (about 3 characters per token, 90% cached), so context tables and the
 // switch lines see real growth. The log records hashes of the system prompt and tools, to
-// confirm that group Sessions share the private chat's prefix, and the Session each
-// request names (`session`, from the adapter's session header), since some routes
-// require one.
+// confirm that group Sessions share the private chat's prefix.
 //
 // Environment: MOCK_PORT, MOCK_LOG, MOCK_DELAY_MS, MOCK_JITTER_MS (random extra latency),
 // MOCK_LOG_CHARS (prompt length kept per log entry), MOCK_SUMMARY_DELAY_MS (handoff notes
 // and backend compaction only), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and
-// answer like an endpoint without search), MOCK_REJECT_IMAGES=1 (reject requests with images).
+// answer like an endpoint without search).
 //
 // Commands to a Bot:
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
-//   看群 名 (read_group_chat) · 转告 名: 消息, also over several lines (message_bot) · 搜索：查询1 | 查询2 (web_search)
-//   进目录 路径 (working_directory with cd)
-//   插话 名: 消息 (message_bot when "now") · 排队 名: 消息 (message_bot when "queue") · 叫停 名: 原因 (stop_bot)
-//   In a message from a Bot: 转告 名: 消息 (hands it on with message_bot) · 慢慢做 N (answers after N seconds)
+//   看群 名 (read_group_chat) · 转告 名: 消息 (message_bot) · 搜索：查询1 | 查询2 (web_search)
 //   长文 N / long N (N×1000 characters) · 长任务 N [K] (N steps of K×1000, default 4)
 //   查记录 词 [词…] · 查锚点 part N #序号 · 查第 N 段 (read_own_chat)
 //   上下文里有 词 (searches the context except the last message) · 撑爆 (fake overflow, 400)
 //   报错 (fake rejected key, 401; also as the text of 转告, so the receiving Bot fails)
 //   卡片 K (K×1000 characters, then a question card) · 笔记模式 截断一次|缺节一次|总截断|总缺节|失败|正常
 //   记住[@话题] 事实 · 团队记住 事实 (remember) · 忘掉 事实 (forget) · 回忆 [词] (recall)
-//   视图选项 (options card, waits) · 视图表单 (form card, waits) · 视图展示 (display-only
-//   stack) · 大视图 (display-only, just under the byte limit)
-//   查能力 [词] (names the mcp__ tools and catalog skills that contain 词; also in a group)
-//   A message with a file (a long Bot message as a file, a file the user sent): the Bot
-//   reads the saved path, then says how many lines it read and how the file ends.
 // Memory panel: a summary restating the entries; asks 记住|remember X, 团队记住 X,
 //   删掉|remove N, 改|edit N: X change entries, anything else gets the entry count.
 // Commands in a group:
 //   把X拉进群 · 把X踢出群 · 群名改成X · 讨论 (admin @all) · 私聊聊了啥 (repeats the briefing)
-//   记住[@话题] 事实 (the admin saves to the group memory) · 自己记住 / 团队记住 事实 (own / team)
-//   忘掉 事实 (the admin) · 回忆 [词] (every member)
 //   查私聊 关键词 (read_own_chat) · 长文 N · 上下文里有 词 · 撑爆 · 报错 [名] (that member's call, or every member's, fails with 401)
-//   提权 (members other than the admin run a shell command that asks for full access)
-//   写成文字 (members write their tool call as text instead of making it; also in a Bot's own chat)
-//   派活 N (the admin hands the first other member N seconds of work; the admin answers its result)
-//   分步 N (like 派活, but the member says a line at each of its three steps, N seconds apart)
 // A handoff turn answers "第 N 段接着做完了". Handoff notes and backend compaction each
 // return a full eight-section note marked "handoff 提示词" or "backend 提示词" (a Bot's
 // Session should only see the former; retries add "重试", merges add "合并了上一份笔记").
@@ -71,7 +55,6 @@ const SUMMARY_DELAY = Number(process.env.MOCK_SUMMARY_DELAY_MS ?? DELAY)
 // How much of each call's last message the log keeps; raise it to read whole prompts.
 const LOG_CHARS = Number(process.env.MOCK_LOG_CHARS ?? 160)
 const WATCH = process.env.MOCK_WATCH ?? ''
-const REJECT_IMAGES = process.env.MOCK_REJECT_IMAGES === '1'
 // MOCK_LOG_TOOLS=1 records the request's tool names, to compare two Sessions' tool views.
 const LOG_TOOLS = process.env.MOCK_LOG_TOOLS === '1'
 let seq = 0
@@ -91,48 +74,9 @@ const tool = (name, input) => ({
     : input,
 })
 const think = value => ({ type: 'thinking', thinking: value })
-const ESCALATION = '提权测试：用户在群里要求'
-const HANDED_WORK = '群里派的活'
-const STEPPED_WORK = '群里分步的活'
-const STEP_LINES = ['目录看完了，一共 12 个文件，开始整理。', '整理好一半了，剩下的是索引。']
-const WRITTEN_CALL = '我先看一下目录。\n<tool_call>\n<function=pwsh>\n<parameter=command>\nGet-ChildItem\n</parameter>\n</function>\n</tool_call>'
 // Deterministic filler that grows a conversation by about `chars` characters.
 const filler = (chars, tag) => Array.from({ length: Math.ceil(chars / 20) }, (_, index) => `${tag}第${index + 1}段：这是一段用来撑长上下文的测试文字。`).join('').slice(0, chars)
 const isResults = message => Array.isArray(message?.content) && message.content.some(block => block.type === 'tool_result')
-// Optional deterministic board lifecycle: when the bench asks for it, a Bot
-// answers a Trello task delivery by starting the card, reporting evidence and
-// (for the independent reviewer) passing the review. This keeps the mock model
-// out of the product path; it is only used by the lifecycle end-to-end check.
-const boardTaskPrompt = messages => {
-  const latest = [...messages].reverse().find(message => message.role === 'user' && !isResults(message))
-  const text = latest ? textOf(latest.content) : ''
-  return /Task ID: .+ \(revision \d+\)/.test(text) && /(task from Trello|Independently compare|Use board_task show first|board_task)/.test(text) ? text : undefined
-}
-const boardTaskArgs = prompt => {
-  const id = /Task ID: (.+?) \(revision (\d+)\)/.exec(prompt)
-  return id ? { taskId:id[1], revision:Number(id[2]), review:/Independently compare/.test(prompt) } : undefined
-}
-function boardAuto(messages, tools, result, used) {
-  if (process.env.MOCK_BOARD_AUTORUN !== '1') return undefined
-  const prompt = boardTaskPrompt(messages)
-  const task = prompt && boardTaskArgs(prompt)
-  if (!task) return undefined
-  if (!tools.has('board_task')) { console.error('board-auto: board_task is not in tools: ' + [...tools].join(',')); return undefined }
-  if (result && used?.name === 'board_task') {
-    try {
-      const parsed = JSON.parse(typeof result.content === 'string' ? result.content : textOf(result.content))
-      const state = parsed?.task
-      if (!state) return undefined
-      if (state.status === 'ready') return [tool('board_task', { action:'start', task_id:state.id, operation_id:`mock-start-${state.id}-${state.revision}`, expected_revision:state.revision })]
-      if (state.status === 'working') return [tool('board_task', { action:'report', task_id:state.id, operation_id:`mock-report-${state.id}-${state.revision}`, expected_revision:state.revision, value:{ kind:'personal', evidence:`mock evidence for ${state.title ?? state.id}`, environment:'mock-bench' } })]
-      if (state.status === 'done') return [text('Task is complete.')]
-      return undefined
-    } catch { return undefined }
-  }
-  if (result) return undefined
-  if (task.review) return [tool('board_task', { action:'review', task_id:task.taskId, operation_id:`mock-review-${task.taskId}-${task.revision}`, expected_revision:task.revision, value:{ evidence:'mock independent review passed', result:'pass' } })]
-  return [tool('board_task', { action:'start', task_id:task.taskId, operation_id:`mock-start-${task.taskId}-${task.revision}`, expected_revision:task.revision })]
-}
 // 'handoff' or 'backend' for a summary request, by its final prompt. The adapter merges
 // that prompt into the user message before it, so it is the last text block, not the
 // whole message.
@@ -148,24 +92,9 @@ function isSummary(body) {
 function decide(body) {
   const system = systemText(body.system) + '\n' + (body.messages ?? []).filter(m => m.role === 'system').map(m => textOf(m.content)).join('\n')
   const tools = new Set((body.tools ?? []).map(entry => entry.name))
-  // Clock snapshots and a group's memory snapshot are context, not a new scripted user command.
-  const messages = (body.messages ?? []).filter(m => m.role !== 'system').map(message => {
-    if (message.role !== 'user') return message
-    const isClock = value => value.startsWith('Current time: ') || value.startsWith('Time sampled while preparing turn ') || value.startsWith('## Group memory, shared by the members of this group chat')
-    const content = typeof message.content === 'string' ? (isClock(message.content) ? '' : message.content)
-      : message.content.filter(block => block.type !== 'text' || !isClock(block.text))
-    return { ...message, content }
-  }).filter(message => message.role !== 'user' || message.content.length > 0)
+  const messages = (body.messages ?? []).filter(m => m.role !== 'system')
   const last = messages.at(-1)
   const blocks = Array.isArray(last?.content) ? last.content : []
-  // A side-chat question (side.js). The first line is the marker; the reply is
-  // fixed and calls nothing. Its count of earlier answers proves follow-ups
-  // carry the chat's finished pairs.
-  if (last?.role === 'user' && textBlocks(last.content).some(value => value.startsWith('ds-bot/side\n') || value === 'ds-bot/side')) {
-    const pairs = messages.filter(message => message.role === 'assistant'
-      && textBlocks(message.content).some(value => value.startsWith('Side note:'))).length
-    return [text(`Side note: ${pairs} earlier pair(s) seen.`)]
-  }
   const me = /You are (.+?), a Bot on the user's team/.exec(system)?.[1] ?? 'Bot'
   const isMain = system.includes('You are the Main Bot')
   const isRelay = system.includes('# Group chat relay')
@@ -185,8 +114,8 @@ function decide(body) {
 
   // The memory panel: a prose summary of the entries it lists, and "ask or update".
   if (system.includes('You write the memory summary')) return [text(memorySummary(textOf(last?.content)))]
-  if (/You keep the memory of one (Bot|group chat)/.test(system)) return [text(JSON.stringify(memoryAsk(textOf(last?.content))))]
-  if (/You keep the long-term memory of one (Bot|group chat)/.test(system)) return [text(JSON.stringify(memoryReview(textOf(last?.content))))]
+  if (system.includes('You keep the memory of one Bot')) return [text(JSON.stringify(memoryAsk(textOf(last?.content))))]
+  if (system.includes('You keep the long-term memory of one Bot')) return [text(JSON.stringify(memoryReview(textOf(last?.content))))]
 
   const kind = isSummary(body)
   if (kind === 'checkpoint') {
@@ -222,25 +151,15 @@ function decide(body) {
     return [text(note(sections))]
   }
 
-  // A stopped call's result can share a message with the next group turn, which wins.
-  const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat'))
-  const result = fresh ? undefined : blocks.find(block => block.type === 'tool_result')
-  if (!result) {
-    const board = boardAuto(messages, tools, undefined, undefined)
-    if (board) return board
-  }
+  const result = blocks.find(block => block.type === 'tool_result')
   if (result) {
     const resultText = typeof result.content === 'string' ? result.content : textOf(result.content)
     const call = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
     const used = call?.content.find(b => b.type === 'tool_use' && b.id === result.tool_use_id) ?? call?.content.find(b => b.type === 'tool_use')
-    const board = boardAuto(messages, tools, result, used)
-    if (board) return board
     // "长任务 N [K]": N steps in one turn, each adding about K thousand characters (default 4).
-    const openerAt = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content).trimStart()))
+    const openerAt = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content)))
     if (openerAt !== -1 && used?.name === 'list_bots') {
-      const task = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[openerAt].content).trimStart())
-      const steps = Number(task[1])
-      const size = Number(task[2] ?? 4)
+      const [, steps, size = 4] = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[openerAt].content)).map(Number)
       const done = messages.slice(openerAt + 1).filter(isResults).length
       if (done < steps) return [text(filler(size * 1000, `步骤${done + 1}`)), tool('list_bots', {})]
       return [text(`长任务做完了，一共 ${done} 步。`)]
@@ -262,15 +181,6 @@ function decide(body) {
     if ((used?.name === 'bash' || used?.name === 'pwsh') && /DSH_SECRET_/.test(used.input?.command ?? '')) {
       return [text(`终端输出里我看到的是：${resultText.replace(/\s+/g, ' ').trim().slice(0, 200)}`)]
     }
-    if (used?.input?.justification === ESCALATION) return [text(result.is_error ? `没跑成：${resultText.slice(0, 80)}` : '命令跑完了，文件已经写好。')]
-    const job = new RegExp(`^${HANDED_WORK}-(\\d+)-`).exec(used?.input?.pattern ?? '')
-    if (job) return Object.assign([text(`干完了，用了 ${job[1]} 秒。`)], { delay: Number(job[1]) * 1000 })
-    const stepped = new RegExp(`^${STEPPED_WORK}-(\\d+)-(\\d+)-`).exec(used?.input?.pattern ?? '')
-    if (stepped) {
-      const [at, wait] = [Number(stepped[1]), Number(stepped[2]) * 1000]
-      if (at > STEP_LINES.length) return Object.assign([text('分步干完了：目录、正文、索引都整理好了。')], { delay: wait })
-      return Object.assign([text(STEP_LINES[at - 1]), tool(used.name, { pattern: `${STEPPED_WORK}-${at + 1}-${stepped[2]}-*` })], { delay: wait })
-    }
     switch (used?.name) {
       case 'group_relay': return [text('')]
       case 'create_bot': {
@@ -281,14 +191,12 @@ function decide(body) {
       // The user's answer can ride in the same message as the card's tool result.
       case 'ask_user': if (textOf(last.content).trim() === '') return [text('')]
         break
-      case 'show_view': return [text(resultText.startsWith('The view is on screen') ? '这些都是示例数据，换成你的数据我再画一次。' : `没画成：${resultText}`)]
       case 'ask_user_question': {
         let picked = ''
         try { picked = JSON.parse(resultText).answers?.[0]?.selected?.[0] ?? '' } catch {}
         return [text(picked ? `好，就从「${picked}」开始。` : '好的。'), text('我先把要点理一下，稍后给你一个方案。')]
       }
       case 'list_bots': return [text(`现在的班底：\n${resultText}`)]
-      case 'cua': return [text(`cua 结果：${resultText.slice(0, 400)}`)]
       case 'create_group':
       case 'update_group':
       case 'delete_group':
@@ -305,16 +213,11 @@ function decide(body) {
         return [text(`我私聊里聊过 ${hits.length} 条${loose}：${hits.at(-1)?.slice(0, 120) ?? ''}${across}`)]
       }
       case 'read_group_chat': return [text(`群里最近：\n${resultText}`)]
-      case 'read': {
-        const content = resultText.replace(/<[^>]+>/g, '').replace(/^\s*\d+[\t→|:]/gm, '').trim()
-        return [text(result.is_error ? `附件没读成：${resultText.slice(0, 200)}` : `读了附件（${content.length} 字），结尾是「${content.slice(-24)}」。`)]
-      }
       case 'remember':
       case 'forget':
         return [text(/^(Saved to|Updated in|Removed from) /.test(resultText) ? (used.name === 'remember' ? '记下了。' : '已经忘掉了。') : `没记成：${resultText}`)]
       case 'recall': return [text(`记忆里有：\n${resultText}`)]
       case 'web_search': return [text(result.is_error ? `搜索失败：${resultText}` : `搜到了：\n${resultText}`)]
-      case 'working_directory': return [text(result.is_error ? `没进去：${resultText}` : `现在在 ${resultText}`)]
       case 'read_browser': {
         const title = /^Title: (.+)$/m.exec(resultText)?.[1]
         const body = (resultText.split(/^Text[^\n]*:\n/m)[1] ?? '').split('\n\nLinks and controls')[0].replace(/\s+/g, ' ').trim()
@@ -327,24 +230,6 @@ function decide(body) {
   const userText = textOf(last?.content).trim()
   // "撑爆": the provider rejects the request as past its window.
   if (userText.startsWith('撑爆')) return 'overflow'
-  // A file in the message (a long Bot message, a file the user sent): DSH gives its saved
-  // path, and the Bot reads it first.
-  const saved = /verbatim read-only copy saved at ("(?:[^"\\]|\\.)*")/.exec(userText)
-  if (saved) return [tool('read', { file_path: JSON.parse(saved[1]) })]
-  // "长任务" keeps stepping when a Bot message splices into its turn (a relayed
-  // note); only a fresh opener or "[Stopped by" ends it. A spliced "[Message
-  // from X]" is taken into account there; it is answered in a turn of its own.
-  const longOpener = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content).trimStart()))
-  if (longOpener !== -1 && /^\[(?:Message|Reply) from /.test(userText)) {
-    const task = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[longOpener].content).trimStart())
-    const steps = Number(task[1])
-    const size = Number(task[2] ?? 4)
-    const done = messages.slice(longOpener + 1).filter(isResults).length
-    if (done < steps) {
-      const joined = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]/.exec(userText)?.[1]
-      return [text(`${joined ? `（已按 ${joined} 的话调整）\n` : ''}${filler(size * 1000, `步骤${done}`)}`), tool('list_bots', {})]
-    }
-  }
   // "报错": the provider rejects the key, in the user's chat or in a message from a Bot.
   if (/^报错$/.test(userText) || /^(?:\[Message from [^\]]*\]\n报错\n?)+$/.test(userText)) return 'auth'
   const lastCall = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
@@ -364,19 +249,20 @@ function decide(body) {
     if (isMain) {
       return [
         text(`嘿，我是 ${me}。从今天起我来管你的 Bot 团队，需要拍板的事找我就行。`),
-        text('现在还只有我一个。我先摸清你每天用的工具，再决定先上谁。先让团队帮你做哪块？'),
+        text('现在还只有我一个。我先摸清你每天用的工具，再决定先上谁。'),
+        tool('ask_user', { question: '先让团队帮你做哪块？', options: ['整理日常事务', '做一次调研', '规划这一周', '先看看再说'] }),
       ]
     }
-    return [text(`Hi, I'm ${me}. Where should I start?`)]
+    return [
+      text(`Hi, I'm ${me}. Where should I start?`),
+      tool('ask_user', { question: 'Where should we start?', options: ['Review what exists', 'Plan this week', 'Start a first draft', 'Something else'], allowCustom: true }),
+    ]
   }
   if (/^\[Group chat "[^"]*" · replies to your post\]/.test(userText)) {
     const replies = userText.split('\n').filter(line => /^[^:\n]{1,40}: /.test(line)).length
     return [text(`群里回完了，一共 ${replies} 条回复。`)]
   }
   if (userText.startsWith('[Group chat') && userText.includes('The user just created this group')) return [text('群建好了，这个群要一起做点什么？')]
-  if (/^\[Group chat "[^"]*" · your tool call did not run\]/.test(userText) || userText.startsWith('[Your last reply wrote a tool call as text')) {
-    return [text('这次真的调用了，目录看完了。')]
-  }
   if (userText.startsWith('[Group chat')) {
     // Reads only this round's transcript block. The opener is the user's last line, or
     // a Bot's post that started the round. Count-off says the next number after the
@@ -394,9 +280,6 @@ function decide(body) {
     const room = /^\[Group chat "([^"]+)"/.exec(userText)?.[1] ?? ''
     const leads = /^Members: .* and you \(admin\)\./m.test(userText)
     let ask
-    if ((ask = /^User: 调用\s*(\S+)(?:\s+([\s\S]+))?$/.exec(userLine))) {
-      try { return [tool(ask[1], ask[2] ? JSON.parse(ask[2]) : {})] } catch { return [text('调用参数不是有效 JSON')] }
-    }
     if ((ask = /把\s*(\S+?)\s*拉进群/.exec(userLine))) return [tool('update_group', { group: room, add_members: [ask[1]] })]
     if ((ask = /把\s*(\S+?)\s*踢出群/.exec(userLine))) return [tool('update_group', { group: room, remove_members: [ask[1]] })]
     if ((ask = /群名改成\s*(\S+)/.exec(userLine))) return [tool('update_group', { group: room, name: ask[1] })]
@@ -409,48 +292,17 @@ function decide(body) {
       const earlier = messages.slice(0, -1).map(m => textOf(m.content)).join('\n')
       return [text(earlier.includes(ask[1]) ? `上下文里有「${ask[1]}」。` : `上下文里没有「${ask[1]}」。`)]
     }
-    // Group memory: the admin saves, so a round of members does not save it twice.
-    if ((ask = /^User: (团队|自己)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('remember')) {
-      if (!leads) return [text('[PASS]')]
-      return [tool('remember', { text: ask[3].trim(), ...(ask[2] ? { topic: ask[2] } : {}), ...(ask[1] ? { scope: ask[1] === '团队' ? 'team' : 'own' } : {}) })]
-    }
-    if ((ask = /^User: 忘掉\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('forget')) return leads ? [tool('forget', { entry: ask[1].trim() })] : [text('[PASS]')]
-    if ((ask = /^User: 回忆(?:\s+(.+))?$/.exec(userLine)) && tools.has('recall')) return [tool('recall', ask[1] ? { query: ask[1].trim() } : {})]
     // Group Sessions: the frozen brief is in the Session's first message, the lookup a tool.
-    if ((ask = /查能力\s*(\S*)/.exec(userLine))) return [text(capabilityReport(me, tools, messages, ask[1]))]
     if ((ask = /查私聊\s*(\S*)/.exec(userLine))) return [tool('read_own_chat', ask[1] ? { query: ask[1] } : {})]
     if (/私聊聊了啥/.test(userLine)) {
       const all = messages.map(m => textOf(m.content)).join('\n')
       const brief = /Your own chat with the user so far[^\n]*\n([\s\S]*?)\nThis brief does not change/.exec(all)?.[1] ?? ''
       return [text(brief ? `简报最后一句：${brief.split('\n').at(-1)}` : '没有简报。')]
     }
-    if (/写成文字/.test(userLine) && !leads) return [text(WRITTEN_CALL)]
-    const shell = ['pwsh', 'bash'].find(name => tools.has(name))
-    if (/提权/.test(userLine) && !leads && shell) {
-      return [text('这一步要写工作区外的文件，我申请一次提权。'), tool(shell, { command: 'echo ok', description: '在工作区外写一个测试文件', justification: ESCALATION, sandbox_permissions: 'danger-full-access' })]
-    }
-    // "派活 N": the admin hands a member N seconds of work: a file lookup, then a model
-    // step that takes N seconds. The member posts the result when done, and the admin
-    // answers the result.
-    const handed = /^\S+: @(\S+) 干活 (\d+)/m.exec(block)
-    const lookup = ['glob', 'grep', 'read'].find(name => tools.has(name))
-    if ((ask = /派活\s*(\d+)/.exec(userLine)) && leads && peer) return [text(`@${peer} 干活 ${ask[1]}`)]
-    if (handed?.[1] === me && mentioner && lookup) return [tool(lookup, { pattern: `${HANDED_WORK}-${handed[2]}-*` })]
-    const steps = /^\S+: @(\S+) 分步干活 (\d+)/m.exec(block)
-    if ((ask = /分步\s*(\d+)/.exec(userLine)) && leads && peer) return [text(`@${peer} 分步干活 ${ask[1]}`)]
-    if (steps?.[1] === me && mentioner && lookup) return [text('收到，我先看看目录。'), tool(lookup, { pattern: `${STEPPED_WORK}-1-${steps[2]}-*` })]
-    if (/分步干完了/.test(block) && leads) return [text('收到，辛苦了。')]
-    if (/^\S+: 干完了/.test(userLine) && leads) return [text('收到，辛苦了。')]
     // Ping-pong: whoever is mentioned mentions back, to exercise the per-member cap.
     if (/来回/.test(userLine)) return [text(mentioner ? `@${mentioner} 回你` : leads && peer ? `@${peer} 来回` : '[PASS]')]
     if (mentioner) return [text('进度正常，今天能交。')]
     if (/安排/.test(userLine)) return [text(leads && peer ? `@${peer} 你先说说进度。` : '[PASS]')]
-    // 调用 <tool> <json> in a group: the same generic trigger as in a Bot's own chat,
-    // so a member's turn can drive a real tool (a write, a shell command) in the group.
-    if ((ask = /调用\s*(\S+)(?:\s+([\s\S]+))?/.exec(userLine))) {
-      if (!tools.has(ask[1])) return [text(`The tool ${ask[1]} is not in my tool list.`)]
-      try { return [tool(ask[1], ask[2] ? JSON.parse(ask[2]) : {})] } catch { return [text(`Bad JSON for ${ask[1]}.`)] }
-    }
     if (/讨论/.test(userLine)) return [text(leads ? '@all 大家各说一句。' : '我觉得可以。')]
     return [text(`${me}：${leads ? '我是群管理员，需要拍板时找我。' : '我负责自己那一摊，有需要直接点我。'}`)]
   }
@@ -474,17 +326,7 @@ function decide(body) {
     return [tool('update_group', { group: order[1], ...field })]
   }
   if ((order = /^删群\s*(\S+)$/.exec(userText))) return [tool('delete_group', { group: order[1] })]
-  if ((order = /^转告\s*(\S+?)\s*[:：]\s*([\s\S]+)$/.exec(userText))) return [tool('message_bot', { to: order[1], message: order[2] })]
-  if ((order = /^插话\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('message_bot', { to: order[1], message: order[2], when: 'now' })]
-  if ((order = /^排队\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('message_bot', { to: order[1], message: order[2], when: 'queue' })]
-  if ((order = /^叫停\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('stop_bot', { bot: order[1], reason: order[2] })]
-  // 调用 <tool> <json>: emit the named tool call verbatim — the generic way to
-  // drive a tool the mock has no dedicated trigger for (e.g. the cua methods).
-  if ((order = /^调用\s*(\S+)(?:\s+([\s\S]+))?$/.exec(userText))) {
-    if (!tools.has(order[1])) return [text(`The tool ${order[1]} is not in my tool list.`)]
-    try { return [tool(order[1], order[2] ? JSON.parse(order[2]) : {})] }
-    catch { return [text(`Bad JSON for ${order[1]}.`)] }
-  }
+  if ((order = /^转告\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('message_bot', { to: order[1], message: order[2] })]
   if ((order = /^看群\s*(.+)$/.exec(userText))) return [tool('read_group_chat', { group: order[1].trim() })]
   // Memory: 记住[@话题] 事实 · 团队记住 事实 · 忘掉 事实 · 回忆 [词]
   if ((order = /^(团队)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('remember')) {
@@ -493,16 +335,13 @@ function decide(body) {
   if ((order = /^忘掉\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('forget')) return [tool('forget', { entry: order[1].trim() })]
   if ((order = /^回忆(?:\s+(.+))?$/.exec(userText)) && tools.has('recall')) return [tool('recall', order[1] ? { query: order[1].trim() } : {})]
   if ((order = /^搜索\s*[:：]\s*([^\n]+)/.exec(userText)) && tools.has('web_search')) return [tool('web_search', { queries: order[1].trim().split(/\s*[|｜]\s*/) })]
-  if ((order = /^进目录\s+(.+)$/.exec(userText)) && tools.has('working_directory')) return [tool('working_directory', { cd: order[1].trim() })]
   if (/^看(?:网页|页面)/.test(userText) && tools.has('read_browser')) return [tool('read_browser', {})]
-  if (userText.startsWith('写成文字')) return [text(WRITTEN_CALL)]
   // Context-line tests: grow the context, run a long multi-step turn, search history.
   if ((order = /^(?:长文|long)\s*(\d+)/.exec(userText))) return [text(filler(Number(order[1]) * 1000, '长文'))]
   if ((order = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(userText))) return [text(filler(Number(order[2] ?? 4) * 1000, '步骤0')), tool('list_bots', {})]
   if ((order = /^查记录\s*([^\n]+)/.exec(userText))) return [tool('read_own_chat', { query: order[1].trim() })]
   if ((order = /^查锚点\s*([^\n]+)/.exec(userText))) return [tool('read_own_chat', { around: order[1].trim() })]
   if ((order = /^查第\s*(\d+)\s*段/.exec(userText))) return [tool('read_own_chat', { part: Number(order[1]) })]
-  if ((order = /^查能力\s*(\S*)/.exec(userText))) return [text(capabilityReport(me, tools, messages, order[1]))]
   if ((order = /^上下文里有\s*(\S+)/.exec(userText))) {
     const all = messages.slice(0, -1).map(m => textOf(m.content)).join('\n')
     return [text(all.includes(order[1]) ? `上下文里有「${order[1]}」。` : `上下文里没有「${order[1]}」。`)]
@@ -512,18 +351,11 @@ function decide(body) {
     const asked = userText.split('\n').slice(1).join(' ').trim().replace(/[。.!！?？]+$/u, '')
     return [text(`${match[1]} 转来一句话：「${asked}」。我先说打算：把手头已有的材料理一遍，列出还缺什么，再和你确认先后顺序；你确认之前我不会动手。`)]
   }
-  if ((match = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]\n(?:转告\s*(\S+?)\s*[:：]\s*([\s\S]+)|慢慢做\s*(\d+))/.exec(userText))) {
-    if (match[2] && tools.has('message_bot')) return [tool('message_bot', { to: match[2], message: match[3].trim() })]
-    if (match[4]) return Object.assign([text(`给 ${match[1]} 的回复：做完了，用了 ${match[4]} 秒。`)], { delay: Number(match[4]) * 1000 })
-  }
-  if ((match = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]/.exec(userText))) {
+  if ((match = /^\[Message from ([^\]]+)\]/.exec(userText))) {
     return [text(`给 ${match[1]} 的回复：\n- 先做：把现有材料理一遍\n- 需要用户提供：目标和截止时间（尚未聊过）\n- 节奏：确认后每天同步一次`)]
   }
   if ((match = /^\[Reply from ([^\]]+)\]\n.* could not answer your message: its model call failed \(([^)]+)\)/.exec(userText))) {
     return [text(`${match[1]} 这次没能回答：它的模型调用出错了（${match[2]}）。可能是 API 密钥失效，请检查它用的模型设置。`)]
-  }
-  if ((match = /^\[Reply from ([^\]·]+?) · for the work ([^\]]+?) asked you for/.exec(userText))) {
-    return [text(`${match[1]} 交回了，我把结果交给 ${match[2]}。`)]
   }
   if ((match = /^\[Reply from ([^\]]+)\]/.exec(userText))) {
     return [text(`${match[1]} 回话了：目标和截止时间都还没和你聊过，它没法凭空开工。`), tool('ask_user', { question: '下一步怎么走？', detail: '没有目标之前它只能空转。', options: ['现在告诉我目标', '先去跟它聊', '先搁着'] })]
@@ -544,96 +376,6 @@ function decide(body) {
   if (/^\s*阻塞提问/.test(userText) && tools.has('ask_user_question')) {
     return [tool('ask_user_question', { questions: [{ id: 'start', header: 'Choose', question: '先从哪块开始？', options: [{ label: '先定目标 (Recommended)', description: '先把要做成什么说清楚' }, { label: '整理日常事务' }] }] })]
   }
-  // View cards: 视图选项 and 视图表单 wait for an answer; 视图展示 and 大视图 are
-  // display-only — the latter sits just under the view byte limit.
-  if (/^\s*视图选项/.test(userText) && tools.has('show_view')) {
-    return [tool('show_view', { title: 'Pick a lane', view: { type: 'options', id: 'lane', options: [{ label: 'Ship now' }, { label: 'One more pass' }] } })]
-  }
-  if (/^\s*视图表单/.test(userText) && tools.has('show_view')) {
-    return [tool('show_view', { title: 'A few details', view: { type: 'form', id: 'ask', submitLabel: 'Send', fields: [{ id: 'name', label: 'Name', placeholder: 'Ada' }, { id: 'note', label: 'Note' }] } })]
-  }
-  if (/^\s*视图展示/.test(userText) && tools.has('show_view')) {
-    return [tool('show_view', {
-      title: 'Status board', await_reply: false,
-      view: {
-        type: 'stack',
-        children: [
-          { type: 'text', text: '**Release readiness** — all checks are in.' },
-          { type: 'metric', label: 'Open issues', value: 3, tone: 'warn' },
-          { type: 'table', columns: [{ key: 'item', label: 'Item' }, { key: 'state', label: 'State' }], rows: [['Tests', 'green'], ['Docs', 'draft'], ['Changelog', 'done']] },
-          { type: 'progress', label: 'Reviewed', percent: 72 },
-        ],
-      },
-    })]
-  }
-  if (/^\s*大视图/.test(userText) && tools.has('show_view')) {
-    // Big but valid: every text node stays under the component limit, the whole
-    // blueprint just under the byte limit.
-    return [tool('show_view', { title: 'A long note', view: { type: 'stack', children: [0, 1, 2, 3].map(() => ({ type: 'text', text: 'x'.repeat(1900) })) }, await_reply: false })]
-  }
-  // 视图图表, 视图计算器 and 视图网页 cover the chart kinds, inputs with formulas
-  // and a submit, and the sandboxed html frame.
-  if (/^\s*视图图表/.test(userText) && tools.has('show_view')) {
-    return [text('B 最快，D 最慢。下面是四个模型的首字延迟（示例数据）：'), tool('show_view', {
-      view: {
-        type: 'stack',
-        children: [
-          { type: 'chart', kind: 'bar', categories: ['Model A', 'Model B', 'Model C', 'Model D'], series: [{ name: 'p50', values: [420, 310, 520, 680] }, { name: 'p95', values: [690, 540, 810, 1150] }], unit: 'ms', caption: 'Time to first token, sample data' },
-          { type: 'row', children: [{ type: 'chart', kind: 'line', categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], series: [{ name: 'Requests', values: [120, 180, 160, 240, 210] }] }, { type: 'chart', kind: 'donut', categories: ['Cached', 'Fresh', 'Failed'], series: [{ values: [62, 33, 5] }], unit: '%' }] },
-          { type: 'sources', items: [{ label: 'Bench notes', url: 'https://example.com/bench' }] },
-        ],
-      },
-    })]
-  }
-  if (/^\s*视图计算器/.test(userText) && tools.has('show_view')) {
-    return [text('拖一下滑块看看每月要花多少：'), tool('show_view', {
-      title: 'Monthly cost',
-      view: {
-        type: 'stack',
-        let: { tokens: 'req * 30 * 2000 / 1e6', cost: 'tokens * (1 - hit) * 2 + tokens * hit * 0.5' },
-        children: [
-          { type: 'slider', id: 'req', label: 'Requests a day', min: 100, max: 5000, step: 100, value: 1200 },
-          { type: 'choice', id: 'hit', label: 'Cache hits', options: [{ label: 'Low', value: 0.2 }, { label: 'Mid', value: 0.5 }, { label: 'High', value: 0.8 }], value: 0.5 },
-          { type: 'row', children: [
-            { type: 'metric', label: 'Cost a month', value: { '=': "'¥' + format(cost, 0)" }, tone: { '=': "cost > 100 ? 'bad' : 'good'" } },
-            { type: 'metric', label: 'Tokens a month', value: { '=': "format(tokens, 1) + ' M'" } },
-          ] },
-          { type: 'progress', label: 'Basic plan (¥100)', value: { '=': 'min(cost, 100)' }, max: 100, valueLabel: { '=': "cost > 100 ? '¥' + format(cost - 100, 0) + ' over' : '¥' + format(100 - cost, 0) + ' left'" }, tone: { '=': "cost > 100 ? 'bad' : cost > 80 ? 'warn' : 'good'" } },
-          { type: 'callout', text: 'Assumes 2,000 tokens a request and list prices.', tone: 'info' },
-          { type: 'submit', id: 'send', label: 'Send to Bot' },
-        ],
-      },
-    })]
-  }
-  // The calculator without the submit control: local formula recompute only.
-  if (/^\s*视图静态计算器/.test(userText) && tools.has('show_view')) {
-    return [text('拖一下滑块看看每月要花多少：'), tool('show_view', {
-      title: 'Monthly cost',
-      await_reply: false,
-      view: {
-        type: 'stack',
-        let: { tokens: 'req * 30 * 2000 / 1e6', cost: 'tokens * (1 - hit) * 2 + tokens * hit * 0.5' },
-        children: [
-          { type: 'slider', id: 'req', label: 'Requests a day', min: 100, max: 5000, step: 100, value: 1200 },
-          { type: 'choice', id: 'hit', label: 'Cache hits', options: [{ label: 'Low', value: 0.2 }, { label: 'Mid', value: 0.5 }, { label: 'High', value: 0.8 }], value: 0.5 },
-          { type: 'row', children: [
-            { type: 'metric', label: 'Cost a month', value: { '=': "'¥' + format(cost, 0)" }, tone: { '=': "cost > 100 ? 'bad' : 'good'" } },
-            { type: 'metric', label: 'Tokens a month', value: { '=': "format(tokens, 1) + ' M'" } },
-          ] },
-          { type: 'progress', label: 'Basic plan (¥100)', value: { '=': 'min(cost, 100)' }, max: 100, valueLabel: { '=': "cost > 100 ? '¥' + format(cost - 100, 0) + ' over' : '¥' + format(100 - cost, 0) + ' left'" }, tone: { '=': "cost > 100 ? 'bad' : cost > 80 ? 'warn' : 'good'" } },
-          { type: 'callout', text: 'Assumes 2,000 tokens a request and list prices.', tone: 'info' },
-        ],
-      },
-    })]
-  }
-  if (/^\s*视图网页/.test(userText) && tools.has('show_view')) {
-    return [tool('show_view', {
-      view: {
-        type: 'html', summary: 'Six seats, two taken', height: 96,
-        html: '<style>.g{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.s{height:40px;border-radius:8px;background:var(--bt-hover);border:0;color:var(--bt-ink);font:inherit;cursor:pointer}.s[data-on]{background:var(--bt-accent);color:#fff}.s:disabled{opacity:.4}</style><div class="g"></div><p id="n" style="color:var(--bt-ink-2);margin:8px 0 0">Pick a seat</p><script>const g=document.querySelector(".g");for(let i=1;i<=6;i++){const b=document.createElement("button");b.className="s";b.textContent="A"+i;if(i===2||i===5)b.disabled=true;b.onclick=()=>{b.toggleAttribute("data-on");document.getElementById("n").textContent=[...g.querySelectorAll("[data-on]")].map(x=>x.textContent).join(", ")||"Pick a seat"};g.append(b)}</script>',
-      },
-    })]
-  }
   // Streams slowly, then checks the team: exercises the activity row stepping aside
   // for a streaming reply and coming back for the tool.
   if (/^\s*慢慢说/.test(userText) && tools.has('list_bots')) {
@@ -653,8 +395,7 @@ function decide(body) {
 
 // The memory panel's summary: headed paragraphs that restate the listed entries.
 function memorySummary(request) {
-  const asked = /Here is everything (?:the group chat "(.+?)"|(.+?)) remembers/.exec(request)
-  const name = asked?.[1] ?? asked?.[2] ?? 'Bot'
+  const name = /Here is everything (.+?) remembers/.exec(request)?.[1] ?? 'Bot'
   const zh = /Write the summary in [^,]*Chinese/.test(request)
   const [own = [], team = []] = request.split(/^## .*$/m).slice(1, 3).map(part => part.split('\n')
     .filter(line => line.startsWith('- ')).map(line => line.slice(2).replace(/^\[\[[^\]]+\]\]\s*/, '').replace(/[。.]$/u, '')))
@@ -699,16 +440,6 @@ function memoryReview(request) {
   return { changes }
 }
 
-// The MCP tools in this request and the entries of the latest skill catalog, both limited
-// to names that contain `filter`.
-function capabilityReport(me, tools, messages, filter) {
-  const catalogs = messages.flatMap(m => textBlocks(m.content)).flatMap(value => [...value.matchAll(/<available_skills>([\s\S]*?)<\/available_skills>/g)])
-  const skills = (catalogs.at(-1)?.[1] ?? '').split('\n').map(line => /^- `([^`]+)`: (.*)$/.exec(line))
-    .filter(entry => entry && entry[1].includes(filter)).map(entry => `${entry[1]}（${entry[2]}）`)
-  const mcp = [...tools].filter(name => name.startsWith('mcp__') && name.includes(filter)).sort()
-  return `${me} 能力：工具 ${mcp.join(', ') || '无'}；技能 ${skills.join(', ') || '无'}`
-}
-
 function secretNote(note, tools) {
   const ready = /The user (?:saved|let you use) ([A-Z][A-Z0-9_]*)/.exec(note)
   return ready ? [text(`收到 ${ready[1]}，我来试一下。`), echoSecret(ready[1], tools)] : [text('好，不用这个密钥了。')]
@@ -743,11 +474,10 @@ function sse(res, payload) {
 // An Ollama-shaped search API, for checking a `searchApis` entry declared in config.
 function searchApi(req, res) {
   let raw = ''
-  req.setEncoding('utf8')
   req.on('data', chunk => { raw += chunk })
   req.on('end', () => {
     const body = JSON.parse(raw || '{}')
-    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id: ++seq, images: 0, searchApi: { path: req.url, body, auth: req.headers.authorization ? 'bearer' : '' } }) + '\n')
+    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id: ++seq, searchApi: { path: req.url, body, auth: req.headers.authorization ? 'bearer' : '' } }) + '\n')
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ results: [{ title: `Search API result: ${body.query}`, url: `https://example.com/search-api/${encodeURIComponent(body.query ?? '')}`, content: `Page text about ${body.query}.` }] }))
   })
@@ -755,48 +485,32 @@ function searchApi(req, res) {
 
 const server = createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/web_search') return searchApi(req, res)
-  // Anthropic's own client, which a provider set up by hand uses, adds a query string.
-  const path = req.url.split('?')[0]
-  if (req.method === 'GET' && path.endsWith('/v1/models')) {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ data: [{ type: 'model', id: 'mock-model', display_name: 'Mock Model' }, { type: 'model', id: 'mock-model-mini', display_name: 'Mock Model Mini' }], has_more: false }))
-    return
-  }
-  if (req.method !== 'POST' || !path.endsWith('/v1/messages')) {
+  if (req.method !== 'POST' || !req.url.endsWith('/v1/messages')) {
     res.writeHead(404, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ error: { message: `no route ${req.method} ${req.url}` } }))
     return
   }
   let raw = ''
-  req.setEncoding('utf8')
   req.on('data', chunk => { raw += chunk })
   req.on('end', () => {
     const body = JSON.parse(raw)
-    const images = (body.messages ?? []).reduce((count, message) => count
-      + (Array.isArray(message.content) ? message.content.filter(block => block?.type === 'image').length : 0), 0)
-    const id = ++seq
-    if (REJECT_IMAGES && images > 0) {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, rejectedImages: true, messages: body.messages?.length ?? 0, last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS) }) + '\n')
-      res.writeHead(400, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'mock: request with images rejected' } }))
-      return
-    }
     const search = asksNativeSearch(body)
     const out = search ? nativeSearch(body) : decide(body)
+    const id = ++seq
     if (out === 'overflow') {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, overflow: true, messages: body.messages?.length ?? 0, last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS) }) + '\n')
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, overflow: true, messages: body.messages?.length ?? 0, last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS) }) + '\n')
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: maximum context length exceeded' } }))
       return
     }
     if (out === 'auth') {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, auth: true, messages: body.messages?.length ?? 0 }) + '\n')
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, auth: true, messages: body.messages?.length ?? 0 }) + '\n')
       res.writeHead(401, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'mock: invalid x-api-key sk-mock1234567890' } }))
       return
     }
     if (out === 'fail') {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, fail: true, messages: body.messages?.length ?? 0 }) + '\n')
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, fail: true, messages: body.messages?.length ?? 0 }) + '\n')
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'mock: this note request fails on purpose' } }))
       return
@@ -809,7 +523,7 @@ const server = createServer((req, res) => {
     // Hashes of the system prompt and tools show whether two Sessions share a cacheable prefix.
     const digest = value => createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex').slice(0, 12)
     const watch = WATCH ? { watchHit: JSON.stringify([body.system, body.tools, body.messages]).includes(WATCH) } : {}
-    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, tokens, images, session: req.headers['x-deepseek-harness-session-id'] ?? null, ...watch, ...LOG_TOOLS ? { toolNames: (body.tools ?? []).map(entry => entry.name ?? entry.type) } : {}, ...search ? { nativeSearch: { model: body.model, tools: body.tools, auth: [req.headers['x-api-key'] ? 'x-api-key' : '', req.headers.authorization ? 'bearer' : ''].filter(Boolean) } } : {}, system: digest(body.system), tools: digest(body.tools), messages: body.messages?.length ?? 0, first: textOf(body.messages?.[0]?.content).slice(0, 60), last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS), out: out.map(block => (block.type === 'text' && block.text.length > 200 ? { ...block, text: `${block.text.slice(0, 200)}…(${block.text.length})` } : block)) }) + '\n')
+    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, tokens, ...watch, ...LOG_TOOLS ? { toolNames: (body.tools ?? []).map(entry => entry.name ?? entry.type) } : {}, ...search ? { nativeSearch: { model: body.model, tools: body.tools, auth: [req.headers['x-api-key'] ? 'x-api-key' : '', req.headers.authorization ? 'bearer' : ''].filter(Boolean) } } : {}, system: digest(body.system), tools: digest(body.tools), messages: body.messages?.length ?? 0, first: textOf(body.messages?.[0]?.content).slice(0, 60), last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS), out: out.map(block => (block.type === 'text' && block.text.length > 200 ? { ...block, text: `${block.text.slice(0, 200)}…(${block.text.length})` } : block)) }) + '\n')
     if (search) {
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'application/json' })
@@ -853,8 +567,8 @@ const server = createServer((req, res) => {
       sse(res, { type: 'message_delta', delta: { stop_reason: out.stop ?? (usedTool ? 'tool_use' : 'end_turn'), stop_sequence: null }, usage: { output_tokens: Math.ceil(JSON.stringify(out).length / 3) } })
       sse(res, { type: 'message_stop' })
       res.end()
-    }, (out.delay ?? (isSummary(body) ? SUMMARY_DELAY : DELAY)) + Math.random() * JITTER)
+    }, (isSummary(body) ? SUMMARY_DELAY : DELAY) + Math.random() * JITTER)
   })
 })
 
-server.listen(PORT, '127.0.0.1', () => console.log(`ds-bot mock on http://127.0.0.1:${server.address().port}/v1`))
+server.listen(PORT, '127.0.0.1', () => console.log(`ds-bot mock on http://127.0.0.1:${PORT}/v1`))

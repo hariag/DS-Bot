@@ -1,6 +1,6 @@
 {
   "name": "ds-bot",
-  "version": "0.3.8+aios.20261120.3",
+  "version": "0.1.0",
   "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
@@ -11,55 +11,43 @@
     "multi-agent",
     "agents"
   ],
-  "homepage": "https://github.com/Fei2411/DS-Bot#readme",
+  "homepage": "https://github.com/FeiZhuLulu/DeepSeek-Bot#readme",
   "bugs": {
-    "url": "https://github.com/Fei2411/DS-Bot/issues"
+    "url": "https://github.com/FeiZhuLulu/DeepSeek-Bot/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Fei2411/DS-Bot.git",
+    "url": "git+https://github.com/FeiZhuLulu/DeepSeek-Bot.git",
     "directory": "ds-bot"
   },
   "license": "Apache-2.0",
   "type": "module",
-  "main": "plugin.js",
+  "main": "index.js",
   "exports": {
-    ".": "./plugin.js",
+    ".": "./index.js",
     "./client": "./client.js",
     "./web-search": "./web-search.js",
     "./package.json": "./package.json"
   },
   "files": [
-    "bin/",
-    "plugin.js",
     "index.js",
     "src/host/",
-    "src/shared/",
-    "src/office/",
     "client.js",
-    "link.js",
-    "office.js",
     "web-search.js",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "node scripts/build-client.mjs && node scripts/build-link.mjs",
-    "test": "node --import ./test/harness-resolve.mjs --test --test-timeout=120000 --test-force-exit \"test/*.test.js\" \"test/board-host/*.test.mjs\"",
-    "test:board:browser": "node test/task-board.browser.mjs",
-    "test:board:e2e": "node test/e2e/board.e2e.mjs",
-    "test:lifecycle:e2e": "node test/e2e/lifecycle.e2e.mjs",
+    "build": "node scripts/build-client.mjs",
+    "test": "node --import ./test/harness-resolve.mjs --test \"test/*.test.js\"",
     "lint": "node scripts/lint.mjs",
-    "harness": "npm install --prefix dev/harness --legacy-peer-deps=false --no-package-lock --no-fund --no-audit",
     "check": "sh dev/check.sh"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-llm": "*",
-    "@deepseek-ai/dsh-scope": "*",
     "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/dsh-typert-protocol": "*",
     "@deepseek-ai/dsh-web": "*"
   },
   "dsh": {
@@ -71,36 +59,6 @@
     }
   },
   "devDependencies": {
-    "@xmldom/xmldom": "0.9.12",
-    "esbuild": "0.28.2",
-    "qrcode-generator": "2.0.4"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/client": "2.4.0",
-    "deep-view": "0.1.2",
-    "imapflow": "2.9.1",
-    "jpeg-js": "0.4.4",
-    "mailparser": "3.12.4",
-    "nodemailer": "10.2.1",
-    "playwright-core": "1.64.1",
-    "pngjs": "7.0.0",
-    "semver": "^7.8.6",
-    "undici": "8.11.2",
-    "ws": "8.18.3"
-  },
-  "bin": {
-    "ds-bot": "./bin/ds-bot-doctor.mjs"
-  },
-  "dsBot": {
-    "build": "aios-20261120.3",
-    "fork": "hariag/DS-Bot",
-    "forkCommit": "51b787764b18066f36c804bf7dc5897ab3de0bff",
-    "upstreamCommit": "5e9b7da8882da3b68d8a0624342708c2150a9156",
-    "changes": [
-      "goal-pass-gate",
-      "git-evidence-verifier",
-      "review-inspection-ledger-bound",
-      "version-endpoint"
-    ]
+    "esbuild": "0.28.2"
   }
 }

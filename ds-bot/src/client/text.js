@@ -1,24 +1,28 @@
-import { peerRole, relaySender } from '../shared/message-sender.js'
 // -------------------------------------------------------------------------
 // Text helpers
 import { dateLocale, t } from './i18n.js'
-import { mentionSpans } from '../shared/mentions.js'
 
 export const MENTION_ORIGIN = 'https://bots.local/'
 
-// The Bots a text calls, by the rule the group host reads (shared/mentions.js). The
-// speaker's own name takes part so that it is never read as a shorter name inside it
-// ("@新 Bot" in "@新 Bot 2"); it then stays plain text.
+const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// Only "@Name" is a mention, the same rule the group host reads (mentionsIn): a bare
+// name is ordinary text, so a Bot called "测试" leaves the word "测试" alone.
 export function linkMentions(text, bots, selfId) {
-  if (!text || !text.includes('@')) return text
-  let out = ''
-  let cursor = 0
-  for (const span of mentionSpans(text, bots)) {
-    if (!span.bot || span.bot.id === selfId) continue
-    out += `${text.slice(cursor, span.start)}[${text.slice(span.start + 1, span.end).replace(/[[\]\\]/g, '\\$&')}](${MENTION_ORIGIN}${span.bot.id})`
-    cursor = span.end
-  }
-  return cursor === 0 ? text : out + text.slice(cursor)
+  if (!text || bots.length === 0 || text.includes('```') || !text.includes('@')) return text
+  // The speaker's own name takes part so that, longest first, it is never read as a
+  // shorter name inside it ("@新 Bot" in "@新 Bot 2"); it then stays plain text.
+  const names = bots.filter(bot => bot.name).sort((a, b) => b.name.length - a.name.length)
+  if (!names.some(bot => bot.id !== selfId)) return text
+  const byName = new Map(names.map(bot => [bot.name.toLowerCase(), bot]))
+  // A letter, digit, "_" or "." before "@" is an address ("a@b"); a letter, digit, "_"
+  // or "-" after the name means a longer word ("@Mi" in "@MiniMax").
+  const pattern = new RegExp(`(\\[[^\\]]*\\]\\([^)]*\\)|\`[^\`]*\`)|(?<![A-Za-z0-9_.])@(${names.map(bot => escapeRegExp(bot.name)).join('|')})(?![A-Za-z0-9_-])`, 'gi')
+  return text.replace(pattern, (match, skip, name) => {
+    if (skip) return skip
+    const bot = byName.get(name.toLowerCase())
+    return bot && bot.id !== selfId ? `[${name}](${MENTION_ORIGIN}${bot.id})` : match
+  })
 }
 
 export function mentionTarget(event) {
@@ -29,29 +33,11 @@ export function mentionTarget(event) {
 function clock(ms) {
   return new Date(ms).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' })
 }
-const midnight = value => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
-const daysBefore = (date, now) => Math.round((midnight(new Date(now)) - midnight(date)) / 86400000)
 export function dayLabel(ms) {
   const date = new Date(ms)
   const today = new Date()
   const sameDay = date.toDateString() === today.toDateString()
   return sameDay ? t('Today {time}', { time: clock(ms) }) : `${date.toLocaleDateString(dateLocale(), { weekday: 'short', month: 'short', day: 'numeric' })} ${clock(ms)}`
-}
-
-// The time separator's stamp: "Today 1:12 AM", "Yesterday 9:03 PM", "Thu, Sep 3 4:20 PM".
-export function clockLabel(time, now = Date.now()) {
-  const date = new Date(time)
-  const days = daysBefore(date, now)
-  const stamp = clock(time)
-  if (days === 0) return t('Today {time}', { time: stamp })
-  if (days === 1) return t('Yesterday {time}', { time: stamp })
-  const sameYear = date.getFullYear() === new Date(now).getFullYear()
-  return `${date.toLocaleDateString(dateLocale(), { weekday: 'short', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })} ${stamp}`
-}
-
-// A message's own stamp: today only the clock, an earlier day named as a separator does.
-export function messageClock(time, now = Date.now()) {
-  return daysBefore(new Date(time), now) === 0 ? clock(time) : clockLabel(time, now)
 }
 
 // A short relative stamp for list rows: "just now", "5 min", "3 h", "2 d", then a date.
@@ -64,40 +50,8 @@ export function relativeShort(ms) {
   return new Date(ms).toLocaleDateString(dateLocale(), { month: 'short', day: 'numeric' })
 }
 
-// A running clock: "8s", "1m 8s", "1h 2m 8s", in every language.
-export function elapsedLabel(ms) {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const hours = Math.floor(total / 3600)
-  return `${hours > 0 ? `${hours}h ` : ''}${total >= 60 ? `${Math.floor(total / 60) % 60}m ` : ''}${total % 60}s`
-}
-
-// A model that writes its tool call in DSML form can leave the closing tags in
-// the text block DSH hands the chat. They are wire syntax, not part of the reply.
-const DSML_CLOSING_TAG = /<\/DSML\s+(?:invoke|calls)\s*>/i
-const DSML_EDGE_TOP = /^(?:[ \t]*<\/DSML\s+(?:invoke|calls)\s*>[ \t]*(?:\r?\n|$))+/i
-const DSML_EDGE_END = /(?:\r?\n[ \t]*<\/DSML\s+(?:invoke|calls)\s*>[ \t]*)+$/i
-const DSML_TAG_LINE = /\r?\n[ \t]*<\/DSML\s+(?:invoke|calls)\s*>[ \t]*(?=\r?\n)/gi
-const DSML_TAG_INLINE = /[ \t]*<\/DSML\s+(?:invoke|calls)\s*>[ \t]*/gi
-export const stripToolCallTags = (text) => {
-  const value = String(text ?? '')
-  if (!DSML_CLOSING_TAG.test(value)) return value
-  return value
-    .replace(DSML_EDGE_TOP, '')
-    .replace(DSML_EDGE_END, '')
-    .replace(DSML_TAG_LINE, '')
-    .replace(DSML_TAG_INLINE, (match, offset, whole) => {
-      const before = offset > 0 ? whole[offset - 1] : ''
-      const after = whole[offset + match.length] ?? ''
-      return before && after && !/\s/.test(before) && !/\s/.test(after) ? ' ' : ''
-    })
-}
-export const contentText = content => (content ?? [])
-  .filter(block => block?.type === 'text')
-  .map(block => (typeof block.text === 'string' ? stripToolCallTags(block.text) : ''))
-  .join('\n')
-// A name can contain brackets. Generated headers end at the newline; without a
-// newline, a legacy inline header still stops at its first closing bracket.
-export const HEADER = /^\[(Message from|Reply from|Group chat|Group post from|Bot team setup|Handoff · part|Secret card)(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/
+export const contentText = content => (content ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n')
+export const HEADER = /^\[(Message from|Reply from|Group chat|Group post from|Bot team setup|Handoff · part|Secret card)[^\]]*\]\n?/
 export const currentPart = bot => bot.sessionId ?? bot.id
 // The prompts in a due scheduled task's message. DSH frames it for the model: one
 // task as `reminder_prompt_json: "…"`, several as `reminders_json: [{reminder_prompt}]`.
@@ -171,51 +125,6 @@ export function toolArgs(root) {
   }
 }
 
-// A relay context is a Bot-to-Bot request, reply or stop notice injected into the
-// model's history. ds-bot's own package sources (kickoff, room, secret, handoff
-// parts) are not events in the chat, nor is a request handed back after its line was
-// already shown: deferred, resumed after a restart, or retried after a tool call
-// written as text.
-export const isRelayContext = (data) => {
-  const source = data?.source
-  if (source === null || typeof source !== 'object' || source.kind !== 'bot' || source.handoff === true) return false
-  if (source.deferred === true || source.resumed === true || source.retried === true) return false
-  return !!peerRole(source) && !source.taskAction && !!relaySender(source).id
-}
-
-// 'context' chat nodes never reach the flow on DSH 0.2, so a relay spliced into
-// a running turn would be invisible; the step that answers it renders the line.
-// A relay attaches to the next step that renders a cell: tool-only steps mount
-// nothing (ui-chat gives them no visible node), so `prev` is the previous step
-// with visible content, not the previous step in the list.
-// `contexts` and `steps` are the turn's turnDataSource lists (anchor order) and
-// `step` is the rendering step's own data. A step is found by its number: the
-// cell's node data and the source's entries can be different snapshot objects.
-const stepShows = (step) => (step?.blocks ?? []).some(block => {
-  // ui-chat's mount rule for a step node: non-empty reasoning, or reply content
-  // (`hasAssistantReplyContent`); a tool call alone keeps the node hidden.
-  if (block === undefined || block.kind === 'tool-call') return false
-  return block.kind === 'text' || block.kind === 'reasoning' ? String(block.text ?? '').trim() !== '' : true
-})
-const stepHasReasoning = (step) => (step?.blocks ?? []).some(block => block?.kind === 'reasoning' && String(block.text ?? '').trim() !== '')
-// The step's own cells: a reasoning step emits a 'reasoning' part and a step
-// with reply content a 'response' part, or both. The line belongs in the first
-// of them — before the thinking row, else before the reply.
-export const relayPart = (data, groupPart) => groupPart === undefined || (stepHasReasoning(data) ? groupPart === 'reasoning' : groupPart === 'response')
-export function relaysBefore(contexts, steps, step) {
-  const index = steps.findIndex(entry => entry?.step === step?.step)
-  if (index === -1) return []
-  let prev = -Infinity
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (stepShows(steps[cursor])) { prev = steps[cursor].time; break }
-  }
-  // The lower bound is inclusive: a relay steered right after the previous
-  // step's assistant/message can share its millisecond, and it still belongs to
-  // this step — its own model call follows the previous one. The upper bound
-  // stays strict: a step's time is its settled message or first visible token.
-  return (contexts ?? []).filter(data => isRelayContext(data) && typeof data.time === 'number' && data.time >= prev && data.time < step.time)
-}
-
 // Back-to-back Bot-to-Bot messages fold into one "N messages with" line. A
 // hidden exchange turn holds a request and its reply; a visible one (a reply, or a
 // request answered to the user) adds only its trigger and ends the run. Group turns
@@ -275,40 +184,4 @@ export function usageOf(list, ids) {
   if (input + output === 0) return ''
   const hit = input > 0 ? Math.round((cacheRead / input) * 100) : 0
   return t('{tokens} tok · Cache hit {hit}%', { tokens: formatTokens(input + output), hit })
-}
-
-// A share that is not whole never reads as 100%: it gets decimals until it does not.
-function percentText(part, whole) {
-  if (part >= whole) return '100'
-  for (let places = 0; places < 3; places += 1) {
-    const text = ((part / whole) * 100).toFixed(places)
-    if (Number(text) < 100) return text
-  }
-  return '99.99'
-}
-
-// One Session's figures from DSH's sessionStats, tokenUsage and contextPressure views, as
-// its status bar counts them: turns, output tokens over decode time, cache reads over
-// every prompt-side token, and the context in use. Figures with nothing to count yet are left out.
-export function runStatsOf(values) {
-  const stats = values?.sessionStats
-  const usage = values?.tokenUsage
-  const pressure = values?.contextPressure
-  const shown = []
-  if (stats?.turns > 0) shown.push({ key: 'turns', text: stats.turns === 1 ? t('1 turn') : t('{count} turns', { count: stats.turns }) })
-  if (stats?.decodeMs > 0 && stats.decodeTokens > 0) {
-    const speed = stats.decodeTokens / (stats.decodeMs / 1000)
-    shown.push({ key: 'speed', text: t('{speed} tok/s', { speed: speed >= 10 ? Math.round(speed) : Math.round(speed * 10) / 10 }) })
-  }
-  const prompt = (usage?.uncachedInputTokens ?? 0) + (usage?.cacheReadTokens ?? 0) + (usage?.cacheWriteTokens ?? 0)
-  if (prompt > 0) shown.push({ key: 'cache', text: t('Cache hit {hit}%', { hit: percentText(usage.cacheReadTokens ?? 0, prompt) }) })
-  const used = pressure?.projectedTokens ?? pressure?.pressureTokens
-  if (Number.isFinite(used) && pressure.contextWindow > 0) {
-    shown.push({
-      key: 'context',
-      text: t('Context {percent}%', { percent: Math.min(100, Math.round((used / pressure.contextWindow) * 100)) }),
-      title: t('{used} of {total} tokens of context in use', { used: formatTokens(used), total: formatTokens(pressure.contextWindow) }),
-    })
-  }
-  return shown
 }

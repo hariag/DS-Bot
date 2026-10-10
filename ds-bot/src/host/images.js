@@ -2,31 +2,11 @@
 // reaches a model that cannot read them, each image becomes text from a vision model.
 // Texts are kept per attachment, so later requests repeat the same words and the
 // prompt cache still hits.
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { BlockAssembler } from '@deepseek-ai/dsh-llm'
 import { OCR_CACHE_MAX, OCR_PROMPT, OCR_RETRY_MS, OCR_TIMEOUT_MS } from './constants.js'
-import { replaceFile } from './files.js'
-import { assembleLlmStream } from './models.js'
 import { splitRef } from './text.js'
-
-export function offloadTargets(session, beforeSeq) {
-  const targets = []
-  for (const seq of session.surface.nodes) {
-    if (seq >= beforeSeq) continue
-    const event = session.eventAt(seq)
-    if (event?.type !== 'user/message' && event?.type !== 'tool/result') continue
-    const message = session.deriveEventMessage(event)
-    const imageIndexes = []
-    let imageIndex = 0
-    for (const block of message?.content ?? []) {
-      if (block?.type !== 'image') continue
-      if (block.offloaded !== true) imageIndexes.push(imageIndex)
-      imageIndex += 1
-    }
-    if (imageIndexes.length > 0) targets.push({ seq, imageIndexes })
-  }
-  return targets
-}
 
 export function install(rt) {
   const { ctx, config, home } = rt
@@ -53,9 +33,9 @@ export function install(rt) {
   }
 
   // The configured `ocrModel` first, then served models that declare image input, the
-  // DSH default among them first. A provider with no key set is skipped.
+  // DSH default among them first.
   async function ocrRoute() {
-    const models = (await rt.catalog()).filter(entry => entry.needsKey !== true && rt.isLocalAgentRef?.(entry.ref) !== true)
+    const models = await rt.catalog()
     const served = new Set(models.map(entry => entry.ref))
     const declared = models.filter(entry => entry.input?.includes('image')).map(entry => entry.ref)
     const fallback = rt.defaultRef()
@@ -83,7 +63,7 @@ export function install(rt) {
       await mkdir(home, { recursive: true })
       const temp = `${ocrPath}.${process.pid}.tmp`
       await writeFile(temp, snapshot, 'utf8')
-      await replaceFile(temp, ocrPath)
+      await rename(temp, ocrPath)
     }).catch(error => rt.warn('ds-bot: OCR cache write failed: %s', error))
   }
 
@@ -91,15 +71,15 @@ export function install(rt) {
   async function readImage(attachment, sessionId) {
     const route = await ocrRoute()
     if (route === undefined) throw new Error('no vision model is available')
-    const callOptions = {
+    const assembler = new BlockAssembler()
+    // No sessionId: this call is not a Session request, so the hook below lets it through.
+    for await (const chunk of ctx.llm.stream({
       provider: route.provider,
       model: route.model,
-      sessionId,
       messages: rt.tagUsage([{ role: 'user', content: [{ type: 'image', attachment }, { type: 'text', text: OCR_PROMPT }] }], { sessionId, kind: 'image' }),
       maxTokens: 8192,
       signal: AbortSignal.timeout(OCR_TIMEOUT_MS),
-    }
-    const assembler = await (rt.assembleLlm ? rt.assembleLlm(callOptions) : assembleLlmStream(ctx, callOptions, { backoff: rt.config?.llmRetryBackoff }))
+    })) assembler.push(chunk)
     const finish = assembler.finish
     if (finish.kind === 'error' || finish.kind === 'aborted') throw new Error(finish.failure?.message ?? finish.kind)
     const text = assembler.blocks().filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
@@ -133,41 +113,26 @@ export function install(rt) {
     ? `"${attachment.name}"`
     : `sha256:${String(attachment.attachmentId).slice('sha256:'.length, 'sha256:'.length + 8)}`)
 
-  function imagePath(attachment) {
-    try {
-      const hostPath = ctx.get?.('attachments')?.imageHostPath?.(attachment)
-      if (hostPath === undefined) return undefined
-      return ctx.get?.('fs')?.processPathFromHostPath?.(hostPath) ?? hostPath
-    } catch {
-      return undefined
-    }
-  }
-
   function imageAsText(attachment, reading) {
     const label = imageLabel(attachment)
-    const path = imagePath(attachment)
-    const saved = path === undefined ? '' : ` Read-only copy saved at ${JSON.stringify(path)}.`
     return {
       type: 'text',
       text: reading === null
-        ? `[Image ${label}: you cannot see images and it could not be read right now.${saved} Ask the user what it shows if it matters.]`
-        : `[Image ${label}.${saved} You cannot see images, so ${reading.model} read it for you:]\n${reading.text}\n[End of image ${label}]`,
+        ? `[Image ${label}: you cannot see images and it could not be read right now. Ask the user what it shows if it matters.]`
+        : `[Image ${label}. You cannot see images, so ${reading.model} read it for you:]\n${reading.text}\n[End of image ${label}]`,
     }
   }
 
   // Members read the group as text, so a picture posted there reaches every member,
-  // vision model or not, as its reading; the image block itself also rides with the
-  // prompt for members whose model or tools can inspect it directly.
+  // vision model or not, as its reading.
   async function imagesForGroup(attachments, sessionId) {
     await loadOcr()
     return Promise.all(attachments.map(async (attachment) => {
       const reading = await imageReading(attachment, sessionId)
       const label = imageLabel(attachment)
-      const path = imagePath(attachment)
-      const saved = path === undefined ? '' : ` (read-only copy saved at ${JSON.stringify(path)})`
       return reading === null
-        ? `[Image ${label}${saved}: it could not be read right now. Ask the user what it shows if it matters.]`
-        : `[Image ${label}${saved}, read by ${reading.model}:]\n${reading.text}\n[End of image ${label}]`
+        ? `[Image ${label}: it could not be read right now. Ask the user what it shows if it matters.]`
+        : `[Image ${label}, read by ${reading.model}:]\n${reading.text}\n[End of image ${label}]`
     }))
   }
 
@@ -192,7 +157,7 @@ export function install(rt) {
   }
 
   ctx.on('llm/stream', (options, next) => {
-    if (options.sessionId === undefined || rt.ownRequest(options) || !(options.messages ?? []).some(liveImages)) return next()
+    if (options.sessionId === undefined || !(options.messages ?? []).some(liveImages)) return next()
     return (async function* imagesAsTextOrPass() {
       await rt.load()
       if (rt.roomOf(options.sessionId) !== undefined || await readsImages(options.provider, options.model)) {
@@ -203,24 +168,6 @@ export function install(rt) {
       // carries no image, so this listener lets it through.
       yield* ctx.llm.stream({ ...options, messages: await withImagesAsText(options.messages, options.sessionId) })
     })()
-  })
-
-  ctx.on('agent/status', ({ agent, status }) => {
-    if (status !== 'idle' || !agent?.session || !rt.isBotSession(agent.id) || rt.readOnly() !== undefined) return
-    const beforeSeq = agent.session.seq
-    setImmediate(() => {
-      void (async () => {
-        try {
-          if (!ctx.sessions.messageProjections.some(projection => projection.type === 'image/offload')) return
-          const targets = offloadTargets(agent.session, beforeSeq)
-          if (targets.length === 0) return
-          agent.session.append('image/offload', { targets })
-          await ctx.sessions.flush(agent.session)
-        } catch (error) {
-          rt.warn('ds-bot: old images for %s not offloaded: %s', agent.id, error)
-        }
-      })()
-    })
   })
 
   Object.assign(rt, { imagesForGroup })

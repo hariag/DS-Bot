@@ -3,11 +3,10 @@
 // other's changes. The first host to load takes `state.lock`; a second one only reads.
 //
 // The lock is a small JSON file (pid, host, a random token) whose mtime the holder bumps
-// on a timer. A live holder on the same host needs both: a process that still runs under
-// that pid and a heartbeat fresher than `staleMs` — a crashed holder's pid may be reused
-// by an unrelated process, and without the heartbeat check that process would hold the
-// team read-only for as long as it runs. The token, not the pid, decides ownership: a
-// holder that finds another token has lost the lock.
+// on a timer. It counts as gone when its process has exited (same host) or when it has
+// not been bumped for `staleMs`, which also covers a reused pid after a crash. On another
+// host only the age can tell, so a lock on shared storage waits out `staleMs`. The token,
+// not the pid, decides ownership: a holder that finds another token has lost the lock.
 import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
@@ -21,17 +20,6 @@ export function pidAlive(pid) {
     return error?.code === 'EPERM'
   }
 }
-
-// A quit that ends the process without running the plugin's cleanup (a shutdown
-// timeout, a signal handler that exits) still lets go of the lock: an exit listener
-// deletes the file this process wrote, and only while its token is still in it, so a
-// host that lost the lock never erases the new holder's.
-const held = new Set()
-process.once('exit', () => {
-  for (const release of held) {
-    try { release() } catch {}
-  }
-})
 
 export function homeLock(path, { staleMs = 60_000, beatMs = 15_000, host = hostname(), pid = process.pid, isAlive = pidAlive, now = Date.now } = {}) {
   const token = randomUUID()
@@ -50,9 +38,11 @@ export function homeLock(path, { staleMs = 60_000, beatMs = 15_000, host = hostn
   }
   const live = (holder) => {
     if (holder === undefined) return false
-    if (holder === null) return age() < staleMs
-    if (holder.host === host) return holder.pid !== pid && isAlive(holder.pid) && age() < staleMs
-    return age() < staleMs
+    if (age() >= staleMs) return false
+    if (holder === null) return true
+    if (holder.host !== host) return true
+    // A lock this same process left (a plugin reload whose dispose never ran) is no rival.
+    return holder.pid !== pid && isAlive(holder.pid)
   }
   const owns = () => read()?.token === token
 
@@ -79,29 +69,19 @@ export function homeLock(path, { staleMs = 60_000, beatMs = 15_000, host = hostn
         stop()
         timer = setInterval(beat, beatMs)
         timer.unref?.()
-        held.add(release)
         return undefined
       } catch (error) {
         if (error?.code !== 'EEXIST') throw error
       }
       const holder = read()
       if (live(holder)) return holder ?? {}
-      const current = read()
-      const unchanged = holder === null
-        ? current === null
-        : holder?.token !== undefined
-          ? current?.token === holder.token
-          : JSON.stringify(current) === JSON.stringify(holder)
-      if (unchanged) {
-        try { unlinkSync(path) } catch {}
-      }
+      try { unlinkSync(path) } catch {}
     }
     return read() ?? {}
   }
 
   function release() {
     stop()
-    held.delete(release)
     if (owns()) {
       try { unlinkSync(path) } catch {}
     }

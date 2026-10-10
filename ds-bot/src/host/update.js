@@ -2,15 +2,15 @@
 // installed from (the npm registry, or a GitHub tag for a versioned git install)
 // and, when the user asks, reinstall it through DSH's plugin manager. A new version
 // runs from the next DSH start. A linked or local checkout is never offered one.
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const PKG = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
 export const OFFICIAL_REGISTRY = 'https://registry.npmjs.org/'
-export const MIRROR_REGISTRY = 'https://registry.npmmirror.com/'
+const MIRROR_REGISTRY = 'https://registry.npmmirror.com/'
 // Every window that opens asks; within this long the last answer stands.
-export const CHECK_TTL_MS = 10 * 60_000
-export const FETCH_TIMEOUT_MS = 8000
+const CHECK_TTL_MS = 10 * 60_000
+const FETCH_TIMEOUT_MS = 8000
 // The first check waits until the host has settled its own start.
 const STARTUP_DELAY_MS = 15_000
 const VERSION = /^v?(\d+\.\d+\.\d+(?:-[\w.]+)?)(?:\+[\w.]+)?$/
@@ -60,55 +60,12 @@ export function sourceOf(spec) {
 }
 
 const normalizeRegistry = url => `${String(url).trim().replace(/\/+$/, '')}/`
-export const encodeName = name => (name.startsWith('@') ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name))
-
-export const fetchJson = async (url, headers = {}) => {
-  const response = await fetch(url, { headers: { accept: 'application/json', ...headers }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-  if (!response.ok) throw new Error(`${url} answered ${response.status}`)
-  return response.json()
-}
-
-// The registries the plugin manager installs from, in its order: its configured
-// first one (else pnpm's own), then the fallbacks, unless that first one is private.
-export async function registryPlan(config, manager) {
-  if (typeof config.updateRegistry === 'string' && config.updateRegistry !== '') return [normalizeRegistry(config.updateRegistry)]
-  const configured = await Promise.resolve(manager?.registries?.()).catch(() => null)
-  if (!configured) return [OFFICIAL_REGISTRY, MIRROR_REGISTRY]
-  const fallbacks = (configured.fallbackRegistries ?? []).map(normalizeRegistry)
-  const own = configured.resolved ? normalizeRegistry(configured.resolved) : null
-  const first = configured.registry ? normalizeRegistry(configured.registry) : own ?? OFFICIAL_REGISTRY
-  const isPublic = first === OFFICIAL_REGISTRY || fallbacks.includes(first)
-  return isPublic ? [...new Set([first, ...fallbacks])] : [first]
-}
-
-// The plugin manager's `source` for this package; DSH releases before it reported
-// one leave the profile's own dependency entry to say the same.
-export async function installSpecOf(ctx) {
-  const manager = ctx.get?.('pluginManager')
-  const bundles = await Promise.resolve(manager?.listBundles?.()).catch(() => null)
-  const own = Array.isArray(bundles) ? bundles.find(bundle => bundle.name === PKG.name) : undefined
-  if (typeof own?.source === 'string') return own.source
-  const dir = ctx.get?.('profileContext')?.dir
-  if (typeof dir !== 'string') return undefined
-  try {
-    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dependencies?.[PKG.name]
-  } catch { return undefined }
-}
-
-// The public repository the releases live in, for tags and the "what's new" link.
-export const repoSlug = () =>
-  /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?$/i.exec(String(PKG.repository?.url ?? PKG.repository ?? ''))?.[1] ?? null
-
-const repoUrl = () => {
-  const repo = repoSlug()
-  return repo ? `https://github.com/${repo}` : null
-}
+const encodeName = name => (name.startsWith('@') ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name))
+// The project page of the releases, for the "what's new" link.
 const releasesUrl = () => {
-  const repo = repoUrl()
-  return repo ? `${repo}/releases` : (PKG.homepage ?? null)
+  const repo = /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?$/i.exec(String(PKG.repository?.url ?? PKG.repository ?? ''))?.[1]
+  return repo ? `https://github.com/${repo}/releases` : (PKG.homepage ?? null)
 }
-
-export const STARS_TTL_MS = 60 * 60_000
 
 export function install(rt) {
   const { ctx, config } = rt
@@ -123,55 +80,33 @@ export function install(rt) {
   let target = null
   let checking = null
 
-  // A remove-and-install update under hot reload drops this host with its bundle;
-  // a note in the data folder carries the result to the start that follows it.
-  const markerPath = typeof rt.home === 'string' ? join(rt.home, 'update.json') : null
-  if (markerPath !== null && existsSync(markerPath)) {
-    let marker = null
-    try {
-      marker = JSON.parse(readFileSync(markerPath, 'utf8'))
-    } catch (error) {
-      rt.warn('ds-bot: could not read the update note: %s', error?.message ?? error)
-    }
-    if (marker === null) {
-      try { unlinkSync(markerPath) } catch { /* gone is what we want */ }
-    } else if (marker.to === PKG.version) {
-      Object.assign(status, { phase: 'updated', installed: PKG.version })
-      try { unlinkSync(markerPath) } catch { /* gone is what we want */ }
-    } else if (typeof marker.error === 'string' || marker.from !== PKG.version) {
-      rt.warn('ds-bot: the update to %s did not finish: %s', marker.to ?? 'a newer version', typeof marker.error === 'string' ? marker.error.slice(0, 600) : 'the install did not complete')
-      try { unlinkSync(markerPath) } catch { /* gone is what we want */ }
-    }
-    // A clean note on the version that wrote it stays: a reload can still be
-    // running the old modules (the hoisted profile layout keeps one path), and
-    // the next start that runs the new code reports the update then.
-  }
-
   const view = () => ({
     name: status.name, current: status.current, latest: status.latest, source: status.source, notesUrl: status.notesUrl,
-    repoUrl: repoUrl(), enabled,
     checkedAt: status.checkedAt, phase: status.phase, installed: status.installed, error: status.error,
-    available: status.phase !== 'installed' && status.phase !== 'updated' && target !== null && status.latest !== null && newer(status.latest, status.current),
+    available: status.phase !== 'installed' && target !== null && status.latest !== null && newer(status.latest, status.current),
   })
 
-  // Asked only while the About page is open, so a closed page never calls GitHub.
-  // A failed answer keeps the last count and is asked again next time.
-  let stars = { count: null, at: 0 }
-  let starring = null
-  async function repoStars() {
-    const repo = repoSlug()
-    if (repo === null) return null
-    if (Date.now() - stars.at < STARS_TTL_MS) return stars.count
-    starring ??= fetchJson(`https://api.github.com/repos/${repo}`, { 'user-agent': `${PKG.name}/${PKG.version}` })
-      .then((info) => { if (Number.isInteger(info?.stargazers_count)) stars = { count: info.stargazers_count, at: Date.now() } })
-      .catch(error => rt.warn('ds-bot: star count failed: %s', error?.message ?? error))
-      .finally(() => { starring = null })
-    await starring
-    return stars.count
+  const fetchJson = async (url, headers = {}) => {
+    const response = await fetch(url, { headers: { accept: 'application/json', ...headers }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`)
+    return response.json()
+  }
+
+  // The registries the plugin manager installs from, in its order: its configured
+  // first one (else pnpm's own), then the fallbacks, unless that first one is private.
+  async function registryPlan() {
+    if (typeof config.updateRegistry === 'string' && config.updateRegistry !== '') return [normalizeRegistry(config.updateRegistry)]
+    const configured = await Promise.resolve(manager()?.registries?.()).catch(() => null)
+    if (!configured) return [OFFICIAL_REGISTRY, MIRROR_REGISTRY]
+    const fallbacks = (configured.fallbackRegistries ?? []).map(normalizeRegistry)
+    const own = configured.resolved ? normalizeRegistry(configured.resolved) : null
+    const first = configured.registry ? normalizeRegistry(configured.registry) : own ?? OFFICIAL_REGISTRY
+    const isPublic = first === OFFICIAL_REGISTRY || fallbacks.includes(first)
+    return isPublic ? [...new Set([first, ...fallbacks])] : [first]
   }
 
   async function newestFromRegistry() {
-    for (const registry of await registryPlan(config, manager())) {
+    for (const registry of await registryPlan()) {
       try {
         const version = cleanVersion((await fetchJson(`${registry}${encodeName(PKG.name)}/latest`)).version)
         if (version) return { version, spec: `${PKG.name}@${version}`, registry }
@@ -185,17 +120,25 @@ export function install(rt) {
     const release = await fetchJson(`https://api.github.com/repos/${source.owner}/${source.repo}/releases/latest`, { 'user-agent': `${PKG.name}/${PKG.version}` })
     const version = cleanVersion(release?.tag_name)
     if (!version) return null
-    // The API answers through redirects, so the release's html_url names the
-    // repository's current address; the install moves to it.
-    const current = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/releases\//.exec(release.html_url ?? '')
-    const [owner, repo] = current ? [current[1], current[2]] : [source.owner, source.repo]
     const fragment = [release.tag_name, ...source.rest].join('&')
-    return { version, spec: `github:${owner}/${repo}#${fragment}` }
+    return { version, spec: `github:${source.owner}/${source.repo}#${fragment}` }
+  }
+
+  // The plugin manager's `source` for this package; DSH releases before it reported
+  // one leave the profile's own dependency entry to say the same.
+  async function installSpec() {
+    const bundles = await Promise.resolve(manager()?.listBundles?.()).catch(() => null)
+    const own = Array.isArray(bundles) ? bundles.find(bundle => bundle.name === PKG.name) : undefined
+    if (typeof own?.source === 'string') return own.source
+    const dir = ctx.get?.('profileContext')?.dir
+    if (typeof dir !== 'string') return undefined
+    try {
+      return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dependencies?.[PKG.name]
+    } catch { return undefined }
   }
 
   async function runCheck() {
-    // The desktop app updates as a whole, with this package inside it.
-    const source = process.env.DS_BOT_APP === '1' ? { kind: 'app' } : sourceOf(await installSpecOf(ctx))
+    const source = sourceOf(await installSpec())
     status.source = source.kind
     let found = null
     try {
@@ -215,9 +158,6 @@ export function install(rt) {
     }
     status.latest = found.version
     target = newer(found.version, status.current) ? found : null
-    // The note that reported the last update is a one-time message; a newer
-    // release found later in the same run still offers itself.
-    if (target !== null && status.phase === 'updated') status.phase = 'idle'
   }
 
   /** Ask where the package came from for its newest version; a fresh check ignores the last answer. */
@@ -238,70 +178,7 @@ export function install(rt) {
     if (typeof service?.installBundle !== 'function') throw new Error('The DSH plugin manager is not available in this profile')
     const chosen = target
     Object.assign(status, { phase: 'installing', error: null })
-    const options = chosen.registry ? { registry: chosen.registry } : {}
-    // Removing this bundle disposes our context before the promise answers, so the
-    // continuation uses plain fs for the note and a guarded logger.
-    const note = (template, ...args) => { try { rt.warn(template, ...args) } catch { /* our context is disposed */ } }
-    const mark = (error) => {
-      if (markerPath === null) return
-      try {
-        writeFileSync(markerPath, JSON.stringify({
-          from: PKG.version, to: chosen.version, spec: chosen.spec, startedAt: new Date().toISOString(),
-          ...(error === undefined ? {} : { error: String(error).slice(0, 600) }),
-        }))
-      } catch { /* a note that cannot be written just is not there */ }
-    }
-    // A refused removal leaves this version running, with nothing for a later start to report.
-    const unmark = () => { if (markerPath !== null) try { unlinkSync(markerPath) } catch { /* already gone */ } }
-    void Promise.resolve(service.installBundle(chosen.spec, options))
-      .then(async (result) => {
-        if (result?.error?.code !== 'already-installed') return result
-        // With HMR the plugin manager refuses to install a package the profile already
-        // depends on: remove the bundle (which unloads this host) and install it again.
-        if (typeof service.removeBundle !== 'function') return { error: { code: 'not-removable' } }
-        // Asked before removal drops this host: the spec that puts the old version
-        // back. A registry spec is a range that can resolve to the failed release
-        // again, so pin the version that is actually running.
-        const oldSpec = await Promise.resolve(installSpecOf(ctx)).catch(() => undefined)
-        const previous = typeof oldSpec === 'string' && sourceOf(oldSpec).kind === 'registry' ? `${PKG.name}@${PKG.version}` : oldSpec
-        // The bundle is gone now; a failed install leaves no DS Bot unless the old one goes back.
-        const restore = async (failed) => {
-          if (typeof previous !== 'string' || previous === '') return failed
-          const back = await Promise.resolve(service.installBundle(previous, sourceOf(previous).kind === 'registry' && chosen.registry ? { registry: chosen.registry } : {})).catch(error => ({ error: { code: error?.message ?? 'restore failed' } }))
-          if (back?.error) {
-            note('ds-bot: could not reinstall %s after the failed update: %s', previous, back.error.diagnostic ?? back.error.code)
-            return failed
-          }
-          return `${failed}; ${previous} was reinstalled`
-        }
-        // A removal deselects the bundle before it unloads and removes the package, so
-        // one that fails afterwards leaves the profile changed (`changed`) without DS Bot.
-        // Selecting the bundle again undoes that; if the package is gone too, the old
-        // version is installed again. A removal that throws ran nothing (lock timeout).
-        const recover = async (failed) => {
-          const on = await Promise.resolve(service.setBundleEnabled?.(PKG.name, true)).catch(() => null)
-          if (on && !on.error && ['applied', 'restart-required'].includes(on.application)) return `${failed}; ${PKG.name} was enabled again`
-          return restore(failed)
-        }
-        mark()
-        const removed = await Promise.resolve(service.removeBundle(PKG.name)).catch((error) => { unmark(); throw error })
-        if (removed?.error) {
-          if (removed.changed) mark(await recover(removed.error.diagnostic ?? removed.error.code))
-          else unmark()
-          return { error: removed.error }
-        }
-        try {
-          const again = await service.installBundle(chosen.spec, options)
-          // A failure also arrives as an application state with no error; the
-          // result check below rejects every one of those, so restore sees the
-          // same failures it does.
-          if (again?.error || !['applied', 'restart-required'].includes(again?.application)) mark(await restore(again?.error?.diagnostic ?? again?.error?.code ?? `install ${again?.application ?? 'failed'}`))
-          return again
-        } catch (error) {
-          mark(await restore(error?.message ?? String(error)))
-          throw error
-        }
-      })
+    void Promise.resolve(service.installBundle(chosen.spec, chosen.registry ? { registry: chosen.registry } : {}))
       .then((result) => {
         if (result?.error || !['applied', 'restart-required'].includes(result?.application)) {
           throw new Error(result?.error?.diagnostic ?? result?.error?.code ?? `install ${result?.application ?? 'failed'}`)
@@ -309,7 +186,7 @@ export function install(rt) {
         Object.assign(status, { phase: 'installed', installed: cleanVersion(result.version) ?? chosen.version })
       })
       .catch((error) => {
-        note('ds-bot: update to %s failed: %s', chosen.spec, error?.message ?? error)
+        rt.warn('ds-bot: update to %s failed: %s', chosen.spec, error?.message ?? error)
         Object.assign(status, { phase: 'failed', error: String(error?.message ?? error).slice(0, 600) })
       })
     return view()
@@ -324,5 +201,5 @@ export function install(rt) {
     }, 'ds-bot: update check')
   }
 
-  Object.assign(rt, { updateCheck: check, updateStart: start, updateView: view, repoStars })
+  Object.assign(rt, { updateCheck: check, updateStart: start, updateView: view })
 }

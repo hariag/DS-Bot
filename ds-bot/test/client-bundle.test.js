@@ -22,7 +22,7 @@ test('client.js registers a factory that exports apply and inject', () => {
 
   const requested = []
   const platform = {
-    'react': { Component: class {}, createElement: () => null, Fragment: Symbol('Fragment'), useState: initial => [initial, () => {}], useEffect: () => {}, useMemo: make => make(), useCallback: fn => fn, useRef: current => ({ current }), useId: () => 'id', useSyncExternalStore: (sub, get) => get(), createContext: initial => ({ value: initial, Provider: () => null }), useContext: ctx => ctx.value },
+    'react': { createElement: () => null, Fragment: Symbol('Fragment'), useState: initial => [initial, () => {}], useEffect: () => {}, useMemo: make => make(), useRef: current => ({ current }) },
     'react-dom': { createPortal: node => node },
     '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null },
   }
@@ -35,7 +35,5 @@ test('client.js registers a factory that exports apply and inject', () => {
   assert.equal(Object.prototype.toString.call(exports), '[object Module]')
   assert.deepEqual(Object.keys(exports), ['apply', 'inject'])
   assert.equal(typeof exports.apply, 'function')
-  // No `configForms`: the client never writes the user's DSH settings, such as the
-  // work-details mode it once held at `verbose`.
-  assert.deepEqual(Array.from(exports.inject), ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout'])
+  assert.deepEqual(Array.from(exports.inject), ['sessions', 'uiWorkspace', 'slots', 'theme', 'layout', 'configForms'])
 })

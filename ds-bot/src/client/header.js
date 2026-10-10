@@ -1,14 +1,10 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
-import { ArrowUpIcon, CloseIcon, ArrowDownIcon, GoalIcon, MemoryIcon, SearchIcon } from './icons.js'
+import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
-import { AgentBadge } from './agent-badge.js'
 import { ActivityIndicator } from './activity-row.js'
 import { clockLabel, openingTurn, unseenSince } from './cells.js'
-import { GoalIsland, goalView } from './goal.js'
-import { TaskBoard } from './task-board.js'
-import { viewBottom } from './motion.js'
 import { t } from './i18n.js'
 
 // -------------------------------------------------------------------------
@@ -46,14 +42,8 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
-export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
-  const [boardOpen, setBoardOpen] = useState(false)
-  const [boardReview, setBoardReview] = useState(false)
-  useEffect(() => { setBoardOpen(false); setBoardReview(false) }, [sessionId])
+export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useActivity, useMemoryNews, useTurnClock, useUi, useLive, actions }) {
   const roster = useRoster(value => value)
-  const selectedView = useStore?.(state => state.view)
-  const away = useConversationViews?.(views => views.some(view => view.id === selectedView && view.id !== 'chat')) === true
-    && typeof selectView === 'function'
   const title = useSessions(list => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? '')
   const firstTurns = useSessions((list) => {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline
@@ -77,33 +67,17 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   const doing = useActivity(map => map[owner])
   const bot = roster.byId[sessionId]
   const room = roster.roomsById[sessionId]
-  const goal = room?.goal
-  // Goal panels are keyed by the group, never by its current Session: `composeGoal` and
-  // `toggleGoal` store `room.id`, and a group's Session moves to a fresh part when its
-  // folder changes, so the two differ for every group whose folder was changed.
-  const goalCompose = useUi(state => room !== undefined && state.goalCompose === room.id)
-  const goalOpen = useUi(state => room !== undefined && state.goalOpen === room.id)
-  // The island's live faces: who is at work in this group right now. Non-group
-  // chats subscribe to a constant so their header does not redraw on work.
-  const roomWorkKey = useWork?.(work => (room ? JSON.stringify(work.rooms?.[sessionId] ?? []) : '')) ?? '[]'
-  const roomWork = room ? JSON.parse(roomWorkKey || '[]') : []
-  const view = goal ? goalView(goal, { roster, roomWork }) : null
-  const goalShown = room !== undefined && !away && goal !== undefined
   const detailsOpen = useUi(state => state.details === sessionId)
   const name = bot?.name ?? room?.name ?? ''
   const useNews = useMemoryNews ?? noNews
-  const memoryIds = bot ? [bot.id] : room ? [room.id, ...room.members] : []
+  const memoryIds = bot ? [bot.id] : room?.members ?? []
   const notice = useMemoryNotice(memoryIds, useNews)
-  // While the notice shows, the pill opens the memory that changed: a Bot's, or the group's.
+  // While the notice shows, the pill opens the memory of the Bot that changed.
   const changed = useNews(map => latestMemoryChange(map, memoryIds))
   // The composer placeholder is not localizable per Session, so CSS reads it from here.
   useEffect(() => {
     document.body.style.setProperty('--bt-placeholder', JSON.stringify(name ? t('Message {name}', { name }) : t('Message')))
   }, [name, t('Message')])
-  // The unread label under a pending steering bubble reads its text from here.
-  useEffect(() => {
-    document.body.style.setProperty('--bt-steer-unread', JSON.stringify(t('Not read yet')))
-  }, [t('Not read yet')])
   useEffect(() => {
     actions.beginVisit(sessionId)
     return () => actions.endVisit(sessionId)
@@ -114,43 +88,21 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     else delete document.body.dataset.btRoom
     return () => { delete document.body.dataset.btRoom }
   }, [Boolean(room)])
-  const memoryNotice = !away && notice && changed !== null && roster.memory !== false
-  const showGoal = room !== undefined && !away && (goal !== undefined || goalCompose)
-  // The goal island pads the transcript so its pod does not cover the first message.
-  useEffect(() => {
-    if (showGoal) document.body.dataset.btGoal = ''
-    else delete document.body.dataset.btGoal
-    return () => { delete document.body.dataset.btGoal }
-  }, [showGoal])
-  const pill = h('button', {
-    type: 'button', className: 'bt-pill', 'aria-expanded': away ? undefined : detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
-    'aria-label': away ? t('Back to chat') : memoryNotice ? t('Memory updated. Open {name}\'s memory', { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
-    title: away ? name : undefined,
-    onClick: () => (away ? selectView('chat') : memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)),
-  },
+  const memoryNotice = notice && changed !== null && roster.memory !== false
+  return h('div', { className: 'bt-head' },
+    h('button', {
+      type: 'button', className: 'bt-pill', 'aria-expanded': detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
+      'aria-label': memoryNotice ? t('Memory updated. Open {name}\'s memory', { name: roster.byId[changed]?.name ?? name }) : t('View conversation details'),
+      onClick: () => (memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)),
+    },
     bot ? h(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== undefined), badge: false })
       : room ? h(RoomAvatar, { room, roster, size: 24 }) : null,
-    goalShown
-      ? h('span', { className: 'bt-pill-swap' },
-        h('span', { className: 'bt-pill-goal' }, h('span', { className: 'bt-pill-ico', 'aria-hidden': true }, h(GoalIcon)), h('span', { className: 'bt-pill-title' }, view.title)),
-        h('span', { className: 'bt-pill-name' }, name))
-      : h('span', { className: 'bt-pill-name' }, away ? t('Back to chat') : bot?.name ?? room?.name ?? (title || t('New chat')), !away && bot?.engine ? h(AgentBadge, { engine: bot.engine }) : null),
-    goalShown && view?.number !== undefined ? h('span', { className: 'bt-pill-count' }, `${view.number}/${view.count}`) : null,
+    h('span', { className: 'bt-pill-name' }, bot?.name ?? room?.name ?? (title || t('New chat'))),
     h(MemoryNotice, { shown: memoryNotice }),
-    h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow)))
-  return h('div', { className: 'bt-head' },
-    showGoal ? h(GoalIsland, { room, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill, openReview: () => { actions.closeGoal?.(); setBoardReview(true); setBoardOpen(true) } }) : pill,
-    !away && (room || bot) ? h('button', { type: 'button', className: 'bt-board-launch', onClick: () => { setBoardReview(false); setBoardOpen(true) } }, t('Task board')) : null,
-    boardOpen && !away && (room || bot) ? h(TaskBoard, { key: room?.id ?? bot.id, scope: room ? { kind: 'room', id: room.id } : { kind: 'personal', id: bot.id }, title: name, goal: room?.goal, initialReview: boardReview, refreshGoal: actions.refreshTeam, currentRoomGoal: actions.currentRoomGoal, resolveReview: room ? (goalId, reviewId, evidence) => actions.goalReviewResolve(room.id, goalId, reviewId, evidence) : undefined, close: () => setBoardOpen(false) }) : null,
+    h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
-    room !== undefined && !away
-      ? h('button', {
-        type: 'button', className: 'bt-icon-btn bt-head-search', 'aria-label': t('Search this group'), title: t('Search this group'),
-        onClick: () => actions.openGroupSearch(room.id),
-      }, h(SearchIcon))
-      : null,
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions }))
+    h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useLive, actions }))
 }
 
 // New-message pills. "N new messages ↓" takes Back to bottom's place when
@@ -186,23 +138,19 @@ function useTranscriptView() {
         divider,
         center: Math.round(box.left + box.width / 2),
         top: Math.round(headerBottom + 8),
-        bottom: Math.round(viewBottom() - box.bottom + composer + 8),
+        bottom: Math.round(window.innerHeight - box.bottom + composer + 8),
       }
       setView(prev => (prev && Object.keys(next).every(key => prev[key] === next[key]) ? prev : next))
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
     document.addEventListener('scroll', schedule, true)
     window.addEventListener('resize', schedule)
-    window.visualViewport?.addEventListener('resize', schedule)
-    window.visualViewport?.addEventListener('scroll', schedule)
     schedule()
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
       document.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
-      window.visualViewport?.removeEventListener('resize', schedule)
-      window.visualViewport?.removeEventListener('scroll', schedule)
     }
   }, [])
   return view

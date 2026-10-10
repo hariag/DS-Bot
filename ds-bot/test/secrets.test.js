@@ -1,16 +1,11 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { Context } from '@deepseek-ai/cordis'
-import { ShellEnvRegistry } from '@deepseek-ai/dsh-shell-env'
-import { createRuntime } from '../index.js'
-import { install as installDiagnostics } from '../src/host/diagnostics.js'
-import { inject as hostInject, name as hostName } from '../src/host/entry.js'
-import { canUse, encodeUrlComponent, install as installSecrets, normalizeName, redactDeep, redactor, SECRET_NAME } from '../src/host/secrets.js'
-import { install as installStore } from '../src/host/store.js'
+import { apply } from '../index.js'
+import { canUse, normalizeName, redactDeep, redactor, SECRET_NAME } from '../src/host/secrets.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Test values are random on every run, so a leak can only come from this run.
@@ -49,15 +44,6 @@ test('redaction replaces the longest value first, JSON-escaped forms too, and sk
   assert.equal(redactDeep(clean, redact), clean)
 })
 
-test('redaction replaces URL-encoded values', () => {
-  const value = `${fresh()} /+&?=#'!()* 中文`
-  const redact = redactor([{ name: 'TOKEN', value }])
-  assert.equal(redact(`https://example.test/mcp?key=${encodeUrlComponent(value)}&mode=1`), 'https://example.test/mcp?key=[secret:TOKEN]&mode=1')
-  assert.equal(redact(new URL(`https://example.test/mcp?key=${encodeUrlComponent(value)}`).href), 'https://example.test/mcp?key=[secret:TOKEN]')
-  const broken = `${fresh()}\uD800`
-  assert.equal(redactor([{ name: 'BROKEN', value: broken }])(`x ${broken}`), 'x [secret:BROKEN]')
-})
-
 test('a short key (4 to 7 characters) is replaced only where it stands alone', () => {
   const redact = redactor([{ name: 'PIN', value: '4821' }, { name: 'PW', value: 'cat$1' }, { name: 'SECRET_WORD', value: 'secret' }])
   assert.equal(redact('pin 4821, again "4821"'), 'pin [secret:PIN], again "[secret:PIN]"')
@@ -87,8 +73,8 @@ const TEAM = {
   questions: {},
 }
 
-let rt
-function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-')) } = {}) {
+function start() {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const contributors = []
   const shellEnv = {
@@ -118,7 +104,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-')) } = {}) {
   }
   let route
   ctx.connection.fetch.register = (options) => { route = options; return () => {} }
-  rt = createRuntime(ctx, { home })
+  apply(ctx, { home })
   const call = async (endpoint, payload) => {
     const response = await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))
     return response.json()
@@ -126,7 +112,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-')) } = {}) {
   const tool = (name, args, agentId, extra = {}) => {
     let concluded = false
     const exec = { agent: { id: agentId }, callId: `call-${agentId}-${name}`, concludeTurn: () => { concluded = true }, ...extra }
-    return rt.teamTools.find(d => d.name === name).execute(args, exec).then(text => ({ text, concluded }))
+    return ctx.registeredTools.get(name).execute(args, exec).then(text => ({ text, concluded }))
   }
   const view = async () => {
     const result = await call('state', {})
@@ -134,7 +120,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-')) } = {}) {
     return result.value
   }
   const env = (agentId, command = '') => contributors.filter(entry => entry.live).at(-1)?.resolve({ agent: { id: agentId, session: { header: { id: agentId } } }, arguments: { command } }) ?? {}
-  const stop = async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) }
+  const stop = () => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) }
   return { ctx, home, call, tool, view, env, listeners, delivered, streamed, contributors, stop }
 }
 
@@ -163,8 +149,7 @@ test('a card saves a key the Bot never sees, and the shell gets it', async (t) =
   assert.match((await bench.call('secret-set', { requestId: request.id, value })).error.message, /already answered/)
 
   const file = join(bench.home, 'secrets.json')
-  // Windows has no POSIX mode bits: a writable file always stats as 0o666 there.
-  if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600)
+  assert.equal(statSync(file).mode & 0o777, 0o600)
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).secrets[0].value, value)
   assert.deepEqual(readdirSync(bench.home).filter(name => name.endsWith('.tmp')), [])
   team = await bench.view()
@@ -249,27 +234,6 @@ test('a Bot outside the scope gets an allow card, and allowing resolves it', asy
   assert.deepEqual(JSON.parse(readFileSync(join(bench.home, 'secrets.json'), 'utf8')).secrets, [])
 })
 
-test('a key\'s purpose can be changed or cleared on its own', async (t) => {
-  const bench = start()
-  t.after(bench.stop)
-  await bench.call('secret-set', { name: 'DEMO_TOKEN', value: fresh(), purpose: 'first', scope: 'all' })
-
-  const changed = await bench.call('secret-update', { name: 'DEMO_TOKEN', purpose: 'renamed' })
-  assert.equal(changed.value.purpose, 'renamed')
-  assert.equal(changed.value.scope, 'all')
-  const cleared = await bench.call('secret-update', { name: 'DEMO_TOKEN', purpose: '' })
-  assert.equal(cleared.value.purpose, '')
-  const scoped = await bench.call('secret-update', { name: 'DEMO_TOKEN', scope: ['b2'] })
-  assert.deepEqual(scoped.value.scope, ['b2'])
-  assert.equal(scoped.value.purpose, '')
-  const both = await bench.call('secret-update', { name: 'DEMO_TOKEN', scope: 'all', purpose: 'kept' })
-  assert.equal(both.value.scope, 'all')
-  assert.equal(both.value.purpose, 'kept')
-  const saved = JSON.parse(readFileSync(join(bench.home, 'secrets.json'), 'utf8')).secrets[0]
-  assert.equal(saved.purpose, 'kept')
-  assert.equal(saved.scope, 'all')
-})
-
 test('cards stay in a Bot\'s own chat; canceling tells the Bot', async (t) => {
   const bench = start()
   t.after(bench.stop)
@@ -307,32 +271,9 @@ test('tool results and model requests lose the values', async (t) => {
   t.after(bench.stop)
   const value = fresh()
   await bench.call('secret-set', { name: 'DEMO_TOKEN', value })
-  // The team tools' listener (working_directory) registers first; the schedule list's
-  // registers after this one.
-  const execute = bench.listeners['tools/execute'].filter(listener => listener.name !== 'listOwnSchedules' && listener.name !== 'computerTrack').at(-1)
+  const [execute] = bench.listeners['tools/execute']
   const ok = await execute({}, async () => ({ isError: false, value: { kind: 'foreground', stdout: { text: `${value}\n`, truncated: false } }, content: [{ type: 'text', text: value }], meta: { stdout: value } }))
-  assert.equal(ok.isError, false)
-  assert.deepEqual(ok.value, { kind: 'foreground', stdout: { text: '[secret:DEMO_TOKEN]\n', truncated: false } })
-  // The rest of a changed result stays whole and loses the values too: a wrapper
-  // further out still reads its content and meta, and they are already redacted.
-  assert.deepEqual(ok.content, [{ type: 'text', text: '[secret:DEMO_TOKEN]' }])
-  assert.equal(ok.meta.stdout, '[secret:DEMO_TOKEN]')
-  const logged = await (async () => {
-    const result = await execute({}, async () => ({
-      isError: false,
-      value: { text: value },
-      content: [{ type: 'text', text: `out ${value}` }],
-      meta: { stdout: value },
-      additionalContexts: [{ role: 'user', content: [{ type: 'text', text: value }] }],
-    }))
-    // A logging wrapper reads `content` right after its next() — before the
-    // registry re-renders a success result from its value.
-    assert.equal(result.content.length, 1)
-    return result
-  })()
-  assert.equal(logged.content[0].text, 'out [secret:DEMO_TOKEN]')
-  assert.equal(logged.meta.stdout, '[secret:DEMO_TOKEN]')
-  assert.equal(logged.additionalContexts[0].content[0].text, '[secret:DEMO_TOKEN]')
+  assert.deepEqual(ok, { isError: false, value: { kind: 'foreground', stdout: { text: '[secret:DEMO_TOKEN]\n', truncated: false } } })
   const failed = await execute({}, async () => ({ isError: true, error: { message: `bad ${value}` }, content: [{ type: 'text', text: `bad ${value}` }] }))
   assert.equal(failed.content[0].text, 'bad [secret:DEMO_TOKEN]')
   assert.equal(failed.error.message, 'bad [secret:DEMO_TOKEN]')
@@ -359,211 +300,4 @@ test('tool results and model requests lose the values', async (t) => {
   assert.equal(passed.length, 1)
   stream({ ...options, system: 'clean', messages: [] }, next)
   assert.equal(passed.length, 2)
-})
-
-test('a restarted host resolves its team Sessions and their keys before the first shell call', (t) => {
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-'))
-  const value = fresh()
-  writeFileSync(join(home, 'secrets.json'), JSON.stringify({ version: 1, secrets: [{ name: 'DEMO_TOKEN', value, purpose: 'p', scope: 'all', requestedBy: 'b2', createdAt: 1, updatedAt: 1 }] }))
-  const bench = start({ home })
-  t.after(bench.stop)
-  // apply() has just returned: no endpoint or tool has run yet, but a restored
-  // Session's first shell call already resolves its Bot and its variables.
-  assert.deepEqual(bench.env('b2'), { DSH_SECRET_DEMO_TOKEN: value })
-  assert.deepEqual(bench.env('g-b2'), { DSH_SECRET_DEMO_TOKEN: value })
-  assert.deepEqual(bench.env('elsewhere'), {})
-})
-
-test('a secrets file that cannot be read blocks every write instead of being overwritten', async (t) => {
-  // A directory reads as EISDIR on every platform; no chmod games needed. It has to
-  // exist before the plugin loads, or the first read has already found the file empty.
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-'))
-  mkdirSync(join(home, 'secrets.json'))
-  const bench = start({ home })
-  t.after(bench.stop)
-  const file = join(home, 'secrets.json')
-  const denied = await bench.call('secret-set', { name: 'TEST_TOKEN', value: '12345678' })
-  assert.equal(denied.ok, false)
-  assert.match(denied.error.message, /secrets\.json could not be read \(EISDIR\)\. DS Bot does not change it/)
-  assert.ok(statSync(file).isDirectory())
-  // While it stays unreadable, nothing is written; once it is gone, saving works.
-  rmSync(file, { recursive: true })
-  const saved = await bench.call('secret-set', { name: 'TEST_TOKEN', value: '12345678' })
-  assert.equal(saved.ok, true, JSON.stringify(saved.error))
-})
-
-test('a secrets file that is not JSON is kept aside, and the store goes on', async (t) => {
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-secrets-'))
-  writeFileSync(join(home, 'secrets.json'), 'not a secrets file\n')
-  const bench = start({ home })
-  t.after(bench.stop)
-  const saved = await bench.call('secret-set', { name: 'TEST_TOKEN', value: '12345678' })
-  assert.equal(saved.ok, true, JSON.stringify(saved.error))
-  const broken = readdirSync(home).filter(name => name.startsWith('secrets.json.broken-'))
-  assert.deepEqual(broken.length, 1)
-  assert.equal(readFileSync(join(home, broken[0]), 'utf8'), 'not a secrets file\n')
-})
-
-function stubCordisHost(ctx) {
-  const noop = () => () => {}
-  const services = {
-    llm: { listProviders: () => [], registerAdapter: () => { const h = () => {}; h.replace = () => {}; return h } },
-    tools: { register: noop, guard: noop, schemas: () => [] },
-    systemPrompt: { section: noop },
-    sessionController: { runningSessions: () => [], running: () => new Set(), list: () => [], get: () => undefined, resolveAgent: async () => undefined, watch: noop },
-    sessions: { list: async () => [], get: async () => null, load: async () => null, on: noop },
-    sessionTitle: { register: noop, setSource: noop },
-    workspaceRegistry: { list: () => [], get: () => null },
-    connection: { fetch: { register: noop }, ws: { register: noop } },
-  }
-  for (const [key, service] of Object.entries(services)) ctx.provide(key, service)
-}
-
-test('real Cordis ShellEnvRegistry resolves secrets after restart and reload across session shapes', async (t) => {
-  const dshHome = mkdtempSync(join(tmpdir(), 'ds-bot-cordis-secrets-'))
-  const team = join(dshHome, 'bot')
-  mkdirSync(team, { recursive: true })
-  const apiKey = fresh()
-  const coderKey = fresh()
-  writeFileSync(join(team, 'state.json'), JSON.stringify({
-    version: 1,
-    mainBotIds: ['main'],
-    bots: {
-      main: { id: 'main', name: 'Chief', main: true },
-      'empty-sid': { id: 'empty-sid', name: 'Empty', sessionId: '' },
-      coder: {
-        id: 'coder',
-        name: 'Coder',
-        sessionId: 'sess-coder-2',
-        segments: [{ sessionId: 'sess-coder-1', workDir: '/a' }],
-        openParts: [{ sessionId: 'sess-coder-open', segments: [{ sessionId: 'sess-coder-open-old' }] }],
-      },
-    },
-    rooms: {
-      r1: { id: 'r1', name: 'SecRoom', named: true, members: ['main', 'coder'], sessions: { main: 'grp-main-1' } },
-    },
-  }))
-  writeFileSync(join(team, 'secrets.json'), JSON.stringify({
-    version: 1,
-    secrets: [
-      { name: 'API_KEY', value: apiKey, purpose: 'p', scope: 'all', requestedBy: 'main', createdAt: 1, updatedAt: 1 },
-      { name: 'CODER_KEY', value: coderKey, purpose: 'c', scope: ['coder'], requestedBy: 'coder', createdAt: 1, updatedAt: 1 },
-    ],
-  }))
-
-  const ctx = new Context()
-  stubCordisHost(ctx)
-  await ctx.plugin(ShellEnvRegistry, { dshHome })
-  const mount = async () => {
-    const fiber = ctx.plugin({
-      name: hostName,
-      inject: hostInject,
-      apply(c) { createRuntime(c, { home: team }) },
-    })
-    await fiber
-    await new Promise(resolve => setImmediate(resolve))
-    return fiber
-  }
-
-  let active = await mount()
-  t.after(async () => {
-    await active?.dispose?.()
-    await ctx.stop?.()
-    rmSync(dshHome, { recursive: true, force: true })
-  })
-
-  const collect = agent => ctx.shellEnv.collect({ agent, arguments: { command: 'env' } })
-  const checkAll = () => {
-    assert.equal(collect({ session: { header: { id: 'main' } } }).DSH_SECRET_API_KEY, apiKey)
-    assert.equal(collect({ session: { header: { id: 'main' } } }).DSH_SECRET_CODER_KEY, undefined)
-    assert.equal(collect({ session: { header: { id: 'empty-sid' } } }).DSH_SECRET_API_KEY, apiKey)
-    assert.equal(collect({ session: { id: 'sess-coder-2', header: {} } }).DSH_SECRET_CODER_KEY, coderKey)
-    assert.equal(collect({ session: { header: { id: 'sess-coder-1' } } }).DSH_SECRET_CODER_KEY, coderKey)
-    assert.equal(collect({ session: { header: { id: 'sess-coder-open' } } }).DSH_SECRET_CODER_KEY, coderKey)
-    assert.equal(collect({ session: { header: { id: 'sess-coder-open-old' } } }).DSH_SECRET_CODER_KEY, coderKey)
-    assert.equal(collect({ session: { header: { id: 'grp-main-1' } } }).DSH_SECRET_API_KEY, apiKey)
-    assert.equal(collect({ session: { header: { id: 'unrelated-chat' } } }).DSH_SECRET_API_KEY, undefined)
-  }
-
-  checkAll()
-  await active.dispose()
-  active = await mount()
-  checkAll()
-})
-
-test('read-only host with secrets loaded before store.load does not touch files and picks up external updates', async (t) => {
-  const dshHome = mkdtempSync(join(tmpdir(), 'ds-bot-ro-secrets-'))
-  const team = join(dshHome, 'bot')
-  mkdirSync(team, { recursive: true })
-
-  writeFileSync(join(team, 'state.lock'), JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: 'writer-host' }))
-  writeFileSync(join(team, 'state.json'), JSON.stringify({
-    version: 1,
-    mainBotIds: ['main'],
-    bots: { main: { id: 'main', name: 'Chief', main: true } },
-    rooms: {},
-  }))
-  const v1 = fresh()
-  const secPath = join(team, 'secrets.json')
-  writeFileSync(secPath, JSON.stringify({
-    version: 1,
-    secrets: [{ name: 'API_KEY', value: v1, purpose: 'p', scope: 'all', requestedBy: null, createdAt: 1, updatedAt: 1 }],
-  }))
-  chmodSync(secPath, 0o444)
-  const modeBefore = statSync(secPath).mode & 0o777
-
-  const ctx = new Context()
-  stubCordisHost(ctx)
-  await ctx.plugin(ShellEnvRegistry, { dshHome })
-  let rt
-  const fiber = ctx.plugin({
-    name: 'ro-secrets-test',
-    inject: ['shellEnv', 'tools', 'connection'],
-    apply(c) {
-      rt = { ctx: c, config: {}, home: team, statePath: join(team, 'state.json'), teamTools: [] }
-      installDiagnostics(rt)
-      installStore(rt)
-      installSecrets(rt)
-    },
-  })
-  await fiber
-  await new Promise(resolve => setImmediate(resolve))
-  t.after(async () => {
-    await fiber.dispose()
-    await ctx.stop?.()
-    await new Promise(resolve => setTimeout(resolve, 20))
-    rmSync(dshHome, { recursive: true, force: true })
-  })
-
-  // Before rt.load(), secrets must not chmod a locked team's secrets.json.
-  assert.equal(statSync(secPath).mode & 0o777, modeBefore)
-
-  // Calling collect before explicit rt.load() must load state & resolve secrets without modifying secrets.json mode.
-  const first = ctx.shellEnv.collect({ agent: { session: { header: { id: 'main' } } }, arguments: {} })
-  assert.equal(first.DSH_SECRET_API_KEY, v1)
-  await rt.load()
-  assert.equal(statSync(secPath).mode & 0o777, modeBefore)
-
-  // Writer updates an existing secret and adds a new key while this host stays read-only.
-  chmodSync(secPath, 0o644)
-  const v2 = fresh()
-  const extra = fresh()
-  writeFileSync(secPath, JSON.stringify({
-    version: 1,
-    secrets: [
-      { name: 'API_KEY', value: v2, purpose: 'p', scope: 'all', requestedBy: null, createdAt: 1, updatedAt: 2 },
-      { name: 'NEW_KEY', value: extra, purpose: 'n', scope: 'all', requestedBy: null, createdAt: 2, updatedAt: 2 },
-    ],
-  }))
-  const second = ctx.shellEnv.collect({ agent: { session: { header: { id: 'main' } } }, arguments: {} })
-  assert.equal(second.DSH_SECRET_API_KEY, v2)
-  await new Promise(resolve => setImmediate(resolve))
-  const third = ctx.shellEnv.collect({ agent: { session: { header: { id: 'main' } } }, arguments: {} })
-  assert.equal(third.DSH_SECRET_NEW_KEY, extra)
-
-  // Corrupt secrets file under read-only must not create .broken-* files on disk.
-  writeFileSync(secPath, 'not valid json\n')
-  await rt.refresh()
-  const broken = readdirSync(team).filter(name => name.startsWith('secrets.json.broken-'))
-  assert.deepEqual(broken, [])
 })

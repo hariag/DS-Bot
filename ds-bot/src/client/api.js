@@ -2,7 +2,6 @@ import { hostText, t } from './i18n.js'
 import { markNoted, noteClientError } from './diagnostics.js'
 
 const ROUTE = 'api/bot'
-const BOARD_UPLOAD_ROUTE = 'api/bot-board-upload'
 // Refusals carry a message meant for the user, who sees it where they acted.
 const REFUSALS = new Set(['bot/refused', 'bot/invalid', 'bot/read-only', 'bot/not-found', 'bot/browser-off'])
 
@@ -10,7 +9,7 @@ export const call = async (endpoint, payload, signal) => {
   let response
   try {
     // Document-relative so the Web UI keeps working under a mounted base path.
-    response = await fetch(endpoint === 'board-upload' ? BOARD_UPLOAD_ROUTE : ROUTE, {
+    response = await fetch(ROUTE, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },

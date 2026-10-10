@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 // -------------------------------------------------------------------------
 // Overlays: new chat, bot exchange, details drawer, context menu
@@ -18,4 +18,14 @@ export function useEscape(onClose) {
       if (escapeLayers.length === 0) window.removeEventListener('keydown', onEscapeKey)
     }
   }, [])
+}
+
+// New chat and Bot exchanges show in place of the conversation, right of the sidebar.
+export function usePaneLeft() {
+  const [paneLeft, setPaneLeft] = useState(280)
+  useLayoutEffect(() => {
+    const column = document.querySelector('[class*="_footArea"]')?.parentElement
+    if (column) setPaneLeft(Math.round(column.getBoundingClientRect().right))
+  }, [])
+  return paneLeft
 }

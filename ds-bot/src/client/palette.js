@@ -1,5 +1,5 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
-import { FishLogo } from './dsh-primitives.js'
+import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isMainOf } from './sources.js'
 import { currentPart, stripHeader } from './text.js'
 import { PlusIcon, SearchIcon, PeopleIcon, CloseIcon, GearIcon } from './icons.js'
@@ -81,7 +81,7 @@ export function CommandPalette({ start, token, roster, actions, useSessions }) {
     { key: 'cmd:new', icon: h(PlusIcon), title: t('New chat'), run: () => actions.openNewChat('new') },
     { key: 'cmd:bot', icon: h(PlusIcon), title: t('Create Bot'), run: () => actions.openNewChat('create') },
     { key: 'cmd:group', icon: h(PeopleIcon), title: t('Create group chat'), run: () => actions.openNewChat('group') },
-    { key: 'cmd:settings', icon: h(GearIcon), title: t('Settings'), run: () => actions.openSettings('general') },
+    { key: 'cmd:settings', icon: h(GearIcon), title: t('Bot settings'), run: () => actions.openSettings('general') },
   ].filter(command => matchesName(command.title))
   if (commands.length) sections.push([t('Commands'), commands])
   const rows = sections.flatMap(([, items]) => items)

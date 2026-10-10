@@ -1,4 +1,4 @@
-import { ACCENT_INKS, INKS, isHex, luminance } from './inks.js'
+import { isHex, luminance } from './inks.js'
 import { SHAPES, markupCache, maskCache } from './characters.js'
 import { createSource } from './sources.js'
 
@@ -29,37 +29,23 @@ const THEMES = {
     dark: { bg: '#0b1020', sidebar: '#10172a', bubble: '#1a2340', card: '#141c33', text: '#e8edf7', user: '#3b6fd8', userText: '#ffffff', accent: '#4f9dff' },
   },
 }
-// Text on the accent: near-black or white, whichever has the higher WCAG contrast.
-// (L + .05)² > 1.05 × (L(#141414) + .05) is "dark ink reads better".
-const DARK_INK = '#141414'
-const accentInk = accent => ((luminance(accent) + 0.05) ** 2 > 1.05 * (luminance(DARK_INK) + 0.05) ? DARK_INK : '#ffffff')
 const rgba = (hex, alpha) => `rgba(${[1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16)).join(',')},${alpha})`
-export function themeVars(mode, dark, accent = mode.accent) {
+function themeVars(mode, dark, accent = mode.accent) {
   return {
     '--bt-ink': mode.text, '--bt-ink-2': rgba(mode.text, 0.6), '--bt-ink-3': rgba(mode.text, 0.36),
-    '--bt-bubble': mode.bubble, '--bt-sidebar': `var(--bt-skin-sidebar, ${mode.sidebar})`,
-    '--bt-main': `var(--bt-skin-main, ${mode.bg})`, '--bt-card': `var(--bt-skin-card, ${mode.card})`,
+    '--bt-bubble': mode.bubble, '--bt-sidebar': mode.sidebar, '--bt-main': mode.bg, '--bt-card': mode.card,
     '--bt-line': rgba(mode.text, 0.08), '--bt-line-2': rgba(mode.text, 0.15),
     '--bt-hover': dark ? 'rgba(160,160,160,.12)' : 'rgba(119,119,119,.09)',
     '--bt-active': dark ? 'rgba(160,160,160,.2)' : 'rgba(119,119,119,.17)',
-    '--bt-accent': accent, '--bt-accent-ink': accentInk(accent),
+    '--bt-accent': accent, '--bt-accent-ink': luminance(accent) > 0.45 ? '#141414' : '#ffffff',
     '--bt-user': mode.user, '--bt-user-ink': mode.userText,
     '--bt-tag-bg': rgba(mode.text, dark ? 0.09 : 0.06), '--bt-tag-ink': rgba(mode.text, 0.58),
-    // Warning text and icon: readable on the card in both modes (ui-standard 2.3).
-    '--bt-warn': dark ? '#f0b84a' : '#8a5a00',
   }
 }
 const declarations = vars => Object.entries(vars).map(([name, value]) => `${name}:${value}`).join(';')
-// A preset accent is saved as its light value; in dark mode it takes the preset's dark
-// value, as Bot names do, so Charcoal does not vanish on a dark background. A custom
-// accent is the same in both modes. A preset is matched the way Settings marks it.
-const darkAccent = (accent) => {
-  const ink = ACCENT_INKS.find(id => INKS[id][0] === accent)
-  return ink === undefined ? accent : INKS[ink][1]
-}
 // `html body` outranks the base sheet's `body` rules without !important.
 export const themeCss = (theme, accent) => `html body{${declarations(themeVars(theme.light, false, accent ?? theme.light.accent))}}
-html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, darkAccent(accent) ?? theme.dark.accent))}}
+html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, accent ?? theme.dark.accent))}}
 ${theme.css ?? ''}`
 export const shellTokens = ({ light, dark }) => ({
   '--dsw-alias-bg-base': { light: light.bg, dark: dark.bg },
@@ -68,6 +54,11 @@ export const shellTokens = ({ light, dark }) => ({
   '--dsw-alias-label-primary': { light: light.text, dark: dark.text },
   '--dsw-alias-label-secondary': { light: rgba(light.text, 0.74), dark: rgba(dark.text, 0.74) },
   '--dsw-alias-label-tertiary': { light: rgba(light.text, 0.6), dark: rgba(dark.text, 0.6) },
+})
+// The user bubble belongs to the conversation group: on a plain Session the shell
+// stays mounted but dsh's own colors paint the bubbles.
+export const conversationTokens = ({ light, dark }) => ({
+  '--dsw-specific-bubble': { light: light.user, dark: dark.user },
 })
 
 // Other plugins add character shapes and themes through `window.dshBot`, or queue
@@ -119,14 +110,3 @@ export function registerTheme(id, theme) {
   }
 }
 export const allThemes = () => ({ ...THEMES, ...customThemes })
-
-// How chat messages are drawn; a value the plugin does not know reads as the default.
-// A width is a percent of the column: the bubbles' in either layout, the text's in the
-// flat one.
-export const MESSAGE_WIDTH = { min: 50, max: 100, step: 5 }
-const percent = (value, initial) => (Number.isInteger(value) && value >= MESSAGE_WIDTH.min && value <= MESSAGE_WIDTH.max ? value : initial)
-export const layoutOf = prefs => (prefs?.layout === 'flat' ? 'flat' : 'bubble')
-export const effectsOf = prefs => (prefs?.effects === 'reduced' || prefs?.effects === 'off' ? prefs.effects : 'full')
-export const thinkingShown = prefs => prefs?.thinking === true
-export const widthOf = prefs => percent(prefs?.width, 80)
-export const flatWidthOf = prefs => percent(prefs?.flatWidth, 100)

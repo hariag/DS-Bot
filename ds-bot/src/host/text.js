@@ -37,8 +37,6 @@ export const estimateTokens = (text) => {
   return Math.ceil(tokens)
 }
 export const clip = (text, max, rest) => (text.length > max ? `${text.slice(0, max)}… (cut; ${rest})` : text)
-// The first `max` UTF-16 units of a text, never half of a character.
-export const headOf = (text, max) => (text.length <= max ? text : text.slice(0, /[\uD800-\uDBFF]/.test(text[max - 1]) ? max - 1 : max))
 
 export const createClock = (timeZone) => {
   const clockFormat = new Intl.DateTimeFormat('en-CA', {
@@ -46,17 +44,4 @@ export const createClock = (timeZone) => {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   })
   return time => (Number.isFinite(time) ? clockFormat.format(time).replace(',', '') : '?')
-}
-
-// The prompts in a due scheduled task's message. DSH frames it for the model: one
-// task as `reminder_prompt_json: "…"`, several as `reminders_json: [{reminder_prompt}]`.
-export function reminderPrompts(text) {
-  const one = /^reminder_prompt_json: (.*)$/m.exec(String(text ?? ''))
-  const batch = /^reminders_json: (.*)$/m.exec(String(text ?? ''))
-  try {
-    const prompts = [...(one ? [JSON.parse(one[1])] : []), ...(batch ? JSON.parse(batch[1]).map(entry => entry?.reminder_prompt) : [])]
-    return prompts.filter(prompt => typeof prompt === 'string' && prompt.trim() !== '')
-  } catch {
-    return []
-  }
 }

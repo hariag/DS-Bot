@@ -1,6 +1,5 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { fnv1a, lookOf, shapeId, shapeOf, MASK_ID, nextMarkSerial, characterMarkup } from './characters.js'
-import { reducedEffects, reducedMotion } from './motion.js'
 import { t } from './i18n.js'
 
 export { colorOf, lookOf } from './characters.js'
@@ -9,12 +8,10 @@ export { colorOf, lookOf } from './characters.js'
 // Bot mark: the Bot's character (or its uploaded photo), looked up by lookOf.
 
 // Mascot states: what the Bot is doing picks the
-// motion. Uploaded images only bob or hop, since they have no parts to move. `waiting`:
-// no turn runs, but work it handed on has not come back yet.
-const STATES = ['idle', 'thinking', 'searching', 'working', 'sending', 'orbit', 'waiting', 'alert', 'done']
-export const botState = (running, activity, alert) => (running ? (STATES.includes(activity) && activity !== 'waiting' ? activity : 'working')
-  : alert ? 'alert' : activity === 'waiting' ? 'waiting' : 'idle')
-export const toolState = name => (/^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? 'sending'
+// motion. Uploaded images only bob or hop, since they have no parts to move.
+const STATES = ['idle', 'thinking', 'searching', 'working', 'sending', 'orbit', 'alert', 'done']
+export const botState = (running, activity, alert) => (running ? (STATES.includes(activity) ? activity : 'working') : alert ? 'alert' : 'idle')
+export const toolState = name => (/^(message_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? 'sending'
   : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? 'searching' : 'working')
 
 // Eyes follow the pointer on large marks.
@@ -23,54 +20,23 @@ function useGaze(ref, enabled) {
     if (!enabled) return undefined
     let frame = 0
     let point = null
-    let active = false
-    const clear = () => {
-      point = null
-      if (frame) {
-        cancelAnimationFrame(frame)
-        frame = 0
-      }
-      ref.current?.style.removeProperty('--bt-gx')
-      ref.current?.style.removeProperty('--bt-gy')
-    }
     const place = () => {
       frame = 0
       const node = ref.current
-      if (!node || !point || reducedEffects()) return
+      if (!node || !point) return
       const box = node.getBoundingClientRect()
       const clamp = value => Math.max(-1, Math.min(1, value))
       node.style.setProperty('--bt-gx', clamp((point.x - box.left - box.width / 2) / 160).toFixed(2))
       node.style.setProperty('--bt-gy', clamp((point.y - box.top - box.height / 2) / 160).toFixed(2))
     }
-    const onMove = (event) => {
-      if (reducedEffects() || document.body?.dataset.btMotion === 'quiet') return
-      point = { x: event.clientX, y: event.clientY }
-      if (!frame) frame = requestAnimationFrame(place)
-    }
+    const onMove = (event) => { point = { x: event.clientX, y: event.clientY }; if (!frame) frame = requestAnimationFrame(place) }
     const onLeave = () => { point = null; ref.current?.style.setProperty('--bt-gx', '0'); ref.current?.style.setProperty('--bt-gy', '0') }
-    const attach = () => {
-      if (active) return
-      active = true
-      window.addEventListener('pointermove', onMove, { passive: true })
-      document.documentElement.addEventListener('pointerleave', onLeave)
-    }
-    const detach = () => {
-      if (!active) return
-      active = false
+    window.addEventListener('pointermove', onMove, { passive: true })
+    document.documentElement.addEventListener('pointerleave', onLeave)
+    return () => {
+      cancelAnimationFrame(frame)
       window.removeEventListener('pointermove', onMove)
       document.documentElement.removeEventListener('pointerleave', onLeave)
-      clear()
-    }
-    const sync = () => { if (reducedEffects()) detach(); else attach() }
-    sync()
-    const observer = typeof MutationObserver === 'function' && document.body ? new MutationObserver(sync) : null
-    observer?.observe(document.body, { attributes: true, attributeFilter: ['data-bt-effects'] })
-    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)')
-    media?.addEventListener?.('change', sync)
-    return () => {
-      observer?.disconnect()
-      media?.removeEventListener?.('change', sync)
-      detach()
     }
   }, [enabled])
 }
@@ -86,14 +52,11 @@ export function BotMark({ bot, look: given, size = 36, state = 'idle', live = fa
   const maskId = useRef('')
   if (maskId.current === '') maskId.current = `bt-mark-${nextMarkSerial()}`
   const [poked, setPoked] = useState(false)
-  // A photo that does not load shows the character instead; a new photo is tried again.
-  const [broken, setBroken] = useState('')
-  const image = look.image && look.image !== broken ? look.image : undefined
   useGaze(ref, gaze)
   const common = {
     ref,
     className: poked ? 'bt-mark bt-mark-poke' : 'bt-mark',
-    'data-shape': image ? 'image' : shapeId(look.shape),
+    'data-shape': look.image ? 'image' : shapeId(look.shape),
     'data-state': STATES.includes(state) ? state : 'idle',
     'data-live': live ? '' : undefined,
     'data-fidget': live ? FIDGETS[fnv1a(`${bot?.id ?? ''}:fidget`) % FIDGETS.length] : undefined,
@@ -103,10 +66,10 @@ export function BotMark({ bot, look: given, size = 36, state = 'idle', live = fa
     role: label ? 'img' : undefined,
     'aria-label': label,
     'aria-hidden': label ? undefined : true,
-    onClick: pokeable ? () => { if (!reducedMotion() && document.body?.dataset.btMotion !== 'quiet') setPoked(true) } : undefined,
+    onClick: pokeable ? () => setPoked(true) : undefined,
     onAnimationEnd: poked ? (event) => { if (/^bt-poke/.test(event.animationName)) setPoked(false) } : undefined,
   }
-  if (image) return h('span', common, h('img', { className: 'bt-mark-img', src: image, alt: '', draggable: false, onError: () => setBroken(image) }))
+  if (look.image) return h('span', common, h('img', { className: 'bt-mark-img', src: look.image, alt: '', draggable: false }))
   const box = shapeOf(look.shape).size
   return h('span', common, h('svg', { viewBox: `0 0 ${box} ${box}`, dangerouslySetInnerHTML: { __html: characterMarkup(look.shape, look.color).replaceAll(MASK_ID, maskId.current) } }))
 }
@@ -144,7 +107,7 @@ function useSettled(state) {
 export function BotAvatar({ bot, size, state = 'idle', main, admin, badge = true, live = true, gaze = false, pokeable = false }) {
   const settled = useSettled(state)
   if (bot === undefined) return h(BotMark, { size })
-  const badgeKind = !badge ? null : state === 'alert' ? 'alert' : state !== 'idle' && state !== 'waiting' ? 'working' : admin ? 'admin' : main ? 'main' : null
+  const badgeKind = !badge ? null : state === 'alert' ? 'alert' : state !== 'idle' ? 'working' : admin ? 'admin' : main ? 'main' : null
   return h('span', { className: 'bt-mark', style: { width: size, height: size, '--bt-size': `${size}px` } },
     h(BotMark, { bot, size, state: settled ? 'done' : state, live, gaze, pokeable }),
     badgeKind === 'working' ? h('span', { className: 'bt-badge bt-badge-working', 'aria-label': t('Working'), role: 'img' }) : null,

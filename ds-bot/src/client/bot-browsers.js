@@ -1,6 +1,6 @@
-// Bot browsers in DSH Desktop and the desktop app: per Bot, a tab strip of pages. Each tab
-// is one Electron webview in the Bot's own storage partition (`browser.acquire('bot:<id>')`
-// on either one's bridge — the same key always yields the same partition, so cookies and logins
+// Bot browsers in the Desktop app: per Bot, a tab strip of pages. Each tab is one
+// Electron webview in the Bot's own storage partition (`dshDesktop.browser.acquire(
+// 'bot:<id>')` — the same key always yields the same partition, so cookies and logins
 // never cross Bots while a Bot may hold several pages). Moving a webview to another
 // parent reloads its guest, so every webview lives in one body-level layer for its
 // whole life: the panel reports a rectangle, the shown tab's webview is placed over
@@ -8,7 +8,6 @@
 // stays the same) but hidden.
 
 import { READ_PAGE_SCRIPT } from './read-page.js'
-import { setEntry, sharedMap } from './shared-map.js'
 import { STORAGE } from './storage.js'
 
 export { READ_PAGE_SCRIPT }
@@ -33,42 +32,6 @@ export const PREVIEW_SCRIPT = `(() => {
 })()`
 
 const EMPTY = { url: '', title: '', favicon: null, loading: false, canGoBack: false, canGoForward: false, error: null, live: false, excerpt: '' }
-export function createAppViewProxy(bridge, botId, tabId) {
-  const listeners = new Map()
-  const state = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false }
-  const fire = (name, event = {}) => {
-    for (const listener of listeners.get(name) ?? []) listener({ type: name, ...event })
-  }
-  return {
-    isAppViewProxy: true, style: {}, dataset: {},
-    addEventListener(name, listener, options = {}) {
-      listeners.set(name, [...(listeners.get(name) ?? []), listener])
-      options.signal?.addEventListener('abort', () => this.removeEventListener(name, listener), { once: true })
-    },
-    removeEventListener(name, listener) { listeners.set(name, (listeners.get(name) ?? []).filter(item => item !== listener)) },
-    setAttribute() {},
-    remove() { void bridge.views.place(tabId, null, false) },
-    getURL() { return state.url },
-    getTitle() { return state.title },
-    isLoading() { return state.loading },
-    canGoBack() { return state.canGoBack },
-    canGoForward() { return state.canGoForward },
-    loadURL(url) { return bridge.views.navigate(botId, tabId, url) },
-    executeJavaScript(script) { return bridge.views.read(botId, tabId, script) },
-    goBack() { return bridge.views.command(botId, tabId, 'back') },
-    goForward() { return bridge.views.command(botId, tabId, 'forward') },
-    reload() { return bridge.views.command(botId, tabId, 'reload') },
-    stop() { return bridge.views.command(botId, tabId, 'stop') },
-    focus() { return bridge.views.focus(botId, tabId) },
-    update(next) {
-      Object.assign(state, next)
-      fire('did-navigate')
-      fire('did-stop-loading')
-      fire('page-title-updated')
-      if (!state.loading) fire('dom-ready')
-    },
-  }
-}
 // Local and LAN pages open; cloud metadata services do not, since on a cloud machine they
 // hand out account credentials. The Desktop shell already refuses its own host port.
 const METADATA_HOST = /^(169\.254\.\d+\.\d+|\[fd00:ec2::254\]|metadata\.google\.internal)$/i
@@ -95,7 +58,7 @@ export function browserAddress(input) {
 /**
  * @param {{ bridge: any, createSource: (initial:any) => any, storage?: Storage, document?: Document }} options
  */
-export function createBotBrowsers({ bridge, createSource, storage = globalThis.localStorage, document: doc = globalThis.document, guestFactory }) {
+export function createBotBrowsers({ bridge, createSource, storage = globalThis.localStorage, document: doc = globalThis.document }) {
   /** @type {Map<string, any>} tabId -> guest entry */
   const views = new Map()
   /** @type {Map<string, string>} tabId -> owning Bot id */
@@ -104,13 +67,9 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
   const tabs = createSource({})
   // Per tab: { url, title, favicon, loading, canGoBack, canGoForward, error, live, readAt?, excerpt }
   const pages = createSource({})
-  const holds = createSource({})
-  // Per Bot, what survives a reload: { tabs: [{id,url,title}], active }. Another window
-  // saves its own Bots' tabs into the same object.
-  const store = sharedMap(STORE_KEY, storage)
-  let saved = store.read()
-  // Bots this window has seen on the team: one deleted later is forgotten even if it never had a tab.
-  const seen = new Set()
+  // Per Bot, what survives a reload: { tabs: [{id,url,title}], active }.
+  let saved = {}
+  try { saved = JSON.parse(storage?.getItem(STORE_KEY) ?? '{}') ?? {} } catch { saved = {} }
   let layer
   let shown = null
   // The last panel rectangle sizes every guest, shown or not; `visible` says whether the
@@ -120,63 +79,32 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
   let resizeLater = 0
   let disposed = false
   let serial = 0
-  const makeGuest = guestFactory ?? (bridge.views
-    ? ({ botId, tabId }) => ({ element: createAppViewProxy(bridge, botId, tabId), appView: true })
-    : ({ document }) => ({ element: document.createElement('webview'), appView: false }))
-  const appViewEvents = bridge.views?.subscribe?.((change) => {
-    const { botId, tabId } = change ?? {}
-    if (!botId || !tabId) return
-    if (change.type === 'closed') {
-      const entry = views.get(tabId)
-      entry?.stop()
-      views.delete(tabId)
-      owner.delete(tabId)
-      tabs.set(snapshot => {
-        const current = snapshot[botId]
-        if (!current) return snapshot
-        const ids = current.ids.filter(id => id !== tabId)
-        if (ids.length === 0) { const next = { ...snapshot }; delete next[botId]; return next }
-        return { ...snapshot, [botId]: { ids, active: current.active === tabId ? ids.at(-1) : current.active } }
-      })
-      pages.set(snapshot => { const { [tabId]: _, ...rest } = snapshot; return rest })
-      persist(botId)
-      return
-    }
-    if (!owner.has(tabId)) owner.set(tabId, botId)
-    if (change.type === 'created') {
-      ensureTabs(botId)
-      tabs.set(snapshot => {
-        const own = snapshot[botId] ?? { ids: [], active: null }
-        if (own.ids.includes(tabId)) return snapshot
-        return { ...snapshot, [botId]: { ids: [...own.ids, tabId], active: tabId } }
-      })
-      publish(tabId, { url: change.url ?? '', title: change.title ?? '', live: true })
-      persist(botId)
-      void open(tabId)
-    }
-    const entry = views.get(tabId)
-    if (entry?.appView) {
-      entry.botAttached = change.botAttached === true
-      entry.ready = change.loading !== true
-      entry.element.update(change)
-      if (entry.ready) { observe(entry); void preview(tabId) }
-    }
-    publish(tabId, change)
-  })
 
   const savedTab = (botId, tabId) => saved[botId]?.tabs?.find(entry => entry.id === tabId)
   const publish = (tabId, patch) => pages.set((state) => {
     const botId = owner.get(tabId)
     return { ...state, [tabId]: { ...EMPTY, ...savedTab(botId, tabId), ...state[tabId], ...patch } }
   })
-  const save = (botId, entry) => { saved = store.update(stored => setEntry(stored, botId, entry), saved) }
+  const writeSaved = () => {
+    try { storage?.setItem(STORE_KEY, JSON.stringify(saved)) } catch { /* storage unavailable */ }
+  }
   const persist = (botId) => {
     const state = tabs.getSnapshot()[botId]
-    const snapshot = pages.getSnapshot()
-    save(botId, state && {
-      tabs: state.ids.map(id => ({ id, url: snapshot[id]?.url ?? '', title: snapshot[id]?.title ?? '' })),
-      active: state.active,
-    })
+    if (state === undefined) {
+      if (saved[botId] === undefined) return
+      const { [botId]: _, ...rest } = saved
+      saved = rest
+    } else {
+      const snapshot = pages.getSnapshot()
+      saved = {
+        ...saved,
+        [botId]: {
+          tabs: state.ids.map(id => ({ id, url: snapshot[id]?.url ?? '', title: snapshot[id]?.title ?? '' })),
+          active: state.active,
+        },
+      }
+    }
+    writeSaved()
   }
 
   // Saved tabs come back as placeholders: they show in the strip and open their
@@ -204,10 +132,6 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
 
   const place = (entry) => {
     const box = rect ?? { left: 0, top: 0, width: 800, height: 600 }
-    if (entry.appView) {
-      void bridge.views.place(entry.tabId, box, shown === entry.tabId && visible && Boolean(rect))
-      return
-    }
     Object.assign(entry.element.style, {
       left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`,
       visibility: shown === entry.tabId && visible && rect ? 'visible' : 'hidden',
@@ -246,36 +170,25 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
 
   async function create(tabId) {
     const botId = owner.get(tabId)
-    const guest = await makeGuest({ bridge, document: doc, botId, tabId })
-    const pending = pages.getSnapshot()[tabId]?.url || savedTab(botId, tabId)?.url
-    const reservation = guest.appView ? undefined : await bridge.acquire(`bot:${botId}`)
-    if (disposed) {
-      if (reservation) await bridge.release(reservation.lease).catch(() => {})
-      else await bridge.views.close(botId, tabId).catch(() => {})
-      return undefined
-    }
-    if (guest.appView) await bridge.views.create(botId, tabId, pending ?? '')
-    const element = guest.element
+    const reservation = await bridge.acquire(`bot:${botId}`)
+    if (disposed) { await bridge.release(reservation.lease).catch(() => {}); return undefined }
+    const element = doc.createElement('webview')
     // The shell forwards app shortcuts from a focused webview that carries these
     // attributes, as it does for its own Sidebar browser.
     element.dataset.sidebarBrowserFrame = 'webview'
     Object.assign(element.style, { position: 'fixed', display: 'flex', border: '0', pointerEvents: 'auto', background: '#fff' })
     element.dataset.btBrowser = tabId
-    if (!guest.appView) {
-      element.setAttribute('name', reservation.lease)
-      element.setAttribute('partition', reservation.partition)
-      element.setAttribute('allowpopups', '')
-      element.setAttribute('src', `about:blank#${reservation.lease}`)
-    }
-    const entry = { botId, tabId, element, lease: reservation?.lease, appView: guest.appView, botAttached: false, ready: false, fresh: !guest.appView, pending: guest.appView ? undefined : pending, usedAt: Date.now() }
+    element.setAttribute('name', reservation.lease)
+    element.setAttribute('partition', reservation.partition)
+    element.setAttribute('allowpopups', '')
+    element.setAttribute('src', `about:blank#${reservation.lease}`)
+    const entry = { botId, tabId, element, lease: reservation.lease, ready: false, fresh: true, pending: pages.getSnapshot()[tabId]?.url || savedTab(botId, tabId)?.url, usedAt: Date.now() }
     const lifetime = new AbortController()
     entry.stop = () => lifetime.abort()
     const { signal } = lifetime
     // A page that asks for a new window gets a new tab in the same Bot, activated.
-    if (!guest.appView) {
-      const unsubscribe = bridge.onOpenRequested(reservation.lease, url => void openTab(botId, url))
-      signal.addEventListener('abort', unsubscribe, { once: true })
-    }
+    const unsubscribe = bridge.onOpenRequested(reservation.lease, url => void openTab(botId, url))
+    signal.addEventListener('abort', unsubscribe, { once: true })
     element.addEventListener('dom-ready', () => {
       entry.ready = true
       observe(entry)
@@ -318,16 +231,9 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
       publish(tabId, { loading: false, error: 'The page crashed.' })
     }, { signal })
     views.set(tabId, entry)
-    if (!guest.appView) ensureLayer().append(element)
+    ensureLayer().append(element)
     place(entry)
     publish(tabId, { live: true, loading: Boolean(entry.pending) })
-    if (guest.appView) {
-      const state = (await bridge.views.sync(botId)).find(view => view.tabId === tabId)
-      if (state) {
-        entry.botAttached = state.botAttached === true
-        element.update(state)
-      }
-    }
     return entry
   }
 
@@ -356,17 +262,13 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
 
   // Release the least recently shown guests beyond the limit, never the one on screen.
   function trim() {
-    const idle = [...views.values()].filter(entry => !entry.appView && !entry.botAttached && entry.tabId !== shown).sort((a, b) => a.usedAt - b.usedAt)
-    while ([...views.values()].filter(entry => !entry.appView).length > MAX_LIVE && idle.length > 0) void release(idle.shift().tabId)
+    const idle = [...views.values()].filter(entry => entry.tabId !== shown).sort((a, b) => a.usedAt - b.usedAt)
+    while (views.size > MAX_LIVE && idle.length > 0) void release(idle.shift().tabId)
   }
 
   async function release(tabId) {
     const entry = views.get(tabId)
     if (entry === undefined) return
-    if (entry.appView) {
-      await bridge.views.place(tabId, rect ?? { left: 0, top: 0, width: 800, height: 600 }, false)
-      return
-    }
     views.delete(tabId)
     entry.stop()
     entry.element.remove()
@@ -393,11 +295,7 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
     if (state === undefined || !state.ids.includes(tabId)) return
     await opening.get(tabId)?.catch(() => {})
     if (shown === tabId) await show(null)
-    if (views.get(tabId)?.appView) {
-      await bridge.views.close(botId, tabId)
-      views.get(tabId)?.stop()
-      views.delete(tabId)
-    } else await release(tabId)
+    await release(tabId)
     // The waits above can overlap a new tab or an active-tab switch; drop the
     // target from the latest state, not the snapshot taken before them.
     tabs.set((snapshot) => {
@@ -479,11 +377,7 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
     for (const tabId of tabs.getSnapshot()[botId]?.ids ?? []) {
       await opening.get(tabId)?.catch(() => {})
       if (shown === tabId) await show(null)
-      if (views.get(tabId)?.appView) {
-        await bridge.views.close(botId, tabId)
-        views.get(tabId)?.stop()
-        views.delete(tabId)
-      } else await release(tabId)
+      await release(tabId)
       owner.delete(tabId)
       pages.set((snapshot) => {
         if (snapshot[tabId] === undefined) return snapshot
@@ -496,17 +390,16 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
       const { [botId]: _, ...rest } = snapshot
       return rest
     })
-    save(botId, undefined)
-    seen.delete(botId)
-    // The desktop app keeps a Bot's logins on disk; they go with the Bot.
-    await bridge.forget?.(`bot:${botId}`)?.catch(error => console.warn('[ds-bot] browser forget', error))
+    if (saved[botId] !== undefined) {
+      const { [botId]: _, ...rest } = saved
+      saved = rest
+      writeSaved()
+    }
   }
 
   return {
     tabs,
     pages,
-    holds,
-    setHolds(value) { holds.set(value && typeof value === 'object' ? value : {}) },
     /** Restore a Bot's saved strip (or an empty one) so the panel can render it. */
     ensureTabs,
     openTab,
@@ -558,19 +451,14 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
     /** Forget every Bot outside `botIds`, as when Bots were deleted from another window. */
     retain(botIds) {
       const keep = new Set(botIds)
-      const known = new Set([...Object.keys(tabs.getSnapshot()), ...Object.keys(saved), ...owner.values(), ...seen])
+      const known = new Set([...Object.keys(tabs.getSnapshot()), ...Object.keys(saved), ...owner.values()])
       for (const entry of views.values()) known.add(entry.botId)
-      for (const botId of keep) seen.add(botId)
       return Promise.all([...known].filter(botId => !keep.has(botId)).map(forget))
     },
     dispose() {
       disposed = true
       clearTimeout(resizeLater)
-      for (const entry of views.values()) {
-        if (entry.appView) void bridge.views.place(entry.tabId, rect ?? { left: 0, top: 0, width: 800, height: 600 }, false)
-        else void release(entry.tabId)
-      }
-      appViewEvents?.()
+      for (const entry of views.values()) void release(entry.tabId)
       layer?.remove()
     },
   }
@@ -617,10 +505,8 @@ export function serveBrowserReads({ browsers, post, clientId = globalThis.crypto
       const open = browsers.openPages()
       reported = JSON.stringify(open)
       try {
-        const response = await post('browser-wait', { clientId, open }, poll.signal)
-        browsers.setHolds?.(response?.holds)
+        const requests = await post('browser-wait', { clientId, open }, poll.signal)
         failures = 0
-        const requests = Array.isArray(response) ? response : response?.requests
         for (const request of Array.isArray(requests) ? requests : []) void answer(request)
       } catch {
         if (stopped) return

@@ -8,11 +8,9 @@
 //
 // `--out <file>` writes a normalized transcript (names instead of ids, sorted where the
 // order depends on timing), so two runs, before and after a refactor, can be diffed.
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { modelsFor } from '../src/client/agent-routes.js'
 
 const [name, port, ...rest] = process.argv.slice(2)
 if (!name || !port) {
@@ -146,8 +144,8 @@ async function step(title, run, check) {
     return undefined
   }
   const calls = mockLog().slice(before)
-  const problem = await (async () => {
-    try { return await check?.(value, calls) } catch (error) { return error.message }
+  const problem = (() => {
+    try { return check?.(value, calls) } catch (error) { return error.message }
   })()
   transcript.push({ step: title, said: said(calls), state: normalized() })
   if (problem) {
@@ -168,8 +166,7 @@ let models = []
 await step('bootstrap: Chief waits for a model', () => api('state'), (value, calls) => {
   const current = state()
   const bots = Object.values(current.bots)
-  // The model card offers DS Bot models only; a CLI found on this machine is no pick there.
-  models = modelsFor(value.models)
+  models = value.models ?? []
   return expect(bots.length === 1 && bots[0].name === 'Chief' && current.mainBotIds[0] === bots[0].id, 'expected one Main Bot named Chief')
     ?? expect(bots[0].model === undefined && bots[0].kickoff !== undefined, 'Chief should hold its greeting until a model is picked')
     ?? expect(value.bots[0].waiting === true, 'the view should show Chief as waiting')
@@ -177,62 +174,19 @@ await step('bootstrap: Chief waits for a model', () => api('state'), (value, cal
     ?? expect(models.length > 0, 'no models listed for the model card')
 })
 
-await step('user picks a model; Chief greets and asks in its reply', () => api('update-bot', { id: chief().id, model: models.at(-1).ref }), (_value, calls) => {
+await step('user picks a model; Chief greets and asks', () => api('update-bot', { id: chief().id, model: models.at(-1).ref }), () => {
   const current = state()
   return expect(chief().model === models.at(-1).ref, `Chief runs on ${chief().model}`)
     ?? expect(chief().kickoff === undefined, 'the greeting is still held')
-    ?? expect(!current.questions?.[chief().sessionId ?? chief().id], 'the greeting should not leave a question card')
-    ?? expect(saidText(calls, /先让团队帮你做哪块/), 'expected Chief to ask in its reply')
+    ?? expect(current.questions?.[chief().sessionId ?? chief().id], 'expected Chief to leave a question card')
 })
 
-await step('Chief creates Writer, who replies', () => send(chief().id, '创建一个叫Writer的bot'), async () => {
+await step('Chief creates Writer, who replies', () => send(chief().id, '创建一个叫Writer的bot'), () => {
   const writer = botNamed('Writer')
   if (!writer) return 'no Writer'
-  const entries = await api('exchange', { a: chief().id, b: writer.id })
-  const kinds = entries.map(entry => entry.role)
+  const kinds = state().exchanges.filter(entry => [entry.from, entry.to].includes(writer.id)).map(entry => entry.role)
   return expect(writer.createdBy === chief().id, 'Writer should be created by Chief')
     ?? expect(kinds.includes('request') && kinds.includes('reply'), `expected a request and a reply, got ${kinds}`)
-})
-
-// The mock calls dsh's ask_user_question for 阻塞提问 whenever the request offers it.
-await step('a Bot is not offered dsh\'s blocking question tool', () => send(botNamed('Writer').id, '阻塞提问'), (_value, calls) => {
-  const asked = calls.some(call => (call.out ?? []).some(block => block.type === 'tool_use' && block.name === 'ask_user_question'))
-  return expect(!asked, 'Writer called ask_user_question')
-    ?? expect(saidText(calls, /^收到：阻塞提问/), 'expected Writer to answer in its reply')
-})
-
-// show_view: an options card waits in state.views. The key is the chat's Session
-// id — the Bot id until its chat first moves to a fresh part (chatOf).
-await step('Writer shows an options view', () => send(botNamed('Writer').id, '视图选项'), () => {
-  const chat = botNamed('Writer').sessionId ?? botNamed('Writer').id
-  const view = state().views?.[chat]
-  return expect(view?.title === 'Pick a lane' && typeof view.id === 'string', `no pending view (${JSON.stringify(state().views)})`)
-    ?? expect(view.callId !== undefined, 'the view does not carry its call')
-})
-await step('the view answer reaches Writer and clears the card', () => {
-  const chat = botNamed('Writer').sessionId ?? botNamed('Writer').id
-  return api('view-reply', {
-    sessionId: chat,
-    viewId: state().views[chat].id,
-    action: 'lane',
-    values: { selected: ['Ship now'] },
-  })
-}, (_value, calls) => {
-  const chat = botNamed('Writer').sessionId ?? botNamed('Writer').id
-  return expect(state().views?.[chat] === undefined, 'the view is still open')
-    // DSH may prepend whitespace to the reply payload.
-    ?? expect(calls.some(call => call.last?.trimStart().startsWith('{"kind":"answer_to_pending_view"')), 'the answer did not arrive as the Bot\'s next message')
-})
-
-// A display-only view just under the byte limit lives on the recorded call; re-reading
-// the part brings it back with its arguments.
-await step('Writer shows a view just under the byte limit', () => send(botNamed('Writer').id, '大视图'), (_value, calls) => {
-  return expect(calls.some(call => (call.out ?? []).some(block => block.type === 'tool_use' && block.name === 'show_view')), 'Writer did not call show_view')
-})
-await step('the big view survives a re-read of the part', () => api('chat', { botId: botNamed('Writer').id }), (page) => {
-  const found = (page?.items ?? []).find(item => item.kind === 'view' && item.title === 'A long note')
-  return expect(found !== undefined, `no view card in the part (${JSON.stringify(page?.items?.length)})`)
-    ?? expect(found.view?.children?.length === 4 && found.view.children.every(node => node.type === 'text' && node.text === 'x'.repeat(1900)), 'the view came back without its complete blueprint')
 })
 
 await step('user creates Coder, who keeps the default model', () => api('create-bot', { name: 'Coder', role: 'Engineer', instructions: 'Write code.' }), (bot) => {
@@ -271,33 +225,6 @@ await step('Chief sets the group notice', () => send(chief().id, '改群 研发�
 
 await step('Chief reads the group', () => send(chief().id, '看群 研发群'), (_value, calls) => expect(saidText(calls, /^群里最近/), 'no read_group_chat answer'))
 
-// Group memory: what the group keeps stays in the group.
-const groupFact = '研发群的产物放在 out 目录'
-const memoryFile = (...path) => {
-  try { return readFileSync(join(HOME, 'bot', 'memory', ...path, 'MEMORY.md'), 'utf8') } catch { return '' }
-}
-await step('the group keeps what the user asks it to remember, in the group memory only', () => send(roomNamed('研发群').id, `记住 ${groupFact}`), () => {
-  const room = roomNamed('研发群')
-  const elsewhere = [['team'], ...room.members.map(id => ['bots', id])].filter(path => memoryFile(...path).includes(groupFact))
-  return expect(memoryFile('groups', room.id).includes(groupFact), 'not in the group memory')
-    ?? expect(elsewhere.length === 0, `also in ${elsewhere.map(path => path.join('/')).join(', ')}`)
-})
-await step('the group memory panel shows it', () => api('memory-view', { roomId: roomNamed('研发群').id }), view => expect(view.entries.some(entry => entry.scope === 'group' && entry.text === groupFact), 'not in the panel'))
-await step('members recall it in the group', () => send(roomNamed('研发群').id, '回忆 out'), (_value, calls) => expect(saidText(calls, new RegExp(`记忆里有：[\\s\\S]*\\[group · MEMORY\\.md\\] ${groupFact}`)), 'no member found it'))
-await step('a member\'s own chat does not read it', () => send(botNamed('Writer').id, '回忆 out'), (_value, calls) => expect(saidText(calls, /记忆里有：\nNothing in your memory and the team memory mentions "out"/), 'Writer\'s own chat found it'))
-await step('a Bot outside the group does not read it', async () => {
-  // A message sent before the new Bot's kickoff turn starts runs first, before its
-  // session has the memory tools; wait for the kickoff's model call to land.
-  const mark = mockLog().length
-  const outsider = await api('create-bot', { name: 'Outsider', role: 'Tester', instructions: 'Test.' })
-  for (const deadline = Date.now() + STEP_TIMEOUT_MS; Date.now() < deadline; await sleep(200)) {
-    if (mockLog().slice(mark).some(entry => String(entry.first).includes('just created you'))) break
-  }
-  await settle()
-  return send(outsider.id, '回忆 out')
-}, (_value, calls) => expect(saidText(calls, /记忆里有：\nNothing in your memory and the team memory mentions "out"/), 'Outsider found it'))
-await step('delete Outsider', () => api('delete-bot', { id: botNamed('Outsider').id }), () => expect(botNamed('Outsider') === undefined, 'Outsider still there'))
-
 for (const round of [1, 2, 3]) {
   await step(`Writer writes long reply ${round}`, () => send(botNamed('Writer').id, `长文 30 第${round}篇`), round < 3 ? undefined : () => {
     const writer = botNamed('Writer')
@@ -309,15 +236,6 @@ await step('Writer searches its own chat across parts', () => send(botNamed('Wri
 
 // `earlier` pages backwards from the part the chat shows now.
 await step('earlier part pages load', () => api('earlier', { sessionId: botNamed('Writer').sessionId }), page => expect(Array.isArray(page?.items) && page.items.some(item => item.kind === 'user'), `no user lines in the part before (${JSON.stringify(page).slice(0, 80)})`))
-await step('the big view survives the switch to an earlier part', async () => {
-  let cursor
-  do {
-    const page = await api('earlier', { sessionId: botNamed('Writer').sessionId, cursor })
-    const found = page.items.find(item => item.kind === 'view' && item.title === 'A long note')
-    if (found) return found
-    cursor = page.cursor
-  } while (cursor)
-}, found => expect(found?.view?.children?.length === 4 && found.view.children.every(node => node.type === 'text' && node.text === 'x'.repeat(1900)), 'the earlier part lost the view blueprint'))
 
 // Work still under way (the mock steward reads 阶段未完 in the latest user message): the
 // part is condensed in place with DS Bot's checkpoint, not switched, and the condensed
@@ -347,48 +265,10 @@ for (const round of [1, 2, 3, 4]) {
 
 await step('exchange log between Chief and Writer', () => api('exchange', { a: chief().id, b: botNamed('Writer').id }), entries => expect(entries.length >= 2, `got ${entries.length}`))
 
-// Writer hands Chief's work on to Coder and waits, and the team view shows it; Coder's
-// result goes up to Chief with Writer's answer.
-await step('Writer waits for the work it handed on, then answers with it', async () => {
-  await send(chief().id, '转告 Writer: 转告 Coder: 慢慢做 3')
-  const writer = botNamed('Writer').id
-  for (const deadline = Date.now() + STEP_TIMEOUT_MS; Date.now() < deadline; await sleep(200)) {
-    const { activity = {}, work = {} } = await api('state')
-    if (activity[writer] === 'waiting') return work.waiting?.[writer]
-  }
-  return undefined
-}, async (waiting, calls) => {
-  const entries = await api('exchange', { a: chief().id, b: botNamed('Writer').id })
-  return expect(waiting?.bots?.includes(botNamed('Coder').id) && waiting.for.includes(chief().id), `Writer did not show that it waits for Coder (${JSON.stringify(waiting)})`)
-    ?? expect(saidText(calls, /^Coder 交回了，我把结果交给 Chief/), 'Writer did not go on when Coder answered')
-    ?? expect(entries.some(entry => entry.role === 'reply' && entry.from === botNamed('Writer').id && String(entry.text).includes('[Handed back to Writer for this work]')), 'Chief did not get Coder\'s result with Writer\'s answer')
-})
-
 await step('update Writer', () => api('update-bot', { id: botNamed('Writer').id, role: 'Copywriter', instructions: 'Write the copy.' }), () => {
   const writer = botNamed('Writer')
   return expect(writer.role === 'Copywriter' && writer.instructions === 'Write the copy.', 'update not saved')
 })
-
-// dsh keeps each Session under a folder named after its cwd. A change of working folder
-// moves the Bot's own chat on to a fresh part made there; the fresh part then stays put.
-// The native realpath is the one DS Bot saves; on Windows the JS one keeps 8.3 short names.
-const project = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-smoke-folder-')))
-const folderOf = sessionId => readdirSync(join(HOME, 'sessions')).find(dir => existsSync(join(HOME, 'sessions', dir, sessionId)))
-const coderParts = () => (botNamed('Coder').segments ?? []).length
-const partsBeforeFolder = coderParts()
-await step('Coder works in a folder of its own', () => api('update-bot', { id: botNamed('Coder').id, workDir: project }), () => {
-  const coder = botNamed('Coder')
-  return expect(coder.workDir === project, `folder not saved (${coder.workDir})`)
-    ?? expect(coderParts() === partsBeforeFolder + 1, `Coder has ${coderParts()} earlier parts, not ${partsBeforeFolder + 1}`)
-    ?? expect(folderOf(coder.sessionId)?.includes(basename(project)), `Coder's chat is under ${folderOf(coder.sessionId)}`)
-})
-await step('Coder answers from its folder', () => send(botNamed('Coder').id, '你好'), () => expect(coderParts() === partsBeforeFolder + 1, 'Coder moved on again'))
-await step('Coder goes back to the team workspace', () => api('update-bot', { id: botNamed('Coder').id, workDir: '' }), () => {
-  const coder = botNamed('Coder')
-  return expect(coder.workDir === undefined, 'folder not cleared')
-    ?? expect(folderOf(coder.sessionId)?.endsWith('-bot-workspace--'), `Coder's chat is under ${folderOf(coder.sessionId)}`)
-})
-rmSync(project, { recursive: true, force: true })
 
 await step('pin Coder', () => api('set-flags', { id: botNamed('Coder').id, pinned: true }), () => expect(botNamed('Coder').pinned === true, 'not pinned'))
 
@@ -403,10 +283,7 @@ await step('duplicate Coder', () => api('duplicate-bot', { id: botNamed('Coder')
 
 await step('set prefs', () => api('set-prefs', { theme: 'dark', accent: '#336699' }), () => expect(state().prefs.theme === 'dark' && state().prefs.accent === '#336699', 'prefs not saved'))
 
-const devRoomId = roomNamed('研发群')?.id
-await step('delete the group', () => api('delete-room', { id: devRoomId }), () => expect(Object.keys(state().rooms).length === 0, 'group still there')
-  ?? expect(memoryFile('groups', devRoomId) === '', 'the group memory is still in place')
-  ?? expect(readdirSync(join(HOME, 'bot', 'memory', 'archive')).some(entry => entry.startsWith(`group-${devRoomId}`)), 'the group memory is not in the archive'))
+await step('delete the group', () => api('delete-room', { id: roomNamed('研发群').id }), () => expect(Object.keys(state().rooms).length === 0, 'group still there'))
 
 await step('delete the copy', async () => {
   const copy = Object.values(state().bots).find(bot => bot.name !== 'Coder' && bot.name.startsWith('Coder'))
@@ -414,43 +291,6 @@ await step('delete the copy', async () => {
   await api('delete-bot', { id: copy.id })
   return copy.id
 }, id => expect(state().bots[id] === undefined, 'copy still there'))
-
-// The mock answers 查能力 with the mcp__ tools and catalog skills it sees in the request.
-const echoName = 'smoke-echo'
-const skillName = 'smoke-guide'
-const skillDescription = 'Smoke test skill'
-const echoServer = join(ROOT, 'ds-bot', 'dev', 'mcp-echo-server.mjs')
-const sees = `工具 mcp__${echoName}__echo；技能 ${skillName}（${skillDescription}）`
-const seesNothing = '工具 无；技能 无'
-const reportOf = (calls, bot) => calls.flatMap(call => call.out ?? []).find(block => block.type === 'text' && block.text.startsWith(`${bot} 能力：`))?.text
-const attach = (bot, name, attached) => api('bot-capability', { botId: bot.id, name, attached })
-await api('capability-save', { name: echoName, kind: 'mcp', description: 'Smoke test echo server', transport: 'stdio', command: process.execPath, args: [echoServer], env: {} })
-await api('capability-save', { name: skillName, kind: 'skill', description: skillDescription, content: 'Use this skill when asked about capability smoke checks.' })
-await attach(chief(), echoName, true)
-await attach(chief(), skillName, true)
-
-await step('Chief sees its attached MCP and skill', () => send(chief().id, '查能力 smoke'), (_value, calls) => {
-  const report = reportOf(calls, 'Chief')
-  return expect(report?.endsWith(sees), `Chief reported ${report}`)
-})
-
-const capabilityRoom = await api('create-room', { name: 'Capability smoke', members: [chief().id, botNamed('Coder').id], admin: chief().id })
-await step('Chief first group turn sees its attached MCP and skill', () => send(capabilityRoom.id, '查能力 smoke'), (_value, calls) => {
-  const report = reportOf(calls, 'Chief')
-  return expect(report?.endsWith(sees), `Chief reported ${report} in the group`)
-})
-
-await step('Coder does not inherit Chief capabilities', () => send(botNamed('Coder').id, '查能力 smoke'), (_value, calls) => {
-  const report = reportOf(calls, 'Coder')
-  return expect(report?.endsWith(seesNothing), `Coder reported ${report}`)
-})
-
-await attach(chief(), echoName, false)
-await attach(chief(), skillName, false)
-await step('detached capabilities disappear from Chief', () => send(chief().id, '查能力 smoke'), (_value, calls) => {
-  const report = reportOf(calls, 'Chief')
-  return expect(report?.endsWith(seesNothing), `Chief reported ${report}`)
-})
 
 if (outFile) writeFileSync(outFile, `${JSON.stringify(transcript, null, 2)}\n`)
 console.log(failures.length === 0 ? `\nsmoke: all ${transcript.length} steps passed` : `\nsmoke: ${failures.length} failed\n${failures.join('\n')}`)
