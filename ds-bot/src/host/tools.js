@@ -88,6 +88,73 @@ export function install(rt) {
     },
   }))
 
+  // Sessions a Bot is running in right now: its own chat plus each group Session
+  // with a live turn. An idle Bot reports just its own chat.
+  const activeSessions = (botId) => {
+    const running = [...new Set([rt.chatOf(botId), ...rt.groupSessionsOf(botId)])]
+      .filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
+    return { running, idle: running.length === 0 }
+  }
+  const whereOf = (sessionId) => {
+    const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+    return room ? `group "${room.name}"` : 'its own chat'
+  }
+
+  ctx.tools.register(defineTool({
+    name: 'interrupt_bot',
+    description: 'Main Bot only. Cut into another Bot\'s running turn with an urgent message it sees at its next step — to warn it off a dangerous action or redirect it in time, while an ordinary message_bot would still be queued. If it is not running, the message opens its next turn instead. Whatever it answers stays in its own chat and is not routed back to you; if it keeps going despite the warning, use stop_bot.',
+    parameters: {
+      to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
+      message: { type: 'string', required: true, description: 'Short urgent instruction, e.g. "Stop — do not run that command"' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const sender = callerBot(exec)
+      if (sender === undefined || !rt.isMain(sender.id)) return 'Only a Main Bot can interrupt other Bots.'
+      const target = rt.findBot(args.to)
+      if (target === undefined) return `No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
+      if (target.id === sender.id) return 'You cannot interrupt yourself.'
+      const text = String(args.message ?? '').trim()
+      if (text === '') return 'Write a message to send.'
+      const { running, idle } = activeSessions(target.id)
+      const sessions = idle ? [rt.chatOf(target.id)] : running
+      for (const [index, sessionId] of sessions.entries()) {
+        await rt.deliver({ fromId: sender.id, toId: target.id, sessionId, text, role: 'interrupt', steer: true, record: index === 0 })
+      }
+      return idle
+        ? `Sent to ${target.name}; it is not running, so the message opens its next turn. What it answers stays in its own chat — nothing comes back to you.`
+        : `Interrupted ${target.name} in ${running.map(whereOf).join(' and ')}: it sees your message at its next step. What it answers stays in its own chat — nothing comes back to you.`
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'stop_bot',
+    description: 'Main Bot only. Stop another Bot\'s running turn immediately — when it must not finish a dangerous action and interrupting is not enough. Its queued messages are dropped with the turn. It is then told why in a new turn, whose reply comes back to you.',
+    parameters: {
+      bot: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
+      reason: { type: 'string', description: 'Why it was stopped; it reads this afterwards' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const sender = callerBot(exec)
+      if (sender === undefined || !rt.isMain(sender.id)) return 'Only a Main Bot can stop other Bots.'
+      const target = rt.findBot(args.bot)
+      if (target === undefined) return `No Bot named ${args.bot}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
+      if (target.id === sender.id) return 'You cannot stop yourself.'
+      const { running } = activeSessions(target.id)
+      if (running.length === 0) return `${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it, or interrupt_bot once it is running.`
+      for (const sessionId of running) {
+        const agent = await rt.resolveAgent(sessionId)
+        agent.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })
+      }
+      const why = String(args.reason ?? '').trim() || 'Stop what you are doing; the previous turn was ended on purpose. Acknowledge briefly.'
+      await rt.deliver({ fromId: sender.id, toId: target.id, text: why, role: 'stopped' })
+      return `Stopped ${target.name} in ${running.map(whereOf).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
+    },
+  }))
+
   ctx.tools.register(defineTool({
     name: 'create_bot',
     description: 'Main Bot only. Create a new Bot on the user\'s team. It appears in the sidebar and greets the user.',

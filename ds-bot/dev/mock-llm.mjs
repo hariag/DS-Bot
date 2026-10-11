@@ -16,6 +16,7 @@
 // Commands to a Bot:
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
 //   看群 名 (read_group_chat) · 转告 名: 消息 (message_bot) · 搜索：查询1 | 查询2 (web_search)
+//   插话 名: 消息 (interrupt_bot) · 叫停 名: 原因 (stop_bot)
 //   长文 N / long N (N×1000 characters) · 长任务 N [K] (N steps of K×1000, default 4)
 //   查记录 词 [词…] · 查锚点 part N #序号 · 查第 N 段 (read_own_chat)
 //   上下文里有 词 (searches the context except the last message) · 撑爆 (fake overflow, 400)
@@ -230,6 +231,14 @@ function decide(body) {
   const userText = textOf(last?.content).trim()
   // "撑爆": the provider rejects the request as past its window.
   if (userText.startsWith('撑爆')) return 'overflow'
+  // "长任务" keeps stepping when a Bot message splices into its turn (an
+  // interrupt or a relayed note); only a fresh opener or "[Stopped by" ends it.
+  const longOpener = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content)))
+  if (longOpener !== -1 && /^\[(?:Interrupt|Message|Reply) from /.test(userText)) {
+    const [, steps, size = 4] = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[longOpener].content)).map(Number)
+    const done = messages.slice(longOpener + 1).filter(isResults).length
+    if (done < steps) return [text(filler(size * 1000, `步骤${done}`)), tool('list_bots', {})]
+  }
   // "报错": the provider rejects the key, in the user's chat or in a message from a Bot.
   if (/^报错$/.test(userText) || /^(?:\[Message from [^\]]*\]\n报错\n?)+$/.test(userText)) return 'auth'
   const lastCall = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
@@ -327,6 +336,8 @@ function decide(body) {
   }
   if ((order = /^删群\s*(\S+)$/.exec(userText))) return [tool('delete_group', { group: order[1] })]
   if ((order = /^转告\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('message_bot', { to: order[1], message: order[2] })]
+  if ((order = /^插话\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('interrupt_bot', { to: order[1], message: order[2] })]
+  if ((order = /^叫停\s*(\S+?)\s*[:：]\s*(.+)$/.exec(userText))) return [tool('stop_bot', { bot: order[1], reason: order[2] })]
   if ((order = /^看群\s*(.+)$/.exec(userText))) return [tool('read_group_chat', { group: order[1].trim() })]
   // Memory: 记住[@话题] 事实 · 团队记住 事实 · 忘掉 事实 · 回忆 [词]
   if ((order = /^(团队)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('remember')) {

@@ -417,6 +417,7 @@ var ZH = {
   "Replies from": "群聊回复：",
   "Reply from": "收到回复：",
   "Message from": "收到消息：",
+  "Stopped by": "叫停者：",
   "{count} messages with": "{count} 条消息，来自",
   "Routine started": "例行任务开始",
   Update: "更新",
@@ -443,6 +444,10 @@ var ZH = {
   "Checking the keys": "查看密钥",
   "Asking {name}": "询问 {name}",
   "Asking another Bot": "询问其他 Bot",
+  "Interrupting {name}": "给 {name} 插话",
+  "Interrupting another Bot": "给其他 Bot 插话",
+  "Stopping {name}": "叫停 {name}",
+  "Stopping another Bot": "叫停其他 Bot",
   "Creating {name}": "创建 {name}",
   "Updating {name}": "更新 {name}",
   "Checking the team": "查看团队",
@@ -453,6 +458,10 @@ var ZH = {
   "{name} is typing…": "{name} 正在输入…",
   "Couldn't message {name}": "没能给 {name} 发消息",
   Messaged: "已发消息给",
+  "Couldn't interrupt {name}": "没能给 {name} 插话",
+  Interrupted: "已插话",
+  "Couldn't stop {name}": "没能叫停 {name}",
+  Stopped: "已叫停",
   Created: "已创建",
   Updated: "已更新",
   "Created group": "已创建群聊",
@@ -2675,7 +2684,7 @@ function installCompiledStyles(text, tag) {
 var import_react2 = require("react");
 var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "alert", "done"];
 var botState = (running, activity, alert) => running ? STATES.includes(activity) ? activity : "working" : alert ? "alert" : "idle";
-var toolState = (name) => /^(message_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
+var toolState = (name) => /^(message_bot|interrupt_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
   (0, import_react2.useEffect)(() => {
     if (!enabled) return void 0;
@@ -3894,7 +3903,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
   const data = node.data;
   const source = data.source !== null && typeof data.source === "object" ? data.source : {};
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
-  const relayed = source.kind === "bot" && source.handoff !== true && (source.role === "request" || source.role === "reply") && typeof source.senderSessionId === "string";
+  const relayed = source.kind === "bot" && source.handoff !== true && (source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string";
   const turn = node.location?.turn?.turn ?? data.turn;
   (0, import_react6.useLayoutEffect)(() => {
     if (relayed) actions.noteTurnPeer(sessionId, turn, source.senderSessionId);
@@ -3943,7 +3952,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         if (!bots.some((bot) => bot.id === peer.id)) bots.push(peer);
       }
       return (0, import_react6.createElement)(EventLine, {
-        prefix: count > 1 ? t("{count} messages with", { count }) : t("Message from"),
+        prefix: source.role === "stopped" ? t("Stopped by") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
         bots,
         onOpen: (bot) => actions.openExchange(selfId, bot.id),
         whole: true
@@ -4066,6 +4075,14 @@ function toolActivity(name, arg, findBot, self2) {
       const target = findBot(arg("to"));
       return { label: target ? t("Asking {name}", { name: target.name }) : t("Asking another Bot"), state: "sending" };
     }
+    case "interrupt_bot": {
+      const target = findBot(arg("to"));
+      return { label: target ? t("Interrupting {name}", { name: target.name }) : t("Interrupting another Bot"), state: "sending" };
+    }
+    case "stop_bot": {
+      const target = findBot(arg("bot"));
+      return { label: target ? t("Stopping {name}", { name: target.name }) : t("Stopping another Bot"), state: "sending" };
+    }
     case "create_bot":
       return { label: t("Creating {name}", { name: arg("name") ?? t("a Bot") }), state: "sending" };
     case "update_bot": {
@@ -4182,6 +4199,16 @@ function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
       if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
       return (0, import_react6.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
+    }
+    case "interrupt_bot": {
+      const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
+      if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't interrupt {name}", { name: target.name }));
+      return (0, import_react6.createElement)(EventLine, { prefix: t("Interrupted"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) });
+    }
+    case "stop_bot": {
+      const target = findBot(arg("bot")) ?? { name: arg("bot") ?? "…", color: "gray" };
+      if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't stop {name}", { name: target.name }));
+      return (0, import_react6.createElement)(EventLine, { prefix: t("Stopped"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) });
     }
     case "create_bot": {
       const created = findBot(arg("name"));

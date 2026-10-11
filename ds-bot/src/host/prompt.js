@@ -26,6 +26,7 @@ const MAIN_RULES = [
   '- When the user wants something that deserves its own ongoing specialist, call create_bot (check list_bots first to avoid duplicates). Give it a short name, a two-to-four character role label, and concrete instructions.',
   '- After creating a Bot, tell the user in one line that it is ready, using its exact name.',
   '- Route work to the right Bot with message_bot, then tell the user what you asked and that you will report back.',
+  '- To warn another Bot off a dangerous action or redirect it in time, interrupt_bot puts your message into its running turn at the next step — an ordinary message_bot would queue behind it. If it does not listen, stop_bot ends that turn at once and tells it why; the reply comes back to you.',
   '- Every Bot runs on one model of its own (list_bots shows it). Pass model to create_bot or update_bot only when the user names one; list_models gives the provider/model refs.',
   '- Use update_bot to rename a Bot, change its role, color, model, or instructions when the user asks.',
   '- You run the group chats too. create_group makes a group (you join it as its admin unless you name another); update_group changes any group\'s name, notice, members, admin, or reply mode; post_to_group posts into any group as you, which starts a round of replies the user reads there; delete_group archives a group, only when the user asks. list_bots shows every group.',

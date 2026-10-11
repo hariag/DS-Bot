@@ -55,7 +55,7 @@ export function install(rt) {
   /** @type {Record<string, string>} */
   let activity = {}
   const activityOf = (tool) => {
-    if (/^(message_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(tool)) return 'sending'
+    if (/^(message_bot|interrupt_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(tool)) return 'sending'
     if (tool === 'group_relay') return 'orbit'
     if (/search|fetch|browse|browser|read|grep|glob|list/i.test(tool)) return 'searching'
     return 'working'
@@ -86,13 +86,16 @@ export function install(rt) {
   // A request whose audience is the user is answered in the recipient's own chat: that
   // turn stays visible there and its reply is not routed back to the sender.
   const answersUser = info => info.role === 'request' && info.audience === 'user'
+  // Roles whose turn owes the sender a reply: a 'stopped' notice asks the Bot to
+  // acknowledge, exactly like a request.
+  const expectsReply = info => info.role === 'request' || info.role === 'stopped'
 
   // A group Session is hidden as a whole, so its turns need no marking. A handoff
   // package that only opens a part is acknowledged with a fixed line, also hidden.
   const claimTrigger = (sessionId, entry, info) => {
     entry.info = info
     if (rt.groupOwners.has(sessionId)) return
-    if ((info.role === 'request' && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
+    if ((expectsReply(info) && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
       markExchangeTurn(sessionId, entry.turn)
     }
   }
@@ -184,6 +187,9 @@ export function install(rt) {
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
+        } else if (source?.kind === SOURCE_KIND && source.role === 'interrupt') {
+          // A steered interrupt neither claims the running turn nor queues as the
+          // next one's trigger: that turn's reply still belongs to its starter.
         } else if (source?.kind === SOURCE_KIND) {
           if (entry.turn !== undefined && entry.info === undefined) claimTrigger(id, entry, source)
           else entry.pending = source
@@ -232,7 +238,7 @@ export function install(rt) {
           roomWaiters.delete(info.exchangeId)
           if (failure !== undefined) waiter?.fail(failure)
           else waiter?.resolve(reason?.kind === 'aborted' ? null : reply)
-        } else if (info.role === 'request' && !answersUser(info) && failure !== undefined) {
+        } else if (expectsReply(info) && !answersUser(info) && failure !== undefined) {
           // The sender was told a reply comes later; without this it would wait forever.
           const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
           void rt.deliver({
@@ -243,11 +249,14 @@ export function install(rt) {
             hop: (info.hop ?? 0) + 1,
             replyTo: info.exchangeId,
           }).catch(error => rt.warn('ds-bot: failure notice delivery failed: %s', error))
-        } else if (info.role === 'request' && !answersUser(info) && reply !== '') {
+        } else if (expectsReply(info) && !answersUser(info) && (reply !== '' || reason?.kind === 'aborted')) {
+          // A turn stopped before it could answer still owes the sender a line,
+          // or it would wait forever for a reply that never comes.
+          const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
           void rt.deliver({
             fromId: rt.selfOf(id),
             toId: info.senderSessionId,
-            text: reply,
+            text: reply !== '' ? reply : `${name} was stopped before it could answer your message.`,
             role: 'reply',
             hop: (info.hop ?? 0) + 1,
             replyTo: info.exchangeId,

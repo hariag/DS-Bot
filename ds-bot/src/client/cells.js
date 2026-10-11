@@ -267,7 +267,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   // Team state (exchanges) is keyed by the Bot id; Session state by the part shown.
   const selfId = roster.byId[sessionId]?.id ?? sessionId
   // A resumed handoff keeps the relayed message's source, but it opens a part, not a run.
-  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply') && typeof source.senderSessionId === 'string'
+  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
   const turn = node.location?.turn?.turn ?? data.turn
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
@@ -326,7 +326,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         if (!bots.some(bot => bot.id === peer.id)) bots.push(peer)
       }
       return h(EventLine, {
-        prefix: count > 1 ? t('{count} messages with', { count }) : t('Message from'),
+        prefix: source.role === 'stopped' ? t('Stopped by') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
         bots,
         onOpen: bot => actions.openExchange(selfId, bot.id),
         whole: true,
@@ -458,6 +458,14 @@ function toolActivity(name, arg, findBot, self) {
       const target = findBot(arg('to'))
       return { label: target ? t('Asking {name}', { name: target.name }) : t('Asking another Bot'), state: 'sending' }
     }
+    case 'interrupt_bot': {
+      const target = findBot(arg('to'))
+      return { label: target ? t('Interrupting {name}', { name: target.name }) : t('Interrupting another Bot'), state: 'sending' }
+    }
+    case 'stop_bot': {
+      const target = findBot(arg('bot'))
+      return { label: target ? t('Stopping {name}', { name: target.name }) : t('Stopping another Bot'), state: 'sending' }
+    }
     case 'create_bot': return { label: t('Creating {name}', { name: arg('name') ?? t('a Bot') }), state: 'sending' }
     case 'update_bot': {
       const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : self)
@@ -551,6 +559,16 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
       return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
+    }
+    case 'interrupt_bot': {
+      const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
+      if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't interrupt {name}", { name: target.name }))
+      return h(EventLine, { prefix: t('Interrupted'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) })
+    }
+    case 'stop_bot': {
+      const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
+      if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't stop {name}", { name: target.name }))
+      return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) })
     }
     case 'create_bot': {
       const created = findBot(arg('name'))
