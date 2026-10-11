@@ -15,6 +15,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - A handoff note whose headings the model translated (for example `## 目标`) is kept, with the headings put back in English, instead of being written again. A note with a repeated or missing heading is still written again. Handoff notes keep file paths in full.
 - Group the first model choices by provider, so models with the same name can be distinguished. Providers with the same display name also show their provider IDs.
 - A turn with many steps shows one "Thought it through" row instead of one per step. The row holds the thinking of every step in order.
+- The Usage page counts the calls of subagent Sessions too. Before, each scan skipped them and wrote one warning per subagent Session to the terminal.
 
 ## [0.1.0] - 2026-10-10
 
