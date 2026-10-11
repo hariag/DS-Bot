@@ -3887,7 +3887,7 @@ function EarlierParts({ sessionId, roster, actions }) {
         case "event": {
           if (row.role === "report") return (0, import_react6.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
-          return (0, import_react6.createElement)(EventLine, { key, prefix: row.role === "reply" ? t("Reply from") : t("Message from"), bots: [other], onOpen: () => {
+          return (0, import_react6.createElement)(EventLine, { key, prefix: row.role === "stopped" ? t("Stopped by") : row.role === "reply" ? t("Reply from") : t("Message from"), bots: [other], onOpen: () => {
             if (selfId && other.id) actions.openExchange(selfId, other.id);
           }, whole: true });
         }
