@@ -4,6 +4,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Fixed
+
+- Group the first model choices by provider, so models with the same name can be distinguished. Providers with the same display name also show their provider IDs.
+
 ## [0.1.0] - 2026-10-10
 
 The first public preview. Tested with DeepSeek Harness `0.2.1-alpha.1` (DSH Desktop and DSH Web).
