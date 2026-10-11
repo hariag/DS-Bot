@@ -4,6 +4,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-11
+
+Tested with DeepSeek Harness `0.2.1-alpha.1` (DSH Desktop and DSH Web).
+
 ### Added
 
 - Voice chat uses the local speech recognition of the official DSH Voice Input plugin (SenseVoice) when the plugin is on, and the browser's speech recognition otherwise. When the plugin has no speech model yet, the voice panel opens its settings.
@@ -58,5 +62,6 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/FeiZhuLulu/DeepSeek-Bot/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/FeiZhuLulu/DeepSeek-Bot/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/FeiZhuLulu/DeepSeek-Bot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/FeiZhuLulu/DeepSeek-Bot/releases/tag/v0.1.0
