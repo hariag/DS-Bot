@@ -2422,6 +2422,8 @@ var CONVERSATION_CSS = `
 .bt-event button{border:0;background:none;color:inherit;font:inherit;display:inline-flex;align-items:center;gap:4px;cursor:pointer;height:24px;padding:4px 6px 4px 4px;border-radius:999px;box-sizing:border-box;transition:background-color .12s ease}
 .bt-event button:hover{background:var(--bt-hover)}
 .bt-event button:active{background:var(--bt-active)}
+.bt-event button.bt-event-whole{padding:4px 6px 4px 8px}
+.bt-event-whole>span{margin-right:2px}
 .bt-time-sep{display:flex;justify-content:center;align-items:center;height:28px;margin:14px 0 8px;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap}
 [class*="_scroll"]>[class*="_column"]::before{content:var(--bt-first-sep,none);display:block;flex:none;height:28px;margin:17px 0 12px;font-size:12px;line-height:28px;text-align:center;color:var(--bt-ink-2);white-space:nowrap}
 .bt-activity{display:flex;align-items:center;gap:10px;margin:8px 0 4px 2px;font-size:14px;color:var(--bt-ink-2)}
@@ -3715,7 +3717,20 @@ function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSt
     texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
   );
 }
-function EventLine({ prefix, bots, joiner = t("and"), onOpen }) {
+function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
+  if (whole && bots.length === 1) {
+    return (0, import_react6.createElement)(
+      "div",
+      { className: "bt-event" },
+      (0, import_react6.createElement)(
+        "button",
+        { type: "button", className: "bt-event-whole", onClick: () => onOpen?.(bots[0]) },
+        (0, import_react6.createElement)("span", null, prefix),
+        (0, import_react6.createElement)(BotMark, { bot: bots[0], size: 16 }),
+        bots[0].name
+      )
+    );
+  }
   const parts = [];
   parts.push((0, import_react6.createElement)("span", { key: "p" }, prefix));
   bots.forEach((bot, index) => {
@@ -3856,7 +3871,7 @@ function EarlierParts({ sessionId, roster, actions }) {
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
           return (0, import_react6.createElement)(EventLine, { key, prefix: row.role === "reply" ? t("Reply from") : t("Message from"), bots: [other], onOpen: () => {
             if (selfId && other.id) actions.openExchange(selfId, other.id);
-          } });
+          }, whole: true });
         }
         default:
           return null;
@@ -3921,7 +3936,8 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       return (0, import_react6.createElement)(EventLine, {
         prefix: count > 1 ? t("{count} messages with", { count }) : t("Message from"),
         bots,
-        onOpen: (bot) => actions.openExchange(selfId, bot.id)
+        onOpen: (bot) => actions.openExchange(selfId, bot.id),
+        whole: true
       });
     }
     if (source.kind === "schedule") {
@@ -4156,7 +4172,7 @@ function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
     case "message_bot": {
       const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
       if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
-      return (0, import_react6.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id) });
+      return (0, import_react6.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
     }
     case "create_bot": {
       const created = findBot(arg("name"));
