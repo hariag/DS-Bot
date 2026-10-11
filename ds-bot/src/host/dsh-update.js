@@ -1,11 +1,9 @@
-// DSH updates: a released DS Bot may name the DSH release it was verified
-// against (`dsBot.verifiedDsh` in package.json); a release that names none
-// offers nothing. The newest released bot wins: offering that version and
-// nothing newer keeps the update path away from DSH releases we have not
-// checked. A DSH installed from npm swaps with `npm i -g`; a packaged app's
-// runtime lives inside its bundle and only its own updater moves it, to the
-// newest release it finds, so the client offers it only when that release is
-// the verified one.
+// DSH updates: every released DS Bot names the DSH release it was verified
+// against (`dsBot.verifiedDsh` in package.json). The newest released bot wins:
+// offering that version and nothing newer keeps the update path away from DSH
+// releases we have not checked. A DSH installed from npm swaps with
+// `npm i -g`; a packaged app's runtime lives inside its bundle, so the card
+// there only reports current and verified — its own updater chooses versions.
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -101,12 +99,10 @@ export function install(rt) {
     try {
       status.current = await currentDsh()
       status.kind = installKind()
-      // The desktop app pins its DSH and updates it as a whole, so it has nothing to offer.
-      const inApp = process.env.DS_BOT_APP === '1'
       // The release the running package itself verified stays the floor: a bot
       // older than its own declaration has nothing newer to offer.
-      const declared = inApp ? [] : [{ verifiedDsh: PKG.dsBot?.verifiedDsh }]
-      const released = inApp ? null : await releasedDeclaration(sourceOf(await installSpecOf(ctx)))
+      const declared = [{ verifiedDsh: PKG.dsBot?.verifiedDsh }]
+      const released = await releasedDeclaration(sourceOf(await installSpecOf(ctx)))
       if (released) declared.push(released)
       const newestDeclared = declared
         .filter(entry => cleanVersion(entry.verifiedDsh))

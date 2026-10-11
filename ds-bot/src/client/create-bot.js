@@ -22,6 +22,7 @@ export function CreateBot({ roster, actions, start, brief = '', onBack, canGoBac
   const [image, setImage] = useState(null)
   const [name, setName] = useState(start?.name ?? '')
   const [model, setModel] = useState(() => startModel(roster))
+  const [effort, setEffort] = useState(undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef(null)
@@ -37,7 +38,7 @@ export function CreateBot({ roster, actions, start, brief = '', onBack, canGoBac
     setError('')
     setBusy(true)
     try {
-      const bot = await actions.createBot(createPayload({ name: finalName, look, image, model, brief }))
+      const bot = await actions.createBot(createPayload({ name: finalName, look, image, model, effort, brief }))
       onCreated(bot)
     } catch (failure) {
       setError(failure?.message ?? String(failure))
@@ -78,7 +79,7 @@ export function CreateBot({ roster, actions, start, brief = '', onBack, canGoBac
       clash ? h('span', { className: 'bt-note bt-danger' }, t('A Bot named {name} already exists', { name: finalName })) : null),
     h('div', { className: 'bt-field' },
       h('span', { className: 'bt-field-label' }, t('Model')),
-      h(ModelMenu, { bot: { id: 'new-bot', name: finalName, model: model || undefined }, roster, actions, wide: true, onPick: setModel }),
+      h(ModelMenu, { bot: { id: 'new-bot', name: finalName, model: model || undefined, effort }, roster, actions, wide: true, onPick: ref => { setModel(ref); setEffort(undefined) }, onPickEffort: setEffort }),
       h('span', { className: 'bt-note' }, (roster.models ?? []).length > 0
         ? t('The Bot runs on this model. You can change it later in its details.')
         : t('Add a provider and a model in DeepSeek Harness first, or pick one in the Bot\'s chat later.'))),

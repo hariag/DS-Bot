@@ -226,6 +226,7 @@ const ZH = {
 
   // Model menu
   Default: '默认',
+  'Thinking level': '思考强度',
   'Model: {model}': '模型：{model}',
   none: '无',
   'Choose a model': '选择模型',
@@ -318,6 +319,13 @@ const ZH = {
   'The update did not finish: {reason}': '更新没有完成：{reason}',
   "What's new": '更新说明',
   'Updating…': '正在更新…',
+  'DSH {version} is available': 'DSH {version} 可以更新',
+  'Updating DSH…': '正在更新 DSH…',
+  'DSH update': 'DSH 更新',
+  'DSH {version}': 'DSH {version}',
+  'Restart DSH to start using DSH {version}.': '重启 DSH 后开始使用 DSH {version}。',
+  'Update DS Bot {version} first.': '先更新 DS Bot {version}。',
+  'Open updates': '打开更新',
 
   // Command palette
   Messages: '消息',
@@ -560,6 +568,10 @@ const ZH = {
   'Resume listening': '继续听',
   Pause: '暂停',
   'End voice chat': '结束语音对话',
+  'Recognizing…': '识别中…',
+  'Voice input needs its speech model': '语音输入还没有语音模型',
+  'Set up voice input': '设置语音输入',
+  'That was too long to recognize': '这段太长了，识别不了',
 
   // Usage page
   '24 hours': '24 小时',

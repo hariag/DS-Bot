@@ -77,6 +77,8 @@ Options go in the profile's `cordis.patch.yml`, under the `bot` entry. All of th
 
 **Updates**: when a window opens, DS Bot asks where it was installed from for a newer release: the npm registry (the one the DSH plugin manager installs from, then its fallbacks), or the latest GitHub release for a `github:…#vX.Y.Z` install. A newer version shows a cloud button at the top right of the sidebar; **Update** reinstalls DS Bot through the DSH plugin manager, and the new version runs from the next DSH start. A linked or local checkout is never offered an update.
 
+The same card carries DSH itself: every DS Bot release names the DSH release it was verified against (`dsBot.verifiedDsh` in its `package.json`), and only that version is offered — running something newer is a downgrade offer too. A DSH installed from npm is swapped by `npm install -g @deepseek-ai/dsh@<version>`; a packaged app owns its runtime, so the card shows its current and verified versions and opens the app's own update panel. A release may raise the floor with `dsBot.minBot`: until the bot itself is that new, the DSH row waits.
+
 ## Models
 
 Model providers are set up with dsh's `llm-pi-ai` plugin in `cordis.patch.yml`. Every Bot runs on one model of its own, from the models DSH serves. A new team's first Main Bot has none: its chat opens on a model card and it greets the user only after a pick. The Create Bot form starts on the DSH default model. The Bot's details panel and settings (or a Main Bot's `update_bot`) change it; a Bot whose model is no longer served shows the card again. A team saved by an older version keeps the model each Bot last ran on.

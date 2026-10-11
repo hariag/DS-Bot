@@ -107,6 +107,19 @@ export function historyEntry(event, group) {
   return { answer: false, who: ours ? 'bot' : 'user', text: skipped ? '' : text, keepAnswers: !skipped || (ours && source.resume === true) }
 }
 
+// A note with every heading in order but some translated (e.g. "## 目标" for "## Goals")
+// gets the headings as written, so the note is not thrown away over its headings alone.
+// A known heading in another place (repeated or out of order) keeps the note as it is.
+export function canonicalHeadings(note, names) {
+  const lines = note.split('\n')
+  const at = lines.flatMap((line, index) => /^##\s+\S/.test(line) ? [index] : [])
+  const heading = index => lines[index].replace(/^##\s+/, '').trim()
+  if (at.length !== names.length || at.every((index, n) => heading(index) === names[n])) return note
+  if (at.some((index, n) => names.includes(heading(index)) && heading(index) !== names[n])) return note
+  at.forEach((index, n) => { lines[index] = `## ${names[n]}` })
+  return lines.join('\n')
+}
+
 export function install(rt) {
   const { ctx, config, state } = rt
 
@@ -301,7 +314,7 @@ export function install(rt) {
     '',
     ...NOTE_SECTIONS.flatMap(([name, what]) => [`## ${name}`, `- [${what}]`, '']),
     'Rules:',
-    '- Do not make anything up. Leave a detail out rather than guess it. Keep identifiers, quotes, and numbers exact.',
+    '- Do not make anything up. Leave a detail out rather than guess it. Keep identifiers, quotes, and numbers exact, and write every file path in full, as it first appeared: never shorten it.',
     '- When a newer message contradicts an older one, the newer one wins; drop what is stale.',
     '- Your latest messages travel to the fresh conversation word for word, and in your own chat so does every message the user and other Bots sent you (long ones cut). Do not copy them whole; record what they mean and what they rely on. Still put in the facts, quotes, and error messages from them that the work needs: the move after this one leaves them behind.',
     '- If the conversation starts with a "[Handoff · part N]" message, it holds your previous note, and a "[Checkpoint N]" summary holds a condensed stretch of this part. Merge them: keep what is still true, drop what is stale, and add what is new. Nothing in them survives unless this note keeps it.',
@@ -342,7 +355,8 @@ export function install(rt) {
       })) assembler.push(chunk)
       const finish = assembler.finish
       if (finish.kind === 'error' || finish.kind === 'aborted') throw new Error(finish.failure?.message ?? finish.kind)
-      const note = assembler.blocks().filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
+      const text = assembler.blocks().filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
+      const note = missingSections(text).length > 0 ? canonicalHeadings(text, NOTE_SECTIONS.map(([name]) => name)) : text
       const missing = missingSections(note)
       if (finish.kind === 'max-tokens') {
         problem = 'it was cut off at the output limit'

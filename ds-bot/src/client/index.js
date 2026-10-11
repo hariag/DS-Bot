@@ -9,6 +9,7 @@ import { lookOf } from './mark.js'
 import { TeamSidebar, ConnectPlugins, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
 import { HeaderPill } from './header.js'
 import { ComposerPlus, ComposerVoice } from './composer.js'
+import { VOICE_BUNDLE } from './speech.js'
 import { AnsweredCell, QuestionCard, QuestionDock } from './questions.js'
 import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, ToolCell } from './cells.js'
 import { Overlays } from './overlays.js'
@@ -27,7 +28,7 @@ import { installLocale, language } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 
-export const inject = ['sessions', 'uiWorkspace', 'slots', 'theme', 'layout', 'configForms']
+export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'configForms']
 
 export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
@@ -181,7 +182,7 @@ export function apply(ctx) {
       const value = await call('update-check', { fresh: false }).catch(() => null)
       if (stopped) return
       if (value) update.set(value)
-      timer = setTimeout(loop, value?.phase === 'installing' ? 2000 : 60 * 60_000)
+      timer = setTimeout(loop, value?.phase === 'installing' || value?.dsh?.phase === 'installing' ? 2000 : 60 * 60_000)
     }
     wakeUpdate = loop
     void loop()
@@ -504,6 +505,7 @@ export function apply(ctx) {
     createRoom: (members, options = {}) => after(call('create-room', { members, ...options })),
     updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
     refreshModels: () => after(call('models')).catch(() => {}),
+    efforts: ref => call('efforts', { ref }),
     deleteBot: id => after(call('delete-bot', { id })),
     duplicateBot: id => after(call('duplicate-bot', { id })),
     setPrefs: prefs => after(call('set-prefs', prefs)),
@@ -590,12 +592,27 @@ export function apply(ctx) {
   actions.signIn = () => ui.set(state => ({ ...state, signIn: (state.signIn ?? 0) + 1 }))
   actions.closeSignIn = () => ui.set(state => ({ ...state, signIn: null }))
   actions.accountT = () => ctx.get('locale').bind('settings.account')
+  // The Voice Input plugin's speech Remote; absent while that plugin is off.
+  actions.speech = () => ctx.get('remote.speech') ?? undefined
+  actions.voiceSetup = () => {
+    const navigation = ctx.get('pluginNavigation')
+    return navigation ? () => navigation.openBundle(VOICE_BUNDLE) : null
+  }
   actions.seatAccount = on => ui.set(state => (state.accountSeated === on ? state : { ...state, accountSeated: on }))
   // The install runs on the host; the check loop follows it every two seconds.
   actions.installUpdate = async () => {
-    update.set(await call('update-install'))
+    const value = await call('update-install')
+    update.set(previous => ({ ...previous, ...value }))
     wakeUpdate()
   }
+  // The DSH the newest released DS Bot verified installs the same way.
+  actions.installDshUpdate = async () => {
+    const dsh = await call('dsh-update-install')
+    update.set(previous => ({ ...previous, dsh }))
+    wakeUpdate()
+  }
+  // A packaged DSH only updates inside its app; the button opens the app's panel.
+  actions.openAppUpdates = () => window.dshDesktop?.updates?.open?.()
   actions.noteTurnTime = (sessionId, turn, key, time) => {
     if (sessionId === undefined || !Number.isFinite(turn) || !Number.isFinite(time)) return
     turnClock.set((state) => {
@@ -636,6 +653,18 @@ export function apply(ctx) {
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
   const face = () => ({ actions, hooks: { roster, ui, activity, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } })
+  const assistantFace = (sessionId) => {
+    const binding = ctx.sessions.binding(sessionId)
+    if (binding === undefined) throw new Error(`ds-bot: unknown session "${sessionId}"`)
+    const chat = ctx.uiConversation.binding(binding).target('chat')
+    return { ...face(), keyedHooks: {
+      turnSteps: (turn) => {
+        const snapshot = chat.getSnapshot()
+        if (snapshot === undefined) throw new Error('ds-bot: Chat target is unavailable')
+        return snapshot.nodes.turnDataSource(Number(turn), 'assistant-step')
+      },
+    } }
+  }
 
   const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component))
 
@@ -675,7 +704,7 @@ export function apply(ctx) {
     // the mode is held at `verbose` while this group is mounted.
     holdFlatTranscript(ctx.configForms.get('ui-chat')),
     shadow('conversation.session.header', { priority: -10, inject: face }, HeaderPill),
-    shadow('conversation.chat.node', { key: 'assistant-step', priority: -10, locale: 'chat', inject: face }, AssistantCell),
+    shadow('conversation.chat.node', { key: 'assistant-step', priority: -10, locale: 'chat', inject: assistantFace }, AssistantCell),
     shadow('conversation.chat.node', { key: 'turn-trigger', priority: -10, locale: 'chat', inject: face }, TriggerCell),
     shadow('conversation.chat.node', { key: 'tool-call', priority: -10, locale: 'chat', inject: face }, ToolCell),
     shadow('conversation.chat.node', { key: 'turn-process', priority: -10, locale: 'chat', inject: face }, TurnProcessCell),

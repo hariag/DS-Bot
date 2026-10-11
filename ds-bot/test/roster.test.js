@@ -7,7 +7,7 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Enough of the dsh services for the roster to make Sessions; kickoff messages are dropped.
-function start(team, { models = [] } = {}) {
+function start(team, { models = [], reasoning = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-roster-'))
   if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   const ctx = fakeContext()
@@ -19,6 +19,7 @@ function start(team, { models = [] } = {}) {
     llm: {
       listProviders: () => (models.length > 0 ? [{ id: 'deepseek', name: 'DeepSeek' }] : []),
       listModels: async () => models.map(id => ({ id })),
+      resolveModelInfo: async (provider, model) => reasoning[`${provider}/${model}`] ?? {},
     },
     workspaceRegistry: {
       get: id => workspaces.get(id),
@@ -128,6 +129,35 @@ test('a group the user makes without a first message opens with its admin asking
   const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).rooms[room.id]
   assert.equal(saved.sessions[writer.id], turns[0].sessionId)
   assert.deepEqual(saved.log, [])
+})
+
+test('a Bot takes a thinking level its model serves, applied with the model', async (t) => {
+  const reasoning = { 'deepseek/deepseek-v4-flash': { reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'high' } } }
+  const { call, stop, selected } = start(undefined, { models: ['deepseek-v4-flash'], reasoning })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
+  await settle()
+  assert.equal((await call('update-bot', { id: chief, effort: 'low' })).ok, true)
+  await settle()
+  const main = (await call('state', {})).value.bots.find(bot => bot.id === chief)
+  assert.equal(main.effort, 'low')
+  assert.equal(main.appliedEffort, 'low')
+  assert.equal(selected.at(-1).reasoningEffort, 'low')
+
+  // A level the model does not serve is refused; null clears the pick.
+  assert.equal((await call('update-bot', { id: chief, effort: 'max' })).ok, false)
+  assert.equal((await call('update-bot', { id: chief, effort: null })).ok, true)
+  await settle()
+  const cleared = (await call('state', {})).value.bots.find(bot => bot.id === chief)
+  assert.equal(cleared.effort, undefined)
+  assert.equal(cleared.appliedEffort, undefined)
+
+  // Creating a Bot with a level stores and applies it.
+  const writer = (await call('create-bot', { name: 'Writer', model: 'deepseek/deepseek-v4-flash', effort: 'high' })).value
+  await settle()
+  assert.equal(writer.effort, 'high')
+  assert.equal(selected.at(-1).reasoningEffort, 'high')
 })
 
 test('the state reports a changed model list without a new revision', async (t) => {

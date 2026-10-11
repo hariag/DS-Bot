@@ -245,6 +245,7 @@ var ZH = {
   Create: "创建",
   // Model menu
   Default: "默认",
+  "Thinking level": "思考强度",
   "Model: {model}": "模型：{model}",
   none: "无",
   "Choose a model": "选择模型",
@@ -368,6 +369,13 @@ var ZH = {
   "The update did not finish: {reason}": "更新没有完成：{reason}",
   "What's new": "更新说明",
   "Updating…": "正在更新…",
+  "DSH {version} is available": "DSH {version} 可以更新",
+  "Updating DSH…": "正在更新 DSH…",
+  "DSH update": "DSH 更新",
+  "DSH {version}": "DSH {version}",
+  "Restart DSH to start using DSH {version}.": "重启 DSH 后开始使用 DSH {version}。",
+  "Update DS Bot {version} first.": "先更新 DS Bot {version}。",
+  "Open updates": "打开更新",
   // Command palette
   Messages: "消息",
   Commands: "命令",
@@ -601,6 +609,10 @@ var ZH = {
   "Resume listening": "继续听",
   Pause: "暂停",
   "End voice chat": "结束语音对话",
+  "Recognizing…": "识别中…",
+  "Voice input needs its speech model": "语音输入还没有语音模型",
+  "Set up voice input": "设置语音输入",
+  "That was too long to recognize": "这段太长了，识别不了",
   // Usage page
   "24 hours": "24 小时",
   "7 days": "7 天",
@@ -2113,6 +2125,8 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-voice-status{font-size:13px;line-height:18px;color:var(--bt-ink-2);min-height:18px}
 .bt-voice-caption{min-height:44px;font-size:15px;line-height:22px;color:var(--bt-ink);animation:bt-blur-in .25s ease-out;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .bt-voice-note{font-size:12px;color:#e02135}
+.bt-voice-setup{height:32px;padding:0 14px;border-radius:16px;border:0;background:var(--bt-hover);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;transition:background-color .15s ease}
+.bt-voice-setup:hover{background:var(--bt-active)}
 .bt-voice-bar{display:flex;gap:16px;padding:0 0 32px}
 .bt-voice-btn{position:relative;width:52px;height:52px;border-radius:50%;border:0;background:var(--bt-hover);color:var(--bt-ink);display:grid;place-items:center;cursor:pointer;transition:background-color .15s ease,transform .12s ease}
 .bt-voice-btn:hover{background:var(--bt-active)}
@@ -3513,12 +3527,22 @@ var SECRET_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-secret-glide{transition:none}.bt-secret-check,.bt-secret-done,.bt-secret-ok,.bt-secret-edit{animation:none}}
 `;
 
+// src/client/turn-reasoning.js
+function turnReasoning(steps, current) {
+  const members = steps.length ? steps : [current];
+  if (members.find((step) => stepReasoning(step) !== "")?.step !== current.step) return "";
+  return members.filter((step) => !thinkingLive(step)).map(stepReasoning).filter(Boolean).join("\n\n");
+}
+var texts = (step) => step.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
+var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
+var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
+
 // src/client/cells.js
 var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
-function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
+function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
   const onClick = (event) => {
     const target = mentionTarget(event);
     if (target === null) return;
@@ -3530,10 +3554,10 @@ function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey,
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-astack", "data-lead": lead ? "" : void 0, onClickCapture: onClick },
-    texts.map((text, index) => {
+    texts2.map((text, index) => {
       const key = msgKey ? `${msgKey}:${index}` : void 0;
       const picked = key ? reactions?.[index] ?? [] : [];
-      const last = index === texts.length - 1;
+      const last = index === texts2.length - 1;
       const live = streaming && last;
       return (0, import_react6.createElement)(
         "div",
@@ -3638,8 +3662,7 @@ function MessageTools({ text, name, sessionId, react, actions }) {
     ), document.body) : null
   );
 }
-function ThinkingRow({ text, running }) {
-  if (running || !text) return null;
+function ThinkingRow({ text }) {
   return (0, import_react6.createElement)(
     "details",
     { className: "bt-think" },
@@ -3647,22 +3670,22 @@ function ThinkingRow({ text, running }) {
     (0, import_react6.createElement)("div", { className: "bt-think-text" }, text)
   );
 }
-function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, actions }) {
+function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, actions }) {
   const roster = useRoster((value) => value);
   const data = node.data;
+  const steps = useTurnSteps(String(data.turn));
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
-  const texts = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
+  const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
-  useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null);
+  useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
   if (hidden) return null;
-  const reasoning = groupPart === "response" ? "" : data.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
-  const thinkingLive = running && texts.length === 0 && data.blocks.some((block) => block.kind === "reasoning");
-  if (texts.length === 0 && !reasoning) return null;
+  const reasoning = groupPart === "response" ? "" : turnReasoning(steps, data);
+  if (texts2.length === 0 && !reasoning) return null;
   return (0, import_react6.createElement)(
     import_react6.Fragment,
     null,
-    reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning, running: thinkingLive }) : null,
-    texts.length ? (0, import_react6.createElement)(Bubbles, { texts, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
+    reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning }) : null,
+    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
   );
 }
 function EventLine({ prefix, bots, joiner = t("and"), onOpen }) {
@@ -4667,6 +4690,7 @@ function UpdateButton({ useUpdate, actions }) {
   const [open, setOpen] = (0, import_react8.useState)(false);
   const [box, setBox] = (0, import_react8.useState)(null);
   const [error, setError] = (0, import_react8.useState)("");
+  const [dshError, setDshError] = (0, import_react8.useState)("");
   const button = (0, import_react8.useRef)(null);
   (0, import_react8.useEffect)(() => {
     if (!open) return void 0;
@@ -4689,7 +4713,11 @@ function UpdateButton({ useUpdate, actions }) {
     };
   }, [open]);
   const phase = update?.phase ?? "idle";
-  if (!update?.available && phase === "idle") return null;
+  const dsh = update?.dsh;
+  const dshPhase = dsh?.phase ?? "idle";
+  const dshRow = dsh && dsh.verified && dsh.current && dsh.verified !== dsh.current;
+  if (!update?.available && !dshRow && phase === "idle" && dshPhase === "idle") return null;
+  const cloudPhase = phase === "installing" || dshPhase === "installing" ? "installing" : phase !== "idle" ? phase : dshPhase;
   const toggle = () => {
     const rect = button.current?.getBoundingClientRect();
     if (rect) setBox({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)), top: rect.bottom + 6 });
@@ -4699,8 +4727,14 @@ function UpdateButton({ useUpdate, actions }) {
     setError("");
     void actions.installUpdate().catch((failure) => setError(hostText(failure?.message ?? String(failure))));
   };
-  const label = phase === "installing" ? t("Updating DS Bot…") : phase === "installed" ? t("DS Bot {version} is installed. Restart DSH to use it.", { version: update.installed ?? update.latest }) : t("DS Bot {version} is available", { version: update.latest });
+  const startDsh = () => {
+    setDshError("");
+    void actions.installDshUpdate().catch((failure) => setDshError(hostText(failure?.message ?? String(failure))));
+  };
+  const label = phase === "installing" ? t("Updating DS Bot…") : dshPhase === "installing" ? t("Updating DSH…") : phase === "installed" ? t("DS Bot {version} is installed. Restart DSH to use it.", { version: update.installed ?? update.latest }) : dshPhase === "installed" ? t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified }) : update?.available ? t("DS Bot {version} is available", { version: update.latest }) : t("DSH {version} is available", { version: dsh?.verified });
   const message = error || (phase === "failed" ? update.error : "");
+  const dshMessage = dshError || (dshPhase === "failed" ? dsh?.error : "");
+  const dshText = dshPhase === "installed" ? t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified }) : dsh?.available === false && dsh?.blockedBy && dsh.kind === "npm" ? t("Update DS Bot {version} first.", { version: dsh.blockedBy }) : t("You have {version}.", { version: dsh?.current });
   return (0, import_react8.createElement)(
     import_react8.Fragment,
     null,
@@ -4708,30 +4742,51 @@ function UpdateButton({ useUpdate, actions }) {
       ref: button,
       type: "button",
       className: "bt-round bt-update",
-      "data-phase": phase,
+      "data-phase": cloudPhase,
       "aria-label": label,
       title: label,
       "aria-haspopup": "dialog",
       "aria-expanded": open,
       onClick: toggle
-    }, (0, import_react8.createElement)(CloudDownloadIcon, { done: phase === "installed" }), phase === "failed" ? (0, import_react8.createElement)("span", { className: "bt-update-dot", "aria-hidden": true }) : null),
+    }, (0, import_react8.createElement)(CloudDownloadIcon, { done: phase === "installed" }), phase === "failed" || dshPhase === "failed" ? (0, import_react8.createElement)("span", { className: "bt-update-dot", "aria-hidden": true }) : null),
     open && box ? (0, import_react_dom3.createPortal)((0, import_react8.createElement)(
       "div",
-      { className: "bt-update-pop", role: "dialog", "aria-label": t("DS Bot update"), style: box },
-      (0, import_react8.createElement)("div", { className: "bt-update-title" }, phase === "installed" ? t("Update installed") : t("DS Bot {version}", { version: update.latest })),
-      (0, import_react8.createElement)("div", { className: "bt-update-text" }, phase === "installed" ? t("Restart DSH to start using DS Bot {version}.", { version: update.installed ?? update.latest }) : t("You have {version}.", { version: update.current })),
-      message ? (0, import_react8.createElement)("div", { className: "bt-update-error", role: "alert" }, t("The update did not finish: {reason}", { reason: message })) : null,
-      (0, import_react8.createElement)(
+      { className: "bt-update-pop", role: "dialog", "aria-label": update?.available || phase !== "idle" ? t("DS Bot update") : t("DSH update"), style: box },
+      update?.available || phase !== "idle" ? (0, import_react8.createElement)(
+        import_react8.Fragment,
+        null,
+        (0, import_react8.createElement)("div", { className: "bt-update-title" }, phase === "installed" ? t("Update installed") : t("DS Bot {version}", { version: update.latest })),
+        (0, import_react8.createElement)("div", { className: "bt-update-text" }, phase === "installed" ? t("Restart DSH to start using DS Bot {version}.", { version: update.installed ?? update.latest }) : t("You have {version}.", { version: update.current })),
+        message ? (0, import_react8.createElement)("div", { className: "bt-update-error", role: "alert" }, t("The update did not finish: {reason}", { reason: message })) : null,
+        (0, import_react8.createElement)(
+          "div",
+          { className: "bt-update-actions" },
+          update.notesUrl ? (0, import_react8.createElement)("a", { className: "bt-update-notes", href: update.notesUrl, target: "_blank", rel: "noopener noreferrer" }, t("What's new")) : null,
+          phase === "installed" ? null : (0, import_react8.createElement)("button", {
+            type: "button",
+            className: "bt-update-go",
+            disabled: phase === "installing",
+            onClick: start
+          }, phase === "installing" ? t("Updating…") : phase === "failed" ? t("Try again") : t("Update"))
+        )
+      ) : null,
+      dshRow ? (0, import_react8.createElement)(
         "div",
-        { className: "bt-update-actions" },
-        update.notesUrl ? (0, import_react8.createElement)("a", { className: "bt-update-notes", href: update.notesUrl, target: "_blank", rel: "noopener noreferrer" }, t("What's new")) : null,
-        phase === "installed" ? null : (0, import_react8.createElement)("button", {
-          type: "button",
-          className: "bt-update-go",
-          disabled: phase === "installing",
-          onClick: start
-        }, phase === "installing" ? t("Updating…") : phase === "failed" ? t("Try again") : t("Update"))
-      )
+        { className: "bt-update-dsh" },
+        (0, import_react8.createElement)("div", { className: "bt-update-title" }, t("DSH {version}", { version: dsh.verified })),
+        (0, import_react8.createElement)("div", { className: "bt-update-text" }, dshText),
+        dshMessage ? (0, import_react8.createElement)("div", { className: "bt-update-error", role: "alert" }, t("The update did not finish: {reason}", { reason: dshMessage })) : null,
+        (0, import_react8.createElement)(
+          "div",
+          { className: "bt-update-actions" },
+          dsh.kind === "app" ? (0, import_react8.createElement)("button", { type: "button", className: "bt-update-go", onClick: () => actions.openAppUpdates() }, t("Open updates")) : !dsh.available && dshPhase === "idle" ? null : dshPhase === "installed" ? null : (0, import_react8.createElement)("button", {
+            type: "button",
+            className: "bt-update-go",
+            disabled: dshPhase === "installing",
+            onClick: startDsh
+          }, dshPhase === "installing" ? t("Updating…") : dshPhase === "failed" ? t("Try again") : t("Update"))
+        )
+      ) : null
     ), document.body) : null
   );
 }
@@ -5027,6 +5082,7 @@ var SIDEBAR_CSS = `
 .bt-update-go:hover:not(:disabled){opacity:.9}
 .bt-update-go:active:not(:disabled){transform:scale(.96)}
 .bt-update-go:disabled{opacity:.6;cursor:default}
+.bt-update-dsh{margin-top:12px;padding-top:12px;border-top:.5px solid var(--bt-line-2)}
 @media (prefers-reduced-motion:reduce){.bt-round.bt-update,.bt-update-pop,.bt-update .bt-cloud-arrow{animation:none}}
 
 /* The DSH Agent row and its expanding Session list. The black whale is the
@@ -5354,10 +5410,11 @@ function ComposerVoice({ sessionId, inputActions, actions, useUi }) {
     }
   }, [quote?.token]);
   if (sessionId === void 0) return null;
+  const pluginMic = actions.speech() !== void 0;
   return (0, import_react10.createElement)(
     import_react10.Fragment,
     null,
-    (0, import_react10.createElement)("button", {
+    pluginMic ? null : (0, import_react10.createElement)("button", {
       type: "button",
       className: "bt-mic",
       "aria-label": dictation.listening ? t("Stop dictation") : t("Dictate"),
@@ -5447,6 +5504,132 @@ function ComposerPlus({ sessionId, useRoster, actions }) {
       (0, import_react10.createElement)("button", { type: "button", role: "menuitem", onClick: schedule }, (0, import_react10.createElement)(ClockIcon), (0, import_react10.createElement)("span", { className: "bt-menu-label" }, t("Scheduled task")))
     ), document.body) : null
   );
+}
+
+// src/client/speech.js
+var VOICE_BUNDLE = "@deepseek-ai/dsh-experimental-voice-input-bundle";
+var USABLE = /* @__PURE__ */ new Set(["ready", "standby", "waking"]);
+async function speechCatalog(speech) {
+  const result = await speech.catalog();
+  if (!result?.ok) throw new Error(result?.error?.message ?? "Speech catalog failed");
+  const catalog = result.value;
+  const provider = catalog.providers.find((item) => item.id === catalog.selection.providerId);
+  return { catalog, usable: USABLE.has(provider?.preparation?.phase) };
+}
+function waveBytes(samples, rate = 16e3) {
+  const bytes = new Uint8Array(44 + samples.length * 2);
+  const view = new DataView(bytes.buffer);
+  const ascii = (at, text) => {
+    for (let index = 0; index < text.length; index += 1) bytes[at + index] = text.charCodeAt(index);
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  ascii(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  samples.forEach((sample, index) => {
+    const value = Math.max(-1, Math.min(1, sample));
+    view.setInt16(44 + index * 2, value < 0 ? Math.round(value * 32768) : Math.round(value * 32767), true);
+  });
+  return bytes;
+}
+function base64Of(bytes) {
+  let text = "";
+  for (let index = 0; index < bytes.length; index += 32768) text += String.fromCharCode(...bytes.subarray(index, index + 32768));
+  return btoa(text);
+}
+var captureError = (kind, cause) => Object.assign(new Error(kind), { kind, cause });
+async function openCapture() {
+  const devices = navigator.mediaDevices;
+  if (!devices?.getUserMedia || typeof MediaRecorder === "undefined") throw captureError("unavailable");
+  let stream;
+  try {
+    stream = await devices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+  } catch (error) {
+    throw captureError(error?.name === "NotAllowedError" ? "blocked" : "failed", error);
+  }
+  const audio = new AudioContext();
+  const analyser = audio.createAnalyser();
+  analyser.fftSize = 512;
+  audio.createMediaStreamSource(stream).connect(analyser);
+  const frame = new Float32Array(analyser.fftSize);
+  const recorder = new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size > 0) chunks.push(event.data);
+  };
+  recorder.start();
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    if (recorder.state !== "inactive") recorder.stop();
+    stream.getTracks().forEach((track) => track.stop());
+    void audio.close().catch(() => {
+    });
+  };
+  return {
+    level() {
+      if (closed) return 0;
+      analyser.getFloatTimeDomainData(frame);
+      let sum = 0;
+      for (const sample of frame) sum += sample * sample;
+      return Math.min(1, Math.sqrt(sum / frame.length) * 4);
+    },
+    cancel: close,
+    async finish(maxSeconds) {
+      if (closed || recorder.state === "inactive") {
+        close();
+        return null;
+      }
+      try {
+        await new Promise((resolve) => {
+          recorder.onstop = resolve;
+          recorder.stop();
+        });
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(chunks, { type: recorder.mimeType });
+        if (blob.size === 0) return null;
+        const decoded = await audio.decodeAudioData(await blob.arrayBuffer());
+        const length = Math.max(1, Math.floor(Math.min(decoded.duration, maxSeconds) * 16e3));
+        const offline = new OfflineAudioContext(1, length, 16e3);
+        const source = offline.createBufferSource();
+        source.buffer = decoded;
+        source.connect(offline.destination);
+        source.start();
+        return waveBytes((await offline.startRendering()).getChannelData(0));
+      } finally {
+        close();
+      }
+    }
+  };
+}
+async function transcribeWave(speech, catalog, wave, signal) {
+  if (wave.byteLength > catalog.maxAudioBytes) throw captureError("too-long");
+  const result = await speech.transcribe({ audioBase64: base64Of(wave), ...catalog.selection }, signal);
+  if (!result?.ok) throw Object.assign(new Error(result?.error?.message ?? "Transcription failed"), { kind: "service" });
+  return String(result.value?.text ?? "").trim();
+}
+function turnDetector({ loud = 0.12, quiet = 0.06, quietMs = 1200 } = {}) {
+  let spokeAt = 0;
+  let quietSince = 0;
+  return (level, now) => {
+    if (level >= loud) {
+      spokeAt ||= now;
+      quietSince = 0;
+      return "speech";
+    }
+    if (!spokeAt) return "waiting";
+    if (level < quiet) quietSince ||= now;
+    return quietSince && now - quietSince >= quietMs ? "done" : "speech";
+  };
 }
 
 // src/client/overlay-hooks.js
@@ -5702,6 +5885,53 @@ function modelOf(bot, roster) {
   const [provider, ...rest] = ref.split("/");
   return { ref, name: served?.name ?? rest.join("/"), provider: served?.providerName ?? provider, served: served !== void 0 };
 }
+var effortCache = /* @__PURE__ */ new Map();
+function useEfforts(served, ref, actions) {
+  const [fetched, setFetched] = (0, import_react13.useState)(void 0);
+  (0, import_react13.useEffect)(() => {
+    setFetched(void 0);
+    if (ref === void 0 || served?.reasoning !== void 0 || actions?.efforts === void 0) return void 0;
+    let live = true;
+    if (effortCache.has(ref)) setFetched(effortCache.get(ref));
+    else void Promise.resolve(actions.efforts(ref)).then((value) => {
+      const reasoning = value?.efforts ? value : null;
+      effortCache.set(ref, reasoning);
+      if (live) setFetched(reasoning);
+    }).catch(() => {
+    });
+    return () => {
+      live = false;
+    };
+  }, [ref, served?.reasoning !== void 0, actions]);
+  return served?.reasoning ?? fetched;
+}
+function effortRows(reasoning) {
+  if (reasoning?.efforts === void 0 || reasoning.efforts.length === 0) return [];
+  return [
+    { effort: void 0, label: t("Default") },
+    ...reasoning.efforts.map((effort) => ({ effort: effort.id, label: effort.name }))
+  ];
+}
+function EffortRows({ reasoning, current, onPick }) {
+  return (0, import_react13.createElement)(
+    import_react13.Fragment,
+    null,
+    (0, import_react13.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
+    (0, import_react13.createElement)("div", { className: "bt-model-group", role: "presentation" }, t("Thinking level")),
+    effortRows(reasoning).map((row) => (0, import_react13.createElement)(
+      "button",
+      {
+        key: row.effort ?? "default",
+        type: "button",
+        role: "menuitemradio",
+        "aria-checked": row.effort === current,
+        onClick: () => onPick(row.effort)
+      },
+      (0, import_react13.createElement)("span", { className: "bt-menu-label" }, row.label),
+      (0, import_react13.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, row.effort === current ? (0, import_react13.createElement)(CheckIcon) : null)
+    ))
+  );
+}
 function ModelRows({ roster, current, onPick }) {
   return groupModels(roster.models).map(([provider, list]) => (0, import_react13.createElement)(
     import_react13.Fragment,
@@ -5723,13 +5953,18 @@ function ModelRows({ roster, current, onPick }) {
     ))
   ));
 }
-function ModelMenu({ bot, roster, actions, run, wide = false, onPick }) {
+function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffort }) {
   const [place, setPlace] = (0, import_react13.useState)(null);
   const [shownPlace, leaving] = useLinger(place, MENU_EXIT_MS);
   const button = (0, import_react13.useRef)(null);
   const menu = (0, import_react13.useRef)(null);
   const shown = modelOf(bot, roster);
   const current = bot.model ?? bot.appliedModel;
+  const served = servedOf(roster, current);
+  const reasoning = useEfforts(served, current, actions);
+  const picked = reasoning?.efforts?.some((effort) => effort.id === bot.effort) ? bot.effort : void 0;
+  const currentEffort = picked ?? reasoning?.defaultEffort;
+  const effortLabel = currentEffort === void 0 ? reasoning?.efforts?.length > 0 ? t("Default") : void 0 : reasoning.efforts.find((effort) => effort.id === currentEffort)?.name ?? currentEffort;
   const close = () => setPlace(null);
   (0, import_react13.useEffect)(() => {
     if (place === null) return void 0;
@@ -5773,6 +6008,11 @@ function ModelMenu({ bot, roster, actions, run, wide = false, onPick }) {
     if (onPick) onPick(ref);
     else if (ref !== current || !bot.model) void run(actions.updateBot(bot.id, { model: ref }));
   };
+  const pickEffort = (effort) => {
+    close();
+    if (onPickEffort) onPickEffort(effort);
+    else if (effort !== bot.effort) void run(actions.updateBot(bot.id, { effort: effort ?? null }));
+  };
   const models = roster.models ?? [];
   return (0, import_react13.createElement)(
     import_react13.Fragment,
@@ -5794,7 +6034,7 @@ function ModelMenu({ bot, roster, actions, run, wide = false, onPick }) {
         "span",
         { className: "bt-model-copy" },
         (0, import_react13.createElement)("span", { className: "bt-model-name" }, shown?.name ?? t("Choose a model")),
-        shown ? (0, import_react13.createElement)("span", { className: "bt-model-provider" }, shown.served || models.length === 0 ? shown.provider : t("{provider} · not available", { provider: shown.provider })) : null
+        shown ? (0, import_react13.createElement)("span", { className: "bt-model-provider" }, shown.served || models.length === 0 ? effortLabel === void 0 ? shown.provider : `${shown.provider} · ${effortLabel}` : t("{provider} · not available", { provider: shown.provider })) : null
       ),
       (0, import_react13.createElement)("svg", { className: "bt-model-caret", width: 12, height: 12, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react13.createElement)("path", { d: "M5.5 8l4.5 4.5L14.5 8" }))
     ),
@@ -5802,6 +6042,7 @@ function ModelMenu({ bot, roster, actions, run, wide = false, onPick }) {
       "div",
       { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== void 0 ? " bt-menu-up" : ""}`, role: "menu", "aria-label": t("Model for {name}", { name: bot.name }), style: shownPlace, "data-leaving": leaving || void 0 },
       models.length > 0 ? (0, import_react13.createElement)(ModelRows, { roster, current, onPick: pick2 }) : (0, import_react13.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
+      effortRows(reasoning).length > 0 ? (0, import_react13.createElement)(EffortRows, { reasoning, current: picked, onPick: pickEffort }) : null,
       (0, import_react13.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
       (0, import_react13.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
         close();
@@ -7049,9 +7290,10 @@ function startModel(roster) {
   const models = roster.models ?? [];
   return (models.find((model) => model.ref === roster.defaultModel) ?? models[0])?.ref ?? "";
 }
-function createPayload({ name, look, image, model, brief }) {
+function createPayload({ name, look, image, model, effort, brief }) {
   const payload = { name, color: look.color, avatar: image ? { shape: look.shape, image } : { shape: look.shape } };
   if (model) payload.model = model;
+  if (effort) payload.effort = effort;
   if (brief) payload.brief = brief;
   return payload;
 }
@@ -7069,6 +7311,7 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
   const [image, setImage] = (0, import_react17.useState)(null);
   const [name, setName] = (0, import_react17.useState)(start?.name ?? "");
   const [model, setModel] = (0, import_react17.useState)(() => startModel(roster));
+  const [effort, setEffort] = (0, import_react17.useState)(void 0);
   const [busy, setBusy] = (0, import_react17.useState)(false);
   const [error, setError] = (0, import_react17.useState)("");
   const fileRef = (0, import_react17.useRef)(null);
@@ -7085,7 +7328,7 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
     setError("");
     setBusy(true);
     try {
-      const bot = await actions.createBot(createPayload({ name: finalName, look, image, model, brief }));
+      const bot = await actions.createBot(createPayload({ name: finalName, look, image, model, effort, brief }));
       onCreated(bot);
     } catch (failure) {
       setError(failure?.message ?? String(failure));
@@ -7169,7 +7412,10 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
       "div",
       { className: "bt-field" },
       (0, import_react17.createElement)("span", { className: "bt-field-label" }, t("Model")),
-      (0, import_react17.createElement)(ModelMenu, { bot: { id: "new-bot", name: finalName, model: model || void 0 }, roster, actions, wide: true, onPick: setModel }),
+      (0, import_react17.createElement)(ModelMenu, { bot: { id: "new-bot", name: finalName, model: model || void 0, effort }, roster, actions, wide: true, onPick: (ref) => {
+        setModel(ref);
+        setEffort(void 0);
+      }, onPickEffort: setEffort }),
       (0, import_react17.createElement)("span", { className: "bt-note" }, (roster.models ?? []).length > 0 ? t("The Bot runs on this model. You can change it later in its details.") : t("Add a provider and a model in DeepSeek Harness first, or pick one in the Bot's chat later."))
     ),
     error ? (0, import_react17.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null,
@@ -7531,7 +7777,15 @@ function ExchangeDialog({ pair, roster, actions }) {
 // src/client/voice.js
 var import_react20 = require("react");
 var plainSpeech = (text) => stripHeader(text).replace(/```[\s\S]*?```/g, " ").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`#>|~-]+/g, " ").replace(/\s+/g, " ").trim();
-var VOICE_LABELS = { listening: "Listening", thinking: "Thinking", speaking: "Speaking", paused: "Paused", unsupported: "Voice chat is not available in this browser" };
+var VOICE_LABELS = {
+  listening: "Listening",
+  thinking: "Thinking",
+  speaking: "Speaking",
+  paused: "Paused",
+  setup: "Voice input needs its speech model",
+  unsupported: "Voice chat is not available in this browser"
+};
+var CAPTURE_NOTES = { blocked: "Microphone access is blocked", unavailable: "Voice chat is not available in this browser", "too-long": "That was too long to recognize" };
 function useMicLevel(enabled) {
   const [level, setLevel] = (0, import_react20.useState)(0);
   (0, import_react20.useEffect)(() => {
@@ -7584,27 +7838,59 @@ function VoiceMode({ sessionId, roster, actions, useSessions, useSessionStatus }
     const entry = Array.isArray(outline) ? outline[outline.length - 1] : void 0;
     return entry ? `${outline.length}|${entry.response ?? ""}` : "0|";
   });
-  const [phase, setPhase] = (0, import_react20.useState)(speechApi() ? "listening" : "unsupported");
+  const [speech] = (0, import_react20.useState)(() => actions.speech());
+  const [phase, setPhase] = (0, import_react20.useState)(speech ? "starting" : speechApi() ? "listening" : "unsupported");
+  const [catalog, setCatalog] = (0, import_react20.useState)(null);
   const [heard, setHeard] = (0, import_react20.useState)("");
   const [said, setSaid] = (0, import_react20.useState)("");
+  const [note, setNote] = (0, import_react20.useState)("");
+  const [serviceLevel, setServiceLevel] = (0, import_react20.useState)(0);
+  const [cycle, setCycle] = (0, import_react20.useState)(0);
   const waiting = (0, import_react20.useRef)(null);
+  const reply = (0, import_react20.useRef)(lastReply);
+  reply.current = lastReply;
+  const turn = (0, import_react20.useRef)(0);
   const paneLeft = usePaneLeft();
   const close = () => {
+    turn.current += 1;
     window.speechSynthesis?.cancel();
     actions.closeVoice();
   };
   useEscape(close);
+  const submit = (text) => {
+    setHeard(text);
+    setPhase("thinking");
+    waiting.current = reply.current.split("|")[0];
+    void actions.send(sessionId, text.trim()).catch(() => setPhase("listening"));
+  };
   const dictation = useDictation((text, final) => {
     setHeard(text);
     if (!final) return;
     dictation.stop();
-    setPhase("thinking");
-    waiting.current = lastReply.split("|")[0];
-    void actions.send(sessionId, text.trim()).catch(() => setPhase("listening"));
+    submit(text);
   });
+  (0, import_react20.useEffect)(() => {
+    if (!note) return void 0;
+    const timer = setTimeout(() => setNote(""), 2600);
+    return () => clearTimeout(timer);
+  }, [note]);
+  (0, import_react20.useEffect)(() => {
+    if (!speech) return void 0;
+    let live = true;
+    speechCatalog(speech).then(({ catalog: next, usable }) => {
+      if (!live) return;
+      setCatalog(next);
+      setPhase(usable ? "listening" : "setup");
+    }, () => {
+      if (live) setPhase("setup");
+    });
+    return () => {
+      live = false;
+    };
+  }, [speech]);
   const listen = phase === "listening";
   (0, import_react20.useEffect)(() => {
-    if (!listen || dictation.listening) return void 0;
+    if (speech || !listen || dictation.listening) return void 0;
     const timer = setTimeout(() => dictation.start({ continuous: false, onEnd: () => {
     } }), 250);
     return () => clearTimeout(timer);
@@ -7613,19 +7899,81 @@ function VoiceMode({ sessionId, roster, actions, useSessions, useSessionStatus }
     if (phase !== "listening") dictation.stop();
   }, [phase]);
   (0, import_react20.useEffect)(() => {
+    if (!speech || !catalog || !listen) return void 0;
+    const own = turn.current;
+    let capture = null;
+    let frame = 0;
+    let stopped = false;
+    let smooth = 0;
+    const detect = turnDetector();
+    const limit = Math.max(1, catalog.maxDurationSeconds - 1) * 1e3;
+    const finish = async (current) => {
+      setPhase("transcribing");
+      try {
+        const wave = await current.finish(catalog.maxDurationSeconds);
+        const text = wave ? await transcribeWave(speech, catalog, wave, new AbortController().signal) : "";
+        if (turn.current !== own) return;
+        if (text) submit(text);
+        else setPhase("listening");
+      } catch (error) {
+        if (turn.current !== own) return;
+        setNote(t(CAPTURE_NOTES[error?.kind] ?? "Couldn't hear that"));
+        setPhase("listening");
+      }
+    };
+    openCapture().then((opened) => {
+      if (stopped) {
+        opened.cancel();
+        return;
+      }
+      capture = opened;
+      const began = performance.now();
+      const tick = () => {
+        const now = performance.now();
+        const level2 = capture.level();
+        smooth = smooth * 0.8 + level2 * 0.2;
+        setServiceLevel(Math.round(smooth * 100) / 100);
+        const state = detect(level2, now);
+        if (state === "done" || state === "speech" && now - began >= limit) {
+          const current = capture;
+          capture = null;
+          setServiceLevel(0);
+          void finish(current);
+          return;
+        }
+        if (state === "waiting" && now - began >= limit) {
+          setCycle((value) => value + 1);
+          return;
+        }
+        frame = requestAnimationFrame(tick);
+      };
+      tick();
+    }, (error) => {
+      if (stopped) return;
+      setNote(t(CAPTURE_NOTES[error?.kind] ?? "Couldn't hear that"));
+      setPhase("paused");
+    });
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      capture?.cancel();
+      setServiceLevel(0);
+    };
+  }, [speech, catalog, listen, cycle]);
+  (0, import_react20.useEffect)(() => {
     if (phase !== "thinking" || running || waiting.current === null) return;
     const [count, text] = [lastReply.slice(0, lastReply.indexOf("|")), lastReply.slice(lastReply.indexOf("|") + 1)];
     if (count === waiting.current || !text.trim()) return;
     waiting.current = null;
-    const speech = plainSpeech(text);
-    setSaid(speech);
+    const spoken = plainSpeech(text);
+    setSaid(spoken);
     setHeard("");
-    if (!window.speechSynthesis || !speech) {
+    if (!window.speechSynthesis || !spoken) {
       setPhase("listening");
       return;
     }
-    const utterance = new SpeechSynthesisUtterance(speech);
-    utterance.lang = /[\u3400-\u9fff]/.test(speech) ? "zh-CN" : "en-US";
+    const utterance = new SpeechSynthesisUtterance(spoken);
+    utterance.lang = /[\u3400-\u9fff]/.test(spoken) ? "zh-CN" : "en-US";
     utterance.onend = () => setPhase((current) => current === "speaking" ? "listening" : current);
     utterance.onerror = utterance.onend;
     setPhase("speaking");
@@ -7633,23 +7981,28 @@ function VoiceMode({ sessionId, roster, actions, useSessions, useSessionStatus }
     window.speechSynthesis.speak(utterance);
   }, [phase, running, lastReply]);
   (0, import_react20.useEffect)(() => () => window.speechSynthesis?.cancel(), []);
-  const level = useMicLevel(phase === "listening" && dictation.listening);
-  const markState = phase === "thinking" ? "thinking" : phase === "speaking" ? "sending" : "idle";
+  const micLevel = useMicLevel(!speech && phase === "listening" && dictation.listening);
+  const level = speech ? serviceLevel : micLevel;
+  const markState = phase === "thinking" || phase === "transcribing" ? "thinking" : phase === "speaking" ? "sending" : "idle";
+  const blocked = phase === "unsupported" || phase === "setup" || phase === "starting";
   const togglePause = () => {
     if (phase === "paused") {
       setPhase("listening");
       return;
     }
+    turn.current += 1;
     window.speechSynthesis?.cancel();
     setPhase("paused");
   };
+  const openSetup = phase === "setup" ? actions.voiceSetup() : null;
   const caption = phase === "speaking" ? said : heard;
+  const shownNote = note || dictation.note;
   return (0, import_react20.createElement)(
     "div",
     { className: "bt-pane bt-voice-pane", style: { left: paneLeft } },
     (0, import_react20.createElement)(
       "div",
-      { className: "bt-voice-stage", role: "dialog", "aria-label": t("Voice chat with {name}", { name }), "data-phase": phase },
+      { className: "bt-voice-stage", role: "dialog", "aria-label": t("Voice chat with {name}", { name }), "data-phase": phase === "transcribing" ? "thinking" : phase },
       (0, import_react20.createElement)(
         "div",
         { className: "bt-voice-orb", style: { "--bt-level": level } },
@@ -7661,10 +8014,14 @@ function VoiceMode({ sessionId, roster, actions, useSessions, useSessionStatus }
       (0, import_react20.createElement)(
         "div",
         { className: "bt-voice-status", role: "status" },
-        phase === "thinking" ? (0, import_react20.createElement)(Shimmer, null, t("Thinking…")) : VOICE_LABELS[phase] ? t(VOICE_LABELS[phase]) : ""
+        phase === "thinking" ? (0, import_react20.createElement)(Shimmer, null, t("Thinking…")) : phase === "transcribing" ? (0, import_react20.createElement)(Shimmer, null, t("Recognizing…")) : VOICE_LABELS[phase] ? t(VOICE_LABELS[phase]) : ""
       ),
       (0, import_react20.createElement)("div", { className: "bt-voice-caption", key: `${phase}:${caption.slice(0, 12)}` }, caption),
-      dictation.note ? (0, import_react20.createElement)("div", { className: "bt-voice-note" }, dictation.note) : null
+      openSetup ? (0, import_react20.createElement)("button", { type: "button", className: "bt-voice-setup", onClick: () => {
+        close();
+        openSetup();
+      } }, t("Set up voice input")) : null,
+      shownNote ? (0, import_react20.createElement)("div", { className: "bt-voice-note" }, shownNote) : null
     ),
     (0, import_react20.createElement)(
       "div",
@@ -7673,7 +8030,7 @@ function VoiceMode({ sessionId, roster, actions, useSessions, useSessionStatus }
         type: "button",
         className: "bt-voice-btn",
         "aria-pressed": phase === "paused",
-        disabled: phase === "unsupported",
+        disabled: blocked,
         "aria-label": phase === "paused" ? t("Resume listening") : t("Pause"),
         onClick: togglePause
       }, (0, import_react20.createElement)(MicIcon, { size: 20 }), phase === "paused" ? (0, import_react20.createElement)("span", { className: "bt-voice-slash", "aria-hidden": true }) : null),
@@ -11380,7 +11737,7 @@ function writeMode(mode, storage = globalThis.localStorage) {
 }
 
 // src/client/index.js
-var inject = ["sessions", "uiWorkspace", "slots", "theme", "layout", "configForms"];
+var inject = ["sessions", "uiWorkspace", "uiConversation", "slots", "theme", "layout", "configForms"];
 function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get("locale")), "ds-bot: interface copy");
   const roster = createSource(EMPTY_ROSTER);
@@ -11551,7 +11908,7 @@ function apply(ctx) {
       const value = await call("update-check", { fresh: false }).catch(() => null);
       if (stopped) return;
       if (value) update.set(value);
-      timer = setTimeout(loop, value?.phase === "installing" ? 2e3 : 60 * 6e4);
+      timer = setTimeout(loop, value?.phase === "installing" || value?.dsh?.phase === "installing" ? 2e3 : 60 * 6e4);
     };
     wakeUpdate = loop;
     void loop();
@@ -11924,6 +12281,7 @@ function apply(ctx) {
     updateBot: (id, patch) => after(call("update-bot", { id, ...patch })),
     refreshModels: () => after(call("models")).catch(() => {
     }),
+    efforts: (ref) => call("efforts", { ref }),
     deleteBot: (id) => after(call("delete-bot", { id })),
     duplicateBot: (id) => after(call("duplicate-bot", { id })),
     setPrefs: (prefs) => after(call("set-prefs", prefs)),
@@ -12010,11 +12368,23 @@ function apply(ctx) {
   actions.signIn = () => ui.set((state) => ({ ...state, signIn: (state.signIn ?? 0) + 1 }));
   actions.closeSignIn = () => ui.set((state) => ({ ...state, signIn: null }));
   actions.accountT = () => ctx.get("locale").bind("settings.account");
+  actions.speech = () => ctx.get("remote.speech") ?? void 0;
+  actions.voiceSetup = () => {
+    const navigation = ctx.get("pluginNavigation");
+    return navigation ? () => navigation.openBundle(VOICE_BUNDLE) : null;
+  };
   actions.seatAccount = (on) => ui.set((state) => state.accountSeated === on ? state : { ...state, accountSeated: on });
   actions.installUpdate = async () => {
-    update.set(await call("update-install"));
+    const value = await call("update-install");
+    update.set((previous) => ({ ...previous, ...value }));
     wakeUpdate();
   };
+  actions.installDshUpdate = async () => {
+    const dsh = await call("dsh-update-install");
+    update.set((previous) => ({ ...previous, dsh }));
+    wakeUpdate();
+  };
+  actions.openAppUpdates = () => window.dshDesktop?.updates?.open?.();
   actions.noteTurnTime = (sessionId, turn, key, time) => {
     if (sessionId === void 0 || !Number.isFinite(turn) || !Number.isFinite(time)) return;
     turnClock.set((state) => {
@@ -12055,6 +12425,18 @@ function apply(ctx) {
   const browserPages = browsers?.pages ?? createSource({});
   const browserTabs = browsers?.tabs ?? createSource({});
   const face = () => ({ actions, hooks: { roster, ui, activity, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } });
+  const assistantFace = (sessionId) => {
+    const binding = ctx.sessions.binding(sessionId);
+    if (binding === void 0) throw new Error(`ds-bot: unknown session "${sessionId}"`);
+    const chat = ctx.uiConversation.binding(binding).target("chat");
+    return { ...face(), keyedHooks: {
+      turnSteps: (turn) => {
+        const snapshot = chat.getSnapshot();
+        if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
+        return snapshot.nodes.turnDataSource(Number(turn), "assistant-step");
+      }
+    } };
+  };
   const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component));
   const installShell = () => [
     installCompiledStyles(SHELL_CSS, "shell"),
@@ -12089,7 +12471,7 @@ function apply(ctx) {
     // the mode is held at `verbose` while this group is mounted.
     holdFlatTranscript(ctx.configForms.get("ui-chat")),
     shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
-    shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: face }, AssistantCell),
+    shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
     shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
     shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
     shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),

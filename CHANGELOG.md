@@ -7,6 +7,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 ### Fixed
 
 - Group the first model choices by provider, so models with the same name can be distinguished. Providers with the same display name also show their provider IDs.
+- A turn with many steps shows one "Thought it through" row instead of one per step. The row holds the thinking of every step in order.
 
 ## [0.1.0] - 2026-10-10
 

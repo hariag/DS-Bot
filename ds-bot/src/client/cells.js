@@ -9,6 +9,7 @@ import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
 import { SecretToolCell } from './secret-card.js'
 import { dateLocale, t } from './i18n.js'
 import { failureLabel } from './diagnostics.js'
+import { turnReasoning } from './turn-reasoning.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -99,28 +100,26 @@ function MessageTools({ text, name, sessionId, react, actions }) {
       item(t('Copy'), CopyIcon, copy), item(t('Download'), DownloadIcon, download)), document.body) : null)
 }
 
-// Live reasoning shows only as the activity row's phrase.
-function ThinkingRow({ text, running }) {
-  if (running || !text) return null
+function ThinkingRow({ text }) {
   return h('details', { className: 'bt-think' },
     h('summary', null, t('Thought it through')),
     h('div', { className: 'bt-think-text' }, text))
 }
 
-export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, actions }) {
+export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, actions }) {
   const roster = useRoster(value => value)
   const data = node.data
+  const steps = useTurnSteps(String(data.turn))
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
   // A streaming reply stands in for the activity row.
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null)
   if (hidden) return null
-  const reasoning = groupPart === 'response' ? '' : data.blocks.filter(block => block.kind === 'reasoning').map(block => block.text).join('\n').trim()
-  const thinkingLive = running && texts.length === 0 && data.blocks.some(block => block.kind === 'reasoning')
+  const reasoning = groupPart === 'response' ? '' : turnReasoning(steps, data)
   if (texts.length === 0 && !reasoning) return null
   return h(Fragment, null,
-    reasoning ? h(ThinkingRow, { text: reasoning, running: thinkingLive }) : null,
+    reasoning ? h(ThinkingRow, { text: reasoning }) : null,
     texts.length ? h(Bubbles, { texts, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
 }
 

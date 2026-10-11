@@ -54,13 +54,14 @@ export function install(rt) {
 
   // `pickModel` leaves the model to the user: the chat opens on a model card, and the
   // greeting waits until a model is chosen. So does a Bot made when no model is served.
-  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, copyOf, pickModel = false }) {
+  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, copyOf, pickModel = false }) {
     const cleanName = String(botName ?? '').trim().slice(0, 40)
     if (cleanName === '') throw new Error('A Bot needs a name')
     if (rt.findBot(cleanName)) throw new Error(`A Bot named ${cleanName} already exists`)
     const cleanAvatarValue = cleanAvatar(avatar)
     // The model is fixed at creation, so a later change of the DSH default leaves it alone.
     const modelRef = model ? await rt.resolveModel(model) : pickModel ? undefined : await rt.defaultModel()
+    const effortId = modelRef !== undefined && effort !== undefined ? await rt.resolveEffort(modelRef, effort) : undefined
     const id = await createSession(cleanName)
     state.bots[id] = {
       id,
@@ -70,6 +71,7 @@ export function install(rt) {
       ...(isColor(currentColor(color)) ? { color: currentColor(color) } : {}),
       ...(cleanAvatarValue ? { avatar: cleanAvatarValue } : {}),
       ...(modelRef ? { model: modelRef } : {}),
+      ...(effortId ? { effort: effortId } : {}),
       instructions: String(instructions).trim(),
       createdAt: Date.now(),
       createdBy: createdBy ?? null,
@@ -126,6 +128,7 @@ export function install(rt) {
       color: bot.color,
       avatar: bot.avatar,
       model: served ? bot.model : undefined,
+      effort: served ? bot.effort : undefined,
       copyOf: bot.id,
     })
   }
@@ -157,6 +160,15 @@ export function install(rt) {
     if (patch.model !== undefined) {
       if (patch.model === null || patch.model === '') delete bot.model
       else bot.model = await rt.resolveModel(patch.model)
+      modelChanged = true
+    }
+    if (patch.effort !== undefined) {
+      if (patch.effort === null || patch.effort === '') delete bot.effort
+      else {
+        const ref = bot.model ?? bot.appliedModel
+        if (ref === undefined) throw new Error('Pick a model before choosing a thinking level')
+        bot.effort = await rt.resolveEffort(ref, patch.effort)
+      }
       modelChanged = true
     }
     await rt.save()

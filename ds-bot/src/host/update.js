@@ -7,10 +7,10 @@ import { join } from 'node:path'
 
 const PKG = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
 export const OFFICIAL_REGISTRY = 'https://registry.npmjs.org/'
-const MIRROR_REGISTRY = 'https://registry.npmmirror.com/'
+export const MIRROR_REGISTRY = 'https://registry.npmmirror.com/'
 // Every window that opens asks; within this long the last answer stands.
-const CHECK_TTL_MS = 10 * 60_000
-const FETCH_TIMEOUT_MS = 8000
+export const CHECK_TTL_MS = 10 * 60_000
+export const FETCH_TIMEOUT_MS = 8000
 // The first check waits until the host has settled its own start.
 const STARTUP_DELAY_MS = 15_000
 const VERSION = /^v?(\d+\.\d+\.\d+(?:-[\w.]+)?)(?:\+[\w.]+)?$/
@@ -60,10 +60,47 @@ export function sourceOf(spec) {
 }
 
 const normalizeRegistry = url => `${String(url).trim().replace(/\/+$/, '')}/`
-const encodeName = name => (name.startsWith('@') ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name))
-// The project page of the releases, for the "what's new" link.
+export const encodeName = name => (name.startsWith('@') ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name))
+
+export const fetchJson = async (url, headers = {}) => {
+  const response = await fetch(url, { headers: { accept: 'application/json', ...headers }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`)
+  return response.json()
+}
+
+// The registries the plugin manager installs from, in its order: its configured
+// first one (else pnpm's own), then the fallbacks, unless that first one is private.
+export async function registryPlan(config, manager) {
+  if (typeof config.updateRegistry === 'string' && config.updateRegistry !== '') return [normalizeRegistry(config.updateRegistry)]
+  const configured = await Promise.resolve(manager?.registries?.()).catch(() => null)
+  if (!configured) return [OFFICIAL_REGISTRY, MIRROR_REGISTRY]
+  const fallbacks = (configured.fallbackRegistries ?? []).map(normalizeRegistry)
+  const own = configured.resolved ? normalizeRegistry(configured.resolved) : null
+  const first = configured.registry ? normalizeRegistry(configured.registry) : own ?? OFFICIAL_REGISTRY
+  const isPublic = first === OFFICIAL_REGISTRY || fallbacks.includes(first)
+  return isPublic ? [...new Set([first, ...fallbacks])] : [first]
+}
+
+// The plugin manager's `source` for this package; DSH releases before it reported
+// one leave the profile's own dependency entry to say the same.
+export async function installSpecOf(ctx) {
+  const manager = ctx.get?.('pluginManager')
+  const bundles = await Promise.resolve(manager?.listBundles?.()).catch(() => null)
+  const own = Array.isArray(bundles) ? bundles.find(bundle => bundle.name === PKG.name) : undefined
+  if (typeof own?.source === 'string') return own.source
+  const dir = ctx.get?.('profileContext')?.dir
+  if (typeof dir !== 'string') return undefined
+  try {
+    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dependencies?.[PKG.name]
+  } catch { return undefined }
+}
+
+// The public repository the releases live in, for tags and the "what's new" link.
+export const repoSlug = () =>
+  /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?$/i.exec(String(PKG.repository?.url ?? PKG.repository ?? ''))?.[1] ?? null
+
 const releasesUrl = () => {
-  const repo = /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?$/i.exec(String(PKG.repository?.url ?? PKG.repository ?? ''))?.[1]
+  const repo = repoSlug()
   return repo ? `https://github.com/${repo}/releases` : (PKG.homepage ?? null)
 }
 
@@ -86,27 +123,8 @@ export function install(rt) {
     available: status.phase !== 'installed' && target !== null && status.latest !== null && newer(status.latest, status.current),
   })
 
-  const fetchJson = async (url, headers = {}) => {
-    const response = await fetch(url, { headers: { accept: 'application/json', ...headers }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-    if (!response.ok) throw new Error(`${url} answered ${response.status}`)
-    return response.json()
-  }
-
-  // The registries the plugin manager installs from, in its order: its configured
-  // first one (else pnpm's own), then the fallbacks, unless that first one is private.
-  async function registryPlan() {
-    if (typeof config.updateRegistry === 'string' && config.updateRegistry !== '') return [normalizeRegistry(config.updateRegistry)]
-    const configured = await Promise.resolve(manager()?.registries?.()).catch(() => null)
-    if (!configured) return [OFFICIAL_REGISTRY, MIRROR_REGISTRY]
-    const fallbacks = (configured.fallbackRegistries ?? []).map(normalizeRegistry)
-    const own = configured.resolved ? normalizeRegistry(configured.resolved) : null
-    const first = configured.registry ? normalizeRegistry(configured.registry) : own ?? OFFICIAL_REGISTRY
-    const isPublic = first === OFFICIAL_REGISTRY || fallbacks.includes(first)
-    return isPublic ? [...new Set([first, ...fallbacks])] : [first]
-  }
-
   async function newestFromRegistry() {
-    for (const registry of await registryPlan()) {
+    for (const registry of await registryPlan(config, manager())) {
       try {
         const version = cleanVersion((await fetchJson(`${registry}${encodeName(PKG.name)}/latest`)).version)
         if (version) return { version, spec: `${PKG.name}@${version}`, registry }
@@ -124,21 +142,8 @@ export function install(rt) {
     return { version, spec: `github:${source.owner}/${source.repo}#${fragment}` }
   }
 
-  // The plugin manager's `source` for this package; DSH releases before it reported
-  // one leave the profile's own dependency entry to say the same.
-  async function installSpec() {
-    const bundles = await Promise.resolve(manager()?.listBundles?.()).catch(() => null)
-    const own = Array.isArray(bundles) ? bundles.find(bundle => bundle.name === PKG.name) : undefined
-    if (typeof own?.source === 'string') return own.source
-    const dir = ctx.get?.('profileContext')?.dir
-    if (typeof dir !== 'string') return undefined
-    try {
-      return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dependencies?.[PKG.name]
-    } catch { return undefined }
-  }
-
   async function runCheck() {
-    const source = sourceOf(await installSpec())
+    const source = sourceOf(await installSpecOf(ctx))
     status.source = source.kind
     let found = null
     try {
