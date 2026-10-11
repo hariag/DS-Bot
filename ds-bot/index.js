@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import * as diagnostics from './src/host/diagnostics.js'
 import * as store from './src/host/store.js'
 import * as models from './src/host/models.js'
+import * as permissions from './src/host/permissions.js'
 import * as turns from './src/host/turns.js'
 import * as delivery from './src/host/delivery.js'
 import * as roster from './src/host/roster.js'
@@ -35,7 +36,7 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 // the functions other modules call; they call them through `rt` at run time, never during
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them.
-const MODULES = [diagnostics, store, models, turns, delivery, roster, agents, prompt, tools, chatIndex, groups, memory, parts, images, secrets, connectors, schedules, browser, usage, update, dshUpdate, channel]
+const MODULES = [diagnostics, store, models, permissions, turns, delivery, roster, agents, prompt, tools, chatIndex, groups, memory, parts, images, secrets, connectors, schedules, browser, usage, update, dshUpdate, channel]
 
 export function apply(ctx, config = {}) {
   const home = config.home ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'bot')

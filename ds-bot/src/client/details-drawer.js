@@ -10,7 +10,7 @@ import { GroupSettingsForm, ROOM_MODES, roomSubtitle, shownMode } from './group-
 import { ModelMenu, modelOf } from './model-menu.js'
 import { MemoryRow } from './memory-panel.js'
 import { ScheduleSummary } from './schedules.js'
-import { useGlide, useMorph } from './motion.js'
+import { Segmented, useGlide, useMorph } from './motion.js'
 import { t } from './i18n.js'
 
 function transcriptOf(list, id, name, hiddenTurns = []) {
@@ -33,6 +33,33 @@ const EMPTY_TABS = { ids: [], active: null }
 
 // The Bot's browser inside the details page: its tabs as small window cards on
 // Desktop, a pointer there on web.
+const PERMISSION_LABELS = { 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' }
+const DANGER = new Set(['danger-full-access'])
+
+// The Bot's permission preset, from the presets DeepSeek Harness offers.
+function PermissionRow({ bot, roster, actions, run }) {
+  const [pending, setPending] = useState(null)
+  const catalog = roster.permissions
+  const saved = bot.permission ?? catalog?.defaultPreset
+  useEffect(() => { if (pending === saved) setPending(null) }, [pending, saved])
+  if (!catalog?.options?.length) return null
+  const current = pending ?? saved
+  const pick = (value) => {
+    // A Bot without its own preset may run on another one set in DSH, so its first pick always applies.
+    if (value === current && bot.permission !== undefined) return
+    setPending(value)
+    void run(actions.updateBot(bot.id, { permission: value })).catch(() => setPending(null))
+  }
+  return h('div', { className: 'bt-drawer-permission' },
+    h('div', { className: 'bt-section-title' }, t('Permissions')),
+    h(Segmented, { label: t('Permissions'), value: current },
+      catalog.options.map(option => h('button', {
+        key: option.value, type: 'button', 'aria-pressed': option.value === current,
+        title: option.description, onClick: () => pick(option.value),
+        className: DANGER.has(option.value) ? 'bt-perm-danger' : undefined,
+      }, PERMISSION_LABELS[option.value] ? t(PERMISSION_LABELS[option.value]) : option.name))))
+}
+
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
   const state = useBrowserTabs(map => map[bot.id] ?? EMPTY_TABS)
   const pages = useBrowserPages(map => map)
@@ -198,6 +225,7 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
           h('div', { className: 'bt-section-title' }, t('Model')),
           h(ModelMenu, { bot, roster, actions, run, wide: true }),
           modelOf(bot, roster) ? null : h('div', { className: 'bt-note' }, t('Pick a model and {name} can start.', { name: bot.name }))),
+        h(PermissionRow, { key: 'permission', bot, roster, actions, run }),
         bot.instructions
           ? h(About, { key: 'about', text: bot.instructions })
           : h('button', { key: 'about', type: 'button', className: 'bt-more', onClick: () => setView('settings') }, t('Add instructions in Bot settings')),

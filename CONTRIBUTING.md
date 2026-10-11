@@ -2,13 +2,17 @@
 
 Thank you for helping. This file explains how to set up the plugin, how to test a change and which rules a change must follow. For what the plugin does and how users install it, see [README.md](README.md).
 
+## Pull requests
+
+Thank you for your interest in improving DS Bot. The project is still changing quickly, so we are not accepting pull requests for now. If you find a problem or have an idea, please open an issue (see [Report a problem](#report-a-problem)). We hope to open pull requests again when the project is stable. Thank you for your understanding.
+
 ## The rules that matter most
 
 1. **DS Bot is a DSH plugin, and only a plugin.** Do not patch DeepSeek Harness, and do not depend on files inside a DSH install. Use the plugin APIs that DSH documents (Cordis services, the plugin client entry, profile patches). When a feature needs something that DSH does not offer, open an issue here first; the fix can belong in DSH.
 2. **Every Bot is a DSH Session.** Bot work runs through the normal DSH agent loop, tools and model routes. Do not add a second agent runtime.
 3. **No real secrets anywhere.** Do not commit API keys, tokens, cookies, `DSH_HOME` folders, logs or screenshots with personal data. The tests and the test bench use a scripted mock model and need no key.
-4. **Only original material.** Do not copy code, text, icons, logos or other graphics from other products or websites. Code under a license compatible with Apache 2.0 is the only exception: say where it comes from in the pull request and add its notice to a `NOTICE` file.
-5. **Every change is tested.** Run the unit tests and the client check before you open a pull request (see [Test a change](#test-a-change)).
+4. **Only original material.** Do not copy code, text, icons, logos or other graphics from other products or websites. Code under a license compatible with Apache 2.0 is the only exception: say where it comes from and add its notice to a `NOTICE` file.
+5. **Every change is tested.** Run the unit tests and the client check for every change (see [Test a change](#test-a-change)).
 
 ## Set up
 
@@ -79,7 +83,7 @@ For a change to the Bot browser, check it in DSH Desktop. On Linux, the scripts 
 
 ## Write a change
 
-- Keep a pull request to one subject. Explain why the change is needed, how you tested it, and what you did not test.
+- Keep a change to one subject.
 - Do not edit `client.js` by hand. Change `src/client/`, run `npm run build` and commit both.
 - Follow the style of the code around your change. Write a comment only when the reason for the code is not clear from the code itself.
 - Write commit messages in English. Use a short subject in the imperative mood ("Keep group replies visible") and explain the reason in the body.

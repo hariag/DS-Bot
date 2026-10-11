@@ -710,6 +710,8 @@ export function install(rt) {
       await rt.selectSessionModel(freshId, model)
         .catch(error => rt.warn('ds-bot: model for the fresh part of %s not applied: %s', bot.name, error))
     }
+    await rt.applyPermission(bot, freshId)
+      .catch(error => rt.warn('ds-bot: permission for the fresh part of %s not applied: %s', bot.name, error))
     const segment = { sessionId: agent.id, endedAt: Date.now(), ...(tokens !== undefined ? { tokens } : {}), ...noted }
     if (room !== undefined) {
       room.segments ??= {}

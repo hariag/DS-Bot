@@ -195,6 +195,10 @@ const ZH = {
   'Click again to delete. Its chats are archived.': '再点一次删除，它的对话会归档。',
   'Removes the Bot from the team.': '把这个 Bot 从团队里移除。',
   'Pick a model and {name} can start.': '选好模型，{name} 就能开始工作。',
+  'Permissions': '权限',
+  'Read only': '仅可查看',
+  'Workspace': '工作区内修改',
+  'Full access': '完全权限',
   'The only Main Bot. To hand the role to another Bot, use Main Bot on the Bots page.': '这是唯一的主 Bot。要把主 Bot 交给别的 Bot，请到「Bot」页的主 Bot 里换。',
   Change: '更换',
   'Can create and change Bots, and runs every group chat.': '可以创建和修改 Bot，并管理所有群聊。',
@@ -777,6 +781,7 @@ const HOST_ERRORS = [
 ]
 const HOST_ZH = {
   'Request failed': '请求失败',
+  'Permissions are not available in this DeepSeek Harness': '这个 DeepSeek Harness 不支持权限设置',
   'Avatar images must be PNG, JPEG, WebP, or GIF': '头像图片必须是 PNG、JPEG、WebP 或 GIF',
   'Avatar image is too large': '头像图片太大了',
   'A Bot needs a name': 'Bot 需要一个名字',

@@ -217,6 +217,10 @@ var ZH = {
   "Click again to delete. Its chats are archived.": "再点一次删除，它的对话会归档。",
   "Removes the Bot from the team.": "把这个 Bot 从团队里移除。",
   "Pick a model and {name} can start.": "选好模型，{name} 就能开始工作。",
+  "Permissions": "权限",
+  "Read only": "仅可查看",
+  "Workspace": "工作区内修改",
+  "Full access": "完全权限",
   "The only Main Bot. To hand the role to another Bot, use Main Bot on the Bots page.": "这是唯一的主 Bot。要把主 Bot 交给别的 Bot，请到「Bot」页的主 Bot 里换。",
   Change: "更换",
   "Can create and change Bots, and runs every group chat.": "可以创建和修改 Bot，并管理所有群聊。",
@@ -814,6 +818,7 @@ var HOST_ERRORS = [
 ];
 var HOST_ZH = {
   "Request failed": "请求失败",
+  "Permissions are not available in this DeepSeek Harness": "这个 DeepSeek Harness 不支持权限设置",
   "Avatar images must be PNG, JPEG, WebP, or GIF": "头像图片必须是 PNG、JPEG、WebP 或 GIF",
   "Avatar image is too large": "头像图片太大了",
   "A Bot needs a name": "Bot 需要一个名字",
@@ -2026,6 +2031,8 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-set-body{gap:20px}
 .bt-drawer-model{display:flex;flex-direction:column}
 .bt-drawer-model .bt-note{margin-top:6px}
+.bt-drawer-permission{display:flex;flex-direction:column}
+.bt-seg button.bt-perm-danger,.bt-seg button.bt-perm-danger[aria-pressed=true]{color:#e02135}
 
 /* Settings dialog: a 198px page list beside the page. */
 .bt-settings-layer{position:fixed;inset:var(--dsh-frame-chrome-top,0px) 0 0;z-index:60;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
@@ -9986,6 +9993,40 @@ var hostOf = (url) => {
 };
 var shortUrl = (url) => String(url ?? "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 var EMPTY_TABS = { ids: [], active: null };
+var PERMISSION_LABELS = { "read-only": "Read only", "workspace-write": "Workspace", "danger-full-access": "Full access" };
+var DANGER = /* @__PURE__ */ new Set(["danger-full-access"]);
+function PermissionRow({ bot, roster, actions, run }) {
+  const [pending, setPending] = (0, import_react27.useState)(null);
+  const catalog = roster.permissions;
+  const saved = bot.permission ?? catalog?.defaultPreset;
+  (0, import_react27.useEffect)(() => {
+    if (pending === saved) setPending(null);
+  }, [pending, saved]);
+  if (!catalog?.options?.length) return null;
+  const current = pending ?? saved;
+  const pick2 = (value) => {
+    if (value === current && bot.permission !== void 0) return;
+    setPending(value);
+    void run(actions.updateBot(bot.id, { permission: value })).catch(() => setPending(null));
+  };
+  return (0, import_react27.createElement)(
+    "div",
+    { className: "bt-drawer-permission" },
+    (0, import_react27.createElement)("div", { className: "bt-section-title" }, t("Permissions")),
+    (0, import_react27.createElement)(
+      Segmented,
+      { label: t("Permissions"), value: current },
+      catalog.options.map((option) => (0, import_react27.createElement)("button", {
+        key: option.value,
+        type: "button",
+        "aria-pressed": option.value === current,
+        title: option.description,
+        onClick: () => pick2(option.value),
+        className: DANGER.has(option.value) ? "bt-perm-danger" : void 0
+      }, PERMISSION_LABELS[option.value] ? t(PERMISSION_LABELS[option.value]) : option.name))
+    )
+  );
+}
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
   const state = useBrowserTabs((map) => map[bot.id] ?? EMPTY_TABS);
   const pages = useBrowserPages((map) => map);
@@ -10217,6 +10258,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
           (0, import_react27.createElement)(ModelMenu, { bot, roster, actions, run, wide: true }),
           modelOf(bot, roster) ? null : (0, import_react27.createElement)("div", { className: "bt-note" }, t("Pick a model and {name} can start.", { name: bot.name }))
         ),
+        (0, import_react27.createElement)(PermissionRow, { key: "permission", bot, roster, actions, run }),
         bot.instructions ? (0, import_react27.createElement)(About, { key: "about", text: bot.instructions }) : (0, import_react27.createElement)("button", { key: "about", type: "button", className: "bt-more", onClick: () => setView("settings") }, t("Add instructions in Bot settings")),
         roster.memory === false ? null : (0, import_react27.createElement)(MemoryRow, { key: "memory", bot, actions }),
         usage ? (0, import_react27.createElement)(

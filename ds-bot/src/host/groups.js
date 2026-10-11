@@ -117,6 +117,8 @@ export function install(rt) {
       await rt.selectSessionModel(id, splitRef(ref))
         .catch(error => rt.warn('ds-bot: model for %s in %s not applied: %s', member.name, room.name, error))
     }
+    await rt.applyPermission(member, id)
+      .catch(error => rt.warn('ds-bot: permission for %s in %s not applied: %s', member.name, room.name, error))
     await rt.save()
     return { id, brief: await rt.ownChatBrief(member) }
   }

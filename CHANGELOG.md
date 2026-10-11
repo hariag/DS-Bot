@@ -9,6 +9,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - Voice chat uses the local speech recognition of the official DSH Voice Input plugin (SenseVoice) when the plugin is on, and the browser's speech recognition otherwise. When the plugin has no speech model yet, the voice panel opens its settings.
 - The update card also offers DSH updates, but only the DSH version that the newest DS Bot release was verified with (`dsBot.verifiedDsh`). A DSH installed with npm updates in one click; DSH Desktop opens its own update panel.
 - Each Bot can pick a thinking level with its model, in the model menu or when the Bot is created. **Default** uses the model's own level.
+- A permission setting in each Bot's details panel: **Read only**, **Workspace** or **Full access**, from the presets DSH offers. The Bot keeps it in its own chat, its group chats and its new conversation parts.
 
 ### Fixed
 
