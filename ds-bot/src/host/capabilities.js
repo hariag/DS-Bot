@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const SECRET_REFERENCE = /\$DSH_SECRET_([A-Z][A-Z0-9_]*)/g
+const ENSURE_TIMEOUT_MS = 15_000
 
 export function validateCapabilityName(value) {
   const name = String(value ?? '').trim()
@@ -348,6 +349,26 @@ export function install(rt) {
     }
     return scheduled
   }
+  async function ensureCapabilities(sessionId) {
+    await rt.load()
+    if (!rt.isBotSession(sessionId)) return
+    const bot = rt.botOf(rt.selfOf(sessionId))
+    if (!bot || (bot.capabilities ?? []).length === 0) return
+    try {
+      trackAgent(await rt.resolveAgent(sessionId))
+    } catch (error) {
+      rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, rt.redactSecrets(String(error)))
+      return
+    }
+    const timeoutMs = rt.capabilityEnsureTimeoutMs ?? ENSURE_TIMEOUT_MS
+    let timer
+    const completed = await Promise.race([
+      scheduleReconcile().then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) }),
+    ])
+    clearTimeout(timer)
+    if (!completed) rt.warn('ds-bot: capability mount for %s did not finish within %dms; continuing', sessionId, timeoutMs)
+  }
   const trackAgent = agent => {
     const sessionId = agent?.session?.id
     if (typeof sessionId !== 'string' || !agent.ctx) return
@@ -420,6 +441,10 @@ export function install(rt) {
     if (!loadingSecrets) void scheduleReconcile()
   }
   rt.capabilitiesStateSaved = () => { void scheduleReconcile() }
+  ctx.on('agent/pre-step', async function ensureCapabilitiesBeforeStep({ agent }, next) {
+    await ensureCapabilities(agent.session.id)
+    return next()
+  })
   ctx.on('agent/created', ({ agent }) => {
     trackAgent(agent)
     void rt.load().then(scheduleReconcile).catch(error => rt.warn('ds-bot: capability load failed: %s', error))
@@ -441,6 +466,7 @@ export function install(rt) {
     capabilityStatusesView,
     reconcileCapabilities: reconcile,
     scheduleCapabilitiesReconcile: scheduleReconcile,
+    ensureCapabilities,
     expandCapabilities: names => expandCapabilityNames(names, library()),
     changeCapabilityAttachment: changeAttachment,
   })

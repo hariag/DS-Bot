@@ -29,7 +29,7 @@ const team = () => ({
 })
 const mcp = (name, command = 'node') => ({ name, kind: 'mcp', description: 'Echo service', transport: 'stdio', command, args: [], env: {} })
 
-function testAgent(id, mounts, skillsBySession) {
+function testAgent(id, mounts, skillsBySession, { awaitMount = async () => {} } = {}) {
   const disposers = []
   const skills = new Map()
   skillsBySession.set(id, skills)
@@ -49,13 +49,13 @@ function testAgent(id, mounts, skillsBySession) {
         plugin.apply(c)
       }
       return {
-        await: async () => {},
+        await: () => awaitMount(record),
         dispose: () => { record.disposed = true; record.cleanup?.() },
       }
     },
     dispose() { for (const dispose of disposers.reverse()) dispose() },
   }
-  return { session: { id }, ctx: agentCtx }
+  return { id, session: { id }, ctx: agentCtx }
 }
 
 async function setup({ state = team(), secret, beforeLoad } = {}) {
@@ -204,6 +204,83 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   await env.rt.scheduleCapabilitiesReconcile()
   assert.deepEqual(resolved, ['chief', 'room-chief', 'worker', 'helper'])
   assert.deepEqual(env.mounts.filter(mount => !mount.disposed).map(mount => mount.sessionId), ['chief', 'room-chief', 'worker', 'helper'])
+})
+
+test('a Bot turn waits for a slow capability mount before its first model step', async t => {
+  const state = team()
+  state.capabilities = { items: { echo: { ...mcp('echo'), approved: true, createdBy: 'chief', createdAt: 1, updatedAt: 1 } } }
+  state.bots.chief.capabilities = ['echo']
+  let startMount
+  let releaseMount
+  const mountStarted = new Promise(resolve => { startMount = resolve })
+  const mountGate = new Promise(resolve => { releaseMount = resolve })
+  let startRequest = false
+  const env = await setup({
+    state,
+    beforeLoad: ({ rt, mounts, skills }) => {
+      const agent = testAgent('chief', mounts, skills, { awaitMount: async () => { startMount(); await mountGate } })
+      rt.chatOf = () => 'chief'
+      rt.groupSessionsOf = () => []
+      rt.resolveAgent = async () => agent
+    },
+  })
+  const agent = await env.rt.resolveAgent('chief')
+  t.after(async () => {
+    releaseMount()
+    agent.ctx.dispose()
+    await env.rt.scheduleCapabilitiesReconcile()
+    await new Promise(resolve => setImmediate(resolve))
+    env.dispose()
+  })
+  const beforeStep = env.ctx.listeners.get('agent/pre-step').find(listener => listener.name === 'ensureCapabilitiesBeforeStep')
+  const turn = beforeStep({ agent, messages: [], step: 1 }, () => { startRequest = true })
+  await mountStarted
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(startRequest, false)
+  releaseMount()
+  await turn
+  assert.equal(startRequest, true)
+  assert.equal(env.rt.capabilityStatusesView().chief.echo.state, 'ready')
+})
+
+test('a hung capability mount releases the Bot turn after its readiness timeout', async t => {
+  const state = team()
+  state.capabilities = { items: { echo: { ...mcp('echo'), approved: true, createdBy: 'chief', createdAt: 1, updatedAt: 1 } } }
+  state.bots.chief.capabilities = ['echo']
+  const warnings = []
+  let startMount
+  let releaseMount
+  const mountStarted = new Promise(resolve => { startMount = resolve })
+  const mountGate = new Promise(resolve => { releaseMount = resolve })
+  let startRequest = false
+  const env = await setup({
+    state,
+    beforeLoad: ({ ctx, rt, mounts, skills }) => {
+      ctx.logger.warn = (...args) => warnings.push(args.join(' '))
+      const agent = testAgent('chief', mounts, skills, { awaitMount: async () => { startMount(); await mountGate } })
+      rt.chatOf = () => 'chief'
+      rt.groupSessionsOf = () => []
+      rt.resolveAgent = async () => agent
+      rt.capabilityEnsureTimeoutMs = 10
+    },
+  })
+  const agent = await env.rt.resolveAgent('chief')
+  t.after(async () => {
+    releaseMount()
+    agent.ctx.dispose()
+    await env.rt.scheduleCapabilitiesReconcile()
+    await new Promise(resolve => setImmediate(resolve))
+    env.dispose()
+  })
+  const beforeStep = env.ctx.listeners.get('agent/pre-step').find(listener => listener.name === 'ensureCapabilitiesBeforeStep')
+  const turn = beforeStep({ agent, messages: [], step: 1 }, () => { startRequest = true })
+  await mountStarted
+  await turn
+  assert.equal(startRequest, true)
+  assert.equal(env.rt.capabilityStatusesView().chief.echo.state, 'connecting')
+  assert.match(warnings.join('\n'), /capability mount for chief did not finish within 10ms; continuing/)
+  releaseMount()
+  await env.rt.scheduleCapabilitiesReconcile()
 })
 
 test('unset capability statuses are omitted from the view and tool listing', async t => {
