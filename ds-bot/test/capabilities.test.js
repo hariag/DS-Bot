@@ -69,7 +69,7 @@ async function setup({ state = team(), secret, beforeLoad } = {}) {
   const rt = createRuntime(ctx, { home, github: false })
   beforeLoad?.({ ctx, rt, mounts, skills, mcpPlugin })
   await rt.load()
-  return { home, ctx, rt, mounts, skills, mcpPlugin, dispose() { ctx.dispose(); rmSync(home, { recursive: true, force: true }) } }
+  return { home, ctx, rt, mounts, skills, mcpPlugin, dispose() { ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) } }
 }
 
 test('capability names use the MCP and skill validator intersection', () => {
