@@ -434,3 +434,53 @@ test('an earlier part keeps the request its Bot answered', async () => {
   assert.deepEqual(items.map(item => [item.kind, item.role ?? item.text]), [['event', 'request'], ['bot', 'Understood, I stopped.']])
   assert.equal(items[0].botId, 'a')
 })
+
+test('a request the model keeps turning down moves the Bot on, without its latest messages the second time; a connection failure does not', async (t) => {
+  const { ctx, agents, agentOf, emit, fire, stop } = await start(team())
+  t.after(stop)
+  let made = 0
+  ctx.sessionController.create = async () => ({ sessionId: `s${++made}` })
+  // Per Session, the events DS Bot reads back; only the previous turn's end matters.
+  const ends = new Map()
+  const endedWith = (id, code) => ends.set(id, { 9: { type: 'turn/end', data: { reason: { kind: 'error', error: { code } } } } })
+  const failTurn = async (id, code) => {
+    const agent = agentOf(id)
+    agent.session.seq = 10
+    agent.session.eventAt = seq => ends.get(id)?.[seq]
+    emit(id, 'turn/start', { turn: 1 })
+    emit(id, 'user/message', { content: textBlock('look at this'), source: { kind: 'user' } })
+    await fire('agent/request-error', { failure: { code }, signal: AbortSignal.timeout(60_000), agent })
+    emit(id, 'turn/end', { turn: 1, reason: { kind: 'error', error: { code } } })
+  }
+  const handoffIn = id => agents.get(id)?.calls.find(([, message]) => message.source?.handoff === true)?.[1]
+  const waitFor = async (check) => {
+    for (let count = 0; count < 200 && !check(); count += 1) await delay(5)
+    assert.ok(check())
+  }
+
+  await failTurn('b', 'TRANSPORT')
+  // One turned-down request may be the provider's own hiccup.
+  await failTurn('b', 'INVALID_REQUEST')
+  await delay(30)
+  assert.equal(made, 0)
+
+  endedWith('b', 'INVALID_REQUEST')
+  await failTurn('b', 'INVALID_REQUEST')
+  await waitFor(() => handoffIn('s1') !== undefined)
+  const first = textOf(handoffIn('s1').content)
+  assert.match(first, /because a request in the previous part kept failing \(INVALID_REQUEST\)/)
+  assert.match(first, /first tell the user in one short sentence that the last message could not be sent as it was/)
+
+  endedWith('s1', 'INVALID_REQUEST')
+  await failTurn('s1', 'INVALID_REQUEST')
+  await waitFor(() => handoffIn('s2') !== undefined)
+  const second = textOf(handoffIn('s2').content)
+  assert.match(second, /so they are left out this time\. First tell the user/)
+  assert.match(second, /## Latest messages[^#]*\(none\)/)
+
+  // A part that already left the messages out stays where it is.
+  endedWith('s2', 'INVALID_REQUEST')
+  await failTurn('s2', 'INVALID_REQUEST')
+  await delay(30)
+  assert.equal(made, 2)
+})

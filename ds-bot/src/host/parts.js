@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { HISTORY_TIMEOUT_MS, REPLY_KIND, SOURCE_KIND } from './constants.js'
 import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
-import { clip, createClock, escapeRegExp, estimateTokens, textOf } from './text.js'
+import { clip, createClock, escapeRegExp, estimateTokens, splitRef, textOf } from './text.js'
 
 // An ask_user card as the user saw it. The user's reply is often just an option label,
 // which means nothing without the card. Arguments the tool would refuse (no question,
@@ -136,14 +136,32 @@ export function install(rt) {
   const NOTE_COOLDOWN_MS = [60_000, 300_000, 900_000]
   const SWITCH_ATTEMPTS = 5
   const OVERFLOW = 'CONTEXT_WINDOW_EXCEEDED'
-  const STUCK_CODES = ['TRANSPORT', 'INVALID_REQUEST', 'IMAGE_OFFLOAD_REQUIRED']
+  // A failed connection says nothing about the conversation, so it never moves a part on.
+  const STUCK_CODES = ['INVALID_REQUEST', 'IMAGE_OFFLOAD_REQUIRED']
   const ORIGINAL_COMPACT = Symbol.for('ds-bot/compaction')
   const HANDOFF_ACK = 'Noted. I have my handoff note and carry on from here.'
   const STEWARD_MAX_TOKENS = 4_096
   const STEWARD_TIMEOUT_MS = 120_000
   const STEWARD_LINES = 40
 
-  const tokensOf = session => ctx.get('tokenMeter')?.measure(session).totalTokens
+  // A broken provider adapter must not crash every turn; estimate from the
+  // derived messages instead, with one warning.
+  let measureWarned = false
+  const tokensOf = (session) => {
+    try {
+      return ctx.get('tokenMeter')?.measure(session).totalTokens
+    } catch (error) {
+      if (!measureWarned) {
+        measureWarned = true
+        rt.warn('ds-bot: token measure failed; context sizes are estimated: %s', error)
+      }
+    }
+    try {
+      return estimateTokens(session.deriveMessages().map(message => textOf(message.content)).join('\n'))
+    } catch {
+      return undefined
+    }
+  }
   const clock = createClock(config.timeZone)
 
   // Lines for the model the Session last routed to; undefined while it has not
@@ -538,7 +556,7 @@ export function install(rt) {
       : `${head} It is the note written at the end of part ${segment.noteFrom}, carried over unchanged; anything newer is in the messages below, and read_own_chat finds the rest.)\n\n${segment.note}`
   }
 
-  function handoffPackage({ room, segment, lines, number, resume, overflow, failed }) {
+  function handoffPackage({ room, segment, lines, number, resume, overflow, failed, bare }) {
     const where = room ? `your conversation in the group chat "${room.name}"` : 'your own chat with the user'
     const lookup = room
       ? 'read_group_chat shows the group\'s latest messages, and read_own_chat your own chat.'
@@ -570,6 +588,7 @@ export function install(rt) {
       recent.length > 0 ? recent.join('\n') : '(none)',
       '',
       !resume ? 'Every message above has had its answer. Nothing needs an answer now; wait for the next message.'
+        : bare ? `Your last turn could not finish because the model request kept failing, also in a fresh conversation with the latest messages carried over, so they are left out this time. First tell ${room ? 'the group' : 'the user'} in one short sentence that the last message could not be sent, and ask for it again.`
         : failed !== undefined ? room
           ? 'Your last turn could not finish because the model request kept failing. Go on with it now from the messages above, and first tell the group in one short sentence that the last message could not be sent as it was and you moved on to a fresh conversation, and write your reply to the group.'
           : 'Your last turn could not finish because the model request kept failing. Go on with it now from the messages above, and first tell the user in one short sentence that the last message could not be sent as it was and you moved on to a fresh conversation.'
@@ -585,11 +604,15 @@ export function install(rt) {
     exchangeId: job.info?.exchangeId ?? randomUUID(),
     handoff: true,
     ...(resume ? { resume: true } : {}),
+    ...(resume && job.joined?.length ? { joined: job.joined } : {}),
   })
 
-  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, resume:boolean, overflow:boolean, failed?:string, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
+  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, joined?:any[], resume:boolean, overflow:boolean, failed?:string, bare?:boolean, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
   const switches = new Map()
-  const rescued = new Set()
+  // Parts opened because requests kept failing, until one of their turns ends well:
+  // 'carried' brought the latest messages along, 'bare' left them out.
+  /** @type {Map<string, 'carried'|'bare'>} */
+  const rescued = new Map()
   // Parts that have not started a turn yet, with their handoff package's size.
   const freshParts = new Map()
   // Context size where a part started, or where a checkpoint or a failed switch left
@@ -630,10 +653,10 @@ export function install(rt) {
 
   // `hard`: past the hard line or the window, the part moves on even without a note
   // from the model.
-  function startSwitch(agent, { resume = false, carry = [], info, overflow = false, failed, hard = overflow } = {}) {
+  function startSwitch(agent, { resume = false, carry = [], info, joined, overflow = false, failed, bare = false, hard = overflow } = {}) {
     const place = placeOf(agent.id)
     if (place === undefined || switches.has(agent.id) || readOnly()) return
-    const job = { ...place, carry: [...carry], info, resume, overflow, failed, hard }
+    const job = { ...place, carry: [...carry], info, joined, resume, overflow, failed, bare, hard }
     switches.set(agent.id, job)
     void runSwitch(agent, job)
       .catch(error => rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error))
@@ -647,9 +670,10 @@ export function install(rt) {
         // The stopped turn goes on where it was.
         const back = job.carry.splice(0)
         if (resume) {
+          const carried = job.joined?.length ? { joined: job.joined } : {}
           back.unshift(createUserMessage({
             content: [{ type: 'text', text: 'DS Bot paused your turn for a context check. Go on with it now from where you stopped.' }],
-            source: job.info ?? { kind: SOURCE_KIND, form: 'relay', role: 'resume', exchangeId: randomUUID(), senderName: 'DS Bot', hop: 0 },
+            source: job.info ? { ...job.info, ...carried } : { kind: SOURCE_KIND, form: 'relay', role: 'resume', exchangeId: randomUUID(), senderName: 'DS Bot', hop: 0, ...carried },
           }))
         }
         await forward(job, back).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))
@@ -711,13 +735,14 @@ export function install(rt) {
     const noted = written !== undefined ? { note: written.note }
       : { fallback: job.failed !== undefined ? 'failure' : job.overflow ? 'overflow' : 'failed', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) }
     const budget = Math.min(RECENT_TOKENS, Math.floor((lines?.check ?? 4 * RECENT_TOKENS) / 4))
-    const carried = await handoffLines(agent.id, { budget, group: room !== undefined, number })
+    const carried = job.bare ? { recent: [], earlier: [], unlisted: 0, complete: true } : await handoffLines(agent.id, { budget, group: room !== undefined, number })
     if (signal.aborted) throw signal.reason
     const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name)
     const route = session.requestHeader()?.config
-    const model = route?.provider && route?.model ? `${route.provider}/${route.model}` : await rt.desiredModel(bot)
-    if (model !== undefined) {
-      await rt.selectSessionModel(freshId, model)
+    const ref = route?.provider && route?.model ? `${route.provider}/${route.model}` : await rt.desiredModel(bot)
+    if (ref !== undefined) {
+      const effort = route?.reasoningEffort ?? await rt.desiredEffort(bot, ref)
+      await rt.selectSessionModel(freshId, { ...splitRef(ref), ...(effort === undefined ? {} : { reasoningEffort: effort }) })
         .catch(error => rt.warn('ds-bot: model for the fresh part of %s not applied: %s', bot.name, error))
     }
     await rt.applyPermission(bot, freshId)
@@ -739,11 +764,11 @@ export function install(rt) {
       }
     }
     await rt.save()
-    if (job.failed !== undefined) rescued.add(freshId)
+    if (job.failed !== undefined) rescued.set(freshId, job.bare ? 'bare' : 'carried')
     void rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
-    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed })
+    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare })
     freshParts.set(freshId, estimateTokens(text))
     const fresh = await rt.resolveAgent(freshId)
     fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
@@ -792,7 +817,7 @@ export function install(rt) {
     // `messages` left the inbox for this step, so the switch carries them along.
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, hard: true })
+    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, joined: midTurn ? [...(entry.joined ?? [])] : undefined, hard: true })
     return { kind: 'reject' }
   }, { prepend: true })
 
@@ -803,10 +828,14 @@ export function install(rt) {
     if (decided !== undefined || payload.signal?.aborted) return decided
     await rt.load()
     const { agent } = payload
-    if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly() || rescued.has(agent.id)) return decided
+    if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly() || rescued.get(agent.id) === 'bare') return decided
+    // A provider may turn down one request for reasons of its own; a history that
+    // breaks every request fails the next turn as well.
+    if (failure.code === 'INVALID_REQUEST' && !STUCK_CODES.includes(lastTurnEnd(agent)?.data?.reason?.error?.code)) return decided
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: true, info: entry.info, overflow: true, failed: failure.code })
+    // The latest messages carried into a rescued part may be what breaks the request.
+    startSwitch(agent, { resume: true, info: entry.info, joined: [...(entry.joined ?? [])], overflow: true, failed: failure.code, bare: rescued.has(agent.id) })
     return undefined
   }, { prepend: true })
 
@@ -817,7 +846,7 @@ export function install(rt) {
     if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly()) return next()
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: true, info: entry.info, overflow: true })
+    startSwitch(agent, { resume: true, info: entry.info, joined: [...(entry.joined ?? [])], overflow: true })
     return undefined
   }, { prepend: true })
 
@@ -844,16 +873,20 @@ export function install(rt) {
     }
   }
 
+  // The newest turn/end among the Session's last events in memory.
+  function lastTurnEnd(agent) {
+    const latest = agent.session.seq - 1
+    for (let seq = latest; seq >= Math.max(0, latest - 199); seq -= 1) {
+      const event = agent.session.eventAt?.(seq)
+      if (event?.type === 'turn/end') return event
+    }
+    return undefined
+  }
+
   function releaseRescued(agent) {
     if (!rescued.has(agent.id)) return
-    const latest = agent.session.seq - 1
-    const earliest = Math.max(0, latest - 199)
-    for (let seq = latest; seq >= earliest; seq -= 1) {
-      const event = agent.session.eventAt(seq)
-      if (event?.type !== 'turn/end') continue
-      if (event.data?.reason?.kind !== 'error') rescued.delete(agent.id)
-      break
-    }
+    const end = lastTurnEnd(agent)
+    if (end !== undefined && end.data?.reason?.kind !== 'error') rescued.delete(agent.id)
   }
 
   ctx.on('agent/status', ({ agent, status }) => {
@@ -902,7 +935,7 @@ export function install(rt) {
       } else if (source?.kind === REPLY_KIND) {
         const reply = readReply(textOf(event.data.content))
         if (reply !== undefined) items.push({ kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
-      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && ['request', 'reply', 'report'].includes(source.role)) {
+      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
         items.push({ kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
       }
     }
