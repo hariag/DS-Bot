@@ -72,6 +72,21 @@ test('a failed state write rejects and leaves the saved file unchanged', async (
   assert.deepEqual(fs.readFileSync(statePath), original)
 })
 
+test('a failed migration write warns but load() still resolves', async (t) => {
+  const { rt, statePath, warnings } = runtime(t, { version: 1, mainBotId: 'chief', bots: { chief: { id: 'chief', name: 'Chief' } } })
+  // The migrated team's first write fails: a directory takes the temp file's path.
+  fs.mkdirSync(`${statePath}.${process.pid}.tmp`)
+  await rt.load()
+  assert.equal(rt.readOnly(), undefined)
+  assert.ok(warnings.some(args => /saving the migrated Bot team failed/.test(String(args))))
+  // Once the disk is free the next save() writes the migrated state.
+  fs.rmSync(`${statePath}.${process.pid}.tmp`, { recursive: true })
+  await rt.save()
+  const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(saved.mainBotId, undefined)
+  assert.ok(saved.mainBotIds.includes('chief'))
+})
+
 test('a failed state rename rejects and preserves the saved file', async (t) => {
   const { rt, statePath } = runtime(t)
   await rt.load()

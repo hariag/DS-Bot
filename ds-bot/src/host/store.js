@@ -161,7 +161,15 @@ export function install(rt) {
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
     const { migrated, stale } = adopt(await readFileState())
     if (holder !== undefined) return
-    if (migrated && stuck === undefined && lockError === undefined) await save()
+    if (migrated && stuck === undefined && lockError === undefined) {
+      // A failed write must not poison `loaded`: the migrated state stays in
+      // memory and the next save() writes it.
+      try {
+        await save()
+      } catch (error) {
+        warn('ds-bot: saving the migrated Bot team failed: %s', error)
+      }
+    }
     // Not awaited: renaming a session must not hold up the first roster read.
     for (const room of stale) void rt.retitleRoom(room)
   })()
