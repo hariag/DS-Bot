@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
-import { mentionSpans, nameProblem, referenceSpans, speakerOf } from '../src/shared/mentions.js'
+import { mentionSpans, nameProblem, referenceSpans } from '../src/shared/mentions.js'
 import { mentionsIn } from '../src/host/groups.js'
 import { linkMentions, MENTION_ORIGIN } from '../src/client/text.js'
 
@@ -19,12 +19,12 @@ const module = { exports: {} }
 runInNewContext(bundle.outputFiles[0].text, {
   module, exports: module.exports,
   require: (name) => {
-    const platform = { react: { createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx }, useContext: ctx => ctx.value, useMemo: make => make(), useCallback: fn => fn, useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),  createElement: () => null, Fragment: 'fragment', useState: initial => [initial, () => {}], useEffect: () => {}, useRef: initial => ({ current: initial }), useLayoutEffect: () => {}, useId: () => 'id' }, 'react-dom': {}, '@deepseek-ai/dsh-client-ui-primitives': {} }
+    const platform = { react: { createElement: () => null, Fragment: 'fragment', useState: initial => [initial, () => {}], useEffect: () => {}, useRef: initial => ({ current: initial }), useLayoutEffect: () => {}, useId: () => 'id' }, 'react-dom': {}, '@deepseek-ai/dsh-client-ui-primitives': {} }
     if (!(name in platform)) throw new Error(`no platform module ${name}`)
     return platform[name]
   },
 })
-const { userTextParts, mentionableBots, canDrawUserMessages, contentParts } = module.exports
+const { userTextParts, mentionableBots, canDrawUserMessages } = module.exports
 const plain = value => JSON.parse(JSON.stringify(value))
 
 const called = text => mentionSpans(text, bots).map(span => (span.all ? '@all' : span.bot.name))
@@ -41,14 +41,6 @@ test('addresses, code and links never call', () => {
   assert.deepEqual(called('run `@Chief` now'), [])
   assert.deepEqual(called('```\n@Chief\n```\n@K'), ['K'])
   assert.deepEqual(called('[@Chief](https://example.com) @K'), ['K'])
-  assert.deepEqual(called('[read @Chief](https://example.com "docs") @K'), ['K'])
-  assert.deepEqual(called("[read @Chief](https://example.com 'docs')"), [])
-  assert.deepEqual(called('https://medium.com/@Chief'), [])
-})
-
-test('a file or folder reference that starts with a Bot name is not a call', () => {
-  assert.deepEqual(called('看 @Chief.md 和 @chief/notes.md、@Chief\\a.txt'), [])
-  assert.deepEqual(called('@Chief. @K。@Chief...'), ['Chief', 'K', 'Chief'])
 })
 
 test('a referenced conversation\'s "@label" is a reference, once per label', () => {
@@ -57,7 +49,7 @@ test('a referenced conversation\'s "@label" is a reference, once per label', () 
 })
 
 test('the group host and the bubbles call the same Bots', () => {
-  const texts = ['@新 Bot 提权', '@新 Bot 2 来一下', 'a@K.com @K', '`@Chief` @新 Bot', '@Chief，@K。', '@Chief.md @K', '[see @K](https://x.dev "t") @Chief']
+  const texts = ['@新 Bot 提权', '@新 Bot 2 来一下', 'a@K.com @K', '`@Chief` @新 Bot', '@Chief，@K。']
   for (const text of texts) {
     const host = mentionsIn(text, bots).found.map(bot => bot.id)
     const linked = [...linkMentions(text, bots, undefined).matchAll(new RegExp(`\\]\\(${MENTION_ORIGIN}([^)]+)\\)`, 'g'))].map(match => match[1])
@@ -70,19 +62,12 @@ test('the group host and the bubbles call the same Bots', () => {
 test('the user bubble keeps the text around a mention, and a group only calls its members', () => {
   assert.deepEqual(plain(userTextParts('@新 Bot 提权', bots)), [{ bot: bots[0], label: '新 Bot' }, { text: ' 提权' }])
   assert.deepEqual(plain(userTextParts('看 @a/b.md', bots)), [{ text: '看 @a/b.md' }])
-  assert.deepEqual(plain(userTextParts('打开 @K.md', bots)), [{ text: '打开 @K.md' }])
-  // Text blocks join as the group host joins them, so "@新" + " Bot" is not "@新 Bot".
-  const { text } = contentParts([{ type: 'text', text: 'hi @新' }, { type: 'text', text: ' Bot' }])
-  assert.equal(text, 'hi @新\n Bot')
-  assert.deepEqual(plain(userTextParts(text, bots).filter(part => part.bot)), [])
   const roster = { bots, byId: Object.fromEntries(bots.map(bot => [bot.id, bot])), roomsById: { r: { members: ['c', 'k'] } } }
   assert.deepEqual(plain(mentionableBots(roster, 'r').map(bot => bot.id)), ['c', 'k'])
   assert.equal(mentionableBots(roster, 'a').length, 4)
   assert.equal(mentionableBots(roster, 'elsewhere').length, 0)
-  // With neither DSH's old text projection nor its user-text registry, DSH keeps its own
-  // bubble; with the registry DS Bot draws it (user-message.test.js).
-  assert.equal(canDrawUserMessages(false), false)
-  assert.equal(canDrawUserMessages(true), true)
+  // Without DSH's text projection the plugin leaves the bubble to DSH.
+  assert.equal(canDrawUserMessages(), false)
 })
 
 test('a Bot name is something "@" can call without a second reading', () => {
@@ -90,14 +75,4 @@ test('a Bot name is something "@" can call without a second reading', () => {
   assert.equal(nameProblem('  '), 'A Bot needs a name')
   for (const name of ['a@b', 'x`y', 'two\nlines']) assert.equal(nameProblem(name), 'A Bot name cannot contain @, ` or a line break')
   assert.match(nameProblem('All'), /calls everyone in a group/)
-  // 公开#178: a Bot called "User" spoke in the group log exactly like the user.
-  for (const name of ['User', 'you', ' USER ']) assert.match(nameProblem(name), /stands for the user in a chat/)
-  assert.equal(nameProblem('Users'), undefined)
-})
-
-test('a group log line of a Bot named like the user never reads as the user', () => {
-  assert.equal(speakerOf({ who: 'User', text: 'hi' }), 'User')
-  assert.equal(speakerOf({ who: 'User', botId: 'b', text: 'hi' }), 'Bot "User"')
-  assert.equal(speakerOf({ who: 'you', botId: 'b', text: 'hi' }), 'Bot "you"')
-  assert.equal(speakerOf({ who: 'Writer', botId: 'b', text: 'hi' }), 'Writer')
 })

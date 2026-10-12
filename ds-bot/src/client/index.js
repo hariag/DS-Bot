@@ -1,6 +1,6 @@
 import { call } from './api.js'
 import { isHex, inkText, paintCss } from './inks.js'
-import { SHAPES, markupCache, maskOf } from './characters.js'
+import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
@@ -30,7 +30,7 @@ import { installLocale, language } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
-import { MEMBER_CSS, MemberDock } from './member-status.js'
+import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'configForms']
 
@@ -88,9 +88,6 @@ export function apply(ctx) {
     return () => window.removeEventListener('pagehide', onPageHide)
   }, 'ds-bot: remember visits on page hide')
   const activity = createSource({})
-  // Per Bot, the turn it runs and its tool; and the approvals waiting for the user.
-  const work = createSource({ bots: {}, approvals: [] })
-  let workKey = ''
   // Per Session, what its transcript has in flight (running tools, a streaming reply).
   const live = createSource({})
   // Per Session, the first visible time and the end time of each turn the transcript
@@ -132,8 +129,6 @@ export function apply(ctx) {
     applied = order
     const nextActivity = JSON.stringify(value.activity ?? {})
     if (nextActivity !== activityKey) { activityKey = nextActivity; activity.set(value.activity ?? {}) }
-    const nextWork = JSON.stringify(value.work ?? null)
-    if (nextWork !== workKey) { workKey = nextWork; work.set(value.work ?? { bots: {}, approvals: [] }) }
     noteMemoryNews(value.memoryNews ?? {})
     const current = roster.getSnapshot()
     // Connector states change without a new revision, so they come with every answer.
@@ -238,18 +233,24 @@ export function apply(ctx) {
 
   ctx.effect(() => () => { markupCache.clear() }, 'ds-bot: character markup')
 
-  // Mentions wear each Bot's color and character silhouette (or its photo).
+  // Mentions wear each Bot's color and character silhouette (or its photo). A message
+  // DSH still draws itself, while it waits to be sent or to join a running turn, shows
+  // "@Name" as a file reference; one whose label is a whole Bot name wears the Bot's
+  // mark there too (a name with a space is cut by DSH, so it stays as DSH draws it).
   const installMentions = () => {
     const style = installStyles('', 'mentions')
     let last = ''
     const render = () => {
       const next = roster.getSnapshot().bots.map((bot) => {
         const anchor = `.bt-bubble a[href="${MENTION_ORIGIN}${bot.id}"]`
+        const chip = /\s/.test(bot.name) ? '' : `[class*="_userRow"] [data-ref-chip="file"][title="@${bot.name.replace(/["\\]/g, '\\$&')}" i]`
         const look = lookOf(bot)
+        const marks = chip ? `${anchor}::before,${chip}::before` : `${anchor}::before`
         const mark = look.image
-          ? `${anchor}::before{background:center/cover url("${look.image}");-webkit-mask:none;mask:none;border-radius:50%}`
-          : `${anchor}::before{background:${paintCss(look.color)};-webkit-mask-image:${maskOf(look.shape)};mask-image:${maskOf(look.shape)}}`
-        return `${anchor}{color:${inkText(look.color)}}${mark}`
+          ? `${marks}{background:center/cover url("${look.image}");-webkit-mask:none;mask:none;border-radius:50%}`
+          : `${marks}{background:${paintCss(look.color)};-webkit-mask-image:${maskOf(look.shape)};mask-image:${maskOf(look.shape)}}`
+        const chipBase = chip ? `${chip}{color:inherit;font-weight:600}${chip}>svg{display:none}${chip}::before{content:"";display:inline-block;flex:none;width:16px;height:16px;margin-right:3px;vertical-align:-3px;-webkit-mask:${DEFAULT_MASK} center/contain no-repeat;mask:${DEFAULT_MASK} center/contain no-repeat}` : ''
+        return `${anchor}{color:${inkText(look.color)}}${chipBase}${mark}`
       }).join('\n')
       if (next !== last) style.textContent = last = next
     }
@@ -536,7 +537,6 @@ export function apply(ctx) {
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
-    answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
     // Values go out in these requests and never come back in a response.
     secretSet: payload => after(call('secret-set', payload)),
     secretAllow: requestId => after(call('secret-allow', { requestId })),
@@ -686,7 +686,7 @@ export function apply(ctx) {
   })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } })
+  const face = () => ({ actions, hooks: { roster, ui, activity, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } })
   const assistantFace = (sessionId) => {
     const binding = ctx.sessions.binding(sessionId)
     if (binding === undefined) throw new Error(`ds-bot: unknown session "${sessionId}"`)
@@ -748,7 +748,7 @@ export function apply(ctx) {
     installCompiledStyles(SCHEDULE_CSS, 'schedules'),
     installCompiledStyles(FEEDBACK_CSS, 'feedback'),
     installCompiledStyles(ABOUT_CSS, 'about'),
-    installCompiledStyles(MEMBER_CSS, 'members'),
+    installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
     browsers ? installCompiledStyles(BROWSER_CSS, 'browser') : null,
     installTheme(),
     shadow('sidebar.workspaces', { priority: -10, inject: face }, TeamSidebar),
@@ -784,6 +784,7 @@ export function apply(ctx) {
     // every message.
     shadow('conversation.chat.node', { key: 'question-reply', priority: -10, locale: 'chat' }, AnsweredCell),
     shadow('conversation.chat.node', { key: 'compaction', priority: -10, locale: 'chat' }, Nothing),
+    ...(canDrawUserMessages() ? ['user', 'steering'].map(key => shadow('conversation.chat.node', { key, priority: -10, locale: 'chat', inject: face }, UserMessageCell)) : []),
     shadow('conversation.input.permission', { priority: -10 }, Nothing),
     shadow('conversation.input.plan', { priority: -10 }, Nothing),
     // The composer carries no model picker or run statistics; a Bot's model lives
@@ -797,7 +798,6 @@ export function apply(ctx) {
       priority: -10,
       select: owner => (owner.pendingInteraction?.kind === 'question' ? owner.pendingInteraction : null),
     }, QuestionCard),
-    shadow('conversation.input.dock', { id: 'bot-members', order: -120, inject: face }, MemberDock),
     shadow('conversation.input.dock', { id: 'bot-model', order: -110, inject: face }, ModelChoiceDock),
     shadow('conversation.input.dock', { id: 'bot-question', order: -100, inject: face }, QuestionDock),
     shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
