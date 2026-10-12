@@ -103,7 +103,8 @@ test('non-relay context and ds-bot package sources are ignored', () => {
     relay(22, 'request', { senderSessionId: undefined }),
     { time: 24, source: { kind: 'agent-instructions' } },
     { time: 26, source: null },
+    relay(27, 'request', { deferred: true }),
     relay(28, 'request'),
   ]
-  assert.deepEqual(relaysBefore(contexts, steps, steps[1]), [contexts[7]])
+  assert.deepEqual(relaysBefore(contexts, steps, steps[1]), [contexts[8]])
 })

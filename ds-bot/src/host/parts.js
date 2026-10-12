@@ -801,7 +801,7 @@ export function install(rt) {
     // `messages` left the inbox for this step, so the switch carries them along.
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, joined: midTurn ? (entry.joined ?? []).map(joined => joined.info) : undefined, hard: true })
+    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, joined: midTurn ? [...(entry.joined ?? [])] : undefined, hard: true })
     return { kind: 'reject' }
   }, { prepend: true })
 
@@ -812,7 +812,7 @@ export function install(rt) {
     if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly()) return next()
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: true, info: entry.info, joined: (entry.joined ?? []).map(joined => joined.info), overflow: true })
+    startSwitch(agent, { resume: true, info: entry.info, joined: [...(entry.joined ?? [])], overflow: true })
     return undefined
   }, { prepend: true })
 
@@ -884,7 +884,7 @@ export function install(rt) {
       } else if (source?.kind === REPLY_KIND) {
         const reply = readReply(textOf(event.data.content))
         if (reply !== undefined) items.push({ kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
-      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
+      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
         items.push({ kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
       }
     }

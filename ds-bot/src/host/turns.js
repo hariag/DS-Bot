@@ -96,8 +96,7 @@ export function install(rt) {
     entry.info = info
     // A turn that was stopped for a part switch brings its joined requests along.
     if (Array.isArray(info.joined) && info.joined.length > 0) {
-      entry.joined = info.joined.filter(item => item !== undefined && item !== null)
-        .map(item => ({ info: item, from: 0 }))
+      entry.joined = info.joined.filter(item => item?.info !== undefined && item.info !== null)
     }
     if (rt.groupOwners.has(sessionId)) return
     if ((expectsReply(info) && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
@@ -208,11 +207,12 @@ export function install(rt) {
           else if (expectsReply(source) && !answersUser(source)
             && source.exchangeId !== entry.info?.exchangeId
             && !(entry.joined ?? []).some(joined => joined.info.exchangeId === source.exchangeId)) {
-            // A request that lands inside a running turn is answered by the text
-            // that follows it, routed back at turn/end. A failed-switch resume
-            // message re-sends the trigger's own source; the same exchangeId must
-            // not join twice.
-            entry.joined = [...(entry.joined ?? []), { info: source, from: entry.texts.length }]
+            // A request that lands inside a running turn steers that work but is
+            // answered in a hidden turn of its own once the work is done, so the
+            // sender never gets the turn's text. A failed-switch resume message
+            // re-sends the trigger's own source; the same exchangeId must not join twice.
+            const text = textOf(event.data.content).replace(/^\[[^\]\n]*\]\n?/, '')
+            entry.joined = [...(entry.joined ?? []), { info: source, text }]
           }
           // A mid-turn relay that owes no reply only informs the turn: it neither
           // claims the running turn nor queues as the next one's trigger.
@@ -259,8 +259,7 @@ export function install(rt) {
         if (failure !== undefined) noteTurnFailure(id, failure)
         if (switched) break
         // Whoever the turn answers gets the same three-way rule: a failure notice,
-        // the turn's text (or a stopped-before-answer line), or nothing. A joined
-        // request is answered by only the text that follows where it landed.
+        // the turn's text (or a stopped-before-answer line), or nothing.
         const answer = (source, reply) => {
           if (!expectsReply(source) || answersUser(source)) return
           const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
@@ -295,7 +294,24 @@ export function install(rt) {
         } else if (info !== undefined) {
           answer(info, texts.join('\n\n').trim())
         }
-        for (const request of joined) answer(request.info, texts.slice(request.from).join('\n\n').trim())
+        for (const request of joined) {
+          // A failed or stopped turn closes the request like any other; a finished
+          // one hands it back to the Bot to answer next.
+          if (failure !== undefined || reason?.kind === 'aborted') {
+            answer(request.info, '')
+            continue
+          }
+          void rt.deliver({
+            fromId: request.info.senderSessionId,
+            toId: rt.selfOf(id),
+            sessionId: id,
+            text: request.text,
+            role: 'request',
+            hop: request.info.hop ?? 0,
+            exchangeId: request.info.exchangeId,
+            deferred: true,
+          }).catch(error => rt.warn('ds-bot: deferred request delivery failed: %s', error))
+        }
         break
       }
     }

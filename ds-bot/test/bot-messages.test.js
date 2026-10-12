@@ -117,7 +117,7 @@ test('message_bot steers by default; on an idle Bot it opens the next turn', asy
   // Running: the message cuts into that turn instead of queuing.
   emit('b', 'turn/start', { turn: 1 })
   const busy = await tool('message_bot', { to: 'Writer', message: 'watch out' }, 'a')
-  assert.equal(busy, 'Delivered to Writer while it is working: it reads your message at its next step. Its reply will arrive later as a new message; do not wait for it.')
+  assert.equal(busy, 'Delivered to Writer while it is working: it reads your message at its next step and answers once that work is done. Its reply will arrive later as a new message; do not wait for it.')
   assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['steer', 'steer'])
 })
 
@@ -134,6 +134,57 @@ test('message_bot when "queue" waits for the current work, and reply_to "user" a
   assert.equal(toUser, 'Delivered to Writer. It will answer the user in its own chat; nothing comes back to you, so point the user to Writer\'s chat instead of relaying.')
   assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['followup', 'followup'])
   assert.equal(agents.get('b').calls[1][1].source.audience, 'user')
+})
+
+test('a Bot busy in a group gets the message in its own chat, and the sender is told', async (t) => {
+  const seed = team({ group: true })
+  seed.rooms.r1.sessions.a = 'ga'
+  const { agents, emit, tool, stop } = await start(seed)
+  t.after(stop)
+
+  emit('gb', 'turn/start', { turn: 1 })
+  const out = await tool('message_bot', { to: 'Writer', message: 'status?' }, 'a')
+  assert.equal(out, 'Delivered to Writer. Its reply will arrive later as a new message; do not wait for it. Writer is also working in group "Ops"; your message does not reach that work. If it must not go on there, use stop_bot.')
+  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['steer'])
+  assert.equal(agents.get('gb'), undefined)
+
+  // A non-Main sender gets no stop_bot hint.
+  emit('ga', 'turn/start', { turn: 1 })
+  const back = await tool('message_bot', { to: 'Chief', message: 'done' }, 'b')
+  assert.equal(back, 'Delivered to Chief. Its reply will arrive later as a new message; do not wait for it. Chief is also working in group "Ops"; your message does not reach that work.')
+})
+
+test('a request steered into a running turn is recorded once and answered in a turn of its own', async (t) => {
+  const { agents, emit, tool, exchanges, stop } = await start(team())
+  t.after(stop)
+
+  emit('b', 'turn/start', { turn: 1 })
+  emit('b', 'user/message', { content: textBlock('write the letter'), source: { kind: 'user' } })
+  await tool('message_bot', { to: 'Writer', message: 'which year is the data?' }, 'a')
+  const steered = agents.get('b').calls[0][1]
+  emit('b', 'user/message', { content: steered.content, source: steered.source })
+  emit('b', 'assistant/message', assistantText('the letter, for the user'))
+  emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  for (let count = 0; count < 200 && agents.get('b').calls.length < 2; count += 1) await delay(5)
+
+  // Nothing from the user's turn goes to Chief; the request comes back to Writer.
+  assert.equal(agents.get('a')?.calls.length ?? 0, 0)
+  const [kind, again] = agents.get('b').calls[1]
+  assert.equal(kind, 'followup')
+  assert.equal(textOf(again.content), '[Message from Chief · you read it during your last task; answer it now]\nwhich year is the data?')
+  assert.equal(again.source.deferred, true)
+  assert.equal(again.source.exchangeId, steered.source.exchangeId)
+  assert.deepEqual((await exchanges()).map(entry => entry.role), ['request'])
+
+  emit('b', 'turn/start', { turn: 2 })
+  emit('b', 'user/message', { content: again.content, source: again.source })
+  emit('b', 'assistant/message', assistantText('2025'))
+  emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  for (let count = 0; count < 200 && (agents.get('a')?.calls ?? []).length < 1; count += 1) await delay(5)
+  const reply = agents.get('a').calls[0][1]
+  assert.equal(textOf(reply.content), '[Reply from Writer]\n2025')
+  assert.equal(reply.source.replyTo, steered.source.exchangeId)
+  assert.deepEqual((await exchanges()).map(entry => entry.role), ['request', 'reply'])
 })
 
 test('a non-Main Bot can steer a message to a Main Bot', async (t) => {
@@ -218,23 +269,30 @@ test('a stopped notice routes the acknowledgement back like a request', () => {
   assert.equal(delivered[0].text, 'understood')
 })
 
-test('a request that joins a user-started turn answers with the text that follows it', () => {
+// What the turn hands back for a joined request: the request itself, to answer next.
+const deferredOf = job => [job.fromId, job.toId, job.sessionId, job.role, job.exchangeId, job.hop, job.deferred, job.text]
+
+test('a request that joins a user-started turn is handed back, not answered with the turn\'s text', () => {
   const { rt, emit, delivered } = turnsHost()
   emit('b', 'turn/start', { turn: 1 })
   emit('b', 'user/message', { content: textBlock('write the letter'), source: { kind: 'user' } })
   emit('b', 'assistant/message', assistantText('first half'))
-  emit('b', 'user/message', { content: textBlock('[Message from Chief]\nmake it shorter'), source: replySource('request', { exchangeId: 'e1' }) })
+  emit('b', 'user/message', { content: textBlock('[Message from Chief]\nmake it shorter'), source: replySource('request', { exchangeId: 'e1', hop: 2 }) })
   emit('b', 'assistant/message', assistantText('second half'))
   emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  assert.equal(delivered.length, 1)
-  assert.equal(delivered[0].toId, 'a')
-  assert.equal(delivered[0].role, 'reply')
-  assert.equal(delivered[0].replyTo, 'e1')
-  assert.equal(delivered[0].text, 'second half')
+  assert.deepEqual(delivered.map(deferredOf), [['a', 'b', 'b', 'request', 'e1', 2, true, 'make it shorter']])
   assert.deepEqual(rt.state.exchangeTurns, {})
+
+  // The handed-back request opens a hidden turn whose text is the reply.
+  emit('b', 'turn/start', { turn: 2 })
+  emit('b', 'user/message', { content: textBlock('[Message from Chief · you read it during your last task; answer it now]\nmake it shorter'), source: replySource('request', { exchangeId: 'e1', hop: 2, deferred: true }) })
+  emit('b', 'assistant/message', assistantText('done, it is shorter'))
+  emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  assert.deepEqual(delivered.slice(1).map(job => [job.toId, job.role, job.replyTo, job.hop, job.text]), [['a', 'reply', 'e1', 3, 'done, it is shorter']])
+  assert.deepEqual(rt.state.exchangeTurns, { b: [2] })
 })
 
-test('a request that joins a Bot-triggered turn gets only the after-text, the trigger the whole turn', () => {
+test('a request that joins a Bot-triggered turn is handed back; the trigger gets the whole turn', () => {
   const { rt, emit, delivered } = turnsHost()
   emit('b', 'turn/start', { turn: 1 })
   emit('b', 'user/message', { content: textBlock('[Message from Chief]\ntask'), source: replySource('request', { exchangeId: 'e0' }) })
@@ -243,15 +301,16 @@ test('a request that joins a Bot-triggered turn gets only the after-text, the tr
   emit('b', 'assistant/message', assistantText('second half'))
   emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   assert.deepEqual(rt.state.exchangeTurns.b, [1])
-  assert.deepEqual(delivered.map(job => [job.replyTo, job.text]), [['e0', 'first half\n\nsecond half'], ['e1', 'second half']])
+  assert.deepEqual(delivered.map(job => [job.role, job.replyTo ?? job.exchangeId, job.text]), [['reply', 'e0', 'first half\n\nsecond half'], ['request', 'e1', 'more']])
 })
 
-test('a joined request aborted without after-text still answers its sender', () => {
+test('a joined request in a stopped turn tells its sender, and is not handed back', () => {
   const { emit, delivered } = turnsHost()
   emit('b', 'turn/start', { turn: 1 })
   emit('b', 'user/message', { content: textBlock('write the letter'), source: { kind: 'user' } })
   emit('b', 'assistant/message', assistantText('first half'))
   emit('b', 'user/message', { content: textBlock('[Message from Chief]\nmore'), source: replySource('request', { exchangeId: 'e1' }) })
+  emit('b', 'assistant/message', assistantText('second half'))
   emit('b', 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'hook', reason: 'ds-bot/stopped' } } })
   assert.equal(delivered.length, 1)
   assert.equal(delivered[0].toId, 'a')
@@ -282,8 +341,7 @@ test('a joined request never claims the next turn', () => {
   emit('b', 'user/message', { content: textBlock('next task'), source: { kind: 'user' } })
   emit('b', 'assistant/message', assistantText('for the user'))
   emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  assert.equal(delivered.length, 1)
-  assert.equal(delivered[0].replyTo, 'e1')
+  assert.deepEqual(delivered.map(job => [job.role, job.exchangeId, job.deferred]), [['request', 'e1', true]])
   assert.deepEqual(rt.state.exchangeTurns, {})
 })
 
@@ -295,9 +353,7 @@ test('a schedule-started turn stays visible when a request joins', () => {
   emit('b', 'user/message', { content: textBlock('[Message from Chief]\nmore'), source: replySource('request', { exchangeId: 'e1' }) })
   emit('b', 'assistant/message', assistantText('after'))
   emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  assert.equal(delivered.length, 1)
-  assert.equal(delivered[0].replyTo, 'e1')
-  assert.equal(delivered[0].text, 'after')
+  assert.deepEqual(delivered.map(job => [job.role, job.exchangeId, job.text]), [['request', 'e1', 'more']])
   assert.deepEqual(rt.state.exchangeTurns, {})
 })
 
@@ -312,7 +368,7 @@ test('a duplicate exchangeId joins no second reply', () => {
   assert.equal(delivered[0].replyTo, 'e0')
 })
 
-test('a joined request crosses a part switch and is answered in the new part', async (t) => {
+test('a joined request crosses a part switch and is handed back in the new part', async (t) => {
   const { agents, agentOf, emit, fire, stop } = await start(team())
   t.after(stop)
 
@@ -328,18 +384,21 @@ test('a joined request crosses a part switch and is answered in the new part', a
   const handoff = agents.get('s1').calls.find(([, message]) => message.source?.handoff === true)[1]
   assert.equal((agents.get('a')?.calls ?? []).filter(([, message]) => message.source?.role === 'reply').length, 0)
   assert.equal(handoff.source.exchangeId, 'e0')
-  assert.deepEqual(handoff.source.joined.map(info => info.exchangeId), ['e1'])
+  assert.deepEqual(handoff.source.joined.map(item => [item.info.exchangeId, item.text]), [['e1', 'more']])
 
-  // The resumed turn routes the trigger's and the joined request's replies.
+  // The resumed turn answers its trigger and hands the joined request back there.
   emit('s1', 'turn/start', { turn: 1 })
   emit('s1', 'user/message', { content: textBlock('[Handoff]\npackage'), source: handoff.source })
   emit('s1', 'assistant/message', assistantText('done'))
   emit('s1', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  for (let count = 0; count < 200 && (agents.get('a')?.calls ?? []).length < 2; count += 1) await delay(5)
+  const handedBack = () => agents.get('s1').calls.find(([, message]) => message.source?.deferred === true)
+  for (let count = 0; count < 200 && ((agents.get('a')?.calls ?? []).length < 1 || handedBack() === undefined); count += 1) await delay(5)
   const replies = (agents.get('a')?.calls ?? []).filter(([, message]) => message.source?.role === 'reply')
-  assert.deepEqual(replies.map(([, message]) => message.source.replyTo), ['e0', 'e1'])
+  assert.deepEqual(replies.map(([, message]) => message.source.replyTo), ['e0'])
   assert.equal(textOf(replies[0][1].content), '[Reply from Writer]\ndone')
-  assert.equal(textOf(replies[1][1].content), '[Reply from Writer]\ndone')
+  assert.equal(handedBack()[0], 'followup')
+  assert.equal(handedBack()[1].source.exchangeId, 'e1')
+  assert.equal(textOf(handedBack()[1].content), '[Message from Chief · you read it during your last task; answer it now]\nmore')
 })
 
 test('the caller hop is the highest of the turn\'s trigger and joined requests', async (t) => {

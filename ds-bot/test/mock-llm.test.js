@@ -61,10 +61,13 @@ test('长任务 writes text on every step when the step size is left out', async
   assert.equal(out.text.length, 4000) // a tool result continues the task
   fold(messages, out)
 
-  // A spliced Bot message mid-task hits the other parse of the same command.
+  // A spliced Bot message mid-task hits the other parse of the same command, and its
+  // note comes before the step's text.
   messages.push({ role: 'user', content: '[Message from HelperBot] 进度如何？' })
   out = await call(url, messages)
-  assert.equal(out.text.length, 4000)
+  const ack = '（已按 HelperBot 的话调整）\n'
+  assert.ok(out.text.startsWith(ack), out.text.slice(0, 40))
+  assert.equal(out.text.length - ack.length, 4000)
   fold(messages, out)
 
   out = await call(url, messages)

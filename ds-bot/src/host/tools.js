@@ -58,9 +58,21 @@ export function install(rt) {
     },
   }))
 
+  // Sessions a Bot is running in right now: its own chat plus each group Session
+  // with a live turn. An idle Bot reports just its own chat.
+  const activeSessions = (botId) => {
+    const running = [...new Set([rt.chatOf(botId), ...rt.groupSessionsOf(botId)])]
+      .filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
+    return { running, idle: running.length === 0 }
+  }
+  const whereOf = (sessionId) => {
+    const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+    return room ? `group "${room.name}"` : 'its own chat'
+  }
+
   ctx.tools.register(defineTool({
     name: 'message_bot',
-    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead.',
+    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course, then answers once that work is done; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead.',
     parameters: {
       to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
       message: { type: 'string', required: true, description: 'Self-contained message; the other Bot cannot see this conversation' },
@@ -72,7 +84,7 @@ export function install(rt) {
       when: {
         type: 'string',
         enum: ['now', 'queue'],
-        description: '"now" (default): a working Bot reads your message at its next step, between its current actions; use it for questions, information it needs, corrections and warnings. "queue": it reads your message only after its current work is done, as a separate task; use it only for a new task unrelated to what it is doing now. With reply_to "user" the message always queues.',
+        description: '"now" (default): a working Bot reads your message at its next step, between its current actions, and answers once its current work is done; use it for questions, information it needs, corrections and warnings. "queue": it reads your message only after its current work is done, as a separate task; use it only for a new task unrelated to what it is doing now. With reply_to "user" the message always queues.',
       },
     },
     output,
@@ -90,27 +102,21 @@ export function install(rt) {
       const working = rt.live.get(rt.chatOf(target.id))?.turn !== undefined
       const steer = args.when !== 'queue' && !toUser
       await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : {}) })
-      return toUser
+      const sent = toUser
         ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
         : working && steer
-          ? `Delivered to ${target.name} while it is working: it reads your message at its next step. Its reply will arrive later as a new message; do not wait for it.`
+          ? `Delivered to ${target.name} while it is working: it reads your message at its next step and answers once that work is done. Its reply will arrive later as a new message; do not wait for it.`
           : working
             ? `Queued for ${target.name}: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it.`
             : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
+      // Messages reach a Bot's own chat only; work in a group goes on without them.
+      const groups = activeSessions(target.id).running.filter(sessionId => sessionId !== rt.chatOf(target.id))
+      if (groups.length === 0) return sent
+      const stop = rt.isMain(sender.id) ? ' If it must not go on there, use stop_bot.' : ''
+      return `${sent} ${target.name} is also working in ${groups.map(whereOf).join(' and ')}; your message does not reach that work.${stop}`
     },
   }))
 
-  // Sessions a Bot is running in right now: its own chat plus each group Session
-  // with a live turn. An idle Bot reports just its own chat.
-  const activeSessions = (botId) => {
-    const running = [...new Set([rt.chatOf(botId), ...rt.groupSessionsOf(botId)])]
-      .filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
-    return { running, idle: running.length === 0 }
-  }
-  const whereOf = (sessionId) => {
-    const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-    return room ? `group "${room.name}"` : 'its own chat'
-  }
   // stop_bot throws when it does nothing, so the chat shows the call as failed
   // instead of "Stopped".
   const refuse = (message) => { throw new Error(message) }

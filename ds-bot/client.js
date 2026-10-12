@@ -1415,7 +1415,7 @@ function toolArgs(root) {
 var RELAY_ROLES = /* @__PURE__ */ new Set(["request", "reply", "stopped"]);
 var isRelayContext = (data) => {
   const source = data?.source;
-  if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true) return false;
+  if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true || source.deferred === true) return false;
   return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
 };
 var stepShows = (step) => (step?.blocks ?? []).some((block) => {
@@ -3948,7 +3948,8 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
   const data = node.data;
   const source = data.source !== null && typeof data.source === "object" ? data.source : {};
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
-  const relayed = source.kind === "bot" && source.handoff !== true && (source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string";
+  const deferred = source.kind === "bot" && source.deferred === true;
+  const relayed = source.kind === "bot" && source.handoff !== true && !deferred && (source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string";
   const turn = node.location?.turn?.turn ?? data.turn;
   (0, import_react6.useLayoutEffect)(() => {
     if (relayed) actions.noteTurnPeer(sessionId, turn, source.senderSessionId);
@@ -3974,7 +3975,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
     if (source.kind === "bot") {
       if (source.handoff === true) return roster.roomsById[sessionId] ? null : (0, import_react6.createElement)(EarlierParts, { sessionId, roster, actions });
       if (source.role === "kickoff" || source.role === "room") return null;
-      if (source.role === "secret") return null;
+      if (source.role === "secret" || deferred) return null;
       if (source.role === "post") {
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };

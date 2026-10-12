@@ -285,7 +285,10 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   // Team state (exchanges) is keyed by the Bot id; Session state by the part shown.
   const selfId = roster.byId[sessionId]?.id ?? sessionId
   // A resumed handoff keeps the relayed message's source, but it opens a part, not a run.
-  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
+  // A deferred request was already shown where the Bot read it mid-turn; the turn
+  // that answers it adds no second line.
+  const deferred = source.kind === 'bot' && source.deferred === true
+  const relayed = source.kind === 'bot' && source.handoff !== true && !deferred && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
   const turn = node.location?.turn?.turn ?? data.turn
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
@@ -320,7 +323,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       // Group turns belong to the group chat; the member's own chat stays one-to-one.
       if (source.role === 'kickoff' || source.role === 'room') return null
       // The secret card itself shows what the user did; the note to the Bot stays out.
-      if (source.role === 'secret') return null
+      if (source.role === 'secret' || deferred) return null
       if (source.role === 'post') {
         const room = roster.roomsById[sessionId]
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }

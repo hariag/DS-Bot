@@ -12,24 +12,19 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Changed
 
-- When a Bot messages another Bot that is working, the message reaches it at its next step instead of waiting until its current work is done, and the reply still comes back. A Bot can still queue a separate task behind the current work.
+- When a Bot messages another Bot that is working, the message reaches it at its next step instead of waiting until its current work is done. It answers once that work is done, and the reply comes back. A Bot can still queue a separate task behind the current work.
+- Bots give a brief progress message when starting a multi-step task in their own chat with the user, and at meaningful milestones on long tasks.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 - Updating a copy installed from GitHub uses the repository's current address.
-- The Usage page groups its statistics, chart, rankings and activity into one panel.
-- Hover over an Activity day to see its token count.
 
 ### Fixed
 
-- When DS Bot cannot save the Bot team, the change now fails with an error instead of being lost silently.
-- A Bot team file that cannot be read is no longer replaced by an empty team; a damaged file is kept as a backup.
-- Warnings in the host log hide keys and tokens.
 - In a group chat, a conversation referenced in a message reached none of the members, and a reference whose title started with a member's name called that member. Now the members who answer the message get the referenced conversation.
 - In a group chat, typing `@` and a Bot's name and pressing Enter inserted a conversation reference instead of the Bot's name.
 - Deleting a Bot or group chat also removes its scheduled tasks, including ones left on the Bot's earlier chat parts. Before, armed tasks stayed active and kept running the deleted Session; the archive that would have stopped them was refused and the failure was silent.
 - A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.
 - A provider adapter that cannot measure tokens no longer fails every turn. The context size is estimated instead, with one warning in the log.
 - The memory panel's summary works on models that think by default. The call asks for the model's lowest thinking level, and when the answer is cut off at the output limit it is written once more with a larger budget instead of failing or being saved half-written.
-- A message sent to a group chat while a round is running joins that round before the next member speaks. Everyone still to speak sees it, and the members it is for answer it in the same round. Before, it waited for the whole round to end. A message with images or a referenced conversation still waits for its own round.
 
 ## [0.1.2] - 2026-10-11
 
