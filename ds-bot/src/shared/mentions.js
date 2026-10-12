@@ -3,12 +3,14 @@
 // is what gets called. Pure, so both sides import it.
 
 export const ALL_WORDS = ['all', 'everyone', '所有人', '全体']
-// A letter, digit, "_" or "-" after a name means a longer word ("@Mi" in "@MiniMax");
-// a letter, digit, "_" or "." before "@" means an address ("a@b").
-const NAME_GOES_ON = /^[a-z0-9_-]/i
-const ADDRESS_BEFORE = /[a-z0-9_.]/i
-// Code and Markdown links are literal text.
-const LITERAL = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*\)/g
+// A letter, digit, "_" or "-" after a name means a longer word ("@Mi" in "@MiniMax"),
+// and "/", "\" or a "." that goes on into a word mean a path: DSH writes a file
+// reference as "@docs/guide.md", which must not call a Bot named Docs. A letter,
+// digit, "_", "." or "/" before "@" means an address ("a@b", "medium.com/@Writer").
+const NAME_GOES_ON = /^(?:[a-z0-9_\-/\\]|\.[a-z0-9_-])/i
+const ADDRESS_BEFORE = /[a-z0-9_./]/i
+// Code and Markdown links, with or without a title, are literal text.
+const LITERAL = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g
 
 const fitsAt = (text, at, word) => text.slice(at, at + word.length).toLowerCase() === word.toLowerCase()
   && !NAME_GOES_ON.test(text.slice(at + word.length))

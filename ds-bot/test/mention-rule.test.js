@@ -24,7 +24,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return platform[name]
   },
 })
-const { userTextParts, mentionableBots, canDrawUserMessages } = module.exports
+const { userTextParts, mentionableBots, canDrawUserMessages, contentParts } = module.exports
 const plain = value => JSON.parse(JSON.stringify(value))
 
 const called = text => mentionSpans(text, bots).map(span => (span.all ? '@all' : span.bot.name))
@@ -41,6 +41,14 @@ test('addresses, code and links never call', () => {
   assert.deepEqual(called('run `@Chief` now'), [])
   assert.deepEqual(called('```\n@Chief\n```\n@K'), ['K'])
   assert.deepEqual(called('[@Chief](https://example.com) @K'), ['K'])
+  assert.deepEqual(called('[read @Chief](https://example.com "docs") @K'), ['K'])
+  assert.deepEqual(called("[read @Chief](https://example.com 'docs')"), [])
+  assert.deepEqual(called('https://medium.com/@Chief'), [])
+})
+
+test('a file or folder reference that starts with a Bot name is not a call', () => {
+  assert.deepEqual(called('看 @Chief.md 和 @chief/notes.md、@Chief\\a.txt'), [])
+  assert.deepEqual(called('@Chief. @K。@Chief...'), ['Chief', 'K', 'Chief'])
 })
 
 test('a referenced conversation\'s "@label" is a reference, once per label', () => {
@@ -49,7 +57,7 @@ test('a referenced conversation\'s "@label" is a reference, once per label', () 
 })
 
 test('the group host and the bubbles call the same Bots', () => {
-  const texts = ['@新 Bot 提权', '@新 Bot 2 来一下', 'a@K.com @K', '`@Chief` @新 Bot', '@Chief，@K。']
+  const texts = ['@新 Bot 提权', '@新 Bot 2 来一下', 'a@K.com @K', '`@Chief` @新 Bot', '@Chief，@K。', '@Chief.md @K', '[see @K](https://x.dev "t") @Chief']
   for (const text of texts) {
     const host = mentionsIn(text, bots).found.map(bot => bot.id)
     const linked = [...linkMentions(text, bots, undefined).matchAll(new RegExp(`\\]\\(${MENTION_ORIGIN}([^)]+)\\)`, 'g'))].map(match => match[1])
@@ -62,6 +70,11 @@ test('the group host and the bubbles call the same Bots', () => {
 test('the user bubble keeps the text around a mention, and a group only calls its members', () => {
   assert.deepEqual(plain(userTextParts('@新 Bot 提权', bots)), [{ bot: bots[0], label: '新 Bot' }, { text: ' 提权' }])
   assert.deepEqual(plain(userTextParts('看 @a/b.md', bots)), [{ text: '看 @a/b.md' }])
+  assert.deepEqual(plain(userTextParts('打开 @K.md', bots)), [{ text: '打开 @K.md' }])
+  // Text blocks join as the group host joins them, so "@新" + " Bot" is not "@新 Bot".
+  const { text } = contentParts([{ type: 'text', text: 'hi @新' }, { type: 'text', text: ' Bot' }])
+  assert.equal(text, 'hi @新\n Bot')
+  assert.deepEqual(plain(userTextParts(text, bots).filter(part => part.bot)), [])
   const roster = { bots, byId: Object.fromEntries(bots.map(bot => [bot.id, bot])), roomsById: { r: { members: ['c', 'k'] } } }
   assert.deepEqual(plain(mentionableBots(roster, 'r').map(bot => bot.id)), ['c', 'k'])
   assert.equal(mentionableBots(roster, 'a').length, 4)

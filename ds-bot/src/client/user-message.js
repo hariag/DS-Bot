@@ -23,7 +23,8 @@ export function contentParts(content) {
     else if ((block?.type === 'image' || block?.type === 'file') && block.attachment !== undefined) attachments.push(block)
     else rest.push(block)
   }
-  return { text: texts.join(''), attachments, rest }
+  // Joined as the group host joins them, so a mention never spans two blocks here only.
+  return { text: texts.join('\n'), attachments, rest }
 }
 
 // In a group only its members are called; elsewhere a mention opens that Bot's chat.
@@ -78,7 +79,7 @@ function CopyButton({ text }) {
 
 const clock = time => (typeof time === 'number' ? new Date(time).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' }) : undefined)
 
-// A sent message, or one that joined a running turn ("steering"), which has no tools.
+// A sent message, or one that joined a running turn ("steering").
 export function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageImages, openFile, openSkill }) {
   const roster = useRoster(value => value)
   const data = node.data ?? {}
@@ -93,7 +94,7 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
         h(UserText, { text, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions }),
         rest.map((block, index) => (ui.JsonBlock ? h(ui.JsonBlock, { key: index, label: t('Content'), payload: block }) : null))) : null,
       referenceLabels.length > 0 ? h('div', { className: 'bt-urefs' }, t('Referenced {labels}', { labels: referenceLabels.join(t(', ')) })) : null),
-    steering || text === '' ? null : h('div', { className: 'bt-utools' }, h(CopyButton, { text })))
+    text === '' ? null : h('div', { className: 'bt-utools' }, h(CopyButton, { text })))
 }
 
 export const USER_MESSAGE_CSS = `

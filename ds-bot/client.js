@@ -1329,9 +1329,9 @@ var allThemes = () => ({ ...THEMES, ...customThemes });
 
 // src/shared/mentions.js
 var ALL_WORDS = ["all", "everyone", "所有人", "全体"];
-var NAME_GOES_ON = /^[a-z0-9_-]/i;
-var ADDRESS_BEFORE = /[a-z0-9_.]/i;
-var LITERAL = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*\)/g;
+var NAME_GOES_ON = /^(?:[a-z0-9_\-/\\]|\.[a-z0-9_-])/i;
+var ADDRESS_BEFORE = /[a-z0-9_./]/i;
+var LITERAL = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g;
 var fitsAt = (text, at, word) => text.slice(at, at + word.length).toLowerCase() === word.toLowerCase() && !NAME_GOES_ON.test(text.slice(at + word.length));
 var overlaps = (spans, start, end) => spans.some((span) => start < span.end && span.start < end);
 function nameProblem(name) {
@@ -12277,7 +12277,7 @@ function contentParts(content) {
     else if ((block?.type === "image" || block?.type === "file") && block.attachment !== void 0) attachments.push(block);
     else rest.push(block);
   }
-  return { text: texts2.join(""), attachments, rest };
+  return { text: texts2.join("\n"), attachments, rest };
 }
 function mentionableBots(roster, sessionId) {
   const room2 = roster.roomsById[sessionId];
@@ -12353,7 +12353,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
       ) : null,
       referenceLabels.length > 0 ? (0, import_react31.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null
     ),
-    steering || text === "" ? null : (0, import_react31.createElement)("div", { className: "bt-utools" }, (0, import_react31.createElement)(CopyButton, { text }))
+    text === "" ? null : (0, import_react31.createElement)("div", { className: "bt-utools" }, (0, import_react31.createElement)(CopyButton, { text }))
   );
 }
 var USER_MESSAGE_CSS = `
