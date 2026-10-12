@@ -501,6 +501,12 @@ function toolActivity(name, arg, findBot, self) {
   }
 }
 
+// What a Bot busy elsewhere is doing, from its current tool alone.
+export function workPhrase(tool) {
+  if (!tool) return t('Thinking about it')
+  return toolActivity(tool, () => undefined, () => undefined)?.label ?? t('On it')
+}
+
 // Transcript rows report what is in flight to the one activity row at the tail.
 function useLiveNote(actions, sessionId, id, entry) {
   const key = entry ? JSON.stringify(entry) : ''
@@ -511,7 +517,7 @@ function useLiveNote(actions, sessionId, id, entry) {
   }, [sessionId, id, key])
 }
 
-function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi }) {
+function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
   const [live, setLive] = useState({ replies: [], speaking: null })
   useEffect(() => {
     if (done) return undefined
@@ -535,6 +541,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   }
   // Members speak one at a time, so only the current speaker is typing.
   const pending = done || !live.speaking ? [] : [live.speaking]
+  const speakerTool = useWork?.(work => work.bots?.[live.speaking]?.tool) ?? undefined
   if (replies.length === 0 && pending.length === 0) return null
   const room = roster.roomsById[sessionId]
   return h('div', { className: 'bt-group-replies' },
@@ -552,18 +559,26 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' },
           reply.text ? t('{name} looked up its own chat for “{text}”', { name: bot.name, text: reply.text }) : t('{name} looked up its own chat', { name: bot.name }))
       }
+      if (reply.kind === 'missed') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("{name} didn't answer in time", { name: bot.name }))
+      }
+      if (reply.kind === 'approval') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' },
+          h('button', { type: 'button', className: 'bt-event-whole', onClick: () => actions.showDetails(sessionId) },
+            h(BotMark, { bot, size: 16 }), h('span', { className: 'bt-event-name' }, t('{name} paused for your approval', { name: bot.name }))))
+      }
       return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, text: reply.text, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
     }),
     pending.map((id) => {
       const bot = roster.byId[id]
       if (!bot) return null
       return h('div', { key: `pending-${id}`, className: 'bt-activity' },
-        h(BotMark, { bot: bot, size: 22, state: 'thinking' }),
-        h(Shimmer, null, t('{name} is typing…', { name: bot.name })))
+        h(BotMark, { bot: bot, size: 22, state: speakerTool ? toolState(speakerTool) : 'thinking' }),
+        h(Shimmer, null, speakerTool ? `${bot.name} · ${workPhrase(speakerTool)}…` : t('{name} is typing…', { name: bot.name })))
     }))
 }
 
-export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
+export function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
   const roster = useRoster(value => value)
   const root = node.data.root
   const done = root.kind === 'tool-result'
@@ -596,7 +611,7 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : null
     }
     case 'group_relay':
-      return h(GroupReplies, { sessionId, callId: root.callId, done, content: root.content, roster, actions, useUi })
+      return h(GroupReplies, { sessionId, callId: root.callId, done, content: root.content, roster, actions, useUi, useWork })
     case 'create_group':
     case 'update_group':
     case 'delete_group':

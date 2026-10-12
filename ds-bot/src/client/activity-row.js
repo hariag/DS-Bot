@@ -12,7 +12,7 @@ import { t } from './i18n.js'
 
 const PHRASE_HOLD_MS = 800
 const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
-function elapsedLabel(ms) {
+export function elapsedLabel(ms) {
   const minutes = Math.floor(ms / 60000)
   if (minutes < 60) return `${Math.max(1, minutes)}m`
   const hours = Math.floor(minutes / 60)
