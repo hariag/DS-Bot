@@ -250,7 +250,7 @@ export function install(rt) {
       slot.status = 'posted'
       appendRoom(room, { who: member.name, botId: member.id, text: reply })
       round.replies.push({ botId: member.id, name: member.name, color: member.color, text: reply, time: Date.now() })
-      void rt.save()
+      void rt.save().catch(() => {})
       // A called member moves up if it is still waiting, or gets one more turn if it
       // already spoke; either way it goes right after this speaker. Only the admin's
       // "@all" calls everyone, so a member cannot set off a storm.
@@ -357,7 +357,7 @@ export function install(rt) {
         for (const round of rt.roomProgress.values()) {
           if (round.roomId === room.id) round.replies.push({ kind: 'lookup', botId: member.id, name: member.name, color: member.color, text, time: Date.now() })
         }
-        void rt.save()
+        void rt.save().catch(() => {})
       }
       const partsNote = parts.length > 1 ? `\n\nYour own chat has ${parts.length} parts: ${rt.partIndex(parts)}. Call read_own_chat with part N for the note that closed an earlier part, or with words to search all parts.` : ''
       if (query === '' && around !== '') {

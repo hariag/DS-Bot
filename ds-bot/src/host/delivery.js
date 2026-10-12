@@ -48,7 +48,7 @@ export function install(rt) {
     }
     if (EXCHANGE_ROLES.has(role)) {
       state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
-      void rt.save()
+      void rt.save().catch(() => {})
     }
     const agent = await resolveAgent(sessionId ?? rt.chatOf(toId))
     // A steered message cuts into a running turn at its next step; a follow-up

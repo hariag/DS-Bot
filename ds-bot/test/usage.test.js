@@ -220,7 +220,10 @@ test('a subagent Session is read through its parent, even a parent that is gone;
   assert.equal(totals(view)['other/chat'], 44 + 9)
   // No parent on record: it cannot be addressed, so it is not asked for.
   assert.ok(!pages.includes('s-lost'))
-  const unread = () => warnings.filter(([template]) => template.includes('usage could not read')).map(([, sessionId]) => sessionId)
+  const unread = () => warnings
+    .map(([template, ...args]) => template === '%s' ? args[0] : template)
+    .filter(line => line.includes('usage could not read'))
+    .map(line => line.match(/usage could not read (\S+):/)?.[1])
   assert.deepEqual(unread(), ['s-broken'])
 
   t.mock.timers.tick(60_000)

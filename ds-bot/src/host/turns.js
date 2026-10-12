@@ -73,14 +73,14 @@ export function install(rt) {
     if (!turns.includes(turn)) {
       turns.push(turn)
       if (turns.length > 400) turns.splice(0, turns.length - 400)
-      void rt.save()
+      void rt.save().catch(() => {})
     }
   }
   const unmarkExchangeTurn = (sessionId, turn) => {
     const turns = state.exchangeTurns[sessionId] ?? []
     if (!turns.includes(turn)) return
     state.exchangeTurns[sessionId] = turns.filter(other => other !== turn)
-    void rt.save()
+    void rt.save().catch(() => {})
   }
 
   // A request whose audience is the user is answered in the recipient's own chat: that
@@ -232,7 +232,7 @@ export function install(rt) {
           // Any user message answers or supersedes the open question card.
           if (state.questions[id] !== undefined) {
             delete state.questions[id]
-            void rt.save()
+            void rt.save().catch(() => {})
           }
         }
         break

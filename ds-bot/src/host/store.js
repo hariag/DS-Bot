@@ -2,7 +2,7 @@
 // host on the same data from writing it, and the indexes that map a Session to the Bot
 // or group chat it belongs to.
 import { mkdirSync, statSync } from 'node:fs'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES } from './constants.js'
 import { homeLock } from './home-lock.js'
@@ -21,8 +21,10 @@ export function install(rt) {
   // The other dsh host that holds state.lock while this one only reads (see home-lock.js);
   // undefined while this host may write.
   let holder
-  let lockBroken = false
+  let lockError
+  let stuck
   let warnedReadOnly = false
+  let stopped = false
   // mtime and size of the state.json this host last read or wrote.
   let seen = ''
   const stamp = () => {
@@ -35,32 +37,62 @@ export function install(rt) {
   }
   const lock = homeLock(join(home, 'state.lock'))
   const claimLock = () => {
-    if (lockBroken) return
     try {
       mkdirSync(home, { recursive: true })
       holder = lock.claim()
+      lockError = undefined
     } catch (error) {
-      // An unusable lock (a read-only or odd file system) must not stop the team.
-      lockBroken = true
+      lockError = error
       holder = undefined
-      warn('ds-bot: cannot lock %s, so another dsh on the same data could undo changes: %s', home, error)
     }
   }
   const readOnly = () => {
+    if (lockError !== undefined) {
+      const code = lockError.code ?? 'unknown error'
+      return `DS Bot cannot lock the Bot team in ${home} (${code}), so it does not save changes. Check that the folder is writable and reload.`
+    }
+    if (stuck !== undefined) return `The Bot team file ${statePath} could not be read (${stuck}). DS Bot does not change it; fix or move the file and reload.`
     if (holder === undefined) return undefined
     const where = holder.pid ? `pid ${holder.pid}${holder.host ? ` on ${holder.host}` : ''}` : 'unknown process'
     return `The Bot team in ${home} is open in another dsh (Web or Desktop, ${where}). This window shows the team but cannot change it; close the other one and reload.`
   }
 
   const readFileState = async () => {
+    let contents
     try {
-      seen = stamp()
-      const parsed = JSON.parse(await readFile(statePath, 'utf8'))
-      return parsed?.version === 1 ? parsed : undefined
+      contents = await readFile(statePath, 'utf8')
     } catch (error) {
-      if (error?.code !== 'ENOENT') warn('ds-bot: unreadable state %s: %s', statePath, error)
+      seen = stamp()
+      if (error?.code === 'ENOENT') {
+        stuck = undefined
+        return undefined
+      }
+      stuck = error?.code ?? error?.message ?? String(error)
+      warn('ds-bot: unreadable state %s: %s', statePath, error)
       return undefined
     }
+    seen = stamp()
+    let parsed
+    try {
+      parsed = JSON.parse(contents)
+    } catch (error) {
+      const backup = `${statePath}.broken-${Date.now()}`
+      try {
+        await copyFile(statePath, backup)
+        stuck = undefined
+        warn('ds-bot: unreadable state %s: %s; backed up as %s', statePath, error, backup)
+      } catch (copyError) {
+        stuck = copyError?.code ?? copyError?.message ?? error?.message ?? String(error)
+        warn('ds-bot: unreadable state %s: %s; backup failed: %s', statePath, error, copyError)
+      }
+      return undefined
+    }
+    if (parsed?.version === 1) {
+      stuck = undefined
+      return parsed
+    }
+    stuck = 'saved by a newer DS Bot; update DS Bot'
+    return undefined
   }
 
   // Fill `state` from the saved file and bring an older team up to date. Returns the
@@ -129,7 +161,7 @@ export function install(rt) {
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
     const { migrated, stale } = adopt(await readFileState())
     if (holder !== undefined) return
-    if (migrated) await save()
+    if (migrated && stuck === undefined) await save()
     // Not awaited: renaming a session must not hold up the first roster read.
     for (const room of stale) void rt.retitleRoom(room)
   })()
@@ -137,51 +169,82 @@ export function install(rt) {
   // A reading host follows the file and takes over once the other host has gone.
   const refresh = async () => {
     await load()
-    if (holder === undefined) return
-    claimLock()
-    if (holder === undefined) {
-      warn('ds-bot: the other dsh has closed; this one now saves the Bot team')
-      warnedReadOnly = false
-      adopt(await readFileState())
-      return
+    const hadHolder = holder !== undefined
+    if (hadHolder || lockError !== undefined) {
+      claimLock()
+      if (holder === undefined && lockError === undefined) {
+        if (hadHolder) warn('ds-bot: the other dsh has closed; this one now saves the Bot team')
+        warnedReadOnly = false
+        adopt(await readFileState())
+        return
+      }
     }
-    if (stamp() !== seen) adopt(await readFileState())
+    if ((stuck !== undefined || holder !== undefined) && stamp() !== seen) adopt(await readFileState())
   }
 
-  const writable = () => {
-    if (lockBroken) return true
-    if (holder === undefined && lock.owns()) return true
-    // Lost the lock: retake it when nobody else holds it (its file was deleted), else
-    // another host took it over and this one stops writing.
-    if (holder === undefined) {
-      claimLock()
-      if (holder === undefined) return true
-    }
+  const warnReadOnly = () => {
     if (!warnedReadOnly) {
       warnedReadOnly = true
       warn('ds-bot: not saving the Bot team: %s', readOnly())
     }
     return false
   }
+  const writable = () => {
+    if (stuck !== undefined) return warnReadOnly()
+    if (holder === undefined && lockError !== undefined) claimLock()
+    if (lockError !== undefined) return warnReadOnly()
+    if (holder === undefined && lock.owns()) return true
+    // Lost the lock: retake it when nobody else holds it (its file was deleted), else
+    // another host took it over and this one stops writing.
+    if (holder === undefined) {
+      claimLock()
+      if (lockError !== undefined) return warnReadOnly()
+      if (holder === undefined) return true
+    }
+    return warnReadOnly()
+  }
 
   const save = () => {
+    if (stopped) return writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
     if (!writable()) return writing
     state.revision += 1
     state.exchanges = state.exchanges.slice(-MAX_EXCHANGES)
     const snapshot = JSON.stringify(state, null, 2)
-    writing = writing.then(async () => {
-      await mkdir(home, { recursive: true })
+    const run = writing.then(async () => {
       const temp = `${statePath}.${process.pid}.tmp`
-      await writeFile(temp, snapshot, 'utf8')
-      await rename(temp, statePath)
-      seen = stamp()
-    }).catch(error => { warn('ds-bot: state write failed: %s', error) })
-    return writing
+      try {
+        await mkdir(home, { recursive: true })
+        const ensureLock = () => {
+          if (lockError !== undefined) throw lockError
+          if (!lock.owns()) {
+            const error = new Error('ds-bot lost the state lock to another dsh')
+            error.code = 'ELOCKLOST'
+            throw error
+          }
+        }
+        ensureLock()
+        await writeFile(temp, snapshot, 'utf8')
+        ensureLock()
+        await rename(temp, statePath)
+        seen = stamp()
+      } catch (error) {
+        await unlink(temp).catch(() => {})
+        throw error
+      }
+    })
+    writing = run.catch(() => {})
+    return run.catch(error => {
+      warn('ds-bot: state write failed: %s', error)
+      throw error
+    })
   }
 
-  ctx.effect(() => () => lock.release(), 'ds-bot: state lock')
+  ctx.effect(() => () => {
+    stopped = true
+    return writing.finally(() => lock.release())
+  }, 'ds-bot: state lock')
 
   const botOf = id => (id === undefined ? undefined : state.bots[id])
   const roomOf = id => (id === undefined ? undefined : state.rooms[id])

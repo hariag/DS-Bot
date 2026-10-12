@@ -114,7 +114,7 @@ export function install(rt) {
     const bot = rt.botOf(botId)
     if (bot?.kickoff === undefined) return
     delete bot.kickoff
-    void rt.save()
+    void rt.save().catch(() => {})
   }
 
   async function duplicateBot(id) {
