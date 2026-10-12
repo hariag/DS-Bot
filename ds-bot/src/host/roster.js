@@ -411,8 +411,12 @@ export function install(rt) {
     await archived
     await rt.save()
     // Same as deleteRoom: stopActivity removes the Session's armed scheduled tasks.
-    await ctx.workspaceRegistry.archiveSession(current, { stopActivity: true })
-      .catch(error => rt.warn('ds-bot: Bot %s not archived: %s', bot.name, error))
+    // Past parts are archived too: a part move can leave tasks on the old Session,
+    // which otherwise stays armed and invisible. Already-archived ids are a no-op.
+    for (const part of parts) {
+      await ctx.workspaceRegistry.archiveSession(part, { stopActivity: true })
+        .catch(error => rt.warn('ds-bot: Bot %s not archived: %s', bot.name, error))
+    }
   }
 
   async function bootstrap() {

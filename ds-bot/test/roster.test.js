@@ -291,6 +291,33 @@ test('deleting a Bot or group chat stops its Session, so its tasks are removed',
   ])
 })
 
+const TEAM_WITH_PART = {
+  version: 1,
+  mainBotIds: ['m1'],
+  revision: 2,
+  bots: {
+    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', instructions: '', createdAt: 1 },
+    w1: { id: 'w1', sessionId: 'w2', name: 'Writer', role: '', instructions: '', createdAt: 2, segments: [{ sessionId: 'w1', endedAt: 3 }] },
+  },
+  rooms: {},
+  exchanges: [],
+  exchangeTurns: {},
+  questions: {},
+}
+
+test("deleting a Bot also stops its past parts' Sessions, where tasks can stay armed", async (t) => {
+  const { call, stop, archived } = start(TEAM_WITH_PART, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  archived.length = 0
+  assert.equal((await call('delete-bot', { id: 'w1' })).ok, true)
+  // A part switch can leave armed tasks on the old Session (w1); archiving only
+  // the current one (w2) would orphan them exactly like a skipped archive.
+  assert.deepEqual(archived, [
+    ['w1', { stopActivity: true }],
+    ['w2', { stopActivity: true }],
+  ])
+})
+
 test('an archive failure on delete is warned instead of passing silently', async (t) => {
   const { call, stop, warnings } = start(undefined, { models: ['deepseek-v4-flash'], archiveError: new Error('archive refused') })
   t.after(stop)
