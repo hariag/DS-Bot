@@ -40,6 +40,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on agent/created',
     'effect ds-bot: identity section',
     'prompt bot-identity 640',
+    'on agent/pre-step (prepend)',
     'tool list_bots',
     'tool message_bot',
     'tool interrupt_bot',
