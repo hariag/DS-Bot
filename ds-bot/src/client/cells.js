@@ -123,7 +123,12 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
     texts.length ? h(Bubbles, { texts, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
 }
 
-function EventLine({ prefix, bots, joiner = t('and'), onOpen }) {
+function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
+  if (whole && bots.length === 1) {
+    return h('div', { className: 'bt-event' },
+      h('button', { type: 'button', className: 'bt-event-whole', title: bots[0].name, onClick: () => onOpen?.(bots[0]) },
+        h('span', null, prefix), h(BotMark, { bot: bots[0], size: 16 }), h('span', { className: 'bt-event-name' }, bots[0].name)))
+  }
   const parts = []
   parts.push(h('span', { key: 'p' }, prefix))
   bots.forEach((bot, index) => {
@@ -247,8 +252,7 @@ function EarlierParts({ sessionId, roster, actions }) {
         case 'event': {
           if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
-          const prefix = { stopped: t('Stopped by'), interrupt: t('Interrupt from'), reply: t('Reply from') }[row.role] ?? t('Message from')
-          return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) } })
+          return h(EventLine, { key, prefix: row.role === 'reply' ? t('Reply from') : t('Message from'), bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
         }
         default: return null
       }
@@ -263,7 +267,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   // Team state (exchanges) is keyed by the Bot id; Session state by the part shown.
   const selfId = roster.byId[sessionId]?.id ?? sessionId
   // A resumed handoff keeps the relayed message's source, but it opens a part, not a run.
-  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
+  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply') && typeof source.senderSessionId === 'string'
   const turn = node.location?.turn?.turn ?? data.turn
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
@@ -322,9 +326,10 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         if (!bots.some(bot => bot.id === peer.id)) bots.push(peer)
       }
       return h(EventLine, {
-        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'interrupt' ? t('Interrupt from') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
+        prefix: count > 1 ? t('{count} messages with', { count }) : t('Message from'),
         bots,
         onOpen: bot => actions.openExchange(selfId, bot.id),
+        whole: true,
       })
     }
     if (source.kind === 'schedule') {
@@ -442,7 +447,7 @@ const TOOL_PHRASES = [
   [/image|photo|draw/i, 'Working on an image'],
 ]
 const GROUP_PHRASES = { create_group: 'Creating a group', update_group: 'Updating the group', delete_group: 'Deleting the group', post_to_group: 'Posting in the group' }
-function toolActivity(name, arg, findBot) {
+function toolActivity(name, arg, findBot, self) {
   switch (name) {
     case 'ask_user': return null
     case 'request_secret': return null
@@ -453,17 +458,9 @@ function toolActivity(name, arg, findBot) {
       const target = findBot(arg('to'))
       return { label: target ? t('Asking {name}', { name: target.name }) : t('Asking another Bot'), state: 'sending' }
     }
-    case 'interrupt_bot': {
-      const target = findBot(arg('to'))
-      return { label: target ? t('Interrupting {name}', { name: target.name }) : t('Interrupting another Bot'), state: 'sending' }
-    }
-    case 'stop_bot': {
-      const target = findBot(arg('bot'))
-      return { label: target ? t('Stopping {name}', { name: target.name }) : t('Stopping another Bot'), state: 'sending' }
-    }
     case 'create_bot': return { label: t('Creating {name}', { name: arg('name') ?? t('a Bot') }), state: 'sending' }
     case 'update_bot': {
-      const target = findBot(arg('name')) ?? findBot(arg('bot'))
+      const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : self)
       return { label: t('Updating {name}', { name: target?.name ?? t('a Bot') }), state: 'sending' }
     }
     case 'list_bots': return { label: t('Checking the team'), state: 'searching' }
@@ -547,23 +544,13 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
   const { text: arg, value: argValue } = toolArgs(root)
   const findBot = nameOrId => roster.byId[nameOrId] ?? roster.bots.find(bot => bot.name.toLowerCase() === String(nameOrId ?? '').toLowerCase())
   // A running tool shows only as the activity row's phrase.
-  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot))
+  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot, roster.byId[sessionId]))
   if (hidden) return null
   switch (tool) {
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id) })
-    }
-    case 'interrupt_bot': {
-      const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
-      if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't interrupt {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Interrupted'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) })
-    }
-    case 'stop_bot': {
-      const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
-      if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't stop {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) })
+      return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
     }
     case 'create_bot': {
       const created = findBot(arg('name'))
@@ -571,7 +558,7 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       return h(EventLine, { prefix: t('Created'), bots: [created], onOpen: bot => actions.openSession(bot.id) })
     }
     case 'update_bot': {
-      const target = findBot(arg('name')) ?? findBot(arg('bot'))
+      const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : roster.byId[sessionId])
       return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : null
     }
     case 'group_relay':
