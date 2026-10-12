@@ -11,13 +11,13 @@
     "multi-agent",
     "agents"
   ],
-  "homepage": "https://github.com/FeiZhuLulu/DeepSeek-Bot#readme",
+  "homepage": "https://github.com/Fei2411/DeepSeek-Bot#readme",
   "bugs": {
-    "url": "https://github.com/FeiZhuLulu/DeepSeek-Bot/issues"
+    "url": "https://github.com/Fei2411/DeepSeek-Bot/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/FeiZhuLulu/DeepSeek-Bot.git",
+    "url": "git+https://github.com/Fei2411/DeepSeek-Bot.git",
     "directory": "ds-bot"
   },
   "license": "Apache-2.0",

@@ -23,7 +23,7 @@ You need:
 - A checkout of DeepSeek Harness at the DSH version that the plugin is tested with. The unit tests and the test bench load the `@deepseek-ai/*` packages from it.
 
 ```sh
-git clone https://github.com/FeiZhuLulu/DeepSeek-Bot.git ds-bot-repo
+git clone https://github.com/Fei2411/DeepSeek-Bot.git ds-bot-repo
 cd ds-bot-repo
 
 # DeepSeek Harness, next to the plugin folder (this folder is ignored by Git).
