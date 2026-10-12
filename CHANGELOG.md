@@ -6,6 +6,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Added
 
+- Settings → **Capabilities**: share MCP servers and skills with the team, group them into packs, and choose which capabilities each Bot can use.
 - In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
 - **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
 - A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.

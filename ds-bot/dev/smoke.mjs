@@ -8,7 +8,7 @@
 //
 // `--out <file>` writes a normalized transcript (names instead of ids, sorted where the
 // order depends on timing), so two runs, before and after a refactor, can be diffed.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,6 +33,26 @@ const mockLog = () => {
     if (error.code === 'ENOENT') return []
     throw error
   }
+}
+const tapFiles = bot => {
+  try {
+    return readdirSync(join(HOME, 'tap-bodies'))
+      .filter(file => new RegExp(`^\\d+-main-${bot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.json$`).test(file))
+      .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+}
+const tapBody = bot => {
+  const file = tapFiles(bot).at(-1)
+  if (!file) throw new Error(`no llm-tap main request for ${bot}`)
+  return { path: join(HOME, 'tap-bodies', file), body: readJson(join(HOME, 'tap-bodies', file)) }
+}
+const bodyText = body => JSON.stringify(body)
+const latestReminder = body => {
+  const reminders = bodyText(body).match(/<system-reminder>[\s\S]*?<\/system-reminder>/g) ?? []
+  return reminders.at(-1) ?? ''
 }
 
 async function login() {
@@ -291,6 +311,43 @@ await step('delete the copy', async () => {
   await api('delete-bot', { id: copy.id })
   return copy.id
 }, id => expect(state().bots[id] === undefined, 'copy still there'))
+
+const echoName = 'smoke-echo'
+const skillName = 'smoke-guide'
+const skillDescription = 'Smoke test skill'
+const echoServer = join(ROOT, 'ds-bot', 'dev', 'mcp-echo-server.mjs')
+await api('capability-save', { name: echoName, kind: 'mcp', description: 'Smoke test echo server', transport: 'stdio', command: process.execPath, args: [echoServer], env: {} })
+await api('capability-save', { name: skillName, kind: 'skill', description: skillDescription, content: 'Use this skill when asked about capability smoke checks.' })
+await api('bot-capabilities', { botId: chief().id, capabilities: [echoName, skillName] })
+for (let attempt = 0; attempt < 60; attempt += 1) {
+  const live = await api('state')
+  const statuses = live.capabilityStatuses?.[chief().id] ?? {}
+  if (statuses[echoName]?.state === 'ready' && statuses[skillName]?.state === 'ready') break
+  await sleep(250)
+}
+
+await step('Chief sees its attached MCP and skill', () => send(chief().id, 'Check your available capabilities.'), () => {
+  const { body, path } = tapBody('Chief')
+  const tools = (body.tools ?? []).map(tool => tool.name)
+  return expect(tools.includes(`mcp__${echoName}__echo`), `MCP tool missing from ${path}`)
+    ?? expect(latestReminder(body).includes(skillName) && latestReminder(body).includes(skillDescription), `skill catalog entry missing from ${path}`)
+})
+
+await step('Coder does not inherit Chief capabilities', () => send(botNamed('Coder').id, 'Check your available capabilities.'), () => {
+  const { body, path } = tapBody('Coder')
+  const tools = (body.tools ?? []).map(tool => tool.name)
+  return expect(!tools.includes(`mcp__${echoName}__echo`), `MCP tool leaked into ${path}`)
+    ?? expect(!latestReminder(body).includes(skillName), `skill leaked into ${path}`)
+})
+
+await api('bot-capabilities', { botId: chief().id, capabilities: [] })
+await sleep(500)
+await step('detached capabilities disappear from Chief', () => send(chief().id, 'Check your available capabilities.'), () => {
+  const { body, path } = tapBody('Chief')
+  const tools = (body.tools ?? []).map(tool => tool.name)
+  return expect(!tools.includes(`mcp__${echoName}__echo`), `MCP tool remained in ${path}`)
+    ?? expect(!latestReminder(body).includes(skillName), `latest skill reminder still lists the skill in ${path}`)
+})
 
 if (outFile) writeFileSync(outFile, `${JSON.stringify(transcript, null, 2)}\n`)
 console.log(failures.length === 0 ? `\nsmoke: all ${transcript.length} steps passed` : `\nsmoke: ${failures.length} failed\n${failures.join('\n')}`)
