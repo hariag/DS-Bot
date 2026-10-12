@@ -23,7 +23,7 @@ function start(state, { config = {}, services } = {}) {
   }
   const stop = () => {
     ctx.dispose()
-    rmSync(home, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { ctx, call, stop }
 }

@@ -11,7 +11,7 @@ import { fakeContext } from './fake-ctx.js'
 
 const tempHome = (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-lock-'))
-  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   return home
 }
 

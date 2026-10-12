@@ -49,7 +49,7 @@ function host(home, extra = {}) {
 
 test('warnings are kept, cleaned, written to the log, and read back after a restart', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-diag-'))
-  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   const error = Object.assign(new Error(`cannot open ${homedir()}/x with sk-abcdefghij`), { code: 'EACCES' })
   const quiet = t.mock.method(console, 'error', () => {})
   const rt = host(home)
@@ -86,7 +86,7 @@ test('warnings are kept, cleaned, written to the log, and read back after a rest
 
 test('warnings send only cleaned text to the logger and stderr', (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-diag-'))
-  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   const values = ['synthetic-api-key-123456', 'synthetic-bearer-token-12345', 'synthetic-query-token-12345']
   const error = new Error(`api_key=${values[0]} Bearer ${values[1]} https://example.invalid/?token=${values[2]}`)
   error.stack = `${error.name}: ${error.message}\n    at fake (https://example.invalid/?token=${values[2]}:1:1)`
@@ -110,7 +110,7 @@ test('warnings send only cleaned text to the logger and stderr', (t) => {
 
 test('diagnostics append fallback redacts an error message', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-diag-'))
-  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   const value = 'synthetic-api-key-append-123456'
   const stderr = []
   const quiet = t.mock.method(console, 'error', (...args) => stderr.push(args.join(' ')))

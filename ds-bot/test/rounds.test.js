@@ -99,7 +99,7 @@ function start() {
   }
   const stop = () => {
     ctx.dispose()
-    rmSync(home, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { call, emit, userMessage, compose, relay, inboxOf, answer, stop, sent, ctx, home }
 }

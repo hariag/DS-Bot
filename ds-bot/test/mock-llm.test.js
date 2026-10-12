@@ -42,7 +42,7 @@ test('长任务 writes text on every step when the step size is left out', async
   const mock = spawn(process.execPath, [MOCK], {
     env: { ...process.env, MOCK_PORT: '0', MOCK_LOG: join(home, 'mock.jsonl'), MOCK_DELAY_MS: '5', MOCK_JITTER_MS: '0' },
   })
-  t.after(() => { mock.kill(); rmSync(home, { recursive: true, force: true }) })
+  t.after(() => { mock.kill(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
   // MOCK_PORT=0 lets the kernel pick a free port; the mock prints the real one.
   const url = await new Promise((resolve, reject) => {
     mock.stdout.on('data', chunk => {

@@ -61,7 +61,7 @@ function start(team, { models = [], reasoning = {}, archiveError } = {}) {
   }
   const stop = () => {
     ctx.dispose()
-    rmSync(home, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { call, stop, home, sent, selected, ctx, archived, warnings }
 }

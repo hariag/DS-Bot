@@ -56,7 +56,7 @@ function runtime(t, saved) {
   }
   t.after(async () => {
     await dispose()
-    fs.rmSync(home, { recursive: true, force: true })
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   })
   return { rt, home, statePath, warnings, dispose }
 }

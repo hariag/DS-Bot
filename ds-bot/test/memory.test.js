@@ -166,7 +166,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies =
   const journal = () => read('journal.jsonl').trim().split('\n').map(line => JSON.parse(line))
   const stop = ({ keep = false } = {}) => {
     ctx.dispose()
-    if (!keep) rmSync(home, { recursive: true, force: true })
+    if (!keep) rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { ctx, home, call, tool, section, read, journal, requests, stop }
 }

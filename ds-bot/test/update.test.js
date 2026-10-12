@@ -172,7 +172,7 @@ test('without a source from the plugin manager, the profile\'s own dependency en
   assert.equal(view.available, true)
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { [PKG.name]: 'link:/work/ds-bot' } }))
   assert.equal((await rt.updateCheck({ fresh: true })).source, 'path')
-  rmSync(dir, { recursive: true, force: true })
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
 })
 
 test('a check that finds nothing clears the version a check before it found', async () => {
@@ -197,7 +197,7 @@ test('a check that finds nothing clears the version a check before it found', as
   const gone = await rt.updateCheck({ fresh: true })
   assert.equal(gone.available, false)
   assert.equal(gone.latest, null)
-  rmSync(dir, { recursive: true, force: true })
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
 })
 
 test('a failed install reports why and can be tried again', async () => {

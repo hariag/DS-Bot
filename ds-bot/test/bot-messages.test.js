@@ -94,7 +94,7 @@ async function start(seed) {
   const exchanges = async () => (await call('exchange', { a: 'a', b: 'b' })).value ?? []
   const stop = () => {
     ctx.dispose()
-    rmSync(home, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   // Loading once fills the Session-owner indexes turns.js filters events by.
   await tool('list_bots', {}, 'a')
