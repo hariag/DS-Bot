@@ -229,6 +229,11 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-q-settled .bt-key{opacity:.4}
 .bt-q-settled .bt-q-label{color:color-mix(in srgb,var(--bt-ink) 45%,transparent)}
 .bt-q-dismissed .bt-q-title{color:var(--bt-ink-2)}
+.bt-q.bt-q-settled{gap:6px;padding:12px 16px}
+.bt-q-settled .bt-q-title{font-size:14px;line-height:20px;font-weight:500}
+.bt-q.bt-q-settled>.bt-q-head:has(+.bt-q-list){padding-bottom:0;border-bottom:0}
+.bt-q.bt-q-settled>.bt-q-head+.bt-q-list{margin-top:0}
+.bt-q-settled .bt-q-opt{padding:4px 8px}
 .bt-q-badge{flex:none;height:20px;padding:0 7px;border-radius:999px;border:1px dotted var(--bt-line-2);color:var(--bt-ink-2);font-size:12px;line-height:18px;box-sizing:border-box}
 .bt-q-custom{display:flex;align-items:flex-start;gap:8px;width:100%;min-width:0}
 .bt-q-field{flex:1 1 0;min-width:0;display:flex;box-sizing:border-box;min-height:32px;padding:5px 11px;border-radius:8px;border:.5px solid var(--bt-line-2);background:none;cursor:text;transition:border-color .12s ease}
