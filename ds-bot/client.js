@@ -3,9 +3,11 @@ window.__ModuleLoader__.load({
   id: 'ds-bot',
   factory: (require) => {
 const module = { exports: {} }
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -19,6 +21,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/client/index.js
@@ -418,7 +428,6 @@ var ZH = {
   "Reply from": "收到回复：",
   "Message from": "收到消息：",
   "Stopped by": "叫停者：",
-  "Interrupt from": "收到插话：",
   "{count} messages with": "{count} 条消息，来自",
   "Routine started": "例行任务开始",
   Update: "更新",
@@ -445,8 +454,6 @@ var ZH = {
   "Checking the keys": "查看密钥",
   "Asking {name}": "询问 {name}",
   "Asking another Bot": "询问其他 Bot",
-  "Interrupting {name}": "给 {name} 插话",
-  "Interrupting another Bot": "给其他 Bot 插话",
   "Stopping {name}": "叫停 {name}",
   "Stopping another Bot": "叫停其他 Bot",
   "Creating {name}": "创建 {name}",
@@ -459,8 +466,6 @@ var ZH = {
   "{name} is typing…": "{name} 正在输入…",
   "Couldn't message {name}": "没能给 {name} 发消息",
   Messaged: "已发消息给",
-  "Couldn't interrupt {name}": "没能给 {name} 插话",
-  Interrupted: "已插话",
   "Couldn't stop {name}": "没能叫停 {name}",
   Stopped: "已叫停",
   Created: "已创建",
@@ -2451,6 +2456,13 @@ var CONVERSATION_CSS = `
 .bt-event-whole>span:first-child{margin-right:2px}
 /* One button cannot wrap like separate parts, so a long name is cut to fit the chat. */
 .bt-event-whole>.bt-event-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-ctx{min-width:0}
+.bt-ctx-chev{color:var(--bt-ink-3)}
+.bt-ctx-sep{background:var(--bt-ink-3);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}
+.bt-ctx-src,.bt-ctx-summary{min-width:0;color:var(--bt-ink-3);font-size:12px;line-height:24px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.bt-ctx-src{flex:none}
+.bt-ctx-summary{flex:auto}
+.bt-ctx-body{box-sizing:border-box;width:calc(100% - 22px);max-height:141px;margin:4px 0 0 22px;padding:10px 16px 12px 12px;border-radius:8px;background:var(--bt-bubble);color:var(--bt-ink-3);font:400 11px/16px var(--ds-font-family-code,monospace);overflow:auto;white-space:pre-wrap;word-break:break-word}
 .bt-time-sep{display:flex;justify-content:center;align-items:center;height:28px;margin:14px 0 8px;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap}
 [class*="_scroll"]>[class*="_column"]::before{content:var(--bt-first-sep,none);display:block;flex:none;height:28px;margin:17px 0 12px;font-size:12px;line-height:28px;text-align:center;color:var(--bt-ink-2);white-space:nowrap}
 .bt-activity{display:flex;align-items:center;gap:10px;margin:8px 0 4px 2px;font-size:14px;color:var(--bt-ink-2)}
@@ -2693,7 +2705,7 @@ function installCompiledStyles(text, tag) {
 var import_react2 = require("react");
 var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "alert", "done"];
 var botState = (running, activity, alert) => running ? STATES.includes(activity) ? activity : "working" : alert ? "alert" : "idle";
-var toolState = (name) => /^(message_bot|interrupt_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
+var toolState = (name) => /^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
   (0, import_react2.useEffect)(() => {
     if (!enabled) return void 0;
@@ -3597,6 +3609,7 @@ var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reas
 var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+var dshPrimitives = __toESM(require("@deepseek-ai/dsh-client-ui-primitives"), 1);
 var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
 function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
   const onClick = (event) => {
@@ -3896,7 +3909,7 @@ function EarlierParts({ sessionId, roster, actions }) {
         case "event": {
           if (row.role === "report") return (0, import_react6.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
-          const prefix = { stopped: t("Stopped by"), interrupt: t("Interrupt from"), reply: t("Reply from") }[row.role] ?? t("Message from");
+          const prefix = { stopped: t("Stopped by"), reply: t("Reply from") }[row.role] ?? t("Message from");
           return (0, import_react6.createElement)(EventLine, { key, prefix, bots: [other], onOpen: () => {
             if (selfId && other.id) actions.openExchange(selfId, other.id);
           }, whole: true });
@@ -3962,7 +3975,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         if (!bots.some((bot) => bot.id === peer.id)) bots.push(peer);
       }
       return (0, import_react6.createElement)(EventLine, {
-        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "interrupt" ? t("Interrupt from") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
+        prefix: source.role === "stopped" ? t("Stopped by") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
         bots,
         onOpen: (bot) => actions.openExchange(selfId, bot.id),
         whole: true
@@ -3975,6 +3988,61 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
     if (source.kind === "user-question-reply") return null;
     return (0, import_react6.createElement)("div", { className: "bt-event" }, contentText(data.content).slice(0, 80) || t("Update"));
   }
+}
+function ContextCell({ node, sessionId, useRoster, actions, t: chatT }) {
+  const roster = useRoster((value) => value);
+  const data = node.data;
+  const source = data.source !== null && typeof data.source === "object" ? data.source : {};
+  const selfId = roster.byId[sessionId]?.id ?? sessionId;
+  if (source.kind === "bot") {
+    if (source.handoff === true || source.role === "kickoff" || source.role === "room" || source.role === "secret") return null;
+    if ((source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string") {
+      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
+      return (0, import_react6.createElement)(EventLine, {
+        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "reply" ? t("Reply from") : t("Message from"),
+        bots: [sender],
+        onOpen: () => {
+          if (sender.id) actions.openExchange(selfId, sender.id);
+        },
+        whole: true
+      });
+    }
+  }
+  return (0, import_react6.createElement)(ContextRow, { node, chatT: chatT ?? t });
+}
+var InjectionIcon = dshPrimitives.IconContextInjectionOutlineRegular ?? dshPrimitives.IconContextInjectionOutline16;
+var RecallIcon = dshPrimitives.ReferenceIconRegular ?? dshPrimitives.ReferenceIcon;
+function ContextRow({ node, chatT }) {
+  const [open, setOpen] = (0, import_react6.useState)(false);
+  const data = node.data;
+  const source = data.source !== null && typeof data.source === "object" ? data.source : {};
+  const producer = data.producer ?? data.provenance ?? { role: "inject", label: null };
+  const label = typeof producer.label === "string" && producer.label !== "" ? producer.label : null;
+  const summary = data.form === "notice" && typeof source.summary === "string" && source.summary !== "" ? source.summary : null;
+  const recall = producer.role === "recall";
+  return (0, import_react6.createElement)(import_dsh_client_ui_primitives.DisclosureRow, {
+    className: "bt-ctx",
+    icon: recall ? (0, import_react6.createElement)("span", null, (0, import_react6.createElement)(RecallIcon, { kind: "session" })) : (0, import_react6.createElement)(InjectionIcon, { size: 14 }),
+    chevronClassName: "bt-ctx-chev",
+    title: chatT(recall ? "message.contextRecall" : "message.contextInjection"),
+    collapsedContent: label === null ? void 0 : (0, import_react6.createElement)(
+      import_react6.Fragment,
+      null,
+      (0, import_react6.createElement)("span", { className: "bt-ctx-sep", "aria-hidden": true }),
+      (0, import_react6.createElement)("span", { className: "bt-ctx-src" }, label),
+      summary === null ? null : (0, import_react6.createElement)(
+        import_react6.Fragment,
+        null,
+        (0, import_react6.createElement)("span", { className: "bt-ctx-sep", "aria-hidden": true }),
+        (0, import_react6.createElement)("span", { className: "bt-ctx-summary" }, summary)
+      )
+    ),
+    keepContentWhenOpen: true,
+    open,
+    expandable: true,
+    expandOnRowClick: true,
+    onToggle: () => setOpen((value) => !value)
+  }, (0, import_react6.createElement)("div", { className: "bt-ctx-body" }, contentText(data.content)));
 }
 function NewDivider() {
   return (0, import_react6.createElement)("div", { className: "bt-new-sep", role: "separator", "aria-label": t("New messages") }, (0, import_react6.createElement)("span", null, t("New")));
@@ -4084,10 +4152,6 @@ function toolActivity(name, arg, findBot, self2) {
     case "message_bot": {
       const target = findBot(arg("to"));
       return { label: target ? t("Asking {name}", { name: target.name }) : t("Asking another Bot"), state: "sending" };
-    }
-    case "interrupt_bot": {
-      const target = findBot(arg("to"));
-      return { label: target ? t("Interrupting {name}", { name: target.name }) : t("Interrupting another Bot"), state: "sending" };
     }
     case "stop_bot": {
       const target = findBot(arg("bot"));
@@ -4210,15 +4274,10 @@ function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
       return (0, import_react6.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
     }
-    case "interrupt_bot": {
-      const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
-      if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't interrupt {name}", { name: target.name }));
-      return (0, import_react6.createElement)(EventLine, { prefix: t("Interrupted"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) });
-    }
     case "stop_bot": {
       const target = findBot(arg("bot")) ?? { name: arg("bot") ?? "…", color: "gray" };
       if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't stop {name}", { name: target.name }));
-      return (0, import_react6.createElement)(EventLine, { prefix: t("Stopped"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) });
+      return (0, import_react6.createElement)(EventLine, { prefix: t("Stopped"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true });
     }
     case "create_bot": {
       const created = findBot(arg("name"));
@@ -12911,6 +12970,7 @@ function apply(ctx) {
     shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
     shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
     shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
+    shadow("conversation.chat.node", { key: "context", priority: -10, locale: "chat", inject: face }, ContextCell),
     shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
     shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
     shadow("conversation.chat.node", { key: "turn-tail", priority: -10, locale: "chat", inject: face }, TurnTailCell),

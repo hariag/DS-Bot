@@ -1,6 +1,7 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { DisclosureRow, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import * as dshPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
@@ -252,7 +253,8 @@ function EarlierParts({ sessionId, roster, actions }) {
         case 'event': {
           if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
-          return h(EventLine, { key, prefix: row.role === 'reply' ? t('Reply from') : t('Message from'), bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
+          const prefix = { stopped: t('Stopped by'), reply: t('Reply from') }[row.role] ?? t('Message from')
+          return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
         }
         default: return null
       }
@@ -267,7 +269,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   // Team state (exchanges) is keyed by the Bot id; Session state by the part shown.
   const selfId = roster.byId[sessionId]?.id ?? sessionId
   // A resumed handoff keeps the relayed message's source, but it opens a part, not a run.
-  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply') && typeof source.senderSessionId === 'string'
+  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
   const turn = node.location?.turn?.turn ?? data.turn
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
@@ -326,7 +328,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         if (!bots.some(bot => bot.id === peer.id)) bots.push(peer)
       }
       return h(EventLine, {
-        prefix: count > 1 ? t('{count} messages with', { count }) : t('Message from'),
+        prefix: source.role === 'stopped' ? t('Stopped by') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
         bots,
         onOpen: bot => actions.openExchange(selfId, bot.id),
         whole: true,
@@ -339,6 +341,68 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
     if (source.kind === 'user-question-reply') return null
     return h('div', { className: 'bt-event' }, contentText(data.content).slice(0, 80) || t('Update'))
   }
+}
+
+// A message that joined a running turn renders as a 'context' node (the
+// 'turn-trigger' key is only a turn's opener). A Bot's request shows as the same
+// event line a trigger gets, but it names no peer and opens no comm run: the
+// turn keeps its own course and answers the joiner directly. Every other
+// context node re-creates DSH's collapsed context row: a keyed slot has no
+// fallback to the renderer this registration shadows, so this one covers them.
+export function ContextCell({ node, sessionId, useRoster, actions, t: chatT }) {
+  const roster = useRoster(value => value)
+  const data = node.data
+  const source = data.source !== null && typeof data.source === 'object' ? data.source : {}
+  const selfId = roster.byId[sessionId]?.id ?? sessionId
+  if (source.kind === 'bot') {
+    if (source.handoff === true || source.role === 'kickoff' || source.role === 'room' || source.role === 'secret') return null
+    if ((source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string') {
+      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
+      return h(EventLine, {
+        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'reply' ? t('Reply from') : t('Message from'),
+        bots: [sender],
+        onOpen: () => { if (sender.id) actions.openExchange(selfId, sender.id) },
+        whole: true,
+      })
+    }
+  }
+  return h(ContextRow, { node, chatT: chatT ?? t })
+}
+
+// These icons were renamed from *16 / unsuffixed to *Regular/*Medium in dsh
+// 0.2.x; whichever name the runtime's primitives expose wins.
+const InjectionIcon = dshPrimitives.IconContextInjectionOutlineRegular ?? dshPrimitives.IconContextInjectionOutline16
+const RecallIcon = dshPrimitives.ReferenceIconRegular ?? dshPrimitives.ReferenceIcon
+
+// The collapsed context row DSH shows for injected content: icon, title, a
+// producer label and an optional one-line notice summary, expanding to the
+// message text in a bounded box. The projected `producer` is `provenance`
+// before dsh 0.2.x.
+function ContextRow({ node, chatT }) {
+  const [open, setOpen] = useState(false)
+  const data = node.data
+  const source = data.source !== null && typeof data.source === 'object' ? data.source : {}
+  const producer = data.producer ?? data.provenance ?? { role: 'inject', label: null }
+  const label = typeof producer.label === 'string' && producer.label !== '' ? producer.label : null
+  const summary = data.form === 'notice' && typeof source.summary === 'string' && source.summary !== '' ? source.summary : null
+  const recall = producer.role === 'recall'
+  return h(DisclosureRow, {
+    className: 'bt-ctx',
+    icon: recall ? h('span', null, h(RecallIcon, { kind: 'session' })) : h(InjectionIcon, { size: 14 }),
+    chevronClassName: 'bt-ctx-chev',
+    title: chatT(recall ? 'message.contextRecall' : 'message.contextInjection'),
+    collapsedContent: label === null ? undefined : h(Fragment, null,
+      h('span', { className: 'bt-ctx-sep', 'aria-hidden': true }),
+      h('span', { className: 'bt-ctx-src' }, label),
+      summary === null ? null : h(Fragment, null,
+        h('span', { className: 'bt-ctx-sep', 'aria-hidden': true }),
+        h('span', { className: 'bt-ctx-summary' }, summary))),
+    keepContentWhenOpen: true,
+    open,
+    expandable: true,
+    expandOnRowClick: true,
+    onToggle: () => setOpen(value => !value),
+  }, h('div', { className: 'bt-ctx-body' }, contentText(data.content)))
 }
 
 function NewDivider() {
@@ -458,6 +522,10 @@ function toolActivity(name, arg, findBot, self) {
       const target = findBot(arg('to'))
       return { label: target ? t('Asking {name}', { name: target.name }) : t('Asking another Bot'), state: 'sending' }
     }
+    case 'stop_bot': {
+      const target = findBot(arg('bot'))
+      return { label: target ? t('Stopping {name}', { name: target.name }) : t('Stopping another Bot'), state: 'sending' }
+    }
     case 'create_bot': return { label: t('Creating {name}', { name: arg('name') ?? t('a Bot') }), state: 'sending' }
     case 'update_bot': {
       const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : self)
@@ -551,6 +619,11 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
       return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
+    }
+    case 'stop_bot': {
+      const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
+      if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't stop {name}", { name: target.name }))
+      return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true })
     }
     case 'create_bot': {
       const created = findBot(arg('name'))
