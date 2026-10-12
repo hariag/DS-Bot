@@ -67,9 +67,24 @@ async function setup({ state = team(), secret, beforeLoad } = {}) {
   const loader = { import: async () => ({ default: mcpPlugin }), unwrapExports: exports => exports.default }
   const ctx = fakeContext({ services: { loader } })
   const rt = createRuntime(ctx, { home, github: false })
+  ctx.sessionTitle = { rename: async () => {} }
+  rt.resolveAgent = async sessionId => ({ session: { id: sessionId } })
   beforeLoad?.({ ctx, rt, mounts, skills, mcpPlugin })
   await rt.load()
-  return { home, ctx, rt, mounts, skills, mcpPlugin, dispose() { ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) } }
+  return {
+    home,
+    ctx,
+    rt,
+    mounts,
+    skills,
+    mcpPlugin,
+    async dispose() {
+      ctx.dispose()
+      await rt.scheduleCapabilitiesReconcile()
+      await new Promise(resolve => setImmediate(resolve))
+      rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+    },
+  }
 }
 
 test('capability names use the MCP and skill validator intersection', () => {
@@ -230,7 +245,7 @@ test('a Bot turn waits for a slow capability mount before its first model step',
     agent.ctx.dispose()
     await env.rt.scheduleCapabilitiesReconcile()
     await new Promise(resolve => setImmediate(resolve))
-    env.dispose()
+    await env.dispose()
   })
   const beforeStep = env.ctx.listeners.get('agent/pre-step').find(listener => listener.name === 'ensureCapabilitiesBeforeStep')
   const turn = beforeStep({ agent, messages: [], step: 1 }, () => { startRequest = true })
@@ -270,7 +285,7 @@ test('a hung capability mount releases the Bot turn after its readiness timeout'
     agent.ctx.dispose()
     await env.rt.scheduleCapabilitiesReconcile()
     await new Promise(resolve => setImmediate(resolve))
-    env.dispose()
+    await env.dispose()
   })
   const beforeStep = env.ctx.listeners.get('agent/pre-step').find(listener => listener.name === 'ensureCapabilitiesBeforeStep')
   const turn = beforeStep({ agent, messages: [], step: 1 }, () => { startRequest = true })
