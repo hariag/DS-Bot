@@ -1,19 +1,13 @@
 import { createHash } from 'node:crypto'
-import { encodeUrlComponent } from './secrets.js'
-import { own } from './store.js'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const SECRET_REFERENCE = /\$DSH_SECRET_([A-Z][A-Z0-9_]*)/g
-const ENSURE_TIMEOUT_MS = 15_000
 
-// Connector ids are reserved: a capability named like one would collide with
-// its mcp__<id>__* tool prefix. The connectors module registers its ids here.
-export const CONNECTOR_IDS = new Set(['github', 'mail'])
-export function validateCapabilityName(value, reserved = CONNECTOR_IDS) {
+export function validateCapabilityName(value) {
   const name = String(value ?? '').trim()
-  if (name.length > 32 || !NAME.test(name) || name === 'github' || reserved.has(name)) {
-    throw new Error('Use a capability name with lowercase letters, digits, and single hyphens; connector names are reserved.')
+  if (name.length > 32 || !NAME.test(name) || name === 'github') {
+    throw new Error('Use a capability name with lowercase letters, digits, and single hyphens; "github" is reserved.')
   }
   return name
 }
@@ -21,11 +15,11 @@ export function validateCapabilityName(value, reserved = CONNECTOR_IDS) {
 export function expandCapabilityNames(capabilities, library) {
   const expanded = new Set()
   for (const name of capabilities ?? []) {
-    const item = own(library, name)
+    const item = library[name]
     if (!item) throw new Error(`No capability named ${name}.`)
     if (item.kind === 'pack') {
       for (const childName of item.items ?? []) {
-        const child = own(library, childName)
+        const child = library[childName]
         if (!child || !['mcp', 'skill'].includes(child.kind)) throw new Error(`Pack ${name} refers to an unavailable capability ${childName}.`)
         expanded.add(childName)
       }
@@ -54,18 +48,12 @@ const stringMap = (value, label) => {
 export function install(rt) {
   const { ctx, state } = rt
   const agents = new Map()
-  // Mounted fibers live in each Agent's own context, so they outlive this plugin unless
-  // its cleanup disposes them; a strong map keeps them reachable for that.
-  const mounts = new Map()
-  // One reconcile chain per Agent: a slow MCP server holds up only its own Agent.
-  const chains = new WeakMap()
-  const queued = new WeakSet()
+  const mounts = new WeakMap()
   const sessionStatuses = new Map()
   let pluginPromise
+  let queue = Promise.resolve()
   let scheduled = null
-  let loadingSecrets = 0
-  let stopped = false
-  const isStopped = () => stopped || rt.stopping === true
+  let loadingSecrets = false
 
   const library = () => state.capabilities.items
   const ensureLibrary = () => {
@@ -78,23 +66,13 @@ export function install(rt) {
     if (readOnly !== undefined) throw new Error(readOnly)
   }
   const allowedToEdit = (item, botId) => rt.isMain(botId) || item.createdBy === botId
-  const usedByOthers = (name, botId) => Object.values(state.bots).some(bot => bot.id !== botId
-    && (bot.capabilities ?? []).some((attached) => {
-      const item = own(library(), attached)
-      return attached === name || (item?.kind === 'pack' && (item.items ?? []).includes(name))
-    }))
-  // A creator that is not a Main Bot could otherwise rewrite what a Main Bot runs.
-  const editCheck = (item, botId, verb) => {
-    if (!allowedToEdit(item, botId)) throw new Error(`Only ${item.createdBy ? 'its creator or a Main Bot' : 'a Main Bot'} can ${verb} ${item.name}.`)
-    if (!rt.isMain(botId) && usedByOthers(item.name, botId)) throw new Error(`Another Bot uses ${item.name}, so only a Main Bot can ${verb} it.`)
-  }
   const itemInput = (body, { botId, ui }) => {
     const name = validateCapabilityName(body.name)
     const kind = body.kind
     if (!['mcp', 'skill', 'pack'].includes(kind)) throw new Error('Choose an MCP server, skill, or pack.')
     const items = ensureLibrary()
-    const previous = own(items, name)
-    if (previous && !ui) editCheck(previous, botId, 'change')
+    const previous = items[name]
+    if (previous && !ui && !allowedToEdit(previous, botId)) throw new Error(`Only ${previous.createdBy ? 'its creator or a Main Bot' : 'a Main Bot'} can change ${name}.`)
     if (previous && previous.kind !== kind) throw new Error('A capability cannot change its kind. Delete it and save a new one.')
     const now = Date.now()
     const item = {
@@ -128,7 +106,7 @@ export function install(rt) {
     } else {
       const names = [...new Set(strings(body.items))]
       for (const childName of names) {
-        const child = own(items, childName)
+        const child = items[childName]
         if (!child || !['mcp', 'skill'].includes(child.kind)) throw new Error(`Packs can include only saved MCP servers and skills. ${childName} is not one.`)
       }
       item.items = names
@@ -147,28 +125,14 @@ export function install(rt) {
     await rt.load()
     writeCheck()
     const items = ensureLibrary()
-    const item = own(items, String(name ?? ''))
+    const item = items[String(name ?? '')]
     if (!item) throw new Error(`No capability named ${name}.`)
-    if (!ui) editCheck(item, botId, 'delete')
+    if (!ui && !allowedToEdit(item, botId)) throw new Error(`Only its creator or a Main Bot can delete ${name}.`)
     delete items[item.name]
     for (const pack of Object.values(items)) if (pack.kind === 'pack') pack.items = (pack.items ?? []).filter(child => child !== item.name)
     for (const bot of Object.values(state.bots)) bot.capabilities = (bot.capabilities ?? []).filter(attached => attached !== item.name)
     await rt.save()
     return true
-  }
-  // Called with the Bot being deleted, after it left the team. The shared list belongs to
-  // the user, so only a local MCP this Bot added, nobody approved and no other Bot or pack
-  // uses goes: no one is left to ask for it, and approving it would start a server for no one.
-  // Anything a pack lists stays.
-  const dropOrphanCapabilities = (bot) => {
-    const items = library()
-    const packed = name => Object.values(items).some(item => item.kind === 'pack' && (item.items ?? []).includes(name))
-    for (const name of bot.capabilities ?? []) {
-      const item = own(items, name)
-      if (item === undefined || item.kind !== 'mcp' || item.transport !== 'stdio' || item.approved === true) continue
-      if (item.createdBy !== bot.id || usedByOthers(name, bot.id) || packed(name)) continue
-      delete items[item.name]
-    }
   }
   const changeAttachment = async (endpoint, { name, bot: targetRef }, callerId) => {
     await rt.load()
@@ -178,23 +142,21 @@ export function install(rt) {
     const target = targetRef ? rt.findBot(targetRef) : caller
     if (!target) throw new Error(`No Bot named ${targetRef}.`)
     if (target.id !== caller.id && !rt.isMain(callerId)) throw new Error('Only a Main Bot can change another Bot’s capabilities.')
-    const item = own(ensureLibrary(), String(name ?? ''))
+    const item = ensureLibrary()[String(name ?? '')]
     if (!item) throw new Error(`No capability named ${name}.`)
-    await setAttached(target, item.name, endpoint === 'attach')
-    return { bot: target.name, attached: endpoint === 'attach' }
-  }
-  // Changes one name against the saved list, so two quick changes both land.
-  const setAttached = async (bot, name, attached) => {
-    bot.capabilities ??= []
-    const wasEmpty = bot.capabilities.length === 0
-    if (attached && !bot.capabilities.includes(name)) bot.capabilities.push(name)
-    if (!attached) bot.capabilities = bot.capabilities.filter(entry => entry !== name)
+    target.capabilities ??= []
+    const wasEmpty = target.capabilities.length === 0
+    if (endpoint === 'attach') {
+      if (!target.capabilities.includes(item.name)) target.capabilities.push(item.name)
+    } else {
+      target.capabilities = target.capabilities.filter(attached => attached !== item.name)
+    }
     await rt.save()
-    if (wasEmpty && bot.capabilities.length > 0) {
-      await trackBotAgents(bot)
+    if (endpoint === 'attach' && wasEmpty && target.capabilities.length > 0) {
+      await trackBotAgents(target)
       void scheduleReconcile()
     }
-    return bot.capabilities
+    return { bot: target.name, attached: endpoint === 'attach' }
   }
 
   const statusSet = (botId, itemName, sessionId, status) => {
@@ -232,7 +194,7 @@ export function install(rt) {
     for (const bot of Object.values(state.bots)) {
       const statuses = {}
       for (const name of bot.capabilities ?? []) {
-        const item = own(library(), name)
+        const item = library()[name]
         if (!item) continue
         if (item.kind !== 'pack') {
           const status = statusFor(bot.id, name)
@@ -268,179 +230,125 @@ export function install(rt) {
     }
     return pluginPromise
   }
-  function secretFor(name, botId) {
-    const value = rt.canUseSecret(name, botId) ? rt.secretValue(name) : undefined
-    if (value === undefined) throw new Error(`Secret ${name} is missing or unavailable for this Bot.`)
-    return value
-  }
   function resolveValues(values, botId) {
     const resolved = {}
     for (const [key, raw] of Object.entries(values ?? {})) {
-      resolved[key] = String(raw).replace(SECRET_REFERENCE, (_match, name) => secretFor(name, botId))
+      resolved[key] = String(raw).replace(SECRET_REFERENCE, (_match, name) => {
+        if (!rt.canUseSecret(name, botId)) throw new Error(`Secret ${name} is missing or unavailable for this Bot.`)
+        const value = rt.secretValue(name)
+        if (value === undefined) throw new Error(`Secret ${name} is missing or unavailable for this Bot.`)
+        return value
+      })
     }
     return resolved
   }
-  const resolveUrl = (url, botId) => String(url).replace(SECRET_REFERENCE, (_match, name) => encodeUrlComponent(secretFor(name, botId)))
-  const resolveList = (list, botId) => (list ?? []).map(raw => String(raw).replace(SECRET_REFERENCE, (_match, name) => secretFor(name, botId)))
   const configFor = (item, botId) => {
     if (item.kind === 'skill') return { name: item.name, description: item.description, content: item.content }
-    if (item.transport === 'stdio') return { transport: 'stdio', serverName: item.name, command: item.command, args: resolveList(item.args, botId), env: resolveValues(item.env, botId), failOnStartupError: true }
-    return { transport: 'streamable-http', serverName: item.name, url: resolveUrl(item.url, botId), headers: resolveValues(item.headers, botId), failOnStartupError: true }
+    if (item.transport === 'stdio') return { transport: 'stdio', serverName: item.name, command: item.command, args: item.args ?? [], env: resolveValues(item.env, botId), failOnStartupError: true }
+    return { transport: 'streamable-http', serverName: item.name, url: item.url, headers: resolveValues(item.headers, botId), failOnStartupError: true }
   }
   const disposeMount = async mount => {
     if (mount?.fiber) await Promise.resolve().then(() => mount.fiber.dispose()).catch(() => {})
   }
-  const mountOne = async (agent, bot, agentMounts, name) => {
-    const sessionId = agent.session.id
-    const item = own(library(), name)
-    const drop = async () => {
-      await disposeMount(agentMounts.get(name))
-      agentMounts.delete(name)
-    }
-    if (item.kind === 'mcp' && item.transport === 'stdio' && item.approved !== true) {
-      await drop()
-      statusSet(bot.id, name, sessionId, { state: 'needs-approval' })
-      return
-    }
-    let config
-    try {
-      config = configFor(item, bot.id)
-    } catch (error) {
-      await drop()
-      statusSet(bot.id, name, sessionId, { state: 'error', error: rt.redactSecrets(error.message).slice(0, 300) })
-      return
-    }
-    const key = `${name}:${createHash('sha256').update(JSON.stringify(config)).digest('hex')}`
-    if (agentMounts.get(name)?.key === key) return
-    await drop()
-    statusSet(bot.id, name, sessionId, { state: 'connecting' })
-    try {
-      const plugin = item.kind === 'skill'
-        ? {
-          name: `ds-bot-capability-skill-${name}`,
-          inject: ['skills'],
-          apply(c) {
-            c.effect(() => c.skills.register({ name: config.name, description: config.description, source: 'runtime', content: config.content }))
-          },
-        }
-        : await loadMcpPlugin()
-      if (isStopped()) return
-      const fiber = item.kind === 'skill' ? agent.ctx.plugin(plugin) : agent.ctx.plugin(plugin, config)
-      agentMounts.set(name, { key, fiber })
-      await fiber.await()
-      if (isStopped() || agents.get(sessionId)?.deref() !== agent) return
-      statusSet(bot.id, name, sessionId, { state: 'ready' })
-    } catch (error) {
-      await drop()
-      const message = rt.redactSecrets([error, error?.cause].filter(Boolean).map(part => String(part?.message ?? part)).join(': ') || 'Connection failed').slice(0, 300)
-      statusSet(bot.id, name, sessionId, { state: 'error', error: message })
-    }
-  }
   const reconcileAgent = async (agent, bot) => {
     const sessionId = agent.session.id
-    const desired = bot ? expandCapabilityNames(bot.capabilities, library()) : new Set()
     const agentMounts = mounts.get(agent) ?? new Map()
-    if (desired.size > 0) mounts.set(agent, agentMounts)
-    if (bot) {
-      for (const name of sessionStatuses.get(bot.id)?.keys() ?? []) {
-        if (!desired.has(name)) clearStatus(bot.id, name, sessionId)
-      }
-    } else {
-      clearSession(sessionId)
+    mounts.set(agent, agentMounts)
+    const desired = expandCapabilityNames(bot.capabilities, library())
+    for (const name of sessionStatuses.get(bot.id)?.keys() ?? []) {
+      if (!desired.has(name)) clearStatus(bot.id, name, sessionId)
     }
     for (const [name, mount] of agentMounts) {
       if (desired.has(name)) continue
       await disposeMount(mount)
       agentMounts.delete(name)
     }
-    await Promise.all([...desired].map(name => mountOne(agent, bot, agentMounts, name)))
-    if (agentMounts.size === 0 && mounts.get(agent) === agentMounts) mounts.delete(agent)
-  }
-  const botOfSession = sessionId => (rt.isBotSession(sessionId) ? rt.botOf(rt.selfOf(sessionId)) : undefined)
-  // At most one run waits behind the running one; it reads the latest state when it starts.
-  const reconcileOne = agent => {
-    if (queued.has(agent)) return chains.get(agent)
-    queued.add(agent)
-    const run = (chains.get(agent) ?? Promise.resolve()).then(async () => {
-      queued.delete(agent)
-      const sessionId = agent.session.id
-      if (isStopped() || agents.get(sessionId)?.deref() !== agent) return
-      await reconcileAgent(agent, botOfSession(sessionId))
-    }).catch(error => rt.warn('ds-bot: capability reconcile for %s failed: %s', agent.session?.id, error))
-    chains.set(agent, run)
-    return run
-  }
-  const loadInputs = async () => {
-    await rt.load()
-    loadingSecrets += 1
-    try {
-      await rt.loadSecrets()
-    } finally {
-      loadingSecrets -= 1
+    for (const name of desired) {
+      const item = library()[name]
+      if (item.kind === 'mcp' && item.transport === 'stdio' && item.approved !== true) {
+        await disposeMount(agentMounts.get(name))
+        agentMounts.delete(name)
+        statusSet(bot.id, name, sessionId, { state: 'needs-approval' })
+        continue
+      }
+      let config
+      try {
+        config = configFor(item, bot.id)
+      } catch (error) {
+        await disposeMount(agentMounts.get(name))
+        agentMounts.delete(name)
+        statusSet(bot.id, name, sessionId, { state: 'error', error: rt.redactSecrets(error.message).slice(0, 300) })
+        continue
+      }
+      const key = `${name}:${createHash('sha256').update(JSON.stringify(config)).digest('hex')}`
+      const current = agentMounts.get(name)
+      if (current?.key === key) continue
+      await disposeMount(current)
+      statusSet(bot.id, name, sessionId, { state: 'connecting' })
+      try {
+        const fiber = item.kind === 'skill'
+          ? agent.ctx.plugin({
+            name: `ds-bot-capability-skill-${name}`,
+            inject: ['skills'],
+            apply(c) {
+              c.effect(() => c.skills.register({ name: config.name, description: config.description, source: 'runtime', content: config.content }))
+            },
+          })
+          : agent.ctx.plugin(await loadMcpPlugin(), config)
+        agentMounts.set(name, { key, fiber })
+        await fiber.await()
+        if (agents.get(sessionId)?.deref() !== agent) continue
+        statusSet(bot.id, name, sessionId, { state: 'ready' })
+      } catch (error) {
+        await disposeMount(agentMounts.get(name))
+        agentMounts.delete(name)
+        const message = rt.redactSecrets([error, error?.cause].filter(Boolean).map(part => String(part?.message ?? part)).join(': ') || 'Connection failed').slice(0, 300)
+        statusSet(bot.id, name, sessionId, { state: 'error', error: message })
+      }
     }
   }
   async function reconcile() {
-    if (isStopped()) return
-    await loadInputs()
-    if (isStopped()) return
-    const runs = []
+    await rt.load()
+    loadingSecrets = true
+    try {
+      await rt.loadSecrets()
+    } finally {
+      loadingSecrets = false
+    }
     for (const [sessionId, reference] of agents) {
       const agent = reference.deref()
-      if (agent) {
-        runs.push(reconcileOne(agent))
+      if (!agent) {
+        agents.delete(sessionId)
+        clearSession(sessionId)
         continue
       }
-      agents.delete(sessionId)
-      clearSession(sessionId)
+      if (!rt.isBotSession(sessionId)) {
+        clearSession(sessionId)
+        continue
+      }
+      const bot = rt.botOf(rt.selfOf(sessionId))
+      if (!bot) {
+        clearSession(sessionId)
+        continue
+      }
+      try {
+        await reconcileAgent(agent, bot)
+      } catch (error) {
+        rt.warn('ds-bot: capability reconcile for %s failed: %s', sessionId, error)
+      }
     }
-    await Promise.all(runs)
   }
   const scheduleReconcile = () => {
     if (!scheduled) {
       scheduled = new Promise(resolve => queueMicrotask(() => {
+        const current = queue = queue.then(reconcile).catch(error => rt.warn('ds-bot: capability reconcile failed: %s', error))
         scheduled = null
-        resolve(reconcile().catch(error => rt.warn('ds-bot: capability reconcile failed: %s', error)))
+        resolve(current)
       }))
     }
     return scheduled
   }
-  // A run that outlasts the limit goes on in the background, and later requests for the
-  // same Agent do not wait for it again.
-  const stalled = new WeakSet()
-  const prepare = async (agent, sessionId) => {
-    if (isStopped()) return
-    const run = loadInputs().then(() => isStopped() ? undefined : reconcileOne(agent)).then(() => true, error => {
-      if (!isStopped()) rt.warn('ds-bot: capability mount for %s failed: %s', sessionId, error)
-      return true
-    })
-    if (stalled.has(agent)) return
-    const timeoutMs = rt.capabilityEnsureTimeoutMs ?? ENSURE_TIMEOUT_MS
-    let timer
-    const completed = await Promise.race([run, new Promise(resolve => { timer = setTimeout(resolve, timeoutMs, false) })])
-    clearTimeout(timer)
-    if (completed) return
-    stalled.add(agent)
-    void run.then(() => stalled.delete(agent))
-    rt.warn('ds-bot: capability mount for %s did not finish within %dms; continuing', sessionId, timeoutMs)
-  }
-  async function ensureCapabilities(sessionId) {
-    await rt.load()
-    if (isStopped()) return
-    const bot = botOfSession(sessionId)
-    if (!bot) return
-    if ((bot.capabilities ?? []).length === 0 && !mounts.get(agents.get(sessionId)?.deref())?.size) return
-    let agent
-    try {
-      agent = await rt.resolveAgent(sessionId)
-    } catch (error) {
-      if (!isStopped()) rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, rt.redactSecrets(String(error)))
-      return
-    }
-    trackAgent(agent)
-    await prepare(agent, sessionId)
-  }
   const trackAgent = agent => {
-    if (isStopped()) return
     const sessionId = agent?.session?.id
     if (typeof sessionId !== 'string' || !agent.ctx) return
     if (agents.get(sessionId)?.deref() === agent) return
@@ -453,7 +361,6 @@ export function install(rt) {
     }, `ds-bot: capabilities ${sessionId}`)
   }
   const trackBotAgents = async bot => {
-    if (isStopped()) return
     const sessionIds = new Set()
     try {
       const sessionId = rt.chatOf(bot.id)
@@ -469,13 +376,9 @@ export function install(rt) {
       rt.warn('ds-bot: capability group sessions for %s could not be read: %s', bot.id, error)
     }
     for (const sessionId of sessionIds) {
-      if (isStopped()) return
       try {
-        const agent = await rt.resolveAgent(sessionId)
-        if (isStopped()) return
-        trackAgent(agent)
+        trackAgent(await rt.resolveAgent(sessionId))
       } catch (error) {
-        if (isStopped()) return
         rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, error)
       }
     }
@@ -487,71 +390,57 @@ export function install(rt) {
     if (endpoint === 'capability-approve') {
       await rt.load()
       writeCheck()
-      const item = own(library(), String(body.name ?? ''))
+      const item = library()[String(body.name ?? '')]
       if (!item || item.kind !== 'mcp' || item.transport !== 'stdio') throw new Error(`No unapproved stdio MCP named ${body.name}.`)
       item.approved = true
       item.updatedAt = Date.now()
       await rt.save()
       return item
     }
-    if (endpoint === 'bot-capability') {
+    if (endpoint === 'bot-capabilities') {
       await rt.load()
       writeCheck()
       const bot = rt.botOf(String(body.botId ?? ''))
       if (!bot) throw new Error('Unknown Bot')
-      const name = String(body.name ?? '')
-      if (!own(library(), name)) throw new Error(`No capability named ${name}.`)
-      return setAttached(bot, name, body.attached === true)
+      if (!Array.isArray(body.capabilities) || body.capabilities.some(name => typeof name !== 'string' || !library()[name])) throw new Error('Choose saved capabilities.')
+      const wasEmpty = (bot.capabilities ?? []).length === 0
+      bot.capabilities = [...new Set(body.capabilities)]
+      await rt.save()
+      if (wasEmpty && bot.capabilities.length > 0) {
+        await trackBotAgents(bot)
+        void scheduleReconcile()
+      }
+      return bot.capabilities
     }
     throw new Error('Unknown capability operation.')
   }
   const secretsChanged = rt.secretsChanged
   rt.secretsChanged = () => {
     secretsChanged?.()
-    if (loadingSecrets === 0) void scheduleReconcile()
+    if (!loadingSecrets) void scheduleReconcile()
   }
   rt.capabilitiesStateSaved = () => { void scheduleReconcile() }
-  // Creation waits for these listeners, so a new Agent's first request already has its
-  // tools and skill catalog. agent/pre-step is too late: a step assembles its tools first.
-  ctx.on('agent/created', async function prepareCapabilities({ agent }) {
+  ctx.on('agent/created', ({ agent }) => {
     trackAgent(agent)
-    try {
-      await rt.load()
-      if (isStopped()) return
-      const bot = botOfSession(agent.session.id)
-      if ((bot?.capabilities ?? []).length > 0) await prepare(agent, agent.session.id)
-    } catch (error) {
-      rt.warn('ds-bot: capability load failed: %s', error)
-    }
+    void rt.load().then(scheduleReconcile).catch(error => rt.warn('ds-bot: capability load failed: %s', error))
   })
   ctx.effect(() => {
     void rt.load().then(async () => {
       for (const bot of Object.values(state.bots)) {
-        if (isStopped()) return
         if ((bot.capabilities ?? []).length > 0) await trackBotAgents(bot)
       }
-      if (isStopped()) return
       await scheduleReconcile()
     }).catch(error => rt.warn('ds-bot: capability startup failed: %s', error))
-    return async () => {
-      stopped = true
-      const live = [...mounts.values()]
-      mounts.clear()
-      agents.clear()
-      sessionStatuses.clear()
-      await Promise.all(live.flatMap(agentMounts => [...agentMounts.values()].map(disposeMount)))
-    }
+    return () => { agents.clear() }
   }, 'ds-bot: capabilities')
   Object.assign(rt, {
     capabilitySave,
     capabilityDelete,
-    dropOrphanCapabilities,
     capabilityEndpoint,
     capabilityLibraryView: libraryView,
     capabilityStatusesView,
     reconcileCapabilities: reconcile,
     scheduleCapabilitiesReconcile: scheduleReconcile,
-    ensureCapabilities,
     expandCapabilities: names => expandCapabilityNames(names, library()),
     changeCapabilityAttachment: changeAttachment,
   })
