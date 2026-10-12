@@ -3,18 +3,22 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { format } from 'node:util'
 import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Enough of the dsh services for the roster to make Sessions; kickoff messages are dropped.
-function start(team, { models = [], reasoning = {} } = {}) {
+function start(team, { models = [], reasoning = {}, archiveError } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-roster-'))
   if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   const ctx = fakeContext()
   const workspaces = new Map()
   const sent = []
   const selected = []
+  const archived = []
+  const warnings = []
   let sessions = 0
+  ctx.logger.warn = (...args) => warnings.push(format(...args))
   Object.assign(ctx, {
     llm: {
       listProviders: () => (models.length > 0 ? [{ id: 'deepseek', name: 'DeepSeek' }] : []),
@@ -29,7 +33,10 @@ function start(team, { models = [], reasoning = {} } = {}) {
         workspaces.set(workspace.id, workspace)
         return workspace
       },
-      archiveSession: async () => {},
+      archiveSession: async (sessionId, options) => {
+        if (archiveError !== undefined) throw archiveError
+        archived.push([sessionId, options])
+      },
     },
     sessionController: {
       create: async () => ({ sessionId: `s${++sessions}` }),
@@ -54,7 +61,7 @@ function start(team, { models = [], reasoning = {} } = {}) {
     ctx.dispose()
     rmSync(home, { recursive: true, force: true })
   }
-  return { call, stop, home, sent, selected, ctx }
+  return { call, stop, home, sent, selected, ctx, archived, warnings }
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -264,6 +271,33 @@ test('set-main keeps one Main Bot and replaces only a Main Bot', async (t) => {
   assert.equal((await call('set-main', { id: 'nope', main: true })).ok, false)
   assert.equal((await call('set-main', { id: reader.id, main: false })).ok, true)
   assert.deepEqual((await call('state', {})).value.mainBotIds, [chief])
+})
+
+test('deleting a Bot or group chat stops its Session, so its tasks are removed', async (t) => {
+  const { call, stop, archived } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const room = (await call('create-room', { members: [chief, writer.id], admin: writer.id })).value
+  archived.length = 0
+  assert.equal((await call('delete-bot', { id: writer.id })).ok, true)
+  assert.equal((await call('delete-room', { id: room.id })).ok, true)
+  // `stopActivity` lets DSH's session-stop hook drop the Session's armed
+  // scheduled tasks; without it the archive is refused and they keep
+  // delivering into the deleted Session.
+  assert.deepEqual(archived, [
+    [writer.id, { stopActivity: true }],
+    [room.id, { stopActivity: true }],
+  ])
+})
+
+test('an archive failure on delete is warned instead of passing silently', async (t) => {
+  const { call, stop, warnings } = start(undefined, { models: ['deepseek-v4-flash'], archiveError: new Error('archive refused') })
+  t.after(stop)
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  assert.equal((await call('delete-bot', { id: writer.id })).ok, true)
+  await settle()
+  assert.equal(warnings.filter(text => text.includes('not archived')).length, 1)
 })
 
 test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its held greeting', async (t) => {
