@@ -15,6 +15,8 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - When a Bot messages another Bot that is working, the message reaches it at its next step instead of waiting until its current work is done, and the reply still comes back. A Bot can still queue a separate task behind the current work.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 - Updating a copy installed from GitHub uses the repository's current address.
+- The Usage page groups its statistics, chart, rankings and activity into one panel.
+- Hover over an Activity day to see its token count.
 
 ### Fixed
 
