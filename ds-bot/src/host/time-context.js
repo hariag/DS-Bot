@@ -20,7 +20,10 @@ export function install(rt) {
     if (decision.kind === 'reject' || signal.aborted) return decision
     await rt.load()
     if (!rt.isBotSession(agent.id) || signal.aborted) return decision
-    // A preset may already supply DSH's clock for this step.
+    // A loaded DSH clock covers every step itself. Its listener may run before or
+    // after this one (a reload reorders them), so its presence is read from its
+    // projection, not from the messages added so far.
+    if (ctx.get?.('sessionProjections')?.stateOf(agent.session, 'timeContext') !== undefined) return decision
     if (decision.messages.some(message => isClock(message.source))) return decision
     const now = Date.now()
     for await (const event of rt.eventsBackwards(agent.id, signal, Infinity)) {
