@@ -60,7 +60,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'message_bot',
-    description: 'Send an asynchronous message to another Bot on the team. By default its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead.',
+    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead.',
     parameters: {
       to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
       message: { type: 'string', required: true, description: 'Self-contained message; the other Bot cannot see this conversation' },
@@ -68,6 +68,11 @@ export function install(rt) {
         type: 'string',
         enum: ['me', 'user'],
         description: '"me" (default): the reply comes back to you and the user does not see it. "user": the Bot answers the user in its own chat, where the user reads it, and nothing comes back to you. Use "user" whenever the user wants to hear from that Bot directly or asks Bots to say something in their own chats.',
+      },
+      when: {
+        type: 'string',
+        enum: ['now', 'queue'],
+        description: '"now" (default): a working Bot reads your message at its next step, between its current actions; use it for questions, information it needs, corrections and warnings. "queue": it reads your message only after its current work is done, as a separate task; use it only for a new task unrelated to what it is doing now. With reply_to "user" the message always queues.',
       },
     },
     output,
@@ -78,13 +83,20 @@ export function install(rt) {
       const target = rt.findBot(args.to)
       if (target === undefined) return `No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
       if (target.id === sender.id) return 'You cannot message yourself.'
-      const hop = (rt.live.get(exec.agent?.id)?.info?.hop ?? 0)
+      const turn = rt.live.get(exec.agent?.id)
+      const hop = Math.max(turn?.info?.hop ?? 0, ...(turn?.joined ?? []).map(joined => joined.info?.hop ?? 0))
       if (hop >= MAX_HOPS) return 'This chain of Bot messages is already long. Stop here and report to the user instead.'
       const toUser = args.reply_to === 'user'
-      await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, ...(toUser ? { audience: 'user' } : {}) })
+      const working = rt.live.get(rt.chatOf(target.id))?.turn !== undefined
+      const steer = args.when !== 'queue' && !toUser
+      await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : {}) })
       return toUser
         ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
-        : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
+        : working && steer
+          ? `Delivered to ${target.name} while it is working: it reads your message at its next step. Its reply will arrive later as a new message; do not wait for it.`
+          : working
+            ? `Queued for ${target.name}: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it.`
+            : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
     },
   }))
 
@@ -99,41 +111,13 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
     return room ? `group "${room.name}"` : 'its own chat'
   }
-  // interrupt_bot and stop_bot throw when they do nothing, so the chat shows the call
-  // as failed instead of "Interrupted" or "Stopped".
+  // stop_bot throws when it does nothing, so the chat shows the call as failed
+  // instead of "Stopped".
   const refuse = (message) => { throw new Error(message) }
 
   ctx.tools.register(defineTool({
-    name: 'interrupt_bot',
-    description: 'Main Bot only. Cut into another Bot\'s running turn with an urgent message it sees at its next step — to warn it off a dangerous action or redirect it in time, while an ordinary message_bot would still be queued. If it is not running, the message opens its next turn instead. Whatever it answers stays in its own chat and is not routed back to you; if it keeps going despite the warning, use stop_bot.',
-    parameters: {
-      to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
-      message: { type: 'string', required: true, description: 'Short urgent instruction, e.g. "Stop — do not run that command"' },
-    },
-    output,
-    async execute(args, exec) {
-      await rt.load()
-      const sender = callerBot(exec)
-      if (sender === undefined || !rt.isMain(sender.id)) refuse('Only a Main Bot can interrupt other Bots.')
-      const target = rt.findBot(args.to)
-      if (target === undefined) refuse(`No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`)
-      if (target.id === sender.id) refuse('You cannot interrupt yourself.')
-      const text = String(args.message ?? '').trim()
-      if (text === '') refuse('Write a message to send.')
-      const { running, idle } = activeSessions(target.id)
-      const sessions = idle ? [rt.chatOf(target.id)] : running
-      for (const [index, sessionId] of sessions.entries()) {
-        await rt.deliver({ fromId: sender.id, toId: target.id, sessionId, text, role: 'interrupt', steer: true, record: index === 0 })
-      }
-      return idle
-        ? `Sent to ${target.name}; it is not running, so the message opens its next turn. What it answers stays in its own chat — nothing comes back to you.`
-        : `Interrupted ${target.name} in ${running.map(whereOf).join(' and ')}: it sees your message at its next step. What it answers stays in its own chat — nothing comes back to you.`
-    },
-  }))
-
-  ctx.tools.register(defineTool({
     name: 'stop_bot',
-    description: 'Main Bot only. Stop another Bot\'s running turn immediately — when it must not finish a dangerous action and interrupting is not enough. Its queued messages are dropped with the turn. It is then told why in a new turn, whose reply comes back to you.',
+    description: 'Main Bot only. Stop another Bot\'s running turn immediately — when it must not finish a dangerous action and a message_bot warning is not enough. Its queued messages are dropped with the turn. It is then told why in a new turn, whose reply comes back to you.',
     parameters: {
       bot: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
       reason: { type: 'string', description: 'Why it was stopped; it reads this afterwards' },
@@ -147,7 +131,7 @@ export function install(rt) {
       if (target === undefined) refuse(`No Bot named ${args.bot}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`)
       if (target.id === sender.id) refuse('You cannot stop yourself.')
       const { running } = activeSessions(target.id)
-      if (running.length === 0) refuse(`${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it, or interrupt_bot once it is running.`)
+      if (running.length === 0) refuse(`${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it.`)
       for (const sessionId of running) {
         const agent = await rt.resolveAgent(sessionId)
         agent.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })

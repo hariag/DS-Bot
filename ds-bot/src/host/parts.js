@@ -593,9 +593,10 @@ export function install(rt) {
     exchangeId: job.info?.exchangeId ?? randomUUID(),
     handoff: true,
     ...(resume ? { resume: true } : {}),
+    ...(resume && job.joined?.length ? { joined: job.joined } : {}),
   })
 
-  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, resume:boolean, overflow:boolean, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
+  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, joined?:any[], resume:boolean, overflow:boolean, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
   const switches = new Map()
   // Parts that have not started a turn yet, with their handoff package's size.
   const freshParts = new Map()
@@ -637,10 +638,10 @@ export function install(rt) {
 
   // `hard`: past the hard line or the window, the part moves on even without a note
   // from the model.
-  function startSwitch(agent, { resume = false, carry = [], info, overflow = false, hard = overflow } = {}) {
+  function startSwitch(agent, { resume = false, carry = [], info, joined, overflow = false, hard = overflow } = {}) {
     const place = placeOf(agent.id)
     if (place === undefined || switches.has(agent.id) || readOnly()) return
-    const job = { ...place, carry: [...carry], info, resume, overflow, hard }
+    const job = { ...place, carry: [...carry], info, joined, resume, overflow, hard }
     switches.set(agent.id, job)
     void runSwitch(agent, job)
       .catch(error => rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error))
@@ -654,9 +655,10 @@ export function install(rt) {
         // The stopped turn goes on where it was.
         const back = job.carry.splice(0)
         if (resume) {
+          const carried = job.joined?.length ? { joined: job.joined } : {}
           back.unshift(createUserMessage({
             content: [{ type: 'text', text: 'DS Bot paused your turn for a context check. Go on with it now from where you stopped.' }],
-            source: job.info ?? { kind: SOURCE_KIND, form: 'relay', role: 'resume', exchangeId: randomUUID(), senderName: 'DS Bot', hop: 0 },
+            source: job.info ? { ...job.info, ...carried } : { kind: SOURCE_KIND, form: 'relay', role: 'resume', exchangeId: randomUUID(), senderName: 'DS Bot', hop: 0, ...carried },
           }))
         }
         await forward(job, back).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))
@@ -799,7 +801,7 @@ export function install(rt) {
     // `messages` left the inbox for this step, so the switch carries them along.
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, hard: true })
+    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, joined: midTurn ? (entry.joined ?? []).map(joined => joined.info) : undefined, hard: true })
     return { kind: 'reject' }
   }, { prepend: true })
 
@@ -810,7 +812,7 @@ export function install(rt) {
     if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly()) return next()
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: true, info: entry.info, overflow: true })
+    startSwitch(agent, { resume: true, info: entry.info, joined: (entry.joined ?? []).map(joined => joined.info), overflow: true })
     return undefined
   }, { prepend: true })
 
@@ -882,7 +884,7 @@ export function install(rt) {
       } else if (source?.kind === REPLY_KIND) {
         const reply = readReply(textOf(event.data.content))
         if (reply !== undefined) items.push({ kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
-      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && ['request', 'reply', 'report', 'interrupt', 'stopped'].includes(source.role)) {
+      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
         items.push({ kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
       }
     }

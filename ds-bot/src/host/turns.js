@@ -34,7 +34,7 @@ export function attachReference(queued, source, text) {
 export function install(rt) {
   const { ctx, state } = rt
 
-  /** @type {Map<string, {turn?:number, pending?:any, info?:any, texts:string[]}>} */
+  /** @type {Map<string, {turn?:number, pending?:any, info?:any, texts:string[], opened?:boolean, joined?:{info:any, from:number}[]}>} */
   const live = new Map()
   /** @type {Map<string, {resolve:(text:string)=>void}>} member turn waiters keyed by exchange id */
   const roomWaiters = new Map()
@@ -55,7 +55,7 @@ export function install(rt) {
   /** @type {Record<string, string>} */
   let activity = {}
   const activityOf = (tool) => {
-    if (/^(message_bot|interrupt_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(tool)) return 'sending'
+    if (/^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(tool)) return 'sending'
     if (tool === 'group_relay') return 'orbit'
     if (/search|fetch|browse|browser|read|grep|glob|list/i.test(tool)) return 'searching'
     return 'working'
@@ -94,6 +94,11 @@ export function install(rt) {
   // package that only opens a part is acknowledged with a fixed line, also hidden.
   const claimTrigger = (sessionId, entry, info) => {
     entry.info = info
+    // A turn that was stopped for a part switch brings its joined requests along.
+    if (Array.isArray(info.joined) && info.joined.length > 0) {
+      entry.joined = info.joined.filter(item => item !== undefined && item !== null)
+        .map(item => ({ info: item, from: 0 }))
+    }
     if (rt.groupOwners.has(sessionId)) return
     if ((expectsReply(info) && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
       markExchangeTurn(sessionId, entry.turn)
@@ -156,6 +161,8 @@ export function install(rt) {
         // A turn turned away before its first step may end without a turn/end.
         entry.switched = false
         entry.answers = false
+        entry.opened = false
+        entry.joined = []
         if (entry.pending !== undefined) {
           claimTrigger(id, entry, entry.pending)
           entry.pending = undefined
@@ -166,6 +173,14 @@ export function install(rt) {
         // A message that shares a step with a bare handoff package is what the turn
         // answers, so the turn is not a hidden acknowledgement.
         const bare = info => info?.handoff === true && info.resume !== true
+        // Whether the turn was already opened by an earlier message decides what a
+        // Bot relay that lands inside it may claim: the first message of a turn
+        // still claims it as today, a later one only joins it.
+        const opened = entry.opened === true
+        if (entry.turn !== undefined && !bare(source)
+          && (source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === 'schedule' || source?.kind === SOURCE_KIND)) {
+          entry.opened = true
+        }
         if (entry.turn !== undefined && (source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === SOURCE_KIND)) {
           if (bare(source)) {
             if (entry.answers) break
@@ -187,12 +202,20 @@ export function install(rt) {
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
-        } else if (source?.kind === SOURCE_KIND && source.role === 'interrupt') {
-          // A steered interrupt neither claims the running turn nor queues as the
-          // next one's trigger: that turn's reply still belongs to its starter.
         } else if (source?.kind === SOURCE_KIND) {
-          if (entry.turn !== undefined && entry.info === undefined) claimTrigger(id, entry, source)
-          else entry.pending = source
+          if (entry.turn === undefined) entry.pending = source
+          else if (!opened) claimTrigger(id, entry, source)
+          else if (expectsReply(source) && !answersUser(source)
+            && source.exchangeId !== entry.info?.exchangeId
+            && !(entry.joined ?? []).some(joined => joined.info.exchangeId === source.exchangeId)) {
+            // A request that lands inside a running turn is answered by the text
+            // that follows it, routed back at turn/end. A failed-switch resume
+            // message re-sends the trigger's own source; the same exchangeId must
+            // not join twice.
+            entry.joined = [...(entry.joined ?? []), { info: source, from: entry.texts.length }]
+          }
+          // A mid-turn relay that owes no reply only informs the turn: it neither
+          // claims the running turn nor queues as the next one's trigger.
         } else if (source?.kind === 'schedule' && rt.roomOf(id)) {
           // A group's scheduled task reaches the group as the user's message.
           queueRoomMessage(id, { text: reminderText(textOf(event.data.content)) })
@@ -222,46 +245,57 @@ export function install(rt) {
       case 'turn/end': {
         setActivity(id, undefined)
         const info = entry.info
-        const reply = entry.texts.join('\n\n').trim()
+        const joined = entry.joined ?? []
+        const texts = entry.texts
         // A turn stopped for a switch goes on in the next part, which answers instead.
         const switched = entry.switched === true
         entry.turn = undefined
         entry.info = undefined
         entry.texts = []
         entry.switched = false
+        entry.joined = []
         const reason = event.data?.reason
         const failure = reason?.kind === 'error' && !switched ? turnFailure(reason.error) : undefined
         if (failure !== undefined) noteTurnFailure(id, failure)
-        if (info === undefined || switched) break
-        if (info.role === 'room') {
+        if (switched) break
+        // Whoever the turn answers gets the same three-way rule: a failure notice,
+        // the turn's text (or a stopped-before-answer line), or nothing. A joined
+        // request is answered by only the text that follows where it landed.
+        const answer = (source, reply) => {
+          if (!expectsReply(source) || answersUser(source)) return
+          const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
+          if (failure !== undefined) {
+            // The sender was told a reply comes later; without this it would wait forever.
+            void rt.deliver({
+              fromId: rt.selfOf(id),
+              toId: source.senderSessionId,
+              text: `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`,
+              role: 'reply',
+              hop: (source.hop ?? 0) + 1,
+              replyTo: source.exchangeId,
+            }).catch(error => rt.warn('ds-bot: failure notice delivery failed: %s', error))
+          } else if (reply !== '' || reason?.kind === 'aborted') {
+            // A turn stopped before it could answer still owes the sender a line,
+            // or it would wait forever for a reply that never comes.
+            void rt.deliver({
+              fromId: rt.selfOf(id),
+              toId: source.senderSessionId,
+              text: reply !== '' ? reply : `${name} was stopped before it could answer your message.`,
+              role: 'reply',
+              hop: (source.hop ?? 0) + 1,
+              replyTo: source.exchangeId,
+            }).catch(error => rt.warn('ds-bot: reply delivery failed: %s', error))
+          }
+        }
+        if (info?.role === 'room') {
           const waiter = roomWaiters.get(info.exchangeId)
           roomWaiters.delete(info.exchangeId)
           if (failure !== undefined) waiter?.fail(failure)
-          else waiter?.resolve(reason?.kind === 'aborted' ? null : reply)
-        } else if (expectsReply(info) && !answersUser(info) && failure !== undefined) {
-          // The sender was told a reply comes later; without this it would wait forever.
-          const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
-          void rt.deliver({
-            fromId: rt.selfOf(id),
-            toId: info.senderSessionId,
-            text: `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`,
-            role: 'reply',
-            hop: (info.hop ?? 0) + 1,
-            replyTo: info.exchangeId,
-          }).catch(error => rt.warn('ds-bot: failure notice delivery failed: %s', error))
-        } else if (expectsReply(info) && !answersUser(info) && (reply !== '' || reason?.kind === 'aborted')) {
-          // A turn stopped before it could answer still owes the sender a line,
-          // or it would wait forever for a reply that never comes.
-          const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
-          void rt.deliver({
-            fromId: rt.selfOf(id),
-            toId: info.senderSessionId,
-            text: reply !== '' ? reply : `${name} was stopped before it could answer your message.`,
-            role: 'reply',
-            hop: (info.hop ?? 0) + 1,
-            replyTo: info.exchangeId,
-          }).catch(error => rt.warn('ds-bot: reply delivery failed: %s', error))
+          else waiter?.resolve(reason?.kind === 'aborted' ? null : texts.join('\n\n').trim())
+        } else if (info !== undefined) {
+          answer(info, texts.join('\n\n').trim())
         }
+        for (const request of joined) answer(request.info, texts.slice(request.from).join('\n\n').trim())
         break
       }
     }

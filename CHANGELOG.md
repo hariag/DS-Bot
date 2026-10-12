@@ -8,18 +8,20 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 - In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
 - **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
+- A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.
 
 ### Changed
 
-- Bots give a brief progress message when starting a multi-step task in their own chat with the user, and at meaningful milestones on long tasks.
+- When a Bot messages another Bot that is working, the message reaches it at its next step instead of waiting until its current work is done, and the reply still comes back. A Bot can still queue a separate task behind the current work.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 - Updating a copy installed from GitHub uses the repository's current address.
 
 ### Fixed
 
-- Bots receive the current time on their first model step and refresh it after ten minutes, even when their DSH preset does not supply a clock.
 - In a group chat, a conversation referenced in a message reached none of the members, and a reference whose title started with a member's name called that member. Now the members who answer the message get the referenced conversation.
 - In a group chat, typing `@` and a Bot's name and pressing Enter inserted a conversation reference instead of the Bot's name.
+- A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.
+- A provider adapter that cannot measure tokens no longer fails every turn. The context size is estimated instead, with one warning in the log.
 
 ## [0.1.2] - 2026-10-11
 

@@ -14,7 +14,6 @@ export function install(rt) {
 
   const headerFor = (role, fromName, roomName, audience, note = 'new message') => {
     if (role === 'reply') return `[Reply from ${fromName}]`
-    if (role === 'interrupt') return `[Interrupt from ${fromName}]`
     if (role === 'stopped') return `[Stopped by ${fromName}]`
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`
     if (role === 'report') return `[Group chat "${roomName}" · replies to your post]`
@@ -24,11 +23,11 @@ export function install(rt) {
     return `[Message from ${fromName}]`
   }
 
-  // Roles recorded as team exchanges; 'interrupt' and 'stopped' count once each.
-  const EXCHANGE_ROLES = new Set(['request', 'reply', 'interrupt', 'stopped'])
+  // Roles recorded as team exchanges.
+  const EXCHANGE_ROLES = new Set(['request', 'reply', 'stopped'])
 
   // `sessionId` defaults to the recipient's own chat; group turns name its group Session.
-  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, record = true }) {
+  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -47,7 +46,7 @@ export function install(rt) {
       ...(roomId ? { roomId } : {}),
       ...(audience === 'user' ? { audience } : {}),
     }
-    if (record && EXCHANGE_ROLES.has(role)) {
+    if (EXCHANGE_ROLES.has(role)) {
       state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
       void rt.save()
     }
