@@ -11,7 +11,7 @@
 // Environment: MOCK_PORT, MOCK_LOG, MOCK_DELAY_MS, MOCK_JITTER_MS (random extra latency),
 // MOCK_LOG_CHARS (prompt length kept per log entry), MOCK_SUMMARY_DELAY_MS (handoff notes
 // and backend compaction only), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and
-// answer like an endpoint without search).
+// answer like an endpoint without search), MOCK_REJECT_IMAGES=1 (reject requests with images).
 //
 // Commands to a Bot:
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
@@ -57,6 +57,7 @@ const SUMMARY_DELAY = Number(process.env.MOCK_SUMMARY_DELAY_MS ?? DELAY)
 // How much of each call's last message the log keeps; raise it to read whole prompts.
 const LOG_CHARS = Number(process.env.MOCK_LOG_CHARS ?? 160)
 const WATCH = process.env.MOCK_WATCH ?? ''
+const REJECT_IMAGES = process.env.MOCK_REJECT_IMAGES === '1'
 // MOCK_LOG_TOOLS=1 records the request's tool names, to compare two Sessions' tool views.
 const LOG_TOOLS = process.env.MOCK_LOG_TOOLS === '1'
 let seq = 0
@@ -504,7 +505,7 @@ function searchApi(req, res) {
   req.on('data', chunk => { raw += chunk })
   req.on('end', () => {
     const body = JSON.parse(raw || '{}')
-    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id: ++seq, searchApi: { path: req.url, body, auth: req.headers.authorization ? 'bearer' : '' } }) + '\n')
+    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id: ++seq, images: 0, searchApi: { path: req.url, body, auth: req.headers.authorization ? 'bearer' : '' } }) + '\n')
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ results: [{ title: `Search API result: ${body.query}`, url: `https://example.com/search-api/${encodeURIComponent(body.query ?? '')}`, content: `Page text about ${body.query}.` }] }))
   })
@@ -521,23 +522,31 @@ const server = createServer((req, res) => {
   req.on('data', chunk => { raw += chunk })
   req.on('end', () => {
     const body = JSON.parse(raw)
+    const images = (body.messages ?? []).reduce((count, message) => count
+      + (Array.isArray(message.content) ? message.content.filter(block => block?.type === 'image').length : 0), 0)
+    const id = ++seq
+    if (REJECT_IMAGES && images > 0) {
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, rejectedImages: true, messages: body.messages?.length ?? 0, last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS) }) + '\n')
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'mock: request with images rejected' } }))
+      return
+    }
     const search = asksNativeSearch(body)
     const out = search ? nativeSearch(body) : decide(body)
-    const id = ++seq
     if (out === 'overflow') {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, overflow: true, messages: body.messages?.length ?? 0, last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS) }) + '\n')
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, overflow: true, messages: body.messages?.length ?? 0, last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS) }) + '\n')
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: maximum context length exceeded' } }))
       return
     }
     if (out === 'auth') {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, auth: true, messages: body.messages?.length ?? 0 }) + '\n')
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, auth: true, messages: body.messages?.length ?? 0 }) + '\n')
       res.writeHead(401, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'mock: invalid x-api-key sk-mock1234567890' } }))
       return
     }
     if (out === 'fail') {
-      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, fail: true, messages: body.messages?.length ?? 0 }) + '\n')
+      appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, images, fail: true, messages: body.messages?.length ?? 0 }) + '\n')
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'mock: this note request fails on purpose' } }))
       return
@@ -550,7 +559,7 @@ const server = createServer((req, res) => {
     // Hashes of the system prompt and tools show whether two Sessions share a cacheable prefix.
     const digest = value => createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex').slice(0, 12)
     const watch = WATCH ? { watchHit: JSON.stringify([body.system, body.tools, body.messages]).includes(WATCH) } : {}
-    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, tokens, ...watch, ...LOG_TOOLS ? { toolNames: (body.tools ?? []).map(entry => entry.name ?? entry.type) } : {}, ...search ? { nativeSearch: { model: body.model, tools: body.tools, auth: [req.headers['x-api-key'] ? 'x-api-key' : '', req.headers.authorization ? 'bearer' : ''].filter(Boolean) } } : {}, system: digest(body.system), tools: digest(body.tools), messages: body.messages?.length ?? 0, first: textOf(body.messages?.[0]?.content).slice(0, 60), last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS), out: out.map(block => (block.type === 'text' && block.text.length > 200 ? { ...block, text: `${block.text.slice(0, 200)}…(${block.text.length})` } : block)) }) + '\n')
+    appendFileSync(LOG, JSON.stringify({ t: new Date().toISOString(), id, tokens, images, ...watch, ...LOG_TOOLS ? { toolNames: (body.tools ?? []).map(entry => entry.name ?? entry.type) } : {}, ...search ? { nativeSearch: { model: body.model, tools: body.tools, auth: [req.headers['x-api-key'] ? 'x-api-key' : '', req.headers.authorization ? 'bearer' : ''].filter(Boolean) } } : {}, system: digest(body.system), tools: digest(body.tools), messages: body.messages?.length ?? 0, first: textOf(body.messages?.[0]?.content).slice(0, 60), last: textOf(body.messages?.at(-1)?.content).slice(0, LOG_CHARS), out: out.map(block => (block.type === 'text' && block.text.length > 200 ? { ...block, text: `${block.text.slice(0, 200)}…(${block.text.length})` } : block)) }) + '\n')
     if (search) {
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'application/json' })
