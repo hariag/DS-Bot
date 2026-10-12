@@ -43,6 +43,27 @@ export function install(rt) {
   /** @type {Map<string, {text:string, botId?:string, name?:string, reportBack?:boolean, hop?:number, kickoff?:boolean, references?:{labels:string[], text:string}[]}[]>} messages a room's next relay posts */
   const roomInbox = new Map()
   const queueRoomMessage = (roomId, item) => roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
+  // Member turns of a group round the user stopped: what they end with stays out of the group.
+  const stoppedRoomTurns = new Set()
+
+  // A stopped round stops the member work it started: the turn that answers it, or the
+  // delivery still waiting for the member's Session. An earlier turn there keeps going.
+  // An exchange whose turn already ended stays in the set, so it is bounded.
+  const STOPPED_KEPT = 200
+  async function stopRoomTurn(sessionId, exchangeId) {
+    stoppedRoomTurns.add(exchangeId)
+    if (stoppedRoomTurns.size > STOPPED_KEPT) stoppedRoomTurns.delete(stoppedRoomTurns.values().next().value)
+    const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
+    if (agent === undefined) return
+    const entry = live.get(sessionId)
+    if (entry?.turn !== undefined && entry.info?.exchangeId === exchangeId) {
+      agent.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })
+      return
+    }
+    for (const message of [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]) {
+      if (message.source?.exchangeId === exchangeId && agent.inbox.remove(message.id)) stoppedRoomTurns.delete(exchangeId)
+    }
+  }
 
   const liveOf = id => {
     let entry = live.get(id)
@@ -233,6 +254,7 @@ export function install(rt) {
             hop: source.hop ?? 0,
             ...(source.late ? { late: true } : {}),
             ...(source.quiet ? { quiet: true } : {}),
+            ...(source.failed ? { failed: source.failed } : {}),
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
@@ -327,10 +349,15 @@ export function install(rt) {
         if (info?.role === 'room') {
           const waiter = roomWaiters.get(info.exchangeId)
           roomWaiters.delete(info.exchangeId)
-          if (failure !== undefined) waiter?.fail(failure)
-          else if (waiter !== undefined) waiter.resolve(reason?.kind === 'aborted' ? null : texts.join('\n\n').trim())
-          // The round moved on without this member; what it says now still reaches the group.
-          else if (reason?.kind !== 'aborted') void rt.lateRoomReply?.(id, info, texts.join('\n\n').trim())
+          const stopped = stoppedRoomTurns.delete(info.exchangeId)
+          if (waiter !== undefined) {
+            if (failure !== undefined) waiter.fail(failure)
+            else waiter.resolve(reason?.kind === 'aborted' ? null : texts.join('\n\n').trim())
+          } else if (!stopped && reason?.kind !== 'aborted') {
+            // The round moved on without this member; how its turn ends still reaches the group.
+            if (failure !== undefined) void rt.lateRoomFailure?.(id, info, failure)
+            else void rt.lateRoomReply?.(id, info, texts.join('\n\n').trim())
+          }
         } else if (info !== undefined) {
           answer(info, texts.join('\n\n').trim())
         }
@@ -357,5 +384,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, callDetail })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, callDetail, stopRoomTurn })
 }

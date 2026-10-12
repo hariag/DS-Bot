@@ -32,13 +32,28 @@ async function start() {
   const agentOf = (sessionId) => {
     if (!agents.has(sessionId)) {
       const calls = []
-      agents.set(sessionId, { session: { id: sessionId }, calls, followup(message) { calls.push(message) }, steer(message) { calls.push(message) } })
+      const cancelled = []
+      // What the Session has not taken up yet; a test empties it when the turn starts.
+      const held = []
+      const inbox = {
+        nextStep: [],
+        nextTurn: held,
+        remove(id) {
+          const at = held.findIndex(message => message.id === id)
+          if (at === -1) return false
+          held.splice(at, 1)
+          return true
+        },
+      }
+      const keep = (message) => { calls.push(message); held.push(message) }
+      agents.set(sessionId, { session: { id: sessionId }, calls, cancelled, inbox, followup: keep, steer: keep, cancel(reason) { cancelled.push(reason) } })
     }
     return agents.get(sessionId)
   }
+  const archived = []
   Object.assign(ctx, {
     llm: { listProviders: () => [], listModels: async () => [], resolveModelInfo: async () => ({}) },
-    workspaceRegistry: { get: () => undefined, resolveByPath: async () => undefined, create: async path => ({ id: 'w1', path }), archiveSession: async () => {} },
+    workspaceRegistry: { get: () => undefined, resolveByPath: async () => undefined, create: async path => ({ id: 'w1', path }), archiveSession: async (id, options) => { archived.push([id, options]) } },
     sessionController: { create: async () => ({ sessionId: 's1' }), resolveAgent: async sessionId => ({ agent: agentOf(sessionId) }), selectModel: async () => {} },
     sessionTitle: { rename: async () => {} },
     sessions: { flush: async () => {} },
@@ -58,7 +73,7 @@ async function start() {
   const askApproval = (sessionId, extra = {}, next = () => 'from-dsh') => ctx.listeners.get('approval/request')[0]({ agent: { session: { id: sessionId } }, toolName: 'pwsh', reason: 'escalate sandbox', ...extra }, next)
   const stop = () => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) }
   await tool('list_bots', {}, 'a')
-  return { agentOf, emit, tool, call, askApproval, stop }
+  return { agentOf, emit, tool, call, askApproval, stop, archived }
 }
 
 // Waits on real I/O (state writes) without timers, which some tests mock.
@@ -77,9 +92,12 @@ async function openTurn(t, { agentOf, emit, tool }) {
   void tool('group_relay', {}, 'r1', { callId: 'c1', signal: stop.signal }).then((value) => { result = JSON.parse(value) })
   await settle(() => agentOf('gb').calls.length === 1)
   const message = agentOf('gb').calls[0]
+  agentOf('gb').inbox.nextTurn.length = 0
   emit('gb', 'turn/start', { turn: 1 })
   emit('gb', 'user/message', { content: message.content, source: message.source })
-  return () => result
+  const read = () => result
+  read.stop = () => stop.abort()
+  return read
 }
 
 test('a group Session\'s approval waits in the team view, frees the round, and the late reply reaches the group', async (t) => {
@@ -148,4 +166,84 @@ test('a member at work keeps its turn; one quiet for the whole wait is missed, a
   host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   await settle(() => true)
   assert.equal(host.agentOf('r1').calls.length, 0)
+})
+
+// Real I/O that does not end in a condition the test can see.
+const idle = () => new Promise(resolve => setTimeout(resolve, 50))
+
+test('stopping a round stops the member turn it started, and that turn posts nothing', async (t) => {
+  const host = await start()
+  t.after(host.stop)
+  const result = await openTurn(t, host)
+  result.stop()
+  await settle(() => result() !== undefined)
+  await settle(() => host.agentOf('gb').cancelled.length === 1)
+  assert.equal(host.agentOf('gb').cancelled[0].reason, 'ds-bot/stopped')
+  // The turn may end with text before the stop lands.
+  host.emit('gb', 'assistant/message', { message: { content: [{ type: 'text', text: 'Done anyway.' }] } })
+  host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await idle()
+  assert.equal(host.agentOf('r1').calls.length, 0)
+})
+
+test('stopping a round withdraws a member turn that has not started', async (t) => {
+  const host = await start()
+  t.after(host.stop)
+  let result
+  const stop = new AbortController()
+  t.after(() => stop.abort())
+  void host.tool('group_relay', {}, 'r1', { callId: 'c1', signal: stop.signal }).then((value) => { result = JSON.parse(value) })
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  stop.abort()
+  await settle(() => result !== undefined)
+  await settle(() => host.agentOf('gb').inbox.nextTurn.length === 0)
+  assert.deepEqual(host.agentOf('gb').cancelled, [])
+})
+
+test('deleting a group cancels its members\' waiting approvals and stops their Sessions', async (t) => {
+  const host = await start()
+  t.after(host.stop)
+  await openTurn(t, host)
+  const outcome = host.askApproval('gb')
+  assert.equal((await host.call('delete-room', { id: 'r1' })).ok, true)
+  assert.equal(await outcome, 'cancelled')
+  assert.deepEqual((await host.call('state', {})).value.work.approvals, [])
+  assert.deepEqual(host.archived.find(([id]) => id === 'gb'), ['gb', { stopActivity: true }])
+})
+
+test('a report back names the members still waiting for an approval', async (t) => {
+  const host = await start()
+  t.after(host.stop)
+  const posted = await host.tool('post_to_group', { group: 'Ops', message: 'Copy the doc', report_back: true }, 'a')
+  assert.match(posted, /^Posted in "Ops"/)
+  const post = host.agentOf('r1').calls[0]
+  host.emit('r1', 'user/message', { content: post.content, source: post.source })
+  const result = await openTurn(t, host)
+  void host.askApproval('gb')
+  await settle(() => result() !== undefined)
+  await settle(() => host.agentOf('a').calls.length === 1)
+  const report = text(host.agentOf('a').calls[0])
+  assert.match(report, /Nobody replied to your post\./)
+  assert.match(report, /Waiting for the user's approval: Writer\./)
+})
+
+test('a member that fails after the round moved on shows the failure in the group, and nobody answers it', async (t) => {
+  const host = await start()
+  t.after(host.stop)
+  const result = await openTurn(t, host)
+  const outcome = host.askApproval('gb')
+  await settle(() => result() !== undefined)
+  const [approval] = (await host.call('state', {})).value.work.approvals
+  await host.call('approval-answer', { id: approval.id, choice: 'allow' })
+  await outcome
+  host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'RATE_LIMIT', status: 429, message: 'Too many requests' } } })
+  await settle(() => host.agentOf('r1').calls.length === 1)
+  const post = host.agentOf('r1').calls[0]
+  assert.deepEqual([post.source.late, post.source.quiet, post.source.failed], [true, true, { code: 'RATE_LIMIT', status: 429, message: 'Too many requests' }])
+
+  host.emit('r1', 'user/message', { content: post.content, source: post.source })
+  const round = JSON.parse(await host.tool('group_relay', {}, 'r1', { callId: 'c2', signal: new AbortController().signal }))
+  assert.deepEqual(round.replies.map(reply => [reply.kind, reply.name, reply.code, reply.status]), [['failed', 'Writer', 'RATE_LIMIT', 429]])
+  assert.deepEqual(round.failed, ['Writer'])
+  assert.equal(host.agentOf('gb').calls.length, 1)
 })

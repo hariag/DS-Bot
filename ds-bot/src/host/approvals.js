@@ -52,5 +52,12 @@ export function install(rt) {
     entry.answer(outcome)
   }
 
-  Object.assign(rt, { approvalsView, waitsForApproval, answerApproval })
+  // A group Session that leaves its group has no card left to answer from.
+  const cancelApprovals = (sessionId) => {
+    for (const entry of pending.values()) {
+      if (entry.sessionId === sessionId) entry.answer?.('cancelled')
+    }
+  }
+
+  Object.assign(rt, { approvalsView, waitsForApproval, answerApproval, cancelApprovals })
 }

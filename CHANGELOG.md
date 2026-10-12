@@ -9,6 +9,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
 - **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
 - A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.
+- In a group chat, a member that asks for an approval no longer holds up the round. You allow or reject the request in the group's details panel, and a line above the composer names the members who are waiting or at work. What a member says after the round moved on is posted in the group.
 
 ### Changed
 

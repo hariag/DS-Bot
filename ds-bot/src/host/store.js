@@ -315,7 +315,10 @@ export function install(rt) {
     delete room.sessions[botId]
     if (room.segments !== undefined) delete room.segments[botId]
     groupOwners.delete(sessionId)
-    void ctx.workspaceRegistry.archiveSession(sessionId).catch(() => {})
+    rt.cancelApprovals?.(sessionId)
+    // A plain archive refuses a running Session, which would go on working for a group
+    // that no longer has it.
+    void ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true }).catch(() => {})
   }
   const findBot = (ref) => {
     if (ref === undefined) return undefined
