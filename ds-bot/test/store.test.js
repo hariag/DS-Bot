@@ -112,7 +112,7 @@ test('malformed state stays read-only when its backup cannot be copied', async (
     await rt.load()
     assert.match(rt.readOnly(), /could not be read/)
     rt.state.prefs.marker = 'not saved'
-    await assert.rejects(rt.save(), { code: 'bot/read-only' })
+    await rt.save()
     assert.equal(fs.readFileSync(statePath, 'utf8'), original)
     assert.deepEqual(fs.readdirSync(rt.home).filter(name => name.startsWith('state.json.broken-')), [])
   } finally {
@@ -126,7 +126,7 @@ test('a state from a newer version remains untouched', async (t) => {
   await rt.load()
   assert.match(rt.readOnly(), /saved by a newer DS Bot; update DS Bot/)
   rt.state.prefs.marker = 'not saved'
-  await assert.rejects(rt.save(), { code: 'bot/read-only' })
+  await rt.save()
   assert.equal(fs.readFileSync(statePath, 'utf8'), original)
 })
 
@@ -143,7 +143,7 @@ test('a read error keeps the existing state read-only', async (t) => {
     restore()
   }
   assert.match(rt.readOnly(), /could not be read \(EACCES\)/)
-  await assert.rejects(rt.save(), { code: 'bot/read-only' })
+  await rt.save()
   assert.equal(fs.readFileSync(statePath, 'utf8'), original)
 })
 
@@ -172,7 +172,7 @@ test('an unusable state lock fails closed', async (t) => {
     await rt.load()
     assert.match(rt.readOnly(), /cannot lock the Bot team.*EACCES/)
     rt.state.prefs.marker = 'not saved'
-    await assert.rejects(rt.save(), { code: 'bot/read-only' })
+    await rt.save()
     assert.equal(fs.existsSync(statePath), false)
   } finally {
     restore()
@@ -213,6 +213,20 @@ test('a queued save rejects after another host takes the lock', async (t) => {
     unblock()
     restore()
   }
+})
+
+test('a read-only host resolves awaited saves without writing', async (t) => {
+  const { rt, home, statePath } = runtime(t)
+  await rt.load()
+  await rt.save()
+  fs.writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: process.ppid, host: hostname(), token: 'new-owner' }))
+  const ownerState = JSON.stringify({ version: 1, revision: 900, prefs: { marker: 'new owner' } })
+  fs.writeFileSync(statePath, ownerState)
+  await rt.refresh()
+  assert.match(rt.readOnly(), /another dsh/)
+  rt.state.prefs.marker = 'not saved'
+  await rt.save()
+  assert.equal(fs.readFileSync(statePath, 'utf8'), ownerState)
 })
 
 test('dispose waits for a pending save and prevents later writes', async (t) => {

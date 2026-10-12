@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -341,7 +341,7 @@ test('a host that loses its lock to another dsh refuses changes instead of makin
   assert.equal(team.bots.some(bot => bot.name === 'Phantom'), false)
 })
 
-test('a write refused at save time archives the Session it made', async (t) => {
+test('a write that fails at save time archives the Session it made', async (t) => {
   const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
   t.after(stop)
   await call('state', {})
@@ -350,8 +350,8 @@ test('a write refused at save time archives the Session it made', async (t) => {
   ctx.sessionController.create = async (...args) => {
     const made = await create(...args)
     created.push(made.sessionId)
-    // The lock goes to another live dsh after this request's refresh, before its save.
-    takeover(home)
+    // The disk write fails after this request's refresh, before its save.
+    mkdirSync(join(home, `state.json.${process.pid}.tmp`))
     return made
   }
   const archived = []
@@ -359,10 +359,9 @@ test('a write refused at save time archives the Session it made', async (t) => {
   ctx.workspaceRegistry.archiveSession = async (id) => { archived.push(id); return archive(id) }
   const answer = await call('create-bot', { name: 'Phantom' })
   assert.equal(answer.ok, false)
-  assert.equal(answer.error.code, 'bot/read-only')
+  assert.equal(answer.error.code, 'bot/internal')
   assert.deepEqual(archived, created)
   const team = (await call('state', {})).value
-  assert.match(team.readOnly, /another dsh/)
   assert.equal(team.bots.some(bot => bot.name === 'Phantom'), false)
   const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   assert.equal(Object.values(saved.bots).some(bot => bot.name === 'Phantom'), false)

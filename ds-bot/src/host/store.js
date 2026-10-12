@@ -222,11 +222,7 @@ export function install(rt) {
     if (stopped) return writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
-    if (!writable()) {
-      const error = new Error(readOnly())
-      error.code = 'bot/read-only'
-      return Promise.reject(error)
-    }
+    if (!writable()) return writing
     state.revision += 1
     state.exchanges = state.exchanges.slice(-MAX_EXCHANGES)
     const snapshot = JSON.stringify(state, null, 2)

@@ -108,7 +108,8 @@ export function install(rt) {
       delete state.bots[id]
       state.mainBotIds = state.mainBotIds.filter(other => other !== id)
       rt.chatOwners.delete(id)
-      await ctx.workspaceRegistry.archiveSession(id).catch(() => {})
+      await ctx.workspaceRegistry.archiveSession(id)
+        .catch(archiveError => rt.warn('ds-bot: archiving the Session for %s failed: %s', cleanName, archiveError))
       throw error
     }
   }
@@ -268,7 +269,8 @@ export function install(rt) {
     } catch (error) {
       // The group's Session was already made: archive it instead of leaving an orphan.
       delete state.rooms[id]
-      await ctx.workspaceRegistry.archiveSession(id).catch(() => {})
+      await ctx.workspaceRegistry.archiveSession(id)
+        .catch(archiveError => rt.warn('ds-bot: archiving the Session for %s failed: %s', title, archiveError))
       throw error
     }
   }
