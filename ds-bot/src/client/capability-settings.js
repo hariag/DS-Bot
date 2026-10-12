@@ -17,24 +17,25 @@ function Field({ label, value, onChange, multiline = false, disabled = false, pl
   return h('label', { className: 'bt-set-row bt-bs-row bt-bs-stack' },
     h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-bs-label' }, t(label))),
     h(multiline ? 'textarea' : 'input', {
-    className: multiline ? 'bt-bs-input bt-bs-area' : 'bt-bs-input',
-    value,
-    disabled,
-    maxLength: label === 'Name' ? 32 : undefined,
+      className: multiline ? 'bt-input bt-input-area' : 'bt-input',
+      value,
+      disabled,
+      maxLength: label === 'Name' ? 32 : undefined,
       placeholder,
       spellCheck: false,
       onChange: event => onChange(event.target.value),
     }))
 }
 
-function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
+function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
   const [error, setError] = useState('')
   const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
   const submit = async event => {
     event.preventDefault()
     setError('')
+    let payload
     try {
-      const payload = { name: draft.name.trim(), kind: draft.kind, description: draft.description }
+      payload = { name: draft.name.trim(), kind: draft.kind, description: draft.description }
       if (draft.kind === 'mcp' && draft.transport === 'stdio') {
         payload.transport = 'stdio'
         payload.command = draft.command
@@ -46,7 +47,13 @@ function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
         payload.headers = parseMap(draft.headersText, t('Headers'))
       } else if (draft.kind === 'skill') payload.content = draft.content
       else payload.items = draft.items
-      if (await run(actions.saveCapability(payload))) onClose()
+    } catch (failure) {
+      setError(failure?.message ?? String(failure))
+      return
+    }
+    try {
+      await actions.saveCapability(payload)
+      onClose()
     } catch (failure) {
       setError(failure?.message ?? String(failure))
     }
@@ -54,14 +61,14 @@ function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
   const available = items.filter(item => item.name !== draft.name && ['mcp', 'skill'].includes(item.kind))
   return h('form', { className: 'bt-connector-form', onSubmit: submit },
     h(Field, { label: 'Name', value: draft.name, disabled: draft.originalName !== undefined, onChange: value => set('name', value), placeholder: 'my-tool' }),
-    h('label', { className: 'bt-set-row bt-bs-row' },
+    h('label', { className: 'bt-set-row bt-bs-row bt-bs-stack' },
       h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-bs-label' }, t('Type'))),
-      h('select', { className: 'bt-bs-input', value: draft.kind, disabled: draft.originalName !== undefined, onChange: event => set('kind', event.target.value) },
+      h('select', { className: 'bt-input', value: draft.kind, disabled: draft.originalName !== undefined, onChange: event => set('kind', event.target.value) },
         ['mcp', 'skill', 'pack'].map(kind => h('option', { key: kind, value: kind }, t(kind === 'mcp' ? 'MCP server' : kind === 'skill' ? 'Skill' : 'Pack'))))),
     h(Field, { label: 'Description', value: draft.description, onChange: value => set('description', value) }),
-    draft.kind === 'mcp' ? h('label', { className: 'bt-set-row bt-bs-row' },
+    draft.kind === 'mcp' ? h('label', { className: 'bt-set-row bt-bs-row bt-bs-stack' },
       h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-bs-label' }, t('Connection'))),
-      h('select', { className: 'bt-bs-input', value: draft.transport, onChange: event => set('transport', event.target.value) },
+      h('select', { className: 'bt-input', value: draft.transport, onChange: event => set('transport', event.target.value) },
         h('option', { value: 'stdio' }, t('Local command')),
         h('option', { value: 'streamable-http' }, t('HTTP server')))) : null,
     draft.kind === 'mcp' && draft.transport === 'stdio' ? h('div', null,
@@ -87,11 +94,14 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
   const detail = item.kind === 'pack' ? `${t('Pack')}: ${(item.items ?? []).join(', ') || t('No items')}`
     : item.kind === 'mcp' ? item.transport === 'stdio' ? t('Local command') : t('HTTP server')
       : t('Skill')
+  const secondary = item.kind === 'pack'
+    ? [item.description, (item.items ?? []).join(', ') || t('No items')].filter(Boolean).join(' · ')
+    : item.description || detail
   return h('div', { className: 'bt-connector' },
     h('div', { className: 'bt-connector-head' },
       h('span', { className: 'bt-connector-text' },
         h('span', { className: 'bt-connector-name' }, item.name),
-        h('span', { className: 'bt-connector-status' }, item.description || detail)),
+        h('span', { className: 'bt-connector-status' }, secondary)),
       h('span', { className: 'bt-connector-actions' },
         item.kind === 'mcp' && item.transport === 'stdio' && !item.approved
           ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: onApprove }, t('Allow')) : null,
@@ -127,7 +137,7 @@ export function CapabilitiesPage({ roster, actions, run }) {
     h('h3', null, t('Shared capabilities')),
     h('div', { className: 'bt-actions' },
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: startNew }, t('Add capability'))),
-    draft ? h(CapabilityForm, { draft, setDraft, items, actions, run, onClose: () => setDraft(null) }) : null,
+    draft ? h(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
     h('div', { className: 'bt-set-card bt-connectors-card' },
       items.length === 0 ? h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, t('No capabilities saved')))
         : items.map(item => h(CapabilityRow, {

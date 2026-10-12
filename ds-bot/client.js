@@ -6796,7 +6796,7 @@ function Field({ label, value, onChange, multiline = false, disabled = false, pl
     { className: "bt-set-row bt-bs-row bt-bs-stack" },
     (0, import_react15.createElement)("span", { className: "bt-set-copy" }, (0, import_react15.createElement)("span", { className: "bt-bs-label" }, t(label))),
     (0, import_react15.createElement)(multiline ? "textarea" : "input", {
-      className: multiline ? "bt-bs-input bt-bs-area" : "bt-bs-input",
+      className: multiline ? "bt-input bt-input-area" : "bt-input",
       value,
       disabled,
       maxLength: label === "Name" ? 32 : void 0,
@@ -6806,14 +6806,15 @@ function Field({ label, value, onChange, multiline = false, disabled = false, pl
     })
   );
 }
-function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
+function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
   const [error, setError] = (0, import_react15.useState)("");
   const set = (key, value) => setDraft((previous) => ({ ...previous, [key]: value }));
   const submit = async (event) => {
     event.preventDefault();
     setError("");
+    let payload;
     try {
-      const payload = { name: draft.name.trim(), kind: draft.kind, description: draft.description };
+      payload = { name: draft.name.trim(), kind: draft.kind, description: draft.description };
       if (draft.kind === "mcp" && draft.transport === "stdio") {
         payload.transport = "stdio";
         payload.command = draft.command;
@@ -6825,7 +6826,13 @@ function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
         payload.headers = parseMap(draft.headersText, t("Headers"));
       } else if (draft.kind === "skill") payload.content = draft.content;
       else payload.items = draft.items;
-      if (await run(actions.saveCapability(payload))) onClose();
+    } catch (failure) {
+      setError(failure?.message ?? String(failure));
+      return;
+    }
+    try {
+      await actions.saveCapability(payload);
+      onClose();
     } catch (failure) {
       setError(failure?.message ?? String(failure));
     }
@@ -6837,22 +6844,22 @@ function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
     (0, import_react15.createElement)(Field, { label: "Name", value: draft.name, disabled: draft.originalName !== void 0, onChange: (value) => set("name", value), placeholder: "my-tool" }),
     (0, import_react15.createElement)(
       "label",
-      { className: "bt-set-row bt-bs-row" },
+      { className: "bt-set-row bt-bs-row bt-bs-stack" },
       (0, import_react15.createElement)("span", { className: "bt-set-copy" }, (0, import_react15.createElement)("span", { className: "bt-bs-label" }, t("Type"))),
       (0, import_react15.createElement)(
         "select",
-        { className: "bt-bs-input", value: draft.kind, disabled: draft.originalName !== void 0, onChange: (event) => set("kind", event.target.value) },
+        { className: "bt-input", value: draft.kind, disabled: draft.originalName !== void 0, onChange: (event) => set("kind", event.target.value) },
         ["mcp", "skill", "pack"].map((kind) => (0, import_react15.createElement)("option", { key: kind, value: kind }, t(kind === "mcp" ? "MCP server" : kind === "skill" ? "Skill" : "Pack")))
       )
     ),
     (0, import_react15.createElement)(Field, { label: "Description", value: draft.description, onChange: (value) => set("description", value) }),
     draft.kind === "mcp" ? (0, import_react15.createElement)(
       "label",
-      { className: "bt-set-row bt-bs-row" },
+      { className: "bt-set-row bt-bs-row bt-bs-stack" },
       (0, import_react15.createElement)("span", { className: "bt-set-copy" }, (0, import_react15.createElement)("span", { className: "bt-bs-label" }, t("Connection"))),
       (0, import_react15.createElement)(
         "select",
-        { className: "bt-bs-input", value: draft.transport, onChange: (event) => set("transport", event.target.value) },
+        { className: "bt-input", value: draft.transport, onChange: (event) => set("transport", event.target.value) },
         (0, import_react15.createElement)("option", { value: "stdio" }, t("Local command")),
         (0, import_react15.createElement)("option", { value: "streamable-http" }, t("HTTP server"))
       )
@@ -6892,6 +6899,7 @@ function CapabilityForm({ draft, setDraft, items, actions, run, onClose }) {
 }
 function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
   const detail = item.kind === "pack" ? `${t("Pack")}: ${(item.items ?? []).join(", ") || t("No items")}` : item.kind === "mcp" ? item.transport === "stdio" ? t("Local command") : t("HTTP server") : t("Skill");
+  const secondary = item.kind === "pack" ? [item.description, (item.items ?? []).join(", ") || t("No items")].filter(Boolean).join(" · ") : item.description || detail;
   return (0, import_react15.createElement)(
     "div",
     { className: "bt-connector" },
@@ -6902,7 +6910,7 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
         "span",
         { className: "bt-connector-text" },
         (0, import_react15.createElement)("span", { className: "bt-connector-name" }, item.name),
-        (0, import_react15.createElement)("span", { className: "bt-connector-status" }, item.description || detail)
+        (0, import_react15.createElement)("span", { className: "bt-connector-status" }, secondary)
       ),
       (0, import_react15.createElement)(
         "span",
@@ -6950,7 +6958,7 @@ function CapabilitiesPage({ roster, actions, run }) {
       { className: "bt-actions" },
       (0, import_react15.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: startNew }, t("Add capability"))
     ),
-    draft ? (0, import_react15.createElement)(CapabilityForm, { draft, setDraft, items, actions, run, onClose: () => setDraft(null) }) : null,
+    draft ? (0, import_react15.createElement)(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
     (0, import_react15.createElement)(
       "div",
       { className: "bt-set-card bt-connectors-card" },
