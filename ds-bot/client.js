@@ -9071,7 +9071,7 @@ function Heat({ view, keep, paint, index }) {
         "data-on": hover?.ms === ms ? "" : void 0,
         "data-future": ms > today ? "" : void 0,
         "data-today": ms === today ? "" : void 0,
-        onMouseEnter: ms > today ? void 0 : () => setHover({ ms, week, day, value })
+        onMouseEnter: ms > today ? void 0 : () => setHover({ ms, week, day })
       }, level > 0 ? (0, import_react22.createElement)("i", { style: { background: soften(paint, levels[level - 1]) } }) : null));
     }
   }
@@ -9094,7 +9094,7 @@ function Heat({ view, keep, paint, index }) {
         "div",
         { className: "bt-us-tip bt-us-heat-tip", style: tipSide },
         (0, import_react22.createElement)("div", { className: "bt-us-tip-title" }, dates({ month: "long", day: "numeric", weekday: "short" }).format(hover.ms)),
-        (0, import_react22.createElement)("div", { className: "bt-us-tip-total" }, t("{count} tokens", { count: full(hover.value) }))
+        (0, import_react22.createElement)("div", { className: "bt-us-tip-total" }, t("{count} tokens", { count: full(daily.get(dayKey(hover.ms)) ?? 0) }))
       ) : null
     ),
     (0, import_react22.createElement)(

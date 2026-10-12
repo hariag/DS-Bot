@@ -351,7 +351,7 @@ function Heat({ view, keep, paint, index }) {
         key: ms, className: 'bt-us-cell', style: { '--w': week },
         'data-on': hover?.ms === ms ? '' : undefined,
         'data-future': ms > today ? '' : undefined, 'data-today': ms === today ? '' : undefined,
-        onMouseEnter: ms > today ? undefined : () => setHover({ ms, week, day, value }),
+        onMouseEnter: ms > today ? undefined : () => setHover({ ms, week, day }),
       }, level > 0 ? h('i', { style: { background: soften(paint, levels[level - 1]) } }) : null))
     }
   }
@@ -372,7 +372,7 @@ function Heat({ view, keep, paint, index }) {
       h('div', { className: 'bt-us-heat-grid', role: 'img', 'aria-label': summary }, cells),
       hover ? h('div', { className: 'bt-us-tip bt-us-heat-tip', style: tipSide },
         h('div', { className: 'bt-us-tip-title' }, dates({ month: 'long', day: 'numeric', weekday: 'short' }).format(hover.ms)),
-        h('div', { className: 'bt-us-tip-total' }, t('{count} tokens', { count: full(hover.value) }))) : null),
+        h('div', { className: 'bt-us-tip-total' }, t('{count} tokens', { count: full(daily.get(dayKey(hover.ms)) ?? 0) }))) : null),
     h('div', { className: 'bt-us-heat-scale', 'aria-hidden': true }, t('Light'),
       levels.map(level => h('span', { key: level, className: 'bt-us-cell' }, h('i', { style: { background: soften(paint, level) } }))),
       t('Heavy')))
