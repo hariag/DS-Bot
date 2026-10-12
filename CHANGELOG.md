@@ -24,6 +24,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - Deleting a Bot or group chat also removes its scheduled tasks, including ones left on the Bot's earlier chat parts. Before, armed tasks stayed active and kept running the deleted Session; the archive that would have stopped them was refused and the failure was silent.
 - A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.
 - A provider adapter that cannot measure tokens no longer fails every turn. The context size is estimated instead, with one warning in the log.
+- When the recent errors were too long for **Report on GitHub**, the new issue got no diagnostics at all. Now it keeps the versions, the system and the models, and only the errors go by the clipboard.
 - The memory panel's summary works on models that think by default. The call asks for the model's lowest thinking level, and when the answer is cut off at the output limit it is written once more with a larger budget instead of failing or being saved half-written.
 
 ### Fixed

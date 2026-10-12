@@ -214,7 +214,7 @@ test('a failed group turn fails its waiter; a stopped one counts as no answer', 
   assert.equal(value, null)
 })
 
-test('issueUrl fills the issue form, and falls back to the clipboard when too long', async () => {
+test('issueUrl fills the issue form, keeps the versions when the errors are too long, and falls back to the clipboard', async () => {
   const { issueUrl } = await import('../src/client/diagnostics.js')
   const base = 'https://github.com/Fei2411/DeepSeek-Bot/issues/new'
   const short = issueUrl(base, { what: 'Writer failed\nin the group', diagnostics: '| DS Bot | 0.1.0 |' })
@@ -229,6 +229,14 @@ test('issueUrl fills the issue form, and falls back to the clipboard when too lo
   assert.ok(long.url.length < 7000)
   assert.match(new URL(long.url).searchParams.get('diagnostics'), /clipboard/)
   assert.equal(new URL(long.url).searchParams.has('title'), false)
+  const table = '| | |\n|---|---|\n| DS Bot | 0.1.2 |\n| DSH | 0.2.0 |'
+  const errors = issueUrl(base, { what: 'Writer failed', diagnostics: `${table}\n\nRecent host errors:\n${'错误'.repeat(2000)}` })
+  assert.equal(errors.inline, false)
+  assert.ok(errors.url.length < 7000)
+  const kept = new URL(errors.url).searchParams.get('diagnostics')
+  assert.ok(kept.startsWith(`${table}\n\n`))
+  assert.match(kept, /clipboard: paste them below this line/)
+  assert.doesNotMatch(kept, /错误/)
 })
 
 test('a browser error is noted once, repeats are counted, and clear empties the list', async () => {

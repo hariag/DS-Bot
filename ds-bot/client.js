@@ -981,12 +981,17 @@ function failureLabel(code, message) {
 var URL_LIMIT = 7e3;
 var WHAT_MAX = 2e3;
 var PASTE_NOTE = "DS Bot copied the diagnostics to the clipboard. Paste them here.";
+var REST_NOTE = "The recent errors do not fit in the link. DS Bot copied the diagnostics to the clipboard: paste them below this line.";
 function issueUrl(base, { what = "", diagnostics }) {
   const text = what.trim().slice(0, WHAT_MAX);
   const title = text.split("\n")[0].slice(0, 80);
   const build = (body) => `${base}?${new URLSearchParams({ template: "bug.yml", ...title ? { title } : {}, ...text ? { what: text } : {}, diagnostics: body })}`;
   const full2 = build(diagnostics);
-  return full2.length <= URL_LIMIT ? { url: full2, inline: true } : { url: build(PASTE_NOTE), inline: false };
+  if (full2.length <= URL_LIMIT) return { url: full2, inline: true };
+  const facts = build(`${diagnostics.split("\n\n")[0]}
+
+${REST_NOTE}`);
+  return { url: facts.length <= URL_LIMIT ? facts : build(PASTE_NOTE), inline: false };
 }
 
 // src/client/api.js
