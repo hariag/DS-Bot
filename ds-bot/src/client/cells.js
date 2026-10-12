@@ -519,8 +519,8 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       const result = await actions.roomProgress(sessionId)
       if (stop) return
       const entry = (result ?? []).find(item => item.callId === callId) ?? (result ?? [])[0]
-      const key = entry ? JSON.stringify([entry.replies, entry.speaking, entry.pending]) : ''
-      if (entry && key !== seen) { seen = key; setLive({ replies: entry.replies ?? [], speaking: entry.speaking ?? null, pending: entry.pending ?? [] }) }
+      const key = entry ? JSON.stringify([entry.replies, entry.speaking]) : ''
+      if (entry && key !== seen) { seen = key; setLive({ replies: entry.replies ?? [], speaking: entry.speaking ?? null }) }
       timer = setTimeout(tick, document.hidden ? 5000 : 1000)
     }
     void tick()
@@ -530,16 +530,17 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   if (done) {
     try { replies = JSON.parse(contentText(content)).replies ?? [] } catch { replies = [] }
   }
-  // User messages sent mid-round show at once, then join the replies when posted.
-  const queued = done ? [] : (live.pending ?? []).map((text, index) => ({ kind: 'user', text, key: `pending-${index}` }))
   // Members speak one at a time, so only the current speaker is typing.
   const pending = done || !live.speaking ? [] : [live.speaking]
-  if (replies.length === 0 && queued.length === 0 && pending.length === 0) return null
+  if (replies.length === 0 && pending.length === 0) return null
   const room = roster.roomsById[sessionId]
   return h('div', { className: 'bt-group-replies' },
     replies.map((reply, index) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? 'gray' }
-      if (reply.kind === 'user') return h('div', { key: `user-${index}`, className: 'bt-event' }, reply.text)
+      if (reply.kind === 'user') {
+        return h('div', { key: `user-${index}`, className: 'bt-urow' }, h('div', { className: 'bt-ububble' },
+          h(MarkdownText, { text: reply.text, labels: mdLabels(), variant: 'compact' })))
+      }
       if (reply.kind === 'failed') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event bt-event-error', role: 'status', title: [reply.code, reply.status, reply.text].filter(Boolean).join(' · ') },
           t('{name} could not answer: {reason}', { name: bot.name, reason: failureLabel(reply.code, reply.text) }))
@@ -550,7 +551,6 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, text: reply.text, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
     }),
-    queued.map(reply => h('div', { key: reply.key, className: 'bt-event' }, reply.text)),
     pending.map((id) => {
       const bot = roster.byId[id]
       if (!bot) return null

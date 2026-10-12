@@ -29,10 +29,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.
 - A provider adapter that cannot measure tokens no longer fails every turn. The context size is estimated instead, with one warning in the log.
 - The memory panel's summary works on models that think by default. The call asks for the model's lowest thinking level, and when the answer is cut off at the output limit it is written once more with a larger budget instead of failing or being saved half-written.
-
-### Fixed
-
-- A message sent to a group chat while a round is running shows at once and joins that round instead of waiting for it to end.
+- A message sent to a group chat while a round is running joins that round before the next member speaks. Everyone still to speak sees it, and the members it is for answer it in the same round. Before, it waited for the whole round to end. A message with images or a referenced conversation still waits for its own round.
 
 ## [0.1.2] - 2026-10-11
 

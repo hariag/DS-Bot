@@ -42,10 +42,7 @@ export function install(rt) {
   const roomProgress = new Map()
   /** @type {Map<string, {text:string, botId?:string, name?:string, reportBack?:boolean, hop?:number, kickoff?:boolean, references?:{labels:string[], text:string}[]}[]>} messages a room's next relay posts */
   const roomInbox = new Map()
-  const queueRoomMessage = (roomId, item) => {
-    roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
-    return item
-  }
+  const queueRoomMessage = (roomId, item) => roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
 
   const liveOf = id => {
     let entry = live.get(id)
@@ -226,21 +223,9 @@ export function install(rt) {
           attachReference(roomInbox.get(id), source, textOf(event.data.content))
         } else if (source?.kind === 'user' || source?.kind === REPLY_KIND) {
           if (rt.roomOf(id) && source.kind === 'user') {
-            const text = textOf(event.data.content)
             const images = (Array.isArray(event.data.content) ? event.data.content : [])
               .filter(block => block?.type === 'image' && !block.offloaded).map(block => block.attachment)
-            // A message recorded for a running round (`early`) reaches the Session
-            // again once its queued prompt lands: keep the round's own posting and
-            // treat this copy as consumed so it neither posts nor opens a round.
-            const earlier = images.length === 0
-              ? (rt.roomInbox.get(id) ?? []).find(item => item.early === true && item.claimed !== true && item.text === text)
-              : undefined
-            if (earlier !== undefined) {
-              earlier.claimed = true
-              queueRoomMessage(id, { text, consumed: true })
-            } else {
-              queueRoomMessage(id, { text, ...(images.length > 0 ? { images } : {}) })
-            }
+            queueRoomMessage(id, { text: textOf(event.data.content), ...(images.length > 0 ? { images } : {}) })
           }
           const own = rt.chatOwners.get(id)
           if (own !== undefined) rt.dropKickoff(own)
@@ -316,5 +301,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, queueRoomMessage, activityView })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView })
 }

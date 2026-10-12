@@ -4167,10 +4167,10 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       const result = await actions.roomProgress(sessionId);
       if (stop) return;
       const entry = (result ?? []).find((item) => item.callId === callId) ?? (result ?? [])[0];
-      const key = entry ? JSON.stringify([entry.replies, entry.speaking, entry.pending]) : "";
+      const key = entry ? JSON.stringify([entry.replies, entry.speaking]) : "";
       if (entry && key !== seen) {
         seen = key;
-        setLive({ replies: entry.replies ?? [], speaking: entry.speaking ?? null, pending: entry.pending ?? [] });
+        setLive({ replies: entry.replies ?? [], speaking: entry.speaking ?? null });
       }
       timer = setTimeout(tick, document.hidden ? 5e3 : 1e3);
     };
@@ -4188,16 +4188,21 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       replies = [];
     }
   }
-  const queued = done ? [] : (live.pending ?? []).map((text, index) => ({ kind: "user", text, key: `pending-${index}` }));
   const pending = done || !live.speaking ? [] : [live.speaking];
-  if (replies.length === 0 && queued.length === 0 && pending.length === 0) return null;
+  if (replies.length === 0 && pending.length === 0) return null;
   const room2 = roster.roomsById[sessionId];
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-group-replies" },
     replies.map((reply, index) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? "gray" };
-      if (reply.kind === "user") return (0, import_react6.createElement)("div", { key: `user-${index}`, className: "bt-event" }, reply.text);
+      if (reply.kind === "user") {
+        return (0, import_react6.createElement)("div", { key: `user-${index}`, className: "bt-urow" }, (0, import_react6.createElement)(
+          "div",
+          { className: "bt-ububble" },
+          (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: reply.text, labels: mdLabels(), variant: "compact" })
+        ));
+      }
       if (reply.kind === "failed") {
         return (0, import_react6.createElement)(
           "div",
@@ -4214,7 +4219,6 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       return (0, import_react6.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, text: reply.text, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi });
     }),
-    queued.map((reply) => (0, import_react6.createElement)("div", { key: reply.key, className: "bt-event" }, reply.text)),
     pending.map((id) => {
       const bot = roster.byId[id];
       if (!bot) return null;
