@@ -129,7 +129,15 @@ export function install(rt) {
           await rt.load()
           return ok(await rt.usageView({ timeZone: typeof body.timeZone === 'string' ? body.timeZone.slice(0, 64) : undefined }))
         case 'room-progress':
-          return ok([...rt.roomProgress.entries()].filter(([, entry]) => entry.roomId === body.roomId).map(([callId, entry]) => ({ callId, replies: entry.replies, speaking: entry.speaking ?? null })))
+          return ok([...rt.roomProgress.entries()].filter(([, entry]) => entry.roomId === body.roomId).map(([callId, entry]) => ({
+            callId,
+            replies: entry.replies,
+            speaking: entry.speaking ?? null,
+            // Messages sent mid-round that the next drain has not posted yet.
+            pending: (rt.roomInbox.get(entry.roomId) ?? [])
+              .filter(item => item.early === true && item.posted !== true && item.consumed !== true)
+              .map(item => item.text),
+          })))
         case 'create-bot': {
           await rt.bootstrap()
           const bot = await rt.createBot({ name: body.name, role: body.role, color: body.color, instructions: body.instructions, brief: body.brief, avatar: body.avatar, model: body.model, effort: body.effort })
@@ -254,6 +262,9 @@ export function install(rt) {
           // A Bot id or an earlier part of its own chat means the current part.
           const past = rt.pastOwners.get(body.sessionId)
           const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
+          // While a group is mid-round its queued copy waits out the whole round;
+          // record it for the running round too so the next speaker sees it now.
+          if (rt.roomOf(sessionId) !== undefined && rt.roomBusy(sessionId)) rt.queueRoomMessage(sessionId, { text, early: true })
           await ctx.sessionController.prompt({
             requestId: randomUUID(),
             sessionId,
