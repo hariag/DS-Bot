@@ -18,25 +18,31 @@ Thank you for your interest in improving DS Bot. The project is still changing q
 
 You need:
 
-- Node.js `22.19` or later (or `24` and later), and pnpm `11`.
+- Node.js `22.19` or later (or `24` and later).
 - Git.
-- A checkout of DeepSeek Harness at the DSH version that the plugin is tested with. The unit tests and the test bench load the `@deepseek-ai/*` packages from it.
+- For the test bench only: pnpm `11` and a checkout of DeepSeek Harness at the DSH version that the plugin is tested with.
 
 ```sh
 git clone https://github.com/Fei2411/DeepSeek-Bot.git ds-bot-repo
-cd ds-bot-repo
+cd ds-bot-repo/ds-bot
 
-# DeepSeek Harness, next to the plugin folder (this folder is ignored by Git).
+# The plugin's own build tool (esbuild only).
+npm ci
+
+# The DSH packages that the unit tests and the linter load, from npm, into dev/harness/.
+npm run harness
+```
+
+For the test bench, add the DeepSeek Harness checkout next to the plugin folder (this folder is ignored by Git):
+
+```sh
+cd ..
 git clone https://github.com/deepseek-ai/deepseek-harness.git
 git -C deepseek-harness checkout dsh-v0.2.1-alpha.1
 (cd deepseek-harness && pnpm install)
-
-# The plugin's own build tool (esbuild only).
-cd ds-bot
-npm ci
 ```
 
-If your DeepSeek Harness checkout is somewhere else, set `DSH_HARNESS` to its path for the tests and the test bench.
+If your DeepSeek Harness checkout is somewhere else, set `DSH_HARNESS` to its path. `DSH_HARNESS` also takes the place of `dev/harness/` for the unit tests and the linter.
 
 The `@deepseek-ai/*` packages are peer dependencies: in a real install, the DSH profile supplies them. `ds-bot/.npmrc` keeps npm from installing them into the plugin folder.
 
@@ -50,7 +56,7 @@ The `@deepseek-ai/*` packages are peer dependencies: in a real install, the DSH 
 | `ds-bot/web-search.js` | The `auto` web-search provider. It does not depend on the Bot team code |
 | `ds-bot/cordis.patch.yml` | The profile patch that the plugin brings |
 | `ds-bot/test/` | Unit tests and fixtures |
-| `ds-bot/dev/` | The mock model, the test bench, the smoke test, the character generator, the Desktop scripts for Linux, and two tools for real models: the steward evaluation and a logging pass-through |
+| `ds-bot/dev/` | The DSH packages for the unit tests (`harness/`), the mock model, the test bench, the smoke test, the character generator, the Desktop scripts for Linux, and two tools for real models: the steward evaluation and a logging pass-through |
 
 ## Test a change
 
@@ -60,7 +66,10 @@ Run these in `ds-bot/`:
 npm run build                          # src/client → client.js
 npm test                               # unit tests; they also fail if client.js is stale
 node scripts/build-client.mjs --check  # client.js matches src/client
+npm run lint                           # oxlint
 ```
+
+CI runs the same three checks on every pull request, on Linux and Windows.
 
 For a change to the server side (`index.js`, `src/host/`), also run the smoke test. It starts the mock model and a DSH Web with the plugin linked from your checkout, and walks through the main flows (Bots, group chats, conversation parts, condensing, settings). `CONTEXT_WINDOW` and `CHECK_RATIO` give the mock models a small window, so a few long replies reach the check line:
 
