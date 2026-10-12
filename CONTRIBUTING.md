@@ -4,7 +4,7 @@ Thank you for helping. This file explains how to set up the plugin, how to test 
 
 ## Pull requests
 
-Thank you for your interest in improving DS Bot. The project is still changing quickly, so we are not accepting pull requests for now. If you find a problem or have an idea, please open an issue (see [Report a problem](#report-a-problem)). We hope to open pull requests again when the project is stable. Thank you for your understanding.
+Thank you for your interest in improving DS Bot. The project is still changing quickly, so we are not accepting pull requests for now. If you find a problem, please open an issue (see [Report a problem](#report-a-problem)). For a question, idea or feature request, use [Discussions](https://github.com/FeiZhuLulu/DeepSeek-Bot/discussions). We hope to open pull requests again when the project is stable. Thank you for your understanding.
 
 ## The rules that matter most
 
@@ -102,6 +102,8 @@ If you open an issue by hand, include:
 DS Bot removes API keys, tokens, saved secrets and your home folder from its diagnostics. Read the text before you post it, and remove personal data from screenshots.
 
 For a security problem, do not open a public issue. Use **Report a vulnerability** on the repository's **Security** tab.
+
+Issues are for bug reports. Questions, ideas and feature requests belong in [Discussions](https://github.com/FeiZhuLulu/DeepSeek-Bot/discussions).
 
 ## License
 

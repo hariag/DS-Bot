@@ -7,6 +7,7 @@ body:
       value: |
         Thank you for the report. Before you submit, check that the text below has no API keys, tokens or personal data.
         For a security problem, do not open a public issue: use **Report a vulnerability** on the **Security** tab.
+        For a question, idea or feature request, use [Discussions](https://github.com/FeiZhuLulu/DeepSeek-Bot/discussions) instead.
   - type: textarea
     id: what
     attributes:
