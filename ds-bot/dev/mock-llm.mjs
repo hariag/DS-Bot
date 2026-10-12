@@ -93,7 +93,14 @@ function isSummary(body) {
 function decide(body) {
   const system = systemText(body.system) + '\n' + (body.messages ?? []).filter(m => m.role === 'system').map(m => textOf(m.content)).join('\n')
   const tools = new Set((body.tools ?? []).map(entry => entry.name))
-  const messages = (body.messages ?? []).filter(m => m.role !== 'system')
+  // Clock snapshots are context, not a new scripted user command.
+  const messages = (body.messages ?? []).filter(m => m.role !== 'system').map(message => {
+    if (message.role !== 'user') return message
+    const isClock = value => value.startsWith('Current time: ') || value.startsWith('Time sampled while preparing turn ')
+    const content = typeof message.content === 'string' ? (isClock(message.content) ? '' : message.content)
+      : message.content.filter(block => block.type !== 'text' || !isClock(block.text))
+    return { ...message, content }
+  }).filter(message => message.role !== 'user' || message.content.length > 0)
   const last = messages.at(-1)
   const blocks = Array.isArray(last?.content) ? last.content : []
   const me = /You are (.+?), a Bot on the user's team/.exec(system)?.[1] ?? 'Bot'
