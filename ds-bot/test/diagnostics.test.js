@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import fs, { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { homedir, tmpdir } from 'node:os'

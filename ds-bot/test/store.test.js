@@ -176,8 +176,8 @@ test('refresh adopts a fixed state file and clears read-only mode', async (t) =>
   assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).prefs.marker, 'saved after repair')
 })
 
-test('an unusable state lock fails closed', async (t) => {
-  const { rt, home, statePath } = runtime(t)
+test('an unusable state lock warns and keeps the team saving', async (t) => {
+  const { rt, home, statePath, warnings } = runtime(t)
   const lockPath = join(home, 'state.lock')
   const restore = patchSync('writeFileSync', originalWrite => (path, ...args) => {
     if (path === lockPath) throw Object.assign(new Error('synthetic lock failure'), { code: 'EACCES' })
@@ -185,10 +185,13 @@ test('an unusable state lock fails closed', async (t) => {
   })
   try {
     await rt.load()
-    assert.match(rt.readOnly(), /cannot lock the Bot team.*EACCES/)
-    rt.state.prefs.marker = 'not saved'
+    assert.equal(rt.readOnly(), undefined)
+    assert.equal(warnings.filter(([template]) => template.includes('cannot lock')).length, 1)
+    rt.state.prefs.marker = 'saved without a lock'
     await rt.save()
-    assert.equal(fs.existsSync(statePath), false)
+    await rt.refresh()
+    assert.equal(rt.state.prefs.marker, 'saved without a lock')
+    assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).prefs.marker, 'saved without a lock')
   } finally {
     restore()
   }

@@ -21,7 +21,7 @@ export function install(rt) {
   // The other dsh host that holds state.lock while this one only reads (see home-lock.js);
   // undefined while this host may write.
   let holder
-  let lockError
+  let lockBroken = false
   let stuck
   let warnedReadOnly = false
   let stopped = false
@@ -37,20 +37,19 @@ export function install(rt) {
   }
   const lock = homeLock(join(home, 'state.lock'))
   const claimLock = () => {
+    if (lockBroken) return
     try {
       mkdirSync(home, { recursive: true })
       holder = lock.claim()
-      lockError = undefined
     } catch (error) {
-      lockError = error
+      // An unusable lock (a read-only or odd file system) must not stop the team; a
+      // save that then cannot write still rejects.
+      lockBroken = true
       holder = undefined
+      warn('ds-bot: cannot lock %s, so another dsh on the same data could undo changes: %s', home, error)
     }
   }
   const readOnly = () => {
-    if (lockError !== undefined) {
-      const code = lockError.code ?? 'unknown error'
-      return `DS Bot cannot lock the Bot team in ${home} (${code}), so it does not save changes. Check that the folder is writable and reload.`
-    }
     if (stuck !== undefined) return `The Bot team file ${statePath} could not be read (${stuck}). DS Bot does not change it; fix or move the file and reload.`
     if (holder === undefined) return undefined
     const where = holder.pid ? `pid ${holder.pid}${holder.host ? ` on ${holder.host}` : ''}` : 'unknown process'
@@ -161,7 +160,7 @@ export function install(rt) {
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
     const { migrated, stale } = adopt(await readFileState())
     if (holder !== undefined) return
-    if (migrated && stuck === undefined && lockError === undefined) {
+    if (migrated && stuck === undefined) {
       // A failed write must not poison `loaded`: the migrated state stays in
       // memory and the next save() writes it.
       try {
@@ -178,20 +177,20 @@ export function install(rt) {
   const refresh = async () => {
     await load()
     const hadHolder = holder !== undefined
-    if (hadHolder || lockError !== undefined) {
+    if (hadHolder) {
       claimLock()
-      if (holder === undefined && lockError === undefined) {
-        if (hadHolder) warn('ds-bot: the other dsh has closed; this one now saves the Bot team')
+      if (holder === undefined) {
+        warn('ds-bot: the other dsh has closed; this one now saves the Bot team')
         warnedReadOnly = false
         adopt(await readFileState())
         return
       }
-    } else if (!lock.owns()) {
+    } else if (!lockBroken && !lock.owns()) {
       // A cached "writer" is stale once the lock file no longer names this host:
       // another dsh may have taken it over, or the file may just be gone. Re-claim
       // and re-check instead of trusting the flag.
       claimLock()
-      if (lockError !== undefined) return
+      if (lockBroken) return
       if (holder === undefined) {
         // The lock was free: still the writer, but the file may carry changes
         // written while no host held it.
@@ -213,14 +212,12 @@ export function install(rt) {
   }
   const writable = () => {
     if (stuck !== undefined) return warnReadOnly()
-    if (holder === undefined && lockError !== undefined) claimLock()
-    if (lockError !== undefined) return warnReadOnly()
+    if (lockBroken) return true
     if (holder === undefined && lock.owns()) return true
     // Lost the lock: retake it when nobody else holds it (its file was deleted), else
     // another host took it over and this one stops writing.
     if (holder === undefined) {
       claimLock()
-      if (lockError !== undefined) return warnReadOnly()
       if (holder === undefined) return true
     }
     return warnReadOnly()
@@ -239,7 +236,7 @@ export function install(rt) {
       try {
         await mkdir(home, { recursive: true })
         const ensureLock = () => {
-          if (lockError !== undefined) throw lockError
+          if (lockBroken) return
           if (!lock.owns()) {
             const error = new Error('ds-bot lost the state lock to another dsh')
             error.code = 'ELOCKLOST'
