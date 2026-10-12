@@ -75,12 +75,21 @@ export const mentionsIn = (text, members) => {
   return { all, found }
 }
 
-// DSH writes a referenced conversation into the message as "@label"; that is not a
-// call, even when the label starts with a member's name.
+// DSH writes each referenced conversation into the message as one "@label"; that is not
+// a call, even when the label starts with a member's name. Only that one "@label" goes,
+// so a "@Name" the user typed with the same text still calls.
+const dropMention = (text, label) => {
+  const mention = `@${label}`
+  for (let at = text.indexOf(mention); at !== -1; at = text.indexOf(mention, at + 1)) {
+    const end = at + mention.length
+    if ((at === 0 || !/[a-z0-9_.]/i.test(text[at - 1])) && !NAME_GOES_ON.test(text.slice(end))) return text.slice(0, at) + text.slice(end)
+  }
+  return text
+}
 export const withoutReferences = (text, references = []) => references
   .flatMap(reference => reference.labels)
   .sort((a, b) => b.length - a.length)
-  .reduce((rest, label) => rest.split(`@${label}`).join(''), text)
+  .reduce(dropMention, text)
 
 // What the user referenced in this round, for a member that has not been shown it yet.
 export const referenceNote = references => (references?.length
