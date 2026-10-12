@@ -250,6 +250,7 @@ export function install(rt) {
           // Claim the question before queueing so a second answer is refused.
           delete state.questions[sessionId]
           try {
+            await rt.ensureCapabilities(sessionId)
             const agent = await rt.resolveAgent(sessionId)
             agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
             await ctx.sessions.flush(agent.session)
@@ -267,6 +268,7 @@ export function install(rt) {
           // A Bot id or an earlier part of its own chat means the current part.
           const past = rt.pastOwners.get(body.sessionId)
           const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
+          await rt.ensureCapabilities(sessionId)
           await ctx.sessionController.prompt({
             requestId: randomUUID(),
             sessionId,

@@ -333,6 +333,14 @@ await step('Chief sees its attached MCP and skill', () => send(chief().id, 'Chec
     ?? expect(latestReminder(body).includes(skillName) && latestReminder(body).includes(skillDescription), `skill catalog entry missing from ${path}`)
 })
 
+const capabilityRoom = await api('create-room', { name: 'Capability smoke', members: [chief().id, botNamed('Coder').id], admin: chief().id })
+await step('Chief first group turn sees its attached MCP and skill', () => send(capabilityRoom.id, 'Check your available capabilities.'), () => {
+  const { body, path } = tapBody('Chief')
+  const tools = (body.tools ?? []).map(tool => tool.name)
+  return expect(tools.includes(`mcp__${echoName}__echo`), `MCP tool missing from the first group request in ${path}`)
+    ?? expect(latestReminder(body).includes(skillName) && latestReminder(body).includes(skillDescription), `skill catalog entry missing from the first group request in ${path}`)
+})
+
 await step('Coder does not inherit Chief capabilities', () => send(botNamed('Coder').id, 'Check your available capabilities.'), () => {
   const { body, path } = tapBody('Coder')
   const tools = (body.tools ?? []).map(tool => tool.name)
