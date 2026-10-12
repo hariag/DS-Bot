@@ -586,4 +586,4 @@ const server = createServer((req, res) => {
   })
 })
 
-server.listen(PORT, '127.0.0.1', () => console.log(`ds-bot mock on http://127.0.0.1:${PORT}/v1`))
+server.listen(PORT, '127.0.0.1', () => console.log(`ds-bot mock on http://127.0.0.1:${server.address().port}/v1`))
