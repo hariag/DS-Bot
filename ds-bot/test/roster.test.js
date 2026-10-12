@@ -67,6 +67,15 @@ function start(team, { models = [], reasoning = {}, archiveError } = {}) {
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+// A greeting goes out after the team is saved, which can take longer than one settle() on a
+// busy machine.
+const until = async (check) => {
+  const end = Date.now() + 2000
+  while (!check()) {
+    if (Date.now() > end) throw new Error('until: the condition did not hold within 2 s')
+    await settle()
+  }
+}
 
 test('the first Main Bot waits for the user to pick a model, then greets', async (t) => {
   const { call, stop, sent, selected } = start(undefined, { models: ['deepseek-v4-flash', 'deepseek-v4-pro'] })
@@ -104,6 +113,7 @@ test('other Bots start on the default model and greet at once', async (t) => {
   t.after(stop)
   await call('state', {})
   const writer = (await call('create-bot', { name: 'Writer' })).value
+  await until(() => sent.length > 0)
   await settle()
   assert.equal(writer.model, 'deepseek/deepseek-v4-flash')
   assert.deepEqual(sent.map(entry => entry.sessionId), [writer.id])
@@ -114,7 +124,7 @@ test('a group the user makes without a first message opens with its admin asking
   t.after(stop)
   const chief = (await call('state', {})).value.mainBotId
   const writer = (await call('create-bot', { name: 'Writer' })).value
-  await settle()
+  await until(() => sent.some(entry => entry.sessionId === writer.id))
   sent.length = 0
   await call('create-room', { members: [chief, writer.id], admin: writer.id })
   assert.equal(sent.length, 0)

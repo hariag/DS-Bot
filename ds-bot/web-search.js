@@ -575,7 +575,7 @@ export function createAutoSearchProvider(deps, config = {}) {
       text = await response.text()
     } catch (error) {
       if (signal?.aborted) throw aborted(signal)
-      return { reason: timeout.signal.aborted ? `timed out after ${seconds(budget)}` : `request failed: ${reasonOf(error)}` }
+      return timeout.signal.aborted ? { reason: `timed out after ${seconds(budget)}`, timedOut: true } : { reason: `request failed: ${reasonOf(error)}` }
     } finally {
       clearTimeout(timer)
     }
@@ -604,7 +604,7 @@ export function createAutoSearchProvider(deps, config = {}) {
     const keyOf = candidate => [route.provider, candidate.url, candidate.model ?? ''].join('\n')
     const works = candidate => memory.get(keyOf(candidate))?.works === true
     const ordered = [...plan.candidates.filter(works), ...plan.candidates.filter(candidate => !works(candidate))]
-    const deadline = now() + options.nativeTimeoutMs
+    let deadline = now() + options.nativeTimeoutMs
     const notes = []
     let credential
     for (const candidate of ordered) {
@@ -633,6 +633,9 @@ export function createAutoSearchProvider(deps, config = {}) {
       notes.push(`${where}: ${outcome.reason}`)
       if (outcome.skip !== undefined) memory.set(keyOf(candidate), { until: now() + SKIP_FOR[outcome.skip], reason: outcome.reason })
       if (outcome.final) break
+      // A timed-out attempt had all the time that was left, but the timer and now() use
+      // different clocks, so now() can still read a millisecond before the deadline.
+      if (outcome.timedOut) deadline = now()
     }
     return { reason: `route "${route.provider}": ${notes.join('; ')}` }
   }
