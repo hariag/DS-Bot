@@ -99,6 +99,9 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
     return room ? `group "${room.name}"` : 'its own chat'
   }
+  // interrupt_bot and stop_bot throw when they do nothing, so the chat shows the call
+  // as failed instead of "Interrupted" or "Stopped".
+  const refuse = (message) => { throw new Error(message) }
 
   ctx.tools.register(defineTool({
     name: 'interrupt_bot',
@@ -111,12 +114,12 @@ export function install(rt) {
     async execute(args, exec) {
       await rt.load()
       const sender = callerBot(exec)
-      if (sender === undefined || !rt.isMain(sender.id)) return 'Only a Main Bot can interrupt other Bots.'
+      if (sender === undefined || !rt.isMain(sender.id)) refuse('Only a Main Bot can interrupt other Bots.')
       const target = rt.findBot(args.to)
-      if (target === undefined) return `No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
-      if (target.id === sender.id) return 'You cannot interrupt yourself.'
+      if (target === undefined) refuse(`No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`)
+      if (target.id === sender.id) refuse('You cannot interrupt yourself.')
       const text = String(args.message ?? '').trim()
-      if (text === '') return 'Write a message to send.'
+      if (text === '') refuse('Write a message to send.')
       const { running, idle } = activeSessions(target.id)
       const sessions = idle ? [rt.chatOf(target.id)] : running
       for (const [index, sessionId] of sessions.entries()) {
@@ -139,12 +142,12 @@ export function install(rt) {
     async execute(args, exec) {
       await rt.load()
       const sender = callerBot(exec)
-      if (sender === undefined || !rt.isMain(sender.id)) return 'Only a Main Bot can stop other Bots.'
+      if (sender === undefined || !rt.isMain(sender.id)) refuse('Only a Main Bot can stop other Bots.')
       const target = rt.findBot(args.bot)
-      if (target === undefined) return `No Bot named ${args.bot}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
-      if (target.id === sender.id) return 'You cannot stop yourself.'
+      if (target === undefined) refuse(`No Bot named ${args.bot}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`)
+      if (target.id === sender.id) refuse('You cannot stop yourself.')
       const { running } = activeSessions(target.id)
-      if (running.length === 0) return `${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it, or interrupt_bot once it is running.`
+      if (running.length === 0) refuse(`${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it, or interrupt_bot once it is running.`)
       for (const sessionId of running) {
         const agent = await rt.resolveAgent(sessionId)
         agent.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })

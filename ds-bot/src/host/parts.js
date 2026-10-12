@@ -882,7 +882,7 @@ export function install(rt) {
       } else if (source?.kind === REPLY_KIND) {
         const reply = readReply(textOf(event.data.content))
         if (reply !== undefined) items.push({ kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
-      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
+      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && ['request', 'reply', 'report', 'interrupt', 'stopped'].includes(source.role)) {
         items.push({ kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
       }
     }

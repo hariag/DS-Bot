@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { install as installTurns } from '../src/host/turns.js'
+import { install as installParts } from '../src/host/parts.js'
 import { SOURCE_KIND } from '../src/host/constants.js'
 
 // A two-Bot team, optionally with b in a group Session 'gb' of room 'Ops'.
@@ -131,10 +132,13 @@ test('interrupt_bot and stop_bot belong to a Main Bot', async (t) => {
   const { agents, tool, stop } = await start(team())
   t.after(stop)
 
-  assert.equal(await tool('interrupt_bot', { to: 'Writer', message: 'x' }, 'b'), 'Only a Main Bot can interrupt other Bots.')
-  assert.equal(await tool('stop_bot', { bot: 'Writer' }, 'b'), 'Only a Main Bot can stop other Bots.')
-  assert.equal(await tool('interrupt_bot', { to: 'Chief', message: 'x' }, 'a'), 'You cannot interrupt yourself.')
-  assert.equal(await tool('stop_bot', { bot: 'Chief' }, 'a'), 'You cannot stop yourself.')
+  // A refusal fails the call, so the chat does not show it as done.
+  await assert.rejects(tool('interrupt_bot', { to: 'Writer', message: 'x' }, 'b'), { message: 'Only a Main Bot can interrupt other Bots.' })
+  await assert.rejects(tool('stop_bot', { bot: 'Writer' }, 'b'), { message: 'Only a Main Bot can stop other Bots.' })
+  await assert.rejects(tool('interrupt_bot', { to: 'Chief', message: 'x' }, 'a'), { message: 'You cannot interrupt yourself.' })
+  await assert.rejects(tool('stop_bot', { bot: 'Chief' }, 'a'), { message: 'You cannot stop yourself.' })
+  await assert.rejects(tool('interrupt_bot', { to: 'Nobody', message: 'x' }, 'a'), /No Bot named Nobody/)
+  await assert.rejects(tool('interrupt_bot', { to: 'Writer', message: '  ' }, 'a'), { message: 'Write a message to send.' })
   assert.deepEqual(agents.get('b')?.calls ?? [], [])
 })
 
@@ -142,7 +146,8 @@ test('stop_bot cancels the running turns and tells the Bot why in a new turn', a
   const { agents, emit, tool, stop } = await start(team({ group: true }))
   t.after(stop)
 
-  assert.match(await tool('stop_bot', { bot: 'Writer' }, 'a'), /not running/)
+  await assert.rejects(tool('stop_bot', { bot: 'Writer' }, 'a'), /not running/)
+  assert.deepEqual(agents.get('b')?.calls ?? [], [])
 
   emit('b', 'turn/start', { turn: 1 })
   emit('gb', 'turn/start', { turn: 1 })
@@ -230,4 +235,27 @@ test('a stopped notice routes the acknowledgement back like a request', () => {
   assert.equal(delivered[0].role, 'reply')
   assert.equal(delivered[0].replyTo, 's1')
   assert.equal(delivered[0].text, 'understood')
+})
+
+test('an earlier part keeps the interrupt that its Bot answered', async () => {
+  const writer = { id: 'b', name: 'Writer', createdAt: 1, sessionId: 'b2', segments: [{ sessionId: 'b1', endedAt: 2 }] }
+  const events = [
+    { type: 'user/message', seq: 1, time: 10, data: { turn: 1, content: [{ type: 'text', text: '[Interrupt from Chief]\nDo not delete that' }], source: replySource('interrupt') } },
+    { type: 'assistant/message', seq: 2, time: 11, data: { turn: 1, message: { content: [{ type: 'text', text: 'Understood, I stopped.' }] } } },
+  ]
+  const rt = {
+    ctx: { on() {}, effect() {}, get() {}, sessionController: { page: async () => ({ records: events.map(event => ({ event })), hasMore: false }) } },
+    config: {},
+    state: { exchangeTurns: {} },
+    chatOwners: new Map([['b2', 'b']]),
+    pastOwners: new Map([['b1', { botId: 'b' }]]),
+    botOf: id => (id === 'b' ? writer : undefined),
+    roomOf: () => undefined,
+    chatOf: () => 'b2',
+    resolveAgent: async id => ({ session: { id, seq: 3 } }),
+  }
+  installParts(rt)
+  const { items } = await rt.earlierPage('b2')
+  assert.deepEqual(items.map(item => [item.kind, item.role ?? item.text]), [['event', 'interrupt'], ['bot', 'Understood, I stopped.']])
+  assert.equal(items[0].botId, 'a')
 })

@@ -418,6 +418,7 @@ var ZH = {
   "Reply from": "收到回复：",
   "Message from": "收到消息：",
   "Stopped by": "叫停者：",
+  "Interrupt from": "收到插话：",
   "{count} messages with": "{count} 条消息，来自",
   "Routine started": "例行任务开始",
   Update: "更新",
@@ -3887,7 +3888,8 @@ function EarlierParts({ sessionId, roster, actions }) {
         case "event": {
           if (row.role === "report") return (0, import_react6.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
-          return (0, import_react6.createElement)(EventLine, { key, prefix: row.role === "stopped" ? t("Stopped by") : row.role === "reply" ? t("Reply from") : t("Message from"), bots: [other], onOpen: () => {
+          const prefix = { stopped: t("Stopped by"), interrupt: t("Interrupt from"), reply: t("Reply from") }[row.role] ?? t("Message from");
+          return (0, import_react6.createElement)(EventLine, { key, prefix, bots: [other], onOpen: () => {
             if (selfId && other.id) actions.openExchange(selfId, other.id);
           }, whole: true });
         }
@@ -3952,7 +3954,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         if (!bots.some((bot) => bot.id === peer.id)) bots.push(peer);
       }
       return (0, import_react6.createElement)(EventLine, {
-        prefix: source.role === "stopped" ? t("Stopped by") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
+        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "interrupt" ? t("Interrupt from") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
         bots,
         onOpen: (bot) => actions.openExchange(selfId, bot.id),
         whole: true

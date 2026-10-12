@@ -247,7 +247,8 @@ function EarlierParts({ sessionId, roster, actions }) {
         case 'event': {
           if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
-          return h(EventLine, { key, prefix: row.role === 'stopped' ? t('Stopped by') : row.role === 'reply' ? t('Reply from') : t('Message from'), bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) } })
+          const prefix = { stopped: t('Stopped by'), interrupt: t('Interrupt from'), reply: t('Reply from') }[row.role] ?? t('Message from')
+          return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) } })
         }
         default: return null
       }
@@ -321,7 +322,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         if (!bots.some(bot => bot.id === peer.id)) bots.push(peer)
       }
       return h(EventLine, {
-        prefix: source.role === 'stopped' ? t('Stopped by') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
+        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'interrupt' ? t('Interrupt from') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
         bots,
         onOpen: bot => actions.openExchange(selfId, bot.id),
       })
