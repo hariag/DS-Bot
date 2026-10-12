@@ -108,6 +108,9 @@ export function install(rt) {
       delete state.bots[id]
       state.mainBotIds = state.mainBotIds.filter(other => other !== id)
       rt.chatOwners.delete(id)
+      // A save that another change queued meanwhile still carries this Bot; a later
+      // one writes the team without it.
+      void rt.save().catch(() => {})
       await ctx.workspaceRegistry.archiveSession(id)
         .catch(archiveError => rt.warn('ds-bot: archiving the Session for %s failed: %s', cleanName, archiveError))
       throw error
@@ -269,6 +272,7 @@ export function install(rt) {
     } catch (error) {
       // The group's Session was already made: archive it instead of leaving an orphan.
       delete state.rooms[id]
+      void rt.save().catch(() => {})
       await ctx.workspaceRegistry.archiveSession(id)
         .catch(archiveError => rt.warn('ds-bot: archiving the Session for %s failed: %s', title, archiveError))
       throw error
@@ -346,11 +350,12 @@ export function install(rt) {
     for (const botId of Object.keys(room.sessions ?? {})) rt.dropGroupSession(room, botId)
     delete state.rooms[id]
     rt.roomInbox.delete(id)
-    await rt.save()
+    const failed = await saveForDelete()
     // Armed scheduled tasks refuse a plain archive and would keep delivering into
     // the deleted group; the session-stop that stopActivity runs removes them.
     await ctx.workspaceRegistry.archiveSession(id, { stopActivity: true })
       .catch(error => rt.warn('ds-bot: group chat %s not archived: %s', room.name, error))
+    if (failed !== undefined) throw failed
   }
 
   // The first Main Bot is the sidebar tile. `replace` gives a Main Bot's place to
@@ -409,13 +414,28 @@ export function install(rt) {
     await followMemberNames(touched)
     await rt.forgetBotSecrets(id)
     await archived
-    await rt.save()
+    const failed = await saveForDelete()
     // Same as deleteRoom: stopActivity removes the Session's armed scheduled tasks.
     // Past parts are archived too: a part move can leave tasks on the old Session,
     // which otherwise stays armed and invisible. Already-archived ids are a no-op.
     for (const part of parts) {
       await ctx.workspaceRegistry.archiveSession(part, { stopActivity: true })
         .catch(error => rt.warn('ds-bot: Bot %s not archived: %s', bot.name, error))
+    }
+    if (failed !== undefined) throw failed
+  }
+
+  // A deletion whose save fails stays in memory, and the next save writes it, so its
+  // Sessions are stopped anyway: left armed, their scheduled tasks would keep running
+  // with nothing in the team to show or delete them. Only a host that lost the team
+  // to another dsh keeps them, since the other host's copy still has them.
+  async function saveForDelete() {
+    try {
+      await rt.save()
+      return undefined
+    } catch (error) {
+      if (error?.code === 'ELOCKLOST' || rt.readOnly() !== undefined) throw error
+      return error
     }
   }
 
