@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isPass, mentionsIn, referenceNote, stripOwnName, withoutReferences } from '../src/host/groups.js'
+import { isPass, mentionsIn, referenceNote, stripOwnName } from '../src/host/groups.js'
 import { attachReference } from '../src/host/turns.js'
 
 const members = [{ name: 'M' }, { name: 'Mx' }, { name: 'K' }, { name: 'Writer' }]
@@ -42,18 +42,18 @@ test('a referenced conversation rides with the user\'s queued message, not a Bot
 
 test('a reference label is not a call, even when it starts with a member\'s name', () => {
   const references = [{ labels: ['K notes', 'K'] }]
-  assert.deepEqual(names(mentionsIn(withoutReferences('see @K notes, then @Writer', references), members)), { all: false, found: ['Writer'] })
-  assert.deepEqual(names(mentionsIn(withoutReferences('@K notes', undefined), members)), { all: false, found: ['K'] })
+  assert.deepEqual(names(mentionsIn('see @K notes, then @Writer', members, references)), { all: false, found: ['Writer'] })
+  assert.deepEqual(names(mentionsIn('@K notes', members)), { all: false, found: ['K'] })
   assert.equal(referenceNote([]), '')
   assert.equal(referenceNote([{ text: 'A' }, { text: 'B' }]), 'Conversations the user referenced in this round:\n\nA\n\nB')
 })
 
 test('a reference takes out only its own "@label", so a typed call with the same text stays', () => {
   const writer = [{ labels: ['Writer'] }]
-  assert.deepEqual(names(mentionsIn(withoutReferences('Read @Writer, then @Writer please answer.', writer), members)), { all: false, found: ['Writer'] })
-  assert.deepEqual(names(mentionsIn(withoutReferences('see @Writer', writer), members)), { all: false, found: [] })
-  assert.deepEqual(names(mentionsIn(withoutReferences('see @Writer and @Writer', [...writer, ...writer]), members)), { all: false, found: [] })
+  assert.deepEqual(names(mentionsIn('Read @Writer, then @Writer please answer.', members, writer)), { all: false, found: ['Writer'] })
+  assert.deepEqual(names(mentionsIn('see @Writer', members, writer)), { all: false, found: [] })
+  assert.deepEqual(names(mentionsIn('see @Writer and @Writer', members, [...writer, ...writer])), { all: false, found: [] })
   // "@Kate" is not the reference "K", so the "@K" after it is the one taken out.
-  assert.deepEqual(names(mentionsIn(withoutReferences('@Kate, @K', [{ labels: ['K'] }]), [...members, { name: 'Kate' }])), { all: false, found: ['Kate'] })
-  assert.deepEqual(names(mentionsIn(withoutReferences('@K notes and @K', [{ labels: ['K notes'] }]), members)), { all: false, found: ['K'] })
+  assert.deepEqual(names(mentionsIn('@Kate, @K', [...members, { name: 'Kate' }], [{ labels: ['K'] }])), { all: false, found: ['Kate'] })
+  assert.deepEqual(names(mentionsIn('@K notes and @K', members, [{ labels: ['K notes'] }])), { all: false, found: ['K'] })
 })

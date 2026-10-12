@@ -1,28 +1,23 @@
 // -------------------------------------------------------------------------
 // Text helpers
 import { dateLocale, t } from './i18n.js'
+import { mentionSpans } from '../shared/mentions.js'
 
 export const MENTION_ORIGIN = 'https://bots.local/'
 
-const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-// Only "@Name" is a mention, the same rule the group host reads (mentionsIn): a bare
-// name is ordinary text, so a Bot called "测试" leaves the word "测试" alone.
+// The Bots a text calls, by the rule the group host reads (shared/mentions.js). The
+// speaker's own name takes part so that it is never read as a shorter name inside it
+// ("@新 Bot" in "@新 Bot 2"); it then stays plain text.
 export function linkMentions(text, bots, selfId) {
-  if (!text || bots.length === 0 || text.includes('```') || !text.includes('@')) return text
-  // The speaker's own name takes part so that, longest first, it is never read as a
-  // shorter name inside it ("@新 Bot" in "@新 Bot 2"); it then stays plain text.
-  const names = bots.filter(bot => bot.name).sort((a, b) => b.name.length - a.name.length)
-  if (!names.some(bot => bot.id !== selfId)) return text
-  const byName = new Map(names.map(bot => [bot.name.toLowerCase(), bot]))
-  // A letter, digit, "_" or "." before "@" is an address ("a@b"); a letter, digit, "_"
-  // or "-" after the name means a longer word ("@Mi" in "@MiniMax").
-  const pattern = new RegExp(`(\\[[^\\]]*\\]\\([^)]*\\)|\`[^\`]*\`)|(?<![A-Za-z0-9_.])@(${names.map(bot => escapeRegExp(bot.name)).join('|')})(?![A-Za-z0-9_-])`, 'gi')
-  return text.replace(pattern, (match, skip, name) => {
-    if (skip) return skip
-    const bot = byName.get(name.toLowerCase())
-    return bot && bot.id !== selfId ? `[${name}](${MENTION_ORIGIN}${bot.id})` : match
-  })
+  if (!text || !text.includes('@')) return text
+  let out = ''
+  let cursor = 0
+  for (const span of mentionSpans(text, bots)) {
+    if (!span.bot || span.bot.id === selfId) continue
+    out += `${text.slice(cursor, span.start)}[${text.slice(span.start + 1, span.end).replace(/[[\]\\]/g, '\\$&')}](${MENTION_ORIGIN}${span.bot.id})`
+    cursor = span.end
+  }
+  return cursor === 0 ? text : out + text.slice(cursor)
 }
 
 export function mentionTarget(event) {

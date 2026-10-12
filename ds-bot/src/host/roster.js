@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MAX_AVATAR_IMAGE, ROOM_MAX_MEMBERS, ROOM_MODES, ROOM_NAME_MAX, ROOM_NOTICE_MAX } from './constants.js'
 import { currentColor, isColor, unquote } from './text.js'
+import { nameProblem } from '../shared/mentions.js'
 
 export function install(rt) {
   const { ctx, config, home, defaults, state } = rt
@@ -56,7 +57,8 @@ export function install(rt) {
   // greeting waits until a model is chosen. So does a Bot made when no model is served.
   async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, copyOf, pickModel = false }) {
     const cleanName = String(botName ?? '').trim().slice(0, 40)
-    if (cleanName === '') throw new Error('A Bot needs a name')
+    const problem = nameProblem(cleanName)
+    if (problem !== undefined) throw new Error(problem)
     if (rt.findBot(cleanName)) throw new Error(`A Bot named ${cleanName} already exists`)
     const cleanAvatarValue = cleanAvatar(avatar)
     // The model is fixed at creation, so a later change of the DSH default leaves it alone.
@@ -153,6 +155,9 @@ export function install(rt) {
       const next = String(patch.name).trim().slice(0, 40)
       const clash = rt.findBot(next)
       if (next === '' || (clash && clash.id !== id)) throw new Error(`Name ${next} is not available`)
+      // A name saved before the rule stays usable until it changes.
+      const problem = next === bot.name ? undefined : nameProblem(next)
+      if (problem !== undefined) throw new Error(problem)
       bot.name = next
       const agent = await rt.resolveAgent(rt.chatOf(id))
       await ctx.sessionTitle.rename(agent.session, next)

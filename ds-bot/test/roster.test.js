@@ -119,6 +119,16 @@ test('other Bots start on the default model and greet at once', async (t) => {
   assert.deepEqual(sent.map(entry => entry.sessionId), [writer.id])
 })
 
+test('a new name must be one "@" can call; a name saved before the rule still saves', async (t) => {
+  const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  await call('state', {})
+  for (const name of ['a@b', 'All', '所有人']) assert.equal((await call('create-bot', { name })).ok, false, name)
+  const writer = (await call('create-bot', { name: 'Writer 2' })).value
+  assert.equal((await call('update-bot', { id: writer.id, name: 'Writer@home' })).ok, false)
+  assert.equal((await call('update-bot', { id: writer.id, name: '新 Writer' })).ok, true)
+})
+
 test('a group the user makes without a first message opens with its admin asking what it is for', async (t) => {
   const { call, stop, sent, ctx, home } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
