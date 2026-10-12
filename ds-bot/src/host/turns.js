@@ -36,7 +36,7 @@ export function install(rt) {
 
   /** @type {Map<string, {turn?:number, pending?:any, info?:any, texts:string[], opened?:boolean, joined?:{info:any, from:number}[]}>} */
   const live = new Map()
-  /** @type {Map<string, {resolve:(text:string)=>void}>} member turn waiters keyed by exchange id */
+  /** @type {Map<string, {sessionId:string, resolve:(text:string|null)=>void, fail:(failure:any)=>void, touch:()=>void, approval:()=>void}>} member turn waiters keyed by exchange id */
   const roomWaiters = new Map()
   /** @type {Map<string, {roomId:string, replies:any[], members:string[], speaking:string|null}>} */
   const roomProgress = new Map()
@@ -119,7 +119,32 @@ export function install(rt) {
       if (job.roomId === undefined) merged[job.botId] = 'thinking'
       else merged[job.botId] ??= 'thinking'
     }
+    for (const approval of rt.approvalsView?.() ?? []) merged[approval.botId] = 'alert'
     return merged
+  }
+
+  // Per Bot, the turn it is running and its current tool; its own chat wins over a group.
+  const workView = () => {
+    const bots = {}
+    for (const [id, entry] of live) {
+      if (entry.turn === undefined) continue
+      const owner = rt.groupOwners.get(id)
+      const botId = owner?.botId ?? rt.chatOwners.get(id)
+      if (botId === undefined || (owner !== undefined && bots[botId] !== undefined)) continue
+      bots[botId] = { since: entry.since, ...(entry.tool ? { tool: entry.tool } : {}), ...(owner ? { roomId: owner.roomId } : {}) }
+    }
+    return bots
+  }
+
+  // What a running tool call is about, for an approval card: its own description and
+  // the command, path or address it acts on.
+  const callDetail = (sessionId, callId) => {
+    let args
+    try { args = JSON.parse(live.get(sessionId)?.calls?.get(callId) ?? '{}') } catch { args = {} }
+    const first = keys => keys.map(key => args?.[key]).find(value => typeof value === 'string' && value.trim() !== '')
+    const text = first(['description', 'justification'])
+    const code = first(['command', 'cmd', 'file_path', 'path', 'url', 'query'])
+    return { ...(text ? { text: text.trim().slice(0, 300) } : {}), ...(code ? { code: code.trim().slice(0, 400) } : {}) }
   }
 
   // Where a Session speaks, for the diagnostics log.
@@ -145,16 +170,24 @@ export function install(rt) {
     if (id === undefined) return
     if (!rt.isBotSession(id) && !rt.roomOf(id)) return
     const entry = liveOf(id)
+    if (rt.groupOwners.has(id)) rt.touchRoomTurn?.(id)
     switch (event.type) {
-      case 'tool/call':
-        setActivity(id, event.data?.name === 'ask_user' ? undefined : activityOf(String(event.data?.name ?? '')))
+      case 'tool/call': {
+        const name = String(event.data?.name ?? '')
+        setActivity(id, name === 'ask_user' ? undefined : activityOf(name))
+        entry.tool = name
+        if (typeof event.data?.callId === 'string') (entry.calls ??= new Map()).set(event.data.callId, String(event.data.arguments ?? ''))
         break
+      }
       case 'tool/result':
         if (entry.turn !== undefined) setActivity(id, 'thinking')
+        entry.tool = undefined
+        entry.calls?.delete(event.data?.callId)
         break
       case 'turn/start':
         setActivity(id, 'thinking')
         entry.turn = event.data.turn
+        entry.since = event.time ?? Date.now()
         entry.texts = []
         entry.info = undefined
         // A turn turned away before its first step may end without a turn/end.
@@ -198,6 +231,8 @@ export function install(rt) {
             name: source.senderName,
             reportBack: source.reportBack === true,
             hop: source.hop ?? 0,
+            ...(source.late ? { late: true } : {}),
+            ...(source.quiet ? { quiet: true } : {}),
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
@@ -254,6 +289,9 @@ export function install(rt) {
         entry.texts = []
         entry.switched = false
         entry.joined = []
+        entry.since = undefined
+        entry.tool = undefined
+        entry.calls = undefined
         const reason = event.data?.reason
         const failure = reason?.kind === 'error' && !switched ? turnFailure(reason.error) : undefined
         if (failure !== undefined) noteTurnFailure(id, failure)
@@ -290,7 +328,9 @@ export function install(rt) {
           const waiter = roomWaiters.get(info.exchangeId)
           roomWaiters.delete(info.exchangeId)
           if (failure !== undefined) waiter?.fail(failure)
-          else waiter?.resolve(reason?.kind === 'aborted' ? null : texts.join('\n\n').trim())
+          else if (waiter !== undefined) waiter.resolve(reason?.kind === 'aborted' ? null : texts.join('\n\n').trim())
+          // The round moved on without this member; what it says now still reaches the group.
+          else if (reason?.kind !== 'aborted') void rt.lateRoomReply?.(id, info, texts.join('\n\n').trim())
         } else if (info !== undefined) {
           answer(info, texts.join('\n\n').trim())
         }
@@ -317,5 +357,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, callDetail })
 }

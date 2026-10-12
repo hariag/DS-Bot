@@ -1,9 +1,8 @@
 // Team tools: the roster, bot-to-bot messages, group chat settings and posts, and the
 // question card. Group rounds and reading chats are in groups.js.
 import { randomUUID } from 'node:crypto'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { COLORS, EXTRA_COLORS, MAX_HOPS, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
+import { COLORS, EXTRA_COLORS, MAX_HOPS, ROOM_BOT_ROUNDS, ROOM_MODES } from './constants.js'
 import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
@@ -357,22 +356,7 @@ export function install(rt) {
       await rt.save()
       const reportBack = args.report_back === true
       try {
-        const agent = await rt.resolveAgent(room.id)
-        agent.followup(createUserMessage({
-          content: [{ type: 'text', text: `[Group post from ${sender.name}]\n${text}` }],
-          source: {
-            kind: SOURCE_KIND,
-            form: 'relay',
-            role: 'post',
-            exchangeId: randomUUID(),
-            senderName: sender.name,
-            senderSessionId: sender.id,
-            roomId: room.id,
-            hop: info?.hop ?? 0,
-            ...(reportBack ? { reportBack: true } : {}),
-          },
-        }))
-        await ctx.sessions.flush(agent.session)
+        await rt.postToRoom(room, sender, text, { hop: info?.hop ?? 0, ...(reportBack ? { reportBack: true } : {}) })
       } catch (failure) {
         return `Could not post in "${room.name}": ${failure.message}`
       }

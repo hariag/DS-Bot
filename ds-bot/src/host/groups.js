@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { ROOM_REPLY_TIMEOUT_MS, SOURCE_KIND } from './constants.js'
+import { ROOM_BOT_ROUNDS, ROOM_REPLY_TIMEOUT_MS, SOURCE_KIND } from './constants.js'
 import { escapeRegExp, splitRef, textOf } from './text.js'
 import { GROUP_REF, output } from './tools.js'
 import { failureLine } from './turns.js'
@@ -75,6 +75,27 @@ export const mentionsIn = (text, members) => {
   return { all, found }
 }
 
+// DSH writes each referenced conversation into the message as one "@label"; that is not
+// a call, even when the label starts with a member's name. Only that one "@label" goes,
+// so a "@Name" the user typed with the same text still calls.
+const dropMention = (text, label) => {
+  const mention = `@${label}`
+  for (let at = text.indexOf(mention); at !== -1; at = text.indexOf(mention, at + 1)) {
+    const end = at + mention.length
+    if ((at === 0 || !/[a-z0-9_.]/i.test(text[at - 1])) && !NAME_GOES_ON.test(text.slice(end))) return text.slice(0, at) + text.slice(end)
+  }
+  return text
+}
+export const withoutReferences = (text, references = []) => references
+  .flatMap(reference => reference.labels)
+  .sort((a, b) => b.length - a.length)
+  .reduce(dropMention, text)
+
+// What the user referenced in this round, for a member that has not been shown it yet.
+export const referenceNote = references => (references?.length
+  ? `Conversations the user referenced in this round:\n\n${references.map(reference => reference.text).join('\n\n')}`
+  : '')
+
 const ROOM_REPLY = 'Reply with your message for the group: one or two short messages, no name prefix. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
 
 const slotLabel = (slot) => {
@@ -82,6 +103,7 @@ const slotLabel = (slot) => {
   if (slot.status === 'posted') return `${slot.name} (posted)`
   if (slot.status === 'passed') return `${slot.name} (passed)`
   if (slot.status === 'missed') return `${slot.name} (no answer)`
+  if (slot.status === 'waiting-approval') return `${slot.name} (waiting for the user's approval; posts when done)`
   if (slot.status === 'failed') return `${slot.name} (could not answer: error)`
   if (slot.status === 'left') return `${slot.name} (left the group)`
   return slot.name
@@ -147,6 +169,7 @@ export function install(rt) {
       current.length
         ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current)}`
         : 'Nothing new in this round since your last message.',
+      round.shown?.includes(member.id) ? '' : referenceNote(round.references),
       `Speaking order for this round: ${round.slots.map(slotLabel).join(' → ')}.`,
       `You are number ${index + 1} of ${round.slots.length}. ${before === 0 ? 'Nobody spoke before you' : `${before} went before you`}${after === 0 ? ', and you are the last.' : `; ${after} after you will see your message.`}`,
       ROOM_REPLY,
@@ -154,31 +177,44 @@ export function install(rt) {
   }
 
   // One member turn inside the room; resolves to its final text, `{ failure }` when its
-  // model call failed, or null when it did not answer in time or the round was stopped.
+  // model call failed, `{ missed }` when it went quiet for too long, `{ approval }` when
+  // it waits for the user's approval, or null when the round was stopped. The wait
+  // restarts on each event of the member's Session, so a member at work is never cut off.
   async function roomTurn(room, member, sessionId, text, note, signal) {
     if (signal.aborted) return null
     const exchangeId = randomUUID()
     room.seen[member.id] = room.seq
     const done = new Promise((resolve) => {
+      let timer
       const finish = (value) => {
         clearTimeout(timer)
         rt.roomWaiters.delete(exchangeId)
         resolve(value)
       }
-      const timer = setTimeout(() => finish(null), ROOM_REPLY_TIMEOUT_MS)
-      rt.roomWaiters.set(exchangeId, { resolve: finish, fail: failure => finish({ failure }) })
+      const touch = () => {
+        clearTimeout(timer)
+        timer = setTimeout(() => finish({ missed: true }), ROOM_REPLY_TIMEOUT_MS)
+      }
+      touch()
+      rt.roomWaiters.set(exchangeId, { sessionId, resolve: finish, fail: failure => finish({ failure }), touch, approval: () => finish({ approval: true }) })
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
       await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text })
+      // Still held by an earlier request: this turn cannot start until the user answers.
+      if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
     } catch (error) {
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
       rt.roomWaiters.get(exchangeId)?.resolve(null)
     }
     const reply = await done
-    if (reply === null || reply?.failure !== undefined) return reply
+    if (reply === null || typeof reply === 'object') return reply
     return stripOwnName(member.name, String(reply ?? '').trim())
   }
+
+  const waitersOf = sessionId => [...rt.roomWaiters.values()].filter(waiter => waiter.sessionId === sessionId)
+  rt.touchRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.touch() }
+  rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
 
   // A called member moves up if it is still waiting, or gets one more turn if it
   // already spoke; either way it goes right after slot `index`. `cap` is the caller's
@@ -232,7 +268,7 @@ export function install(rt) {
     }
     // The user spoke in this room, so Bots may start their own rounds again.
     room.botRounds = 0
-    void rt.save()
+    void rt.save().catch(() => {})
     return round.slots.length - before
   }
 
@@ -268,6 +304,7 @@ export function install(rt) {
         continue
       }
       const prompt = roomPrompt(room, member, round)
+      round.shown?.push(member.id)
       const text = session.brief === undefined ? prompt : `${session.brief}\n\n${prompt}`
       const reply = await roomTurn(room, member, session.id, text, slot.note ?? 'your turn', signal)
       round.speaking = null
@@ -279,15 +316,22 @@ export function install(rt) {
         round.replies.push({ kind: 'failed', botId: member.id, name: member.name, color: member.color, code, ...(status ? { status } : {}), text: message, time: Date.now() })
         continue
       }
-      if (reply === null || isPass(reply)) {
-        slot.status = reply === null ? 'missed' : 'passed'
+      // The member's turn goes on in the background and posts when it ends.
+      if (reply?.approval) {
+        slot.status = 'waiting-approval'
+        round.replies.push({ kind: 'approval', botId: member.id, name: member.name, color: member.color, time: Date.now() })
+        continue
+      }
+      if (reply === null || reply?.missed || isPass(reply)) {
+        slot.status = typeof reply === 'string' ? 'passed' : 'missed'
         round.passed.push(member.name)
+        if (reply?.missed) round.replies.push({ kind: 'missed', botId: member.id, name: member.name, color: member.color, time: Date.now() })
         continue
       }
       slot.status = 'posted'
       appendRoom(room, { who: member.name, botId: member.id, text: reply })
       round.replies.push({ botId: member.id, name: member.name, color: member.color, text: reply, time: Date.now() })
-      void rt.save()
+      void rt.save().catch(() => {})
       // Only the admin's "@all" calls everyone, so a member cannot set off a storm.
       const leads = rt.isAdminOf(room, member.id)
       const others = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
@@ -324,11 +368,13 @@ export function install(rt) {
       if (posts.some(post => !post.botId && !post.kickoff)) room.botRounds = 0
       await rt.save()
       const opener = posts.at(-1)
+      const references = posts.flatMap(post => post.references ?? [])
       const round = {
         roomId: room.id,
         members: room.members,
         startSeq,
         ...(opener.kickoff ? { kickoff: true } : {}),
+        ...(references.length > 0 ? { references, shown: [] } : {}),
         slots: openingSpeakers(room, opener).map(member => ({ id: member.id, name: member.name, status: 'waiting', ...(opener.kickoff ? { note: 'the group was just created' } : {}) })),
         speaking: null,
         turns: 0,
@@ -382,7 +428,7 @@ export function install(rt) {
         for (const round of rt.roomProgress.values()) {
           if (round.roomId === room.id) round.replies.push({ kind: 'lookup', botId: member.id, name: member.name, color: member.color, text, time: Date.now() })
         }
-        void rt.save()
+        void rt.save().catch(() => {})
       }
       const partsNote = parts.length > 1 ? `\n\nYour own chat has ${parts.length} parts: ${rt.partIndex(parts)}. Call read_own_chat with part N for the note that closed an earlier part, or with words to search all parts.` : ''
       if (query === '' && around !== '') {
@@ -432,11 +478,42 @@ export function install(rt) {
     const members = room.members.map(rt.botOf).filter(bot => bot && bot.id !== opener.botId)
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
     if (opener.kickoff) return admin ? [admin] : []
-    const { all, found } = mentionsIn(opener.text, members)
+    if (opener.quiet) return []
+    const { all, found } = mentionsIn(withoutReferences(opener.text, opener.references), members)
+    if (opener.late) return found.length > 0 ? found : admin ? [admin] : []
     if (found.length > 0 && !all) return found
     if (!all && room.mode === 'admin' && admin) return [admin]
     return admin ? [admin, ...members.filter(bot => bot !== admin)] : members
   }
+
+  // A Bot's message into the group's own Session, which relays it as a new round.
+  async function postToRoom(room, sender, text, extra = {}) {
+    const agent = await rt.resolveAgent(room.id)
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: `[Group post from ${sender.name}]\n${text}` }],
+      source: { kind: SOURCE_KIND, form: 'relay', role: 'post', exchangeId: randomUUID(), senderName: sender.name, senderSessionId: sender.id, roomId: room.id, hop: 0, ...extra },
+    }))
+    await ctx.sessions.flush(agent.session)
+  }
+  rt.postToRoom = postToRoom
+
+  // A member the round moved on from (it went quiet or waited for an approval) posts
+  // what its turn ended with. Only the admin and anyone it names answer, and past the
+  // Bot round limit nobody does, so late posts cannot keep a group talking.
+  async function lateRoomReply(sessionId, info, reply) {
+    const owner = rt.groupOwners.get(sessionId)
+    const room = rt.roomOf(owner?.roomId ?? info.roomId)
+    const member = rt.botOf(owner?.botId)
+    if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    const text = stripOwnName(member.name, reply)
+    if (isPass(text)) return
+    const quiet = (room.botRounds ?? 0) >= ROOM_BOT_ROUNDS
+    if (!quiet) room.botRounds = (room.botRounds ?? 0) + 1
+    await rt.save()
+    await postToRoom(room, member, text, { late: true, ...(quiet ? { quiet: true } : {}) })
+      .catch(error => rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error))
+  }
+  rt.lateRoomReply = lateRoomReply
 
   // A group the user just made opens with its admin asking what the group is for.
   async function greetRoom(roomId) {
