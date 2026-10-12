@@ -161,7 +161,7 @@ export function install(rt) {
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
     const { migrated, stale } = adopt(await readFileState())
     if (holder !== undefined) return
-    if (migrated && stuck === undefined) await save()
+    if (migrated && stuck === undefined && lockError === undefined) await save()
     // Not awaited: renaming a session must not hold up the first roster read.
     for (const room of stale) void rt.retitleRoom(room)
   })()
@@ -178,6 +178,20 @@ export function install(rt) {
         adopt(await readFileState())
         return
       }
+    } else if (!lock.owns()) {
+      // A cached "writer" is stale once the lock file no longer names this host:
+      // another dsh may have taken it over, or the file may just be gone. Re-claim
+      // and re-check instead of trusting the flag.
+      claimLock()
+      if (lockError !== undefined) return
+      if (holder === undefined) {
+        // The lock was free: still the writer, but the file may carry changes
+        // written while no host held it.
+        warnedReadOnly = false
+        adopt(await readFileState())
+        return
+      }
+      warn('ds-bot: %s', readOnly())
     }
     if ((stuck !== undefined || holder !== undefined) && stamp() !== seen) adopt(await readFileState())
   }
@@ -208,7 +222,11 @@ export function install(rt) {
     if (stopped) return writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
-    if (!writable()) return writing
+    if (!writable()) {
+      const error = new Error(readOnly())
+      error.code = 'bot/read-only'
+      return Promise.reject(error)
+    }
     state.revision += 1
     state.exchanges = state.exchanges.slice(-MAX_EXCHANGES)
     const snapshot = JSON.stringify(state, null, 2)

@@ -112,7 +112,7 @@ test('malformed state stays read-only when its backup cannot be copied', async (
     await rt.load()
     assert.match(rt.readOnly(), /could not be read/)
     rt.state.prefs.marker = 'not saved'
-    await rt.save()
+    await assert.rejects(rt.save(), { code: 'bot/read-only' })
     assert.equal(fs.readFileSync(statePath, 'utf8'), original)
     assert.deepEqual(fs.readdirSync(rt.home).filter(name => name.startsWith('state.json.broken-')), [])
   } finally {
@@ -126,7 +126,7 @@ test('a state from a newer version remains untouched', async (t) => {
   await rt.load()
   assert.match(rt.readOnly(), /saved by a newer DS Bot; update DS Bot/)
   rt.state.prefs.marker = 'not saved'
-  await rt.save()
+  await assert.rejects(rt.save(), { code: 'bot/read-only' })
   assert.equal(fs.readFileSync(statePath, 'utf8'), original)
 })
 
@@ -143,7 +143,7 @@ test('a read error keeps the existing state read-only', async (t) => {
     restore()
   }
   assert.match(rt.readOnly(), /could not be read \(EACCES\)/)
-  await rt.save()
+  await assert.rejects(rt.save(), { code: 'bot/read-only' })
   assert.equal(fs.readFileSync(statePath, 'utf8'), original)
 })
 
@@ -172,7 +172,7 @@ test('an unusable state lock fails closed', async (t) => {
     await rt.load()
     assert.match(rt.readOnly(), /cannot lock the Bot team.*EACCES/)
     rt.state.prefs.marker = 'not saved'
-    await rt.save()
+    await assert.rejects(rt.save(), { code: 'bot/read-only' })
     assert.equal(fs.existsSync(statePath), false)
   } finally {
     restore()

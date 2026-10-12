@@ -63,45 +63,54 @@ export function install(rt) {
     const modelRef = model ? await rt.resolveModel(model) : pickModel ? undefined : await rt.defaultModel()
     const effortId = modelRef !== undefined && effort !== undefined ? await rt.resolveEffort(modelRef, effort) : undefined
     const id = await createSession(cleanName)
-    state.bots[id] = {
-      id,
-      name: cleanName,
-      role: String(role).trim().slice(0, 24),
-      // A color is only stored when the user picks one; otherwise the id picks it.
-      ...(isColor(currentColor(color)) ? { color: currentColor(color) } : {}),
-      ...(cleanAvatarValue ? { avatar: cleanAvatarValue } : {}),
-      ...(modelRef ? { model: modelRef } : {}),
-      ...(effortId ? { effort: effortId } : {}),
-      instructions: String(instructions).trim(),
-      createdAt: Date.now(),
-      createdBy: createdBy ?? null,
-    }
-    if (main) state.mainBotIds.push(id)
-    const creator = rt.botOf(createdBy)
-    const original = rt.botOf(copyOf)
-    const language = rt.uiLanguage?.()
-    const kickoff = main
-      ? `You were just set up as the user's Main Bot. Greet the user in one or two short messages: say you will run their Bot team and that they can come to you for anything that needs a decision. Then use ask_user to ask what they want the team to help with first (3-4 short options). Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
-      : original
-        ? `The user just made you as a copy of ${original.name}: same job, fresh memory. Greet the user in one short message, then use ask_user to ask what this copy should focus on (3-4 short options).`
-        : creator
-          ? `${creator.name} just created you for the user.${brief ? ` Why you exist: ${brief}` : ''}\nGreet the user in one short message, then use ask_user to ask where to start (3-4 short options relevant to your role, with allowCustom). Keep it brief.`
-          : brief
-            ? `The user just created you and sent this first message:\n\n${brief}\n\nIntroduce yourself in one short line, then help with it.`
-            : 'The user just created you. Greet the user in one short message, then use ask_user to ask what you should focus on (3-4 short options, with allowCustom).'
-    const text = !main && language ? `${kickoff}\nWrite in ${language}.` : kickoff
-    const bot = state.bots[id]
-    if (modelRef === undefined) {
-      bot.kickoff = { text, from: createdBy ?? null, ...(main ? { main: true } : {}) }
+    try {
+      state.bots[id] = {
+        id,
+        name: cleanName,
+        role: String(role).trim().slice(0, 24),
+        // A color is only stored when the user picks one; otherwise the id picks it.
+        ...(isColor(currentColor(color)) ? { color: currentColor(color) } : {}),
+        ...(cleanAvatarValue ? { avatar: cleanAvatarValue } : {}),
+        ...(modelRef ? { model: modelRef } : {}),
+        ...(effortId ? { effort: effortId } : {}),
+        instructions: String(instructions).trim(),
+        createdAt: Date.now(),
+        createdBy: createdBy ?? null,
+      }
+      if (main) state.mainBotIds.push(id)
+      const creator = rt.botOf(createdBy)
+      const original = rt.botOf(copyOf)
+      const language = rt.uiLanguage?.()
+      const kickoff = main
+        ? `You were just set up as the user's Main Bot. Greet the user in one or two short messages: say you will run their Bot team and that they can come to you for anything that needs a decision. Then use ask_user to ask what they want the team to help with first (3-4 short options). Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
+        : original
+          ? `The user just made you as a copy of ${original.name}: same job, fresh memory. Greet the user in one short message, then use ask_user to ask what this copy should focus on (3-4 short options).`
+          : creator
+            ? `${creator.name} just created you for the user.${brief ? ` Why you exist: ${brief}` : ''}\nGreet the user in one short message, then use ask_user to ask where to start (3-4 short options relevant to your role, with allowCustom). Keep it brief.`
+            : brief
+              ? `The user just created you and sent this first message:\n\n${brief}\n\nIntroduce yourself in one short line, then help with it.`
+              : 'The user just created you. Greet the user in one short message, then use ask_user to ask what you should focus on (3-4 short options, with allowCustom).'
+      const text = !main && language ? `${kickoff}\nWrite in ${language}.` : kickoff
+      const bot = state.bots[id]
+      if (modelRef === undefined) {
+        bot.kickoff = { text, from: createdBy ?? null, ...(main ? { main: true } : {}) }
+        await rt.save()
+        return bot
+      }
       await rt.save()
+      // The greeting runs on the Bot's own model, once its provider is registered.
+      void rt.waitForModel(bot)
+        .then(() => rt.applyModel(bot).catch(error => rt.warn('ds-bot: model for %s not applied: %s', cleanName, error)))
+        .then(() => sendKickoff(bot, { text, from: createdBy }))
       return bot
+    } catch (error) {
+      // The Bot's Session was already made: archive it instead of leaving an orphan.
+      delete state.bots[id]
+      state.mainBotIds = state.mainBotIds.filter(other => other !== id)
+      rt.chatOwners.delete(id)
+      await ctx.workspaceRegistry.archiveSession(id).catch(() => {})
+      throw error
     }
-    await rt.save()
-    // The greeting runs on the Bot's own model, once its provider is registered.
-    void rt.waitForModel(bot)
-      .then(() => rt.applyModel(bot).catch(error => rt.warn('ds-bot: model for %s not applied: %s', cleanName, error)))
-      .then(() => sendKickoff(bot, { text, from: createdBy }))
-    return bot
   }
 
   function sendKickoff(bot, { text, from }) {
@@ -242,19 +251,26 @@ export function install(rt) {
     if (mode !== undefined && !ROOM_MODES.includes(mode)) throw new Error(`Reply mode must be one of ${ROOM_MODES.join(', ')}`)
     const title = custom || autoRoomName(members)
     const id = await createSession(title)
-    state.rooms[id] = {
-      id,
-      name: title,
-      ...(custom ? { named: true } : {}),
-      members,
-      admin: adminId,
-      mode: mode ?? 'admin',
-      notice: cleanNotice(notice),
-      createdAt: Date.now(),
-      createdBy: createdBy ?? null,
+    try {
+      state.rooms[id] = {
+        id,
+        name: title,
+        ...(custom ? { named: true } : {}),
+        members,
+        admin: adminId,
+        mode: mode ?? 'admin',
+        notice: cleanNotice(notice),
+        createdAt: Date.now(),
+        createdBy: createdBy ?? null,
+      }
+      await rt.save()
+      return state.rooms[id]
+    } catch (error) {
+      // The group's Session was already made: archive it instead of leaving an orphan.
+      delete state.rooms[id]
+      await ctx.workspaceRegistry.archiveSession(id).catch(() => {})
+      throw error
     }
-    await rt.save()
-    return state.rooms[id]
   }
 
   // `actorId` is the Bot asking, or undefined for the user. Returns what changed, in words.

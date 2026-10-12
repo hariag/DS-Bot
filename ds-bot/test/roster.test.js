@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
@@ -280,4 +280,56 @@ test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its hel
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
   await settle()
   assert.equal(sent.length, greeted)
+})
+
+const takeover = (home, team) => {
+  writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: process.ppid, host: hostname(), token: 'new-owner' }))
+  if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
+}
+
+test('a host that loses its lock to another dsh refuses changes instead of making a phantom Bot', async (t) => {
+  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  t.after(stop)
+  assert.equal((await call('state', {})).value.readOnly, null)
+  let created = 0
+  const create = ctx.sessionController.create
+  ctx.sessionController.create = async (...args) => { created += 1; return create(...args) }
+  // Another live dsh takes the lock and writes its own team.
+  takeover(home, { version: 1, revision: 9, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' }, other: { id: 'other', name: 'FromB' } } })
+  const answer = await call('create-bot', { name: 'Phantom' })
+  assert.equal(answer.ok, false)
+  assert.equal(answer.error.code, 'bot/read-only')
+  assert.equal(created, 0)
+  // The file keeps the new owner's team, and this host now follows it.
+  const team = (await call('state', {})).value
+  assert.match(team.readOnly, /another dsh/)
+  assert.ok(team.bots.some(bot => bot.name === 'FromB'))
+  assert.equal(team.bots.some(bot => bot.name === 'Phantom'), false)
+})
+
+test('a write refused at save time archives the Session it made', async (t) => {
+  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  t.after(stop)
+  await call('state', {})
+  const created = []
+  const create = ctx.sessionController.create
+  ctx.sessionController.create = async (...args) => {
+    const made = await create(...args)
+    created.push(made.sessionId)
+    // The lock goes to another live dsh after this request's refresh, before its save.
+    takeover(home)
+    return made
+  }
+  const archived = []
+  const archive = ctx.workspaceRegistry.archiveSession
+  ctx.workspaceRegistry.archiveSession = async (id) => { archived.push(id); return archive(id) }
+  const answer = await call('create-bot', { name: 'Phantom' })
+  assert.equal(answer.ok, false)
+  assert.equal(answer.error.code, 'bot/read-only')
+  assert.deepEqual(archived, created)
+  const team = (await call('state', {})).value
+  assert.match(team.readOnly, /another dsh/)
+  assert.equal(team.bots.some(bot => bot.name === 'Phantom'), false)
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(Object.values(saved.bots).some(bot => bot.name === 'Phantom'), false)
 })
