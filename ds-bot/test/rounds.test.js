@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -68,7 +68,7 @@ function start() {
     ctx.dispose()
     rmSync(home, { recursive: true, force: true })
   }
-  return { call, emit, userMessage, answer, stop, sent, prompts, ctx }
+  return { call, emit, userMessage, answer, stop, sent, prompts, ctx, home }
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -118,6 +118,90 @@ test('a message sent mid-round joins the round: the next speaker sees it, the qu
   const again = JSON.parse(await ctx.registeredTools.get('group_relay').execute({}, { agent: { id: room.id }, callId: 'relay-2', signal: new AbortController().signal }))
   assert.deepEqual(again, { replies: [], passed: [] })
   assert.equal(sent.length, before)
+})
+
+test('a message sent during the last speaker\'s turn still joins the round', async (t) => {
+  const { call, emit, userMessage, answer, stop, sent, ctx } = start()
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const room = (await call('create-room', { members: [chief, writer.id] })).value
+  await call('update-room', { id: room.id, mode: 'everyone' })
+  sent.length = 0
+
+  await emit(room.id, userMessage('Kick it off'))
+  const relay = ctx.registeredTools.get('group_relay').execute({}, { agent: { id: room.id }, callId: 'relay', signal: new AbortController().signal })
+  const first = await waitFor(() => sent.find(entry => entry.message.source.role === 'room'))
+  await answer(first.sessionId, first.message.source.exchangeId, 'Chief first', 1)
+  const second = await waitFor(() => sent.find(entry => entry !== first && entry.message.source.role === 'room'))
+
+  // The last member is already answering when the message lands.
+  assert.equal((await call('send', { sessionId: room.id, text: '@Chief once more late' })).ok, true)
+  await answer(second.sessionId, second.message.source.exchangeId, 'Writer done', 2)
+
+  const third = await waitFor(() => sent.find(entry => entry !== first && entry !== second && entry.message.source.role === 'room'))
+  assert.ok(third, 'Chief is called back for the late message')
+  assert.match(third.message.content[0].text, /@Chief once more late/)
+  assert.match(third.message.content[0].text, /the user mentioned you/)
+  await answer(third.sessionId, third.message.source.exchangeId, 'Back again', 3)
+  const result = JSON.parse(await relay)
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer', 'User', 'Chief'])
+})
+
+test('a mid-round user line resets the room\'s bot-round budget', async (t) => {
+  const { call, emit, userMessage, answer, stop, sent, ctx, home } = start()
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const room = (await call('create-room', { name: 'R1', members: [chief, writer.id] })).value
+  await call('update-room', { id: room.id, mode: 'everyone' })
+  sent.length = 0
+
+  await emit(room.id, userMessage('Start'))
+  const relay = ctx.registeredTools.get('group_relay').execute({}, { agent: { id: room.id }, callId: 'relay', signal: new AbortController().signal })
+  const first = await waitFor(() => sent.find(entry => entry.message.source.role === 'room'))
+  await answer(first.sessionId, first.message.source.exchangeId, 'one', 1)
+  const second = await waitFor(() => sent.find(entry => entry !== first && entry.message.source.role === 'room'))
+
+  // A Main Bot posts into the room while the last member is still answering:
+  // that spends one bot-round budget.
+  const posted = await ctx.registeredTools.get('post_to_group').execute({ group: 'R1', message: 'bot note' }, { agent: { id: first.sessionId } })
+  const roomState = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).rooms[room.id]
+  assert.equal(roomState().botRounds, 1, String(posted))
+
+  // The user's mid-round message counts as the user speaking: the budget reopens.
+  assert.equal((await call('send', { sessionId: room.id, text: 'user back mid-round' })).ok, true)
+  await answer(second.sessionId, second.message.source.exchangeId, 'two', 2)
+  JSON.parse(await relay)
+  assert.equal(roomState().botRounds, 0)
+})
+
+test('a failed send drops the early record so the round never sees it', async (t) => {
+  const { call, emit, userMessage, answer, stop, sent, ctx } = start()
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const room = (await call('create-room', { members: [chief, writer.id] })).value
+  await call('update-room', { id: room.id, mode: 'everyone' })
+  sent.length = 0
+
+  await emit(room.id, userMessage('Start'))
+  const relay = ctx.registeredTools.get('group_relay').execute({}, { agent: { id: room.id }, callId: 'relay', signal: new AbortController().signal })
+  const first = await waitFor(() => sent.find(entry => entry.message.source.role === 'room'))
+
+  // While the admin is answering, the Session-side queueing fails.
+  const prompt = ctx.sessionController.prompt
+  ctx.sessionController.prompt = async () => { throw new Error('queue full') }
+  const failed = await call('send', { sessionId: room.id, text: 'ghost mid-round' })
+  ctx.sessionController.prompt = prompt
+  assert.equal(failed.ok, false)
+
+  await answer(first.sessionId, first.message.source.exchangeId, 'one', 1)
+  const second = await waitFor(() => sent.find(entry => entry !== first && entry.message.source.role === 'room'))
+  assert.doesNotMatch(second.message.content[0].text, /ghost mid-round/)
+  await answer(second.sessionId, second.message.source.exchangeId, 'two', 2)
+  const result = JSON.parse(await relay)
+  assert.equal(result.replies.filter(reply => reply.text === 'ghost mid-round').length, 0)
 })
 
 test('a message sent between rounds still opens a full round', async (t) => {

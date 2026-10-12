@@ -264,13 +264,28 @@ export function install(rt) {
           const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
           // While a group is mid-round its queued copy waits out the whole round;
           // record it for the running round too so the next speaker sees it now.
-          if (rt.roomOf(sessionId) !== undefined && rt.roomBusy(sessionId)) rt.queueRoomMessage(sessionId, { text, early: true })
-          await ctx.sessionController.prompt({
-            requestId: randomUUID(),
-            sessionId,
-            mode: 'queue',
-            content: [{ type: 'text', text }],
-          }, AbortSignal.timeout(30_000))
+          const early = rt.roomOf(sessionId) !== undefined && rt.roomBusy(sessionId)
+            ? rt.queueRoomMessage(sessionId, { text, early: true })
+            : undefined
+          try {
+            await ctx.sessionController.prompt({
+              requestId: randomUUID(),
+              sessionId,
+              mode: 'queue',
+              content: [{ type: 'text', text }],
+            }, AbortSignal.timeout(30_000))
+          } catch (error) {
+            // The round may have drained the record while prompt() was in flight;
+            // then the message reached the room, so this send still succeeded.
+            if (early !== undefined && early.posted === true) return ok(true)
+            if (early !== undefined) {
+              const inbox = rt.roomInbox.get(sessionId) ?? []
+              const at = inbox.indexOf(early)
+              if (at !== -1) inbox.splice(at, 1)
+              void rt.save()
+            }
+            throw error
+          }
           return ok(true)
         }
         case 'update-check': {

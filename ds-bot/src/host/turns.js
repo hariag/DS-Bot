@@ -42,7 +42,10 @@ export function install(rt) {
   const roomProgress = new Map()
   /** @type {Map<string, {text:string, botId?:string, name?:string, reportBack?:boolean, hop?:number, kickoff?:boolean, references?:{labels:string[], text:string}[]}[]>} messages a room's next relay posts */
   const roomInbox = new Map()
-  const queueRoomMessage = (roomId, item) => roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
+  const queueRoomMessage = (roomId, item) => {
+    roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
+    return item
+  }
 
   const liveOf = id => {
     let entry = live.get(id)

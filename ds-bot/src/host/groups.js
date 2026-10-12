@@ -195,12 +195,14 @@ export function install(rt) {
     }
   }
 
+  const freshInbox = room => (rt.roomInbox.get(room.id) ?? [])
+    .filter(item => item.early === true && item.posted !== true && item.consumed !== true)
+
   // Messages the user sent while this round is running post into the log between
   // speakers, so the members still to speak see them; a member they @ is called
   // right after this slot, as if the admin had called it.
   function drainRoomInbox(room, round, turns, index) {
-    const fresh = (rt.roomInbox.get(room.id) ?? [])
-      .filter(item => item.early === true && item.posted !== true && item.consumed !== true)
+    const fresh = freshInbox(room)
     if (fresh.length === 0) return
     const others = room.members.map(rt.botOf).filter(Boolean)
     for (const item of fresh) {
@@ -215,15 +217,20 @@ export function install(rt) {
       if (next?.status === 'waiting' && callees.some(peer => peer.id === next.id)) next.note = 'the user mentioned you'
       callMembers(room, round, turns, index, callees.filter(peer => peer.id !== next?.id), 'the user', ROOM_ADMIN_TURNS_EACH)
     }
+    // The user spoke in this room, so Bots may start their own rounds again.
+    room.botRounds = 0
     void rt.save()
   }
 
   async function runRound(room, round, signal) {
     const limit = round.slots.length + ROOM_EXTRA_TURNS + (room.admin ? ROOM_ADMIN_EXTRA_TURNS : 0)
     const turns = new Map()
-    for (let index = 0; index < round.slots.length && round.turns < limit; index += 1) {
+    // The inbox check keeps a message sent during the last speaker's turn inside
+    // this round: it drains at the loop's head even once the slots ran out.
+    for (let index = 0; (index < round.slots.length || freshInbox(room).length > 0) && round.turns < limit; index += 1) {
       if (signal.aborted) break
       drainRoomInbox(room, round, turns, index)
+      if (index >= round.slots.length) break
       const slot = round.slots[index]
       const member = rt.botOf(slot.id)
       // Settings may change mid-round, for example when the admin removes someone.
