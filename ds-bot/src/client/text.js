@@ -125,6 +125,49 @@ export function toolArgs(root) {
   }
 }
 
+// A relay context is a Bot-to-Bot request, reply or stop notice injected into the
+// model's history. ds-bot's own package sources (kickoff, room, secret, handoff
+// parts) are not events in the chat.
+const RELAY_ROLES = new Set(['request', 'reply', 'stopped'])
+export const isRelayContext = (data) => {
+  const source = data?.source
+  if (source === null || typeof source !== 'object' || source.kind !== 'bot' || source.handoff === true) return false
+  return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === 'string'
+}
+
+// 'context' chat nodes never reach the flow on DSH 0.2, so a relay spliced into
+// a running turn would be invisible; the step that answers it renders the line.
+// A relay attaches to the next step that renders a cell: tool-only steps mount
+// nothing (ui-chat gives them no visible node), so `prev` is the previous step
+// with visible content, not the previous step in the list.
+// `contexts` and `steps` are the turn's turnDataSource lists (anchor order) and
+// `step` is the rendering step's own data. A step is found by its number: the
+// cell's node data and the source's entries can be different snapshot objects.
+const stepShows = (step) => (step?.blocks ?? []).some(block => {
+  // ui-chat's mount rule for a step node: non-empty reasoning, or reply content
+  // (`hasAssistantReplyContent`); a tool call alone keeps the node hidden.
+  if (block === undefined || block.kind === 'tool-call') return false
+  return block.kind === 'text' || block.kind === 'reasoning' ? String(block.text ?? '').trim() !== '' : true
+})
+const stepHasReasoning = (step) => (step?.blocks ?? []).some(block => block?.kind === 'reasoning' && String(block.text ?? '').trim() !== '')
+// The step's own cells: a reasoning step emits a 'reasoning' part and a step
+// with reply content a 'response' part, or both. The line belongs in the first
+// of them — before the thinking row, else before the reply.
+export const relayPart = (data, groupPart) => groupPart === undefined || (stepHasReasoning(data) ? groupPart === 'reasoning' : groupPart === 'response')
+export function relaysBefore(contexts, steps, step) {
+  const index = steps.findIndex(entry => entry?.step === step?.step)
+  if (index === -1) return []
+  let prev = -Infinity
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (stepShows(steps[cursor])) { prev = steps[cursor].time; break }
+  }
+  // The lower bound is inclusive: a relay steered right after the previous
+  // step's assistant/message can share its millisecond, and it still belongs to
+  // this step — its own model call follows the previous one. The upper bound
+  // stays strict: a step's time is its settled message or first visible token.
+  return (contexts ?? []).filter(data => isRelayContext(data) && typeof data.time === 'number' && data.time >= prev && data.time < step.time)
+}
+
 // Back-to-back Bot-to-Bot messages fold into one "N messages with" line. A
 // hidden exchange turn holds a request and its reply; a visible one (a reply, or a
 // request answered to the user) adds only its trigger and ends the run. Group turns

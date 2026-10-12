@@ -792,13 +792,6 @@ export const CONVERSATION_CSS = `
 .bt-event-whole>span:first-child{margin-right:2px}
 /* One button cannot wrap like separate parts, so a long name is cut to fit the chat. */
 .bt-event-whole>.bt-event-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-ctx{min-width:0}
-.bt-ctx-chev{color:var(--bt-ink-3)}
-.bt-ctx-sep{background:var(--bt-ink-3);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}
-.bt-ctx-src,.bt-ctx-summary{min-width:0;color:var(--bt-ink-3);font-size:12px;line-height:24px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
-.bt-ctx-src{flex:none}
-.bt-ctx-summary{flex:auto}
-.bt-ctx-body{box-sizing:border-box;width:calc(100% - 22px);max-height:141px;margin:4px 0 0 22px;padding:10px 16px 12px 12px;border-radius:8px;background:var(--bt-bubble);color:var(--bt-ink-3);font:400 11px/16px var(--ds-font-family-code,monospace);overflow:auto;white-space:pre-wrap;word-break:break-word}
 .bt-time-sep{display:flex;justify-content:center;align-items:center;height:28px;margin:14px 0 8px;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap}
 [class*="_scroll"]>[class*="_column"]::before{content:var(--bt-first-sep,none);display:block;flex:none;height:28px;margin:17px 0 12px;font-size:12px;line-height:28px;text-align:center;color:var(--bt-ink-2);white-space:nowrap}
 .bt-activity{display:flex;align-items:center;gap:10px;margin:8px 0 4px 2px;font-size:14px;color:var(--bt-ink-2)}

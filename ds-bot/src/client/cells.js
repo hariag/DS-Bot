@@ -1,9 +1,8 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { DisclosureRow, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
-import * as dshPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
+import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
-import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
+import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
@@ -107,10 +106,11 @@ function ThinkingRow({ text }) {
     h('div', { className: 'bt-think-text' }, text))
 }
 
-export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, actions }) {
+export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster(value => value)
   const data = node.data
   const steps = useTurnSteps(String(data.turn))
+  const contexts = useTurnContext(String(data.turn))
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
@@ -118,10 +118,26 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null)
   if (hidden) return null
   const reasoning = groupPart === 'response' ? '' : turnReasoning(steps, data)
-  if (texts.length === 0 && !reasoning) return null
+  // A relay spliced mid-turn is a 'context' node, hidden from the chat flow on
+  // DSH 0.2; the step that answers it shows the event line where it was read,
+  // once, in the step's first cell.
+  const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : []
+  if (texts.length === 0 && !reasoning && relays.length === 0) return null
+  const selfId = roster.byId[sessionId]?.id ?? sessionId
   return h(Fragment, null,
+    relays.map(relay => {
+      const source = relay.source
+      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
+      return h(EventLine, {
+        key: relay.seq,
+        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'reply' ? t('Reply from') : t('Message from'),
+        bots: [sender],
+        onOpen: () => { if (sender.id) actions.openExchange(selfId, sender.id) },
+        whole: true,
+      })
+    }),
     reasoning ? h(ThinkingRow, { text: reasoning }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
 }
 
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
@@ -341,68 +357,6 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
     if (source.kind === 'user-question-reply') return null
     return h('div', { className: 'bt-event' }, contentText(data.content).slice(0, 80) || t('Update'))
   }
-}
-
-// A message that joined a running turn renders as a 'context' node (the
-// 'turn-trigger' key is only a turn's opener). A Bot's request shows as the same
-// event line a trigger gets, but it names no peer and opens no comm run: the
-// turn keeps its own course and answers the joiner directly. Every other
-// context node re-creates DSH's collapsed context row: a keyed slot has no
-// fallback to the renderer this registration shadows, so this one covers them.
-export function ContextCell({ node, sessionId, useRoster, actions, t: chatT }) {
-  const roster = useRoster(value => value)
-  const data = node.data
-  const source = data.source !== null && typeof data.source === 'object' ? data.source : {}
-  const selfId = roster.byId[sessionId]?.id ?? sessionId
-  if (source.kind === 'bot') {
-    if (source.handoff === true || source.role === 'kickoff' || source.role === 'room' || source.role === 'secret') return null
-    if ((source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string') {
-      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
-      return h(EventLine, {
-        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'reply' ? t('Reply from') : t('Message from'),
-        bots: [sender],
-        onOpen: () => { if (sender.id) actions.openExchange(selfId, sender.id) },
-        whole: true,
-      })
-    }
-  }
-  return h(ContextRow, { node, chatT: chatT ?? t })
-}
-
-// These icons were renamed from *16 / unsuffixed to *Regular/*Medium in dsh
-// 0.2.x; whichever name the runtime's primitives expose wins.
-const InjectionIcon = dshPrimitives.IconContextInjectionOutlineRegular ?? dshPrimitives.IconContextInjectionOutline16
-const RecallIcon = dshPrimitives.ReferenceIconRegular ?? dshPrimitives.ReferenceIcon
-
-// The collapsed context row DSH shows for injected content: icon, title, a
-// producer label and an optional one-line notice summary, expanding to the
-// message text in a bounded box. The projected `producer` is `provenance`
-// before dsh 0.2.x.
-function ContextRow({ node, chatT }) {
-  const [open, setOpen] = useState(false)
-  const data = node.data
-  const source = data.source !== null && typeof data.source === 'object' ? data.source : {}
-  const producer = data.producer ?? data.provenance ?? { role: 'inject', label: null }
-  const label = typeof producer.label === 'string' && producer.label !== '' ? producer.label : null
-  const summary = data.form === 'notice' && typeof source.summary === 'string' && source.summary !== '' ? source.summary : null
-  const recall = producer.role === 'recall'
-  return h(DisclosureRow, {
-    className: 'bt-ctx',
-    icon: recall ? h('span', null, h(RecallIcon, { kind: 'session' })) : h(InjectionIcon, { size: 14 }),
-    chevronClassName: 'bt-ctx-chev',
-    title: chatT(recall ? 'message.contextRecall' : 'message.contextInjection'),
-    collapsedContent: label === null ? undefined : h(Fragment, null,
-      h('span', { className: 'bt-ctx-sep', 'aria-hidden': true }),
-      h('span', { className: 'bt-ctx-src' }, label),
-      summary === null ? null : h(Fragment, null,
-        h('span', { className: 'bt-ctx-sep', 'aria-hidden': true }),
-        h('span', { className: 'bt-ctx-summary' }, summary))),
-    keepContentWhenOpen: true,
-    open,
-    expandable: true,
-    expandOnRowClick: true,
-    onToggle: () => setOpen(value => !value),
-  }, h('div', { className: 'bt-ctx-body' }, contentText(data.content)))
 }
 
 function NewDivider() {

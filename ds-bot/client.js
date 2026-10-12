@@ -3,11 +3,9 @@ window.__ModuleLoader__.load({
   id: 'ds-bot',
   factory: (require) => {
 const module = { exports: {} }
-var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -21,14 +19,6 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/client/index.js
@@ -1422,6 +1412,30 @@ function toolArgs(root) {
     value: (key) => object()?.[key]
   };
 }
+var RELAY_ROLES = /* @__PURE__ */ new Set(["request", "reply", "stopped"]);
+var isRelayContext = (data) => {
+  const source = data?.source;
+  if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true) return false;
+  return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
+};
+var stepShows = (step) => (step?.blocks ?? []).some((block) => {
+  if (block === void 0 || block.kind === "tool-call") return false;
+  return block.kind === "text" || block.kind === "reasoning" ? String(block.text ?? "").trim() !== "" : true;
+});
+var stepHasReasoning = (step) => (step?.blocks ?? []).some((block) => block?.kind === "reasoning" && String(block.text ?? "").trim() !== "");
+var relayPart = (data, groupPart) => groupPart === void 0 || (stepHasReasoning(data) ? groupPart === "reasoning" : groupPart === "response");
+function relaysBefore(contexts, steps, step) {
+  const index = steps.findIndex((entry) => entry?.step === step?.step);
+  if (index === -1) return [];
+  let prev = -Infinity;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (stepShows(steps[cursor])) {
+      prev = steps[cursor].time;
+      break;
+    }
+  }
+  return (contexts ?? []).filter((data) => isRelayContext(data) && typeof data.time === "number" && data.time >= prev && data.time < step.time);
+}
 function commRunOf(order, peers, turn, hiddenTurns = []) {
   const turns = [];
   for (const entry of order) {
@@ -2456,13 +2470,6 @@ var CONVERSATION_CSS = `
 .bt-event-whole>span:first-child{margin-right:2px}
 /* One button cannot wrap like separate parts, so a long name is cut to fit the chat. */
 .bt-event-whole>.bt-event-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-ctx{min-width:0}
-.bt-ctx-chev{color:var(--bt-ink-3)}
-.bt-ctx-sep{background:var(--bt-ink-3);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}
-.bt-ctx-src,.bt-ctx-summary{min-width:0;color:var(--bt-ink-3);font-size:12px;line-height:24px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
-.bt-ctx-src{flex:none}
-.bt-ctx-summary{flex:auto}
-.bt-ctx-body{box-sizing:border-box;width:calc(100% - 22px);max-height:141px;margin:4px 0 0 22px;padding:10px 16px 12px 12px;border-radius:8px;background:var(--bt-bubble);color:var(--bt-ink-3);font:400 11px/16px var(--ds-font-family-code,monospace);overflow:auto;white-space:pre-wrap;word-break:break-word}
 .bt-time-sep{display:flex;justify-content:center;align-items:center;height:28px;margin:14px 0 8px;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap}
 [class*="_scroll"]>[class*="_column"]::before{content:var(--bt-first-sep,none);display:block;flex:none;height:28px;margin:17px 0 12px;font-size:12px;line-height:28px;text-align:center;color:var(--bt-ink-2);white-space:nowrap}
 .bt-activity{display:flex;align-items:center;gap:10px;margin:8px 0 4px 2px;font-size:14px;color:var(--bt-ink-2)}
@@ -3609,7 +3616,6 @@ var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reas
 var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-var dshPrimitives = __toESM(require("@deepseek-ai/dsh-client-ui-primitives"), 1);
 var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
 function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead }) {
   const onClick = (event) => {
@@ -3739,22 +3745,38 @@ function ThinkingRow({ text }) {
     (0, import_react6.createElement)("div", { className: "bt-think-text" }, text)
   );
 }
-function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, actions }) {
+function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster((value) => value);
   const data = node.data;
   const steps = useTurnSteps(String(data.turn));
+  const contexts = useTurnContext(String(data.turn));
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
   const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
   if (hidden) return null;
   const reasoning = groupPart === "response" ? "" : turnReasoning(steps, data);
-  if (texts2.length === 0 && !reasoning) return null;
+  const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
+  if (texts2.length === 0 && !reasoning && relays.length === 0) return null;
+  const selfId = roster.byId[sessionId]?.id ?? sessionId;
   return (0, import_react6.createElement)(
     import_react6.Fragment,
     null,
+    relays.map((relay) => {
+      const source = relay.source;
+      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
+      return (0, import_react6.createElement)(EventLine, {
+        key: relay.seq,
+        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "reply" ? t("Reply from") : t("Message from"),
+        bots: [sender],
+        onOpen: () => {
+          if (sender.id) actions.openExchange(selfId, sender.id);
+        },
+        whole: true
+      });
+    }),
     reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning }) : null,
-    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
+    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
   );
 }
 function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
@@ -3988,61 +4010,6 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
     if (source.kind === "user-question-reply") return null;
     return (0, import_react6.createElement)("div", { className: "bt-event" }, contentText(data.content).slice(0, 80) || t("Update"));
   }
-}
-function ContextCell({ node, sessionId, useRoster, actions, t: chatT }) {
-  const roster = useRoster((value) => value);
-  const data = node.data;
-  const source = data.source !== null && typeof data.source === "object" ? data.source : {};
-  const selfId = roster.byId[sessionId]?.id ?? sessionId;
-  if (source.kind === "bot") {
-    if (source.handoff === true || source.role === "kickoff" || source.role === "room" || source.role === "secret") return null;
-    if ((source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string") {
-      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
-      return (0, import_react6.createElement)(EventLine, {
-        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "reply" ? t("Reply from") : t("Message from"),
-        bots: [sender],
-        onOpen: () => {
-          if (sender.id) actions.openExchange(selfId, sender.id);
-        },
-        whole: true
-      });
-    }
-  }
-  return (0, import_react6.createElement)(ContextRow, { node, chatT: chatT ?? t });
-}
-var InjectionIcon = dshPrimitives.IconContextInjectionOutlineRegular ?? dshPrimitives.IconContextInjectionOutline16;
-var RecallIcon = dshPrimitives.ReferenceIconRegular ?? dshPrimitives.ReferenceIcon;
-function ContextRow({ node, chatT }) {
-  const [open, setOpen] = (0, import_react6.useState)(false);
-  const data = node.data;
-  const source = data.source !== null && typeof data.source === "object" ? data.source : {};
-  const producer = data.producer ?? data.provenance ?? { role: "inject", label: null };
-  const label = typeof producer.label === "string" && producer.label !== "" ? producer.label : null;
-  const summary = data.form === "notice" && typeof source.summary === "string" && source.summary !== "" ? source.summary : null;
-  const recall = producer.role === "recall";
-  return (0, import_react6.createElement)(import_dsh_client_ui_primitives.DisclosureRow, {
-    className: "bt-ctx",
-    icon: recall ? (0, import_react6.createElement)("span", null, (0, import_react6.createElement)(RecallIcon, { kind: "session" })) : (0, import_react6.createElement)(InjectionIcon, { size: 14 }),
-    chevronClassName: "bt-ctx-chev",
-    title: chatT(recall ? "message.contextRecall" : "message.contextInjection"),
-    collapsedContent: label === null ? void 0 : (0, import_react6.createElement)(
-      import_react6.Fragment,
-      null,
-      (0, import_react6.createElement)("span", { className: "bt-ctx-sep", "aria-hidden": true }),
-      (0, import_react6.createElement)("span", { className: "bt-ctx-src" }, label),
-      summary === null ? null : (0, import_react6.createElement)(
-        import_react6.Fragment,
-        null,
-        (0, import_react6.createElement)("span", { className: "bt-ctx-sep", "aria-hidden": true }),
-        (0, import_react6.createElement)("span", { className: "bt-ctx-summary" }, summary)
-      )
-    ),
-    keepContentWhenOpen: true,
-    open,
-    expandable: true,
-    expandOnRowClick: true,
-    onToggle: () => setOpen((value) => !value)
-  }, (0, import_react6.createElement)("div", { className: "bt-ctx-body" }, contentText(data.content)));
 }
 function NewDivider() {
   return (0, import_react6.createElement)("div", { className: "bt-new-sep", role: "separator", "aria-label": t("New messages") }, (0, import_react6.createElement)("span", null, t("New")));
@@ -12903,6 +12870,11 @@ function apply(ctx) {
         const snapshot = chat.getSnapshot();
         if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
         return snapshot.nodes.turnDataSource(Number(turn), "assistant-step");
+      },
+      turnContext: (turn) => {
+        const snapshot = chat.getSnapshot();
+        if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
+        return snapshot.nodes.turnDataSource(Number(turn), "context");
       }
     } };
   };
@@ -12970,7 +12942,6 @@ function apply(ctx) {
     shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
     shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
     shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
-    shadow("conversation.chat.node", { key: "context", priority: -10, locale: "chat", inject: face }, ContextCell),
     shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
     shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
     shadow("conversation.chat.node", { key: "turn-tail", priority: -10, locale: "chat", inject: face }, TurnTailCell),
