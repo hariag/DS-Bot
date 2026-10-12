@@ -5,113 +5,47 @@ body:
   - type: markdown
     attributes:
       value: |
-        **A screenshot helps most.** One picture of the whole window, with the chat and the error, often tells us more than a paragraph. A short screen recording is even better for something that moves or flickers.
+        **Please add a screenshot.** A screenshot of the whole window tells us more than a paragraph. A report with only one sentence cannot be fixed and may be closed.
+        **请附截图。** 一张整窗截图比一段文字有用得多。只有一句话的报告修不了，可能会被直接关闭。
 
-        **截图最有用。** 一张包含聊天内容和报错的整窗截图，往往比一段文字说得更清楚。会动、会闪的问题，录一小段屏更好。
+        Fastest: in DS Bot, **Settings → Feedback → Report on GitHub** fills in the diagnostics.
+        最快：在 DS Bot 里点 **设置 → 反馈 → 在 GitHub 上报告**，诊断信息会自动填好。
 
-        We can only fix a bug that we can make happen again. Fill in every field. A report with only one sentence, and no steps or diagnostics, cannot be fixed and may be closed.
-
-        只有能复现的 bug 才修得了。请把每一项都填上。只有一句话、没有步骤和诊断信息的报告修不了，可能会被直接关闭。
-
-        The fastest way: in DS Bot, open **Settings → Feedback**, write what happened and select **Report on GitHub**. It fills in the versions, the system, the models and the recent errors.
-
-        最快的办法：在 DS Bot 里打开 **设置 → 反馈**，写下发生了什么，点 **在 GitHub 上报告**。版本、系统、模型和最近的错误会自动填好。
-
-        For a security problem, do not open a public issue: use **Report a vulnerability** on the **Security** tab. Questions and feature requests go to [Discussions](https://github.com/Fei2411/DeepSeek-Bot/discussions).
-
-        安全问题不要公开发 issue，请在 **Security** 页点 **Report a vulnerability**。提问和功能建议请发到 [Discussions](https://github.com/Fei2411/DeepSeek-Bot/discussions)。
+        Security problems: **Security** tab → **Report a vulnerability**. Questions and ideas: [Discussions](https://github.com/Fei2411/DeepSeek-Bot/discussions).
+        安全问题请在 **Security** 页私下报告；提问和建议请发到 [Discussions](https://github.com/Fei2411/DeepSeek-Bot/discussions)。
   - type: textarea
     id: what
     attributes:
       label: What happened? / 发生了什么？
-      description: |
-        What you saw. Copy the exact error text.
-
-        你看到了什么。错误信息请复制原文。
+      description: What you did, what you expected, and what happened instead. Copy the exact error text. / 你做了什么、期望什么、实际发生了什么。报错请复制原文。
     validations:
       required: true
   - type: textarea
     id: screenshots
     attributes:
-      label: Screenshots or screen recording / 截图或录屏
-      description: |
-        Paste a screenshot here (Ctrl+V or ⌘V), or drag images or a video in. Show the whole window: the chat, the Bot and the error, not only the error line.
-
-        在这里直接粘贴截图（Ctrl+V 或 ⌘V），或把图片、视频拖进来。请截整个窗口：聊天内容、是哪个 Bot、报错都要在图里，不要只截报错那一行。
-  - type: textarea
-    id: expected
-    attributes:
-      label: What did you expect? / 你期望的结果
-      placeholder: Writer answers in the group chat. / Writer 在群聊里回复。
-    validations:
-      required: true
+      label: Screenshot (strongly recommended) / 截图（强烈建议）
+      description: Paste it here (Ctrl+V or ⌘V) or drag it in. A screen recording works too. / 直接粘贴（Ctrl+V 或 ⌘V）或拖进来，录屏也可以。
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce / 复现步骤
-      description: |
-        One action per line, from the start. Name the Bot, the chat and what you sent.
-
-        从头写起，每步一行。写清是哪个 Bot、哪个聊天、发了什么。
       placeholder: |
-        1. Create a group chat with Chief and Writer / 建一个有 Chief 和 Writer 的群聊
-        2. Send "@Writer write a summary" / 发送「@Writer 写个总结」
+        1. Open the group chat "…" / 打开群聊「…」
+        2. Send "…" / 发送「…」
         3. Writer shows "could not answer" / Writer 显示 "could not answer"
-    validations:
-      required: true
-  - type: dropdown
-    id: frequency
-    attributes:
-      label: How often does it happen? / 出现频率
-      options:
-        - Every time / 每次都会
-        - Sometimes / 有时会
-        - Only once so far / 目前只出现过一次
-    validations:
-      required: true
-  - type: dropdown
-    id: where
-    attributes:
-      label: Where does it happen? / 出在哪里
-      multiple: true
-      options:
-        - A Bot's own chat / Bot 的私聊
-        - Group chat / 群聊
-        - Messages between Bots / Bot 之间的消息
-        - Sidebar / 侧栏
-        - Settings / 设置
-        - Install or update / 安装或更新
-        - Other / 其他
     validations:
       required: true
   - type: textarea
     id: diagnostics
     attributes:
       label: Diagnostics / 诊断信息
-      description: |
-        In DS Bot, open Settings → Feedback, select Copy and paste here. If this field says DS Bot copied the diagnostics to the clipboard, paste them below that line. They hold the versions, the system, the models and the recent errors, with keys and your home folder hidden.
-
-        在 DS Bot 里打开 设置 → 反馈，点「复制」，粘贴到这里。如果这里写着诊断信息已复制到剪贴板，请粘贴在那行下面。里面有版本、系统、模型和最近的错误，key 和你的用户目录已隐藏。
-    validations:
-      required: true
-  - type: dropdown
-    id: install
-    attributes:
-      label: How did you install DS Bot? / 安装方式
-      options:
-        - npm
-        - Release file / Release 文件
-        - Git address / Git 地址
-        - Command line (dsh plugin) / 命令行（dsh plugin）
-        - Other / 其他
+      description: In DS Bot, Settings → Feedback → Copy, then paste here. / 在 DS Bot 里点 设置 → 反馈 → 复制，粘贴到这里。
     validations:
       required: true
   - type: checkboxes
     id: clean
     attributes:
-      label: Before you submit / 提交前
+      label: Privacy / 隐私
       options:
-        - label: I searched the open and closed issues, and nobody has reported this yet. / 我搜过已有的 issue（包括已关闭的），还没人报过这个问题。
-          required: true
-        - label: I checked that this report has no API keys, tokens or personal data. / 我确认这份报告里没有 API key、token 或个人信息。
+        - label: This report has no API keys, tokens or personal data. / 报告里没有 API key、token 或个人信息。
           required: true

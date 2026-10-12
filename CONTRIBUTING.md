@@ -107,8 +107,8 @@ If you open an issue by hand, include:
 - The DSH version (DSH Desktop or `@deepseek-ai/dsh`), your operating system, and whether you use DSH Desktop or DSH Web.
 - How you installed DS Bot (npm, release file, Git address or command line) and its version.
 - What you did, what you expected and what happened, with the exact error text.
-- A screenshot of the whole window, with the chat and the error. For something that moves or flickers, a short screen recording.
-- The steps that make it happen again, one action per line, and whether it happens every time.
+- A screenshot of the whole window, with the chat and the error.
+- The steps that make it happen again.
 
 DS Bot removes API keys, tokens, saved secrets and your home folder from its diagnostics. Read the text before you post it, and remove personal data from screenshots.
 
