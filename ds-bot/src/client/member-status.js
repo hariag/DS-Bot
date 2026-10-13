@@ -129,7 +129,9 @@ function useFlowColumn(ref, active, key) {
     }
     place()
     const observer = new ResizeObserver(place)
-    observer.observe(flow)
+    // The column is centered in its scroller, so it moves without resizing when the
+    // scroller or the rows' own container changes width.
+    for (const target of [flow, flow.parentElement, node.parentElement]) if (target) observer.observe(target)
     return () => observer.disconnect()
   }, [active, key])
 }
