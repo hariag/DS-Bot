@@ -8,6 +8,11 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 - A Bot that was working when DeepSeek Harness closed or restarted picks its work back up when DS Bot starts again. A group chat shows which member was cut off, and a Bot that was answering another Bot still sends its answer.
 - The sidebar marks a Bot or group chat that waits for your approval. Where the system allows notifications, a notification also names the Bot.
+- In a group chat, any Bot can hand work to another with @Name. The Bot does the work without holding up the group, and the group, the sidebar and the Bot's own chat show what it is doing. When it is done, it posts the result in the group. You can stop the work in the group's details.
+
+### Changed
+
+- What a group member posts after its round moved on is answered by the Bot that asked for the work, and no longer by the admin. Work you asked for yourself is left for you to read.
 
 ### Fixed
 
