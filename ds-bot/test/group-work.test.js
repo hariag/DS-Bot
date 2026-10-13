@@ -203,10 +203,14 @@ test('the late round limit makes a late post quiet', async (t) => {
   assert.equal(host.takePost().source.quiet, true)
 })
 
-test('a group Session\'s turn that takes a reply posts what it ends with in the group', async (t) => {
+test('a reply to a message a group Session sent comes back there, and its turn posts in the group', async (t) => {
   const host = await start(t)
-  host.emit('gb', 'turn/start', { turn: 1 })
-  host.emit('gb', 'user/message', { content: [{ type: 'text', text: '[Reply from Tester]\nok' }], source: { kind: 'bot', role: 'reply', exchangeId: 'x1', senderName: 'Tester', senderSessionId: 'c', hop: 1 } })
+  await host.tool('message_bot', { to: 'Tester', message: '能跑通吗？' }, 'gb')
+  assert.equal(host.begin('c').source.senderRoomId, 'r1')
+  host.finish('c', 'ok')
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  assert.deepEqual(host.agentOf('b').calls, [])
+  assert.match(text(host.begin('gb')), /^\[Reply from Tester\]\nok/)
   host.finish('gb', 'Tester 说可以，我继续。')
   await settle(() => host.agentOf('r1').calls.length === 1)
   const post = host.takePost()

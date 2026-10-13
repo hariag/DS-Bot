@@ -59,6 +59,7 @@ export function install(rt) {
       ...(keeps && info.exchangeId ? { exchangeId: info.exchangeId } : {}),
       ...(keeps && info.audience ? { audience: info.audience } : {}),
       ...(keeps && info.askedBy ? { askedBy: info.askedBy } : {}),
+      ...(keeps && info.senderRoomId ? { fromRoomId: info.senderRoomId } : {}),
       note: 'your tool call did not run',
       retried: true,
       text: RETRY_TEXT,
@@ -394,11 +395,15 @@ export function install(rt) {
         const answer = (source, reply) => {
           if (!expectsReply(source) || answersUser(source)) return
           const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
+          // A sender that wrote from a group gets the reply in its Session there, while
+          // it is still a member.
+          const back = rt.roomOf(source.senderRoomId)?.sessions?.[source.senderSessionId]
           if (failure !== undefined) {
             // The sender was told a reply comes later; without this it would wait forever.
             void rt.deliver({
               fromId: rt.selfOf(id),
               toId: source.senderSessionId,
+              ...(back ? { sessionId: back } : {}),
               text: `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`,
               role: 'reply',
               hop: (source.hop ?? 0) + 1,
@@ -410,6 +415,7 @@ export function install(rt) {
             void rt.deliver({
               fromId: rt.selfOf(id),
               toId: source.senderSessionId,
+              ...(back ? { sessionId: back } : {}),
               text: reply !== '' ? reply : `${name} was stopped before it could answer your message.`,
               role: 'reply',
               hop: (source.hop ?? 0) + 1,
@@ -455,6 +461,7 @@ export function install(rt) {
             role: 'request',
             hop: request.info.hop ?? 0,
             exchangeId: request.info.exchangeId,
+            ...(request.info.senderRoomId ? { fromRoomId: request.info.senderRoomId } : {}),
             deferred: true,
           }).catch(error => rt.warn('ds-bot: deferred request delivery failed: %s', error))
         }

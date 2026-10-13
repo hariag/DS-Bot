@@ -36,8 +36,9 @@ export function install(rt) {
   // `retried` carry on a turn that a restart cut off or that wrote its tool call as
   // text (resume.js, turns.js), and `resent` is a message a shutdown cancelled; their
   // exchange is recorded already too. `askedBy` is the member whose @mention called a
-  // group turn (groups.js).
-  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, askedBy }) {
+  // group turn (groups.js). `fromRoomId`: the group whose Session the sender wrote
+  // from; the reply goes back to that Session (turns.js).
+  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, askedBy, fromRoomId }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -59,6 +60,7 @@ export function install(rt) {
       ...(resumed ? { resumed: true } : {}),
       ...(retried ? { retried: true } : {}),
       ...(askedBy ? { askedBy } : {}),
+      ...(fromRoomId ? { senderRoomId: fromRoomId } : {}),
     }
     if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried && !resent) {
       state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
