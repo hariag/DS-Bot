@@ -545,6 +545,7 @@ export function apply(ctx) {
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
     answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
+    stopMemberWork: (roomId, botId) => after(call('stop-member-work', { roomId, botId })),
     // Values go out in these requests and never come back in a response.
     secretSet: payload => after(call('secret-set', payload)),
     secretAllow: requestId => after(call('secret-allow', { requestId })),

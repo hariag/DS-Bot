@@ -442,6 +442,8 @@ const ZH = {
   '{name} is typing…': '{name} 正在输入…',
   "{name} didn't answer in time": '{name} 没有及时回应',
   '{name} paused for your approval': '{name} 停下来等你批准',
+  '{name} started on it': '{name} 开始做了',
+  "You stopped {name}'s work": '你停下了 {name} 的工作',
   '{name} was cut off by a restart and picked its work back up': '{name} 的工作被重启打断，已经接着做',
   '{name} was cut off by a restart again and stopped': '{name} 的工作又被重启打断，已停下',
   'Picked up its work after a restart': '重启后接着做之前的工作',

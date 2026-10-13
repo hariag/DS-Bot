@@ -327,9 +327,9 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'resume') return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
       if (source.role === 'retry') return h('div', { className: 'bt-event' }, t('Asked to make the tool call it wrote as text'))
       if (source.role === 'post') {
-        // A member's late failure, or its work picked up after a restart, shows as an
-        // event of the round it opens.
-        if (source.failed !== undefined || source.resumed === true) return null
+        // A member's late failure, its work picked up after a restart, or its work the user
+        // stopped shows as an event of the round it opens.
+        if (source.failed !== undefined || source.resumed === true || source.stopped === true) return null
         const room = roster.roomsById[sessionId]
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
         return h(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi })
@@ -466,7 +466,7 @@ export const PHRASES = {
 const TOOL_PHRASES = [
   [/web_?search|search_?web/i, 'Searching online'],
   [/fetch|browse|browser|web/i, 'Reading a page'],
-  [/shell|bash|exec|command|terminal/i, 'Running shell commands'],
+  [/shell|bash|pwsh|powershell|exec|command|terminal/i, 'Running shell commands'],
   [/^(read|view|cat)\b|read_/i, 'Opening a file'],
   [/grep|glob|list_dir|^ls$|find|search/i, 'Looking through files'],
   [/write|edit|patch|apply|replace/i, 'Writing changes'],
@@ -573,10 +573,13 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       if (reply.kind === 'cut') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t('{name} was cut off by a restart again and stopped', { name: bot.name }))
       }
-      if (reply.kind === 'approval') {
+      if (reply.kind === 'approval' || reply.kind === 'working') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' },
           h('button', { type: 'button', className: 'bt-event-whole', onClick: () => actions.showDetails(sessionId) },
-            h(BotMark, { bot, size: 16 }), h('span', { className: 'bt-event-name' }, t('{name} paused for your approval', { name: bot.name }))))
+            h(BotMark, { bot, size: 16 }), h('span', { className: 'bt-event-name' }, t(reply.kind === 'working' ? '{name} started on it' : '{name} paused for your approval', { name: bot.name }))))
+      }
+      if (reply.kind === 'stopped') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("You stopped {name}'s work", { name: bot.name }))
       }
       return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, text: reply.text, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
     }),
