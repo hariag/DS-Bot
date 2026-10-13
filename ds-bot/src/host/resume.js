@@ -119,9 +119,14 @@ export function install(rt) {
   // Exchanges a turn took up since this start, until the resends are done, so a resend
   // never repeats one.
   let taken = Object.keys(interrupted.queued).length > 0 ? new Set() : undefined
+  // The first turn event of each Session since this start, until the noted turns are
+  // picked up. A turn that ends, or still runs, before one starts here outlived the
+  // last run: only DS Bot restarted (the plugin reloaded) and DSH went on.
+  let firstTurn = Object.keys(interrupted.turns).length > 0 ? new Map() : undefined
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
+    if ((event.type === 'turn/start' || event.type === 'turn/end') && firstTurn?.has(id) === false) firstTurn.set(id, event.type)
     if (event.type === 'user/message' && event.data?.source?.kind === SOURCE_KIND && event.data.source.exchangeId) {
       taken?.add(event.data.source.exchangeId)
       forgetQueued(event.data.source.exchangeId)
@@ -203,17 +208,26 @@ export function install(rt) {
   async function resumeAll() {
     await rt.load()
     if (rt.readOnly() !== undefined) return
-    const { turns: cut, queued: dropped } = interrupted
+    const { turns: noted, queued: dropped } = interrupted
     interrupted = { turns: {}, queued: {} }
     // Taken up now, so another restart does not pick them up twice.
     persist()
-    // Inboxes are read before anything wakes their Sessions.
+    // Agents and inboxes are read before anything wakes their Sessions.
+    const cut = []
+    for (const [sessionId, record] of Object.entries(noted)) {
+      const first = firstTurn.get(sessionId)
+      if (first === 'turn/end') continue
+      // Still running: noted again, as if it had started here.
+      if (first === undefined && (await rt.resolveAgent(sessionId).catch(() => undefined))?.status === 'running') update(sessionId, () => record)
+      else cut.push([sessionId, record])
+    }
+    firstTurn = undefined
     for (const [sessionId, list] of Object.entries(dropped)) {
       if (!Array.isArray(list)) continue
       await resendQueued(sessionId, list).catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
     }
     taken = undefined
-    for (const [sessionId, record] of Object.entries(cut)) {
+    for (const [sessionId, record] of cut) {
       await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
   }

@@ -164,6 +164,33 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   assert.equal(state.exchanges.length, 0)
 })
 
+test('when only DS Bot restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const first = await start(home)
+  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
+  run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
+  await settle(() => inflight(home).b?.trigger !== undefined && inflight(home).a !== undefined)
+  await first.stop()
+
+  // DSH went on: Writer is still at work, and Chief's turn ends before the pick-up.
+  const second = await start(home)
+  second.agentOf('b').status = 'running'
+  second.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  t.mock.timers.tick(3000)
+  await settle(() => inflight(home).b?.trigger?.exchangeId === 'x1' && inflight(home).a === undefined)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual([second.agentOf('a').calls.length, second.agentOf('b').calls.length], [0, 0])
+
+  // Writer's turn stays noted, so a real restart still picks it up.
+  second.emit('b', 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } })
+  await second.stop()
+  const third = await start(home)
+  t.mock.timers.tick(3000)
+  await settle(() => third.agentOf('b').calls.length === 1)
+  assert.deepEqual([third.agentOf('b').calls[0].source.exchangeId, third.agentOf('a').calls.length], ['x1', 0])
+})
+
 test('a finished turn leaves nothing to pick up', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
