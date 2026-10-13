@@ -1284,6 +1284,15 @@ function isAgentSession(roster, cache, sessionId) {
   if (roster.ready) return roster.agentOf[sessionId] !== void 0;
   return cache.has(sessionId);
 }
+function countCards(state, sessionId, callIds, delta) {
+  const own = { ...state[sessionId] };
+  for (const callId of callIds) {
+    const count = (own[callId] ?? 0) + delta;
+    if (count > 0) own[callId] = count;
+    else delete own[callId];
+  }
+  return { ...state, [sessionId]: own };
+}
 
 // src/client/themes.js
 var THEME_KEYS = ["bg", "sidebar", "bubble", "card", "text", "user", "userText", "accent"];
@@ -1516,6 +1525,7 @@ function isHiddenTurn(roster, sessionId, turn) {
   return (roster.exchangeTurns[sessionId] ?? []).includes(turn);
 }
 var toolName = (root) => root.name || root.call?.name;
+var historyLoading = (snapshot) => snapshot?.openState === "cold" || snapshot?.openState === "loading";
 function toolArgs(root) {
   if (typeof root.args?.text === "function") {
     return { text: (key) => root.args.text(key) ?? void 0, value: (key) => typeof root.args.value === "function" ? root.args.value(key) : void 0 };
@@ -3308,9 +3318,11 @@ function PendingQuestion({ sessionId, question, actions, inline }) {
     (0, import_react4.createElement)(QuestionView, { key: question.id, question, onAnswer, onDismiss, ownAnswer: question.allowCustom === true, raised: !inline })
   );
 }
-function QuestionDock({ sessionId, useRoster, actions }) {
+function QuestionDock({ sessionId, useRoster, useCards, useSession, actions }) {
   const question = useRoster((value) => value.questions?.[sessionId]);
-  if (question === void 0 || question.callId) return null;
+  const drawn = useCards?.((state) => state[sessionId]?.[question?.callId] > 0) === true;
+  const loading = useSession?.(historyLoading) === true;
+  if (question === void 0 || question.callId && (drawn || loading)) return null;
   return (0, import_react4.createElement)(PendingQuestion, { sessionId, question, actions, inline: false });
 }
 function AnsweredCell({ node }) {
@@ -3330,6 +3342,7 @@ function AnsweredCell({ node }) {
 // src/client/secret-card.js
 var import_react5 = require("react");
 var MIN_VALUE = 4;
+var NONE = {};
 var KeyIcon = () => (0, import_react5.createElement)(
   "svg",
   { width: 15, height: 15, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
@@ -3496,18 +3509,21 @@ function RequestView({ bot, request, roster, actions }) {
 function SecretToolCell({ sessionId, callId, name, done, content, roster, actions }) {
   const bot = roster.byId[sessionId];
   if (!bot) return null;
-  const request = (roster.secretRequests?.[bot.id] ?? []).find((entry) => entry.callId === callId);
+  const request = (roster.secretRequests?.[bot.id] ?? []).find((entry) => entry.callId === callId && (entry.sessionId ?? sessionId) === sessionId);
   if (request) return (0, import_react5.createElement)("div", { className: "bt-q-inline" }, (0, import_react5.createElement)(RequestView, { bot, request, roster, actions }));
   if (done && /already saved/.test(contentText(content))) {
     return (0, import_react5.createElement)("div", { className: "bt-event" }, (0, import_react5.createElement)("span", { className: "bt-secret-event" }, (0, import_react5.createElement)(KeyIcon), t("{bot} is using {name}", { bot: bot.name, name: name ?? t("a saved key") })));
   }
   return null;
 }
-function SecretDock({ sessionId, useRoster, actions }) {
+function SecretDock({ sessionId, useRoster, useCards, useSession, actions }) {
   const roster = useRoster((value) => value);
+  const shown = useCards?.((state) => state[sessionId]) ?? NONE;
+  const loading = useSession?.(historyLoading) === true;
   const bot = roster.byId[sessionId];
   if (!bot || currentPart(bot) !== sessionId) return null;
-  const waiting = (roster.secretRequests?.[bot.id] ?? []).filter((entry) => entry.status === "pending" && (!entry.callId || entry.sessionId !== sessionId));
+  const drawn = (entry) => entry.callId && entry.sessionId === sessionId && (loading || shown[entry.callId] > 0);
+  const waiting = (roster.secretRequests?.[bot.id] ?? []).filter((entry) => entry.status === "pending" && !drawn(entry));
   if (waiting.length === 0) return null;
   return (0, import_react5.createElement)("div", { className: "bt-q-dock bt-secret-dock" }, waiting.map((request) => (0, import_react5.createElement)(SecretCard, { key: `${request.id}:${request.kind}`, bot, request, roster, actions })));
 }
@@ -4397,6 +4413,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   );
 }
 var DRAWN = /* @__PURE__ */ new Set(["message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "ask_user_question", "read_group_chat", "remember", "forget"]);
+var CARDS = /* @__PURE__ */ new Set(["ask_user", "request_secret"]);
 function callTree(root) {
   const calls = [];
   const seen = /* @__PURE__ */ new Set();
@@ -4409,6 +4426,15 @@ function callTree(root) {
   };
   visit(root);
   return calls;
+}
+function useShownCards(actions, sessionId, callIds) {
+  const key = JSON.stringify(callIds);
+  (0, import_react6.useLayoutEffect)(() => {
+    const ids = JSON.parse(key);
+    if (ids.length === 0 || !actions.noteCards) return void 0;
+    actions.noteCards(sessionId, ids, 1);
+    return () => actions.noteCards(sessionId, ids, -1);
+  }, [sessionId, key]);
 }
 function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot }) {
   const tool = toolName(call2);
@@ -4498,6 +4524,7 @@ function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
   const running = root.kind === "tool-result" ? void 0 : calls.findLast((call2) => call2.kind !== "tool-result");
   const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null;
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note);
+  useShownCards(actions, sessionId, drawn.filter((call2) => CARDS.has(toolName(call2)) && call2.callId).map((call2) => call2.callId));
   if (drawn.length === 0) return null;
   const env = { sessionId, roster, actions, useUi, useWork, findBot };
   return (0, import_react6.createElement)(import_react6.Fragment, null, drawn.map((call2, index) => (0, import_react6.createElement)(import_react6.Fragment, { key: call2.callId ?? index }, renderCall(call2, env))));
@@ -13249,6 +13276,7 @@ function apply(ctx) {
   const work = createSource({ bots: {}, approvals: [] });
   let workKey = "";
   const live = createSource({});
+  const cards = createSource({});
   const turnClock = createSource({});
   let activityKey = "{}";
   const memoryNews = createSource({});
@@ -13887,6 +13915,9 @@ function apply(ctx) {
       return { ...state, [sessionId]: next };
     });
   };
+  actions.noteCards = (sessionId, callIds, delta) => {
+    if (sessionId !== void 0) cards.set((state) => countCards(state, sessionId, callIds, delta));
+  };
   actions.clearLive = (sessionId) => live.set((state) => {
     if (!state[sessionId]) return state;
     const next = { ...state };
@@ -13895,7 +13926,7 @@ function apply(ctx) {
   });
   const browserPages = browsers?.pages ?? createSource({});
   const browserTabs = browsers?.tabs ?? createSource({});
-  const face = () => ({ actions, hooks: { roster, ui: ui2, activity, work, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } });
+  const face = () => ({ actions, hooks: { roster, ui: ui2, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } });
   ctx.effect(() => noticeApprovals({
     work,
     roster,

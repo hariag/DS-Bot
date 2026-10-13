@@ -1,8 +1,8 @@
 import { call } from './api.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
-import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
-import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
+import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
+import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
@@ -22,7 +22,6 @@ import { SECRET_CSS, SecretDock } from './secret-card.js'
 import { MODEL_CSS, ModelChoiceDock, DeepSeekSignIn } from './model-menu.js'
 import { BOT_SETTINGS_CSS } from './bot-settings.js'
 import { GROUP_SETTINGS_CSS } from './group-settings.js'
-import { FOLDER_CSS } from './folder-menu.js'
 import { USAGE_CSS } from './usage-page.js'
 import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
@@ -33,6 +32,7 @@ import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
+import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'configForms']
 
@@ -95,6 +95,9 @@ export function apply(ctx) {
   let workKey = ''
   // Per Session, what its transcript has in flight (running tools, a streaming reply).
   const live = createSource({})
+  // Per Session, the ask_user and request_secret calls its transcript draws; the
+  // docks carry the cards of the other calls.
+  const cards = createSource({})
   // Per Session, the first visible time and the end time of each turn the transcript
   // has rendered; time separators compare one turn's end with the next turn's start.
   const turnClock = createSource({})
@@ -303,6 +306,29 @@ export function apply(ctx) {
       delete document.body.dataset.btMotion
       style.remove()
     }
+  }
+
+  // The user-bubble token rides with the conversation group, so a plain Session
+  // keeps dsh's own bubble colors while the Bot shell stays themed.
+  const installBubbleTokens = () => {
+    let release = null
+    let key = ''
+    const render = () => {
+      const snapshot = roster.getSnapshot()
+      const prefs = snapshot.ready ? snapshot.prefs ?? {} : savedPrefs
+      const themes = allThemes()
+      const id = themes[prefs.theme] ? prefs.theme : 'deepseek'
+      const next = `${id}|${registry.getSnapshot()}`
+      if (next === key) return
+      key = next
+      const drop = release
+      release = ctx.theme.overrideTokens('ds-bot: conversation', conversationTokens(themes[id]))
+      if (typeof drop === 'function') drop()
+    }
+    render()
+    const offRoster = roster.subscribe(render)
+    const offRegistry = registry.subscribe(render)
+    return () => { offRoster(); offRegistry(); if (typeof release === 'function') release() }
   }
 
   ctx.effect(() => {
@@ -514,9 +540,6 @@ export function apply(ctx) {
     updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
     refreshModels: () => after(call('models')).catch(() => {}),
     efforts: ref => call('efforts', { ref }),
-    folders: () => call('folders'),
-    folderPick: () => call('folder-pick'),
-    folderList: path => call('folder-list', { path: path ?? '' }),
     deleteBot: id => after(call('delete-bot', { id })),
     duplicateBot: id => after(call('duplicate-bot', { id })),
     setPrefs: prefs => after(call('set-prefs', prefs)),
@@ -672,6 +695,9 @@ export function apply(ctx) {
       return { ...state, [sessionId]: next }
     })
   }
+  actions.noteCards = (sessionId, callIds, delta) => {
+    if (sessionId !== undefined) cards.set(state => countCards(state, sessionId, callIds, delta))
+  }
   actions.clearLive = sessionId => live.set((state) => {
     if (!state[sessionId]) return state
     const next = { ...state }
@@ -680,7 +706,13 @@ export function apply(ctx) {
   })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, browserPages, browserTabs, surface, update } })
+  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } })
+  ctx.effect(() => noticeApprovals({
+    work,
+    roster,
+    shownSession: () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id,
+    openSession: id => actions.openSession(id),
+  }), 'ds-bot: approval notifications')
   const assistantFace = (sessionId) => {
     const binding = ctx.sessions.binding(sessionId)
     if (binding === undefined) throw new Error(`ds-bot: unknown session "${sessionId}"`)
@@ -737,7 +769,7 @@ export function apply(ctx) {
     installCompiledStyles(SHELL_CSS, 'shell'),
     installCompiledStyles(SIDEBAR_CSS, 'sidebar'),
     installCompiledStyles(SECRET_CSS, 'secrets'),
-    installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, 'models'),
+    installCompiledStyles(MODEL_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, 'models'),
     installCompiledStyles(USAGE_CSS, 'usage'),
     installCompiledStyles(SCHEDULE_CSS, 'schedules'),
     installCompiledStyles(FEEDBACK_CSS, 'feedback'),
@@ -763,6 +795,7 @@ export function apply(ctx) {
   ]
   const installConversation = () => [
     installCompiledStyles(CONVERSATION_CSS, 'conversation'),
+    installBubbleTokens(),
     installMentions(),
     installAtMenu(),
     // Bot conversations are always flat, so the work-details mode is not a choice:
