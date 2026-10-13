@@ -160,7 +160,9 @@ function decide(body) {
     return [text(note(sections))]
   }
 
-  const result = blocks.find(block => block.type === 'tool_result')
+  // A stopped call's result can share a message with the next group turn, which wins.
+  const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat'))
+  const result = fresh ? undefined : blocks.find(block => block.type === 'tool_result')
   if (result) {
     const resultText = typeof result.content === 'string' ? result.content : textOf(result.content)
     const call = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
@@ -193,9 +195,7 @@ function decide(body) {
       return [text(`终端输出里我看到的是：${resultText.replace(/\s+/g, ' ').trim().slice(0, 200)}`)]
     }
     if (used?.input?.justification === ESCALATION) return [text(result.is_error ? `没跑成：${resultText.slice(0, 80)}` : '命令跑完了，文件已经写好。')]
-    // A stopped job's result can share a message with the next group turn, which wins.
-    const fresh = textBlocks(last.content).some(value => value.trimStart().startsWith('[Group chat'))
-    const job = fresh ? null : new RegExp(`^${HANDED_WORK}-(\\d+)-`).exec(used?.input?.pattern ?? '')
+    const job = new RegExp(`^${HANDED_WORK}-(\\d+)-`).exec(used?.input?.pattern ?? '')
     if (job) return Object.assign([text(`干完了，用了 ${job[1]} 秒。`)], { delay: Number(job[1]) * 1000 })
     switch (used?.name) {
       case 'group_relay': return [text('')]
