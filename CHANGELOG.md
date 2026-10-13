@@ -6,12 +6,21 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Added
 
+- A Bot that was working when DeepSeek Harness closed or restarted picks its work back up when DS Bot starts again. A group chat shows which member was cut off, and a Bot that was answering another Bot still sends its answer.
+- The sidebar marks a Bot or group chat that waits for your approval. Where the system allows notifications, a notification also names the Bot.
+
+### Fixed
+
+- When a model wrote its tool call as text instead of making it, nothing ran and the Bot stopped as if it were done. The Bot is now asked once to make the call, and the text of the call is kept out of group chats.
+
+## [0.1.3] - 2026-10-12
+
+### Added
+
 - In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
 - **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
 - A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.
 - In a group chat, a member that asks for an approval no longer holds up the round. You allow or reject the request in the group's details panel, and a line above the composer names the members who are waiting or at work. What a member says after the round moved on is posted in the group.
-- A Bot that was working when DeepSeek Harness closed or restarted picks its work back up when DS Bot starts again. A group chat shows which member was cut off, and a Bot that was answering another Bot still sends its answer.
-- The sidebar marks a Bot or group chat that waits for your approval. Where the system allows notifications, a notification also names the Bot.
 
 ### Changed
 
@@ -30,7 +39,6 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - Bots receive the current time on their first model step and refresh it after ten minutes, even when their DSH preset does not supply a clock.
 - In a group chat, a conversation referenced in a message reached none of the members, and a reference whose title started with a member's name called that member. Now the members who answer the message get the referenced conversation.
 - In a group chat, typing `@` and a Bot's name and pressing Enter inserted a conversation reference instead of the Bot's name.
-- When a model wrote its tool call as text instead of making it, nothing ran and the Bot stopped as if it were done. The Bot is now asked once to make the call, and the text of the call is kept out of group chats.
 - Deleting a Bot or group chat also removes its scheduled tasks, including ones left on the Bot's earlier chat parts. Before, armed tasks stayed active and kept running the deleted Session; the archive that would have stopped them was refused and the failure was silent.
 - A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.
 - A provider adapter that cannot measure tokens no longer fails every turn. The context size is estimated instead, with one warning in the log.
@@ -108,7 +116,8 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.0
