@@ -10,6 +10,7 @@ import * as permissions from './src/host/permissions.js'
 import * as turns from './src/host/turns.js'
 import * as delivery from './src/host/delivery.js'
 import * as roster from './src/host/roster.js'
+import * as folders from './src/host/folders.js'
 import * as agents from './src/host/agents.js'
 import * as prompt from './src/host/prompt.js'
 import * as timeContext from './src/host/time-context.js'
@@ -24,6 +25,7 @@ import * as images from './src/host/images.js'
 import * as browser from './src/host/browser.js'
 import * as secrets from './src/host/secrets.js'
 import * as connectors from './src/host/connectors.js'
+import * as capabilities from './src/host/capabilities.js'
 import * as schedules from './src/host/schedules.js'
 import * as usage from './src/host/usage.js'
 import * as update from './src/host/update.js'
@@ -39,13 +41,19 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 // the functions other modules call; they call them through `rt` at run time, never during
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them.
-const MODULES = [diagnostics, store, models, permissions, turns, delivery, roster, agents, prompt, timeContext, tools, chatIndex, groups, approvals, resume, memory, parts, images, secrets, connectors, schedules, browser, usage, update, dshUpdate, channel]
+const MODULES = [diagnostics, store, models, permissions, turns, delivery, roster, folders, agents, prompt, timeContext, tools, chatIndex, groups, approvals, resume, memory, parts, images, secrets, connectors, capabilities, schedules, browser, usage, update, dshUpdate, channel]
 
 export function apply(ctx, config = {}) {
-  const home = config.home ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'bot')
+  createRuntime(ctx, config)
+}
+
+export function createRuntime(ctx, config = {}) {
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  const home = config.home ?? join(dshHome, 'bot')
   const rt = {
     ctx,
     config,
+    dshHome,
     home,
     statePath: join(home, 'state.json'),
     defaults: {
@@ -54,4 +62,5 @@ export function apply(ctx, config = {}) {
     },
   }
   for (const module of MODULES) module.install(rt)
+  return rt
 }
