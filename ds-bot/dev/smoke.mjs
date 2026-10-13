@@ -8,7 +8,7 @@
 //
 // `--out <file>` writes a normalized transcript (names instead of ids, sorted where the
 // order depends on timing), so two runs, before and after a refactor, can be diffed.
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,26 +33,6 @@ const mockLog = () => {
     if (error.code === 'ENOENT') return []
     throw error
   }
-}
-const tapFiles = bot => {
-  try {
-    return readdirSync(join(HOME, 'tap-bodies'))
-      .filter(file => new RegExp(`^\\d+-main-${bot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.json$`).test(file))
-      .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
-  } catch (error) {
-    if (error.code === 'ENOENT') return []
-    throw error
-  }
-}
-const tapBody = bot => {
-  const file = tapFiles(bot).at(-1)
-  if (!file) throw new Error(`no llm-tap main request for ${bot}`)
-  return { path: join(HOME, 'tap-bodies', file), body: readJson(join(HOME, 'tap-bodies', file)) }
-}
-const bodyText = body => JSON.stringify(body)
-const latestReminder = body => {
-  const reminders = bodyText(body).match(/<system-reminder>[\s\S]*?<\/system-reminder>/g) ?? []
-  return reminders.at(-1) ?? ''
 }
 
 async function login() {
@@ -312,49 +292,41 @@ await step('delete the copy', async () => {
   return copy.id
 }, id => expect(state().bots[id] === undefined, 'copy still there'))
 
+// The mock answers 查能力 with the mcp__ tools and catalog skills it sees in the request.
 const echoName = 'smoke-echo'
 const skillName = 'smoke-guide'
 const skillDescription = 'Smoke test skill'
 const echoServer = join(ROOT, 'ds-bot', 'dev', 'mcp-echo-server.mjs')
+const sees = `工具 mcp__${echoName}__echo；技能 ${skillName}（${skillDescription}）`
+const seesNothing = '工具 无；技能 无'
+const reportOf = (calls, bot) => calls.flatMap(call => call.out ?? []).find(block => block.type === 'text' && block.text.startsWith(`${bot} 能力：`))?.text
+const attach = (bot, name, attached) => api('bot-capability', { botId: bot.id, name, attached })
 await api('capability-save', { name: echoName, kind: 'mcp', description: 'Smoke test echo server', transport: 'stdio', command: process.execPath, args: [echoServer], env: {} })
 await api('capability-save', { name: skillName, kind: 'skill', description: skillDescription, content: 'Use this skill when asked about capability smoke checks.' })
-await api('bot-capabilities', { botId: chief().id, capabilities: [echoName, skillName] })
-for (let attempt = 0; attempt < 60; attempt += 1) {
-  const live = await api('state')
-  const statuses = live.capabilityStatuses?.[chief().id] ?? {}
-  if (statuses[echoName]?.state === 'ready' && statuses[skillName]?.state === 'ready') break
-  await sleep(250)
-}
+await attach(chief(), echoName, true)
+await attach(chief(), skillName, true)
 
-await step('Chief sees its attached MCP and skill', () => send(chief().id, 'Check your available capabilities.'), () => {
-  const { body, path } = tapBody('Chief')
-  const tools = (body.tools ?? []).map(tool => tool.name)
-  return expect(tools.includes(`mcp__${echoName}__echo`), `MCP tool missing from ${path}`)
-    ?? expect(latestReminder(body).includes(skillName) && latestReminder(body).includes(skillDescription), `skill catalog entry missing from ${path}`)
+await step('Chief sees its attached MCP and skill', () => send(chief().id, '查能力 smoke'), (_value, calls) => {
+  const report = reportOf(calls, 'Chief')
+  return expect(report?.endsWith(sees), `Chief reported ${report}`)
 })
 
 const capabilityRoom = await api('create-room', { name: 'Capability smoke', members: [chief().id, botNamed('Coder').id], admin: chief().id })
-await step('Chief first group turn sees its attached MCP and skill', () => send(capabilityRoom.id, 'Check your available capabilities.'), () => {
-  const { body, path } = tapBody('Chief')
-  const tools = (body.tools ?? []).map(tool => tool.name)
-  return expect(tools.includes(`mcp__${echoName}__echo`), `MCP tool missing from the first group request in ${path}`)
-    ?? expect(latestReminder(body).includes(skillName) && latestReminder(body).includes(skillDescription), `skill catalog entry missing from the first group request in ${path}`)
+await step('Chief first group turn sees its attached MCP and skill', () => send(capabilityRoom.id, '查能力 smoke'), (_value, calls) => {
+  const report = reportOf(calls, 'Chief')
+  return expect(report?.endsWith(sees), `Chief reported ${report} in the group`)
 })
 
-await step('Coder does not inherit Chief capabilities', () => send(botNamed('Coder').id, 'Check your available capabilities.'), () => {
-  const { body, path } = tapBody('Coder')
-  const tools = (body.tools ?? []).map(tool => tool.name)
-  return expect(!tools.includes(`mcp__${echoName}__echo`), `MCP tool leaked into ${path}`)
-    ?? expect(!latestReminder(body).includes(skillName), `skill leaked into ${path}`)
+await step('Coder does not inherit Chief capabilities', () => send(botNamed('Coder').id, '查能力 smoke'), (_value, calls) => {
+  const report = reportOf(calls, 'Coder')
+  return expect(report?.endsWith(seesNothing), `Coder reported ${report}`)
 })
 
-await api('bot-capabilities', { botId: chief().id, capabilities: [] })
-await sleep(500)
-await step('detached capabilities disappear from Chief', () => send(chief().id, 'Check your available capabilities.'), () => {
-  const { body, path } = tapBody('Chief')
-  const tools = (body.tools ?? []).map(tool => tool.name)
-  return expect(!tools.includes(`mcp__${echoName}__echo`), `MCP tool remained in ${path}`)
-    ?? expect(!latestReminder(body).includes(skillName), `latest skill reminder still lists the skill in ${path}`)
+await attach(chief(), echoName, false)
+await attach(chief(), skillName, false)
+await step('detached capabilities disappear from Chief', () => send(chief().id, '查能力 smoke'), (_value, calls) => {
+  const report = reportOf(calls, 'Chief')
+  return expect(report?.endsWith(seesNothing), `Chief reported ${report}`)
 })
 
 if (outFile) writeFileSync(outFile, `${JSON.stringify(transcript, null, 2)}\n`)
