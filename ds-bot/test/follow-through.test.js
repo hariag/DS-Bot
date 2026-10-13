@@ -178,7 +178,11 @@ test('when only DS Bot restarts, a turn still running or finished meanwhile is n
   second.agentOf('b').status = 'running'
   second.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   t.mock.timers.tick(3000)
-  await settle(() => inflight(home).b?.trigger?.exchangeId === 'x1' && inflight(home).a === undefined)
+  // One read per check: two reads can see the old notes and the cleared ones.
+  await settle(() => {
+    const noted = inflight(home)
+    return noted.b?.trigger?.exchangeId === 'x1' && noted.a === undefined
+  })
   await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual([second.agentOf('a').calls.length, second.agentOf('b').calls.length], [0, 0])
 
