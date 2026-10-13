@@ -356,13 +356,15 @@ test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its hel
   const writer = (await call('create-bot', { name: 'Writer' })).value
   await call('set-flags', { id: writer.id, hidden: true })
   await settle()
-  const greeted = sent.length
+  // Only Chief's messages count: Writer's own greeting can go out late on a busy machine.
+  const toChief = () => sent.filter(item => item.sessionId === chief).length
+  const greeted = toChief()
   const team = (await call('set-main', { id: writer.id, main: true, replace: chief })).value
   assert.equal(team.bots.find(bot => bot.id === writer.id).hidden, undefined)
   assert.equal(team.bots.find(bot => bot.id === chief).waiting, undefined)
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
   await settle()
-  assert.equal(sent.length, greeted)
+  assert.equal(toChief(), greeted)
 })
 
 const takeover = (home, team) => {
