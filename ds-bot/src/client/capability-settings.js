@@ -161,11 +161,6 @@ export function BotCapabilitiesCard({ bot, roster, actions, run, Card, SwitchRow
       label: item.name,
       hint: attached.has(item.name) ? statusText(statuses[item.name]) : undefined,
       on: attached.has(item.name),
-      onChange: enabled => {
-        const next = new Set(attached)
-        if (enabled) next.add(item.name)
-        else next.delete(item.name)
-        void run(actions.setBotCapabilities(bot.id, [...next]))
-      },
+      onChange: enabled => void run(actions.setBotCapability(bot.id, item.name, enabled)),
     })))
 }

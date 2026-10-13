@@ -225,7 +225,7 @@ export function install(rt) {
         case 'capability-save':
         case 'capability-delete':
         case 'capability-approve':
-        case 'bot-capabilities':
+        case 'bot-capability':
           await rt.load()
           return ok(await rt.capabilityEndpoint(endpoint, body))
         case 'schedules':
