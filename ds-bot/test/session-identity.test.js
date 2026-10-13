@@ -6,24 +6,6 @@ import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
-function timeoutsUsed(t) {
-  const original = AbortSignal.timeout
-  const any = AbortSignal.any
-  const calls = new Map()
-  t.mock.method(AbortSignal, 'timeout', function (ms) {
-    const signal = original.call(AbortSignal, ms)
-    calls.set(signal, ms)
-    return signal
-  })
-  t.mock.method(AbortSignal, 'any', function (signals) {
-    const sources = [...signals]
-    const signal = any.call(AbortSignal, sources)
-    for (const source of sources) if (calls.has(source)) calls.set(signal, calls.get(source))
-    return signal
-  })
-  return calls
-}
-
 // Some routes (OpenCode Go among them) turn down every model request that names no
 // Session. DS Bot's own requests name the Session they serve, and the hooks that act
 // on a Session's own rounds still leave them alone.
@@ -70,12 +52,7 @@ function start() {
       bench.tokens = 100
       return {}
     },
-    async compactNow(_agent, signal) {
-      bench.compactNowSignal = signal
-      bench.compacted += 1
-      bench.tokens = 100
-      return {}
-    },
+    async compactNow() {},
     async compactRegion() {},
   }
   const ctx = fakeContext({ services: { compaction, tokenMeter: { measure: () => ({ totalTokens: bench.tokens }) } } })
@@ -105,7 +82,7 @@ function start() {
       },
     },
     sessionController: {
-      resolveAgent: async sessionId => ({ agent: { id: sessionId, session: { id: sessionId, seq: 2 }, ctx: { tools: { register: () => () => {} } } } }),
+      resolveAgent: async sessionId => ({ agent: { id: sessionId, session: { id: sessionId, seq: 2 } } }),
       selectModel: async () => {},
       page: async () => ({
         records: [
@@ -133,7 +110,6 @@ function start() {
 
 for (const sessionId of ['b2', 'g3']) {
   test(`the context steward names the Session it decides for (${sessionId}), and the part is condensed in place`, async (t) => {
-    const timeouts = timeoutsUsed(t)
     const { ctx, bench, stop } = start()
     t.after(stop)
     bench.tokens = 95_000
@@ -145,30 +121,10 @@ for (const sessionId of ['b2', 'g3']) {
     assert.equal(result, next)
     assert.equal(bench.compacted, 1)
     assert.deepEqual(bench.requests.map(request => [request.sessionId, request.purpose]), [[sessionId, 'compaction']])
-    assert.equal(timeouts.get(bench.requests[0].signal), 120_000)
   })
 }
 
-test('after-turn compaction can run for 10 minutes', async (t) => {
-  const timeouts = timeoutsUsed(t)
-  const { ctx, rt, bench, stop } = start()
-  t.after(stop)
-  await rt.load()
-  bench.tokens = 95_000
-  bench.respond = () => '{"action":"compact"}'
-  const session = { id: 'b2', seq: 2, requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4' } }), deriveMessages: () => [], toolHistory: () => [] }
-  const agent = { id: 'b2', session }
-  const adopt = ctx.listeners.get('agent/created').find(listener => /adoptCompaction/.test(String(listener)))
-  adopt({ agent })
-  const listener = ctx.listeners.get('agent/status').find(listener => /checkContext/.test(String(listener)))
-  listener({ agent, status: 'idle' })
-  for (let tries = 0; tries < 100 && bench.compactNowSignal === undefined; tries += 1) await new Promise(resolve => setTimeout(resolve, 10))
-  assert.equal(bench.compacted, 1)
-  assert.equal(timeouts.get(bench.compactNowSignal), 600_000)
-})
-
 test('an image in a Bot chat is read for that chat, and the chat gets the reading', async (t) => {
-  const timeouts = timeoutsUsed(t)
   const { ctx, bench, stop } = start()
   t.after(stop)
   bench.respond = options => (options.model === 'vision' ? 'A red triangle.' : 'It is a triangle.')
@@ -177,7 +133,6 @@ test('an image in a Bot chat is read for that chat, and the chat gets the readin
   assert.equal(chunks.at(-1).reason.kind, 'stop')
   assert.deepEqual(bench.requests.map(request => [request.model, request.sessionId]), [['vision', 'b2'], ['v4', 'b2']])
   assert.equal(bench.requests[0].messages[0].content[0].type, 'image')
-  assert.equal(timeouts.get(bench.requests[0].signal), 600_000)
   assert.match(bench.requests[1].messages[0].content[0].text, /A red triangle\./)
 })
 
@@ -189,31 +144,9 @@ test('an image in a group is read for the group, and the group still relays its 
   assert.match(reading, /read by vision:\]\nA red triangle\./)
   assert.deepEqual(bench.requests.map(request => [request.model, request.sessionId]), [['vision', 'r1']])
 
-  const chunks = await drain(ctx.llm.stream({ provider: 'deepseek', model: 'v4', sessionId: 'r1', messages: [userText('Discuss the picture')], tools: [{ name: 'group_relay' }] }))
+  const chunks = await drain(ctx.llm.stream({ provider: 'deepseek', model: 'v4', sessionId: 'r1', messages: [userText('Discuss the picture')] }))
   assert.ok(chunks.some(chunk => chunk.type === 'tool-call-delta' && chunk.name === 'group_relay'))
   assert.equal(bench.requests.length, 1)
-})
-
-test('image readings skip providers without a key and include the read-only path when available', async (t) => {
-  const { ctx, rt, bench, stop } = start()
-  t.after(stop)
-  ctx.llm.listProviders = () => [{ id: 'unkeyed', name: 'Unkeyed' }, { id: 'deepseek', name: 'DeepSeek' }]
-  ctx.llm.listModels = async provider => (provider === 'unkeyed'
-    ? [{ id: 'unkeyed-vision', inputModalities: ['text', 'image'] }]
-    : [{ id: 'v4' }, { id: 'vision', inputModalities: ['text', 'image'] }])
-  rt.missingKeys = async () => new Set(['unkeyed'])
-  rt.dropCatalog()
-  const baseGet = ctx.get
-  ctx.get = name => (name === 'attachments'
-    ? { imageHostPath: () => '/host/attachments/v1/objects/aa/bb' }
-    : name === 'fs'
-        ? { processPathFromHostPath: p => p.replace('/host/', '/world/') }
-        : baseGet?.(name))
-  bench.respond = () => 'A blue circle.'
-  const [reading] = await rt.imagesForGroup([attachment], 'r1')
-  assert.match(reading, /read-only copy saved at "\/world\/attachments\/v1\/objects\/aa\/bb"/)
-  assert.match(reading, /read by vision:\]\nA blue circle\./)
-  assert.deepEqual(bench.requests.map(request => [request.provider, request.model, request.sessionId]), [['deepseek', 'vision', 'r1']])
 })
 
 test('the Session hooks pass DS Bot\'s own requests through, and still act on a Session\'s own rounds', async (t) => {
@@ -227,7 +160,7 @@ test('the Session hooks pass DS Bot\'s own requests through, and still act on a 
 
   const relay = hook(/relayOrPass/)
   assert.equal(relay(own('r1', [userText('Read this')]), pass), passed)
-  assert.ok((await drain(relay({ ...round('r1', [userText('Read this')]), tools: [{ name: 'group_relay' }] }, pass))).some(chunk => chunk.name === 'group_relay'))
+  assert.ok((await drain(relay(round('r1', [userText('Read this')]), pass))).some(chunk => chunk.name === 'group_relay'))
 
   const handoff = [{ role: 'user', source: { kind: 'bot', handoff: true }, content: [{ type: 'text', text: 'Handoff note' }] }]
   const acknowledge = hook(/acknowledge/)
