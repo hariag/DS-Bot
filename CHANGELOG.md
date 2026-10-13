@@ -6,7 +6,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Fixed
 
-- On model providers that need every request to name its conversation, such as OpenCode Go, the memory panel, automatic memory updates, the context check of long chats and image reading for text-only models failed. They now work there too.
+- A new Bot asks where to start in its first reply instead of on a question card, and follows its own instructions where they say otherwise.
 
 ## [0.1.4] - 2026-10-13
 
