@@ -31,6 +31,7 @@
 //   查私聊 关键词 (read_own_chat) · 长文 N · 上下文里有 词 · 撑爆 · 报错 [名] (that member's call, or every member's, fails with 401)
 //   提权 (members other than the admin run a shell command that asks for full access)
 //   写成文字 (members write their tool call as text instead of making it; also in a Bot's own chat)
+//   派活 N (the admin hands the first other member N seconds of work; the admin answers its result)
 // A handoff turn answers "第 N 段接着做完了". Handoff notes and backend compaction each
 // return a full eight-section note marked "handoff 提示词" or "backend 提示词" (a Bot's
 // Session should only see the former; retries add "重试", merges add "合并了上一份笔记").
@@ -80,6 +81,7 @@ const tool = (name, input) => ({
 })
 const think = value => ({ type: 'thinking', thinking: value })
 const ESCALATION = '提权测试：用户在群里要求'
+const HANDED_WORK = '群里派的活'
 const WRITTEN_CALL = '我先看一下目录。\n<tool_call>\n<function=pwsh>\n<parameter=command>\nGet-ChildItem\n</parameter>\n</function>\n</tool_call>'
 // Deterministic filler that grows a conversation by about `chars` characters.
 const filler = (chars, tag) => Array.from({ length: Math.ceil(chars / 20) }, (_, index) => `${tag}第${index + 1}段：这是一段用来撑长上下文的测试文字。`).join('').slice(0, chars)
@@ -191,6 +193,10 @@ function decide(body) {
       return [text(`终端输出里我看到的是：${resultText.replace(/\s+/g, ' ').trim().slice(0, 200)}`)]
     }
     if (used?.input?.justification === ESCALATION) return [text(result.is_error ? `没跑成：${resultText.slice(0, 80)}` : '命令跑完了，文件已经写好。')]
+    // A stopped job's result can share a message with the next group turn, which wins.
+    const fresh = textBlocks(last.content).some(value => value.trimStart().startsWith('[Group chat'))
+    const job = fresh ? null : new RegExp(`^${HANDED_WORK}-(\\d+)-`).exec(used?.input?.pattern ?? '')
+    if (job) return Object.assign([text(`干完了，用了 ${job[1]} 秒。`)], { delay: Number(job[1]) * 1000 })
     switch (used?.name) {
       case 'group_relay': return [text('')]
       case 'create_bot': {
@@ -332,6 +338,14 @@ function decide(body) {
     if (/提权/.test(userLine) && !leads && shell) {
       return [text('这一步要写工作区外的文件，我申请一次提权。'), tool(shell, { command: 'echo ok', description: '在工作区外写一个测试文件', justification: ESCALATION, sandbox_permissions: 'danger-full-access' })]
     }
+    // "派活 N": the admin hands a member N seconds of work: a file lookup, then a model
+    // step that takes N seconds. The member posts the result when done, and the admin
+    // answers the result.
+    const handed = /^\S+: @(\S+) 干活 (\d+)/m.exec(block)
+    const lookup = ['glob', 'grep', 'read'].find(name => tools.has(name))
+    if ((ask = /派活\s*(\d+)/.exec(userLine)) && leads && peer) return [text(`@${peer} 干活 ${ask[1]}`)]
+    if (handed?.[1] === me && mentioner && lookup) return [tool(lookup, { pattern: `${HANDED_WORK}-${handed[2]}-*` })]
+    if (/^\S+: 干完了/.test(userLine) && leads) return [text('收到，辛苦了。')]
     // Ping-pong: whoever is mentioned mentions back, to exercise the per-member cap.
     if (/来回/.test(userLine)) return [text(mentioner ? `@${mentioner} 回你` : leads && peer ? `@${peer} 来回` : '[PASS]')]
     if (mentioner) return [text('进度正常，今天能交。')]
@@ -623,7 +637,7 @@ const server = createServer((req, res) => {
       sse(res, { type: 'message_delta', delta: { stop_reason: out.stop ?? (usedTool ? 'tool_use' : 'end_turn'), stop_sequence: null }, usage: { output_tokens: Math.ceil(JSON.stringify(out).length / 3) } })
       sse(res, { type: 'message_stop' })
       res.end()
-    }, (isSummary(body) ? SUMMARY_DELAY : DELAY) + Math.random() * JITTER)
+    }, (out.delay ?? (isSummary(body) ? SUMMARY_DELAY : DELAY)) + Math.random() * JITTER)
   })
 })
 
