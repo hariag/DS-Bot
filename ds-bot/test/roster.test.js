@@ -92,7 +92,7 @@ test('the first Main Bot waits for the user to pick a model, then greets', async
   assert.equal(team.defaultModel, 'deepseek/deepseek-v4-flash')
 
   assert.equal((await call('update-bot', { id: main.id, model: 'deepseek/deepseek-v4-pro' })).ok, true)
-  await settle()
+  await until(() => sent.length > 0)
   team = (await call('state', {})).value
   main = team.bots.find(bot => bot.id === team.mainBotId)
   assert.equal(main.model, 'deepseek/deepseek-v4-pro')
@@ -145,7 +145,7 @@ test('a group the user makes without a first message opens with its admin asking
   for (const listener of ctx.listeners.get('session/event')) listener({ id: room.id }, { type: 'user/message', data: sent[0].message })
   const controller = new AbortController()
   const relay = ctx.registeredTools.get('group_relay').execute({}, { agent: { id: room.id }, callId: 'relay', signal: controller.signal })
-  await settle()
+  await until(() => sent.length > 1)
   controller.abort()
   const result = JSON.parse(await relay)
   const turns = sent.slice(1)
