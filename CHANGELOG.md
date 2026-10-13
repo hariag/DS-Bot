@@ -11,6 +11,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.
 - In a group chat, a member that asks for an approval no longer holds up the round. You allow or reject the request in the group's details panel, and a line above the composer names the members who are waiting or at work. What a member says after the round moved on is posted in the group.
 - A Bot that was working when DeepSeek Harness closed or restarted picks its work back up when DS Bot starts again. A group chat shows which member was cut off, and a Bot that was answering another Bot still sends its answer.
+- The sidebar marks a Bot or group chat that waits for your approval. Where the system allows notifications, a notification also names the Bot.
 
 ### Changed
 
