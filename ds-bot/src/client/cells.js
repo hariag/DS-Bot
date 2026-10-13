@@ -324,9 +324,11 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'kickoff' || source.role === 'room') return null
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
+      if (source.role === 'resume') return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
       if (source.role === 'post') {
-        // A member's late failure shows as an event of the round it opens.
-        if (source.failed !== undefined) return null
+        // A member's late failure, or its work picked up after a restart, shows as an
+        // event of the round it opens.
+        if (source.failed !== undefined || source.resumed === true) return null
         const room = roster.roomsById[sessionId]
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
         return h(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi })
@@ -563,6 +565,12 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === 'missed') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("{name} didn't answer in time", { name: bot.name }))
+      }
+      if (reply.kind === 'resumed') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t('{name} was cut off by a restart and picked its work back up', { name: bot.name }))
+      }
+      if (reply.kind === 'cut') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t('{name} was cut off by a restart again and stopped', { name: bot.name }))
       }
       if (reply.kind === 'approval') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' },

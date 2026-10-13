@@ -255,6 +255,8 @@ export function install(rt) {
             ...(source.late ? { late: true } : {}),
             ...(source.quiet ? { quiet: true } : {}),
             ...(source.failed ? { failed: source.failed } : {}),
+            ...(source.resumed ? { resumed: true } : {}),
+            ...(source.again ? { again: true } : {}),
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })

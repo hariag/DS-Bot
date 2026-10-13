@@ -47,9 +47,12 @@ const unseenLines = (room, memberId) => {
   return room.log.filter(line => line.seq > since && line.botId !== memberId).slice(-ROOM_DELTA_MAX)
 }
 
-const lineText = line => (line.kind === 'lookup'
-  ? `[${line.who} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
-  : `${line.who}: ${line.text}`)
+const lineText = (line) => {
+  if (line.kind === 'lookup') return `[${line.who} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
+  if (line.kind === 'resumed') return `[${line.who}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
+  if (line.kind === 'cut') return `[${line.who}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
+  return `${line.who}: ${line.text}`
+}
 const transcript = lines => lines.map(lineText).join('\n')
 
 // Models often echo the transcript format ("Name: …") despite the instruction.
@@ -372,8 +375,8 @@ export function install(rt) {
       const posts = queued.length > 0 ? queued : [{ text: '' }]
       const startSeq = room.seq + 1
       // The opening greeting is a cue for the admin, not a line of the group; a member's
-      // late failure is an event of the round.
-      for (const post of posts.filter(item => !item.kickoff && !item.failed)) {
+      // late failure, or its work picked up after a restart, is an event of the round.
+      for (const post of posts.filter(item => !item.kickoff && !item.failed && !item.resumed)) {
         // Image readings go into the log only; `@` names are picked from what the user typed.
         const text = post.images === undefined ? post.text : [post.text, ...await rt.imagesForGroup(post.images, room.id)].filter(Boolean).join('\n')
         appendRoom(room, post.botId
@@ -382,7 +385,8 @@ export function install(rt) {
       }
       if (posts.some(post => !post.botId && !post.kickoff)) room.botRounds = 0
       await rt.save()
-      const opener = posts.at(-1)
+      // An event post never picks the speakers over a message queued with it.
+      const opener = posts.findLast(post => !post.failed && !post.resumed) ?? posts.at(-1)
       const references = posts.flatMap(post => post.references ?? [])
       const round = {
         roomId: room.id,
@@ -404,6 +408,14 @@ export function install(rt) {
         round.failed.push(bot?.name ?? post.name)
         round.replies.push({ kind: 'failed', botId: post.botId, name: bot?.name ?? post.name, color: bot?.color, code, ...(status ? { status } : {}), text: message, time: Date.now() })
       }
+      // The log line tells the admin and the other members on their next turn.
+      for (const post of posts.filter(item => item.resumed)) {
+        const bot = rt.botOf(post.botId)
+        const name = bot?.name ?? post.name
+        appendRoom(room, { who: name, botId: post.botId, kind: post.again ? 'cut' : 'resumed', text: '' })
+        round.replies.push({ kind: post.again ? 'cut' : 'resumed', botId: post.botId, name, color: bot?.color, time: Date.now() })
+      }
+      if (posts.some(post => post.resumed)) await rt.save()
       rt.roomProgress.set(exec.callId, round)
       try {
         await runRound(room, round, exec.signal, exec.agent)

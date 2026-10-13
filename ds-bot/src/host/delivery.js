@@ -12,8 +12,10 @@ export function install(rt) {
     return resolved.agent
   }
 
-  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false) => {
+  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false } = {}) => {
     if (deferred) return `[Message from ${fromName} · you read it during your last task; answer it now]`
+    if (resumed && role === 'resume') return '[DeepSeek Harness restarted while you were working]'
+    if (resumed && role !== 'room') return `[Message from ${fromName} · DeepSeek Harness restarted while you were working on it]`
     if (role === 'reply') return `[Reply from ${fromName}]`
     if (role === 'stopped') return `[Stopped by ${fromName}]`
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`
@@ -29,8 +31,10 @@ export function install(rt) {
 
   // `sessionId` defaults to the recipient's own chat; group turns name its group Session.
   // `deferred`: a request the Bot already read mid-turn, handed back to answer in a
-  // turn of its own; its exchange was recorded when it first arrived.
-  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false }) {
+  // turn of its own; its exchange was recorded when it first arrived. `resumed` carries
+  // on a turn that a restart cut off, and `resent` is a message a shutdown cancelled
+  // (resume.js); their exchange is recorded already too.
+  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, resent = false }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -49,8 +53,9 @@ export function install(rt) {
       ...(roomId ? { roomId } : {}),
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
+      ...(resumed ? { resumed: true } : {}),
     }
-    if (EXCHANGE_ROLES.has(role) && !deferred) {
+    if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !resent) {
       state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
       void rt.save().catch(() => {})
     }
@@ -60,7 +65,7 @@ export function install(rt) {
     // A steered message cuts into a running turn at its next step; a follow-up
     // queues for the next turn (see turns.js for how each is routed).
     const message = createUserMessage({
-      content: [{ type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred)}\n${text}` }],
+      content: [{ type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed })}\n${text}` }],
       source,
     })
     if (steer) agent.steer(message)
