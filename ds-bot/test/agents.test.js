@@ -70,8 +70,8 @@ function start(team, { config = {} } = {}) {
     return response.json()
   }
   const createdAgents = payload => (ctx.listeners.get('agent/created') ?? []).map(listener => listener(payload))
-  const stop = () => {
-    ctx.dispose()
+  const stop = async () => {
+    await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { call, stop, home, created, archived, failArchive, restricted, renamed, createdAgents, ctx }
@@ -187,7 +187,7 @@ test('agents survive a state reload', async (t) => {
   const agent = (await call('add-agent')).value
   // Restart on the saved file: the agent record is adopted, not lost.
   const saved = readFileSync(join(home, 'state.json'), 'utf8')
-  stop()
+  await stop()
   const again = start(JSON.parse(saved))
   t.after(again.stop)
   const view = (await again.call('state', {})).value

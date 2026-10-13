@@ -59,8 +59,8 @@ function start(team, { models = [], reasoning = {}, archiveError } = {}) {
     const response = await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))
     return response.json()
   }
-  const stop = () => {
-    ctx.dispose()
+  const stop = async () => {
+    await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { call, stop, home, sent, selected, ctx, archived, warnings }
@@ -415,7 +415,7 @@ test('a rolled-back Bot does not come back with a save queued before the rollbac
   t.after(async () => {
     fsp.rename = rename
     syncBuiltinESMExports()
-    stop()
+    await stop()
   })
   // The first Bot also saves the team's workspace; later ones save only themselves.
   await call('create-bot', { name: 'Warm' })

@@ -97,8 +97,8 @@ function start() {
     await emit(sessionId, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
     await emit(sessionId, { type: 'turn/end', data: { reason: { kind: 'stop' } } })
   }
-  const stop = () => {
-    ctx.dispose()
+  const stop = async () => {
+    await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { call, emit, userMessage, compose, relay, inboxOf, answer, stop, sent, ctx, home, rt }
