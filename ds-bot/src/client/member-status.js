@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useState } from 'react'
+import { createElement as h, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BotMark, toolState } from './mark.js'
 import { Shimmer, workPhrase } from './cells.js'
 import { elapsedLabel } from './activity-row.js'
@@ -97,19 +97,41 @@ export function MemberDock({ sessionId, useRoster, useWork, actions }) {
   const ownChat = bot !== undefined && work.bots?.[bot.id] !== undefined && work.bots[bot.id].roomId === undefined
   const busy = room ? busyMembers(room, work, roster) : []
   const groups = bot !== undefined && !ownChat ? botGroupWork(bot.id, work, roster) : []
-  const now = useNow(busy.length > 0 || groups.length > 0)
+  const shown = busy.length > 0 || groups.length > 0
+  const now = useNow(shown)
+  const ref = useRef(null)
+  useFlowColumn(ref, shown, sessionId)
+  if (!shown) return null
   if (room) {
-    if (busy.length === 0) return null
     const { rows, rest } = splitBusy(busy)
     const open = () => actions.showDetails(sessionId)
-    return h('div', { className: 'bt-mw-dock-stack' },
+    return h('div', { ref, className: 'bt-mw-dock-stack' },
       rows.map(entry => h(WorkRow, { key: entry.id, bot: entry.bot, tool: entry.doing.tool, label: entry.bot.name, at: entry.doing.since, now, onOpen: open })),
       rest.length > 0 ? h(SummaryLine, { busy: rest, onOpen: open }) : null)
   }
-  if (groups.length === 0) return null
-  return h('div', { className: 'bt-mw-dock-stack' }, groups.slice(0, ROWS_MAX).map(item => h(WorkRow, {
+  return h('div', { ref, className: 'bt-mw-dock-stack' }, groups.slice(0, ROWS_MAX).map(item => h(WorkRow, {
     key: item.room.id, bot, tool: item.tool, label: t('in {name}', { name: item.room.name }), at: item.since, now, onOpen: () => actions.openSession(item.room.id),
   })))
+}
+
+// The rows line up with the transcript's column, whose width and gutters are the shell's.
+// Without a transcript the stylesheet's centered column stands.
+function useFlowColumn(ref, active, key) {
+  useLayoutEffect(() => {
+    const node = ref.current
+    const flow = document.querySelector('[data-chat-flow]')
+    if (!active || !node || !flow) return undefined
+    const place = () => {
+      node.style.marginInlineStart = '0px'
+      const column = flow.getBoundingClientRect()
+      node.style.marginInlineStart = `${Math.round(column.left - node.getBoundingClientRect().left)}px`
+      node.style.width = `${Math.round(column.width)}px`
+    }
+    place()
+    const observer = new ResizeObserver(place)
+    observer.observe(flow)
+    return () => observer.disconnect()
+  }, [active, key])
 }
 
 function useNow(active) {

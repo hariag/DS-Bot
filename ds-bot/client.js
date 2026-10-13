@@ -10600,20 +10600,22 @@ function MemberDock({ sessionId, useRoster, useWork, actions }) {
   const ownChat = bot !== void 0 && work.bots?.[bot.id] !== void 0 && work.bots[bot.id].roomId === void 0;
   const busy = room2 ? busyMembers(room2, work, roster) : [];
   const groups = bot !== void 0 && !ownChat ? botGroupWork(bot.id, work, roster) : [];
-  const now = useNow2(busy.length > 0 || groups.length > 0);
+  const shown = busy.length > 0 || groups.length > 0;
+  const now = useNow2(shown);
+  const ref = (0, import_react28.useRef)(null);
+  useFlowColumn(ref, shown, sessionId);
+  if (!shown) return null;
   if (room2) {
-    if (busy.length === 0) return null;
     const { rows, rest } = splitBusy(busy);
     const open = () => actions.showDetails(sessionId);
     return (0, import_react28.createElement)(
       "div",
-      { className: "bt-mw-dock-stack" },
+      { ref, className: "bt-mw-dock-stack" },
       rows.map((entry) => (0, import_react28.createElement)(WorkRow, { key: entry.id, bot: entry.bot, tool: entry.doing.tool, label: entry.bot.name, at: entry.doing.since, now, onOpen: open })),
       rest.length > 0 ? (0, import_react28.createElement)(SummaryLine, { busy: rest, onOpen: open }) : null
     );
   }
-  if (groups.length === 0) return null;
-  return (0, import_react28.createElement)("div", { className: "bt-mw-dock-stack" }, groups.slice(0, ROWS_MAX).map((item) => (0, import_react28.createElement)(WorkRow, {
+  return (0, import_react28.createElement)("div", { ref, className: "bt-mw-dock-stack" }, groups.slice(0, ROWS_MAX).map((item) => (0, import_react28.createElement)(WorkRow, {
     key: item.room.id,
     bot,
     tool: item.tool,
@@ -10622,6 +10624,23 @@ function MemberDock({ sessionId, useRoster, useWork, actions }) {
     now,
     onOpen: () => actions.openSession(item.room.id)
   })));
+}
+function useFlowColumn(ref, active, key) {
+  (0, import_react28.useLayoutEffect)(() => {
+    const node = ref.current;
+    const flow = document.querySelector("[data-chat-flow]");
+    if (!active || !node || !flow) return void 0;
+    const place = () => {
+      node.style.marginInlineStart = "0px";
+      const column = flow.getBoundingClientRect();
+      node.style.marginInlineStart = `${Math.round(column.left - node.getBoundingClientRect().left)}px`;
+      node.style.width = `${Math.round(column.width)}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(flow);
+    return () => observer.disconnect();
+  }, [active, key]);
 }
 function useNow2(active) {
   const [now, setNow] = (0, import_react28.useState)(Date.now);
