@@ -1496,7 +1496,8 @@ function toolArgs(root) {
 var RELAY_ROLES = /* @__PURE__ */ new Set(["request", "reply", "stopped"]);
 var isRelayContext = (data) => {
   const source = data?.source;
-  if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true || source.deferred === true) return false;
+  if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true) return false;
+  if (source.deferred === true || source.resumed === true || source.retried === true) return false;
   return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
 };
 var stepShows = (step) => (step?.blocks ?? []).some((block) => {
@@ -4031,7 +4032,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
   const source = data.source !== null && typeof data.source === "object" ? data.source : {};
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
   const deferred = source.kind === "bot" && source.deferred === true;
-  const relayed = source.kind === "bot" && source.handoff !== true && !deferred && (source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string";
+  const relayed = isRelayContext(data);
   const turn = node.location?.turn?.turn ?? data.turn;
   (0, import_react6.useLayoutEffect)(() => {
     if (relayed) actions.noteTurnPeer(sessionId, turn, source.senderSessionId);
@@ -4058,8 +4059,6 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.handoff === true) return roster.roomsById[sessionId] ? null : (0, import_react6.createElement)(EarlierParts, { sessionId, roster, actions });
       if (source.role === "kickoff" || source.role === "room") return null;
       if (source.role === "secret" || deferred) return null;
-      if (source.role === "resume") return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Picked up its work after a restart"));
-      if (source.role === "retry") return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Asked to make the tool call it wrote as text"));
       if (source.role === "post") {
         if (source.failed !== void 0 || source.resumed === true || source.stopped === true) return null;
         const room2 = roster.roomsById[sessionId];
@@ -4069,6 +4068,8 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.role === "report") {
         return (0, import_react6.createElement)(GroupEvent, { prefix: t("Replies from"), room: roster.roomsById[source.roomId], name: t("a group chat"), roster, actions });
       }
+      if (source.role === "resume" || source.resumed === true) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Picked up its work after a restart"));
+      if (source.role === "retry" || source.retried === true) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Asked to make the tool call it wrote as text"));
       const run = relayed ? commRunOf(
         order.split(",").filter(Boolean).map(Number),
         Object.fromEntries(peers.split(",").filter(Boolean).map((pair) => [Number(pair.slice(0, pair.indexOf(":"))), pair.slice(pair.indexOf(":") + 1)])),

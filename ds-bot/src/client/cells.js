@@ -2,7 +2,7 @@ import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useSt
 import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
-import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
+import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
@@ -288,7 +288,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   // A deferred request was already shown where the Bot read it mid-turn; the turn
   // that answers it adds no second line.
   const deferred = source.kind === 'bot' && source.deferred === true
-  const relayed = source.kind === 'bot' && source.handoff !== true && !deferred && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
+  const relayed = isRelayContext(data)
   const turn = node.location?.turn?.turn ?? data.turn
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
@@ -324,8 +324,6 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'kickoff' || source.role === 'room') return null
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
-      if (source.role === 'resume') return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
-      if (source.role === 'retry') return h('div', { className: 'bt-event' }, t('Asked to make the tool call it wrote as text'))
       if (source.role === 'post') {
         // A member's late failure, its work picked up after a restart, or its work the user
         // stopped shows as an event of the round it opens.
@@ -337,6 +335,9 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'report') {
         return h(GroupEvent, { prefix: t('Replies from'), room: roster.roomsById[source.roomId], name: t('a group chat'), roster, actions })
       }
+      // A request carried on keeps its role, but its message line was shown already.
+      if (source.role === 'resume' || source.resumed === true) return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
+      if (source.role === 'retry' || source.retried === true) return h('div', { className: 'bt-event' }, t('Asked to make the tool call it wrote as text'))
       const run = relayed ? commRunOf(
         order.split(',').filter(Boolean).map(Number),
         Object.fromEntries(peers.split(',').filter(Boolean).map(pair => [Number(pair.slice(0, pair.indexOf(':'))), pair.slice(pair.indexOf(':') + 1)])),
