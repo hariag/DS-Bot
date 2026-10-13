@@ -56,13 +56,21 @@ export function install(rt) {
   let queued = {}
   let writing = Promise.resolve()
   let stopped = false
+  let latest
+  let due = false
   const persist = () => {
     // Only the host that saves the team runs its work again.
     if (stopped || rt.readOnly() !== undefined) return
-    const snapshot = JSON.stringify({ turns, queued })
+    latest = JSON.stringify({ turns, queued })
+    // One write waits at a time and takes the latest notes, so a busy round does not
+    // write the file once per change.
+    if (due) return
+    due = true
     // Written in place: a rename over the file fails on Windows while anything reads
     // it, and a torn write only loses what one restart would pick up.
     writing = writing.then(async () => {
+      due = false
+      const snapshot = latest
       await mkdir(home, { recursive: true })
       await writeFile(file, snapshot, 'utf8')
     }).catch(error => rt.warn('ds-bot: noting running turns failed: %s', error))
