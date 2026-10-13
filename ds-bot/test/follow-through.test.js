@@ -25,6 +25,9 @@ const seed = () => ({
 })
 
 // One DS Bot host on `home`; a second start on the same home is a restart.
+// Hosts by home: a home is removed only after its hosts stopped and their writes landed.
+const started = new Map()
+
 async function start(home) {
   const ctx = fakeContext()
   const agents = new Map()
@@ -58,13 +61,19 @@ async function start(home) {
   const askApproval = sessionId => ctx.listeners.get('approval/request')[0]({ agent: { session: { id: sessionId } }, toolName: 'pwsh', reason: 'escalate sandbox' }, () => 'from-dsh')
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   await tool('list_bots', {}, 'a')
-  return { ctx, agentOf, emit, tool, call, askApproval, stop: () => ctx.dispose() }
+  const host = { ctx, agentOf, emit, tool, call, askApproval, stop: () => ctx.dispose() }
+  started.set(home, [...(started.get(home) ?? []), host])
+  return host
 }
 
 const freshHome = (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-follow-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(seed()))
-  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.after(async () => {
+    await Promise.all((started.get(home) ?? []).map(host => host.stop()))
+    started.delete(home)
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
   return home
 }
 const settle = async (check) => {
@@ -102,10 +111,9 @@ test('a group turn cut off by a restart is picked up once, and the group is told
   void first.askApproval('gb')
   await settle(() => inflight(home).gb?.approval !== undefined)
   assert.deepEqual([inflight(home).gb.botId, inflight(home).gb.roomId, inflight(home).gb.trigger.role], ['b', 'r1', 'room'])
-  first.stop()
+  await first.stop()
 
   const second = await start(home)
-  t.after(second.stop)
   t.mock.timers.tick(3000)
   await settle(() => second.agentOf('gb').calls.length === 1)
   const post = second.agentOf('r1').calls[0]
@@ -126,9 +134,8 @@ test('a group turn cut off by a restart is picked up once, and the group is told
   // Cut off again while picking it up: the group hears it, and the turn stays stopped.
   run(second, 'gb', 2, resumed)
   await settle(() => inflight(home).gb?.resumed === true)
-  second.stop()
+  await second.stop()
   const third = await start(home)
-  t.after(third.stop)
   t.mock.timers.tick(3000)
   await settle(() => third.agentOf('r1').calls.length === 1)
   assert.equal(third.agentOf('r1').calls[0].source.again, true)
@@ -142,10 +149,9 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
   run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   await settle(() => inflight(home).b?.trigger !== undefined && inflight(home).a !== undefined)
-  first.stop()
+  await first.stop()
 
   const second = await start(home)
-  t.after(second.stop)
   t.mock.timers.tick(3000)
   await settle(() => second.agentOf('b').calls.length === 1 && second.agentOf('a').calls.length === 1)
   const request = second.agentOf('b').calls[0]
@@ -165,9 +171,8 @@ test('a finished turn leaves nothing to pick up', async (t) => {
   run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   first.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   await settle(() => Object.keys(inflight(home)).length === 0 && existsSync(join(home, 'inflight.json')))
-  first.stop()
+  await first.stop()
   const second = await start(home)
-  t.after(second.stop)
   t.mock.timers.tick(3000)
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(second.agentOf('a').calls.length, 0)
@@ -176,7 +181,6 @@ test('a finished turn leaves nothing to pick up', async (t) => {
 test('a turn DSH stops as it shuts down stays noted; one the user stops does not', async (t) => {
   const home = freshHome(t)
   const host = await start(home)
-  t.after(host.stop)
   run(host, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   run(host, 'b', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   host.emit('a', 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } })
@@ -197,13 +201,10 @@ test('a message a shutdown cancelled is sent again once; one still waiting, take
   first.emit('b', 'user/message', { content: notesMessage.content, source: notesMessage.source })
   for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ message: withdrawn })
   await settle(() => (notes(home).queued.b ?? []).length === 2)
-  // Lets the team file's last write land before the restart reads it.
-  await new Promise(resolve => setTimeout(resolve, 100))
-  first.stop()
+  await first.stop()
 
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const second = await start(home)
-  t.after(second.stop)
   // A hard stop keeps the inbox: that message runs when the Session wakes.
   second.agentOf('b').inbox.nextTurn.push(numbers)
   t.mock.timers.tick(3000)
@@ -219,7 +220,6 @@ const WRITTEN = 'Checking now.\n<tool_call>\n<function=pwsh>\n<parameter=command
 test('a tool call written as text gets one more turn on the same round slot', async (t) => {
   const home = freshHome(t)
   const host = await start(home)
-  t.after(host.stop)
   const result = await openRoomTurn(t, host)
   host.emit('gb', 'assistant/message', { message: { content: [{ type: 'text', text: WRITTEN }] } })
   host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
@@ -241,7 +241,6 @@ test('a tool call written as text gets one more turn on the same round slot', as
 test('in its own chat, a Bot that wrote a tool call as text is asked to make it', async (t) => {
   const home = freshHome(t)
   const host = await start(home)
-  t.after(host.stop)
   run(host, 'b', 1, { content: [{ type: 'text', text: 'move the docs' }], source: { kind: 'user' } })
   // A call made for real, with or without text around it, is no retry.
   host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'On it.' }, { type: 'tool-call', id: 'k1', name: 'pwsh', arguments: '{}' }] } })
