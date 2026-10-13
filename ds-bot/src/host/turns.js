@@ -31,8 +31,38 @@ export function attachReference(queued, source, text) {
   post.references = [...(post.references ?? []), { labels, text }]
 }
 
+// A tool call some models write into their text instead of making it (the XML-like
+// form of their own chat template).
+const WRITTEN_CALL = /<tool_call>\s*<function=|<function=[\w.-]+>\s*<parameter=/
+export const writesToolCall = text => typeof text === 'string' && WRITTEN_CALL.test(text)
+export const stripWrittenCalls = text => text
+  .replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/g, '')
+  .replace(/<function=[\w.-]+>[\s\S]*?(?:<\/function>|$)/g, '')
+  .trim()
+
+const RETRY_TEXT = 'Your last reply wrote a tool call as plain text (<tool_call>…), so it did not run and nothing happened. Call the tool through the tool interface now, then reply as you meant to.'
+
 export function install(rt) {
   const { ctx, state } = rt
+
+  // The retry goes where the turn's trigger came from: a group round's waiter or a
+  // Bot's request keeps its exchange; anything else is a nudge in the Bot's own chat.
+  const retryWrittenCall = (id, info) => {
+    const keeps = info !== undefined && (info.role === 'room' || expectsReply(info))
+    return rt.deliver({
+      ...(keeps && info.senderSessionId ? { fromId: info.senderSessionId } : {}),
+      toId: rt.selfOf(id),
+      sessionId: id,
+      role: keeps ? info.role : 'retry',
+      ...(keeps && info.roomId ? { roomId: info.roomId } : {}),
+      hop: keeps ? info.hop ?? 0 : 0,
+      ...(keeps && info.exchangeId ? { exchangeId: info.exchangeId } : {}),
+      ...(keeps && info.audience ? { audience: info.audience } : {}),
+      note: 'your tool call did not run',
+      retried: true,
+      text: RETRY_TEXT,
+    })
+  }
 
   /** @type {Map<string, {turn?:number, pending?:any, info?:any, texts:string[], opened?:boolean, joined?:{info:any, from:number}[]}>} */
   const live = new Map()
@@ -297,8 +327,11 @@ export function install(rt) {
         break
       }
       case 'assistant/message': {
-        const text = textOf(event.data?.message?.content)
+        const content = event.data?.message?.content
+        const text = textOf(content)
         if (text !== '') entry.texts.push(text)
+        entry.lastText = text
+        entry.lastCalled = Array.isArray(content) && content.some(block => block?.type === 'tool-call')
         break
       }
       case 'turn/end': {
@@ -306,6 +339,7 @@ export function install(rt) {
         const info = entry.info
         const joined = entry.joined ?? []
         const texts = entry.texts
+        const { lastText, lastCalled } = entry
         // A turn stopped for a switch goes on in the next part, which answers instead.
         const switched = entry.switched === true
         entry.turn = undefined
@@ -316,10 +350,23 @@ export function install(rt) {
         entry.since = undefined
         entry.tool = undefined
         entry.calls = undefined
+        entry.lastText = undefined
+        entry.lastCalled = undefined
         const reason = event.data?.reason
         const failure = reason?.kind === 'error' && !switched ? turnFailure(reason.error) : undefined
         if (failure !== undefined) noteTurnFailure(id, failure)
         if (switched) break
+        // A model that writes its tool call as text ends the turn as if it were done,
+        // though nothing ran. It gets one more turn on the same trigger, so a waiting
+        // round or sender gets the real answer; a second time, the text goes on without
+        // the call.
+        const wroteCall = failure === undefined && reason?.kind === 'completed' && lastCalled !== true && writesToolCall(lastText)
+        const retry = wroteCall && info?.retried !== true && !(info?.role === 'room' && stoppedRoomTurns.has(info.exchangeId))
+        if (retry) void retryWrittenCall(id, info).catch(error => rt.warn('ds-bot: asking %s to run its written tool call failed: %s', id, error))
+        const replyText = () => {
+          const reply = (wroteCall ? texts.map(stripWrittenCalls) : texts).join('\n\n').trim()
+          return wroteCall && reply === '' ? 'Tried to run a tool but wrote the call as text, so it did not run.' : reply
+        }
         // Whoever the turn answers gets the same three-way rule: a failure notice,
         // the turn's text (or a stopped-before-answer line), or nothing.
         const answer = (source, reply) => {
@@ -348,20 +395,21 @@ export function install(rt) {
             }).catch(error => rt.warn('ds-bot: reply delivery failed: %s', error))
           }
         }
-        if (info?.role === 'room') {
+        // A retried turn answers the same waiter or sender, so this one passes nothing on.
+        if (!retry && info?.role === 'room') {
           const waiter = roomWaiters.get(info.exchangeId)
           roomWaiters.delete(info.exchangeId)
           const stopped = stoppedRoomTurns.delete(info.exchangeId)
           if (waiter !== undefined) {
             if (failure !== undefined) waiter.fail(failure)
-            else waiter.resolve(reason?.kind === 'aborted' ? null : texts.join('\n\n').trim())
+            else waiter.resolve(reason?.kind === 'aborted' ? null : replyText())
           } else if (!stopped && reason?.kind !== 'aborted') {
             // The round moved on without this member; how its turn ends still reaches the group.
             if (failure !== undefined) void rt.lateRoomFailure?.(id, info, failure)
-            else void rt.lateRoomReply?.(id, info, texts.join('\n\n').trim())
+            else void rt.lateRoomReply?.(id, info, replyText())
           }
-        } else if (info !== undefined) {
-          answer(info, texts.join('\n\n').trim())
+        } else if (!retry && info !== undefined) {
+          answer(info, replyText())
         }
         for (const request of joined) {
           // A failed or stopped turn closes the request like any other; a finished

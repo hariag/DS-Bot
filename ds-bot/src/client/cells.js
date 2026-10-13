@@ -325,6 +325,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
       if (source.role === 'resume') return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
+      if (source.role === 'retry') return h('div', { className: 'bt-event' }, t('Asked to make the tool call it wrote as text'))
       if (source.role === 'post') {
         // A member's late failure, or its work picked up after a restart, shows as an
         // event of the round it opens.

@@ -29,6 +29,7 @@
 //   把X拉进群 · 把X踢出群 · 群名改成X · 讨论 (admin @all) · 私聊聊了啥 (repeats the briefing)
 //   查私聊 关键词 (read_own_chat) · 长文 N · 上下文里有 词 · 撑爆 · 报错 [名] (that member's call, or every member's, fails with 401)
 //   提权 (members other than the admin run a shell command that asks for full access)
+//   写成文字 (members write their tool call as text instead of making it; also in a Bot's own chat)
 // A handoff turn answers "第 N 段接着做完了". Handoff notes and backend compaction each
 // return a full eight-section note marked "handoff 提示词" or "backend 提示词" (a Bot's
 // Session should only see the former; retries add "重试", merges add "合并了上一份笔记").
@@ -78,6 +79,7 @@ const tool = (name, input) => ({
 })
 const think = value => ({ type: 'thinking', thinking: value })
 const ESCALATION = '提权测试：用户在群里要求'
+const WRITTEN_CALL = '我先看一下目录。\n<tool_call>\n<function=pwsh>\n<parameter=command>\nGet-ChildItem\n</parameter>\n</function>\n</tool_call>'
 // Deterministic filler that grows a conversation by about `chars` characters.
 const filler = (chars, tag) => Array.from({ length: Math.ceil(chars / 20) }, (_, index) => `${tag}第${index + 1}段：这是一段用来撑长上下文的测试文字。`).join('').slice(0, chars)
 const isResults = message => Array.isArray(message?.content) && message.content.some(block => block.type === 'tool_result')
@@ -284,6 +286,9 @@ function decide(body) {
     return [text(`群里回完了，一共 ${replies} 条回复。`)]
   }
   if (userText.startsWith('[Group chat') && userText.includes('The user just created this group')) return [text('群建好了，这个群要一起做点什么？')]
+  if (/^\[Group chat "[^"]*" · your tool call did not run\]/.test(userText) || userText.startsWith('[Your last reply wrote a tool call as text')) {
+    return [text('这次真的调用了，目录看完了。')]
+  }
   if (userText.startsWith('[Group chat')) {
     // Reads only this round's transcript block. The opener is the user's last line, or
     // a Bot's post that started the round. Count-off says the next number after the
@@ -320,6 +325,7 @@ function decide(body) {
       const brief = /Your own chat with the user so far[^\n]*\n([\s\S]*?)\nThis brief does not change/.exec(all)?.[1] ?? ''
       return [text(brief ? `简报最后一句：${brief.split('\n').at(-1)}` : '没有简报。')]
     }
+    if (/写成文字/.test(userLine) && !leads) return [text(WRITTEN_CALL)]
     const shell = ['pwsh', 'bash'].find(name => tools.has(name))
     if (/提权/.test(userLine) && !leads && shell) {
       return [text('这一步要写工作区外的文件，我申请一次提权。'), tool(shell, { command: 'echo ok', description: '在工作区外写一个测试文件', justification: ESCALATION, sandbox_permissions: 'danger-full-access' })]
@@ -364,6 +370,7 @@ function decide(body) {
   if ((order = /^回忆(?:\s+(.+))?$/.exec(userText)) && tools.has('recall')) return [tool('recall', order[1] ? { query: order[1].trim() } : {})]
   if ((order = /^搜索\s*[:：]\s*([^\n]+)/.exec(userText)) && tools.has('web_search')) return [tool('web_search', { queries: order[1].trim().split(/\s*[|｜]\s*/) })]
   if (/^看(?:网页|页面)/.test(userText) && tools.has('read_browser')) return [tool('read_browser', {})]
+  if (userText.startsWith('写成文字')) return [text(WRITTEN_CALL)]
   // Context-line tests: grow the context, run a long multi-step turn, search history.
   if ((order = /^(?:长文|long)\s*(\d+)/.exec(userText))) return [text(filler(Number(order[1]) * 1000, '长文'))]
   if ((order = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(userText))) return [text(filler(Number(order[2] ?? 4) * 1000, '步骤0')), tool('list_bots', {})]

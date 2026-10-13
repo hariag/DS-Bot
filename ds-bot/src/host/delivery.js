@@ -12,8 +12,9 @@ export function install(rt) {
     return resolved.agent
   }
 
-  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false } = {}) => {
+  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false, retried = false } = {}) => {
     if (deferred) return `[Message from ${fromName} · you read it during your last task; answer it now]`
+    if (retried && role !== 'room') return '[Your last reply wrote a tool call as text, so nothing ran]'
     if (resumed && role === 'resume') return '[DeepSeek Harness restarted while you were working]'
     if (resumed && role !== 'room') return `[Message from ${fromName} · DeepSeek Harness restarted while you were working on it]`
     if (role === 'reply') return `[Reply from ${fromName}]`
@@ -31,10 +32,11 @@ export function install(rt) {
 
   // `sessionId` defaults to the recipient's own chat; group turns name its group Session.
   // `deferred`: a request the Bot already read mid-turn, handed back to answer in a
-  // turn of its own; its exchange was recorded when it first arrived. `resumed` carries
-  // on a turn that a restart cut off, and `resent` is a message a shutdown cancelled
-  // (resume.js); their exchange is recorded already too.
-  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, resent = false }) {
+  // turn of its own; its exchange was recorded when it first arrived. `resumed` and
+  // `retried` carry on a turn that a restart cut off or that wrote its tool call as
+  // text (resume.js, turns.js), and `resent` is a message a shutdown cancelled; their
+  // exchange is recorded already too.
+  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -54,8 +56,9 @@ export function install(rt) {
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
       ...(resumed ? { resumed: true } : {}),
+      ...(retried ? { retried: true } : {}),
     }
-    if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !resent) {
+    if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried && !resent) {
       state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
       void rt.save().catch(() => {})
     }
@@ -65,7 +68,7 @@ export function install(rt) {
     // A steered message cuts into a running turn at its next step; a follow-up
     // queues for the next turn (see turns.js for how each is routed).
     const message = createUserMessage({
-      content: [{ type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed })}\n${text}` }],
+      content: [{ type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed, retried })}\n${text}` }],
       source,
     })
     if (steer) agent.steer(message)

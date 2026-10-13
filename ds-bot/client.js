@@ -472,6 +472,7 @@ var ZH = {
   "{name} was cut off by a restart and picked its work back up": "{name} 的工作被重启打断，已经接着做",
   "{name} was cut off by a restart again and stopped": "{name} 的工作又被重启打断，已停下",
   "Picked up its work after a restart": "重启后接着做之前的工作",
+  "Asked to make the tool call it wrote as text": "工具调用被写成了文字，已让它重新调用",
   "{name} is waiting for your approval": "{name} 等你批准",
   "{first} and {second} are waiting for your approval": "{first}、{second} 等你批准",
   "{first}, {second} and {count} more are waiting for your approval": "{first}、{second} 等 {total} 个等你批准",
@@ -4054,6 +4055,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.role === "kickoff" || source.role === "room") return null;
       if (source.role === "secret" || deferred) return null;
       if (source.role === "resume") return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Picked up its work after a restart"));
+      if (source.role === "retry") return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Asked to make the tool call it wrote as text"));
       if (source.role === "post") {
         if (source.failed !== void 0 || source.resumed === true) return null;
         const room2 = roster.roomsById[sessionId];

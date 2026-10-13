@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
+import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
 
 // Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
@@ -211,4 +212,51 @@ test('a message a shutdown cancelled is sent again once; one still waiting, take
   assert.deepEqual([again.source.exchangeId, again.source.role, text(again)], [plan.source.exchangeId, 'request', text(plan)])
   // The resend is the same exchange, not a new one.
   assert.equal((await second.call('exchange', { a: 'a', b: 'b' })).value.length, 4)
+})
+
+const WRITTEN = 'Checking now.\n<tool_call>\n<function=pwsh>\n<parameter=command>\nGet-ChildItem E:\\\n</parameter>\n</function>\n</tool_call>'
+
+test('a tool call written as text gets one more turn on the same round slot', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  t.after(host.stop)
+  const result = await openRoomTurn(t, host)
+  host.emit('gb', 'assistant/message', { message: { content: [{ type: 'text', text: WRITTEN }] } })
+  host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await settle(() => host.agentOf('gb').calls.length === 2)
+  const retry = host.agentOf('gb').calls[1]
+  assert.deepEqual([retry.source.role, retry.source.retried, retry.source.exchangeId], ['room', true, host.agentOf('gb').calls[0].source.exchangeId])
+  assert.match(text(retry), /^\[Group chat "Ops" · your tool call did not run\]/)
+  assert.equal(result(), undefined)
+
+  // Written again: the text goes on without the call.
+  run(host, 'gb', 2, retry)
+  host.emit('gb', 'assistant/message', { message: { content: [{ type: 'text', text: WRITTEN }] } })
+  host.emit('gb', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  await settle(() => result() !== undefined)
+  assert.deepEqual(result().replies.map(reply => reply.text), ['Checking now.'])
+  assert.equal(host.agentOf('gb').calls.length, 2)
+})
+
+test('in its own chat, a Bot that wrote a tool call as text is asked to make it', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  t.after(host.stop)
+  run(host, 'b', 1, { content: [{ type: 'text', text: 'move the docs' }], source: { kind: 'user' } })
+  // A call made for real, with or without text around it, is no retry.
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'On it.' }, { type: 'tool-call', id: 'k1', name: 'pwsh', arguments: '{}' }] } })
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: WRITTEN }] } })
+  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await settle(() => host.agentOf('b').calls.length === 1)
+  const retry = host.agentOf('b').calls[0]
+  assert.deepEqual([retry.source.role, retry.source.retried], ['retry', true])
+  assert.match(text(retry), /^\[Your last reply wrote a tool call as text, so nothing ran\]/)
+})
+
+test('a written tool call is told apart from text about one', () => {
+  assert.equal(writesToolCall(WRITTEN), true)
+  assert.equal(writesToolCall('<function=read>\n<parameter=path>a.md</parameter></function>'), true)
+  assert.equal(writesToolCall('Models such as Step write `<tool_call>` tags in their template.'), false)
+  assert.equal(writesToolCall(undefined), false)
+  assert.equal(stripWrittenCalls(WRITTEN), 'Checking now.')
 })
