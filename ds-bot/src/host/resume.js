@@ -30,6 +30,7 @@ const triggerOf = info => ({
   ...(info.roomId ? { roomId: info.roomId } : {}),
   ...(typeof info.hop === 'number' ? { hop: info.hop } : {}),
   ...(info.audience ? { audience: info.audience } : {}),
+  ...(info.askedBy ? { askedBy: info.askedBy } : {}),
 })
 
 const readNotes = (file) => {
@@ -158,7 +159,7 @@ export function install(rt) {
       // A turn already picked up once and cut off again stays stopped: a restart loop
       // must not run it forever.
       if (record.resumed) return
-      await rt.deliver({ toId: bot.id, sessionId: room.sessions?.[bot.id] ?? sessionId, role: 'room', roomId: room.id, note: 'picking up after a restart', resumed: true, text })
+      await rt.deliver({ toId: bot.id, sessionId: room.sessions?.[bot.id] ?? sessionId, role: 'room', roomId: room.id, note: 'picking up after a restart', resumed: true, text, ...(record.trigger?.askedBy ? { askedBy: record.trigger.askedBy } : {}) })
       return
     }
     if (record.resumed) return

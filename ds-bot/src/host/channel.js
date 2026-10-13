@@ -40,7 +40,7 @@ export function install(rt) {
       ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId), ...(kickoff ? { waiting: true } : {}),
     })),
     // `parts`: the members' hidden group Sessions and their earlier segments, for usage.
-    rooms: Object.values(state.rooms).map(({ log, seen, botRounds, sessions, segments, ...room }) => {
+    rooms: Object.values(state.rooms).map(({ log, seen, botRounds, lateRounds, sessions, segments, ...room }) => {
       const parts = [...Object.values(sessions ?? {}), ...Object.values(segments ?? {}).flat().map(segment => segment.sessionId)]
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
       return { ...room, parts, ...(last ? { preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
@@ -51,7 +51,6 @@ export function install(rt) {
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
-    capabilities: rt.capabilityLibraryView(),
     secretRequests: state.secretRequests ?? {},
     colors: [...COLORS, ...EXTRA_COLORS],
     models: rt.cachedCatalog(),
@@ -68,17 +67,18 @@ export function install(rt) {
   })
   // What changes without a new revision, sent with every state answer. `memoryNews`:
   // per Bot, its latest memory change; `memoryReviews`: memory reviews waiting or
-  // running.
+  // running; `work`: per Bot, the turn it runs and its tool; per group, the members whose
+  // turn there runs; and the approvals waiting.
   const live = () => ({
     activity: rt.activityView(),
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView() },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
-    capabilityStatuses: rt.capabilityStatusesView(),
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -203,6 +203,11 @@ export function install(rt) {
           await rt.load()
           await rt.deleteRoom(body.id)
           return ok(view())
+        case 'approval-answer':
+          rt.answerApproval(body.id, body.choice)
+          return ok(true)
+        case 'stop-member-work':
+          return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
         case 'dismiss-question':
           await rt.load()
           if (state.questions[body.sessionId] !== undefined) {
@@ -222,12 +227,6 @@ export function install(rt) {
         case 'connector-retry':
           await rt.load()
           return ok(await rt.connectorEndpoint(endpoint, body))
-        case 'capability-save':
-        case 'capability-delete':
-        case 'capability-approve':
-        case 'bot-capability':
-          await rt.load()
-          return ok(await rt.capabilityEndpoint(endpoint, body))
         case 'schedules':
         case 'schedule-create':
         case 'schedule-delete':
@@ -250,7 +249,6 @@ export function install(rt) {
           // Claim the question before queueing so a second answer is refused.
           delete state.questions[sessionId]
           try {
-            await rt.ensureCapabilities(sessionId)
             const agent = await rt.resolveAgent(sessionId)
             agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
             await ctx.sessions.flush(agent.session)
@@ -268,7 +266,6 @@ export function install(rt) {
           // A Bot id or an earlier part of its own chat means the current part.
           const past = rt.pastOwners.get(body.sessionId)
           const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
-          await rt.ensureCapabilities(sessionId)
           await ctx.sessionController.prompt({
             requestId: randomUUID(),
             sessionId,

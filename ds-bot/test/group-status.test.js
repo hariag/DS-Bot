@@ -147,13 +147,14 @@ test('an own chat\'s approval stays with DSH and is listed while it waits', asyn
   assert.equal(await host.askApproval('elsewhere'), 'from-dsh')
 })
 
-test('a member at work keeps its turn; one quiet for the whole wait is missed, and a later [PASS] stays out of the group', async (t) => {
+test('a member still going keeps its turn; one quiet for the whole wait is missed, and a later [PASS] stays out of the group', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start()
   t.after(host.stop)
   const result = await openTurn(t, host)
   t.mock.timers.tick(ROOM_REPLY_TIMEOUT_MS - 1000)
-  host.emit('gb', 'tool/call', { callId: 'k1', name: 'shell', arguments: '{}' })
+  // A team tool is quick: it does not let the round go on without the member.
+  host.emit('gb', 'tool/call', { callId: 'k1', name: 'list_bots', arguments: '{}' })
   t.mock.timers.tick(ROOM_REPLY_TIMEOUT_MS - 1000)
   await settle(() => true)
   assert.equal(result(), undefined)

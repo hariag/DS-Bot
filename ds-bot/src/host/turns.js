@@ -58,6 +58,7 @@ export function install(rt) {
       hop: keeps ? info.hop ?? 0 : 0,
       ...(keeps && info.exchangeId ? { exchangeId: info.exchangeId } : {}),
       ...(keeps && info.audience ? { audience: info.audience } : {}),
+      ...(keeps && info.askedBy ? { askedBy: info.askedBy } : {}),
       note: 'your tool call did not run',
       retried: true,
       text: RETRY_TEXT,
@@ -187,6 +188,24 @@ export function install(rt) {
     return bots
   }
 
+  // Per group, the members whose turn there is running; the round's current speaker is
+  // marked, since its round shows it.
+  const roomWorkView = () => {
+    const speaking = new Set([...roomProgress.values()].map(round => `${round.roomId}:${round.speaking}`))
+    const rooms = {}
+    for (const [id, entry] of live) {
+      const owner = rt.groupOwners.get(id)
+      if (entry.turn === undefined || owner === undefined) continue
+      rooms[owner.roomId] = [...(rooms[owner.roomId] ?? []), {
+        botId: owner.botId,
+        since: entry.since,
+        ...(entry.tool ? { tool: entry.tool } : {}),
+        ...(speaking.has(`${owner.roomId}:${owner.botId}`) ? { speaking: true } : {}),
+      }]
+    }
+    return rooms
+  }
+
   // What a running tool call is about, for an approval card: its own description and
   // the command, path or address it acts on.
   const callDetail = (sessionId, callId) => {
@@ -227,6 +246,7 @@ export function install(rt) {
         const name = String(event.data?.name ?? '')
         setActivity(id, name === 'ask_user' ? undefined : activityOf(name))
         entry.tool = name
+        if (rt.groupOwners.has(id)) rt.workRoomTurn?.(id, name)
         if (typeof event.data?.callId === 'string') (entry.calls ??= new Map()).set(event.data.callId, String(event.data.arguments ?? ''))
         break
       }
@@ -287,6 +307,8 @@ export function install(rt) {
             ...(source.failed ? { failed: source.failed } : {}),
             ...(source.resumed ? { resumed: true } : {}),
             ...(source.again ? { again: true } : {}),
+            ...(source.stopped ? { stopped: true } : {}),
+            ...(source.askedBy ? { askedBy: source.askedBy } : {}),
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
@@ -409,7 +431,14 @@ export function install(rt) {
             else void rt.lateRoomReply?.(id, info, replyText())
           }
         } else if (!retry && info !== undefined) {
-          answer(info, replyText())
+          // A group Session speaks only in its group: the turn that takes a reply to a
+          // message it sent from there posts what it ends with.
+          if (rt.groupOwners.has(id) && (info.role === 'reply' || info.role === 'retry')) {
+            if (failure !== undefined) void rt.lateRoomFailure?.(id, info, failure)
+            else if (reason?.kind !== 'aborted') void rt.lateRoomReply?.(id, info, replyText())
+          } else {
+            answer(info, replyText())
+          }
         }
         for (const request of joined) {
           // A failed or stopped turn closes the request like any other; a finished
@@ -434,5 +463,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, callDetail, stopRoomTurn })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, callDetail, stopRoomTurn })
 }

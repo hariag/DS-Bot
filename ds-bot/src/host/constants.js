@@ -54,6 +54,12 @@ export const TEAM_TOOLS = [
 ]
 // Rounds Bots may start in one group by posting, before the user speaks there again.
 export const ROOM_BOT_ROUNDS = 3
+// Answers a group gives to what members post after the round moved on (their finished
+// work, mostly), before the user speaks there again.
+export const ROOM_LATE_ROUNDS = 10
+// A member still at work this long after its first tool call lets the round go on; it
+// posts its reply when the work is done.
+export const ROOM_WORK_GRACE_MS = 15_000
 
 export const OWN_CHAT_LINE_MAX = 400
 // The message an anchor points at is shown whole (up to this), so a long draft takes
