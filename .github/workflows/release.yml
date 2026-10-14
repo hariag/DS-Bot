@@ -22,7 +22,8 @@ on:
         default: true
 
 permissions:
-  contents: read
+  # write: attach the package file to the release.
+  contents: write
   id-token: write
 
 concurrency:
@@ -80,3 +81,13 @@ jobs:
           tag="$(node -p "require('./package.json').version.includes('-') ? 'next' : 'latest'")"
           echo "Publishing $(node -p "require('./package.json').version") with the npm tag $tag"
           npm publish --provenance --access public --tag "$tag"
+
+      # The release keeps the package file for installs without npm.
+      - name: Attach the package to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          npm pack
+          gh release upload "$TAG" "ds-bot-$(node -p "require('./package.json').version").tgz" --clobber
