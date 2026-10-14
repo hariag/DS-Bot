@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 permissions:
@@ -39,3 +39,14 @@ jobs:
       - run: npm test
       - run: node scripts/build-client.mjs --check
       - run: npm run lint
+
+  # The one check that branch rules require. A job whose needs failed is skipped,
+  # and GitHub counts a skipped required check as passed, so this job always runs
+  # and fails unless every matrix entry passed.
+  result:
+    name: Test result
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
