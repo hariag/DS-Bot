@@ -18,7 +18,7 @@
 
 ## 协作方式
 
-团队里谁都可以做任何工作：分诊、修 bug、做功能、改界面、写文档。只有一部分决定归维护者：产品方向、改动已定的设计、这些规则、发版和架构。需要这类决定的 Issue 和 Pull Request 带 `maintainer` 标签；开工前先等维护者回复。拿不准是 bug 还是设计如此时，在 Issue 里问。
+团队里谁都可以做任何工作：分诊、修 bug、做功能、改界面、写文档。只有一部分决定归维护者：产品方向、改动已定的设计、这些规则、发版和架构。需要这类决定的 Issue 和 Pull Request 带 `maintainer` 标签；开工前先等维护者回复。DS Bot 要做成什么，见 [docs/vision.zh.md](docs/vision.zh.md)；已定的设计在 [docs/plans/](docs/plans/)。拿不准是 bug 还是设计如此时，先查这两处，再在 Issue 里问。
 
 ### 分支
 
