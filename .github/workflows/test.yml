@@ -40,13 +40,27 @@ jobs:
       - run: node scripts/build-client.mjs --check
       - run: npm run lint
 
+  scan:
+    name: Leak scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Scan exactly the tracked files, as they would be published.
+      - run: mkdir -p "$RUNNER_TEMP/tree" && git archive HEAD | tar -x -C "$RUNNER_TEMP/tree"
+      - run: node scripts/scan.mjs "$RUNNER_TEMP/tree"
+        env:
+          SCAN_EXTRA_PATTERNS: ${{ secrets.SCAN_EXTRA_PATTERNS }}
+
   # The one check that branch rules require. A job whose needs failed is skipped,
   # and GitHub counts a skipped required check as passed, so this job always runs
-  # and fails unless every matrix entry passed.
+  # and fails unless every matrix entry and the leak scan passed.
   result:
     name: Test result
-    needs: test
+    needs: [test, scan]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success

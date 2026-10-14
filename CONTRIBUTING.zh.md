@@ -130,7 +130,13 @@ node scripts/build-client.mjs --check  # client.js 与 src/client 一致
 npm run lint                           # oxlint
 ```
 
-CI 在每个 Pull Request 上，在 Linux 和 Windows 上跑同样的三项检查。
+CI 在每个 Pull Request 上，在 Linux 和 Windows 上跑同样的三项检查。它还会扫描入库的文件，查找密钥、token、个人路径和邮箱，以及只应留在本地的材料。想自己扫描，在仓库根目录运行：
+
+```sh
+mkdir -p /tmp/ds-bot-tree && git archive HEAD | tar -x -C /tmp/ds-bot-tree && node scripts/scan.mjs /tmp/ds-bot-tree
+```
+
+「must fix」的结果会让 CI 失败；「can stay」的结果仅供阅读。分支规则只要求一项检查 **Test result**，所有检查都通过它才通过。
 
 改服务端（`index.js`、`src/host/`）时，还要跑冒烟测试。它启动模拟模型和一个链接到你本地插件的 DSH Web，走一遍主要流程（Bot、群聊、对话分段、压缩、设置）。`CONTEXT_WINDOW` 和 `CHECK_RATIO` 让模拟模型的上下文窗口变小，几条长回复就能到达检查线：
 
