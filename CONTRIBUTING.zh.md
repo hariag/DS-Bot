@@ -6,19 +6,19 @@
 
 ## 谁可以提 Pull Request
 
-本仓库的协作者直接在这里推分支，向 `dev` 提 Pull Request（见[协作方式](#协作方式)）。目前只有协作者能提 Pull Request。如果你不是协作者，发现 bug 请开 Issue（见[报告问题](#报告问题)），提问或建议请到 [Discussions](https://github.com/Fei2411/DS-Bot/discussions)。
+本仓库的协作者直接在这里推分支，向 `dev` 提 Pull Request（见[协作方式](#协作方式)）。目前只有协作者能提 Pull Request。如果你不是协作者，发现 bug 请开 Issue（见[报告问题](#报告问题)），提问或建议请到 [Discussions](https://github.com/Fei2411/DeepSeek-Bot/discussions)。
 
 ## 最重要的规则
 
 1. **基于 DSH 构建，不改 DSH。** Bot 功能是 DSH 插件：只用 DSH 有文档的插件接口（Cordis 服务、插件客户端入口、profile patch）。桌面应用只通过 DSH 有文档的入口启动 DSH（`@deepseek-ai/dsh/profile-boot`、`dsh` 命令）。不修改 DeepSeek Harness，不依赖 DSH 安装目录里的文件。功能需要 DSH 没有提供的能力时，先在这里开 Issue；修复可能应该放在 DSH 里。
-2. **Bot 的工作跑在 DSH Session 里。** Bot 的身份不变，工作跑在 DSH Session 里：私聊一条、每个群各一条，上下文快满时换一条新的。每个回合都走 DSH 正常的 agent 循环、工具和模型路由。不要另加一套 agent 运行时。
+2. **每个 Bot 都是一个 DSH Session。** Bot 的工作走 DSH 正常的 agent 循环、工具和模型路由。不要另加一套 agent 运行时。
 3. **任何地方都不放真实密钥。** 不要提交 API key、token、cookie、`DSH_HOME` 目录、日志，或带个人信息的截图。测试和测试台用脚本化的模拟模型，不需要密钥。
 4. **只用原创素材。** 不要从其他产品或网站复制代码、文字、图标、logo 或其他图形。唯一例外是与 Apache 2.0 兼容许可的代码：注明出处，并把它的声明加进 `NOTICE` 文件。
 5. **每个改动都要测试。** 每个改动都要跑单元测试和客户端检查（见[测试改动](#测试改动)）。
 
 ## 协作方式
 
-团队里谁都可以做任何工作：分诊、修 bug、做功能、改界面、写文档。只有一部分决定归维护者：产品方向、改动已定的设计、这些规则、发版和架构。需要这类决定的 Issue 和 Pull Request 带 `maintainer` 标签；开工前先等维护者回复。DS Bot 要做成什么，见 [docs/vision.zh.md](docs/vision.zh.md)；已定的设计在 [docs/plans/](docs/plans/)。拿不准是 bug 还是设计如此时，先查这两处，再在 Issue 里问。
+团队里谁都可以做任何工作：分诊、修 bug、做功能、改界面、写文档。只有一部分决定归维护者：产品方向、改动已定的设计、这些规则、发版和架构。需要这类决定的 Issue 和 Pull Request 带 `maintainer` 标签；开工前先等维护者回复。拿不准是 bug 还是设计如此时，在 Issue 里问。
 
 ### 分支
 
@@ -29,12 +29,12 @@
 | `fix/<Issue 号>-<短名>`、`feat/<Issue 号>-<短名>`、`docs/<短名>`、`chore/<短名>` | 你的工作分支。从最新的 `dev` 切出 | — |
 
 - 分支名不要以 `dev/` 开头。有 `dev` 分支时，Git 建不了 `dev/<名字>`。
-- 同步分支用 `scripts/merge-dev.sh`：合入 `origin/dev`，生成文件 `ds-bot/client.js` 冲突时取 dev 的版本再重新生成（热修分支用 `git merge main`）。已推送的分支不要 rebase，也不要强推。
+- 同步分支用 `git merge dev`（热修分支用 `git merge main`）。已推送的分支不要 rebase，也不要强推。
 - 默认分支是 `main`，所以 GitHub 新建 Pull Request 时默认的 base 是 `main`。请改成 `dev`。
 
 ### Issue
 
-1. **分诊。** 给每个新 Issue 打类型、优先级和领域标签（见[标签](#标签)）。每个 Issue 只有一个优先级标签。具体步骤和列出待分诊 Issue 的脚本见 [.agents/skills/issue-triage/](.agents/skills/issue-triage/SKILL.md)，AI 也可以照着做。
+1. **分诊。** 给每个新 Issue 打类型、优先级和领域标签（见[标签](#标签)）。每个 Issue 只有一个优先级标签。
    - 是提问（怎么装、怎么用）：选 **Convert to discussion**，转到 Q&A 分类。
    - 信息不够，找不到原因：加 `needs-info`，写清楚还缺什么。说明 14 天没有回复就关闭。
    - 原因在 DSH 或其他插件：加 `upstream`，并链接到应该处理它的地方。
@@ -56,7 +56,7 @@
 
 ### Pull Request
 
-1. 向 `dev` 提 Pull Request，按模板填写。用 `Fixes #<号>` 关联 Issue；修 bug 的 PR 一定要写明修的是哪个 bug。从 fork 提 Pull Request 时，请保持勾选 **Allow edits from maintainers**，方便维护者在合并前解决冲突或做小调整。
+1. 向 `dev` 提 Pull Request，按模板填写。用 `Fixes #<号>` 关联 Issue；修 bug 的 PR 一定要写明修的是哪个 bug。
 2. 在模板的 **Changelog** 一栏写一句用户能看到的变化，没有就写「无」。不要改 `CHANGELOG.md`：维护者发版时根据这些句子统一写。
 3. CI 通过后，自己用 **Create a merge commit** 合并，然后删除分支。不强制审查；想让人看一眼，在 Pull Request 里 @ 队友。
 4. 合进 `dev` 的修复不会关闭对应的 Issue：`Fixes #<号>` 只在合入默认分支时生效。Issue 会一直开着，直到发版，意思是「已在 `dev` 修复，尚未发版」。
@@ -72,7 +72,7 @@
 
 1. 向 `dev` 提一个 Pull Request：修改 `ds-bot/package.json` 里的版本号，根据已合并 Pull Request 的 Changelog 句子写 `CHANGELOG.md` 的这一版。
 2. 提一个从 `dev` 到 `main` 的 Pull Request，标题为 `release: vX.Y.Z`。在描述里列出这一版所有的 `Fixes #<号>`，合并时这些 Issue 会一起关闭。
-3. 合并前在 Windows 真机上做一遍[发版前真机检查](docs/dev/release-checklist.md)，改动涉及 macOS 时在 macOS 上也做一遍，结果贴在这个 PR 里。用 merge commit 合并，在 `main` 上发布 GitHub Release `vX.Y.Z`，发布时不勾「Set as the latest release」：安装包、`SHA256SUMS.txt` 和下载表都传完后，工作流会自己把它标为最新。Release 工作流会检查 tag 与版本号一致、且在 `main` 上，跑完检查后把包发到 npm（预发布版本发到 npm 的 `next` 标签）。不要手动 `npm publish`。
+3. 用 merge commit 合并，在 `main` 上发布 GitHub Release `vX.Y.Z`。
 4. 热修：从 `main` 切 `fix/hot-<短名>`，向 `main` 提 Pull Request，发一个补丁版本，再把 `main` 合回 `dev`。
 
 ## 搭建环境
@@ -81,10 +81,10 @@
 
 - Node.js `22.19` 或更高（或 `24` 及以上）。
 - Git。
-- 仅 Linux 开发测试台、截图和桌面测试台需要：pnpm `11`，以及插件测试所用 DSH 版本的官方 DeepSeek Harness 源码。
+- 仅测试台需要：pnpm `11`，以及插件测试所用 DSH 版本的 DeepSeek Harness 源码。
 
 ```sh
-git clone https://github.com/Fei2411/DS-Bot.git ds-bot-repo
+git clone https://github.com/Fei2411/DeepSeek-Bot.git ds-bot-repo
 cd ds-bot-repo/ds-bot
 
 # 插件自己的构建工具（只有 esbuild）。
@@ -94,18 +94,16 @@ npm ci
 npm run harness
 ```
 
-Linux 开发测试台、截图和桌面测试台需要把官方 DeepSeek Harness 源码放在插件目录旁边（这个目录被 Git 忽略）。单元测试、lint 和看板/生命周期测试台使用 `npm run harness` 从 npm 装进 `dev/harness/` 的官方包，不需要源码：
+测试台需要把 DeepSeek Harness 源码放在插件目录旁边（这个目录被 Git 忽略）：
 
 ```sh
 cd ..
 git clone https://github.com/deepseek-ai/deepseek-harness.git
-git -C deepseek-harness checkout dsh-v0.2.2-rc.1
+git -C deepseek-harness checkout dsh-v0.2.0-rc.2
 (cd deepseek-harness && pnpm install)
 ```
 
 如果 DeepSeek Harness 源码放在别处，把 `DSH_HARNESS` 设为它的路径。`DSH_HARNESS` 也会代替 `dev/harness/`，供单元测试和 lint 使用。
-
-只支持官方 `deepseek-ai/deepseek-harness` 仓库。个人 fork 可能带有官方版本没有的补丁；插件必须能在官方包上运行。
 
 `@deepseek-ai/*` 包是 peer 依赖：真实安装时由 DSH 的 profile 提供。`ds-bot/.npmrc` 阻止 npm 把它们装进插件目录。
 
@@ -132,13 +130,7 @@ node scripts/build-client.mjs --check  # client.js 与 src/client 一致
 npm run lint                           # oxlint
 ```
 
-CI 在每个 Pull Request 上，在 Linux 和 Windows 上跑同样的三项检查。它还会扫描入库的文件，查找密钥、token、个人路径和邮箱，以及只应留在本地的材料。想自己扫描，在仓库根目录运行：
-
-```sh
-mkdir -p /tmp/ds-bot-tree && git archive HEAD | tar -x -C /tmp/ds-bot-tree && node scripts/scan.mjs /tmp/ds-bot-tree
-```
-
-「must fix」的结果会让 CI 失败；「can stay」的结果仅供阅读。分支规则只要求一项检查 **Test result**，所有检查都通过它才通过。
+CI 在每个 Pull Request 上，在 Linux 和 Windows 上跑同样的三项检查。
 
 改服务端（`index.js`、`src/host/`）时，还要跑冒烟测试。它启动模拟模型和一个链接到你本地插件的 DSH Web，走一遍主要流程（Bot、群聊、对话分段、压缩、设置）。`CONTEXT_WINDOW` 和 `CHECK_RATIO` 让模拟模型的上下文窗口变小，几条长回复就能到达检查线：
 
@@ -163,7 +155,6 @@ dev/bench.sh dev 3081 8771 reset    # 模拟模型 + DSH Web；数据在 ../.dsh
 
 - 一个改动只做一件事。
 - 不要手改 `client.js`。改 `src/client/`，运行 `npm run build`，两者一起提交。
-- 在 `src/client/` 里，颜色用 `--bt-*` 变量，圆角只用 4、6、8、10、12、16、18、20、22、999px 和 50% 这几档，弹簧用 `motion.js` 里的。有单元测试检查这三项。测试之前就写成的地方列在 `test/style-debt.json` 里，这份清单只减不增。改掉一处后，运行 `node scripts/style-debt.mjs --write` 更新清单。
 - 跟随改动周围代码的风格。只有当代码本身看不出原因时才写注释。
 - 提交说明用英文。标题简短，用祈使句（如 "Keep group replies visible"），在正文里写原因。
 - 提交的作者是做出改动的人。用 AI 工具辅助时，不要把它加为作者，也不要加 `Co-authored-by` 行；在工具里关掉这个设置。
@@ -185,7 +176,7 @@ DS Bot 会从诊断信息里去掉 API key、token、保存的密钥和你的用
 
 安全问题不要开公开 Issue。请在仓库的 **Security** 页使用 **Report a vulnerability**。
 
-Issue 只用来报告 bug。提问、想法和功能建议请发到 [Discussions](https://github.com/Fei2411/DS-Bot/discussions)。维护者认可的想法会开成 Issue。
+Issue 只用来报告 bug。提问、想法和功能建议请发到 [Discussions](https://github.com/Fei2411/DeepSeek-Bot/discussions)。维护者认可的想法会开成 Issue。
 
 ## 许可
 
