@@ -2,7 +2,7 @@ import { call } from './api.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
-import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
+import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
@@ -21,11 +21,12 @@ import { SECRET_CSS, SecretDock } from './secret-card.js'
 import { MODEL_CSS, ModelChoiceDock, DeepSeekSignIn } from './model-menu.js'
 import { BOT_SETTINGS_CSS } from './bot-settings.js'
 import { GROUP_SETTINGS_CSS } from './group-settings.js'
+import { FOLDER_CSS } from './folder-menu.js'
 import { USAGE_CSS } from './usage-page.js'
 import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
-import { groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
-import { installLocale, language } from './i18n.js'
+import { freePriority, groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
+import { installLocale, language, t } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
@@ -310,29 +311,6 @@ export function apply(ctx) {
     }
   }
 
-  // The user-bubble token rides with the conversation group, so a plain Session
-  // keeps dsh's own bubble colors while the Bot shell stays themed.
-  const installBubbleTokens = () => {
-    let release = null
-    let key = ''
-    const render = () => {
-      const snapshot = roster.getSnapshot()
-      const prefs = snapshot.ready ? snapshot.prefs ?? {} : savedPrefs
-      const themes = allThemes()
-      const id = themes[prefs.theme] ? prefs.theme : 'deepseek'
-      const next = `${id}|${registry.getSnapshot()}`
-      if (next === key) return
-      key = next
-      const drop = release
-      release = ctx.theme.overrideTokens('ds-bot: conversation', conversationTokens(themes[id]))
-      if (typeof drop === 'function') drop()
-    }
-    render()
-    const offRoster = roster.subscribe(render)
-    const offRegistry = registry.subscribe(render)
-    return () => { offRoster(); offRegistry(); if (typeof release === 'function') release() }
-  }
-
   ctx.effect(() => {
     const hub = { registerShape, registerTheme, themes: () => Object.keys(allThemes()), shapes: () => Object.keys(SHAPES) }
     const queued = Array.isArray(window.dshBotQueue) ? window.dshBotQueue : []
@@ -542,6 +520,9 @@ export function apply(ctx) {
     updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
     refreshModels: () => after(call('models')).catch(() => {}),
     efforts: ref => call('efforts', { ref }),
+    folders: () => call('folders'),
+    folderPick: () => call('folder-pick'),
+    folderList: path => call('folder-list', { path: path ?? '' }),
     deleteBot: id => after(call('delete-bot', { id })),
     duplicateBot: id => after(call('duplicate-bot', { id })),
     setPrefs: prefs => after(call('set-prefs', prefs)),
@@ -733,7 +714,13 @@ export function apply(ctx) {
     } }
   }
 
-  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component))
+  // A Bot surface owns the cells it shadows. It starts far below the -10 that plugins
+  // commonly use and goes below whatever already holds the cell, so a plugin that
+  // shadows the same cell neither breaks the install nor shows through.
+  const BOT_PRIORITY = -100
+  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
+    name, ...options, ...(options.priority === undefined ? {} : { priority: freePriority(ctx.slots.entries(name), options) }),
+  }, component))
 
   // The "@" menu's Bot group and the chats "+" references. The composer's controller
   // for a Session is the shell's own, so the chats open at its caret.
@@ -765,69 +752,68 @@ export function apply(ctx) {
   }
 
   // The shell group paints the team surface around the session; the conversation
-  // group re-skins the session itself. Every disposer comes from slots.inject, so a
-  // surface change withdraws the whole group and the outlets re-render.
+  // group re-skins the session itself. Each step returns a disposer from slots.inject,
+  // so a surface change withdraws the whole group and the outlets re-render.
   const installShell = () => [
-    installCompiledStyles(SHELL_CSS, 'shell'),
-    installCompiledStyles(SIDEBAR_CSS, 'sidebar'),
-    installCompiledStyles(SECRET_CSS, 'secrets'),
-    installCompiledStyles(MODEL_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, 'models'),
-    installCompiledStyles(USAGE_CSS, 'usage'),
-    installCompiledStyles(SCHEDULE_CSS, 'schedules'),
-    installCompiledStyles(FEEDBACK_CSS, 'feedback'),
-    installCompiledStyles(ABOUT_CSS, 'about'),
-    installCompiledStyles(MEMBER_CSS, 'members'),
-    installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    browsers ? installCompiledStyles(BROWSER_CSS, 'browser') : null,
-    installTheme(),
-    shadow('sidebar.workspaces', { priority: -10, inject: face }, TeamSidebar),
-    shadow('sidebar.brand.mark', { priority: -10 }, BrandMark),
-    shadow('sidebar.brand.name', { priority: -10 }, BrandName),
-    shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
-    shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ConnectPlugins),
-    shadow('settings.trigger', { priority: -10 }, YouAvatar),
-    // At priority -10 the whale wins the seat over a shell account plugin's own
-    // launcher (the Desktop's "··· More"), which comes back in Agent mode.
-    shadow('settings.launcher', { priority: -10, inject: face }, AccountLauncher),
-    shadow('shell.overlay', { id: 'bot', order: 50, inject: face }, Overlays),
-    shadow('shell.overlay', { id: 'bot-signin', order: 55, inject: face }, DeepSeekSignIn),
-    shadow('shell.overlay', { id: 'bot-toast', order: 60, inject: face }, ErrorToast),
+    () => installCompiledStyles(SHELL_CSS, 'shell'),
+    () => installCompiledStyles(SIDEBAR_CSS, 'sidebar'),
+    () => installCompiledStyles(SECRET_CSS, 'secrets'),
+    () => installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, 'models'),
+    () => installCompiledStyles(USAGE_CSS, 'usage'),
+    () => installCompiledStyles(SCHEDULE_CSS, 'schedules'),
+    () => installCompiledStyles(FEEDBACK_CSS, 'feedback'),
+    () => installCompiledStyles(ABOUT_CSS, 'about'),
+    () => installCompiledStyles(MEMBER_CSS, 'members'),
+    () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
+    browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
+    () => installTheme(),
+    () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
+    () => shadow('sidebar.brand.mark', { priority: BOT_PRIORITY }, BrandMark),
+    () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
+    () => shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
+    () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ConnectPlugins),
+    () => shadow('settings.trigger', { priority: BOT_PRIORITY }, YouAvatar),
+    // The whale wins the seat over a shell account plugin's own launcher (the
+    // Desktop's "··· More"), which comes back in Agent mode.
+    () => shadow('settings.launcher', { priority: BOT_PRIORITY, inject: face }, AccountLauncher),
+    () => shadow('shell.overlay', { id: 'bot', order: 50, inject: face }, Overlays),
+    () => shadow('shell.overlay', { id: 'bot-signin', order: 55, inject: face }, DeepSeekSignIn),
+    () => shadow('shell.overlay', { id: 'bot-toast', order: 60, inject: face }, ErrorToast),
   ]
   const installConversation = () => [
-    installCompiledStyles(CONVERSATION_CSS, 'conversation'),
-    installBubbleTokens(),
-    installMentions(),
-    installAtMenu(),
-    shadow('conversation.session.header', { priority: -10, inject: face }, HeaderPill),
-    shadow('conversation.chat.node', { key: 'assistant-step', priority: -10, locale: 'chat', inject: assistantFace }, AssistantCell),
-    shadow('conversation.chat.node', { key: 'turn-trigger', priority: -10, locale: 'chat', inject: face }, TriggerCell),
-    shadow('conversation.chat.node', { key: 'tool-call', priority: -10, locale: 'chat', inject: face }, ToolCell),
-    shadow('conversation.chat.node', { key: 'turn-process', priority: -10, locale: 'chat', inject: face }, TurnProcessCell),
+    () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
+    () => installMentions(),
+    () => installAtMenu(),
+    () => shadow('conversation.session.header', { priority: BOT_PRIORITY, inject: face }, HeaderPill),
+    () => shadow('conversation.chat.node', { key: 'assistant-step', priority: BOT_PRIORITY, locale: 'chat', inject: assistantFace }, AssistantCell),
+    () => shadow('conversation.chat.node', { key: 'turn-trigger', priority: BOT_PRIORITY, locale: 'chat', inject: face }, TriggerCell),
+    () => shadow('conversation.chat.node', { key: 'tool-call', priority: BOT_PRIORITY, locale: 'chat', inject: face }, ToolCell),
+    () => shadow('conversation.chat.node', { key: 'turn-process', priority: BOT_PRIORITY, locale: 'chat', inject: face }, TurnProcessCell),
     // DSH's own turn tail stays, so what other plugins add there shows, such as the
     // cards of the files a turn delivered; its copy and branch row is hidden.
-    shadow('conversation.chat.turnTail', { id: 'bot-turn-separators', order: 1000, inject: face }, TurnTailCell),
+    () => shadow('conversation.chat.turnTail', { id: 'bot-turn-separators', order: 1000, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
-    shadow('conversation.chat.node', { key: 'question-reply', priority: -10, locale: 'chat' }, AnsweredCell),
-    shadow('conversation.chat.node', { key: 'compaction', priority: -10, locale: 'chat' }, Nothing),
-    ...(canDrawUserMessages() ? ['user', 'steering'].map(key => shadow('conversation.chat.node', { key, priority: -10, locale: 'chat', inject: face }, UserMessageCell)) : []),
-    shadow('conversation.input.permission', { priority: -10 }, Nothing),
-    shadow('conversation.input.plan', { priority: -10 }, Nothing),
+    () => shadow('conversation.chat.node', { key: 'question-reply', priority: BOT_PRIORITY, locale: 'chat' }, AnsweredCell),
+    () => shadow('conversation.chat.node', { key: 'compaction', priority: BOT_PRIORITY, locale: 'chat' }, Nothing),
+    ...(canDrawUserMessages() ? ['user', 'steering'].map(key => () => shadow('conversation.chat.node', { key, priority: BOT_PRIORITY, locale: 'chat', inject: face }, UserMessageCell)) : []),
+    () => shadow('conversation.input.permission', { priority: BOT_PRIORITY }, Nothing),
+    () => shadow('conversation.input.plan', { priority: BOT_PRIORITY }, Nothing),
     // The composer carries no model picker or run statistics; a Bot's model lives
     // in its details panel.
-    shadow('conversation.input.model', { priority: -10 }, Nothing),
-    shadow('conversation.composer.dock', { id: 'activity', order: 0, priority: -10 }, Nothing),
-    shadow('conversation.composer.dock', { id: 'usage', order: 1, priority: -10 }, Nothing),
-    shadow('conversation.input.left', { id: 'bot-plus', order: -100, inject: face }, ComposerPlus),
-    shadow('conversation.input.right', { id: 'bot-voice', order: 100, inject: face }, ComposerVoice),
-    shadow('conversation.composer', {
-      priority: -10,
+    () => shadow('conversation.input.model', { priority: BOT_PRIORITY }, Nothing),
+    () => shadow('conversation.composer.dock', { id: 'activity', order: 0, priority: BOT_PRIORITY }, Nothing),
+    () => shadow('conversation.composer.dock', { id: 'usage', order: 1, priority: BOT_PRIORITY }, Nothing),
+    () => shadow('conversation.input.left', { id: 'bot-plus', order: -100, inject: face }, ComposerPlus),
+    () => shadow('conversation.input.right', { id: 'bot-voice', order: 100, inject: face }, ComposerVoice),
+    () => shadow('conversation.composer', {
+      priority: BOT_PRIORITY,
       select: owner => (owner.pendingInteraction?.kind === 'question' ? owner.pendingInteraction : null),
     }, QuestionCard),
-    shadow('conversation.input.dock', { id: 'bot-members', order: -120, inject: face }, MemberDock),
-    shadow('conversation.input.dock', { id: 'bot-model', order: -110, inject: face }, ModelChoiceDock),
-    shadow('conversation.input.dock', { id: 'bot-question', order: -100, inject: face }, QuestionDock),
-    shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
+    () => shadow('conversation.input.dock', { id: 'bot-members', order: -120, inject: face }, MemberDock),
+    () => shadow('conversation.input.dock', { id: 'bot-model', order: -110, inject: face }, ModelChoiceDock),
+    () => shadow('conversation.input.dock', { id: 'bot-question', order: -100, inject: face }, QuestionDock),
+    () => shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
   ]
   // The return button belongs to neither group: it renders only in Agent mode.
   ctx.effect(() => {
@@ -894,7 +880,9 @@ export function apply(ctx) {
   }, 'ds-bot: agent surface')
 
   ctx.effect(() => {
-    const groups = surfaceGroups({ shell: installShell, conversation: installConversation })
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation }, {
+      onError: (_group, error) => actions.reportError(new Error(t('Bot mode could not be set up here: {error}', { error: error?.message ?? String(error) })), 'surface'),
+    })
     const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()))
     reconcile()
     const unsub = surface.subscribe(reconcile)

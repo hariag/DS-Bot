@@ -92,6 +92,7 @@ const ZH = {
   'Repositories, issues, and pull requests': '仓库、issue 和 PR',
   'Connecting…': '正在连接…',
   'Could not connect: {error}': '连接失败：{error}',
+  'Bot mode could not be set up here: {error}': '这里无法启用 Bot 模式：{error}',
   'Connected as {account}': '已连接：{account}',
   Connected: '已连接',
   Disconnect: '断开',

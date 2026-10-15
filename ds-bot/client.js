@@ -128,6 +128,7 @@ var ZH = {
   "Repositories, issues, and pull requests": "仓库、issue 和 PR",
   "Connecting…": "正在连接…",
   "Could not connect: {error}": "连接失败：{error}",
+  "Bot mode could not be set up here: {error}": "这里无法启用 Bot 模式：{error}",
   "Connected as {account}": "已连接：{account}",
   Connected: "已连接",
   Disconnect: "断开",
@@ -13160,7 +13161,7 @@ function disposeAll(disposers, label) {
     }
   }
 }
-function surfaceGroups(install) {
+function surfaceGroups(install, { onError } = {}) {
   const mounted = { shell: [], conversation: [] };
   const withdraw = (group) => {
     const disposers = mounted[group];
@@ -13172,10 +13173,15 @@ function surfaceGroups(install) {
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue;
+        const disposers = [];
         try {
-          mounted[group] = install[group]();
+          for (const step of install[group]()) if (step) disposers.push(step());
+          mounted[group] = disposers;
         } catch (error) {
+          disposeAll(disposers, `roll back ${group}`);
           console.warn(`[ds-bot] install ${group}`, error);
+          onError?.(group, error);
+          break;
         }
       }
     },
@@ -13183,6 +13189,11 @@ function surfaceGroups(install) {
       for (const group of [...GROUPS].reverse()) withdraw(group);
     }
   };
+}
+function freePriority(entries2, { priority, key, id }) {
+  if (priority === void 0) return void 0;
+  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
+  return Math.min(priority, ...taken);
 }
 function readMode(storage = globalThis.localStorage) {
   try {
@@ -14082,7 +14093,12 @@ function apply(ctx) {
       }
     } };
   };
-  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component));
+  const BOT_PRIORITY = -100;
+  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
+    name,
+    ...options,
+    ...options.priority === void 0 ? {} : { priority: freePriority(ctx.slots.entries(name), options) }
+  }, component));
   let atMenu = null;
   const installAtMenu = () => {
     const fiber = ctx.inject(["inputTriggers"], (scope) => {
@@ -14110,65 +14126,65 @@ function apply(ctx) {
     controller.toggleSource(CHATS_SOURCE, { trigger: "@", query: "", quoted: false, position: "inline", span });
   };
   const installShell = () => [
-    installCompiledStyles(SHELL_CSS, "shell"),
-    installCompiledStyles(SIDEBAR_CSS, "sidebar"),
-    installCompiledStyles(SECRET_CSS, "secrets"),
-    installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, "models"),
-    installCompiledStyles(USAGE_CSS, "usage"),
-    installCompiledStyles(SCHEDULE_CSS, "schedules"),
-    installCompiledStyles(FEEDBACK_CSS, "feedback"),
-    installCompiledStyles(ABOUT_CSS, "about"),
-    installCompiledStyles(MEMBER_CSS, "members"),
-    installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
-    browsers ? installCompiledStyles(BROWSER_CSS, "browser") : null,
-    installTheme(),
-    shadow("sidebar.workspaces", { priority: -10, inject: face }, TeamSidebar),
-    shadow("sidebar.brand.mark", { priority: -10 }, BrandMark),
-    shadow("sidebar.brand.name", { priority: -10 }, BrandName),
-    shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
-    shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
-    shadow("settings.trigger", { priority: -10 }, YouAvatar),
-    // At priority -10 the whale wins the seat over a shell account plugin's own
-    // launcher (the Desktop's "··· More"), which comes back in Agent mode.
-    shadow("settings.launcher", { priority: -10, inject: face }, AccountLauncher),
-    shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
-    shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
-    shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
+    () => installCompiledStyles(SHELL_CSS, "shell"),
+    () => installCompiledStyles(SIDEBAR_CSS, "sidebar"),
+    () => installCompiledStyles(SECRET_CSS, "secrets"),
+    () => installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, "models"),
+    () => installCompiledStyles(USAGE_CSS, "usage"),
+    () => installCompiledStyles(SCHEDULE_CSS, "schedules"),
+    () => installCompiledStyles(FEEDBACK_CSS, "feedback"),
+    () => installCompiledStyles(ABOUT_CSS, "about"),
+    () => installCompiledStyles(MEMBER_CSS, "members"),
+    () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
+    browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
+    () => installTheme(),
+    () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
+    () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
+    () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
+    () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
+    () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
+    () => shadow("settings.trigger", { priority: BOT_PRIORITY }, YouAvatar),
+    // The whale wins the seat over a shell account plugin's own launcher (the
+    // Desktop's "··· More"), which comes back in Agent mode.
+    () => shadow("settings.launcher", { priority: BOT_PRIORITY, inject: face }, AccountLauncher),
+    () => shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
+    () => shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
+    () => shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
   ];
   const installConversation = () => [
-    installCompiledStyles(CONVERSATION_CSS, "conversation"),
-    installMentions(),
-    installAtMenu(),
-    shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
-    shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
-    shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
-    shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
-    shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
+    () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
+    () => installMentions(),
+    () => installAtMenu(),
+    () => shadow("conversation.session.header", { priority: BOT_PRIORITY, inject: face }, HeaderPill),
+    () => shadow("conversation.chat.node", { key: "assistant-step", priority: BOT_PRIORITY, locale: "chat", inject: assistantFace }, AssistantCell),
+    () => shadow("conversation.chat.node", { key: "turn-trigger", priority: BOT_PRIORITY, locale: "chat", inject: face }, TriggerCell),
+    () => shadow("conversation.chat.node", { key: "tool-call", priority: BOT_PRIORITY, locale: "chat", inject: face }, ToolCell),
+    () => shadow("conversation.chat.node", { key: "turn-process", priority: BOT_PRIORITY, locale: "chat", inject: face }, TurnProcessCell),
     // DSH's own turn tail stays, so what other plugins add there shows, such as the
     // cards of the files a turn delivered; its copy and branch row is hidden.
-    shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
+    () => shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
-    shadow("conversation.chat.node", { key: "question-reply", priority: -10, locale: "chat" }, AnsweredCell),
-    shadow("conversation.chat.node", { key: "compaction", priority: -10, locale: "chat" }, Nothing),
-    ...canDrawUserMessages() ? ["user", "steering"].map((key) => shadow("conversation.chat.node", { key, priority: -10, locale: "chat", inject: face }, UserMessageCell)) : [],
-    shadow("conversation.input.permission", { priority: -10 }, Nothing),
-    shadow("conversation.input.plan", { priority: -10 }, Nothing),
+    () => shadow("conversation.chat.node", { key: "question-reply", priority: BOT_PRIORITY, locale: "chat" }, AnsweredCell),
+    () => shadow("conversation.chat.node", { key: "compaction", priority: BOT_PRIORITY, locale: "chat" }, Nothing),
+    ...canDrawUserMessages() ? ["user", "steering"].map((key) => () => shadow("conversation.chat.node", { key, priority: BOT_PRIORITY, locale: "chat", inject: face }, UserMessageCell)) : [],
+    () => shadow("conversation.input.permission", { priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.input.plan", { priority: BOT_PRIORITY }, Nothing),
     // The composer carries no model picker or run statistics; a Bot's model lives
     // in its details panel.
-    shadow("conversation.input.model", { priority: -10 }, Nothing),
-    shadow("conversation.composer.dock", { id: "activity", order: 0, priority: -10 }, Nothing),
-    shadow("conversation.composer.dock", { id: "usage", order: 1, priority: -10 }, Nothing),
-    shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
-    shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
-    shadow("conversation.composer", {
-      priority: -10,
+    () => shadow("conversation.input.model", { priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.composer.dock", { id: "activity", order: 0, priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.composer.dock", { id: "usage", order: 1, priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
+    () => shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
+    () => shadow("conversation.composer", {
+      priority: BOT_PRIORITY,
       select: (owner) => owner.pendingInteraction?.kind === "question" ? owner.pendingInteraction : null
     }, QuestionCard),
-    shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
-    shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
-    shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
-    shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
+    () => shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
+    () => shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
+    () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
+    () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
   ];
   ctx.effect(() => {
     const style = installStyles(RETURN_CSS, "return");
@@ -14221,7 +14237,9 @@ function apply(ctx) {
     };
   }, "ds-bot: agent surface");
   ctx.effect(() => {
-    const groups = surfaceGroups({ shell: installShell, conversation: installConversation });
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation }, {
+      onError: (_group, error) => actions.reportError(new Error(t("Bot mode could not be set up here: {error}", { error: error?.message ?? String(error) })), "surface")
+    });
     const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
     reconcile();
     const unsub = surface.subscribe(reconcile);
