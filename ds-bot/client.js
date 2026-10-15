@@ -50,7 +50,6 @@ var ZH = {
   Search: "搜索",
   "New chat": "新对话",
   "New…": "新建",
-  "Collapse sidebar": "收起侧边栏",
   "Animation": "动画",
   "Bot animation": "Bot 动画",
   "Quiet": "安静",
@@ -129,7 +128,6 @@ var ZH = {
   "Repositories, issues, and pull requests": "仓库、issue 和 PR",
   "Connecting…": "正在连接…",
   "Could not connect: {error}": "连接失败：{error}",
-  "Bot mode could not be set up here: {error}": "这里无法启用 Bot 模式：{error}",
   "Connected as {account}": "已连接：{account}",
   Connected: "已连接",
   Disconnect: "断开",
@@ -505,7 +503,6 @@ var ZH = {
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
-  "{name} finished its work": "{name} 做完了",
   "{name} was cut off by a restart and picked its work back up": "{name} 的工作被重启打断，已经接着做",
   "{name} was cut off by a restart again and stopped": "{name} 的工作又被重启打断，已停下",
   "Picked up its work after a restart": "重启后接着做之前的工作",
@@ -638,8 +635,6 @@ var ZH = {
   "Updating memory": "正在更新记忆",
   "Checking memory": "正在查看记忆",
   "Memory updated": "记忆已更新",
-  "Show or hide the right sidebar": "显示或隐藏右侧栏",
-  "Right sidebar": "右侧栏",
   "Team memory updated": "团队记忆已更新",
   "Updated {name}'s memory": "已更新 {name} 的记忆",
   "Memory updated. Open {name}'s memory": "记忆已更新，打开 {name} 的记忆",
@@ -815,7 +810,6 @@ var ZH = {
   "The model took too long to answer": "模型响应超时",
   "Could not reach the model service": "连不上模型服务",
   "Its group conversation could not open": "它的群聊会话打不开",
-  "Its group conversation could not open, so it starts a new one next time": "它的群聊会话打不开，下次会换一个新的",
   // The composer's +
   "Add files": "添加文件",
   "Reference a chat": "引用对话",
@@ -903,7 +897,6 @@ var HOST_ERRORS = [
   [/^A Bot named (.+) already exists$/, "已经有叫 $1 的 Bot 了"],
   [/^Name (.*) is not available$/, "名字 $1 不可用"],
   [/^"(.+)" calls everyone in a group, so it cannot be a Bot name$/, "「$1」在群里表示所有人，不能用作 Bot 名字"],
-  [/^"(.+)" stands for the user in a chat, so it cannot be a Bot name$/, "「$1」在对话里表示用户本人，不能用作 Bot 名字"],
   [/^Another group chat is already called "(.+)"$/, "已经有叫「$1」的群聊了"],
   [/^A group chat holds at most (\d+) Bots$/, "一个群聊最多 $1 个 Bot"],
   [/^Reply mode must be one of (.+)$/, "回复模式只能是 $1"],
@@ -1048,8 +1041,7 @@ var FAILURES = {
   SERVER: "The model service failed",
   TIMEOUT: "The model took too long to answer",
   TRANSPORT: "Could not reach the model service",
-  SESSION: "Its group conversation could not open",
-  SESSION_RESET: "Its group conversation could not open, so it starts a new one next time"
+  SESSION: "Its group conversation could not open"
 };
 function failureLabel(code, message) {
   if (FAILURES[code]) return t(FAILURES[code]);
@@ -1412,8 +1404,6 @@ var allThemes = () => ({ ...THEMES, ...customThemes });
 
 // src/shared/mentions.js
 var ALL_WORDS = ["all", "everyone", "所有人", "全体"];
-var USER_NAMES = ["user", "you"];
-var speakerOf = (line) => line.botId !== void 0 && USER_NAMES.includes(String(line.who ?? "").trim().toLowerCase()) ? `Bot "${line.who}"` : line.who;
 var NAME_GOES_ON = /^(?:[a-z0-9_\-/\\]|\.[a-z0-9_-])/i;
 var ADDRESS_BEFORE = /[a-z0-9_./]/i;
 var LITERAL = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g;
@@ -1424,7 +1414,6 @@ function nameProblem(name) {
   if (text === "") return "A Bot needs a name";
   if (/[@`\r\n]/.test(text)) return "A Bot name cannot contain @, ` or a line break";
   if (ALL_WORDS.includes(text.toLowerCase())) return `"${text}" calls everyone in a group, so it cannot be a Bot name`;
-  if (USER_NAMES.includes(text.toLowerCase())) return `"${text}" stands for the user in a chat, so it cannot be a Bot name`;
   return void 0;
 }
 function referenceSpans(text, labels = []) {
@@ -1971,7 +1960,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-row-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-tag{flex:none;max-width:96px;font-size:12px;line-height:16px;font-weight:400;padding:1px 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-row-preview{font-size:13px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bt-unread{width:8px;height:8px;border-radius:50%;background:var(--bt-accent);flex:none;margin-right:2px;animation:bt-fade .13s cubic-bezier(.22,1,.36,1)}
+.bt-unread{width:8px;height:8px;border-radius:50%;background:#1084fe;flex:none;margin-right:2px;animation:bt-fade .13s cubic-bezier(.22,1,.36,1)}
 .bt-unread-wait{background:var(--bt-star)}
 .bt-rail{align-items:center;padding:0 0 8px}
 .bt-rail .bt-row{justify-content:center;padding:6px 0;min-height:44px}
@@ -1988,8 +1977,6 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-head{position:relative;display:flex;justify-content:center;align-items:center;height:40px;flex:none;pointer-events:none}
 .bt-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;height:40px;padding:7.5px 13.5px 7.5px 7.5px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;max-width:70%;box-sizing:border-box;transition:background-color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
 .bt-pill:hover{background:color-mix(in srgb,var(--bt-main),#777 9%)}
-.bt-head-side{position:absolute;right:12px;top:4px;width:32px;height:32px;border-radius:8px;pointer-events:auto;transition:background-color .12s ease}
-.bt-head-side:hover{background:color-mix(in srgb,var(--bt-main),#777 12%);color:var(--bt-ink)}
 .bt-pill:active{transform:scale(.965)}
 .bt-pill-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .bt-pill-mem{flex:none;display:inline-flex;width:0;margin-left:-8px;overflow:hidden;transition:${spring(SPRING_SHAPE, "width", "margin-left")}}
@@ -2267,13 +2254,14 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-settings-layer{position:fixed;inset:var(--dsh-frame-chrome-top,0px) 0 0;z-index:60;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 .bt-scrim{position:absolute;inset:0;background:rgba(0,0,0,.32);animation:bt-fade .22s ease-out}
 body[data-ds-dark-theme] .bt-scrim{background:rgba(0,0,0,.5)}
-.bt-settings{--bt-set-w:min(1100px,calc(100vw - 48px));--bt-set-h:min(780px,calc(100vh - 2*max(32px,var(--dsh-frame-overlay-top,32px))));position:relative;width:var(--bt-set-w);height:var(--bt-set-h);background:var(--bt-main);border-radius:16px;border:.5px solid var(--bt-line-2);box-shadow:0 24px 80px rgba(0,0,0,.24);display:flex;overflow:hidden;color:var(--bt-ink);animation:bt-dialog-rise ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
+.bt-settings{--bt-set-w:min(800px,calc(100vw - 48px));--bt-set-h:min(620px,calc(100vh - 2*max(32px,var(--dsh-frame-overlay-top,32px))));position:relative;width:var(--bt-set-w);height:var(--bt-set-h);background:var(--bt-main);border-radius:16px;border:.5px solid var(--bt-line-2);box-shadow:0 24px 80px rgba(0,0,0,.24);display:flex;overflow:hidden;color:var(--bt-ink);transition:${spring(SPRING_SHAPE, "width", "height")};animation:bt-dialog-rise ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
+.bt-settings[data-wide]{--bt-set-w:min(1100px,calc(100vw - 48px));--bt-set-h:min(780px,calc(100vh - 2*max(32px,var(--dsh-frame-overlay-top,32px))))}
 :is(.bt-settings-layer,.bt-mem-layer)[data-leaving]{pointer-events:none}
 :is(.bt-settings-layer,.bt-mem-layer)[data-leaving] .bt-scrim{opacity:0;transition:opacity .16s ease-in}
 :is(.bt-settings-layer,.bt-mem-layer)[data-leaving]>[role=dialog]{animation:bt-dialog-sink .16s cubic-bezier(.4,0,1,1) forwards}
 @keyframes bt-dialog-rise{from{transform:translateY(12px) scale(.96)}}
 @keyframes bt-dialog-sink{to{opacity:0;transform:translateY(6px) scale(.975);filter:blur(3px)}}
-@media (prefers-reduced-motion:reduce){.bt-settings,.bt-scrim,.bt-settings-page>*{animation:bt-fade .12s ease-out!important}}
+@media (prefers-reduced-motion:reduce){.bt-settings{transition:none}.bt-settings,.bt-scrim,.bt-settings-page>*{animation:bt-fade .12s ease-out!important}}
 .bt-settings-nav{position:relative;width:198px;flex:none;padding:16px 8px;border-right:.5px solid var(--bt-line);display:flex;flex-direction:column;gap:2px;background:var(--bt-sidebar);box-sizing:border-box}
 .bt-settings-item{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:6px 8px;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;line-height:20px;cursor:pointer;text-align:left;transition:background-color .12s ease,color .12s ease}
 .bt-settings-item:hover{color:var(--bt-ink);background:var(--bt-hover)}
@@ -2281,9 +2269,11 @@ body[data-ds-dark-theme] .bt-scrim{background:rgba(0,0,0,.5)}
 .bt-settings-nav>.bt-thumb{left:8px;right:8px;border-radius:8px;background:var(--bt-active)}
 .bt-settings-nav[data-glide] .bt-settings-item[aria-current=page]{background:transparent}
 .bt-settings-shell{margin-top:auto}
-/* Usage while another page is open: out of the flow, so it keeps its layout, and not
-   rendered. */
-.bt-settings-usage[data-off]{position:absolute;top:0;left:198px;width:calc(var(--bt-set-w) - 198px);height:100%;box-sizing:border-box;content-visibility:hidden;pointer-events:none}
+/* Usage while another page is open: out of the flow at Usage's own width, so it keeps
+   its layout, and not rendered. */
+.bt-settings-usage[data-off]{position:absolute;top:0;left:198px;width:calc(min(1100px,calc(100vw - 48px)) - 198px);height:100%;box-sizing:border-box;content-visibility:hidden;pointer-events:none}
+/* The page column takes the dialog's final size at once, so while the dialog resizes
+   only its edge moves and the page does not lay out again every frame. */
 .bt-settings-main{flex:none;display:flex;flex-direction:column;min-width:0;width:calc(var(--bt-set-w) - 198px);height:var(--bt-set-h)}
 .bt-settings-head{display:flex;align-items:center;gap:6px;padding:16px 56px 4px 20px}
 .bt-settings-head h2{margin:0;font-size:15px;line-height:24px;font-weight:600;animation:bt-veil-in .2s ease-out}
@@ -2337,16 +2327,15 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 
 /* Shell chrome reshaped for the team view. Selectors use stable data attributes where the
    shell offers them and CSS-module name suffixes elsewhere. */
-[class*="_newSession"],nav[class*="_panelList"],[class*="_logoRow"]>[class*="_brand"],[class*="_logoRow"]:not(:has([class*="_toggle"])){display:none!important}
-/* The shell's sidebar switch stays where the shell puts it whenever the sidebar is
-   collapsed: on the rail, or fixed in a Windows title bar, where it also stays while
-   the sidebar is open. Elsewhere an open sidebar uses the team's own top row. */
-html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
-html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
-html[data-windows-titlebar] .bt-side-collapse,html[data-platform=darwin] .bt-side-collapse{display:none}
-[class*="_footArea"]{flex-direction:row-reverse;align-items:center;gap:9px;padding:8px 6px 6px!important}
-[class*="_footArea"]>[class*="_footerActions"]{flex:1 1 auto;min-width:0}
-[class*="_footArea"]>[class*="_settingsArea"]{flex:none;width:auto!important}
+[class*="_logoRow"],[class*="_newSession"],nav[class*="_panelList"]{display:none!important}
+/* The footer ends in the Bot row: the whale's settings seat, then Connect plugins. Every
+   other plugin's entry takes a whole row above it, in the shell's order, so none of them
+   squeezes the Bot row. */
+[class*="_footArea"]{display:grid!important;grid-template-columns:auto minmax(0,1fr);grid-auto-flow:row dense;align-items:center;gap:4px 9px;padding:8px 6px 6px!important}
+[class*="_footArea"]>[class*="_footerActions"],[class*="_footArea"]>[class*="_footerActions"]>div{display:contents!important}
+[class*="_footArea"]>[class*="_footerActions"]>div>*{grid-column:1/-1}
+[class*="_footArea"]>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2;order:1}
+[class*="_footArea"]>[class*="_settingsArea"]{grid-column:1;order:1;width:auto!important}
 [class*="_footArea"] button[aria-label="Settings"]{width:auto!important;padding:0!important;background:none!important;border-radius:50%!important;height:auto!important}
 ${SKIN_FOOT}{display:flex!important;flex-direction:row!important;align-items:center!important;gap:9px!important}
 ${SKIN_FOOT}>div:has(> [data-slot="sidebar.footer.action"]){display:flex!important;align-items:center!important;flex:1 1 auto!important;min-width:0!important}
@@ -2789,7 +2778,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 [class*="_toBottomSlot"]>button::before{content:"";width:20px;height:20px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 4v12M5 11l5 5 5-5'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 4v12M5 11l5 5 5-5'/%3E%3C/svg%3E") center/contain no-repeat}
 @keyframes bt-tobottom-in{from{translate:0 8px;scale:.8}}
 [data-bt-news] [class*="_toBottomSlot"]>button{visibility:hidden!important;pointer-events:none!important}
-.bt-news{position:fixed;z-index:30;transform:translateX(-50%);display:inline-flex;align-items:center;overflow:hidden;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink);box-shadow:inset 0 0 0 1px rgba(20,20,20,.05),0 1px 3px 0 rgba(0,0,0,.12);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:bt-news-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out}
+.bt-news{position:fixed;z-index:30;transform:translateX(-50%);display:inline-flex;align-items:center;overflow:hidden;border-radius:999px;background:#0c64c1;color:#fcfcfc;box-shadow:inset 0 0 0 1px rgba(20,20,20,.05),0 1px 3px 0 rgba(0,0,0,.12);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:bt-news-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out}
 @keyframes bt-news-in{from{translate:0 8px;scale:.9}}
 .bt-news[data-direction=up]{animation-name:bt-news-in-up,bt-veil-in}
 @keyframes bt-news-in-up{from{translate:0 -8px;scale:.9}}
@@ -2800,8 +2789,8 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-news-x svg{width:12px;height:12px}
 .bt-news-x:hover{opacity:1;background:rgba(20,20,20,.5)}
 @media (prefers-reduced-motion:reduce){.bt-news,[class*="_toBottomSlot"]>button{animation:none}}
-.bt-new-sep{display:flex;align-items:center;gap:8px;margin:14px 0 8px;padding:2px 0;font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;text-transform:uppercase;color:var(--bt-accent);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
-.bt-new-sep::before,.bt-new-sep::after{content:"";flex:1;height:1px;background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
+.bt-new-sep{display:flex;align-items:center;gap:8px;margin:14px 0 8px;padding:2px 0;font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;text-transform:uppercase;color:#0c64c1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.bt-new-sep::before,.bt-new-sep::after{content:"";flex:1;height:1px;background:color-mix(in srgb,#0c64c1 20%,transparent)}
 .bt-open-new{display:flex;flex-direction:column}
 .bt-open-new .bt-new-sep{margin:18px 0 0}
 .bt-open-new .bt-time-sep{height:16px;margin:32px 0 2px}
@@ -3058,14 +3047,6 @@ function PlusIcon() {
 function SearchIcon() {
   return (0, import_react3.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", "aria-hidden": true }, (0, import_react3.createElement)("circle", { cx: 8.5, cy: 8.5, r: 5.5, stroke: "currentColor", strokeWidth: 1.6, fill: "none" }), (0, import_react3.createElement)("path", { d: "M13 13l4 4", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" }));
 }
-function SidebarIcon() {
-  return (0, import_react3.createElement)(
-    "svg",
-    { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true },
-    (0, import_react3.createElement)("rect", { x: 3, y: 4, width: 14, height: 12, rx: 2.5 }),
-    (0, import_react3.createElement)("path", { d: "M8 4v12" })
-  );
-}
 function PeopleIcon() {
   return (0, import_react3.createElement)(
     "svg",
@@ -3158,7 +3139,6 @@ var TrashIcon = lineIcon(["M3.5 5.5h13", "M8 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1
 var DuplicateIcon = lineIcon(["M7 7h8.5v9.5H7z", "M4.5 13V3.5H13", "M11.25 9.5v4.5M9 11.75h4.5"]);
 var SlidersIcon = lineIcon(["M4 6.5h5M12.5 6.5H16M4 13.5h4M11.5 13.5H16", "M10.5 4.5v4M9.5 11.5v4"]);
 var MemoryIcon = lineIcon(["M5.5 3.5h8A1.5 1.5 0 0 1 15 5v10a1.5 1.5 0 0 1-1.5 1.5h-8z", "M5.5 3.5v13", "M8.5 7.5h3.5M8.5 10.5h2.5", "M12 3.5v4l1-.8 1 .8"]);
-var SidePanelIcon = lineIcon(["M4.5 4h11A1.5 1.5 0 0 1 17 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14.5v-9A1.5 1.5 0 0 1 4.5 4z", "M12.5 4v12"]);
 var FolderIcon = lineIcon(["M3 6A1.5 1.5 0 0 1 4.5 4.5h3.2l1.8 2h6A1.5 1.5 0 0 1 17 8v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14.5z"]);
 var ChatsIcon = lineIcon(["M3.5 5.5A1.5 1.5 0 0 1 5 4h7a1.5 1.5 0 0 1 1.5 1.5V10A1.5 1.5 0 0 1 12 11.5H8L5 14v-2.5A1.5 1.5 0 0 1 3.5 10z", "M13.5 7.5H15A1.5 1.5 0 0 1 16.5 9v4.5A1.5 1.5 0 0 1 15 15v2l-2.5-2h-3A1.5 1.5 0 0 1 8 13.5V13"]);
 var SETTINGS_ICONS = { general: GearIcon, bots: PeopleIcon, groups: ChatsIcon, usage: GaugeIcon };
@@ -4196,7 +4176,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.role === "kickoff" || source.role === "room") return null;
       if (source.role === "secret" || deferred) return null;
       if (source.role === "post") {
-        if (source.failed !== void 0 || source.resumed === true || source.stopped === true || source.done === true) return null;
+        if (source.failed !== void 0 || source.resumed === true || source.stopped === true) return null;
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
         return (0, import_react6.createElement)(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room: room2, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi });
@@ -4475,9 +4455,6 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === "stopped") {
         return (0, import_react6.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("You stopped {name}'s work", { name: bot.name }));
-      }
-      if (reply.kind === "done") {
-        return (0, import_react6.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} finished its work", { name: bot.name }));
       }
       return (0, import_react6.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi });
     }),
@@ -5115,8 +5092,7 @@ function TeamSidebar(props) {
       (0, import_react8.createElement)("span", { className: "bt-brand" }, (0, import_react8.createElement)(BrandMark, { size: 22 }), (0, import_react8.createElement)(BrandName)),
       (0, import_react8.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
       (0, import_react8.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react8.createElement)(SearchIcon)),
-      (0, import_react8.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon)),
-      (0, import_react8.createElement)("button", { type: "button", className: "bt-round bt-side-collapse", "aria-label": t("Collapse sidebar"), title: t("Collapse sidebar"), onClick: () => actions.toggleSidebar() }, (0, import_react8.createElement)(SidebarIcon))
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react8.createElement)(PlusIcon))
     ) : (0, import_react8.createElement)(
       import_react8.Fragment,
       null,
@@ -5502,11 +5478,10 @@ var SIDEBAR_CSS = `
 .bt-rail .bt-row{position:relative}
 .bt-rail .bt-pin{position:absolute;top:3px;left:calc(50% + 12px)}
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
-[class*="_footArea"]:has(.bt-foot-account){flex-direction:row!important;align-items:center;gap:6px}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"],[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div{display:contents!important}
-.bt-foot-account{order:-1;flex:none;display:inline-flex}
-[class*="_footArea"]:has(.bt-foot-account) .bt-connect-foot{order:0;flex:1 1 auto;min-width:0;width:auto}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{order:1;flex:none}
+[class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
+[class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
 /* The update cloud springs in when a newer DS Bot shows up; its arrow drops in a
@@ -5650,9 +5625,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     ),
     (0, import_react9.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
     (0, import_react9.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    (0, import_react9.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
-    // DSH's way into its right sidebar sits in the session header this pill replaces.
-    actions.hasRightSidebar?.() ? (0, import_react9.createElement)("button", { type: "button", className: "bt-icon-btn bt-head-side", "data-bt-right-sidebar": "", "aria-label": t("Show or hide the right sidebar"), title: t("Right sidebar"), onClick: () => actions.toggleRightSidebar() }, (0, import_react9.createElement)(SidePanelIcon)) : null
+    (0, import_react9.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions })
   );
 }
 function useTranscriptView() {
@@ -9908,9 +9881,12 @@ function UsagePage({ roster, actions, focusId }) {
   (0, import_react25.useEffect)(() => {
     let stopped = false;
     let timer;
+    const resized = Promise.all((document.querySelector(".bt-settings")?.getAnimations() ?? []).filter((animation) => animation.transitionProperty === "width" || animation.transitionProperty === "height").map((animation) => animation.finished.catch(() => {
+    })));
     const load = async () => {
       try {
         const value = await actions.usage();
+        await resized;
         if (stopped) return;
         (0, import_react25.startTransition)(() => setView(value));
         setError("");
@@ -10386,21 +10362,6 @@ function entrySummary(entry) {
   return entry.text;
 }
 var SOURCES = { turn: "Model call", host: "DS Bot", api: "DS Bot", browser: "This window" };
-function issueWindow() {
-  if (window.dshDesktop !== void 0) return { go: (url) => {
-    window.open(url, "_blank");
-    return true;
-  } };
-  const reserved = window.open("", "_blank");
-  if (reserved !== null) reserved.opener = null;
-  return {
-    go: (url) => {
-      if (reserved === null) return false;
-      reserved.location.href = url;
-      return true;
-    }
-  };
-}
 function FeedbackPage({ actions, run, Section, Row: Row3 }) {
   const [what, setWhat] = (0, import_react27.useState)("");
   const [report, setReport] = (0, import_react27.useState)(null);
@@ -10421,11 +10382,13 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
   }));
   const [issueLink, setIssueLink] = (0, import_react27.useState)(null);
   const openIssue = () => {
-    const target = issueWindow();
+    const win = window.open("", "_blank");
+    if (win !== null) win.opener = null;
     run(fetchReport().then(async (next) => {
       const copied = await copy(next.markdown);
       const { url, inline } = issueUrl(next.issuesUrl, { what, diagnostics: next.markdown });
-      if (target.go(url)) {
+      if (win !== null) {
+        win.location.href = url;
         setIssueLink(null);
         setNote(inline ? t("Opened a new GitHub issue with the diagnostics filled in. Check it before you submit.") : copied ? t("Opened a new GitHub issue. The diagnostics are long, so they are on the clipboard: paste them into the issue.") : t("Opened a new GitHub issue. Copy the diagnostics below into it."));
       } else {
@@ -10927,7 +10890,7 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false 
     (0, import_react29.createElement)("div", { className: "bt-scrim", onMouseDown: close }),
     (0, import_react29.createElement)(
       "div",
-      { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("DS Bot settings") },
+      { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("DS Bot settings"), "data-wide": shown === "usage" ? "" : void 0 },
       (0, import_react29.createElement)(
         "nav",
         { ref: nav.box, className: "bt-settings-nav", "aria-label": t("Settings pages") },
@@ -13207,7 +13170,7 @@ function disposeAll(disposers, label) {
     }
   }
 }
-function surfaceGroups(install, { onError } = {}) {
+function surfaceGroups(install) {
   const mounted = { shell: [], conversation: [] };
   const withdraw = (group) => {
     const disposers = mounted[group];
@@ -13219,15 +13182,10 @@ function surfaceGroups(install, { onError } = {}) {
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue;
-        const disposers = [];
         try {
-          for (const step of install[group]()) if (step) disposers.push(step());
-          mounted[group] = disposers;
+          mounted[group] = install[group]();
         } catch (error) {
-          disposeAll(disposers, `roll back ${group}`);
           console.warn(`[ds-bot] install ${group}`, error);
-          onError?.(group, error);
-          break;
         }
       }
     },
@@ -13235,11 +13193,6 @@ function surfaceGroups(install, { onError } = {}) {
       for (const group of [...GROUPS].reverse()) withdraw(group);
     }
   };
-}
-function freePriority(entries2, { priority, key, id }) {
-  if (priority === void 0) return void 0;
-  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
-  return Math.min(priority, ...taken);
 }
 function readMode(storage = globalThis.localStorage) {
   try {
@@ -13816,9 +13769,6 @@ function apply(ctx) {
     selectPanel: (id) => {
       ctx.layout.selectPanel(id);
     },
-    toggleSidebar: () => {
-      ctx.layout.toggleSidebar();
-    },
     openNewChat: (mode) => {
       ui2.set((state) => ({ ...state, newChat: mode, menu: null, palette: null }));
     },
@@ -13995,15 +13945,6 @@ function apply(ctx) {
     diagnostics: (payload) => call("diagnostics", payload),
     diagnosticsLog: () => call("diagnostics-log"),
     diagnosticsClear: () => call("diagnostics-clear"),
-    // DSH's right sidebar (files, terminals), which a plugin may load after this one.
-    hasRightSidebar: () => ctx.get("sidebarRight") !== void 0,
-    toggleRightSidebar: () => {
-      try {
-        ctx.get("sidebarRight")?.toggleExpanded();
-      } catch (error) {
-        actions.reportError(error, "right-sidebar");
-      }
-    },
     // A failed action away from any form (a menu, the palette) shows as a toast.
     reportError: (error, where = "action") => {
       noteClientError(where, error);
@@ -14151,12 +14092,7 @@ function apply(ctx) {
       }
     } };
   };
-  const BOT_PRIORITY = -100;
-  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
-    name,
-    ...options,
-    ...options.priority === void 0 ? {} : { priority: freePriority(ctx.slots.entries(name), options) }
-  }, component));
+  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component));
   let atMenu = null;
   const installAtMenu = () => {
     const fiber = ctx.inject(["inputTriggers"], (scope) => {
@@ -14184,65 +14120,65 @@ function apply(ctx) {
     controller.toggleSource(CHATS_SOURCE, { trigger: "@", query: "", quoted: false, position: "inline", span });
   };
   const installShell = () => [
-    () => installCompiledStyles(SHELL_CSS, "shell"),
-    () => installCompiledStyles(SIDEBAR_CSS, "sidebar"),
-    () => installCompiledStyles(SECRET_CSS, "secrets"),
-    () => installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, "models"),
-    () => installCompiledStyles(USAGE_CSS, "usage"),
-    () => installCompiledStyles(SCHEDULE_CSS, "schedules"),
-    () => installCompiledStyles(FEEDBACK_CSS, "feedback"),
-    () => installCompiledStyles(ABOUT_CSS, "about"),
-    () => installCompiledStyles(MEMBER_CSS, "members"),
-    () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
-    browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
-    () => installTheme(),
-    () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
-    () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
-    () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
-    () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
-    () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
-    () => shadow("settings.trigger", { priority: BOT_PRIORITY }, YouAvatar),
-    // The whale wins the seat over a shell account plugin's own launcher (the
-    // Desktop's "··· More"), which comes back in Agent mode.
-    () => shadow("settings.launcher", { priority: BOT_PRIORITY, inject: face }, AccountLauncher),
-    () => shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
-    () => shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
-    () => shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
+    installCompiledStyles(SHELL_CSS, "shell"),
+    installCompiledStyles(SIDEBAR_CSS, "sidebar"),
+    installCompiledStyles(SECRET_CSS, "secrets"),
+    installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, "models"),
+    installCompiledStyles(USAGE_CSS, "usage"),
+    installCompiledStyles(SCHEDULE_CSS, "schedules"),
+    installCompiledStyles(FEEDBACK_CSS, "feedback"),
+    installCompiledStyles(ABOUT_CSS, "about"),
+    installCompiledStyles(MEMBER_CSS, "members"),
+    installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
+    browsers ? installCompiledStyles(BROWSER_CSS, "browser") : null,
+    installTheme(),
+    shadow("sidebar.workspaces", { priority: -10, inject: face }, TeamSidebar),
+    shadow("sidebar.brand.mark", { priority: -10 }, BrandMark),
+    shadow("sidebar.brand.name", { priority: -10 }, BrandName),
+    shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
+    shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
+    shadow("settings.trigger", { priority: -10 }, YouAvatar),
+    // At priority -10 the whale wins the seat over a shell account plugin's own
+    // launcher (the Desktop's "··· More"), which comes back in Agent mode.
+    shadow("settings.launcher", { priority: -10, inject: face }, AccountLauncher),
+    shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
+    shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
+    shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
   ];
   const installConversation = () => [
-    () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
-    () => installMentions(),
-    () => installAtMenu(),
-    () => shadow("conversation.session.header", { priority: BOT_PRIORITY, inject: face }, HeaderPill),
-    () => shadow("conversation.chat.node", { key: "assistant-step", priority: BOT_PRIORITY, locale: "chat", inject: assistantFace }, AssistantCell),
-    () => shadow("conversation.chat.node", { key: "turn-trigger", priority: BOT_PRIORITY, locale: "chat", inject: face }, TriggerCell),
-    () => shadow("conversation.chat.node", { key: "tool-call", priority: BOT_PRIORITY, locale: "chat", inject: face }, ToolCell),
-    () => shadow("conversation.chat.node", { key: "turn-process", priority: BOT_PRIORITY, locale: "chat", inject: face }, TurnProcessCell),
+    installCompiledStyles(CONVERSATION_CSS, "conversation"),
+    installMentions(),
+    installAtMenu(),
+    shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
+    shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
+    shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
+    shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
+    shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
     // DSH's own turn tail stays, so what other plugins add there shows, such as the
     // cards of the files a turn delivered; its copy and branch row is hidden.
-    () => shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
+    shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
-    () => shadow("conversation.chat.node", { key: "question-reply", priority: BOT_PRIORITY, locale: "chat" }, AnsweredCell),
-    () => shadow("conversation.chat.node", { key: "compaction", priority: BOT_PRIORITY, locale: "chat" }, Nothing),
-    ...canDrawUserMessages() ? ["user", "steering"].map((key) => () => shadow("conversation.chat.node", { key, priority: BOT_PRIORITY, locale: "chat", inject: face }, UserMessageCell)) : [],
-    () => shadow("conversation.input.permission", { priority: BOT_PRIORITY }, Nothing),
-    () => shadow("conversation.input.plan", { priority: BOT_PRIORITY }, Nothing),
+    shadow("conversation.chat.node", { key: "question-reply", priority: -10, locale: "chat" }, AnsweredCell),
+    shadow("conversation.chat.node", { key: "compaction", priority: -10, locale: "chat" }, Nothing),
+    ...canDrawUserMessages() ? ["user", "steering"].map((key) => shadow("conversation.chat.node", { key, priority: -10, locale: "chat", inject: face }, UserMessageCell)) : [],
+    shadow("conversation.input.permission", { priority: -10 }, Nothing),
+    shadow("conversation.input.plan", { priority: -10 }, Nothing),
     // The composer carries no model picker or run statistics; a Bot's model lives
     // in its details panel.
-    () => shadow("conversation.input.model", { priority: BOT_PRIORITY }, Nothing),
-    () => shadow("conversation.composer.dock", { id: "activity", order: 0, priority: BOT_PRIORITY }, Nothing),
-    () => shadow("conversation.composer.dock", { id: "usage", order: 1, priority: BOT_PRIORITY }, Nothing),
-    () => shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
-    () => shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
-    () => shadow("conversation.composer", {
-      priority: BOT_PRIORITY,
+    shadow("conversation.input.model", { priority: -10 }, Nothing),
+    shadow("conversation.composer.dock", { id: "activity", order: 0, priority: -10 }, Nothing),
+    shadow("conversation.composer.dock", { id: "usage", order: 1, priority: -10 }, Nothing),
+    shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
+    shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
+    shadow("conversation.composer", {
+      priority: -10,
       select: (owner) => owner.pendingInteraction?.kind === "question" ? owner.pendingInteraction : null
     }, QuestionCard),
-    () => shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
-    () => shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
-    () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
-    () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
+    shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
+    shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
+    shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
+    shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
   ];
   ctx.effect(() => {
     const style = installStyles(RETURN_CSS, "return");
@@ -14295,9 +14231,7 @@ function apply(ctx) {
     };
   }, "ds-bot: agent surface");
   ctx.effect(() => {
-    const groups = surfaceGroups({ shell: installShell, conversation: installConversation }, {
-      onError: (_group, error) => actions.reportError(new Error(t("Bot mode could not be set up here: {error}", { error: error?.message ?? String(error) })), "surface")
-    });
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation });
     const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
     reconcile();
     const unsub = surface.subscribe(reconcile);
