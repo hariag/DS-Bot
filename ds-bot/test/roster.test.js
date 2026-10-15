@@ -496,9 +496,11 @@ test('a rolled-back Bot does not come back with a save queued before the rollbac
   release()
   assert.equal((await phantom).ok, false)
   assert.equal((await kept).ok, true)
-  await settle()
-  const names = Object.values(JSON.parse(readFileSync(statePath, 'utf8')).bots).map(bot => bot.name)
-  assert.deepEqual(names.sort(), ['Chief', 'Kept', 'Warm'])
+  // The rollback queues a save after Kept's without waiting for it, and no later change may
+  // be what drops Phantom, so wait for that save itself.
+  const names = () => Object.values(JSON.parse(readFileSync(statePath, 'utf8')).bots).map(bot => bot.name).sort()
+  await until(() => !names().includes('Phantom'))
+  assert.deepEqual(names(), ['Chief', 'Kept', 'Warm'])
 })
 
 test('a write that fails at save time archives the Session it made', async (t) => {
