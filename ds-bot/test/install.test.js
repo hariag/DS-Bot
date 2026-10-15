@@ -81,6 +81,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'effect ds-bot: Bot compaction',
     'on agent/created',
     'on agent/pre-step (prepend)',
+    'on system-prompt/assemble (prepend)',
     'on agent/request-error (prepend)',
     'on agent/request-error (prepend)',
     'on agent/status',

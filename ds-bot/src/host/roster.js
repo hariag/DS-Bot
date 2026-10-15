@@ -11,8 +11,18 @@ export function install(rt) {
 
   let bootstrapping = null
 
+  // The team folder is DS Bot's own: deleted, it is made again before a Session needs it.
+  async function keepTeamFolder() {
+    const team = rt.teamFolder()
+    if (team !== undefined) await mkdir(team, { recursive: true }).catch(error => rt.warn('ds-bot: team folder %s not made again: %s', team, error))
+    return team
+  }
+
   async function ensureWorkspace() {
-    if (state.workspaceId && ctx.workspaceRegistry.get(state.workspaceId)) return state.workspaceId
+    if (state.workspaceId && ctx.workspaceRegistry.get(state.workspaceId)) {
+      await keepTeamFolder()
+      return state.workspaceId
+    }
     const path = config.workspace ?? join(home, 'workspace')
     await mkdir(path, { recursive: true })
     const workspace = await ctx.workspaceRegistry.resolveByPath(path) ?? await ctx.workspaceRegistry.create(path, 'DS Bot')
@@ -533,7 +543,7 @@ export function install(rt) {
   }
 
   Object.assign(rt, {
-    ensureWorkspace, createSession, createBot, duplicateBot, updateBot, setFlags,
+    ensureWorkspace, keepTeamFolder, createSession, createBot, duplicateBot, updateBot, setFlags,
     roomBusy, autoRoomName, retitleRoom, createRoom, updateRoom, deleteRoom,
     setMain, deleteBot, bootstrap, dropKickoff,
   })

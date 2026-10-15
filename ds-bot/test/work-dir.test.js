@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -444,29 +444,57 @@ test('a Bot the Main Bot creates runs on its creator\'s model unless one is name
   assert.equal(made('Tester').model, 'official/pro')
 })
 
-// A fresh part takes several awaits; a Bot deleted meanwhile must not leave it behind.
-test('a Bot deleted while its chat moves to a new folder leaves no fresh part behind', async (t) => {
-  const { ctx, call, agentOf, project, state, stop } = await start()
-  t.after(stop)
-  const archived = []
-  ctx.workspaceRegistry.archiveSession = async (sessionId) => { archived.push(sessionId) }
-  let release
-  const gate = new Promise(resolve => { release = resolve })
-  let made
-  const making = new Promise(resolve => { made = resolve })
-  const create = ctx.sessionController.create
-  ctx.sessionController.create = async (options) => {
-    const result = await create(options)
-    made(result.sessionId)
-    await gate
-    return result
+// #209: DSH 0.2.1 checks a Session's folder as it puts a model request together, before
+// agent/pre-step, and fails the turn when the folder and the one the Session was made in
+// are gone. Its documented way out is to change the Session's folder first.
+function folderService() {
+  const dirs = new Map()
+  const sets = []
+  return {
+    sets,
+    service: {
+      get: session => dirs.get(session.id) ?? session.header.cwd,
+      set: async (agent, path) => { sets.push([agent.id, path]); dirs.set(agent.session.id, path) },
+    },
   }
+}
+const assemble = (ctx, agent) => {
+  let passed = false
+  const run = ctx.listeners.get('system-prompt/assemble').at(-1)({ contexts: [] }, { agent, signal: AbortSignal.timeout(60_000) }, async () => { passed = true })
+  return run.then(() => passed)
+}
+
+test('a Bot whose folder is gone changes to the team folder before DSH checks it, then moves to a fresh part there', async (t) => {
+  const { sets, service } = folderService()
+  const { ctx, call, agentOf, created, project, team, state, preStep, stop } = await start({ services: { workingDirectory: service } })
+  t.after(stop)
   assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
-  const fresh = await making
-  assert.equal((await call('delete-bot', { id: 'b' })).ok, true)
-  release()
-  await until(() => archived.includes(fresh))
-  await settle()
-  assert.equal(state().bots.b, undefined)
-  assert.equal(handoffOf(agentOf(fresh)), undefined)
+  await until(() => state().bots.b.sessionId === 's1')
+  await until(() => handoffOf(agentOf('s1')) !== undefined)
+  rmSync(project, { recursive: true, force: true })
+
+  assert.equal(await assemble(ctx, agentOf('s1')), true)
+  assert.deepEqual(sets, [['s1', team]])
+  // The pre-step then moves the Bot on to a fresh part in the team workspace. DSH's notice
+  // of the change is about the old part, so it stays behind.
+  const notice = { id: 'm0', role: 'user', content: [{ type: 'text', text: 'The working directory is now the team folder.' }], source: { kind: 'working-directory' } }
+  const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Still there?' }], source: { kind: 'user' } }
+  assert.deepEqual(await preStep('s1', [notice, input]), { kind: 'reject' })
+  await until(() => state().bots.b.sessionId === 's2')
+  assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
+  await until(() => agentOf('s2').calls.length >= 2)
+  assert.deepEqual(agentOf('s2').calls.map(([kind, message]) => [kind, message.source.role ?? textOf(message)]), [['followup', 'handoff'], ['followup', 'Still there?']])
+  // A folder that is there is left as it is.
+  assert.equal(await assemble(ctx, agentOf('a')), true)
+  assert.equal(sets.length, 1)
+})
+
+test('a team folder that was deleted is made again before DSH checks it', async (t) => {
+  const { sets, service } = folderService()
+  const { ctx, agentOf, team, stop } = await start({ services: { workingDirectory: service } })
+  t.after(stop)
+  rmSync(team, { recursive: true, force: true })
+  assert.equal(await assemble(ctx, agentOf('a')), true)
+  assert.equal(existsSync(team), true)
+  assert.deepEqual(sets, [])
 })
