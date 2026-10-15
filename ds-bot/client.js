@@ -811,6 +811,7 @@ var ZH = {
   "The model took too long to answer": "模型响应超时",
   "Could not reach the model service": "连不上模型服务",
   "Its group conversation could not open": "它的群聊会话打不开",
+  "Its group conversation could not open, so it starts a new one next time": "它的群聊会话打不开，下次会换一个新的",
   // The composer's +
   "Add files": "添加文件",
   "Reference a chat": "引用对话",
@@ -1042,7 +1043,8 @@ var FAILURES = {
   SERVER: "The model service failed",
   TIMEOUT: "The model took too long to answer",
   TRANSPORT: "Could not reach the model service",
-  SESSION: "Its group conversation could not open"
+  SESSION: "Its group conversation could not open",
+  SESSION_RESET: "Its group conversation could not open, so it starts a new one next time"
 };
 function failureLabel(code, message) {
   if (FAILURES[code]) return t(FAILURES[code]);

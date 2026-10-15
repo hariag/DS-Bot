@@ -8,7 +8,7 @@ export function install(rt) {
 
   const resolveAgent = async (sessionId) => {
     const resolved = await ctx.sessionController.resolveAgent(sessionId)
-    if ('error' in resolved) throw new Error(resolved.error?.message ?? 'Session unavailable')
+    if ('error' in resolved) throw Object.assign(new Error(resolved.error?.message ?? 'Session unavailable'), { code: resolved.error?.code })
     rt.hideBotUnusedTools(resolved.agent)
     return resolved.agent
   }

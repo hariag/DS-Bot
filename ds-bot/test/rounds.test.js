@@ -347,3 +347,79 @@ test('a message sent between rounds still opens a full round', async (t) => {
   const result = JSON.parse(await running)
   assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
 })
+
+// 公开#163: a member's group Session whose stored log is corrupt could not be resumed;
+// the round counted the member as passed, showed nothing, and tried the same Session
+// again every round.
+test('a member whose group Session cannot be opened shows a failure, and its next turn there starts a new Session', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, ctx, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  const chief = (await call('state', {})).value.mainBotId
+
+  await emit(room.id, userMessage('Report in'))
+  let running = relay(room.id, 'r1')
+  const first = await turnFor(sent)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
+  const second = await turnFor(sent, first)
+  await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 2)
+  await running
+  const broken = rt.roomOf(room.id).sessions[chief]
+  assert.equal(first.sessionId, broken)
+
+  const resolve = ctx.sessionController.resolveAgent
+  ctx.sessionController.resolveAgent = async sessionId => (sessionId === broken
+    ? { error: { code: 'gateway/internal', message: `resume failed for session "${sessionId}": SessionQueryError: stored session "${sessionId}" is corrupt: released v2 row has seq gap (expected 20, got 16)` } }
+    : resolve(sessionId))
+  t.mock.method(rt, 'warn', () => {})
+  sent.length = 0
+  await emit(room.id, userMessage('Again'))
+  running = relay(room.id, 'r2')
+  const writerTurn = await turnFor(sent)
+  assert.equal(writerTurn.sessionId, second.sessionId)
+  await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Still here.', 3)
+  const result = JSON.parse(await running)
+  const failed = result.replies.filter(reply => reply.kind === 'failed')
+  assert.deepEqual(failed.map(reply => [reply.name, reply.code]), [['Chief', 'SESSION_RESET']])
+  assert.equal(result.passed.includes('Chief'), false)
+  assert.equal(rt.roomOf(room.id).sessions[chief], undefined)
+
+  sent.length = 0
+  await emit(room.id, userMessage('Once more'))
+  running = relay(room.id, 'r3')
+  const fresh = await turnFor(sent)
+  assert.notEqual(fresh.sessionId, broken)
+  assert.equal(rt.roomOf(room.id).sessions[chief], fresh.sessionId)
+  await answer(fresh.sessionId, fresh.message.source.exchangeId, 'Back.', 1)
+  const again = await turnFor(sent, fresh)
+  await answer(again.sessionId, again.message.source.exchangeId, 'Here.', 4)
+  assert.deepEqual(JSON.parse(await running).replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
+})
+
+test('a delivery that fails for another reason shows a failure and keeps the Session', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, ctx, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  const chief = (await call('state', {})).value.mainBotId
+  await emit(room.id, userMessage('Report in'))
+  let running = relay(room.id, 'r1')
+  const first = await turnFor(sent)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
+  const second = await turnFor(sent, first)
+  await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 2)
+  await running
+
+  const resolve = ctx.sessionController.resolveAgent
+  ctx.sessionController.resolveAgent = async sessionId => (sessionId === first.sessionId
+    ? { error: { code: 'session/writer-held', message: 'another process holds this Session' } }
+    : resolve(sessionId))
+  t.mock.method(rt, 'warn', () => {})
+  sent.length = 0
+  await emit(room.id, userMessage('Again'))
+  running = relay(room.id, 'r2')
+  const writerTurn = await turnFor(sent)
+  await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Still here.', 3)
+  const result = JSON.parse(await running)
+  assert.deepEqual(result.replies.filter(reply => reply.kind === 'failed').map(reply => [reply.name, reply.code]), [['Chief', 'SESSION']])
+  assert.equal(rt.roomOf(room.id).sessions[chief], first.sessionId)
+})

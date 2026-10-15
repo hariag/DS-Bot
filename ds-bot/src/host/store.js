@@ -333,6 +333,16 @@ export function install(rt) {
     // that no longer has it.
     void ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true }).catch(() => {})
   }
+  // A group Session DSH can no longer open is set aside; the member's earlier parts in
+  // the group stay, and its next turn there starts a new Session.
+  const retireGroupSession = (room, botId) => {
+    const sessionId = room.sessions?.[botId]
+    if (sessionId === undefined) return
+    delete room.sessions[botId]
+    groupOwners.delete(sessionId)
+    rt.cancelApprovals?.(sessionId)
+    void ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true }).catch(() => {})
+  }
   const findBot = (ref) => {
     if (ref === undefined) return undefined
     if (state.bots[ref]) return state.bots[ref]
@@ -352,6 +362,6 @@ export function install(rt) {
     state, load, save, refresh, readOnly,
     botOf, roomOf, isMain, chatOf, selfOf, isBotSession,
     chatOwners, groupOwners, pastOwners,
-    groupSessionsOf, dropGroupSession, findBot, findRooms, isAdminOf,
+    groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })
 }

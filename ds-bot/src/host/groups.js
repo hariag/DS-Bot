@@ -111,6 +111,10 @@ const roomKickoff = language => `The user just created this group and has not wr
 
 const ROOM_READ_MAX = 30
 
+// DSH cannot open the Session at all: it is gone, or its stored log is corrupt. DSH
+// reports a corrupt log only in the message of a generic failure.
+const lostSession = error => error?.code === 'session/not-found' || /\bis corrupt\b|\bcorrupt session log\b/i.test(String(error?.message ?? ''))
+
 export function install(rt) {
   const { ctx } = rt
 
@@ -237,7 +241,14 @@ export function install(rt) {
       else if (busy) rt.roomWaiters.get(exchangeId)?.resolve({ working: true })
     } catch (error) {
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
-      rt.roomWaiters.get(exchangeId)?.resolve(null)
+      // A delivery that failed is not a pass: the round shows it. Nothing here can
+      // repair a lost Session, so the member's next turn in the group starts a new one.
+      const lost = lostSession(error)
+      if (lost && room.sessions?.[member.id] === sessionId) {
+        rt.retireGroupSession(room, member.id)
+        void rt.save().catch(() => {})
+      }
+      rt.roomWaiters.get(exchangeId)?.fail({ code: lost ? 'SESSION_RESET' : 'SESSION', message: String(error?.message ?? error).slice(0, 300) })
     }
     const reply = await done
     // A turn that ended leaves nothing for a stop to cancel.
