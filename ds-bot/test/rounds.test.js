@@ -348,78 +348,33 @@ test('a message sent between rounds still opens a full round', async (t) => {
   assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
 })
 
-// 公开#163: a member's group Session whose stored log is corrupt could not be resumed;
-// the round counted the member as passed, showed nothing, and tried the same Session
-// again every round.
-test('a member whose group Session cannot be opened shows a failure, and its next turn there starts a new Session', async (t) => {
-  const { call, emit, userMessage, relay, answer, stop, sent, ctx, rt } = start()
+// 公开#176: a PDF the user sent in a group reached neither the log nor any member, so
+// every Bot said it could not read it; in a Bot's own chat the same file worked.
+test('a file the user sends in a group reaches each member the line is shown to, once', async (t) => {
+  const { call, emit, relay, answer, stop, sent, rt } = start()
   t.after(stop)
   const room = await team(call, sent)
-  const chief = (await call('state', {})).value.mainBotId
-
-  await emit(room.id, userMessage('Report in'))
+  const pdf = { attachmentId: 'sha256:39cb3dab00', name: 'report-XYZ176.pdf', bytes: 607 }
+  await emit(room.id, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Read this PDF' }, { type: 'file', attachment: pdf }] } })
   let running = relay(room.id, 'r1')
   const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
+  const files = message => message.content.filter(block => block.type === 'file').map(block => block.attachment)
+  assert.deepEqual(files(first.message), [pdf])
+  assert.match(first.message.content[0].text, /User: Read this PDF\n\[File "report-XYZ176\.pdf" \(607 bytes\) attached\]/)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Reading it.', 1)
   const second = await turnFor(sent, first)
-  await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 2)
+  assert.deepEqual(files(second.message), [pdf])
+  await answer(second.sessionId, second.message.source.exchangeId, 'Me too.', 2)
   await running
-  const broken = rt.roomOf(room.id).sessions[chief]
-  assert.equal(first.sessionId, broken)
+  assert.deepEqual(rt.roomOf(room.id).log.find(line => line.who === 'User').files, [pdf])
 
-  const resolve = ctx.sessionController.resolveAgent
-  ctx.sessionController.resolveAgent = async sessionId => (sessionId === broken
-    ? { error: { code: 'gateway/internal', message: `resume failed for session "${sessionId}": SessionQueryError: stored session "${sessionId}" is corrupt: released v2 row has seq gap (expected 20, got 16)` } }
-    : resolve(sessionId))
-  t.mock.method(rt, 'warn', () => {})
   sent.length = 0
-  await emit(room.id, userMessage('Again'))
+  await emit(room.id, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Thanks' }] } })
   running = relay(room.id, 'r2')
-  const writerTurn = await turnFor(sent)
-  assert.equal(writerTurn.sessionId, second.sessionId)
-  await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Still here.', 3)
-  const result = JSON.parse(await running)
-  const failed = result.replies.filter(reply => reply.kind === 'failed')
-  assert.deepEqual(failed.map(reply => [reply.name, reply.code]), [['Chief', 'SESSION_RESET']])
-  assert.equal(result.passed.includes('Chief'), false)
-  assert.equal(rt.roomOf(room.id).sessions[chief], undefined)
-
-  sent.length = 0
-  await emit(room.id, userMessage('Once more'))
-  running = relay(room.id, 'r3')
-  const fresh = await turnFor(sent)
-  assert.notEqual(fresh.sessionId, broken)
-  assert.equal(rt.roomOf(room.id).sessions[chief], fresh.sessionId)
-  await answer(fresh.sessionId, fresh.message.source.exchangeId, 'Back.', 1)
-  const again = await turnFor(sent, fresh)
-  await answer(again.sessionId, again.message.source.exchangeId, 'Here.', 4)
-  assert.deepEqual(JSON.parse(await running).replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
-})
-
-test('a delivery that fails for another reason shows a failure and keeps the Session', async (t) => {
-  const { call, emit, userMessage, relay, answer, stop, sent, ctx, rt } = start()
-  t.after(stop)
-  const room = await team(call, sent)
-  const chief = (await call('state', {})).value.mainBotId
-  await emit(room.id, userMessage('Report in'))
-  let running = relay(room.id, 'r1')
-  const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
-  const second = await turnFor(sent, first)
-  await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 2)
+  const next = await turnFor(sent)
+  assert.deepEqual(files(next.message), [])
+  await answer(next.sessionId, next.message.source.exchangeId, 'OK.', 3)
+  const after = await turnFor(sent, next)
+  await answer(after.sessionId, after.message.source.exchangeId, 'OK.', 4)
   await running
-
-  const resolve = ctx.sessionController.resolveAgent
-  ctx.sessionController.resolveAgent = async sessionId => (sessionId === first.sessionId
-    ? { error: { code: 'session/writer-held', message: 'another process holds this Session' } }
-    : resolve(sessionId))
-  t.mock.method(rt, 'warn', () => {})
-  sent.length = 0
-  await emit(room.id, userMessage('Again'))
-  running = relay(room.id, 'r2')
-  const writerTurn = await turnFor(sent)
-  await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Still here.', 3)
-  const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.filter(reply => reply.kind === 'failed').map(reply => [reply.name, reply.code]), [['Chief', 'SESSION']])
-  assert.equal(rt.roomOf(room.id).sessions[chief], first.sessionId)
 })

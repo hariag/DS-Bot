@@ -453,9 +453,10 @@ export function install(rt) {
           attachReference(roomInbox.get(id), source, textOf(event.data.content))
         } else if (source?.kind === 'user' || source?.kind === REPLY_KIND) {
           if (rt.roomOf(id) && source.kind === 'user') {
-            const images = (Array.isArray(event.data.content) ? event.data.content : [])
-              .filter(block => block?.type === 'image' && !block.offloaded).map(block => block.attachment)
-            queueRoomMessage(id, { text: textOf(event.data.content), ...(images.length > 0 ? { images } : {}) })
+            const content = Array.isArray(event.data.content) ? event.data.content : []
+            const images = content.filter(block => block?.type === 'image' && !block.offloaded).map(block => block.attachment)
+            const files = content.filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment)
+            queueRoomMessage(id, { text: textOf(event.data.content), ...(images.length > 0 ? { images } : {}), ...(files.length > 0 ? { files } : {}) })
           }
           const own = rt.chatOwners.get(id)
           if (own !== undefined) rt.dropKickoff(own)
