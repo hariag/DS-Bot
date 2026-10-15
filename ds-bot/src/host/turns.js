@@ -3,6 +3,7 @@
 //
 // Turn tracking: which turns were triggered by another Bot, and what they said.
 import { HANDOFF_ACK, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND } from './constants.js'
+import { absoluteLinks } from './links.js'
 import { textOf } from './text.js'
 import { reminderText } from './schedules.js'
 
@@ -429,7 +430,8 @@ export function install(rt) {
         const text = textOf(content)
         const called = Array.isArray(content) && content.some(block => block?.type === 'tool-call')
         if (text !== '' && text !== HANDOFF_ACK) {
-          entry.texts.push(text)
+          // What a turn says goes on to the group or the sender, read from other folders.
+          entry.texts.push(absoluteLinks(text, rt.sessionFolder?.(session)))
           if (entry.turn !== undefined) showSteps(id, entry, called ? entry.texts.length : entry.texts.length - 1)
         }
         entry.lastText = text

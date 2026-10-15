@@ -11,8 +11,7 @@ const LINK = /(!?\[[^\]\n]*\]\()(<[^<>\n]*>|[^\s()<>]+)((?:\s+"[^"\n]*")?\))/g
 const ABSOLUTE = /^(?:\/|[A-Za-z]:[\\/])/
 const SCHEME = /^[a-z][a-z\d+.-]*:/i
 
-function fileTarget(destination) {
-  destination = destination.startsWith('<') ? destination.slice(1, -1) : destination
+function relativeFile(destination) {
   const hash = destination.indexOf('#')
   const target = hash < 0 ? destination : destination.slice(0, hash)
   const fragment = hash < 0 ? '' : destination.slice(hash)
@@ -24,19 +23,8 @@ function fileTarget(destination) {
     return undefined
   }
   const control = [...path].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
-  if (control || /^[\\/]{2}/.test(path) || (!ABSOLUTE.test(path) && SCHEME.test(path))) return undefined
+  if (control || /^[\\/]{2}/.test(path) || ABSOLUTE.test(path) || SCHEME.test(path) || path.startsWith('~')) return undefined
   return { path, fragment }
-}
-
-function relativeFile(destination) {
-  const file = fileTarget(destination)
-  return file === undefined || ABSOLUTE.test(file.path) || file.path.startsWith('~') ? undefined : file
-}
-
-// File checks read the same decoded destination that the chat opens.
-export function fileLinks(text) {
-  return text.split(CODE).flatMap((part, index) => index % 2 === 1 ? [] :
-    [...part.matchAll(LINK)].map(match => fileTarget(match[2])?.path).filter(path => path !== undefined))
 }
 
 // DSH decodes the link back to the path, so `%` and what would end the link are escaped.

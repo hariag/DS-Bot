@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { COLORS, EXTRA_COLORS, MAX_HOPS, MAX_UNATTENDED_MESSAGES, MAX_UNREAD_REQUESTS, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
+import { absoluteLinks } from './links.js'
 import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
@@ -136,7 +137,8 @@ export function install(rt) {
       const toUser = args.reply_to === 'user'
       const working = rt.live.get(chat)?.turn !== undefined
       const steer = args.when !== 'queue' && !toUser
-      await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
+      const text = absoluteLinks(args.message, rt.sessionFolder?.(exec.agent?.session ?? exec.agent))
+      await rt.deliver({ fromId: sender.id, toId: target.id, text, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
       rt.unattended.sent += 1
       const sent = toUser
         ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
@@ -418,7 +420,7 @@ export function install(rt) {
       if (info?.role === 'room' && info.roomId === room.id) return `You are speaking in "${room.name}" right now. Write your message as your reply instead.`
       const hop = nextHop(exec)
       if (hop > MAX_HOPS) return CHAIN_TOO_LONG
-      const text = String(args.message ?? '').trim()
+      const text = absoluteLinks(String(args.message ?? '').trim(), rt.sessionFolder?.(exec.agent?.session ?? exec.agent))
       if (text === '') return 'Write a message to post.'
       if ((room.botRounds ?? 0) >= ROOM_BOT_ROUNDS) return `Bots already started ${ROOM_BOT_ROUNDS} rounds in "${room.name}" since the user last spoke there. Wait for the user.`
       checkUnattended()
