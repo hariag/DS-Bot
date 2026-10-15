@@ -352,12 +352,14 @@ export function install(rt) {
       admin = null
     }
     if (patch.mode !== undefined && !ROOM_MODES.includes(patch.mode)) throw new Error(`Reply mode must be one of ${ROOM_MODES.join(', ')}`)
-    const name = patch.name === undefined ? undefined : cleanRoomName(patch.name, room.id)
     const notice = patch.notice === undefined ? undefined : cleanNotice(patch.notice)
     if (patch.workDir !== undefined && byAdmin) throw new Error(`Only the user or a Main Bot can set the folder of "${room.name}"`)
     // A Bot's own permissions are the user's to set, so a group's are too.
     if (patch.permission !== undefined && actorId !== undefined) throw new Error(`Only the user can set the permissions of "${room.name}"`)
     const permission = patch.permission === undefined ? undefined : rt.cleanRoomPermission(patch.permission)
+    // The second run is the last check before the change is written, so no other change
+    // can take the name in between.
+    const name = patch.name === undefined ? undefined : cleanRoomName(patch.name, room.id)
     return { members, admin, name, notice, permission }
   }
 
