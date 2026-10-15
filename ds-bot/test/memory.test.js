@@ -119,8 +119,9 @@ const ownChat = [
 
 // The model answers each call with the next of `replies`. `history` holds the events
 // of a Session, oldest first; each own chat has one user message, at seq 10, unless
-// it says otherwise.
-function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies = [], config = {}, history = {}, reasoning = { efforts: [{ id: 'off' }, { id: 'high' }] }, models = ['v4'], defaultModel } = {}) {
+// it says otherwise. `requireSession` turns down a request without a Session, as
+// some routes do.
+function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies = [], config = {}, history = {}, reasoning = { efforts: [{ id: 'off' }, { id: 'high' }] }, models = ['v4'], defaultModel, requireSession = false } = {}) {
   if (!existsSync(join(home, 'state.json'))) writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const services = defaultModel === undefined ? {} : { agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: defaultModel }) } }
   const ctx = fakeContext({ services })
@@ -132,6 +133,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies =
       resolveModelInfo: async () => ({ reasoning }),
       async* stream(request) {
         requests.push(request)
+        if (requireSession && request.sessionId === undefined) throw new Error('400: {"type":"MissingSessionID","message":"Request is missing x-opencode-session"}')
         const reply = await replies.shift()
         if (reply instanceof Error) throw reply
         const out = typeof reply === 'object' && reply !== null ? reply : { text: reply ?? '' }
@@ -148,6 +150,7 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies =
         return { records, hasMore: records.length < all.length }
       },
     },
+    sessions: { messageProjections: [] },
     workspaceRegistry: { archiveSession: async () => {} },
   })
   let route
@@ -173,6 +176,21 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')), replies =
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+// The summary is written to disk after the model answers; a fixed wait is too short on
+// a slow disk and leaves the write running into the next step or the cleanup.
+async function summarized(call, botId = 'b2') {
+  for (let tries = 0; tries < 200; tries += 1) {
+    if ((await call('memory-view', { botId })).value.summarizing === false) return
+    await settle()
+  }
+  throw new Error('the memory summary did not finish')
+}
+
+async function until(check) {
+  for (let tries = 0; tries < 200 && !check(); tries += 1) await settle()
+  assert.ok(check(), 'the condition did not hold within 4 s')
+}
 
 test('remember saves one entry with its source, and forget removes it, both in the journal', async (t) => {
   const { tool, read, journal, stop } = start()
@@ -333,7 +351,7 @@ test('the memory panel shows every entry and a summary the Bot\'s model writes o
   const asked = (await call('memory-view', { botId: 'b2', summarize: true })).value
   assert.deepEqual(asked.entries.map(entry => [entry.scope, entry.topic, entry.text]), [['own', null, 'Likes tea']])
   assert.equal(asked.summarizing, true)
-  await settle()
+  await summarized(call)
   const done = (await call('memory-view', { botId: 'b2', summarize: true })).value
   assert.deepEqual([done.summary.text, done.fresh, done.summarizing, done.error], ['## Overview\nYou like tea.', true, false, null])
   assert.equal(requests.length, 1)
@@ -344,13 +362,13 @@ test('the memory panel shows every entry and a summary the Bot\'s model writes o
   await tool('remember', { text: 'Lives in Hangzhou' }, 'b2')
   replies.push(new Error('provider down'))
   assert.equal((await call('memory-view', { botId: 'b2', summarize: true })).value.fresh, false)
-  await settle()
+  await summarized(call)
   const failed = (await call('memory-view', { botId: 'b2', summarize: true })).value
   assert.deepEqual([failed.summary.text, failed.fresh, failed.error], ['## Overview\nYou like tea.', false, 'provider down'])
   assert.equal(requests.length, 2)
   replies.push('## Overview\nYou like tea and live in Hangzhou.')
   await call('memory-view', { botId: 'b2', regenerate: true })
-  await settle()
+  await summarized(call)
   assert.equal((await call('memory-view', { botId: 'b2' })).value.summary.text, '## Overview\nYou like tea and live in Hangzhou.')
   assert.equal((await call('memory-view', { botId: 'nope' })).error.message, 'Unknown Bot')
 })
@@ -364,7 +382,7 @@ test('a summary cut off at the output limit is written once more with a bigger b
   t.after(() => stop())
   await tool('remember', { text: 'Likes tea' }, 'b2')
   await call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(call)
   const done = (await call('memory-view', { botId: 'b2' })).value
   assert.deepEqual([done.summary?.text, done.fresh, done.error], ['## Overview\nYou like tea.', true, null])
   assert.deepEqual(requests.map(request => request.maxTokens), [2048, 8192])
@@ -380,11 +398,11 @@ test('a summary cut off at both budgets keeps the old one and says the reasoning
   t.after(() => stop())
   await tool('remember', { text: 'Likes tea' }, 'b2')
   await call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(call)
   // A new entry asks for a fresh summary; both its tries are cut off.
   await tool('remember', { text: 'Lives in Hangzhou' }, 'b2')
   await call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(call)
   const failed = (await call('memory-view', { botId: 'b2' })).value
   assert.equal(failed.summary.text, '## Overview\nYou like tea.')
   assert.match(failed.error, /reasoning.*output budget|output budget.*reasoning/i)
@@ -396,14 +414,14 @@ test('the panel call asks for the model\'s lowest thinking level when it has no 
   t.after(() => first.stop())
   await first.tool('remember', { text: 'Likes tea' }, 'b2')
   await first.call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(first.call)
   assert.equal(first.requests[0].reasoningEffort, 'low')
 
   const second = start({ replies: ['## ok'], reasoning: {} })
   t.after(() => second.stop())
   await second.tool('remember', { text: 'Likes tea' }, 'b2')
   await second.call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(second.call)
   assert.equal(second.requests[0].reasoningEffort, undefined)
 })
 
@@ -415,7 +433,7 @@ test('a summary the Bot\'s model refuses is written by the profile default model
   t.after(() => stop())
   await tool('remember', { text: 'Likes tea' }, 'b2')
   await call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(call)
   const done = (await call('memory-view', { botId: 'b2' })).value
   assert.deepEqual([done.summary?.text, done.fresh, done.error], ['## Overview\nYou like tea.', true, null])
   assert.deepEqual(routes(requests), ['deepseek/v4@2048', 'deepseek/flash@2048'])
@@ -428,7 +446,7 @@ test('a summary cut off at both budgets on the Bot\'s model is written by the de
   t.after(() => stop())
   await tool('remember', { text: 'Likes tea' }, 'b2')
   await call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(call)
   const done = (await call('memory-view', { botId: 'b2' })).value
   assert.deepEqual([done.summary?.text, done.error], ['## Overview\nYou like tea.', null])
   assert.deepEqual(routes(requests), ['deepseek/v4@2048', 'deepseek/v4@8192', 'deepseek/flash@2048'])
@@ -440,7 +458,7 @@ test('a summary that failed on both models is tried again once the Bot has anoth
   t.after(() => stop())
   await tool('remember', { text: 'Likes tea' }, 'b2')
   await call('memory-view', { botId: 'b2', summarize: true })
-  await settle()
+  await summarized(call)
   const failed = (await call('memory-view', { botId: 'b2', summarize: true })).value
   assert.equal(failed.error, 'deepseek/v4: 401: Unauthorized; deepseek/flash: 503 Service Unavailable')
   assert.equal(failed.summarizing, false)
@@ -450,7 +468,7 @@ test('a summary that failed on both models is tried again once the Bot has anoth
   replies.push('## Overview\nYou like tea.')
   const retried = (await call('memory-view', { botId: 'b2', summarize: true })).value
   assert.deepEqual([retried.summarizing, retried.error], [true, null])
-  await settle()
+  await summarized(call)
   const done = (await call('memory-view', { botId: 'b2' })).value
   assert.deepEqual([done.summary?.text, done.error], ['## Overview\nYou like tea.', null])
   assert.deepEqual(routes(requests).slice(2), ['deepseek/flash@2048'])
@@ -819,7 +837,7 @@ test('a queued review keeps the group lines that leave the log while it waits', 
   await call('state', {})
   // A slow review of Writer's own chat holds the queue.
   ctx.emit('agent/status', { agent: { id: 'b2' }, status: 'idle' })
-  await settle()
+  await until(() => requests.length === 1)
   assert.equal(requests.length, 1)
   ctx.emit('agent/status', { agent: { id: 'g3' }, status: 'idle' })
   await postToGroup(ctx, Array.from({ length: 50 }, (_, at) => `More ${at + 1}`))
@@ -1008,4 +1026,68 @@ test('config.memory false leaves the tools, the section, and the panel out', asy
   assert.equal((await call('memory-view', { botId: 'b2' })).error.message, 'Memory is turned off on this host')
   // The first state call applies the Bots' models and saves; let that finish first.
   await settle()
+})
+
+// Routes such as OpenCode Go turn down a request that names no Session. Each memory
+// call names the Bot's own current chat.
+const idleSession = { requestHeader: () => undefined }
+test('a memory summary names the Bot chat on both of its tries', async (t) => {
+  const { tool, call, requests, stop } = start({ requireSession: true, replies: [{ text: 'Half', finish: 'max-tokens' }, 'You like tea.'] })
+  t.after(() => stop())
+  await tool('remember', { text: 'Likes tea' }, 'b2')
+  await call('memory-view', { botId: 'b2', summarize: true })
+  await summarized(call)
+  const view = (await call('memory-view', { botId: 'b2' })).value
+  assert.equal(view.error, null)
+  assert.equal(view.summary?.text, 'You like tea.')
+  assert.deepEqual(requests.map(request => [request.sessionId, request.maxTokens, request.purpose]), [['b2', 2048, undefined], ['b2', 8192, undefined]])
+})
+
+test('a memory panel question names the Bot chat', async (t) => {
+  const { call, requests, stop } = start({ requireSession: true, replies: [JSON.stringify({ reply: 'You have no entries yet.', changes: [] })] })
+  t.after(() => stop())
+  const answer = await call('memory-ask', { botId: 'b2', text: 'What do you remember?' })
+  assert.equal(answer.ok, true)
+  assert.equal(answer.value.reply, 'You have no entries yet.')
+  assert.equal(requests[0].sessionId, 'b2')
+})
+
+test('a memory review of a Bot chat names that chat and saves its changes', async (t) => {
+  const { ctx, call, read, requests, stop } = start({
+    requireSession: true, config: { memoryReviewDelayMs: 0 },
+    replies: [JSON.stringify({ changes: [{ op: 'add', text: 'The user wants this remembered' }] })],
+  })
+  t.after(() => stop())
+  await call('state', {})
+  ctx.emit('agent/status', { agent: { id: 'b2', session: idleSession }, status: 'idle' })
+  await reviewed(call)
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].sessionId, 'b2')
+  assert.match(read('bots', 'b2', 'MEMORY.md'), /The user wants this remembered/)
+})
+
+test('a memory review of a group names the member Bot chat', async (t) => {
+  const { ctx, call, read, requests, stop } = start({
+    requireSession: true, config: { memoryReviewDelayMs: 0 },
+    replies: [JSON.stringify({ changes: [{ op: 'add', text: 'Keep replies under one page', team: true }] })],
+  })
+  t.after(() => stop())
+  await call('state', {})
+  ctx.emit('agent/status', { agent: { id: 'g3', session: idleSession }, status: 'idle' })
+  await reviewed(call)
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].sessionId, 'b3')
+  assert.match(read('team', 'MEMORY.md'), /Keep replies under one page/)
+})
+
+test('a memory call names the current part of the Bot chat', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-'))
+  const team = structuredClone(TEAM)
+  team.bots.b2.sessionId = 'b2-part2'
+  writeFileSync(join(home, 'state.json'), JSON.stringify(team))
+  const { call, requests, stop } = start({ home, requireSession: true, replies: [JSON.stringify({ reply: 'This part.', changes: [] })] })
+  t.after(() => stop())
+  const answer = await call('memory-ask', { botId: 'b2', text: 'Which part?' })
+  assert.equal(answer.ok, true)
+  assert.equal(requests[0].sessionId, 'b2-part2')
 })
