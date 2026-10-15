@@ -20,6 +20,8 @@
 ## 中文和 Windows
 
 - 在 PowerShell 或 cmd 里直接把中文写进 `--body`、`--comment`，可能乱码或被截断。中文先写进 UTF-8 文件，再用 `--body-file` 或 `--comment-file`。
+- Git Bash 会把传给 Windows 程序的 `/tmp/...` 参数改写成 `%TEMP%\...`。`snapshot.mjs --out /tmp/triage` 实际写到了 `%TEMP%\triage`；之后在 node 里读文件，要用脚本最后打印的那个路径。
+- `--jq` 的字符串里不能写 `\s`、`\|` 这类转义，要写成 `[\n ]`、`[|]`。
 - `gh issue list --search` 对中文标题的匹配不可靠，可能漏结果。查重复时用 `--json number,title,body` 拉全量，在本地过滤。
 
 ## 查询
