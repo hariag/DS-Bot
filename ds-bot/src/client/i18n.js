@@ -13,6 +13,7 @@ const ZH = {
   Search: '搜索',
   'New chat': '新对话',
   'New…': '新建',
+  'Collapse sidebar': '收起侧边栏',
   'Animation': '动画',
   'Bot animation': 'Bot 动画',
   'Quiet': '安静',

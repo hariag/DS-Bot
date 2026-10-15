@@ -418,6 +418,7 @@ export function apply(ctx) {
       ctx.uiWorkspace.openSession(target)
     },
     selectPanel: (id) => { ctx.layout.selectPanel(id) },
+    toggleSidebar: () => { ctx.layout.toggleSidebar() },
     openNewChat: (mode) => { ui.set(state => ({ ...state, newChat: mode, menu: null, palette: null })) },
     openPalette: (query = '') => { ui.set(state => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null })) },
     // The token keeps a late exit timer from closing a palette opened again since.
