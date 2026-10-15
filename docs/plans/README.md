@@ -39,4 +39,4 @@
 | [DSH 让步总账](2026-10-13-dsh-concessions.md) | 因 DSH 本身的限制而做的妥协，以及桌面应用之后怎么处理。判断「是 DS Bot 的 bug 还是 DSH 的限制」先看这里 |
 | [角色与权限](2026-10-07-roles-and-permissions.md) | 用户、Main Bot、群管理员、普通 Bot 各能做什么；Bot 的权限预设和群的统一权限 |
 | [群聊](2026-10-07-group-chat.md) | 谁来回答、按顺序发言、@ 提及、轮数上限、干活中的进度和迟到的回复、审批 |
-| [Bot 运行配置](2026-10-10-bot-runtime.md) | Agent 预设、每个 Bot 的模型和思考强度、工作文件夹、能力（MCP、技能、能力包） |
+| [浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md) | 每个 Bot 的浏览器和 `read_browser`、`auto` 联网搜索、密钥卡和替换规则、GitHub 连接器 |
