@@ -12,3 +12,8 @@ node_modules/
 
 # Extra patterns for scripts/scan.mjs that must not be named in the repository.
 .scan-extra
+
+# Local Docker deployment data.
+/docker/data/
+/docker/workspace/
+/docker/.env

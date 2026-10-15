@@ -13,31 +13,11 @@ usermod -o -u "$PUID" node
 if [ ! -d /data/profiles/web ]; then
   mkdir -p /data
   cp -a /opt/dsh-template/. /data/
+  chown -R node:node /data
 fi
-
-# A development container links the plugin to its source mount. Restore the
-# release dependency tree before that mount disappears, keeping the profile data.
-PROFILE=/data/profiles/web
-if [ -f "$PROFILE/package.json.release" ]; then
-  cp "$PROFILE/package.json.release" "$PROFILE/package.json"
-  if [ -f "$PROFILE/pnpm-lock.yaml.release" ]; then
-    cp "$PROFILE/pnpm-lock.yaml.release" "$PROFILE/pnpm-lock.yaml"
-  else
-    rm -f "$PROFILE/pnpm-lock.yaml"
-  fi
-  rm -rf "$PROFILE/node_modules/ds-bot"
-  if [ -d "$PROFILE/ds-bot.release" ]; then
-    mv "$PROFILE/ds-bot.release" "$PROFILE/node_modules/ds-bot"
-  else
-    cp -a /opt/dsh-template/profiles/web/node_modules/ds-bot "$PROFILE/node_modules/ds-bot"
-  fi
-  rm -f "$PROFILE/package.json.release" "$PROFILE/pnpm-lock.yaml.release"
-fi
-
-# Existing profiles and restored backups can belong to a previous PUID/PGID.
-# Do not follow links into workspace shares or descend into other filesystems.
-find -P /data -xdev \( ! -uid "$PUID" -o ! -gid "$PGID" \) \
-  -exec chown -h node:node -- {} +
+# Every start: /data itself must be writable by node; the files below keep the
+# ownership they got on first start or from the host.
+chown node:node /data
 
 mkdir -p /workspace
 # Only claim an empty /workspace; a populated share keeps its owners.
@@ -45,26 +25,46 @@ if [ -z "$(ls -A /workspace)" ]; then
   chown node:node /workspace
 fi
 
-# DSH 0.2.2 binds one concrete address and rejects the wildcard. Keep the
-# existing 0.0.0.0 setting as the default, but translate it to the container's
-# address; the publish rule remains the network boundary. DSH_LISTEN_PORT only
-# matters with network_mode: host — published ports always map to 3080 inside.
+# Keep an existing volume's ds-bot in step with the image. A failed reinstall
+# is logged but never blocks the start — the old plugin keeps working.
+installed_ver=$(jq -r .version /data/profiles/web/node_modules/ds-bot/package.json 2>/dev/null || echo missing)
+image_ver=$(jq -r .version /opt/dsh-template/profiles/web/node_modules/ds-bot/package.json)
+if [ "$installed_ver" != "$image_ver" ]; then
+  echo "entrypoint: ds-bot $installed_ver -> $image_ver, reinstalling into the web profile"
+  HOME=/home/node gosu node dsh plugin --profile web add /opt/ds-bot/ds-bot.tgz \
+    || echo "entrypoint: ds-bot reinstall failed; continuing with $installed_ver" >&2
+fi
+
+# This dsh release accepts only 127.0.0.1 for --host, so an overlay binds all
+# interfaces instead; the container's publish rule is the network boundary.
+# DSH_LISTEN_PORT only matters with network_mode: host — published ports
+# always map to 3080 inside.
 HOST=${DSH_HOST:-0.0.0.0}
 LISTEN_PORT=${DSH_LISTEN_PORT:-3080}
-if [ "$HOST" = "0.0.0.0" ]; then
-  HOST=$(hostname -i 2>/dev/null | awk '{print $1}')
-  # An isolated network can have no hostname address; loopback keeps the
-  # network-disabled regression and other local-only uses working.
-  HOST=${HOST:-127.0.0.1}
-fi
+case "$HOST" in
+  0.0.0.0|127.0.0.1) ;;
+  *) echo "entrypoint: DSH_HOST must be 0.0.0.0 or 127.0.0.1 (got '$HOST')" >&2; exit 1 ;;
+esac
 case "$LISTEN_PORT" in
   ''|*[!0-9]*) echo "entrypoint: DSH_LISTEN_PORT must be a port number (got '$LISTEN_PORT')" >&2; exit 1 ;;
 esac
 
+# The webserver row's whole config is replaced by a patch, so its bundle values
+# (compression on this dsh release) are restated literally.
+cat > /tmp/listen.patch.yml <<EOF
+- id: webserver
+  config:
+    host: $HOST
+    port: $LISTEN_PORT
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+EOF
+
 # --patch is a dsh option and must precede the app's own flags.
 set -- dsh --profile web \
-  --patch /opt/ds-bot/docker.patch.yml --no-open \
-  --host "$HOST" --port "$LISTEN_PORT" "$@"
+  --patch /opt/ds-bot/docker.patch.yml --patch /tmp/listen.patch.yml \
+  --no-open "$@"
 
 if [ -n "${DSH_TRUSTED_HOST:-}" ]; then
   old_ifs=$IFS
