@@ -267,6 +267,11 @@ export function install(rt) {
       || (owner !== undefined && waiter.botId === owner.botId && waiter.roomId === owner.roomId))
   }
   rt.touchRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.touch() }
+  rt.failRoomTurn = (sessionId, failure) => {
+    const waiters = waitersOf(sessionId)
+    for (const waiter of waiters) waiter.fail(failure)
+    return waiters.length > 0
+  }
   rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
   // The team's own tools are quick; any other tool is the start of work.
   const QUICK_TOOLS = new Set(TEAM_TOOLS)
