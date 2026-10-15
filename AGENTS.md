@@ -11,7 +11,7 @@ DS Bot is a team of long-lived Bots, built on DeepSeek Harness (DSH). It has two
 
 The Bot team:
 
-- Every Bot is a DSH Session and runs through the normal DSH agent loop, tools and model routes.
+- Every Bot is a long-lived identity whose work runs in DSH Sessions: one for its own chat, one for each group it is in, and a fresh one when the context fills up (earlier ones stay readable). Every turn runs through the normal DSH agent loop, tools and model routes.
 - The team works together: Bots message each other, share group chats and can see what the other Bots are doing. Each Bot still runs on its own and does not disturb the others.
 - Bots have clear, different roles. A Main Bot has the highest rights: it creates, changes and removes other Bots. Other Bots do not get these rights. There can be more than one Main Bot.
 - Users customize each Bot (name, role label, instructions, model, character).
