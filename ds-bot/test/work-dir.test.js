@@ -443,3 +443,58 @@ test('a Bot the Main Bot creates runs on its creator\'s model unless one is name
   assert.equal(await env.tool('create_bot', { name: 'Tester', role: 'Test', instructions: 'Test', model: 'official/pro' }, 'a'), 'Created Tester. It is greeting the user now.')
   assert.equal(made('Tester').model, 'official/pro')
 })
+
+// 公开#159: the fresh part took the model of the earlier part's last request, so a model
+// the user picked during the handoff never reached it, nor any part after it.
+const MODELS = {
+  listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
+  listModels: async () => [{ id: 'flash' }, { id: 'v4-pro' }],
+  resolveModelInfo: async () => ({}),
+}
+const onModel = (model, appliedModel = model) => ({ ...TEAM, bots: { ...TEAM.bots, b: { ...TEAM.bots.b, model, appliedModel } } })
+const recordSelections = (env) => {
+  const selected = []
+  env.ctx.sessionController.selectModel = async (request) => { selected.push([request.sessionId, request.model]) }
+  // The earlier part's last request went to flash.
+  env.agentOf('b').session.requestHeader = () => ({ config: { provider: 'deepseek', model: 'flash' } })
+  return selected
+}
+
+test('a fresh part runs on the Bot\'s model, not on the earlier part\'s last request', async (t) => {
+  const env = await start({ llm: MODELS, team: onModel('deepseek/v4-pro') })
+  t.after(env.stop)
+  const selected = recordSelections(env)
+  assert.equal((await env.call('update-bot', { id: 'b', workDir: env.project })).ok, true)
+  await until(() => env.state().bots.b.sessionId === 's1')
+  await until(() => handoffOf(env.agentOf('s1')) !== undefined)
+  assert.deepEqual(selected.filter(([sessionId]) => sessionId === 's1'), [['s1', 'v4-pro']])
+})
+
+test('a model the user picks while the fresh part is made reaches the fresh part', async (t) => {
+  const env = await start({ llm: MODELS, team: onModel('deepseek/flash') })
+  t.after(env.stop)
+  const selected = recordSelections(env)
+  const select = env.ctx.sessionController.selectModel
+  env.ctx.sessionController.selectModel = async (request) => {
+    await select(request)
+    if (request.sessionId !== 's1' || selected.length > 1) return
+    // The user switches models after the fresh part got the old one, before it is the Bot's.
+    void env.call('update-bot', { id: 'b', model: 'deepseek/v4-pro' })
+    await until(() => env.state().bots.b.model === 'deepseek/v4-pro')
+  }
+  assert.equal((await env.call('update-bot', { id: 'b', workDir: env.project })).ok, true)
+  await until(() => env.state().bots.b.sessionId === 's1')
+  await until(() => selected.some(([sessionId, model]) => sessionId === 'b' && model === 'v4-pro'))
+  await until(() => handoffOf(env.agentOf('s1')) !== undefined)
+  assert.deepEqual(selected.filter(([sessionId]) => sessionId === 's1'), [['s1', 'flash'], ['s1', 'v4-pro']])
+})
+
+test('a Bot without a model of its own goes on with the earlier part\'s route', async (t) => {
+  const env = await start({ llm: MODELS })
+  t.after(env.stop)
+  const selected = recordSelections(env)
+  assert.equal((await env.call('update-bot', { id: 'b', workDir: env.project })).ok, true)
+  await until(() => env.state().bots.b.sessionId === 's1')
+  await until(() => handoffOf(env.agentOf('s1')) !== undefined)
+  assert.deepEqual(selected.filter(([sessionId]) => sessionId === 's1'), [['s1', 'flash']])
+})

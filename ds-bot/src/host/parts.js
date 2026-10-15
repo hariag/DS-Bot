@@ -720,6 +720,18 @@ export function install(rt) {
     }
   }
 
+  // A fresh part runs on the Bot's model. The earlier part's route is what its last
+  // request used, which misses a model the user picked since, so it counts only for a
+  // Bot without a model of its own.
+  async function freshRoute(bot, session) {
+    const ref = await rt.desiredModel(bot)
+    if (ref !== undefined) return { ref, effort: await rt.desiredEffort(bot, ref) }
+    const route = session.requestHeader()?.config
+    return route?.provider && route?.model ? { ref: `${route.provider}/${route.model}`, effort: route.reasoningEffort } : undefined
+  }
+  const selectRoute = (bot, sessionId, { ref, effort }) => rt.selectSessionModel(sessionId, { ...splitRef(ref), ...(effort === undefined ? {} : { reasoningEffort: effort }) })
+    .catch(error => rt.warn('ds-bot: model for the fresh part of %s not applied: %s', bot.name, error))
+
   async function moveOn(agent, job, signal) {
     job.started = true
     const bot = rt.botOf(job.botId)
@@ -764,13 +776,8 @@ export function install(rt) {
     const dir = rt.workDirOf(job)
     const intended = dir !== undefined && await rt.isFolder(dir) ? dir : rt.teamFolder()
     const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name, { dir })
-    const route = session.requestHeader()?.config
-    const ref = route?.provider && route?.model ? `${route.provider}/${route.model}` : await rt.desiredModel(bot)
-    if (ref !== undefined) {
-      const effort = route?.reasoningEffort ?? await rt.desiredEffort(bot, ref)
-      await rt.selectSessionModel(freshId, { ...splitRef(ref), ...(effort === undefined ? {} : { reasoningEffort: effort }) })
-        .catch(error => rt.warn('ds-bot: model for the fresh part of %s not applied: %s', bot.name, error))
-    }
+    const picked = await freshRoute(bot, session)
+    if (picked !== undefined) await selectRoute(bot, freshId, picked)
     await rt.applyPermission(bot, freshId, room)
       .catch(error => rt.warn('ds-bot: permission for the fresh part of %s not applied: %s', bot.name, error))
     const segment = { sessionId: agent.id, endedAt: Date.now(), ...(tokens !== undefined ? { tokens } : {}), ...noted }
@@ -790,6 +797,10 @@ export function install(rt) {
       }
     }
     await rt.save()
+    // A model the user picked until now went to the earlier part, which was still the
+    // Bot's; from here on a change goes to the fresh one.
+    const now = await freshRoute(bot, session)
+    if (now !== undefined && (now.ref !== picked?.ref || now.effort !== picked?.effort)) await selectRoute(bot, freshId, now)
     if (job.failed !== undefined) rescued.set(freshId, job.bare ? 'bare' : 'carried')
     void rt.moveSchedules(agent.id, freshId)
     job.moved = true
