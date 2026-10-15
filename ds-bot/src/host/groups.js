@@ -127,6 +127,15 @@ export function install(rt) {
       return { id: known, brief: undefined }
     }
     const id = await rt.createSession(`${member.name} · ${room.name}`, { dir: rt.workDirOf({ botId: member.id, roomId: room.id }) })
+    // While the Session was made the member may have left or been deleted, the group been
+    // deleted, or another turn made the member's Session first: the new one is not kept.
+    // Undefined means the member is gone from the group.
+    const gone = rt.roomOf(room.id) !== room || !room.members.includes(member.id) || rt.botOf(member.id) === undefined
+    if (gone || room.sessions?.[member.id] !== undefined) {
+      void ctx.workspaceRegistry.archiveSession(id, { stopActivity: true })
+        .catch(error => rt.warn('ds-bot: unused group Session of %s in %s not archived: %s', member.name, room.name, error))
+      return gone ? undefined : groupSessionFor(room, member)
+    }
     room.sessions[member.id] = id
     rt.groupOwners.set(id, { botId: member.id, roomId: room.id })
     delete room.seen[member.id]
@@ -356,6 +365,11 @@ export function install(rt) {
         slot.status = 'failed'
         round.failed.push(member.name)
         round.replies.push({ kind: 'failed', botId: member.id, name: member.name, color: member.color, code: 'SESSION', text: String(error?.message ?? error).slice(0, 300), time: Date.now() })
+        continue
+      }
+      if (session === undefined) {
+        round.speaking = null
+        slot.status = 'left'
         continue
       }
       const prompt = roomPrompt(room, member, round)

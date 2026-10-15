@@ -780,6 +780,15 @@ export function install(rt) {
     if (picked !== undefined) await selectRoute(bot, freshId, picked)
     await rt.applyPermission(bot, freshId, room)
       .catch(error => rt.warn('ds-bot: permission for the fresh part of %s not applied: %s', bot.name, error))
+    // The fresh part took several awaits: a Bot or group deleted meanwhile, a member that
+    // left, or a part that is no longer the current one gets no fresh part.
+    const current = room !== undefined ? room.sessions?.[bot.id] : rt.chatOf(bot.id)
+    const gone = rt.botOf(bot.id) === undefined || (room !== undefined && (rt.roomOf(room.id) !== room || !room.members.includes(bot.id)))
+    if (gone || current !== agent.id) {
+      await ctx.workspaceRegistry.archiveSession(freshId, { stopActivity: true })
+        .catch(error => rt.warn('ds-bot: unused fresh part of %s not archived: %s', bot.name, error))
+      return
+    }
     const segment = { sessionId: agent.id, endedAt: Date.now(), ...(tokens !== undefined ? { tokens } : {}), ...noted }
     if (room !== undefined) {
       room.segments ??= {}
