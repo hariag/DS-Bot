@@ -12699,6 +12699,60 @@ ${marked}
 var readPageScript = (limits = READ_LIMITS) => `(${readPage})(${JSON.stringify(limits)})`;
 var READ_PAGE_SCRIPT = readPageScript();
 
+// src/client/shared-map.js
+function sharedMap(key, storage = globalThis.localStorage) {
+  const read = (fallback = {}) => {
+    if (!storage) return fallback;
+    try {
+      const value = JSON.parse(storage.getItem(key) ?? "{}");
+      return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch {
+      return fallback;
+    }
+  };
+  const update = (change, fallback = {}) => {
+    const base = read(fallback);
+    const next = change(base);
+    if (next === base) return next;
+    try {
+      storage?.setItem(key, JSON.stringify(next));
+    } catch {
+    }
+    return next;
+  };
+  return { key, read, update };
+}
+function setEntry(map, id, value) {
+  if (value === void 0) {
+    if (!Object.hasOwn(map, id)) return map;
+    const { [id]: _, ...rest } = map;
+    return rest;
+  }
+  return { ...map, [id]: value };
+}
+function toggleReaction(reactions, key, index, emoji) {
+  const entry = { ...reactions[key] };
+  const list = entry[index] ?? [];
+  entry[index] = list.includes(emoji) ? list.filter((item) => item !== emoji) : [...list, emoji];
+  if (entry[index].length === 0) delete entry[index];
+  const next = { ...reactions };
+  if (Object.keys(entry).length) next[key] = entry;
+  else delete next[key];
+  return next;
+}
+function setUnread(unread, id, value) {
+  if (Boolean(unread[id]) === value) return unread;
+  const next = { ...unread };
+  if (value) next[id] = true;
+  else delete next[id];
+  return next;
+}
+function noteLeft(seen, ids, now) {
+  const next = { ...seen };
+  for (const id of ids) next[id] = Math.max(Number(next[id]) || 0, now);
+  return next;
+}
+
 // src/client/bot-browsers.js
 var STORE_KEY = STORAGE.browsers;
 var MAX_LIVE = 6;
@@ -12732,12 +12786,8 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
   const owner = /* @__PURE__ */ new Map();
   const tabs = createSource2({});
   const pages = createSource2({});
-  let saved = {};
-  try {
-    saved = JSON.parse(storage?.getItem(STORE_KEY) ?? "{}") ?? {};
-  } catch {
-    saved = {};
-  }
+  const store = sharedMap(STORE_KEY, storage);
+  let saved = store.read();
   let layer;
   let shown = null;
   let rect = null;
@@ -12750,29 +12800,16 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     const botId = owner.get(tabId);
     return { ...state, [tabId]: { ...EMPTY, ...savedTab(botId, tabId), ...state[tabId], ...patch } };
   });
-  const writeSaved = () => {
-    try {
-      storage?.setItem(STORE_KEY, JSON.stringify(saved));
-    } catch {
-    }
+  const save = (botId, entry) => {
+    saved = store.update((stored) => setEntry(stored, botId, entry), saved);
   };
   const persist = (botId) => {
     const state = tabs.getSnapshot()[botId];
-    if (state === void 0) {
-      if (saved[botId] === void 0) return;
-      const { [botId]: _, ...rest } = saved;
-      saved = rest;
-    } else {
-      const snapshot = pages.getSnapshot();
-      saved = {
-        ...saved,
-        [botId]: {
-          tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
-          active: state.active
-        }
-      };
-    }
-    writeSaved();
+    const snapshot = pages.getSnapshot();
+    save(botId, state && {
+      tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
+      active: state.active
+    });
   };
   const ensureTabs = (botId) => {
     if (tabs.getSnapshot()[botId] !== void 0) return;
@@ -13028,11 +13065,7 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
       const { [botId]: _, ...rest } = snapshot;
       return rest;
     });
-    if (saved[botId] !== void 0) {
-      const { [botId]: _, ...rest } = saved;
-      saved = rest;
-      writeSaved();
-    }
+    save(botId, void 0);
   }
   return {
     tabs,
@@ -13357,28 +13390,11 @@ function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get("locale")), "ds-bot: interface copy");
   const roster = createSource(EMPTY_ROSTER);
   migrateStorage();
-  const UNREAD_KEY = STORAGE.unread;
-  let savedUnread = {};
-  try {
-    savedUnread = JSON.parse(localStorage.getItem(UNREAD_KEY) ?? "{}") ?? {};
-  } catch {
-    savedUnread = {};
-  }
-  const REACTIONS_KEY = STORAGE.reactions;
-  let savedReactions = {};
-  try {
-    savedReactions = JSON.parse(localStorage.getItem(REACTIONS_KEY) ?? "{}") ?? {};
-  } catch {
-    savedReactions = {};
-  }
-  const SEEN_KEY = STORAGE.seen;
-  let seenAt = {};
-  try {
-    seenAt = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}") ?? {};
-  } catch {
-    seenAt = {};
-  }
-  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: savedUnread, reactions: savedReactions, visits: {} });
+  const unreadStore = sharedMap(STORAGE.unread);
+  const reactionStore = sharedMap(STORAGE.reactions);
+  const seenStore = sharedMap(STORAGE.seen);
+  let seenAt = seenStore.read();
+  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {} });
   const surface = createSource({ mode: readMode(), plain: false });
   let agentSessionCache = /* @__PURE__ */ new Set();
   try {
@@ -13399,18 +13415,23 @@ function apply(ctx) {
   const dropPanels = () => ui2.set((state) => state.details || state.renaming ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
   const seenKey = (id) => roster.getSnapshot().byId?.[id]?.id ?? id;
   const leaveVisits = (ids) => {
-    const now = Date.now();
-    for (const id of ids) seenAt[seenKey(id)] = now;
-    try {
-      localStorage.setItem(SEEN_KEY, JSON.stringify(seenAt));
-    } catch {
-    }
+    seenAt = seenStore.update((seen) => noteLeft(seen, ids.map(seenKey), Date.now()), seenAt);
   };
   ctx.effect(() => {
     const onPageHide = () => leaveVisits(Object.keys(ui2.getSnapshot().visits ?? {}));
     window.addEventListener("pagehide", onPageHide);
     return () => window.removeEventListener("pagehide", onPageHide);
   }, "ds-bot: remember visits on page hide");
+  ctx.effect(() => {
+    const onStorage = (event) => {
+      if (event.storageArea !== localStorage) return;
+      if (event.key === null || event.key === unreadStore.key) ui2.set((state) => ({ ...state, unread: unreadStore.read(state.unread) }));
+      if (event.key === null || event.key === reactionStore.key) ui2.set((state) => ({ ...state, reactions: reactionStore.read(state.reactions) }));
+      if (event.key === null || event.key === seenStore.key) seenAt = seenStore.read(seenAt);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, "ds-bot: follow other windows");
   const activity = createSource({});
   const work = createSource({ bots: {}, approvals: [] });
   let workKey = "";
@@ -13437,17 +13458,10 @@ function apply(ctx) {
   } catch {
     savedPrefs = {};
   }
-  const setUnread = (id, value) => ui2.set((state) => {
-    if (Boolean(state.unread[id]) === value) return state;
-    const unread = { ...state.unread };
-    if (value) unread[id] = true;
-    else delete unread[id];
-    try {
-      localStorage.setItem(UNREAD_KEY, JSON.stringify(unread));
-    } catch {
-    }
-    return { ...state, unread };
-  });
+  const writeUnread = (id, value) => {
+    const unread = unreadStore.update((marks) => setUnread(marks, id, value), ui2.getSnapshot().unread);
+    ui2.set((state) => JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread });
+  };
   const refreshed = /* @__PURE__ */ new Set();
   let pulls = 0;
   let applied = 0;
@@ -13855,7 +13869,7 @@ function apply(ctx) {
         });
       }
     },
-    markUnread: (id) => setUnread(id, true),
+    markUnread: (id) => writeUnread(id, true),
     beginVisit: (id) => {
       const made = roster.getSnapshot().byId[id] ?? roster.getSnapshot().roomsById[id];
       const seen = seenAt[seenKey(id)] ?? (made?.createdBy && Number.isFinite(made.createdAt) ? made.createdAt : null);
@@ -13870,23 +13884,13 @@ function apply(ctx) {
         return { ...state, visits };
       });
     },
-    toggleReaction: (key, index, emoji) => ui2.set((state) => {
-      const entry = { ...state.reactions?.[key] ?? {} };
-      const list = entry[index] ?? [];
-      entry[index] = list.includes(emoji) ? list.filter((item) => item !== emoji) : [...list, emoji];
-      if (entry[index].length === 0) delete entry[index];
-      const reactions = { ...state.reactions };
-      if (Object.keys(entry).length) reactions[key] = entry;
-      else delete reactions[key];
-      try {
-        localStorage.setItem(REACTIONS_KEY, JSON.stringify(reactions));
-      } catch {
-      }
-      return { ...state, reactions };
-    }),
+    toggleReaction: (key, index, emoji) => {
+      const reactions = reactionStore.update((saved) => toggleReaction(saved, key, index, emoji), ui2.getSnapshot().reactions);
+      ui2.set((state) => ({ ...state, reactions }));
+    },
     quote: (sessionId, text) => ui2.set((state) => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
     clearQuote: (token) => ui2.set((state) => state.quote?.token === token ? { ...state, quote: null } : state),
-    clearUnread: (id) => setUnread(id, false),
+    clearUnread: (id) => writeUnread(id, false),
     setFlags: (id, flags) => after(call("set-flags", { id, ...flags })),
     deleteRoom: (id) => after(call("delete-room", { id })),
     openMenu: (menu) => {
