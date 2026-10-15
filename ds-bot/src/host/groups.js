@@ -19,7 +19,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { ROOM_LATE_ROUNDS, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS } from './constants.js'
 import { escapeRegExp, splitRef, textOf } from './text.js'
-import { mentionSpans } from '../shared/mentions.js'
+import { mentionSpans, speakerOf } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
 import { failureLine } from './turns.js'
 
@@ -54,12 +54,11 @@ const unseenLines = (room, memberId) => {
 }
 
 const lineText = (line) => {
-  if (line.kind === 'lookup') return `[${line.who} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
-  if (line.kind === 'resumed') return `[${line.who}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
-  if (line.kind === 'cut') return `[${line.who}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
-  if (line.kind === 'stopped') return `[The user stopped ${line.who}'s work here]`
-  if (line.kind === 'done') return `[${line.who} finished the work it was asked for]`
-  return `${line.who}: ${line.text}`
+  if (line.kind === 'lookup') return `[${speakerOf(line)} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
+  if (line.kind === 'resumed') return `[${speakerOf(line)}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
+  if (line.kind === 'cut') return `[${speakerOf(line)}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
+  if (line.kind === 'stopped') return `[The user stopped ${speakerOf(line)}'s work here]`
+  return `${speakerOf(line)}: ${line.text}`
 }
 const transcript = lines => lines.map(lineText).join('\n')
 
@@ -111,10 +110,6 @@ const adminNote = room => [
 const roomKickoff = language => `The user just created this group and has not written yet. Greet the user in one short message and ask what they want this group to work on. Do not call members with @ yet, and do not reply [PASS]. No name prefix. Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
 
 const ROOM_READ_MAX = 30
-
-// DSH cannot open the Session at all: it is gone, or its stored log is corrupt. DSH
-// reports a corrupt log only in the message of a generic failure.
-const lostSession = error => error?.code === 'session/not-found' || /\bis corrupt\b|\bcorrupt session log\b/i.test(String(error?.message ?? ''))
 
 export function install(rt) {
   const { ctx } = rt
@@ -242,14 +237,7 @@ export function install(rt) {
       else if (busy) rt.roomWaiters.get(exchangeId)?.resolve({ working: true })
     } catch (error) {
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
-      // A delivery that failed is not a pass: the round shows it. Nothing here can
-      // repair a lost Session, so the member's next turn in the group starts a new one.
-      const lost = lostSession(error)
-      if (lost && room.sessions?.[member.id] === sessionId) {
-        rt.retireGroupSession(room, member.id)
-        void rt.save().catch(() => {})
-      }
-      rt.roomWaiters.get(exchangeId)?.fail({ code: lost ? 'SESSION_RESET' : 'SESSION', message: String(error?.message ?? error).slice(0, 300) })
+      rt.roomWaiters.get(exchangeId)?.resolve(null)
     }
     const reply = await done
     // A turn that ended leaves nothing for a stop to cancel.
@@ -424,9 +412,9 @@ export function install(rt) {
       const posts = queued.length > 0 ? queued : [{ text: '' }]
       const startSeq = room.seq + 1
       // The opening greeting is a cue for the admin, not a line of the group; a member's
-      // late failure, its work picked up after a restart, its work the user stopped, or
-      // the end of work whose result it already posted is an event of the round.
-      const event = item => item.failed || item.resumed || item.stopped || item.done
+      // late failure, its work picked up after a restart, or its work the user stopped is
+      // an event of the round.
+      const event = item => item.failed || item.resumed || item.stopped
       for (const post of posts.filter(item => !item.kickoff && !event(item))) {
         // Image readings go into the log only; `@` names are picked from what the user typed.
         const text = post.images === undefined ? post.text : [post.text, ...await rt.imagesForGroup(post.images, room.id)].filter(Boolean).join('\n')
@@ -456,7 +444,6 @@ export function install(rt) {
           id: member.id, name: member.name, status: 'waiting',
           ...(opener.kickoff ? { note: 'the group was just created' } : {}),
           ...(named.includes(member) ? { by: opener.botId } : {}),
-          ...(opener.done ? { note: `${opener.name ?? 'a member'} finished the work you asked for` } : {}),
         })),
         speaking: null,
         turns: 0,
@@ -472,14 +459,14 @@ export function install(rt) {
         round.replies.push({ kind: 'failed', botId: post.botId, name: bot?.name ?? post.name, color: bot?.color, code, ...(status ? { status } : {}), text: message, time: Date.now() })
       }
       // The log line tells the admin and the other members on their next turn.
-      for (const post of posts.filter(item => item.resumed || item.stopped || item.done)) {
+      for (const post of posts.filter(item => item.resumed || item.stopped)) {
         const bot = rt.botOf(post.botId)
         const name = bot?.name ?? post.name
-        const kind = post.done ? 'done' : post.stopped ? 'stopped' : post.again ? 'cut' : 'resumed'
+        const kind = post.stopped ? 'stopped' : post.again ? 'cut' : 'resumed'
         appendRoom(room, { who: name, botId: post.botId, kind, text: '' })
         round.replies.push({ kind, botId: post.botId, name, color: bot?.color, time: Date.now() })
       }
-      if (posts.some(post => post.resumed || post.stopped || post.done)) await rt.save()
+      if (posts.some(post => post.resumed || post.stopped)) await rt.save()
       rt.roomProgress.set(exec.callId, round)
       try {
         await runRound(room, round, exec.signal, exec.agent)
@@ -583,7 +570,6 @@ export function install(rt) {
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
     if (opener.kickoff) return admin ? [admin] : []
     if (opener.quiet) return []
-    if (opener.done) return members.filter(bot => bot.id === opener.askedBy)
     const { all, found: named } = mentionsIn(opener.text, everyone, opener.references)
     const found = named.filter(bot => bot.id !== opener.botId)
     if (opener.progress) return found
@@ -607,21 +593,18 @@ export function install(rt) {
   // A member the round moved on from (it went on working, went quiet or waited for an
   // approval) posts what its turn ended with. The member that asked for it and anyone
   // it names answer; past the late round limit nobody does, so late posts cannot keep a
-  // group talking. Work whose result already went out as a step line (`shown`) and
-  // that ends with nothing more to say still tells the member that asked for it, which
-  // answers the result: where the result sits in the turn decides nothing.
-  async function lateRoomReply(sessionId, info, reply, { shown = false } = {}) {
+  // group talking.
+  async function lateRoomReply(sessionId, info, reply) {
     const owner = rt.groupOwners.get(sessionId)
     const room = rt.roomOf(owner?.roomId ?? info.roomId)
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
     const text = stripOwnName(member.name, reply)
-    const done = isPass(text) && shown && info.askedBy !== undefined
-    if (isPass(text) && !done) return
+    if (isPass(text)) return
     const quiet = (room.lateRounds ?? 0) >= ROOM_LATE_ROUNDS
     if (!quiet) room.lateRounds = (room.lateRounds ?? 0) + 1
     await rt.save()
-    await postToRoom(room, member, done ? '' : text, { late: true, hop: info.hop ?? 0, ...(done ? { done: true } : {}), ...(info.askedBy ? { askedBy: info.askedBy } : {}), ...(quiet ? { quiet: true } : {}) })
+    await postToRoom(room, member, text, { late: true, hop: info.hop ?? 0, ...(info.askedBy ? { askedBy: info.askedBy } : {}), ...(quiet ? { quiet: true } : {}) })
       .catch(error => rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error))
   }
   rt.lateRoomReply = lateRoomReply

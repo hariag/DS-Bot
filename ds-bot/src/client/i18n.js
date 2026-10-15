@@ -853,6 +853,7 @@ const HOST_ERRORS = [
   [/^A Bot named (.+) already exists$/, '已经有叫 $1 的 Bot 了'],
   [/^Name (.*) is not available$/, '名字 $1 不可用'],
   [/^"(.+)" calls everyone in a group, so it cannot be a Bot name$/, '「$1」在群里表示所有人，不能用作 Bot 名字'],
+  [/^"(.+)" stands for the user in a chat, so it cannot be a Bot name$/, '「$1」在对话里表示用户本人，不能用作 Bot 名字'],
   [/^Another group chat is already called "(.+)"$/, '已经有叫「$1」的群聊了'],
   [/^A group chat holds at most (\d+) Bots$/, '一个群聊最多 $1 个 Bot'],
   [/^Reply mode must be one of (.+)$/, '回复模式只能是 $1'],
