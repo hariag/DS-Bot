@@ -488,3 +488,29 @@ test('the team view says what a member is doing in the call\'s own words', async
   const later = (await host.call('state', {})).value
   assert.deepEqual(['said', 'note'].map(key => later.work.bots.a[key]), ['先把 JDK 下下来。', 'Download JDK 21'])
 })
+
+// 公开#124: a Bot deleted while it worked stayed "thinking" until DSH restarted, and the
+// Bot that had asked it something never heard back.
+test('deleting a working Bot clears its activity and tells the Bots waiting for its reply', async (t) => {
+  const host = await start(t)
+  host.emit('b', 'turn/start', { turn: 1 })
+  host.emit('b', 'user/message', { content: [{ type: 'text', text: '[Message from Chief]\nwrite the docs' }], source: { kind: 'bot', role: 'request', senderSessionId: 'a', senderName: 'Chief', exchangeId: 'x1', hop: 1 } })
+  host.emit('b', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  // A second request that Writer has not read yet.
+  host.agentOf('b').inbox.nextStep.push({ id: 'm2', source: { kind: 'bot', role: 'request', senderSessionId: 'c', senderName: 'Tester', exchangeId: 'x2', hop: 1 } })
+  assert.equal((await host.call('state', {})).value.activity.b, 'working')
+
+  const deleted = await host.call('delete-bot', { id: 'b' })
+  assert.equal(deleted.ok, true)
+  assert.equal((await host.call('state', {})).value.activity.b, undefined)
+  await settle(() => host.agentOf('a').calls.length === 1 && host.agentOf('c').calls.length === 1)
+  for (const [to, exchangeId] of [['a', 'x1'], ['c', 'x2']]) {
+    const reply = host.agentOf(to).calls[0]
+    assert.deepEqual([reply.source.role, reply.source.replyTo], ['reply', exchangeId])
+    assert.equal(text(reply), '[Reply from Writer]\nWriter was deleted before it could answer your message.')
+  }
+  // The stopped turn ends after the delete; it brings nothing back.
+  host.emit('b', 'turn/start', { turn: 2 })
+  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  assert.equal((await host.call('state', {})).value.activity.b, undefined)
+})

@@ -183,6 +183,44 @@ export function install(rt) {
     }
   }
 
+  // The reply a sender waits for, also when it wrote from a group, where it gets the
+  // reply in its Session there while it is still a member.
+  const tellSender = (id, source, text) => {
+    const back = rt.roomOf(source.senderRoomId)?.sessions?.[source.senderSessionId]
+    void rt.deliver({
+      fromId: rt.selfOf(id),
+      toId: source.senderSessionId,
+      ...(back ? { sessionId: back } : {}),
+      text,
+      role: 'reply',
+      hop: source.hop ?? 0,
+      replyTo: source.exchangeId,
+    }).catch(error => rt.warn('ds-bot: reply delivery failed: %s', error))
+  }
+
+  // Runs before a deleted Bot leaves the team. Its Sessions stop with it, and the
+  // turn/end that follows is no longer the team's, so their activity and turn records go
+  // now. Every Bot still waiting for its reply hears that it was deleted: the turn's
+  // trigger, requests that joined the turn, and requests it has not read yet.
+  async function releaseBot(botId, sessionIds) {
+    const text = `${rt.botOf(botId)?.name ?? 'The other Bot'} was deleted before it could answer your message.`
+    const waiting = new Map()
+    for (const id of sessionIds) {
+      const entry = live.get(id)
+      const held = [entry?.info, entry?.pending, ...(entry?.joined ?? []).map(joined => joined.info)]
+      if (entry?.turn !== undefined) {
+        const agent = await rt.resolveAgent(id).catch(() => undefined)
+        held.push(...[...(agent?.inbox?.nextStep ?? []), ...(agent?.inbox?.nextTurn ?? [])].map(message => message.source))
+      }
+      for (const source of held) {
+        if (source?.kind === SOURCE_KIND && expectsReply(source) && !answersUser(source)) waiting.set(source.exchangeId, [id, source])
+      }
+      live.delete(id)
+      setActivity(id, undefined)
+    }
+    for (const [id, source] of waiting.values()) tellSender(id, source, text)
+  }
+
   // A group Session is hidden as a whole, so its turns need no marking. A handoff
   // package that only opens a part is acknowledged with a fixed line, also hidden.
   const claimTrigger = (sessionId, entry, info) => {
@@ -304,7 +342,11 @@ export function install(rt) {
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
-    if (!rt.isBotSession(id) && !rt.roomOf(id)) return
+    if (!rt.isBotSession(id) && !rt.roomOf(id)) {
+      // A deleted Bot's Session can still be ending its turn; nothing of it stays.
+      if (live.delete(id)) setActivity(id, undefined)
+      return
+    }
     const entry = liveOf(id)
     if (rt.groupOwners.has(id)) rt.touchRoomTurn?.(id)
     switch (event.type) {
@@ -482,32 +524,13 @@ export function install(rt) {
         const answer = (source, reply) => {
           if (!expectsReply(source) || answersUser(source)) return
           const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
-          // A sender that wrote from a group gets the reply in its Session there, while
-          // it is still a member.
-          const back = rt.roomOf(source.senderRoomId)?.sessions?.[source.senderSessionId]
           if (failure !== undefined) {
             // The sender was told a reply comes later; without this it would wait forever.
-            void rt.deliver({
-              fromId: rt.selfOf(id),
-              toId: source.senderSessionId,
-              ...(back ? { sessionId: back } : {}),
-              text: `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`,
-              role: 'reply',
-              hop: source.hop ?? 0,
-              replyTo: source.exchangeId,
-            }).catch(error => rt.warn('ds-bot: failure notice delivery failed: %s', error))
+            tellSender(id, source, `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`)
           } else if (reply !== '' || reason?.kind === 'aborted') {
             // A turn stopped before it could answer still owes the sender a line,
             // or it would wait forever for a reply that never comes.
-            void rt.deliver({
-              fromId: rt.selfOf(id),
-              toId: source.senderSessionId,
-              ...(back ? { sessionId: back } : {}),
-              text: reply !== '' ? reply : `${name} was stopped before it could answer your message.`,
-              role: 'reply',
-              hop: source.hop ?? 0,
-              replyTo: source.exchangeId,
-            }).catch(error => rt.warn('ds-bot: reply delivery failed: %s', error))
+            tellSender(id, source, reply !== '' ? reply : `${name} was stopped before it could answer your message.`)
           }
         }
         // A retried turn answers the same waiter or sender, so this one passes nothing on.
@@ -553,5 +576,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, callDetail, stopRoomTurn, unattended, userSpoke })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, callDetail, stopRoomTurn, unattended, userSpoke, releaseBot })
 }

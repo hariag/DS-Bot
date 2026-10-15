@@ -481,6 +481,7 @@ export function install(rt) {
     const current = rt.chatOf(id)
     // Questions and exchange turns are kept per Session, so every part of the chat is cleared.
     const parts = new Set([id, current, ...(bot.segments ?? []).map(segment => segment.sessionId)])
+    await rt.releaseBot(id, [...parts, ...rt.groupSessionsOf(id)])
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]
