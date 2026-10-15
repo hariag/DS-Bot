@@ -369,9 +369,9 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
       if (source.role === 'post') {
-        // A member's late failure, its work picked up after a restart, or its work the user
-        // stopped shows as an event of the round it opens.
-        if (source.failed !== undefined || source.resumed === true || source.stopped === true) return null
+        // A member's late failure, its work picked up after a restart, its work the user
+        // stopped, or the end of its work shows as an event of the round it opens.
+        if (source.failed !== undefined || source.resumed === true || source.stopped === true || source.done === true) return null
         const room = roster.roomsById[sessionId]
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
         return h(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi })
@@ -636,6 +636,9 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === 'stopped') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("You stopped {name}'s work", { name: bot.name }))
+      }
+      if (reply.kind === 'done') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t('{name} finished its work', { name: bot.name }))
       }
       return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
     }),

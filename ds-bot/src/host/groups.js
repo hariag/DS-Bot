@@ -58,6 +58,7 @@ const lineText = (line) => {
   if (line.kind === 'resumed') return `[${line.who}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
   if (line.kind === 'cut') return `[${line.who}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
   if (line.kind === 'stopped') return `[The user stopped ${line.who}'s work here]`
+  if (line.kind === 'done') return `[${line.who} finished the work it was asked for]`
   return `${line.who}: ${line.text}`
 }
 const transcript = lines => lines.map(lineText).join('\n')
@@ -423,9 +424,9 @@ export function install(rt) {
       const posts = queued.length > 0 ? queued : [{ text: '' }]
       const startSeq = room.seq + 1
       // The opening greeting is a cue for the admin, not a line of the group; a member's
-      // late failure, its work picked up after a restart, or its work the user stopped is
-      // an event of the round.
-      const event = item => item.failed || item.resumed || item.stopped
+      // late failure, its work picked up after a restart, its work the user stopped, or
+      // the end of work whose result it already posted is an event of the round.
+      const event = item => item.failed || item.resumed || item.stopped || item.done
       for (const post of posts.filter(item => !item.kickoff && !event(item))) {
         // Image readings go into the log only; `@` names are picked from what the user typed.
         const text = post.images === undefined ? post.text : [post.text, ...await rt.imagesForGroup(post.images, room.id)].filter(Boolean).join('\n')
@@ -455,6 +456,7 @@ export function install(rt) {
           id: member.id, name: member.name, status: 'waiting',
           ...(opener.kickoff ? { note: 'the group was just created' } : {}),
           ...(named.includes(member) ? { by: opener.botId } : {}),
+          ...(opener.done ? { note: `${opener.name ?? 'a member'} finished the work you asked for` } : {}),
         })),
         speaking: null,
         turns: 0,
@@ -470,14 +472,14 @@ export function install(rt) {
         round.replies.push({ kind: 'failed', botId: post.botId, name: bot?.name ?? post.name, color: bot?.color, code, ...(status ? { status } : {}), text: message, time: Date.now() })
       }
       // The log line tells the admin and the other members on their next turn.
-      for (const post of posts.filter(item => item.resumed || item.stopped)) {
+      for (const post of posts.filter(item => item.resumed || item.stopped || item.done)) {
         const bot = rt.botOf(post.botId)
         const name = bot?.name ?? post.name
-        const kind = post.stopped ? 'stopped' : post.again ? 'cut' : 'resumed'
+        const kind = post.done ? 'done' : post.stopped ? 'stopped' : post.again ? 'cut' : 'resumed'
         appendRoom(room, { who: name, botId: post.botId, kind, text: '' })
         round.replies.push({ kind, botId: post.botId, name, color: bot?.color, time: Date.now() })
       }
-      if (posts.some(post => post.resumed || post.stopped)) await rt.save()
+      if (posts.some(post => post.resumed || post.stopped || post.done)) await rt.save()
       rt.roomProgress.set(exec.callId, round)
       try {
         await runRound(room, round, exec.signal, exec.agent)
@@ -581,6 +583,7 @@ export function install(rt) {
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
     if (opener.kickoff) return admin ? [admin] : []
     if (opener.quiet) return []
+    if (opener.done) return members.filter(bot => bot.id === opener.askedBy)
     const { all, found: named } = mentionsIn(opener.text, everyone, opener.references)
     const found = named.filter(bot => bot.id !== opener.botId)
     if (opener.progress) return found
@@ -604,18 +607,21 @@ export function install(rt) {
   // A member the round moved on from (it went on working, went quiet or waited for an
   // approval) posts what its turn ended with. The member that asked for it and anyone
   // it names answer; past the late round limit nobody does, so late posts cannot keep a
-  // group talking.
-  async function lateRoomReply(sessionId, info, reply) {
+  // group talking. Work whose result already went out as a step line (`shown`) and
+  // that ends with nothing more to say still tells the member that asked for it, which
+  // answers the result: where the result sits in the turn decides nothing.
+  async function lateRoomReply(sessionId, info, reply, { shown = false } = {}) {
     const owner = rt.groupOwners.get(sessionId)
     const room = rt.roomOf(owner?.roomId ?? info.roomId)
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
     const text = stripOwnName(member.name, reply)
-    if (isPass(text)) return
+    const done = isPass(text) && shown && info.askedBy !== undefined
+    if (isPass(text) && !done) return
     const quiet = (room.lateRounds ?? 0) >= ROOM_LATE_ROUNDS
     if (!quiet) room.lateRounds = (room.lateRounds ?? 0) + 1
     await rt.save()
-    await postToRoom(room, member, text, { late: true, hop: info.hop ?? 0, ...(info.askedBy ? { askedBy: info.askedBy } : {}), ...(quiet ? { quiet: true } : {}) })
+    await postToRoom(room, member, done ? '' : text, { late: true, hop: info.hop ?? 0, ...(done ? { done: true } : {}), ...(info.askedBy ? { askedBy: info.askedBy } : {}), ...(quiet ? { quiet: true } : {}) })
       .catch(error => rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error))
   }
   rt.lateRoomReply = lateRoomReply
