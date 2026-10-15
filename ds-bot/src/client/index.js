@@ -561,6 +561,15 @@ export function apply(ctx) {
     diagnostics: payload => call('diagnostics', payload),
     diagnosticsLog: () => call('diagnostics-log'),
     diagnosticsClear: () => call('diagnostics-clear'),
+    // DSH's right sidebar (files, terminals), which a plugin may load after this one.
+    hasRightSidebar: () => ctx.get('sidebarRight') !== undefined,
+    toggleRightSidebar: () => {
+      try {
+        ctx.get('sidebarRight')?.toggleExpanded()
+      } catch (error) {
+        actions.reportError(error, 'right-sidebar')
+      }
+    },
     // A failed action away from any form (a menu, the palette) shows as a toast.
     reportError: (error, where = 'action') => {
       noteClientError(where, error)
