@@ -34,7 +34,7 @@
 
 ### Issue
 
-1. **分诊。** 给每个新 Issue 打类型、优先级和领域标签（见[标签](#标签)）。每个 Issue 只有一个优先级标签。
+1. **分诊。** 给每个新 Issue 打类型、优先级和领域标签（见[标签](#标签)）。每个 Issue 只有一个优先级标签。具体步骤和列出待分诊 Issue 的脚本见 [.agents/skills/issue-triage/](.agents/skills/issue-triage/SKILL.md)，AI 也可以照着做。
    - 是提问（怎么装、怎么用）：选 **Convert to discussion**，转到 Q&A 分类。
    - 信息不够，找不到原因：加 `needs-info`，写清楚还缺什么。说明 14 天没有回复就关闭。
    - 原因在 DSH 或其他插件：加 `upstream`，并链接到应该处理它的地方。

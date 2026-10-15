@@ -34,7 +34,7 @@ Anyone on the team can do any kind of work: triage, bug fixes, features, the int
 
 ### Issues
 
-1. **Triage.** Give each new issue a type, a priority and an area (see [Labels](#labels)). One priority label per issue.
+1. **Triage.** Give each new issue a type, a priority and an area (see [Labels](#labels)). One priority label per issue. The steps, with a script that lists what needs triage, are in [.agents/skills/issue-triage/](.agents/skills/issue-triage/SKILL.md) (in Chinese); an AI agent can follow them as well.
    - A question (how to install, how to use): select **Convert to discussion** and move it to the Q&A category.
    - Not enough information to find the cause: add `needs-info` and ask for exactly what is missing. Say that the issue is closed after 14 days without an answer.
    - A cause in DSH or in another plugin: add `upstream` and link the place where it belongs.

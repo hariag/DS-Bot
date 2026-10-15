@@ -52,6 +52,7 @@ The full workflow is in [CONTRIBUTING.md](CONTRIBUTING.md#how-we-work). The part
 - Do not start work on an issue or pull request with the `maintainer` label; it waits for the maintainer. Do not take an issue that someone else is assigned to.
 - Before you change behavior, read the design for it in `docs/plans/` (and `docs/vision.md`). A change to a decided design needs the maintainer; a new large feature adds its design note to the same pull request.
 - Do not close an issue without evidence: the pull request or commit that fixed it, the issue it duplicates, or the reason it will not be fixed.
+- To triage issues, follow [.agents/skills/issue-triage/SKILL.md](.agents/skills/issue-triage/SKILL.md).
 
 ## Layout
 
