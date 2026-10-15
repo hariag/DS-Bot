@@ -528,3 +528,85 @@ test('a write that fails at save time archives the Session it made', async (t) =
   const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   assert.equal(Object.values(saved.bots).some(bot => bot.name === 'Phantom'), false)
 })
+
+// Holds every new Session until `release`, so creates that start together are all
+// waiting on it at once, as with a slow DSH.
+const holdSessions = (ctx) => {
+  const create = ctx.sessionController.create
+  let open
+  const gate = new Promise(resolve => { open = resolve })
+  let waiting = 0
+  ctx.sessionController.create = async (request) => {
+    waiting += 1
+    await gate
+    return create(request)
+  }
+  return { waiting: () => waiting, release: () => { ctx.sessionController.create = create; open() } }
+}
+
+// 公开#148: two Main Bots that each made a "Coder" at the same time both got one.
+test('Bots created with one name at the same time: one is made, the others are refused', async (t) => {
+  const { call, stop, ctx } = start()
+  t.after(stop)
+  await call('state', {})
+  const sessions = holdSessions(ctx)
+  const creates = [1, 2, 3].map(() => call('create-bot', { name: 'Coder' }))
+  // A rename to a name a create is still working on is refused too.
+  const chief = (await call('state', {})).value.mainBotId
+  const rename = await call('update-bot', { id: chief, name: 'coder' })
+  sessions.release()
+  const results = await Promise.all(creates)
+  assert.deepEqual(results.map(result => result.ok), [true, false, false])
+  assert.match(results[1].error.message, /A Bot named Coder already exists/)
+  assert.equal(rename.ok, false)
+  const names = (await call('state', {})).value.bots.map(bot => bot.name)
+  assert.equal(names.filter(name => name.toLowerCase() === 'coder').length, 1)
+})
+
+test('copies of one Bot made at the same time get different names', async (t) => {
+  const { call, stop, ctx } = start()
+  t.after(stop)
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const sessions = holdSessions(ctx)
+  const copies = [1, 2, 3].map(() => call('duplicate-bot', { id: writer.id }))
+  await until(() => sessions.waiting() === 3)
+  sessions.release()
+  const results = await Promise.all(copies)
+  assert.deepEqual(results.map(result => result.ok), [true, true, true])
+  assert.deepEqual(results.map(result => result.value.name).sort(), ['Writer copy', 'Writer copy 2', 'Writer copy 3'])
+})
+
+// 公开#199: two groups made with one name at the same time were both made, and from then
+// on a Main Bot could reach neither by name.
+test('groups created or renamed to one name at the same time: only one gets it', async (t) => {
+  const { call, stop, ctx } = start()
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const other = (await call('create-room', { members: [chief, writer.id], name: 'Docs' })).value
+  const sessions = holdSessions(ctx)
+  const creates = [1, 2].map(() => call('create-room', { members: [chief, writer.id], name: 'Ops' }))
+  const rename = await call('update-room', { id: other.id, name: 'ops' })
+  sessions.release()
+  const results = await Promise.all(creates)
+  assert.deepEqual(results.map(result => result.ok), [true, false])
+  assert.match(results[1].error.message, /Another group chat is already called "Ops"/)
+  assert.equal(rename.ok, false)
+  const rooms = (await call('state', {})).value.rooms.map(room => room.name).sort()
+  assert.deepEqual(rooms, ['Docs', 'Ops'])
+
+  // Once the create ends, its name is no longer held for anyone else.
+  const later = await call('create-room', { members: [chief, writer.id], name: 'Ops 2' })
+  assert.equal(later.ok, true)
+})
+
+test('a create that fails lets its name go', async (t) => {
+  const { call, stop, ctx } = start()
+  t.after(stop)
+  await call('state', {})
+  const create = ctx.sessionController.create
+  ctx.sessionController.create = async () => { throw new Error('dsh is busy') }
+  assert.equal((await call('create-bot', { name: 'Coder' })).ok, false)
+  ctx.sessionController.create = create
+  assert.equal((await call('create-bot', { name: 'Coder' })).ok, true)
+})
