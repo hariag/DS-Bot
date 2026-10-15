@@ -100,10 +100,28 @@ function MessageTools({ text, name, sessionId, react, actions }) {
       item(t('Copy'), CopyIcon, copy), item(t('Download'), DownloadIcon, download)), document.body) : null)
 }
 
+// Few readers go through a whole chain of thought, so the row opens on its last lines;
+// the box scrolls for the rest. It stays at the end as later steps add reasoning,
+// unless the reader has scrolled up.
 function ThinkingRow({ text }) {
-  return h('details', { className: 'bt-think' },
-    h('summary', null, t('Thought it through')),
-    h('div', { className: 'bt-think-text' }, text))
+  const box = useRef(null)
+  const atEnd = useRef(true)
+  const [fade, setFade] = useState(undefined)
+  const measure = () => {
+    const el = box.current
+    atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 2
+    const above = el.scrollTop > 0
+    setFade(above && !atEnd.current ? 'both' : above ? 'top' : !atEnd.current ? 'bottom' : undefined)
+  }
+  useLayoutEffect(() => {
+    const el = box.current
+    if (atEnd.current) el.scrollTop = el.scrollHeight
+    measure()
+  }, [text])
+  const title = t('Thought it through')
+  return h('div', { className: 'bt-think' },
+    h('div', { className: 'bt-think-title' }, title),
+    h('div', { ref: box, className: 'bt-think-text', role: 'region', 'aria-label': title, tabIndex: 0, 'data-fade': fade, onScroll: measure }, text))
 }
 
 // The files a finished turn changed or delivered, linked from inline code in its
