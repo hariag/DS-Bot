@@ -160,6 +160,16 @@ export function install(rt) {
       room.notice ??= ''
       migrated = true
     }
+    // A Bot deleted while a group was made or changed could stay listed in it, even as its
+    // admin; it leaves the group now.
+    for (const room of Object.values(state.rooms)) {
+      const members = room.members.filter(id => state.bots[id])
+      const admin = members.includes(room.admin) ? room.admin : null
+      if (members.length === room.members.length && admin === room.admin) continue
+      room.members = members
+      room.admin = admin
+      migrated = true
+    }
     // Unnamed groups from before names followed their members may still list old names.
     const stale = Object.values(state.rooms).filter(room => !room.named && room.name !== rt.autoRoomName(room.members))
     for (const room of stale) room.name = rt.autoRoomName(room.members)
