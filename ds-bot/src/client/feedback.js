@@ -39,6 +39,24 @@ function entrySummary(entry) {
 
 const SOURCES = { turn: 'Model call', host: 'DS Bot', api: 'DS Bot', browser: 'This window' }
 
+// Where the new issue opens; `go(url)` tells whether it did. In a browser the window is
+// reserved inside the click gesture and addressed once the diagnostics are gathered:
+// opening after the awaits would hit the popup blocker. The Desktop makes no window. It
+// hands an http(s) address to the system browser, has no blocker, and returns null even
+// then, so it gets the address itself.
+function issueWindow() {
+  if (window.dshDesktop !== undefined) return { go: (url) => { window.open(url, '_blank'); return true } }
+  const reserved = window.open('', '_blank')
+  if (reserved !== null) reserved.opener = null
+  return {
+    go: (url) => {
+      if (reserved === null) return false
+      reserved.location.href = url
+      return true
+    },
+  }
+}
+
 export function FeedbackPage({ actions, run, Section, Row }) {
   const [what, setWhat] = useState('')
   const [report, setReport] = useState(null)
@@ -56,15 +74,11 @@ export function FeedbackPage({ actions, run, Section, Row }) {
   }))
   const [issueLink, setIssueLink] = useState(null)
   const openIssue = () => {
-    // The window is reserved inside the click gesture and addressed once the
-    // diagnostics are gathered; opening after the awaits would hit the blocker.
-    const win = window.open('', '_blank')
-    if (win !== null) win.opener = null
+    const target = issueWindow()
     run(fetchReport().then(async (next) => {
       const copied = await copy(next.markdown)
       const { url, inline } = issueUrl(next.issuesUrl, { what, diagnostics: next.markdown })
-      if (win !== null) {
-        win.location.href = url
+      if (target.go(url)) {
         setIssueLink(null)
         setNote(inline
           ? t('Opened a new GitHub issue with the diagnostics filled in. Check it before you submit.')

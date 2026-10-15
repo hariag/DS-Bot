@@ -10363,6 +10363,21 @@ function entrySummary(entry) {
   return entry.text;
 }
 var SOURCES = { turn: "Model call", host: "DS Bot", api: "DS Bot", browser: "This window" };
+function issueWindow() {
+  if (window.dshDesktop !== void 0) return { go: (url) => {
+    window.open(url, "_blank");
+    return true;
+  } };
+  const reserved = window.open("", "_blank");
+  if (reserved !== null) reserved.opener = null;
+  return {
+    go: (url) => {
+      if (reserved === null) return false;
+      reserved.location.href = url;
+      return true;
+    }
+  };
+}
 function FeedbackPage({ actions, run, Section, Row: Row3 }) {
   const [what, setWhat] = (0, import_react27.useState)("");
   const [report, setReport] = (0, import_react27.useState)(null);
@@ -10383,13 +10398,11 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
   }));
   const [issueLink, setIssueLink] = (0, import_react27.useState)(null);
   const openIssue = () => {
-    const win = window.open("", "_blank");
-    if (win !== null) win.opener = null;
+    const target = issueWindow();
     run(fetchReport().then(async (next) => {
       const copied = await copy(next.markdown);
       const { url, inline } = issueUrl(next.issuesUrl, { what, diagnostics: next.markdown });
-      if (win !== null) {
-        win.location.href = url;
+      if (target.go(url)) {
         setIssueLink(null);
         setNote(inline ? t("Opened a new GitHub issue with the diagnostics filled in. Check it before you submit.") : copied ? t("Opened a new GitHub issue. The diagnostics are long, so they are on the clipboard: paste them into the issue.") : t("Opened a new GitHub issue. Copy the diagnostics below into it."));
       } else {
