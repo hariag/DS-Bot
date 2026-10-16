@@ -13,11 +13,11 @@ usermod -o -u "$PUID" node
 if [ ! -d /data/profiles/web ]; then
   mkdir -p /data
   cp -a /opt/dsh-template/. /data/
-  chown -R node:node /data
 fi
-# Every start: /data itself must be writable by node; the files below keep the
-# ownership they got on first start or from the host.
-chown node:node /data
+# Existing profiles and restored backups can belong to a previous PUID/PGID.
+# Do not follow links into workspace shares or descend into other filesystems.
+find -P /data -xdev \( ! -uid "$PUID" -o ! -gid "$PGID" \) \
+  -exec chown -h node:node -- {} +
 
 mkdir -p /workspace
 # Only claim an empty /workspace; a populated share keeps its owners.

@@ -40,7 +40,7 @@ COPY --from=build /usr/local/ /usr/local/
 COPY --from=build /opt/dsh-template /opt/dsh-template
 COPY --from=build /tmp/ds-bot.tgz /opt/ds-bot/ds-bot.tgz
 COPY --from=build /pnpm-version /opt/ds-bot/pnpm-version
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/docker.patch.yml /opt/ds-bot/docker.patch.yml
 
 # pnpm as a plain global install (same version the build used) so plugin

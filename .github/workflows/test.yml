@@ -54,13 +54,27 @@ jobs:
         env:
           SCAN_EXTRA_PATTERNS: ${{ secrets.SCAN_EXTRA_PATTERNS }}
 
+  docker:
+    name: Docker startup and data migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: docker compose -f docker-compose.yml config --quiet
+      - run: docker compose -f docker/compose.yml config --quiet
+      - run: docker build -f docker/Dockerfile -t ds-bot:test .
+      - run: node docker/test.mjs ds-bot:test
+
   # The one check that branch rules require. A job whose needs failed is skipped,
   # and GitHub counts a skipped required check as passed, so this job always runs
-  # and fails unless every matrix entry and the leak scan passed.
+  # and fails unless the matrix, leak scan and Docker checks passed.
   result:
     name: Test result
-    needs: [test, scan]
+    needs: [test, scan, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success && test "${{ needs.docker.result }}" = success
