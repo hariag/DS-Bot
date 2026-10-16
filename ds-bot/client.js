@@ -506,6 +506,7 @@ var ZH = {
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
+  "{name} finished its work": "{name} 做完了",
   "{name} was cut off by a restart and picked its work back up": "{name} 的工作被重启打断，已经接着做",
   "{name} was cut off by a restart again and stopped": "{name} 的工作又被重启打断，已停下",
   "Picked up its work after a restart": "重启后接着做之前的工作",
@@ -4271,7 +4272,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.role === "kickoff" || source.role === "room") return null;
       if (source.role === "secret" || deferred) return null;
       if (source.role === "post") {
-        if (source.failed !== void 0 || source.resumed === true || source.stopped === true) return null;
+        if (source.failed !== void 0 || source.resumed === true || source.stopped === true || source.done === true) return null;
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
         const file = source.length === void 0 ? void 0 : (data.content ?? []).find((block) => block?.type === "file")?.attachment;
@@ -4561,6 +4562,9 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === "stopped") {
         return (0, import_react7.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("You stopped {name}'s work", { name: bot.name }));
+      }
+      if (reply.kind === "done") {
+        return (0, import_react7.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} finished its work", { name: bot.name }));
       }
       return (0, import_react7.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi });
     }),
