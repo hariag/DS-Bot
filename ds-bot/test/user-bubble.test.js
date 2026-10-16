@@ -123,6 +123,20 @@ test('a preset accent takes its dark value in dark mode; a custom accent stays t
   }
 })
 
+// UI standard §14 #1: the danger red was written out as #e02135 and #c21d2e in 22
+// places. Every danger color reads --bt-danger, which the base sheet sets once.
+test('every danger color reads --bt-danger, which the base sheet sets once', () => {
+  assert.equal([...bundle.matchAll(/--bt-danger:#e02135/g)].length, 1)
+  const allowed = before => before.endsWith('--bt-danger:') // the one value
+    || before.endsWith('var(--bt-danger,') // feedback.js: its toast shows without the base sheet too
+    || before.endsWith('.bt-voice-end:hover{background:') // recording reds: not decided yet
+    || /FF3E51['"],\s*['"]$/i.test(before) // the red Bot color, not a danger color
+  const loose = [...bundle.matchAll(/#e02135|#c21d2e/gi)]
+    .map(match => bundle.slice(Math.max(0, match.index - 40), match.index))
+    .filter(before => !allowed(before))
+  assert.deepEqual(loose, [])
+})
+
 // A dark skin repaints the host bubble surface (dsh-dream-skin's underwater theme
 // sets this value) and leaves ds-bot's colors alone.
 const DARK_SKIN = { '--dsw-specific-bubble': 'rgba(31,33,38,.92)', '--dsw-alias-label-primary': '#ffffff' }

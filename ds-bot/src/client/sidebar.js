@@ -634,7 +634,7 @@ export const SIDEBAR_CSS = `
 @keyframes bt-update-pop{from{opacity:0;transform:scale(.96);filter:blur(4px)}}
 .bt-update-title{font-size:14px;line-height:20px;font-weight:600}
 .bt-update-text{margin-top:2px;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
-.bt-update-error{margin-top:8px;font-size:12px;line-height:17px;color:#c21d2e;overflow-wrap:anywhere;max-height:90px;overflow:auto}
+.bt-update-error{margin-top:8px;font-size:12px;line-height:17px;color:var(--bt-danger);overflow-wrap:anywhere;max-height:90px;overflow:auto}
 .bt-update-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:12px}
 .bt-update-notes{margin-right:auto;font-size:12.5px;color:var(--bt-ink-2);text-decoration:none}
 .bt-update-notes:hover{color:var(--bt-ink);text-decoration:underline}

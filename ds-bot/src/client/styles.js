@@ -18,7 +18,7 @@ const SKIN_FOOT = ':is(div,footer):not([class*="_footArea"]):has(> div > [data-s
 // CONVERSATION_CSS re-skins the shell's own conversation DOM and styles what only
 // the conversation renders.
 export const SHELL_CSS = `
-body{--bt-ink:#141414;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56)}
+body{--bt-ink:#141414;--bt-danger:#e02135;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56)}
 body[data-ds-dark-theme]{--bt-ink:#f2f2f2;--bt-ink-2:rgba(242,242,242,.6);--bt-ink-3:rgba(242,242,242,.36);--bt-bubble:#262626;--bt-sidebar:#1b1b1b;--bt-main:#141414;--bt-line:rgba(255,255,255,.08);--bt-line-2:rgba(255,255,255,.15);--bt-line-weak:rgba(255,255,255,.1);--bt-hover:rgba(160,160,160,.12);--bt-active:rgba(160,160,160,.2);--bt-card:#1f1f1f;--bt-user:#f2f2f2;--bt-user-ink:#141414;--bt-tag-bg:rgba(255,255,255,.09);--bt-tag-ink:rgba(242,242,242,.62)}
 ${Object.entries(INKS).map(([name, [light]]) => `body{--bt-ink-${name}:${light}}`).join('')}
 ${Object.entries(INKS).map(([name, [, dark]]) => `body[data-ds-dark-theme]{--bt-ink-${name}:${dark}}`).join('')}
@@ -314,7 +314,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 @media (prefers-reduced-motion:reduce){.bt-create-card,.bt-create-pop{animation:none}}
 .bt-send{height:40px;min-width:40px;border-radius:999px;border:0;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font-size:14px;padding:0 14px;cursor:pointer;flex:none;white-space:nowrap}
 .bt-send:disabled{opacity:.35;cursor:default}
-.bt-error{padding:0 14px 10px;color:#e02135;font-size:12px}
+.bt-error{padding:0 14px 10px;color:var(--bt-danger);font-size:12px}
 
 .bt-pane{position:fixed;top:var(--dsh-frame-chrome-top,0px);right:0;bottom:0;z-index:45;pointer-events:auto;background:var(--bt-main);color:var(--bt-ink);display:flex;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 .bt-dialog{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -382,7 +382,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bt-kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:20px;color:var(--bt-ink-2)}
 .bt-kv span:last-child{color:var(--bt-ink);font-variant-numeric:tabular-nums}
-.bt-danger{color:#e02135}
+.bt-danger{color:var(--bt-danger)}
 
 /* Bot settings: fields, the avatar editor popover, and the details-pane sub-view. */
 .bt-field{display:flex;flex-direction:column;gap:6px}
@@ -433,7 +433,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-drawer-model{display:flex;flex-direction:column}
 .bt-drawer-model .bt-note{margin-top:6px}
 .bt-drawer-permission{display:flex;flex-direction:column}
-.bt-seg button.bt-perm-danger,.bt-seg button.bt-perm-danger[aria-pressed=true],.bt-kv span.bt-perm-danger{color:#e02135}
+.bt-seg button.bt-perm-danger,.bt-seg button.bt-perm-danger[aria-pressed=true],.bt-kv span.bt-perm-danger{color:var(--bt-danger)}
 
 /* Settings dialog: a 198px page list beside the page. */
 .bt-settings-layer{position:fixed;inset:var(--dsh-frame-chrome-top,0px) 0 0;z-index:60;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
@@ -503,12 +503,12 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-connector-name{font-size:14px;line-height:20px;font-weight:500}
 .bt-connector-status{font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-connector[data-state=ready] .bt-connector-status{color:var(--bt-ink-2)}
-.bt-connector[data-state=error] .bt-connector-status{color:#e02135;white-space:normal}
+.bt-connector[data-state=error] .bt-connector-status{color:var(--bt-danger);white-space:normal}
 .bt-connector-actions{flex:none;display:flex;gap:6px}
 .bt-connector-form{display:flex;flex-direction:column;gap:8px;padding-left:48px;animation:bt-q-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
 .bt-connector-form-row{display:flex;align-items:center;gap:6px}
 .bt-connector-link{flex:1;font-size:12px;color:var(--bt-ink-2)}
-.bt-connector-error{padding-left:48px;font-size:12px;line-height:16px;color:#e02135}
+.bt-connector-error{padding-left:48px;font-size:12px;line-height:16px;color:var(--bt-danger)}
 
 /* Shell chrome reshaped for the team view. Selectors use stable data attributes where the
    shell offers them and CSS-module name suffixes elsewhere. */
@@ -540,7 +540,7 @@ ${SKIN_FOOT}>div:has(> [data-slot="sidebar.settings"]){order:-1!important;flex:n
 .bt-voice-name{font-size:16px;line-height:22px;font-weight:500}
 .bt-voice-status{font-size:13px;line-height:18px;color:var(--bt-ink-2);min-height:18px}
 .bt-voice-caption{min-height:44px;font-size:15px;line-height:22px;color:var(--bt-ink);animation:bt-blur-in .25s ease-out;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
-.bt-voice-note{font-size:12px;color:#e02135}
+.bt-voice-note{font-size:12px;color:var(--bt-danger)}
 .bt-voice-setup{height:32px;padding:0 14px;border-radius:16px;border:0;background:var(--bt-hover);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;transition:background-color .15s ease}
 .bt-voice-setup:hover{background:var(--bt-active)}
 .bt-voice-bar{display:flex;gap:16px;padding:0 0 32px}
@@ -591,7 +591,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-menu button{display:flex;align-items:center;gap:4px;width:100%;min-height:30px;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px;line-height:18px;color:var(--bt-ink);cursor:pointer;box-sizing:border-box}
 .bt-menu button:hover{background:var(--bt-hover)}
 .bt-menu button svg{flex:none;width:16px;height:16px;margin:0 1px}
-.bt-menu .bt-danger{color:#c21d2e}
+.bt-menu .bt-danger{color:var(--bt-danger)}
 .bt-menu-sep{height:.5px;flex:none;background:var(--bt-line-2);margin:4px 8px}
 .bt-menu-up{--bt-origin:bottom left;animation-name:bt-pop-lift,bt-veil-in}
 .bt-menu[data-leaving]{pointer-events:none;animation:bt-pop-out .12s cubic-bezier(.4,0,1,1) forwards}
@@ -747,7 +747,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-mem-remove{flex:none;height:28px;min-width:28px;border-radius:999px;border:0;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0 6px;font:inherit;font-size:12px;opacity:0;transition:opacity .12s ease,background-color .12s ease,color .12s ease}
 .bt-mem-entry:hover .bt-mem-remove,.bt-mem-remove:focus-visible,.bt-mem-remove[data-confirm]{opacity:1}
 .bt-mem-remove:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.bt-mem-remove[data-confirm]{background:rgba(224,33,53,.1);color:#e02135;padding:0 10px}
+.bt-mem-remove[data-confirm]{background:color-mix(in srgb,var(--bt-danger) 10%,transparent);color:var(--bt-danger);padding:0 10px}
 @media (hover:none){.bt-mem-remove{opacity:1}}
 .bt-mem-none{font-size:13px;line-height:18px;color:var(--bt-ink-3);padding:8px 4px}
 .bt-mem-foot{flex:none;padding:8px 20px 20px;display:flex;flex-direction:column;gap:10px}
@@ -758,7 +758,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-mem-reply-text{font-size:14px;line-height:21px;padding-right:8px;overflow-wrap:anywhere}
 .bt-mem-changes{list-style:none;margin:2px 0 0;padding:0 8px 0 0;display:flex;flex-direction:column;gap:4px}
 .bt-mem-changes li{display:flex;align-items:flex-start;gap:6px;font-size:13px;line-height:18px;color:var(--bt-ink-2);overflow-wrap:anywhere}
-.bt-mem-changes li svg{flex:none;margin-top:1px;color:#e02135;animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} .12s backwards}
+.bt-mem-changes li svg{flex:none;margin-top:1px;color:var(--bt-danger);animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} .12s backwards}
 .bt-mem-changes li[data-ok] svg{color:var(--bt-green)}
 .bt-mem-ask{display:flex;align-items:center;gap:8px;height:52px;padding:0 8px 0 22px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-card);box-shadow:0 4px 16px rgba(0,0,0,.06);box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
 .bt-mem-ask:focus-within{border-color:var(--bt-ink-3);box-shadow:0 4px 20px rgba(0,0,0,.1)}
