@@ -169,6 +169,48 @@ image is built and tested with dsh `0.2.0-rc.2`, the version
 DS Bot is verified with; a `DSH_VERSION` build arg exists, but other releases
 are untested and newer ones change how the server binds.
 
+## Prebuilt image
+
+GitHub Actions publishes the image to GHCR after the branch CI succeeds:
+`main` as `latest`, `dev` as `dev`, and every successful push also as
+`sha-<full commit SHA>`. Only the tested linux/amd64 image is published. The
+first publication happens only after this workflow is merged and a push
+succeeds. The maintainer must set the GHCR package visibility to Public once
+before anonymous pulls work.
+
+Save this as `compose.yml` in the directory you want to deploy from. Fill in
+the API key and your NAS host names before starting it. Running these commands
+from the repository root would use the local root Compose file instead.
+
+```yaml
+services:
+  ds-bot:
+    image: ghcr.io/fei2411/deepseek-bot:dev
+    ports:
+      - "13080:3080"
+    environment:
+      DEEPSEEK_API_KEY: ""
+      PUID: "1000"
+      PGID: "1000"
+      DSH_TRUSTED_HOST: "localhost,127.0.0.1"
+    volumes:
+      - ./data:/data
+      - ./workspace:/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    stop_grace_period: 15s
+```
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+The root `docker-compose.yml` and `docker/compose.yml` still build the local
+image. Choose one setup; do not run both against the same data directory. An
+existing persisted profile is not upgraded automatically.
+
 ## Limits
 
 - No Bot browser / `read_browser` tool: those exist in dsh Desktop only.
