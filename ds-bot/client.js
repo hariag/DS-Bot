@@ -46,11 +46,11 @@ var ZH = {
   "Main Bot": "主 Bot",
   Working: "工作中",
   "Waiting for your answer": "等你回答",
-  "Waiting for {names}": "等 {names} 交回",
   "Unread activity": "有未读",
   Search: "搜索",
   "New chat": "新对话",
   "New…": "新建",
+  "Collapse sidebar": "收起侧边栏",
   "Animation": "动画",
   "Bot animation": "Bot 动画",
   "Quiet": "安静",
@@ -129,6 +129,7 @@ var ZH = {
   "Repositories, issues, and pull requests": "仓库、issue 和 PR",
   "Connecting…": "正在连接…",
   "Could not connect: {error}": "连接失败：{error}",
+  "Bot mode could not be set up here: {error}": "这里无法启用 Bot 模式：{error}",
   "Connected as {account}": "已连接：{account}",
   Connected: "已连接",
   Disconnect: "断开",
@@ -817,6 +818,7 @@ var ZH = {
   "The model took too long to answer": "模型响应超时",
   "Could not reach the model service": "连不上模型服务",
   "Its group conversation could not open": "它的群聊会话打不开",
+  "Its group conversation could not open, so it starts a new one next time": "它的群聊会话打不开，下次会换一个新的",
   // The composer's +
   "Add files": "添加文件",
   "Reference a chat": "引用对话",
@@ -904,6 +906,7 @@ var HOST_ERRORS = [
   [/^A Bot named (.+) already exists$/, "已经有叫 $1 的 Bot 了"],
   [/^Name (.*) is not available$/, "名字 $1 不可用"],
   [/^"(.+)" calls everyone in a group, so it cannot be a Bot name$/, "「$1」在群里表示所有人，不能用作 Bot 名字"],
+  [/^"(.+)" stands for the user in a chat, so it cannot be a Bot name$/, "「$1」在对话里表示用户本人，不能用作 Bot 名字"],
   [/^Another group chat is already called "(.+)"$/, "已经有叫「$1」的群聊了"],
   [/^A group chat holds at most (\d+) Bots$/, "一个群聊最多 $1 个 Bot"],
   [/^Reply mode must be one of (.+)$/, "回复模式只能是 $1"],
@@ -1048,7 +1051,8 @@ var FAILURES = {
   SERVER: "The model service failed",
   TIMEOUT: "The model took too long to answer",
   TRANSPORT: "Could not reach the model service",
-  SESSION: "Its group conversation could not open"
+  SESSION: "Its group conversation could not open",
+  SESSION_RESET: "Its group conversation could not open, so it starts a new one next time"
 };
 function failureLabel(code, message) {
   if (FAILURES[code]) return t(FAILURES[code]);
@@ -1413,6 +1417,8 @@ var allThemes = () => ({ ...THEMES, ...customThemes });
 
 // src/shared/mentions.js
 var ALL_WORDS = ["all", "everyone", "所有人", "全体"];
+var USER_NAMES = ["user", "you"];
+var speakerOf = (line) => line.botId !== void 0 && USER_NAMES.includes(String(line.who ?? "").trim().toLowerCase()) ? `Bot "${line.who}"` : line.who;
 var NAME_GOES_ON = /^(?:[a-z0-9_\-/\\]|\.[a-z0-9_-])/i;
 var ADDRESS_BEFORE = /[a-z0-9_./]/i;
 var LITERAL = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/g;
@@ -1423,6 +1429,7 @@ function nameProblem(name) {
   if (text === "") return "A Bot needs a name";
   if (/[@`\r\n]/.test(text)) return "A Bot name cannot contain @, ` or a line break";
   if (ALL_WORDS.includes(text.toLowerCase())) return `"${text}" calls everyone in a group, so it cannot be a Bot name`;
+  if (USER_NAMES.includes(text.toLowerCase())) return `"${text}" stands for the user in a chat, so it cannot be a Bot name`;
   return void 0;
 }
 function referenceSpans(text, labels = []) {
@@ -1898,9 +1905,8 @@ body[data-bt-motion=quiet] .bt-mark[data-gaze] .bt-gaze{transform:none}
 .bt-mark[data-state=working]:is([data-shape=gumdrop],[data-shape=peanut],[data-shape=cushion],[data-shape=squircle],[data-shape=moon],[data-shape=wave]) .bt-b{animation:bt-squash 1.2s ease-in-out infinite}
 .bt-mark[data-state=working] .bt-eye{animation:bt-blink 2.4s ease-in-out infinite}
 .bt-mark[data-state=sending] .bt-b{animation:bt-dash 1.1s cubic-bezier(.4,0,.2,1) infinite}
-/* Waiting for teammates to hand back work circles like coordinating them. */
-.bt-mark:is([data-state=orbit],[data-state=waiting]) .bt-b{animation:bt-sway 2.6s ease-in-out infinite;transform-origin:50% 50%}
-.bt-mark:is([data-state=orbit],[data-state=waiting]) .bt-eyes{animation:bt-roll 2.6s linear infinite}
+.bt-mark[data-state=orbit] .bt-b{animation:bt-sway 2.6s ease-in-out infinite;transform-origin:50% 50%}
+.bt-mark[data-state=orbit] .bt-eyes{animation:bt-roll 2.6s linear infinite}
 /* A question for you hops twice when it arrives and the badge keeps it in view after;
    a lively mark keeps hopping. */
 .bt-mark[data-state=alert] .bt-b{animation:bt-hop 1.3s cubic-bezier(.3,.7,.4,1) 2}
@@ -1970,7 +1976,7 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-row-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-tag{flex:none;max-width:96px;font-size:12px;line-height:16px;font-weight:400;padding:1px 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-row-preview{font-size:13px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bt-unread{width:8px;height:8px;border-radius:50%;background:#1084fe;flex:none;margin-right:2px;animation:bt-fade .13s cubic-bezier(.22,1,.36,1)}
+.bt-unread{width:8px;height:8px;border-radius:50%;background:var(--bt-accent);flex:none;margin-right:2px;animation:bt-fade .13s cubic-bezier(.22,1,.36,1)}
 .bt-unread-wait{background:var(--bt-star)}
 .bt-rail{align-items:center;padding:0 0 8px}
 .bt-rail .bt-row{justify-content:center;padding:6px 0;min-height:44px}
@@ -2271,14 +2277,13 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-settings-layer{position:fixed;inset:var(--dsh-frame-chrome-top,0px) 0 0;z-index:60;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 .bt-scrim{position:absolute;inset:0;background:rgba(0,0,0,.32);animation:bt-fade .22s ease-out}
 body[data-ds-dark-theme] .bt-scrim{background:rgba(0,0,0,.5)}
-.bt-settings{--bt-set-w:min(800px,calc(100vw - 48px));--bt-set-h:min(620px,calc(100vh - 2*max(32px,var(--dsh-frame-overlay-top,32px))));position:relative;width:var(--bt-set-w);height:var(--bt-set-h);background:var(--bt-main);border-radius:16px;border:.5px solid var(--bt-line-2);box-shadow:0 24px 80px rgba(0,0,0,.24);display:flex;overflow:hidden;color:var(--bt-ink);transition:${spring(SPRING_SHAPE, "width", "height")};animation:bt-dialog-rise ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
-.bt-settings[data-wide]{--bt-set-w:min(1100px,calc(100vw - 48px));--bt-set-h:min(780px,calc(100vh - 2*max(32px,var(--dsh-frame-overlay-top,32px))))}
+.bt-settings{--bt-set-w:min(1100px,calc(100vw - 48px));--bt-set-h:min(780px,calc(100vh - 2*max(32px,var(--dsh-frame-overlay-top,32px))));position:relative;width:var(--bt-set-w);height:var(--bt-set-h);background:var(--bt-main);border-radius:16px;border:.5px solid var(--bt-line-2);box-shadow:0 24px 80px rgba(0,0,0,.24);display:flex;overflow:hidden;color:var(--bt-ink);animation:bt-dialog-rise ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
 :is(.bt-settings-layer,.bt-mem-layer)[data-leaving]{pointer-events:none}
 :is(.bt-settings-layer,.bt-mem-layer)[data-leaving] .bt-scrim{opacity:0;transition:opacity .16s ease-in}
 :is(.bt-settings-layer,.bt-mem-layer)[data-leaving]>[role=dialog]{animation:bt-dialog-sink .16s cubic-bezier(.4,0,1,1) forwards}
 @keyframes bt-dialog-rise{from{transform:translateY(12px) scale(.96)}}
 @keyframes bt-dialog-sink{to{opacity:0;transform:translateY(6px) scale(.975);filter:blur(3px)}}
-@media (prefers-reduced-motion:reduce){.bt-settings{transition:none}.bt-settings,.bt-scrim,.bt-settings-page>*{animation:bt-fade .12s ease-out!important}}
+@media (prefers-reduced-motion:reduce){.bt-settings,.bt-scrim,.bt-settings-page>*{animation:bt-fade .12s ease-out!important}}
 .bt-settings-nav{position:relative;width:198px;flex:none;padding:16px 8px;border-right:.5px solid var(--bt-line);display:flex;flex-direction:column;gap:2px;background:var(--bt-sidebar);box-sizing:border-box}
 .bt-settings-item{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:6px 8px;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;line-height:20px;cursor:pointer;text-align:left;transition:background-color .12s ease,color .12s ease}
 .bt-settings-item:hover{color:var(--bt-ink);background:var(--bt-hover)}
@@ -2286,11 +2291,9 @@ body[data-ds-dark-theme] .bt-scrim{background:rgba(0,0,0,.5)}
 .bt-settings-nav>.bt-thumb{left:8px;right:8px;border-radius:8px;background:var(--bt-active)}
 .bt-settings-nav[data-glide] .bt-settings-item[aria-current=page]{background:transparent}
 .bt-settings-shell{margin-top:auto}
-/* Usage while another page is open: out of the flow at Usage's own width, so it keeps
-   its layout, and not rendered. */
-.bt-settings-usage[data-off]{position:absolute;top:0;left:198px;width:calc(min(1100px,calc(100vw - 48px)) - 198px);height:100%;box-sizing:border-box;content-visibility:hidden;pointer-events:none}
-/* The page column takes the dialog's final size at once, so while the dialog resizes
-   only its edge moves and the page does not lay out again every frame. */
+/* Usage while another page is open: out of the flow, so it keeps its layout, and not
+   rendered. */
+.bt-settings-usage[data-off]{position:absolute;top:0;left:198px;width:calc(var(--bt-set-w) - 198px);height:100%;box-sizing:border-box;content-visibility:hidden;pointer-events:none}
 .bt-settings-main{flex:none;display:flex;flex-direction:column;min-width:0;width:calc(var(--bt-set-w) - 198px);height:var(--bt-set-h)}
 .bt-settings-head{display:flex;align-items:center;gap:6px;padding:16px 56px 4px 20px}
 .bt-settings-head h2{margin:0;font-size:15px;line-height:24px;font-weight:600;animation:bt-veil-in .2s ease-out}
@@ -2344,10 +2347,24 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 
 /* Shell chrome reshaped for the team view. Selectors use stable data attributes where the
    shell offers them and CSS-module name suffixes elsewhere. */
-[class*="_logoRow"],[class*="_newSession"],nav[class*="_panelList"]{display:none!important}
-[class*="_footArea"]{display:flex!important;flex-direction:row-reverse;align-items:center;gap:9px;padding:8px 6px 6px!important}
-[class*="_footArea"]>[class*="_footerActions"]{flex:1 1 auto;min-width:0}
-[class*="_footArea"]>[class*="_settingsArea"]{flex:none;width:auto!important}
+[class*="_newSession"],nav[class*="_panelList"],[class*="_logoRow"]>[class*="_brand"],[class*="_logoRow"]:not(:has([class*="_toggle"])){display:none!important}
+/* The shell's sidebar switch stays where the shell puts it whenever the sidebar is
+   collapsed: on the rail, or fixed in a Windows title bar, where it also stays while
+   the sidebar is open. Elsewhere an open sidebar uses the team's own top row. */
+html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
+html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
+html[data-windows-titlebar] .bt-side-collapse,html[data-platform=darwin] .bt-side-collapse{display:none}
+/* The footer ends in the Bot row: the whale's settings seat, then Connect plugins. Every
+   other plugin's entry takes a whole row above it, in the shell's order, so none of them
+   squeezes the Bot row. */
+[class*="_footArea"]{grid-template-columns:auto minmax(0,1fr);grid-auto-flow:row dense;align-items:center;gap:4px 9px;padding:8px 6px 6px!important}
+/* DSH hides the footer of a collapsed sidebar under a Windows title bar; the grid
+   stays out of that one place. */
+html:not([data-windows-titlebar]) [class*="_footArea"],:not([class*="_collapsed"])>[class*="_footArea"]{display:grid!important}
+[class*="_footArea"]>[class*="_footerActions"],[class*="_footArea"]>[class*="_footerActions"]>div{display:contents!important}
+[class*="_footArea"]>[class*="_footerActions"]>div>*{grid-column:1/-1}
+[class*="_footArea"]>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2;order:1}
+[class*="_footArea"]>[class*="_settingsArea"]{grid-column:1;order:1;width:auto!important}
 [class*="_footArea"] button[aria-label="Settings"]{width:auto!important;padding:0!important;background:none!important;border-radius:50%!important;height:auto!important}
 ${SKIN_FOOT}{display:flex!important;flex-direction:row!important;align-items:center!important;gap:9px!important}
 ${SKIN_FOOT}>div:has(> [data-slot="sidebar.footer.action"]){display:flex!important;align-items:center!important;flex:1 1 auto!important;min-width:0!important}
@@ -2790,7 +2807,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 [class*="_toBottomSlot"]>button::before{content:"";width:20px;height:20px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 4v12M5 11l5 5 5-5'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 4v12M5 11l5 5 5-5'/%3E%3C/svg%3E") center/contain no-repeat}
 @keyframes bt-tobottom-in{from{translate:0 8px;scale:.8}}
 [data-bt-news] [class*="_toBottomSlot"]>button{visibility:hidden!important;pointer-events:none!important}
-.bt-news{position:fixed;z-index:30;transform:translateX(-50%);display:inline-flex;align-items:center;overflow:hidden;border-radius:999px;background:#0c64c1;color:#fcfcfc;box-shadow:inset 0 0 0 1px rgba(20,20,20,.05),0 1px 3px 0 rgba(0,0,0,.12);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:bt-news-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out}
+.bt-news{position:fixed;z-index:30;transform:translateX(-50%);display:inline-flex;align-items:center;overflow:hidden;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink);box-shadow:inset 0 0 0 1px rgba(20,20,20,.05),0 1px 3px 0 rgba(0,0,0,.12);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:bt-news-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out}
 @keyframes bt-news-in{from{translate:0 8px;scale:.9}}
 .bt-news[data-direction=up]{animation-name:bt-news-in-up,bt-veil-in}
 @keyframes bt-news-in-up{from{translate:0 -8px;scale:.9}}
@@ -2801,8 +2818,8 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-news-x svg{width:12px;height:12px}
 .bt-news-x:hover{opacity:1;background:rgba(20,20,20,.5)}
 @media (prefers-reduced-motion:reduce){.bt-news,[class*="_toBottomSlot"]>button{animation:none}}
-.bt-new-sep{display:flex;align-items:center;gap:8px;margin:14px 0 8px;padding:2px 0;font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;text-transform:uppercase;color:#0c64c1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
-.bt-new-sep::before,.bt-new-sep::after{content:"";flex:1;height:1px;background:color-mix(in srgb,#0c64c1 20%,transparent)}
+.bt-new-sep{display:flex;align-items:center;gap:8px;margin:14px 0 8px;padding:2px 0;font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;text-transform:uppercase;color:var(--bt-accent);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.bt-new-sep::before,.bt-new-sep::after{content:"";flex:1;height:1px;background:color-mix(in srgb,var(--bt-accent) 20%,transparent)}
 .bt-open-new{display:flex;flex-direction:column}
 .bt-open-new .bt-new-sep{margin:18px 0 0}
 .bt-open-new .bt-time-sep{height:16px;margin:32px 0 2px}
@@ -2894,8 +2911,8 @@ function installCompiledStyles(text, tag) {
 
 // src/client/mark.js
 var import_react2 = require("react");
-var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "waiting", "alert", "done"];
-var botState = (running, activity, alert) => running ? STATES.includes(activity) && activity !== "waiting" ? activity : "working" : alert ? "alert" : activity === "waiting" ? "waiting" : "idle";
+var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "alert", "done"];
+var botState = (running, activity, alert) => running ? STATES.includes(activity) ? activity : "working" : alert ? "alert" : "idle";
 var toolState = (name) => /^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
   (0, import_react2.useEffect)(() => {
@@ -2996,7 +3013,7 @@ function useSettled(state) {
 function BotAvatar({ bot, size, state = "idle", main, admin, badge = true, live = true, gaze = false, pokeable = false }) {
   const settled = useSettled(state);
   if (bot === void 0) return (0, import_react2.createElement)(BotMark, { size });
-  const badgeKind = !badge ? null : state === "alert" ? "alert" : state !== "idle" && state !== "waiting" ? "working" : admin ? "admin" : main ? "main" : null;
+  const badgeKind = !badge ? null : state === "alert" ? "alert" : state !== "idle" ? "working" : admin ? "admin" : main ? "main" : null;
   return (0, import_react2.createElement)(
     "span",
     { className: "bt-mark", style: { width: size, height: size, "--bt-size": `${size}px` } },
@@ -3058,6 +3075,14 @@ function PlusIcon() {
 }
 function SearchIcon() {
   return (0, import_react3.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", "aria-hidden": true }, (0, import_react3.createElement)("circle", { cx: 8.5, cy: 8.5, r: 5.5, stroke: "currentColor", strokeWidth: 1.6, fill: "none" }), (0, import_react3.createElement)("path", { d: "M13 13l4 4", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" }));
+}
+function SidebarIcon() {
+  return (0, import_react3.createElement)(
+    "svg",
+    { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true },
+    (0, import_react3.createElement)("rect", { x: 3, y: 4, width: 14, height: 12, rx: 2.5 }),
+    (0, import_react3.createElement)("path", { d: "M8 4v12" })
+  );
 }
 function PeopleIcon() {
   return (0, import_react3.createElement)(
@@ -4290,7 +4315,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
           room: room2,
           roster,
           actions,
-          msgKey: `${sessionId}:${data.turn}:post`,
+          msgKey: `${sessionId}:post:${data.seq ?? node.key}`,
           useUi,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : void 0
         });
@@ -4903,10 +4928,6 @@ var useGroupWork = (useWork, pick2) => useWork ? useWork((work) => JSON.stringif
 var workKeys = (text) => JSON.parse(text);
 var doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching });
 var workLine = (lead, doing, more) => (0, import_react9.createElement)(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ""}`);
-var waitingFor = (roster, waits) => {
-  const names = [...(waits?.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits?.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
-  return names.length === 0 ? "" : t("Waiting for {names}", { names: names.join(t(" and ")) });
-};
 function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked }) {
   const id = bot.id;
   const part = currentPart(bot);
@@ -4924,15 +4945,13 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const away = !running && groups.length > 0;
   const state = botState(running || away, doing, alert);
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t("a group chat"), groups[0], groups.length - 1) : null;
-  const waits = workKeys(useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null");
-  const waitsFor = state === "waiting" ? waitingFor(roster, waits) : "";
   if (bot.hidden && !active && !main) return null;
   const onContextMenu = (event) => {
     event.preventDefault();
     actions.openMenu({ kind: "bot", id, x: event.clientX, y: event.clientY });
   };
   const pinned = bot.pinned === true && !tile;
-  const label = [bot.name, main ? t("Main Bot") : "", pinned ? t("Pinned") : "", running || away ? t("Working") : "", waitsFor, approval ? t("Waiting for your approval") : alert ? t("Waiting for your answer") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [bot.name, main ? t("Main Bot") : "", pinned ? t("Pinned") : "", running || away ? t("Working") : "", approval ? t("Waiting for your approval") : alert ? t("Waiting for your answer") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
   if (tile && wide) {
     return (0, import_react9.createElement)("div", { className: "bt-tile-wrap" }, (0, import_react9.createElement)(
       "button",
@@ -4969,7 +4988,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       "span",
       { className: "bt-row-body" },
       (0, import_react9.createElement)("span", { className: "bt-row-name" }, (0, import_react9.createElement)("span", { className: "bt-row-title" }, bot.name), pinned ? (0, import_react9.createElement)(PinMark) : null),
-      awayLine ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, preview) : null
+      awayLine ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, awayLine) : preview ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
     wide && unread && !active ? (0, import_react9.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
   );
@@ -5215,7 +5234,8 @@ function TeamSidebar(props) {
       (0, import_react9.createElement)("span", { className: "bt-brand" }, (0, import_react9.createElement)(BrandMark, { size: 22 }), (0, import_react9.createElement)(BrandName)),
       (0, import_react9.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
       (0, import_react9.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react9.createElement)(SearchIcon)),
-      (0, import_react9.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react9.createElement)(PlusIcon))
+      (0, import_react9.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react9.createElement)(PlusIcon)),
+      (0, import_react9.createElement)("button", { type: "button", className: "bt-round bt-side-collapse", "aria-label": t("Collapse sidebar"), title: t("Collapse sidebar"), onClick: () => actions.toggleSidebar() }, (0, import_react9.createElement)(SidebarIcon))
     ) : (0, import_react9.createElement)(
       import_react9.Fragment,
       null,
@@ -5601,11 +5621,10 @@ var SIDEBAR_CSS = `
 .bt-rail .bt-row{position:relative}
 .bt-rail .bt-pin{position:absolute;top:3px;left:calc(50% + 12px)}
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
-[class*="_footArea"]:has(.bt-foot-account){display:flex!important;flex-direction:row!important;align-items:center;gap:6px}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"],[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div{display:contents!important}
-.bt-foot-account{order:-1;flex:none;display:inline-flex}
-[class*="_footArea"]:has(.bt-foot-account) .bt-connect-foot{order:0;flex:1 1 auto;min-width:0;width:auto}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{order:1;flex:none}
+[class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
+[class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
 /* The update cloud springs in when a newer DS Bot shows up; its arrow drops in a
@@ -10008,12 +10027,9 @@ function UsagePage({ roster, actions, focusId }) {
   (0, import_react26.useEffect)(() => {
     let stopped = false;
     let timer;
-    const resized = Promise.all((document.querySelector(".bt-settings")?.getAnimations() ?? []).filter((animation) => animation.transitionProperty === "width" || animation.transitionProperty === "height").map((animation) => animation.finished.catch(() => {
-    })));
     const load = async () => {
       try {
         const value = await actions.usage();
-        await resized;
         if (stopped) return;
         (0, import_react26.startTransition)(() => setView(value));
         setError("");
@@ -10489,6 +10505,21 @@ function entrySummary(entry) {
   return entry.text;
 }
 var SOURCES = { turn: "Model call", host: "DS Bot", api: "DS Bot", browser: "This window" };
+function issueWindow() {
+  if (window.dshDesktop !== void 0) return { go: (url) => {
+    window.open(url, "_blank");
+    return true;
+  } };
+  const reserved = window.open("", "_blank");
+  if (reserved !== null) reserved.opener = null;
+  return {
+    go: (url) => {
+      if (reserved === null) return false;
+      reserved.location.href = url;
+      return true;
+    }
+  };
+}
 function FeedbackPage({ actions, run, Section, Row: Row3 }) {
   const [what, setWhat] = (0, import_react28.useState)("");
   const [report, setReport] = (0, import_react28.useState)(null);
@@ -10509,13 +10540,11 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
   }));
   const [issueLink, setIssueLink] = (0, import_react28.useState)(null);
   const openIssue = () => {
-    const win = window.open("", "_blank");
-    if (win !== null) win.opener = null;
+    const target = issueWindow();
     run(fetchReport().then(async (next) => {
       const copied = await copy(next.markdown);
       const { url, inline } = issueUrl(next.issuesUrl, { what, diagnostics: next.markdown });
-      if (win !== null) {
-        win.location.href = url;
+      if (target.go(url)) {
         setIssueLink(null);
         setNote(inline ? t("Opened a new GitHub issue with the diagnostics filled in. Check it before you submit.") : copied ? t("Opened a new GitHub issue. The diagnostics are long, so they are on the clipboard: paste them into the issue.") : t("Opened a new GitHub issue. Copy the diagnostics below into it."));
       } else {
@@ -11017,7 +11046,7 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false 
     (0, import_react30.createElement)("div", { className: "bt-scrim", onMouseDown: close }),
     (0, import_react30.createElement)(
       "div",
-      { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("DS Bot settings"), "data-wide": shown === "usage" ? "" : void 0 },
+      { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("DS Bot settings") },
       (0, import_react30.createElement)(
         "nav",
         { ref: nav.box, className: "bt-settings-nav", "aria-label": t("Settings pages") },
@@ -12826,6 +12855,60 @@ ${marked}
 var readPageScript = (limits = READ_LIMITS) => `(${readPage})(${JSON.stringify(limits)})`;
 var READ_PAGE_SCRIPT = readPageScript();
 
+// src/client/shared-map.js
+function sharedMap(key, storage = globalThis.localStorage) {
+  const read = (fallback = {}) => {
+    if (!storage) return fallback;
+    try {
+      const value = JSON.parse(storage.getItem(key) ?? "{}");
+      return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch {
+      return fallback;
+    }
+  };
+  const update = (change, fallback = {}) => {
+    const base = read(fallback);
+    const next = change(base);
+    if (next === base) return next;
+    try {
+      storage?.setItem(key, JSON.stringify(next));
+    } catch {
+    }
+    return next;
+  };
+  return { key, read, update };
+}
+function setEntry(map, id, value) {
+  if (value === void 0) {
+    if (!Object.hasOwn(map, id)) return map;
+    const { [id]: _, ...rest } = map;
+    return rest;
+  }
+  return { ...map, [id]: value };
+}
+function toggleReaction(reactions, key, index, emoji) {
+  const entry = { ...reactions[key] };
+  const list = entry[index] ?? [];
+  entry[index] = list.includes(emoji) ? list.filter((item) => item !== emoji) : [...list, emoji];
+  if (entry[index].length === 0) delete entry[index];
+  const next = { ...reactions };
+  if (Object.keys(entry).length) next[key] = entry;
+  else delete next[key];
+  return next;
+}
+function setUnread(unread, id, value) {
+  if (Boolean(unread[id]) === value) return unread;
+  const next = { ...unread };
+  if (value) next[id] = true;
+  else delete next[id];
+  return next;
+}
+function noteLeft(seen, ids, now) {
+  const next = { ...seen };
+  for (const id of ids) next[id] = Math.max(Number(next[id]) || 0, now);
+  return next;
+}
+
 // src/client/bot-browsers.js
 var STORE_KEY = STORAGE.browsers;
 var MAX_LIVE = 6;
@@ -12859,12 +12942,8 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
   const owner = /* @__PURE__ */ new Map();
   const tabs = createSource2({});
   const pages = createSource2({});
-  let saved = {};
-  try {
-    saved = JSON.parse(storage?.getItem(STORE_KEY) ?? "{}") ?? {};
-  } catch {
-    saved = {};
-  }
+  const store = sharedMap(STORE_KEY, storage);
+  let saved = store.read();
   let layer;
   let shown = null;
   let rect = null;
@@ -12877,29 +12956,16 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     const botId = owner.get(tabId);
     return { ...state, [tabId]: { ...EMPTY, ...savedTab(botId, tabId), ...state[tabId], ...patch } };
   });
-  const writeSaved = () => {
-    try {
-      storage?.setItem(STORE_KEY, JSON.stringify(saved));
-    } catch {
-    }
+  const save = (botId, entry) => {
+    saved = store.update((stored) => setEntry(stored, botId, entry), saved);
   };
   const persist = (botId) => {
     const state = tabs.getSnapshot()[botId];
-    if (state === void 0) {
-      if (saved[botId] === void 0) return;
-      const { [botId]: _, ...rest } = saved;
-      saved = rest;
-    } else {
-      const snapshot = pages.getSnapshot();
-      saved = {
-        ...saved,
-        [botId]: {
-          tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
-          active: state.active
-        }
-      };
-    }
-    writeSaved();
+    const snapshot = pages.getSnapshot();
+    save(botId, state && {
+      tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
+      active: state.active
+    });
   };
   const ensureTabs = (botId) => {
     if (tabs.getSnapshot()[botId] !== void 0) return;
@@ -13155,11 +13221,7 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
       const { [botId]: _, ...rest } = snapshot;
       return rest;
     });
-    if (saved[botId] !== void 0) {
-      const { [botId]: _, ...rest } = saved;
-      saved = rest;
-      writeSaved();
-    }
+    save(botId, void 0);
   }
   return {
     tabs,
@@ -13297,7 +13359,7 @@ function disposeAll(disposers, label) {
     }
   }
 }
-function surfaceGroups(install) {
+function surfaceGroups(install, { onError } = {}) {
   const mounted = { shell: [], conversation: [] };
   const withdraw = (group) => {
     const disposers = mounted[group];
@@ -13309,10 +13371,15 @@ function surfaceGroups(install) {
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue;
+        const disposers = [];
         try {
-          mounted[group] = install[group]();
+          for (const step of install[group]()) if (step) disposers.push(step());
+          mounted[group] = disposers;
         } catch (error) {
+          disposeAll(disposers, `roll back ${group}`);
           console.warn(`[ds-bot] install ${group}`, error);
+          onError?.(group, error);
+          break;
         }
       }
     },
@@ -13320,6 +13387,11 @@ function surfaceGroups(install) {
       for (const group of [...GROUPS].reverse()) withdraw(group);
     }
   };
+}
+function freePriority(entries2, { priority, key, id }) {
+  if (priority === void 0) return void 0;
+  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
+  return Math.min(priority, ...taken);
 }
 function readMode(storage = globalThis.localStorage) {
   try {
@@ -13487,28 +13559,11 @@ function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get("locale")), "ds-bot: interface copy");
   const roster = createSource(EMPTY_ROSTER);
   migrateStorage();
-  const UNREAD_KEY = STORAGE.unread;
-  let savedUnread = {};
-  try {
-    savedUnread = JSON.parse(localStorage.getItem(UNREAD_KEY) ?? "{}") ?? {};
-  } catch {
-    savedUnread = {};
-  }
-  const REACTIONS_KEY = STORAGE.reactions;
-  let savedReactions = {};
-  try {
-    savedReactions = JSON.parse(localStorage.getItem(REACTIONS_KEY) ?? "{}") ?? {};
-  } catch {
-    savedReactions = {};
-  }
-  const SEEN_KEY = STORAGE.seen;
-  let seenAt = {};
-  try {
-    seenAt = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}") ?? {};
-  } catch {
-    seenAt = {};
-  }
-  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: savedUnread, reactions: savedReactions, visits: {} });
+  const unreadStore = sharedMap(STORAGE.unread);
+  const reactionStore = sharedMap(STORAGE.reactions);
+  const seenStore = sharedMap(STORAGE.seen);
+  let seenAt = seenStore.read();
+  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {} });
   const surface = createSource({ mode: readMode(), plain: false });
   let agentSessionCache = /* @__PURE__ */ new Set();
   try {
@@ -13529,18 +13584,23 @@ function apply(ctx) {
   const dropPanels = () => ui2.set((state) => state.details || state.renaming ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
   const seenKey = (id) => roster.getSnapshot().byId?.[id]?.id ?? id;
   const leaveVisits = (ids) => {
-    const now = Date.now();
-    for (const id of ids) seenAt[seenKey(id)] = now;
-    try {
-      localStorage.setItem(SEEN_KEY, JSON.stringify(seenAt));
-    } catch {
-    }
+    seenAt = seenStore.update((seen) => noteLeft(seen, ids.map(seenKey), Date.now()), seenAt);
   };
   ctx.effect(() => {
     const onPageHide = () => leaveVisits(Object.keys(ui2.getSnapshot().visits ?? {}));
     window.addEventListener("pagehide", onPageHide);
     return () => window.removeEventListener("pagehide", onPageHide);
   }, "ds-bot: remember visits on page hide");
+  ctx.effect(() => {
+    const onStorage = (event) => {
+      if (event.storageArea !== localStorage) return;
+      if (event.key === null || event.key === unreadStore.key) ui2.set((state) => ({ ...state, unread: unreadStore.read(state.unread) }));
+      if (event.key === null || event.key === reactionStore.key) ui2.set((state) => ({ ...state, reactions: reactionStore.read(state.reactions) }));
+      if (event.key === null || event.key === seenStore.key) seenAt = seenStore.read(seenAt);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, "ds-bot: follow other windows");
   const activity = createSource({});
   const work = createSource({ bots: {}, approvals: [] });
   let workKey = "";
@@ -13567,17 +13627,10 @@ function apply(ctx) {
   } catch {
     savedPrefs = {};
   }
-  const setUnread = (id, value) => ui2.set((state) => {
-    if (Boolean(state.unread[id]) === value) return state;
-    const unread = { ...state.unread };
-    if (value) unread[id] = true;
-    else delete unread[id];
-    try {
-      localStorage.setItem(UNREAD_KEY, JSON.stringify(unread));
-    } catch {
-    }
-    return { ...state, unread };
-  });
+  const writeUnread = (id, value) => {
+    const unread = unreadStore.update((marks) => setUnread(marks, id, value), ui2.getSnapshot().unread);
+    ui2.set((state) => JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread });
+  };
   const refreshed = /* @__PURE__ */ new Set();
   let pulls = 0;
   let applied = 0;
@@ -13899,6 +13952,9 @@ function apply(ctx) {
     selectPanel: (id) => {
       ctx.layout.selectPanel(id);
     },
+    toggleSidebar: () => {
+      ctx.layout.toggleSidebar();
+    },
     openNewChat: (mode) => {
       ui2.set((state) => ({ ...state, newChat: mode, menu: null, palette: null }));
     },
@@ -13985,7 +14041,7 @@ function apply(ctx) {
         });
       }
     },
-    markUnread: (id) => setUnread(id, true),
+    markUnread: (id) => writeUnread(id, true),
     beginVisit: (id) => {
       const made = roster.getSnapshot().byId[id] ?? roster.getSnapshot().roomsById[id];
       const seen = seenAt[seenKey(id)] ?? (made?.createdBy && Number.isFinite(made.createdAt) ? made.createdAt : null);
@@ -14000,23 +14056,13 @@ function apply(ctx) {
         return { ...state, visits };
       });
     },
-    toggleReaction: (key, index, emoji) => ui2.set((state) => {
-      const entry = { ...state.reactions?.[key] ?? {} };
-      const list = entry[index] ?? [];
-      entry[index] = list.includes(emoji) ? list.filter((item) => item !== emoji) : [...list, emoji];
-      if (entry[index].length === 0) delete entry[index];
-      const reactions = { ...state.reactions };
-      if (Object.keys(entry).length) reactions[key] = entry;
-      else delete reactions[key];
-      try {
-        localStorage.setItem(REACTIONS_KEY, JSON.stringify(reactions));
-      } catch {
-      }
-      return { ...state, reactions };
-    }),
+    toggleReaction: (key, index, emoji) => {
+      const reactions = reactionStore.update((saved) => toggleReaction(saved, key, index, emoji), ui2.getSnapshot().reactions);
+      ui2.set((state) => ({ ...state, reactions }));
+    },
     quote: (sessionId, text) => ui2.set((state) => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
     clearQuote: (token) => ui2.set((state) => state.quote?.token === token ? { ...state, quote: null } : state),
-    clearUnread: (id) => setUnread(id, false),
+    clearUnread: (id) => writeUnread(id, false),
     setFlags: (id, flags) => after(call("set-flags", { id, ...flags })),
     deleteRoom: (id) => after(call("delete-room", { id })),
     openMenu: (menu) => {
@@ -14233,7 +14279,12 @@ function apply(ctx) {
       }
     } };
   };
-  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({ name, ...options }, component));
+  const BOT_PRIORITY = -100;
+  const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
+    name,
+    ...options,
+    ...options.priority === void 0 ? {} : { priority: freePriority(ctx.slots.entries(name), options) }
+  }, component));
   let atMenu = null;
   const installAtMenu = () => {
     const fiber = ctx.inject(["inputTriggers"], (scope) => {
@@ -14261,65 +14312,65 @@ function apply(ctx) {
     controller.toggleSource(CHATS_SOURCE, { trigger: "@", query: "", quoted: false, position: "inline", span });
   };
   const installShell = () => [
-    installCompiledStyles(SHELL_CSS, "shell"),
-    installCompiledStyles(SIDEBAR_CSS, "sidebar"),
-    installCompiledStyles(SECRET_CSS, "secrets"),
-    installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, "models"),
-    installCompiledStyles(USAGE_CSS, "usage"),
-    installCompiledStyles(SCHEDULE_CSS, "schedules"),
-    installCompiledStyles(FEEDBACK_CSS, "feedback"),
-    installCompiledStyles(ABOUT_CSS, "about"),
-    installCompiledStyles(MEMBER_CSS, "members"),
-    installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
-    browsers ? installCompiledStyles(BROWSER_CSS, "browser") : null,
-    installTheme(),
-    shadow("sidebar.workspaces", { priority: -10, inject: face }, TeamSidebar),
-    shadow("sidebar.brand.mark", { priority: -10 }, BrandMark),
-    shadow("sidebar.brand.name", { priority: -10 }, BrandName),
-    shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
-    shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
-    shadow("settings.trigger", { priority: -10 }, YouAvatar),
-    // At priority -10 the whale wins the seat over a shell account plugin's own
-    // launcher (the Desktop's "··· More"), which comes back in Agent mode.
-    shadow("settings.launcher", { priority: -10, inject: face }, AccountLauncher),
-    shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
-    shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
-    shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
+    () => installCompiledStyles(SHELL_CSS, "shell"),
+    () => installCompiledStyles(SIDEBAR_CSS, "sidebar"),
+    () => installCompiledStyles(SECRET_CSS, "secrets"),
+    () => installCompiledStyles(MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + GROUP_SETTINGS_CSS, "models"),
+    () => installCompiledStyles(USAGE_CSS, "usage"),
+    () => installCompiledStyles(SCHEDULE_CSS, "schedules"),
+    () => installCompiledStyles(FEEDBACK_CSS, "feedback"),
+    () => installCompiledStyles(ABOUT_CSS, "about"),
+    () => installCompiledStyles(MEMBER_CSS, "members"),
+    () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
+    browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
+    () => installTheme(),
+    () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
+    () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
+    () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
+    () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
+    () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
+    () => shadow("settings.trigger", { priority: BOT_PRIORITY }, YouAvatar),
+    // The whale wins the seat over a shell account plugin's own launcher (the
+    // Desktop's "··· More"), which comes back in Agent mode.
+    () => shadow("settings.launcher", { priority: BOT_PRIORITY, inject: face }, AccountLauncher),
+    () => shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
+    () => shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
+    () => shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
   ];
   const installConversation = () => [
-    installCompiledStyles(CONVERSATION_CSS, "conversation"),
-    installMentions(),
-    installAtMenu(),
-    shadow("conversation.session.header", { priority: -10, inject: face }, HeaderPill),
-    shadow("conversation.chat.node", { key: "assistant-step", priority: -10, locale: "chat", inject: assistantFace }, AssistantCell),
-    shadow("conversation.chat.node", { key: "turn-trigger", priority: -10, locale: "chat", inject: face }, TriggerCell),
-    shadow("conversation.chat.node", { key: "tool-call", priority: -10, locale: "chat", inject: face }, ToolCell),
-    shadow("conversation.chat.node", { key: "turn-process", priority: -10, locale: "chat", inject: face }, TurnProcessCell),
+    () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
+    () => installMentions(),
+    () => installAtMenu(),
+    () => shadow("conversation.session.header", { priority: BOT_PRIORITY, inject: face }, HeaderPill),
+    () => shadow("conversation.chat.node", { key: "assistant-step", priority: BOT_PRIORITY, locale: "chat", inject: assistantFace }, AssistantCell),
+    () => shadow("conversation.chat.node", { key: "turn-trigger", priority: BOT_PRIORITY, locale: "chat", inject: face }, TriggerCell),
+    () => shadow("conversation.chat.node", { key: "tool-call", priority: BOT_PRIORITY, locale: "chat", inject: face }, ToolCell),
+    () => shadow("conversation.chat.node", { key: "turn-process", priority: BOT_PRIORITY, locale: "chat", inject: face }, TurnProcessCell),
     // DSH's own turn tail stays, so what other plugins add there shows, such as the
     // cards of the files a turn delivered; its copy and branch row is hidden.
-    shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
+    () => shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
-    shadow("conversation.chat.node", { key: "question-reply", priority: -10, locale: "chat" }, AnsweredCell),
-    shadow("conversation.chat.node", { key: "compaction", priority: -10, locale: "chat" }, Nothing),
-    ...canDrawUserMessages() ? ["user", "steering"].map((key) => shadow("conversation.chat.node", { key, priority: -10, locale: "chat", inject: face }, UserMessageCell)) : [],
-    shadow("conversation.input.permission", { priority: -10 }, Nothing),
-    shadow("conversation.input.plan", { priority: -10 }, Nothing),
+    () => shadow("conversation.chat.node", { key: "question-reply", priority: BOT_PRIORITY, locale: "chat" }, AnsweredCell),
+    () => shadow("conversation.chat.node", { key: "compaction", priority: BOT_PRIORITY, locale: "chat" }, Nothing),
+    ...canDrawUserMessages() ? ["user", "steering"].map((key) => () => shadow("conversation.chat.node", { key, priority: BOT_PRIORITY, locale: "chat", inject: face }, UserMessageCell)) : [],
+    () => shadow("conversation.input.permission", { priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.input.plan", { priority: BOT_PRIORITY }, Nothing),
     // The composer carries no model picker or run statistics; a Bot's model lives
     // in its details panel.
-    shadow("conversation.input.model", { priority: -10 }, Nothing),
-    shadow("conversation.composer.dock", { id: "activity", order: 0, priority: -10 }, Nothing),
-    shadow("conversation.composer.dock", { id: "usage", order: 1, priority: -10 }, Nothing),
-    shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
-    shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
-    shadow("conversation.composer", {
-      priority: -10,
+    () => shadow("conversation.input.model", { priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.composer.dock", { id: "activity", order: 0, priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.composer.dock", { id: "usage", order: 1, priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
+    () => shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
+    () => shadow("conversation.composer", {
+      priority: BOT_PRIORITY,
       select: (owner) => owner.pendingInteraction?.kind === "question" ? owner.pendingInteraction : null
     }, QuestionCard),
-    shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
-    shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
-    shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
-    shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
+    () => shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
+    () => shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
+    () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
+    () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
   ];
   ctx.effect(() => {
     const style = installStyles(RETURN_CSS, "return");
@@ -14372,7 +14423,9 @@ function apply(ctx) {
     };
   }, "ds-bot: agent surface");
   ctx.effect(() => {
-    const groups = surfaceGroups({ shell: installShell, conversation: installConversation });
+    const groups = surfaceGroups({ shell: installShell, conversation: installConversation }, {
+      onError: (_group, error) => actions.reportError(new Error(t("Bot mode could not be set up here: {error}", { error: error?.message ?? String(error) })), "surface")
+    });
     const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
     reconcile();
     const unsub = surface.subscribe(reconcile);
