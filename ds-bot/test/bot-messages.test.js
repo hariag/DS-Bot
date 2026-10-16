@@ -492,9 +492,10 @@ const threeBots = () => {
   return seed
 }
 const callsOf = (agents, id) => agents.get(id)?.calls ?? []
-// Read once the saves are done: a read while one renames the file over makes it fail on Windows.
-const worksIn = async (home) => {
-  await delay(50)
+// What state.json holds once the saves made so far are done: a save waits for the earlier
+// ones, and a read while one renames the file over makes that save fail on Windows.
+const worksIn = async ({ call, home }) => {
+  await call('set-prefs', {})
   return JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).works ?? {}
 }
 
@@ -512,25 +513,31 @@ async function handedOn({ agents, emit, tool }) {
 test('a Bot\'s answer waits for the work it handed on, and carries what came back', async (t) => {
   const team = await start(threeBots())
   t.after(team.stop)
-  const { agents, tool, home } = team
+  const { agents, tool, call } = team
+  const shown = async () => { const { value } = await call('state', {}); return [value.activity.b === 'waiting', value.work.waiting] }
   const { take, end, handed } = await handedOn(team)
+  assert.deepEqual(await shown(), [false, {}])
   assert.match(handed, /When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to Chief once all of it is back\.$/)
   end('b', 'handed it to Tester')
   // Nothing goes up yet; Writer waits, and the team can see it.
   assert.match(await tool('list_bots', {}, 'a'), /- Writer \(Write\)\n {2}now: waiting for Tester to hand back work, for Chief\n/)
-  assert.deepEqual(Object.values(await worksIn(home)).map(work => [work.from, work.to, work.open.length, work.held]), [['a', 'b', 1, 'handed it to Tester'], ['b', 'c', 0, undefined]])
+  assert.deepEqual(Object.values(await worksIn(team)).map(work => [work.from, work.to, work.open.length, work.held]), [['a', 'b', 1, 'handed it to Tester'], ['b', 'c', 0, undefined]])
   assert.deepEqual(callsOf(agents, 'a'), [])
+  // Its mark shows it waits, and its row whom for.
+  assert.deepEqual(await shown(), [true, { b: { bots: ['c'], rooms: [], for: ['a'] } }])
 
   take('c')
   end('c', 'two things to fix')
   await settled(() => callsOf(agents, 'b').length === 2)
   const back = take('b')
+  assert.deepEqual(await shown(), [false, {}])
   assert.equal(textOf(back.content), '[Reply from Tester · for the work Chief asked you for; your answer goes to Chief once everything you handed on is back]\ntwo things to fix')
   end('b', 'fixed both')
   await settled(() => callsOf(agents, 'a').length === 1)
   assert.equal(textOf(callsOf(agents, 'a')[0][1].content), '[Reply from Writer]\nfixed both\n\n[Handed back to Writer for this work]\n\nTester:\ntwo things to fix')
   assert.match(await tool('list_bots', {}, 'a'), /- Writer \(Write\)\n {2}now: idle\n/)
-  assert.deepEqual(await worksIn(home), {})
+  assert.deepEqual(await shown(), [false, {}])
+  assert.deepEqual(await worksIn(team), {})
 })
 
 test('a Bot may take part in the same work again, but not message one that waits for its result', async (t) => {
@@ -607,13 +614,13 @@ test('a result read during other work comes back in a turn of its own and goes o
 test('deleting a Bot that waits for work it handed on tells the Bot that asked', async (t) => {
   const team = await start(threeBots())
   t.after(team.stop)
-  const { agents, call, home } = team
+  const { agents, call } = team
   const { end } = await handedOn(team)
   end('b', 'handed it on')
   assert.equal((await call('delete-bot', { id: 'b' })).ok, true)
   await settled(() => callsOf(agents, 'a').length === 1)
   assert.equal(textOf(callsOf(agents, 'a')[0][1].content), '[Reply from Writer]\nWriter was deleted before it could answer your message.')
-  assert.deepEqual(await worksIn(home), {})
+  assert.deepEqual(await worksIn(team), {})
 })
 
 test('an answer that grows past 20,000 characters with what came back goes as a file', async (t) => {

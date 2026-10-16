@@ -35,6 +35,11 @@ const useGroupWork = (useWork, pick) => (useWork ? useWork(work => JSON.stringif
 const workKeys = text => JSON.parse(text)
 const doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching })
 const workLine = (lead, doing, more) => h(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ''}`)
+// The Bots and groups a Bot waits for (handoffs.js), by the names they have now.
+const waitingFor = (roster, waits) => {
+  const names = [...(waits?.bots ?? []).map(id => roster.byId[id]?.name), ...(waits?.rooms ?? []).map(id => roster.roomsById[id]?.name)].filter(Boolean)
+  return names.length === 0 ? '' : t('Waiting for {names}', { names: names.join(t(' and ')) })
+}
 
 function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked }) {
   const id = bot.id
@@ -54,13 +59,15 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const away = !running && groups.length > 0
   const state = botState(running || away, doing, alert)
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t('a group chat'), groups[0], groups.length - 1) : null
+  const waits = workKeys(useWork ? useWork(work => JSON.stringify(work.waiting?.[id] ?? null)) : 'null')
+  const waitsFor = state === 'waiting' ? waitingFor(roster, waits) : ''
   if (bot.hidden && !active && !main) return null
   const onContextMenu = (event) => {
     event.preventDefault()
     actions.openMenu({ kind: 'bot', id, x: event.clientX, y: event.clientY })
   }
   const pinned = bot.pinned === true && !tile
-  const label = [bot.name, main ? t('Main Bot') : '', pinned ? t('Pinned') : '', running || away ? t('Working') : '', approval ? t('Waiting for your approval') : alert ? t('Waiting for your answer') : '', unread ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [bot.name, main ? t('Main Bot') : '', pinned ? t('Pinned') : '', running || away ? t('Working') : '', waitsFor, approval ? t('Waiting for your approval') : alert ? t('Waiting for your answer') : '', unread ? t('Unread activity') : ''].filter(Boolean).join(', ')
   if (tile && wide) {
     return h('div', { className: 'bt-tile-wrap' }, h('button', {
       type: 'button', className: 'bt-tile', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
@@ -78,7 +85,9 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   pinned && !wide ? h(PinMark) : null,
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, bot.name), pinned ? h(PinMark) : null),
-    awayLine ? h('span', { className: 'bt-row-preview' }, awayLine) : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
+    awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
+      : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
+        : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 

@@ -255,6 +255,8 @@ export function install(rt) {
       else merged[job.botId] ??= 'thinking'
     }
     for (const approval of rt.approvalsView?.() ?? []) merged[approval.botId] = 'alert'
+    // Waiting for work it handed on shows only while no turn of the Bot runs.
+    for (const botId of Object.keys(rt.waitingView?.() ?? {})) merged[botId] ??= 'waiting'
     return merged
   }
 

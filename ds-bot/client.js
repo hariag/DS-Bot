@@ -46,6 +46,7 @@ var ZH = {
   "Main Bot": "主 Bot",
   Working: "工作中",
   "Waiting for your answer": "等你回答",
+  "Waiting for {names}": "等 {names} 交回",
   "Unread activity": "有未读",
   Search: "搜索",
   "New chat": "新对话",
@@ -1895,8 +1896,9 @@ body[data-bt-motion=quiet] .bt-mark[data-gaze] .bt-gaze{transform:none}
 .bt-mark[data-state=working]:is([data-shape=gumdrop],[data-shape=peanut],[data-shape=cushion],[data-shape=squircle],[data-shape=moon],[data-shape=wave]) .bt-b{animation:bt-squash 1.2s ease-in-out infinite}
 .bt-mark[data-state=working] .bt-eye{animation:bt-blink 2.4s ease-in-out infinite}
 .bt-mark[data-state=sending] .bt-b{animation:bt-dash 1.1s cubic-bezier(.4,0,.2,1) infinite}
-.bt-mark[data-state=orbit] .bt-b{animation:bt-sway 2.6s ease-in-out infinite;transform-origin:50% 50%}
-.bt-mark[data-state=orbit] .bt-eyes{animation:bt-roll 2.6s linear infinite}
+/* Waiting for teammates to hand back work circles like coordinating them. */
+.bt-mark:is([data-state=orbit],[data-state=waiting]) .bt-b{animation:bt-sway 2.6s ease-in-out infinite;transform-origin:50% 50%}
+.bt-mark:is([data-state=orbit],[data-state=waiting]) .bt-eyes{animation:bt-roll 2.6s linear infinite}
 /* A question for you hops twice when it arrives and the badge keeps it in view after;
    a lively mark keeps hopping. */
 .bt-mark[data-state=alert] .bt-b{animation:bt-hop 1.3s cubic-bezier(.3,.7,.4,1) 2}
@@ -2888,8 +2890,8 @@ function installCompiledStyles(text, tag) {
 
 // src/client/mark.js
 var import_react2 = require("react");
-var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "alert", "done"];
-var botState = (running, activity, alert) => running ? STATES.includes(activity) ? activity : "working" : alert ? "alert" : "idle";
+var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "waiting", "alert", "done"];
+var botState = (running, activity, alert) => running ? STATES.includes(activity) && activity !== "waiting" ? activity : "working" : alert ? "alert" : activity === "waiting" ? "waiting" : "idle";
 var toolState = (name) => /^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
   (0, import_react2.useEffect)(() => {
@@ -2990,7 +2992,7 @@ function useSettled(state) {
 function BotAvatar({ bot, size, state = "idle", main, admin, badge = true, live = true, gaze = false, pokeable = false }) {
   const settled = useSettled(state);
   if (bot === void 0) return (0, import_react2.createElement)(BotMark, { size });
-  const badgeKind = !badge ? null : state === "alert" ? "alert" : state !== "idle" ? "working" : admin ? "admin" : main ? "main" : null;
+  const badgeKind = !badge ? null : state === "alert" ? "alert" : state !== "idle" && state !== "waiting" ? "working" : admin ? "admin" : main ? "main" : null;
   return (0, import_react2.createElement)(
     "span",
     { className: "bt-mark", style: { width: size, height: size, "--bt-size": `${size}px` } },
@@ -4896,6 +4898,10 @@ var useGroupWork = (useWork, pick2) => useWork ? useWork((work) => JSON.stringif
 var workKeys = (text) => JSON.parse(text);
 var doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching });
 var workLine = (lead, doing, more) => (0, import_react9.createElement)(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ""}`);
+var waitingFor = (roster, waits) => {
+  const names = [...(waits?.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits?.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
+  return names.length === 0 ? "" : t("Waiting for {names}", { names: names.join(t(" and ")) });
+};
 function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked }) {
   const id = bot.id;
   const part = currentPart(bot);
@@ -4913,13 +4919,15 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const away = !running && groups.length > 0;
   const state = botState(running || away, doing, alert);
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t("a group chat"), groups[0], groups.length - 1) : null;
+  const waits = workKeys(useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null");
+  const waitsFor = state === "waiting" ? waitingFor(roster, waits) : "";
   if (bot.hidden && !active && !main) return null;
   const onContextMenu = (event) => {
     event.preventDefault();
     actions.openMenu({ kind: "bot", id, x: event.clientX, y: event.clientY });
   };
   const pinned = bot.pinned === true && !tile;
-  const label = [bot.name, main ? t("Main Bot") : "", pinned ? t("Pinned") : "", running || away ? t("Working") : "", approval ? t("Waiting for your approval") : alert ? t("Waiting for your answer") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [bot.name, main ? t("Main Bot") : "", pinned ? t("Pinned") : "", running || away ? t("Working") : "", waitsFor, approval ? t("Waiting for your approval") : alert ? t("Waiting for your answer") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
   if (tile && wide) {
     return (0, import_react9.createElement)("div", { className: "bt-tile-wrap" }, (0, import_react9.createElement)(
       "button",
@@ -4956,7 +4964,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       "span",
       { className: "bt-row-body" },
       (0, import_react9.createElement)("span", { className: "bt-row-name" }, (0, import_react9.createElement)("span", { className: "bt-row-title" }, bot.name), pinned ? (0, import_react9.createElement)(PinMark) : null),
-      awayLine ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, awayLine) : preview ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, preview) : null
+      awayLine ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react9.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
     wide && unread && !active ? (0, import_react9.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
   );

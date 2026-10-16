@@ -68,8 +68,9 @@ body[data-bt-motion=quiet] .bt-mark[data-gaze] .bt-gaze{transform:none}
 .bt-mark[data-state=working]:is([data-shape=gumdrop],[data-shape=peanut],[data-shape=cushion],[data-shape=squircle],[data-shape=moon],[data-shape=wave]) .bt-b{animation:bt-squash 1.2s ease-in-out infinite}
 .bt-mark[data-state=working] .bt-eye{animation:bt-blink 2.4s ease-in-out infinite}
 .bt-mark[data-state=sending] .bt-b{animation:bt-dash 1.1s cubic-bezier(.4,0,.2,1) infinite}
-.bt-mark[data-state=orbit] .bt-b{animation:bt-sway 2.6s ease-in-out infinite;transform-origin:50% 50%}
-.bt-mark[data-state=orbit] .bt-eyes{animation:bt-roll 2.6s linear infinite}
+/* Waiting for teammates to hand back work circles like coordinating them. */
+.bt-mark:is([data-state=orbit],[data-state=waiting]) .bt-b{animation:bt-sway 2.6s ease-in-out infinite;transform-origin:50% 50%}
+.bt-mark:is([data-state=orbit],[data-state=waiting]) .bt-eyes{animation:bt-roll 2.6s linear infinite}
 /* A question for you hops twice when it arrives and the badge keeps it in view after;
    a lively mark keeps hopping. */
 .bt-mark[data-state=alert] .bt-b{animation:bt-hop 1.3s cubic-bezier(.3,.7,.4,1) 2}

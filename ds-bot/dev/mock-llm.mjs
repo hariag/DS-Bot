@@ -19,6 +19,7 @@
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
 //   看群 名 (read_group_chat) · 转告 名: 消息, also over several lines (message_bot) · 搜索：查询1 | 查询2 (web_search)
 //   插话 名: 消息 (message_bot when "now") · 排队 名: 消息 (message_bot when "queue") · 叫停 名: 原因 (stop_bot)
+//   In a message from a Bot: 转告 名: 消息 (hands it on with message_bot) · 慢慢做 N (answers after N seconds)
 //   长文 N / long N (N×1000 characters) · 长任务 N [K] (N steps of K×1000, default 4)
 //   查记录 词 [词…] · 查锚点 part N #序号 · 查第 N 段 (read_own_chat)
 //   上下文里有 词 (searches the context except the last message) · 撑爆 (fake overflow, 400)
@@ -424,11 +425,18 @@ function decide(body) {
     const asked = userText.split('\n').slice(1).join(' ').trim().replace(/[。.!！?？]+$/u, '')
     return [text(`${match[1]} 转来一句话：「${asked}」。我先说打算：把手头已有的材料理一遍，列出还缺什么，再和你确认先后顺序；你确认之前我不会动手。`)]
   }
+  if ((match = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]\n(?:转告\s*(\S+?)\s*[:：]\s*([\s\S]+)|慢慢做\s*(\d+))/.exec(userText))) {
+    if (match[2] && tools.has('message_bot')) return [tool('message_bot', { to: match[2], message: match[3].trim() })]
+    if (match[4]) return Object.assign([text(`给 ${match[1]} 的回复：做完了，用了 ${match[4]} 秒。`)], { delay: Number(match[4]) * 1000 })
+  }
   if ((match = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]/.exec(userText))) {
     return [text(`给 ${match[1]} 的回复：\n- 先做：把现有材料理一遍\n- 需要用户提供：目标和截止时间（尚未聊过）\n- 节奏：确认后每天同步一次`)]
   }
   if ((match = /^\[Reply from ([^\]]+)\]\n.* could not answer your message: its model call failed \(([^)]+)\)/.exec(userText))) {
     return [text(`${match[1]} 这次没能回答：它的模型调用出错了（${match[2]}）。可能是 API 密钥失效，请检查它用的模型设置。`)]
+  }
+  if ((match = /^\[Reply from ([^\]·]+?) · for the work ([^\]]+?) asked you for/.exec(userText))) {
+    return [text(`${match[1]} 交回了，我把结果交给 ${match[2]}。`)]
   }
   if ((match = /^\[Reply from ([^\]]+)\]/.exec(userText))) {
     return [text(`${match[1]} 回话了：目标和截止时间都还没和你聊过，它没法凭空开工。`), tool('ask_user', { question: '下一步怎么走？', detail: '没有目标之前它只能空转。', options: ['现在告诉我目标', '先去跟它聊', '先搁着'] })]

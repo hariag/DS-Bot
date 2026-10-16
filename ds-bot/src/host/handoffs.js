@@ -109,6 +109,26 @@ export function install(rt) {
   // Two requests from one sender belong to the same work when they were sent for it.
   const sameWork = (id, parent) => (works()[id]?.parent ?? undefined) === (works()[parent] === undefined ? undefined : parent)
 
+  // The works their Bots wait on, outside a turn that does them (`busy`): each with what
+  // it handed on that has not come back yet. One that came back waits only to be read.
+  const held = busy => Object.entries(works())
+    .filter(([id, work]) => work.to !== undefined && work.open.length > 0 && !busy.has(id))
+    .map(([id, work]) => ({ id, work, out: work.open.map(childId => works()[childId]).filter(Boolean) }))
+  const busyWith = sessionIds => new Set(sessionIds.map(sessionId => rt.live.get(sessionId)).filter(entry => entry?.turn !== undefined).map(entry => workOf(entry.info)).filter(Boolean))
+
+  // Per Bot, the Bots and groups it waits for, and the Bots it does that work for.
+  function waitingView() {
+    const view = {}
+    const add = (list, id) => { if (id !== undefined && !list.includes(id)) list.push(id) }
+    for (const { work, out } of held(busyWith([...rt.live.keys()]))) {
+      if (out.length === 0) continue
+      const entry = view[work.to] ??= { bots: [], rooms: [], for: [] }
+      for (const child of out) add(child.room ? entry.rooms : entry.bots, child.room ?? child.to)
+      add(entry.for, work.from)
+    }
+    return view
+  }
+
   // A deleted Bot answers no more work and waits for none.
   function forgetBot(botId) {
     const waiting = Object.entries(works()).filter(([, work]) => work.to === botId).map(([id]) => askedBy(id))
@@ -145,16 +165,10 @@ export function install(rt) {
       const entry = rt.live.get(sessionId)
       lines.push(`working ${place(sessionId)} ${minutes(entry.since ?? Date.now())}${forWhom(sessionId, entry.info)}${doing(entry)}`)
     }
-    const busyWith = new Set(running.map(sessionId => workOf(rt.live.get(sessionId)?.info)).filter(Boolean))
-    for (const [id, work] of Object.entries(works())) {
-      if (work.to !== botId || work.open.length === 0 || busyWith.has(id)) continue
+    for (const { work, out } of held(busyWith(running))) {
+      if (work.to !== botId) continue
       const forName = nameOf(work.from) ? `, for ${nameOf(work.from)}` : ''
-      // A child that answered already waits only to be read.
-      const on = [...new Set(work.open.flatMap((childId) => {
-        const child = works()[childId]
-        if (child === undefined) return []
-        return [child.room ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : nameOf(child.to) ?? 'a teammate']
-      }))]
+      const on = [...new Set(out.map(child => (child.room ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : nameOf(child.to) ?? 'a teammate')))]
       lines.push(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
     }
     if (lines.length === 0) lines.push('idle')
@@ -168,5 +182,5 @@ export function install(rt) {
     return lines.join('; ')
   }
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView })
 }

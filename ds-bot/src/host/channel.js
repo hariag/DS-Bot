@@ -68,10 +68,10 @@ export function install(rt) {
   // What changes without a new revision, sent with every state answer. `memoryNews`:
   // per Bot, its latest memory change; `memoryReviews`: memory reviews waiting or
   // running; `work`: per Bot, the turn it runs and its tool; per group, the members whose
-  // turn there runs; and the approvals waiting.
+  // turn there runs; the approvals waiting; and per Bot, who it waits for to hand back work.
   const live = () => ({
     activity: rt.activityView(),
-    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView() },
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {} },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
