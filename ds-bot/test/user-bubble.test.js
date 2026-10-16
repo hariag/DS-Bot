@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { luminance } from '../src/client/inks.js'
+import { ACCENT_INKS, INKS, luminance } from '../src/client/inks.js'
 import { allThemes, shellTokens, themeCss } from '../src/client/themes.js'
 
 // The browser bundle holds every style sheet ds-bot installs; the bundle test
@@ -77,6 +77,28 @@ test('the user ink reads on the user surface in every built-in theme and mode', 
       const ratio = contrast(over(vars['--bt-user-ink'], vars['--bt-user']), over(vars['--bt-user'], vars['--bt-main']))
       assert.ok(ratio >= 4.5, `${id} ${dark ? 'dark' : 'light'}: ${ratio.toFixed(2)}:1`)
     }
+  }
+})
+
+// Text on the accent (send key, new-message pill, primary buttons) takes whichever
+// of the two inks reads better: white on Tangerine was 2.89:1, near-black is 6.38:1.
+test('the accent ink is the more readable of the two inks for every accent', () => {
+  const inkOf = (theme, accent, dark) => {
+    const block = themeCss(theme, accent).split('\n').find(line => line.startsWith(dark ? 'html body[data-ds-dark-theme]{' : 'html body{'))
+    return Object.fromEntries(block.slice(block.indexOf('{') + 1, -1).split(';').map(item => item.split(':')))
+  }
+  const cases = []
+  for (const id of ['deepseek', 'mono', 'paper', 'moonlight']) {
+    for (const dark of [false, true]) cases.push([`${id} ${dark ? 'dark' : 'light'}`, allThemes()[id], undefined, dark])
+  }
+  for (const ink of ACCENT_INKS) {
+    for (const dark of [false, true]) cases.push([`${ink} ${dark ? 'dark' : 'light'}`, allThemes().deepseek, INKS[ink][0], dark])
+  }
+  for (const [name, theme, accent, dark] of cases) {
+    const vars = inkOf(theme, accent, dark)
+    const paper = vars['--bt-accent'], ink = vars['--bt-accent-ink']
+    const other = ink === '#ffffff' ? '#141414' : '#ffffff'
+    assert.ok(contrast(ink, paper) >= contrast(other, paper), `${name}: ${ink} on ${paper} is ${contrast(ink, paper).toFixed(2)}:1, ${other} would be ${contrast(other, paper).toFixed(2)}:1`)
   }
 })
 
