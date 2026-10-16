@@ -547,6 +547,7 @@ function sse(res, payload) {
 // An Ollama-shaped search API, for checking a `searchApis` entry declared in config.
 function searchApi(req, res) {
   let raw = ''
+  req.setEncoding('utf8')
   req.on('data', chunk => { raw += chunk })
   req.on('end', () => {
     const body = JSON.parse(raw || '{}')
@@ -564,6 +565,7 @@ const server = createServer((req, res) => {
     return
   }
   let raw = ''
+  req.setEncoding('utf8')
   req.on('data', chunk => { raw += chunk })
   req.on('end', () => {
     const body = JSON.parse(raw)
