@@ -281,7 +281,8 @@ await step('update Writer', () => api('update-bot', { id: botNamed('Writer').id,
 
 // dsh keeps each Session under a folder named after its cwd. A change of working folder
 // moves the Bot's own chat on to a fresh part made there; the fresh part then stays put.
-const project = realpathSync(mkdtempSync(join(tmpdir(), 'ds-bot-smoke-folder-')))
+// The native realpath is the one DS Bot saves; on Windows the JS one keeps 8.3 short names.
+const project = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-smoke-folder-')))
 const folderOf = sessionId => readdirSync(join(HOME, 'sessions')).find(dir => existsSync(join(HOME, 'sessions', dir, sessionId)))
 const coderParts = () => (botNamed('Coder').segments ?? []).length
 const partsBeforeFolder = coderParts()
