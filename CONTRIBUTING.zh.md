@@ -161,6 +161,7 @@ dev/bench.sh dev 3081 8771 reset    # 模拟模型 + DSH Web；数据在 ../.dsh
 
 - 一个改动只做一件事。
 - 不要手改 `client.js`。改 `src/client/`，运行 `npm run build`，两者一起提交。
+- 在 `src/client/` 里，颜色用 `--bt-*` 变量，圆角只用 4、6、8、10、12、16、18、20、22、999px 和 50% 这几档，弹簧用 `motion.js` 里的。有单元测试检查这三项。测试之前就写成的地方列在 `test/style-debt.json` 里，这份清单只减不增。改掉一处后，运行 `node scripts/style-debt.mjs --write` 更新清单。
 - 跟随改动周围代码的风格。只有当代码本身看不出原因时才写注释。
 - 提交说明用英文。标题简短，用祈使句（如 "Keep group replies visible"），在正文里写原因。
 - 提交的作者是做出改动的人。用 AI 工具辅助时，不要把它加为作者，也不要加 `Co-authored-by` 行；在工具里关掉这个设置。
