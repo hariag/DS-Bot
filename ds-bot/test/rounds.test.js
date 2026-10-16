@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -11,8 +11,8 @@ import { fakeContext } from './fake-ctx.js'
 // session/event listener, so a round runs with no model. Prompts land in the
 // Session's inbox the way DSH holds them while a turn runs: queued for the next turn,
 // or steered into the next step.
-function start() {
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-rounds-'))
+// `home`: start on the data of an earlier run, as after a restart.
+function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-rounds-')) } = {}) {
   const ctx = fakeContext()
   const workspaces = new Map()
   const sent = []
@@ -97,9 +97,9 @@ function start() {
     await emit(sessionId, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
     await emit(sessionId, { type: 'turn/end', data: { reason: { kind: 'stop' } } })
   }
-  const stop = async () => {
+  const stop = async ({ keep = false } = {}) => {
     await ctx.dispose()
-    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+    if (!keep) rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { call, emit, userMessage, compose, relay, inboxOf, answer, stop, sent, ctx, home, rt }
 }
@@ -348,35 +348,78 @@ test('a message sent between rounds still opens a full round', async (t) => {
   assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
 })
 
-// #217: DSH opens a relative file link from the folder of the Session that shows it. A
-// member wrote the link in its own group Session, which works in the group's folder; the
-// group's Session and other Bots work elsewhere, so the link reaches them in full.
-test('a relative file link a member writes reaches the group, and another Bot, as a full path', async (t) => {
-  const { call, emit, userMessage, relay, answer, stop, sent, ctx, rt } = start()
-  t.after(stop)
-  const folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-links-')))
-  t.after(() => rmSync(folder, { recursive: true, force: true }))
+// #206: state.json is written whole on every save, so a long group line keeps its start
+// there and its whole text in a file of its own. Members still read it whole.
+test('a long group line keeps its start in state.json, and members and read_group_chat read it whole', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, ctx, home, rt } = start()
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   const room = await team(call, sent)
-  assert.equal((await call('update-room', { id: room.id, workDir: folder })).ok, true)
-  const full = path => join(folder, path).replace(/\\/g, '/').replace(/ /g, '%20')
-  await emit(room.id, userMessage('Where is the draft?'))
+  const long = `${'长'.repeat(9000)}结尾`
+  await emit(room.id, userMessage('Write it all out'))
   const running = relay(room.id, 'relay')
   const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'It is in [a.txt](sub/a.txt).', 1)
+  await answer(first.sessionId, first.message.source.exchangeId, long, 1)
   const second = await turnFor(sent, first)
-  // The next member reads it in its prompt, and the group shows it, with the full path.
-  assert.ok(second.message.content[0].text.includes(`[a.txt](${full('sub/a.txt')})`))
+  assert.ok(second.message.content[0].text.includes(long), 'the next member reads the line whole')
   await answer(second.sessionId, second.message.source.exchangeId, 'Thanks.', 2)
-  const result = JSON.parse(await running)
-  assert.equal(result.replies[0].text, `It is in [a.txt](${full('sub/a.txt')}).`)
+  assert.equal(JSON.parse(await running).replies[0].text, long)
 
-  // A Bot that works in the folder sends the same link to another Bot.
-  const chief = rt.state.mainBotIds[0]
-  const writer = rt.state.rooms[room.id].members.find(id => id !== chief)
-  sent.length = 0
-  await ctx.registeredTools.get('message_bot').execute({ to: rt.botOf(writer).name, message: 'Read [notes](notes.md#L3)', when: 'queue' }, {
-    agent: { id: first.sessionId, session: { id: first.sessionId, header: { cwd: folder } }, inbox: { nextStep: [], nextTurn: [] } }, callId: 'c1',
-  })
-  const delivered = await waitFor(() => sent.find(entry => entry.message.source?.role === 'request'))
-  assert.ok(delivered.message.content.map(block => block.text).join('\n').includes(`[notes](${full('notes.md')}#L3)`))
+  await rt.save()
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).rooms[room.id].log.find(line => line.length !== undefined)
+  assert.equal(saved.text.length, 2000)
+  assert.equal(saved.length, long.length)
+  assert.equal(readFileSync(join(home, 'group-lines', room.id, `${saved.seq}.txt`), 'utf8'), long)
+  const read = ctx.registeredTools.get('read_group_chat')
+  const exec = { agent: { id: first.sessionId } }
+  assert.match(await read.execute({ group: 'R1' }, exec), new RegExp(`cut; ${long.length} characters in all; read_group_chat with seq ${saved.seq} reads it whole`))
+  assert.ok((await read.execute({ group: 'R1', seq: saved.seq }, exec)).endsWith(long))
+  await stop({ keep: true })
+
+  // The log is full (60 lines) when DSH starts again, the long line second oldest.
+  const file = join(home, 'state.json')
+  const onDisk = JSON.parse(readFileSync(file, 'utf8'))
+  const kept = onDisk.rooms[room.id]
+  const fillers = Array.from({ length: 60 - kept.log.length }, (_, at) => ({ who: 'User', text: `line ${at}`, seq: kept.seq + at + 1 }))
+  kept.log = [...kept.log, ...fillers]
+  kept.seq += fillers.length
+  writeFileSync(file, JSON.stringify(onDisk))
+
+  // After a restart the whole line is read back from its file.
+  const again = start({ home })
+  t.after(() => again.stop({ keep: true }))
+  await again.call('state', {})
+  const whole = await again.ctx.registeredTools.get('read_group_chat').execute({ group: 'R1', seq: saved.seq }, exec)
+  assert.ok(whole.endsWith(long))
+
+  // The file goes with the line once the log moves past it, and with the group.
+  await again.emit(room.id, again.userMessage('Next'))
+  const next = again.relay(room.id, 'relay-2')
+  const one = await turnFor(again.sent)
+  await again.answer(one.sessionId, one.message.source.exchangeId, 'One.', 3)
+  const two = await turnFor(again.sent, one)
+  await again.answer(two.sessionId, two.message.source.exchangeId, 'Two.', 4)
+  await next
+  await waitFor(() => (existsSync(join(home, 'group-lines', room.id, `${saved.seq}.txt`)) ? undefined : true))
+  assert.equal(existsSync(join(home, 'group-lines', room.id, `${saved.seq}.txt`)), false)
+  await again.call('delete-room', { id: room.id })
+  await waitFor(() => (existsSync(join(home, 'group-lines', room.id)) ? undefined : true))
+  assert.equal(existsSync(join(home, 'group-lines', room.id)), false)
+})
+
+test('a group line longer than a member reads is cut in its prompt, with its length, and its file keeps only that', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, home, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  await emit(room.id, userMessage('Go'))
+  const running = relay(room.id, 'relay')
+  const first = await turnFor(sent)
+  await answer(first.sessionId, first.message.source.exchangeId, 'x'.repeat(25_000), 1)
+  const second = await turnFor(sent, first)
+  const prompt = second.message.content[0].text
+  assert.ok(prompt.includes(`${'x'.repeat(20_000)}… (cut; 25000 characters in all)`))
+  assert.ok(!prompt.includes('x'.repeat(20_001)))
+  await answer(second.sessionId, second.message.source.exchangeId, 'Ok.', 2)
+  await running
+  const line = rt.state.rooms[room.id].log.find(entry => entry.length === 25_000)
+  assert.equal(readFileSync(join(home, 'group-lines', room.id, `${line.seq}.txt`), 'utf8').length, 20_000)
 })

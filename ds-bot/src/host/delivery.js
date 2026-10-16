@@ -1,7 +1,8 @@
 // Delivery: how one Bot, the user, or DS Bot itself puts a message into a Bot Session.
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SOURCE_KIND } from './constants.js'
+import { HISTORY_TIMEOUT_MS, SOURCE_KIND, TEXT_KEPT, TEXT_SHOW_MAX } from './constants.js'
+import { headOf, textOf } from './text.js'
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -64,11 +65,14 @@ export function install(rt) {
       ...(askedBy ? { askedBy } : {}),
       ...(fromRoomId ? { senderRoomId: fromRoomId } : {}),
     }
+    const targetSessionId = sessionId ?? rt.chatOf(toId)
     if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried && !resent) {
-      state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
+      // The whole text is in the Session it goes to; exchangeText reads it back there.
+      const kept = headOf(text, TEXT_KEPT)
+      const whole = kept.length < text.length ? { length: text.length, sessionId: targetSessionId } : {}
+      state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text: kept, ...whole, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
       void rt.save().catch(() => {})
     }
-    const targetSessionId = sessionId ?? rt.chatOf(toId)
     await rt.ensureCapabilities(targetSessionId)
     const agent = await resolveAgent(targetSessionId)
     // A steered message cuts into a running turn at its next step; a follow-up
@@ -86,5 +90,23 @@ export function install(rt) {
     return exchangeId
   }
 
-  Object.assign(rt, { resolveAgent, deliver })
+  // A message between Bots, whole, from the Session it was delivered to: the message
+  // there is its header line, then the text. `whole` is false when only the start could
+  // be read (the Session is gone, or the message is past what the dialog shows).
+  async function exchangeText(entry) {
+    if (entry.length === undefined) return { text: entry.text, whole: true }
+    try {
+      for await (const event of rt.eventsBackwards(entry.sessionId ?? rt.chatOf(entry.to), AbortSignal.timeout(HISTORY_TIMEOUT_MS))) {
+        if (event.type !== 'user/message' || event.data?.source?.exchangeId !== entry.id) continue
+        const delivered = textOf(event.data.content)
+        const text = delivered.slice(delivered.indexOf('\n') + 1)
+        return { text: headOf(text, TEXT_SHOW_MAX), whole: text.length <= TEXT_SHOW_MAX }
+      }
+    } catch (error) {
+      rt.warn('ds-bot: message %s not read back: %s', entry.id, error)
+    }
+    return { text: entry.text, whole: false }
+  }
+
+  Object.assign(rt, { resolveAgent, deliver, exchangeText })
 }

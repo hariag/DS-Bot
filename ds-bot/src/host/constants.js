@@ -28,6 +28,14 @@ export const MAX_UNATTENDED_MESSAGES = 40
 // stuck, and more messages only pile up behind it.
 export const MAX_UNREAD_REQUESTS = 10
 export const MAX_EXCHANGES = 600
+// state.json is written whole on every save, so a long message between Bots or a long
+// group line keeps only its start there. The rest stays where it already is (a message
+// in the Session it was delivered to) or in a file of its own (a group line).
+export const TEXT_KEPT = 2000
+// Of one group line, a member reads this much: in its prompt, and with read_group_chat.
+export const GROUP_LINE_READ = 20_000
+// The Bot exchange dialog shows at most this much of one message.
+export const TEXT_SHOW_MAX = 200_000
 export const ROOM_REPLY_TIMEOUT_MS = 240_000
 // Lines a member writes less than this apart while it works reach its group together.
 export const ROOM_STEP_GAP_MS = 30_000

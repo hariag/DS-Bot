@@ -78,7 +78,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -128,6 +128,12 @@ export function install(rt) {
           await rt.load()
           const pair = new Set([body.a, body.b])
           return ok(state.exchanges.filter(entry => pair.has(entry.from) && pair.has(entry.to)))
+        }
+        case 'exchange-text': {
+          await rt.load()
+          const entry = state.exchanges.find(item => item.id === body.id)
+          if (entry === undefined) return fail('This message is no longer kept', 'bot/stale')
+          return ok(await rt.exchangeText(entry))
         }
         case 'earlier':
           await rt.load()

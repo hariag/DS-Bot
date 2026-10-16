@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -620,4 +620,53 @@ test('a request the model keeps turning down moves the Bot on, without its lates
   await failTurn('s2', 'INVALID_REQUEST')
   await delay(30)
   assert.equal(made, 2)
+})
+
+// #206: a message between Bots used to go whole into state.json, which is written whole
+// on every save; an empty one started a turn on nothing.
+test('message_bot turns down an empty message', async (t) => {
+  const { agentOf, tool, exchanges, stop } = await start(team())
+  t.after(stop)
+  for (const message of ['', '   \n\t ']) assert.equal(await tool('message_bot', { to: 'Writer', message }, 'a'), 'Write a message to send.')
+  assert.deepEqual(agentOf('b').calls, [])
+  assert.deepEqual(await exchanges(), [])
+})
+
+test('a long message between Bots keeps its start in state.json and is read back whole from the Session', async (t) => {
+  const { ctx, agentOf, tool, call, exchanges, home, stop } = await start(team())
+  t.after(stop)
+  const long = `${'长'.repeat(30_000)}结尾`
+  await tool('message_bot', { to: 'Writer', message: long }, 'a')
+  const [, delivered] = agentOf('b').calls.find(([kind]) => kind === 'steer' || kind === 'followup')
+  assert.ok(delivered.content[0].text.endsWith(long), 'the recipient gets it whole')
+  const [entry] = await exchanges()
+  assert.equal(entry.text.length, 2000)
+  assert.equal(entry.length, long.length)
+  assert.equal(entry.sessionId, 'b')
+  const file = join(home, 'state.json')
+  for (let at = 0; at < 100 && !readFileSync(file, 'utf8').includes(entry.id); at += 1) await delay(20)
+  const saved = readFileSync(file, 'utf8')
+  assert.ok(saved.length < 10_000, `state.json is ${saved.length} characters`)
+  assert.ok(!saved.includes('\n'), 'state.json is written without indentation')
+
+  // The dialog reads the whole text back from the Session it was delivered to.
+  agentOf('b').session.seq = 2
+  ctx.sessionController.page = async ({ address }) => ({
+    records: agentOf(address.sessionId).calls.map(([, message], index) => ({ event: { type: 'user/message', seq: index + 1, data: { content: message.content, source: message.source } } })),
+    hasMore: false,
+  })
+  assert.deepEqual((await call('exchange-text', { id: entry.id })).value, { text: long, whole: true })
+  // A Session that cannot be read leaves the start, said to be only that.
+  ctx.sessionController.page = async () => { throw new Error('gone') }
+  assert.deepEqual((await call('exchange-text', { id: entry.id })).value, { text: entry.text, whole: false })
+})
+
+test('a team saved with long messages whole keeps only their start after it loads', async (t) => {
+  const seed = team()
+  seed.exchanges = [{ id: 'x1', from: 'a', to: 'b', text: 'y'.repeat(5000), role: 'request', time: 1 }]
+  const { exchanges, stop } = await start(seed)
+  t.after(stop)
+  const [entry] = await exchanges()
+  assert.equal(entry.text, 'y'.repeat(2000))
+  assert.equal(entry.length, 5000)
 })

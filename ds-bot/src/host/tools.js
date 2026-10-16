@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { COLORS, EXTRA_COLORS, MAX_HOPS, MAX_UNATTENDED_MESSAGES, MAX_UNREAD_REQUESTS, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
 import { unquote } from './text.js'
-import { mentionSpans } from '../shared/mentions.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
@@ -101,26 +100,9 @@ export function install(rt) {
     refuse(`Not sent: the team has sent ${MAX_UNATTENDED_MESSAGES} Bot messages since the user last wrote. Stop messaging other Bots and tell the user what is still open.`)
   }
 
-  // Work for a group stays in it: from a group Session, message_bot calls a member there
-  // exactly as an "@Name" line would, and never reaches a Bot outside the group.
-  const callInGroup = async (exec, room, sender, target, message) => {
-    if (!room.members.includes(target.id)) {
-      const add = rt.isMain(sender.id) || rt.isAdminOf(room, sender.id) ? ', or add it yourself with update_group first' : ''
-      refuse(`Not sent: ${target.name} is not in "${room.name}", and work for this group stays in it. Ask the user to add ${target.name} to the group${add}.`)
-    }
-    const call = `@${target.name}`
-    await rt.roomStepText(exec.agent.id, rt.live.get(exec.agent.id)?.info, message.startsWith(call) ? message : `${call} ${message}`, false)
-    return `Called ${target.name} in "${room.name}" with your message, as writing "${call}" there does: it works on it in the group, and you answer its result there. Nothing went to its own chat.`
-  }
-
-  // The Bots each Session's post_to_group called by name in its current turn, so that
-  // turn does not also send them the same work in their own chats.
-  const calledInPosts = new Map()
-  const turnOf = exec => rt.live.get(exec.agent?.id)?.turn
-
   ctx.tools.register(defineTool({
     name: 'message_bot',
-    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course, then answers once that work is done; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead. In a group chat it reaches only members of that group, as writing "@Name" there does.',
+    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course, then answers once that work is done; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead.',
     parameters: {
       to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
       message: { type: 'string', required: true, description: 'Self-contained message; the other Bot cannot see this conversation' },
@@ -143,11 +125,7 @@ export function install(rt) {
       const target = rt.findBot(args.to)
       if (target === undefined) return `No Bot named ${args.to}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`
       if (target.id === sender.id) return 'You cannot message yourself.'
-      const room = rt.roomOf(rt.groupOwners.get(exec.agent?.id)?.roomId)
-      if (room !== undefined) return callInGroup(exec, room, sender, target, String(args.message ?? '').trim())
-      const posted = calledInPosts.get(exec.agent?.id)
-      const postedIn = posted !== undefined && posted.turn === turnOf(exec) ? posted.calls.get(target.id) : undefined
-      if (postedIn !== undefined) refuse(`Not sent: you called ${target.name} in "${postedIn}" in this turn, and it works on that there. Send each task one way only; to add to it, post in that group.`)
+      if (String(args.message ?? '').trim() === '') return 'Write a message to send.'
       const hop = nextHop(exec)
       if (hop > MAX_HOPS) return CHAIN_TOO_LONG
       checkUnattended()
@@ -159,7 +137,7 @@ export function install(rt) {
       const toUser = args.reply_to === 'user'
       const working = rt.live.get(chat)?.turn !== undefined
       const steer = args.when !== 'queue' && !toUser
-      await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : {}) })
+      await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
       rt.unattended.sent += 1
       const sent = toUser
         ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
@@ -452,14 +430,6 @@ export function install(rt) {
         await rt.postToRoom(room, sender, text, { hop, ...(reportBack ? { reportBack: true } : {}) })
       } catch (failure) {
         return `Could not post in "${room.name}": ${failure.message}`
-      }
-      const named = mentionSpans(text, room.members.map(rt.botOf).filter(Boolean)).flatMap(span => (span.bot ? [span.bot.id] : []))
-      if (named.length > 0) {
-        const turn = turnOf(exec)
-        const earlier = calledInPosts.get(exec.agent?.id)
-        const calls = new Map(earlier !== undefined && earlier.turn === turn ? earlier.calls : [])
-        for (const id of named) calls.set(id, room.name)
-        calledInPosts.set(exec.agent?.id, { turn, calls })
       }
       rt.unattended.sent += 1
       return `Posted in "${room.name}". Members reply there, where the user reads them${reportBack ? '; their replies also come back to you as a new message when the round ends' : ', and nothing comes back to you'}.`

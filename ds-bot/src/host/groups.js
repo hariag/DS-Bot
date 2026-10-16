@@ -15,11 +15,14 @@
 // turn keeps running in its group Session, and what it ends with is posted to the group,
 // where the member that asked for it answers.
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { ROOM_LATE_ROUNDS, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS } from './constants.js'
-import { escapeRegExp, splitRef, textOf } from './text.js'
-import { mentionSpans, speakerOf } from '../shared/mentions.js'
+import { GROUP_LINE_READ, ROOM_LATE_ROUNDS, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS, TEXT_KEPT } from './constants.js'
+import { escapeRegExp, headOf, splitRef, textOf } from './text.js'
+import { mentionSpans } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
 import { failureLine } from './turns.js'
 
@@ -41,11 +44,6 @@ const ensureRoomLog = (room) => {
   room.seen ??= {}
 }
 
-const appendRoom = (room, line) => {
-  room.seq += 1
-  room.log = [...room.log, { ...line, seq: room.seq }].slice(-ROOM_LOG_MAX)
-}
-
 // A member's own lines are already in its Session, so only the others' are news.
 const unseenLines = (room, memberId) => {
   const since = room.seen[memberId]
@@ -53,14 +51,15 @@ const unseenLines = (room, memberId) => {
   return room.log.filter(line => line.seq > since && line.botId !== memberId).slice(-ROOM_DELTA_MAX)
 }
 
-const lineText = (line) => {
-  if (line.kind === 'lookup') return `[${speakerOf(line)} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
-  if (line.kind === 'resumed') return `[${speakerOf(line)}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
-  if (line.kind === 'cut') return `[${speakerOf(line)}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
-  if (line.kind === 'stopped') return `[The user stopped ${speakerOf(line)}'s work here]`
-  return `${speakerOf(line)}: ${line.text}`
+// `text` is what to show of a message line, by default what the log keeps of it.
+const lineText = (line, text = line.text) => {
+  if (line.kind === 'lookup') return `[${line.who} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
+  if (line.kind === 'resumed') return `[${line.who}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
+  if (line.kind === 'cut') return `[${line.who}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
+  if (line.kind === 'stopped') return `[The user stopped ${line.who}'s work here]`
+  return `${line.who}: ${text}`
 }
-const transcript = lines => lines.map(lineText).join('\n')
+const transcript = (lines, textOfLine = line => line.text) => lines.map(line => lineText(line, textOfLine(line))).join('\n')
 
 // Models often echo the transcript format ("Name: …") despite the instruction.
 export const stripOwnName = (name, text) => text.replace(new RegExp(`^\\s*\\**${escapeRegExp(name)}\\**\\s*[:：]\\s*`), '').trim()
@@ -111,10 +110,67 @@ const roomKickoff = language => `The user just created this group and has not wr
 
 const ROOM_READ_MAX = 30
 
-const fileLine = file => `[File "${file.name}" (${file.bytes} bytes) attached]`
-
 export function install(rt) {
   const { ctx } = rt
+
+  // A long line keeps its start in state.json, which is written whole on every save,
+  // and what a member reads of it (GROUP_LINE_READ) in a file of its own: written once,
+  // before the state that names it, and removed with the line. All of it stays in the
+  // group's Session, where the group chat shows it.
+  const linesDir = join(rt.home, 'group-lines')
+  const lineFile = (roomId, seq) => join(linesDir, roomId, `${seq}.txt`)
+  const wholeLines = new Map()
+  const lineKey = (roomId, seq) => `${roomId}/${seq}`
+  const writes = () => rt.readOnly?.() === undefined
+
+  function keepGroupLine(roomId, line, text) {
+    const kept = headOf(text, TEXT_KEPT)
+    if (kept.length === text.length) return line
+    const read = headOf(text, GROUP_LINE_READ)
+    wholeLines.set(lineKey(roomId, line.seq), read)
+    if (writes()) {
+      try {
+        mkdirSync(join(linesDir, roomId), { recursive: true })
+        writeFileSync(lineFile(roomId, line.seq), read, 'utf8')
+      } catch (error) {
+        rt.warn('ds-bot: group line %s/%s not kept whole: %s', roomId, line.seq, error)
+      }
+    }
+    return { ...line, text: kept, length: text.length }
+  }
+
+  function dropGroupLine(roomId, line) {
+    if (line.length === undefined) return
+    wholeLines.delete(lineKey(roomId, line.seq))
+    if (writes()) void rm(lineFile(roomId, line.seq), { force: true }).catch(() => {})
+  }
+
+  function dropGroupLines(roomId) {
+    for (const key of wholeLines.keys()) if (key.startsWith(`${roomId}/`)) wholeLines.delete(key)
+    if (writes()) void rm(join(linesDir, roomId), { recursive: true, force: true }).catch(() => {})
+  }
+
+  // After a restart the whole lines are read back before a member reads them.
+  const loadGroupLines = room => Promise.all(room.log
+    .filter(line => line.length !== undefined && !wholeLines.has(lineKey(room.id, line.seq)))
+    .map(line => readFile(lineFile(room.id, line.seq), 'utf8').then(text => { wholeLines.set(lineKey(room.id, line.seq), text) }, () => {})))
+
+  // What a member reads of a line: all of it, up to GROUP_LINE_READ.
+  const memberText = room => (line) => {
+    const read = line.length === undefined ? line.text : wholeLines.get(lineKey(room.id, line.seq))
+    if (read === undefined) return `${line.text}… (cut; ${line.length} characters in all, the rest was not kept)`
+    const length = line.length ?? read.length
+    const shown = headOf(read, GROUP_LINE_READ)
+    return length > shown.length ? `${shown}… (cut; ${length} characters in all)` : shown
+  }
+
+  const appendRoom = (room, line) => {
+    room.seq += 1
+    const log = [...room.log, keepGroupLine(room.id, { ...line, seq: room.seq }, line.text ?? '')]
+    for (const gone of log.slice(0, -ROOM_LOG_MAX)) dropGroupLine(room.id, gone)
+    room.log = log.slice(-ROOM_LOG_MAX)
+  }
+  Object.assign(rt, { keepGroupLine, dropGroupLines })
 
   // A member's group Session, created on its first turn there. A new one starts with
   // a fresh look at the log and a brief of the member's own chat; the brief is the
@@ -127,15 +183,6 @@ export function install(rt) {
       return { id: known, brief: undefined }
     }
     const id = await rt.createSession(`${member.name} · ${room.name}`, { dir: rt.workDirOf({ botId: member.id, roomId: room.id }) })
-    // While the Session was made the member may have left or been deleted, the group been
-    // deleted, or another turn made the member's Session first: the new one is not kept.
-    // Undefined means the member is gone from the group.
-    const gone = rt.roomOf(room.id) !== room || !room.members.includes(member.id) || rt.botOf(member.id) === undefined
-    if (gone || room.sessions?.[member.id] !== undefined) {
-      void ctx.workspaceRegistry.archiveSession(id, { stopActivity: true })
-        .catch(error => rt.warn('ds-bot: unused group Session of %s in %s not archived: %s', member.name, room.name, error))
-      return gone ? undefined : groupSessionFor(room, member)
-    }
     room.sessions[member.id] = id
     rt.groupOwners.set(id, { botId: member.id, roomId: room.id })
     delete room.seen[member.id]
@@ -153,7 +200,6 @@ export function install(rt) {
 
   // Lines from before the round's opening message are kept apart from this round, so
   // an earlier round (an old count-off, say) never reads as part of the current one.
-  // `files` are the files of the lines shown, which go to the member with the prompt.
   function roomPrompt(room, member, round) {
     const peers = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
       .map(bot => `${bot.name}${rt.isAdminOf(room, bot.id) ? ' (admin)' : ''}`)
@@ -167,15 +213,15 @@ export function install(rt) {
     const after = round.slots.length - index - 1
     const members = `Members: the user${peers.length ? `, ${peers.join(', ')}` : ''} and you${leads ? ' (admin)' : ''}. Members speak one at a time; each message is posted before the next speaker starts. ${ROOM_CALLS}`
     const notice = room.notice ? `Group notice (shared instructions for every member):\n${room.notice}` : ''
-    if (round.kickoff) return { text: [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n'), files: [] }
+    if (round.kickoff) return [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n')
     const working = workingIn(room).filter(item => item.bot.id !== member.id)
-    const text = [
+    return [
       members,
       notice,
       leads ? adminNote(room) : '',
-      earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier)}` : '',
+      earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
       current.length
-        ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current)}`
+        ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room))}`
         : 'Nothing new in this round since your last message.',
       round.shown?.includes(member.id) ? '' : referenceNote(round.references),
       working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min)`).join(', ')}.` : '',
@@ -183,7 +229,6 @@ export function install(rt) {
       `You are number ${index + 1} of ${round.slots.length}. ${before === 0 ? 'Nobody spoke before you' : `${before} went before you`}${after === 0 ? ', and you are the last.' : `; ${after} after you will see your message.`}`,
       ROOM_REPLY,
     ].filter(Boolean).join('\n\n')
-    return { text, files: [...earlier, ...current].flatMap(line => line.files ?? []) }
   }
 
   // Members whose turn in this group is running, and since when.
@@ -209,7 +254,7 @@ export function install(rt) {
   // member's Session, so a member at work is never cut off. `by` is the member that
   // called it, which answers what the turn posts after the round moved on. What the
   // member writes before its last step is posted at once and collected in `said`.
-  async function roomTurn(room, member, sessionId, { text, files }, note, signal, round, by, said = []) {
+  async function roomTurn(room, member, sessionId, text, note, signal, round, by, said = []) {
     if (signal.aborted) return null
     const exchangeId = randomUUID()
     const turn = { botId: member.id, sessionId, exchangeId }
@@ -243,7 +288,7 @@ export function install(rt) {
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, hop: round.hop, ...(by ? { askedBy: by } : {}) })
+      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, hop: round.hop, ...(by ? { askedBy: by } : {}) })
       // Still held by an earlier request: this turn cannot start until the user answers.
       if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
       // Still at earlier work: the call waits in its inbox and is answered after that.
@@ -267,11 +312,6 @@ export function install(rt) {
       || (owner !== undefined && waiter.botId === owner.botId && waiter.roomId === owner.roomId))
   }
   rt.touchRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.touch() }
-  rt.failRoomTurn = (sessionId, failure) => {
-    const waiters = waitersOf(sessionId)
-    for (const waiter of waiters) waiter.fail(failure)
-    return waiters.length > 0
-  }
   rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
   // The team's own tools are quick; any other tool is the start of work.
   const QUICK_TOOLS = new Set(TEAM_TOOLS)
@@ -372,16 +412,12 @@ export function install(rt) {
         round.replies.push({ kind: 'failed', botId: member.id, name: member.name, color: member.color, code: 'SESSION', text: String(error?.message ?? error).slice(0, 300), time: Date.now() })
         continue
       }
-      if (session === undefined) {
-        round.speaking = null
-        slot.status = 'left'
-        continue
-      }
+      await loadGroupLines(room)
       const prompt = roomPrompt(room, member, round)
       round.shown?.push(member.id)
-      const text = session.brief === undefined ? prompt.text : `${session.brief}\n\n${prompt.text}`
+      const text = session.brief === undefined ? prompt : `${session.brief}\n\n${prompt}`
       const said = []
-      const reply = await roomTurn(room, member, session.id, { text, files: prompt.files }, slot.note ?? 'your turn', signal, round, slot.by, said)
+      const reply = await roomTurn(room, member, session.id, text, slot.note ?? 'your turn', signal, round, slot.by, said)
       round.speaking = null
       const final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       if (reply?.failure !== undefined) {
@@ -440,12 +476,10 @@ export function install(rt) {
       const event = item => item.failed || item.resumed || item.stopped
       for (const post of posts.filter(item => !item.kickoff && !event(item))) {
         // Image readings go into the log only; `@` names are picked from what the user typed.
-        // A file stays with its line and reaches each member the line is shown to.
-        const readings = post.images === undefined ? [] : await rt.imagesForGroup(post.images, room.id)
-        const text = [post.text, ...readings, ...(post.files ?? []).map(fileLine)].filter(Boolean).join('\n')
+        const text = post.images === undefined ? post.text : [post.text, ...await rt.imagesForGroup(post.images, room.id)].filter(Boolean).join('\n')
         appendRoom(room, post.botId
           ? { who: rt.botOf(post.botId)?.name ?? post.name ?? 'Bot', botId: post.botId, text }
-          : { who: 'User', text, ...(post.files === undefined ? {} : { files: post.files }) })
+          : { who: 'User', text })
       }
       if (posts.some(post => !post.botId && !post.kickoff)) {
         room.botRounds = 0
@@ -571,7 +605,10 @@ export function install(rt) {
   ctx.tools.register(defineTool({
     name: 'read_group_chat',
     description: 'Read the latest messages of a group chat, including what you said there. You speak in groups from separate conversations, so your own chat does not show them. Main Bots may read any group; others the groups they are in.',
-    parameters: { group: GROUP_REF },
+    parameters: {
+      group: GROUP_REF,
+      seq: { type: 'integer', description: 'Read one message whole: the seq that a cut message names' },
+    },
     output,
     async execute(args, exec) {
       await rt.load()
@@ -580,8 +617,18 @@ export function install(rt) {
       const { room, error } = rt.pickRoom(args.group, self)
       if (error) return error
       ensureRoomLog(room)
+      await loadGroupLines(room)
+      if (args.seq !== undefined) {
+        const line = room.log.find(entry => entry.seq === Number(args.seq))
+        return line === undefined ? `"${room.name}" no longer keeps message ${args.seq}; it keeps its latest ${ROOM_LOG_MAX}.` : lineText(line, memberText(room)(line))
+      }
+      // Thirty whole lines could fill the context, so a long one shows its start.
+      const short = (line) => {
+        const length = line.length ?? line.text.length
+        return length <= TEXT_KEPT ? line.text : `${headOf(line.text, TEXT_KEPT)}… (cut; ${length} characters in all; read_group_chat with seq ${line.seq} reads it whole)`
+      }
       const lines = room.log.slice(-ROOM_READ_MAX)
-      return lines.length === 0 ? `"${room.name}" has no messages yet.` : `Latest in "${room.name}" (oldest first):\n${transcript(lines)}`
+      return lines.length === 0 ? `"${room.name}" has no messages yet.` : `Latest in "${room.name}" (oldest first):\n${transcript(lines, short)}`
     },
   }))
 

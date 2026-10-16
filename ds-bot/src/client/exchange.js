@@ -7,9 +7,29 @@ import { useEscape, usePaneLeft } from './overlay-hooks.js'
 import { t } from './i18n.js'
 
 const SHEET_EXIT_MS = 220
+
+// Under a long message: the button that reads it whole, or why only part of it shows.
+function WholeNote({ entry, read, onShow }) {
+  if (read === undefined || read === 'loading') {
+    return h('button', { type: 'button', className: 'bt-more bt-whole', disabled: read === 'loading', onClick: onShow }, t('Show all · {count} characters', { count: entry.length.toLocaleString() }))
+  }
+  if (read.whole) return null
+  const note = typeof read.text === 'string' && read.text.length > entry.text.length
+    ? t('Showing the first {count} characters', { count: read.text.length.toLocaleString() })
+    : t('Only the start of this message is kept here')
+  return h('span', { className: 'bt-more bt-whole', 'data-note': '' }, note)
+}
+
 export function ExchangeDialog({ pair, roster, actions }) {
   const [entries, setEntries] = useState(null)
   const [leaving, setLeaving] = useState(false)
+  // A long message comes with its start only; its whole text is read on request.
+  const [wholes, setWholes] = useState({})
+  const showAll = async (id) => {
+    setWholes(current => ({ ...current, [id]: 'loading' }))
+    const read = await actions.exchangeText(id)
+    setWholes(current => ({ ...current, [id]: read ?? { whole: false } }))
+  }
   // The sheet slides back down before it unmounts.
   const close = () => {
     if (leaving) return
@@ -48,11 +68,15 @@ export function ExchangeDialog({ pair, roster, actions }) {
               const bot = roster.byId[entry.from] ?? { id: entry.from, name: t('You'), color: 'gray' }
               const showDay = entry.time - lastDay > 30 * 60 * 1000
               lastDay = entry.time
+              const read = wholes[entry.id]
+              const cut = entry.length !== undefined
+              const text = typeof read?.text === 'string' ? read.text : cut ? `${entry.text}…` : entry.text
               return h(Fragment, { key: entry.id },
                 showDay ? h('time', { className: 'bt-time' }, dayLabel(entry.time)) : null,
                 h('div', { className: 'bt-group-msg' },
                   h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name),
-                  h(Bubbles, { texts: [entry.text], roster, selfId: bot.id, actions, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) })))
+                  h(Bubbles, { texts: [text], roster, selfId: bot.id, actions, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) }),
+                  cut ? h(WholeNote, { entry, read, onShow: () => showAll(entry.id) }) : null))
             })),
       h('div', { className: 'bt-dialog-foot' }, h('button', { type: 'button', className: 'bt-soft', onClick: close }, t('Close Chat')))))
 }

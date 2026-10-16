@@ -437,6 +437,9 @@ var ZH = {
   "Bot exchange transcript": "Bot 间对话记录",
   "No messages yet": "还没有消息",
   "Close Chat": "关闭",
+  "Show all · {count} characters": "显示全部 · {count} 字",
+  "Showing the first {count} characters": "只显示前 {count} 字",
+  "Only the start of this message is kept here": "这里只保留了这条消息的开头",
   // Time and usage
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
@@ -2148,6 +2151,9 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-exchange .bt-dialog{position:relative}
 .bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 76px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
+.bt-exchange .bt-whole{align-self:flex-start;margin-left:30px}
+.bt-exchange .bt-whole[data-note]{cursor:default}
+.bt-exchange .bt-whole[data-note]:hover{color:var(--bt-ink-3)}
 .bt-exchange .bt-dialog-foot{position:absolute;left:0;right:0;bottom:0;height:76px;box-sizing:border-box;align-items:flex-end;padding:0 0 28px;background:var(--bt-main);z-index:3;animation:bt-foot-in .3s cubic-bezier(.22,1,.36,1) .3s both}
 .bt-exchange .bt-dialog-foot::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:40px;background:linear-gradient(to top,var(--bt-main),transparent);pointer-events:none}
 .bt-exchange[data-leaving] .bt-dialog-foot{animation:bt-foot-out .22s cubic-bezier(.4,0,1,1) forwards}
@@ -8616,9 +8622,23 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
 // src/client/exchange.js
 var import_react21 = require("react");
 var SHEET_EXIT_MS = 220;
+function WholeNote({ entry, read, onShow }) {
+  if (read === void 0 || read === "loading") {
+    return (0, import_react21.createElement)("button", { type: "button", className: "bt-more bt-whole", disabled: read === "loading", onClick: onShow }, t("Show all · {count} characters", { count: entry.length.toLocaleString() }));
+  }
+  if (read.whole) return null;
+  const note = typeof read.text === "string" && read.text.length > entry.text.length ? t("Showing the first {count} characters", { count: read.text.length.toLocaleString() }) : t("Only the start of this message is kept here");
+  return (0, import_react21.createElement)("span", { className: "bt-more bt-whole", "data-note": "" }, note);
+}
 function ExchangeDialog({ pair, roster, actions }) {
   const [entries2, setEntries] = (0, import_react21.useState)(null);
   const [leaving, setLeaving] = (0, import_react21.useState)(false);
+  const [wholes, setWholes] = (0, import_react21.useState)({});
+  const showAll = async (id) => {
+    setWholes((current) => ({ ...current, [id]: "loading" }));
+    const read = await actions.exchangeText(id);
+    setWholes((current) => ({ ...current, [id]: read ?? { whole: false } }));
+  };
   const close = () => {
     if (leaving) return;
     setLeaving(true);
@@ -8671,6 +8691,9 @@ function ExchangeDialog({ pair, roster, actions }) {
           const bot = roster.byId[entry.from] ?? { id: entry.from, name: t("You"), color: "gray" };
           const showDay = entry.time - lastDay > 30 * 60 * 1e3;
           lastDay = entry.time;
+          const read = wholes[entry.id];
+          const cut = entry.length !== void 0;
+          const text = typeof read?.text === "string" ? read.text : cut ? `${entry.text}…` : entry.text;
           return (0, import_react21.createElement)(
             import_react21.Fragment,
             { key: entry.id },
@@ -8679,7 +8702,8 @@ function ExchangeDialog({ pair, roster, actions }) {
               "div",
               { className: "bt-group-msg" },
               (0, import_react21.createElement)("span", { className: "bt-group-name", style: { color: inkText(colorOf(bot)) } }, bot.name),
-              (0, import_react21.createElement)(Bubbles, { texts: [entry.text], roster, selfId: bot.id, actions, lead: (0, import_react21.createElement)("span", { className: "bt-lead" }, (0, import_react21.createElement)(BotMark, { bot, size: 22 })) })
+              (0, import_react21.createElement)(Bubbles, { texts: [text], roster, selfId: bot.id, actions, lead: (0, import_react21.createElement)("span", { className: "bt-lead" }, (0, import_react21.createElement)(BotMark, { bot, size: 22 })) }),
+              cut ? (0, import_react21.createElement)(WholeNote, { entry, read, onShow: () => showAll(entry.id) }) : null
             )
           );
         })
@@ -13938,6 +13962,7 @@ function apply(ctx) {
     scheduleCreate: (task) => call("schedule-create", task),
     scheduleDelete: (sessionId, id) => call("schedule-delete", { sessionId, id }),
     exchange: (a, b) => call("exchange", { a, b }).catch(() => []),
+    exchangeText: (id) => call("exchange-text", { id }).catch(() => void 0),
     roomProgress: (roomId) => call("room-progress", { roomId }).catch(() => []),
     earlier: (sessionId, cursor) => call("earlier", { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
