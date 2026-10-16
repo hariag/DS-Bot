@@ -1,7 +1,7 @@
 # 桌面应用
 
 - 日期：2026-10-16
-- 相关：[愿景](../vision.zh.md)「两种形态」、[DSH 让步总账](2026-10-13-dsh-concessions.md)
+- 相关：PR #275；[愿景](../vision.zh.md)「两种形态」、[DSH 让步总账](2026-10-13-dsh-concessions.md)
 
 ## 为什么
 
