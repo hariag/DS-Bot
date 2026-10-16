@@ -18,9 +18,38 @@ export const DEBT = join(PLUGIN, 'test', 'style-debt.json')
 const PALETTES = new Set(['themes.js', 'inks.js', 'characters.js'])
 export const RADII = ['0', '4px', '6px', '8px', '10px', '12px', '16px', '18px', '20px', '22px', '999px', '50%', 'inherit']
 
-const COLOR = /#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})\b|\b(?:rgba?|hsla?)\([^)]*\)/gi
-const RADIUS = /border(?:-[a-z]+)*-radius\s*:\s*((?:\$\{[^}]*\}|[^;{}`'"])+)|border\w*Radius\s*:\s*['"]?((?:\$\{[^}]*\}|[^,}'"])+)/g
+const COLOR = /#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^)]*\)/gi
+// Named colors count in the value of a CSS declaration that takes a color. A quoted
+// value is JavaScript data, such as a Bot's color name, not CSS.
+const NAMES = ('aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood '
+  + 'cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen '
+  + 'darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray '
+  + 'darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia '
+  + 'gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender '
+  + 'lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink '
+  + 'lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon '
+  + 'mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise '
+  + 'mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid '
+  + 'palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red '
+  + 'rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow '
+  + 'springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen').split(' ')
+const NAMED = new RegExp(`(?<![\\w-])(?:${NAMES.join('|')})(?![\\w-])`, 'gi')
+const TAKES_COLOR = /(?<![\w-])(--[\w-]+|color|background(?:-color)?|border(?:-[a-z]+)*|outline(?:-color)?|fill|stroke|(?:box|text)-shadow|(?:caret|accent|text-decoration|column-rule)(?:-color)?)\s*:\s*([^;{}'"`]*)/g
+const RADIUS = new RegExp([
+  /border(?:-[a-z]+)*-radius\s*:\s*((?:\$\{[^}]*\}|[^;{}`'"])+)/.source,
+  /['"]?\bborder\w*Radius['"]?\s*[:=]\s*['"]?((?:\$\{[^}]*\}|[^,;}'"])+)/.source,
+  /setProperty\(\s*['"]border(?:-[a-z]+)*-radius['"]\s*,\s*['"]((?:\$\{[^}]*\}|[^'"])+)/.source,
+].join('|'), 'g')
 const SPRING = /\bspringEasing\([^)]*\)|\blinear\([^)]*\)/g
+
+// Every literal color in `text` and where it starts.
+function* colorLiterals(text) {
+  for (const { 0: value, index } of text.matchAll(COLOR)) yield { value: plain(value), index }
+  for (const declaration of text.matchAll(TAKES_COLOR)) {
+    const start = declaration.index + declaration[0].length - declaration[2].length
+    for (const { 0: value, index } of declaration[2].matchAll(NAMED)) yield { value: value.toLowerCase(), index: start + index }
+  }
+}
 
 // The gradient(…) that holds `index`, or ''.
 function gradientAround(line, index) {
@@ -34,45 +63,58 @@ function gradientAround(line, index) {
   return ''
 }
 
-// A literal color that is not a hard-coded one: the value of a variable, or black used
-// for its alpha (shadows, scrims, and masks, whose ramps run to transparent).
-function exempt(value, line, index) {
-  const before = line.slice(0, index)
-  if (/--[\w-]+['"]?\s*:[^;{}]*$/.test(before) || value.startsWith('rgba(0,0,0,')) return true
-  if (!/^#000(?:000)?$/.test(value)) return false
-  return /<mask\b(?!.*<\/mask>)/.test(before) || gradientAround(line, index).includes('transparent')
+// `before` ends inside a --bt-* declaration of the base sheet's body rules, where the
+// theme variables get their default values.
+function definesToken(before) {
+  const open = before.lastIndexOf('{')
+  if (open < 0 || !/--bt-[\w-]+\s*:[^;{}]*$/.test(before)) return false
+  const selector = before.slice(Math.max(before.lastIndexOf('}', open), before.lastIndexOf('`', open)) + 1, open).trim()
+  return /^body(?:\[[\w-]+\])?$/.test(selector)
 }
 
-const plain = value => value.toLowerCase().replace(/\s+/g, '')
+// A literal color that is not a hard-coded one: a theme variable's default value, or
+// black used for its alpha (shadows, scrims, and masks, whose ramps run to transparent).
+function exempt(file, value, text, index) {
+  const start = text.lastIndexOf('\n', index - 1) + 1
+  const end = text.indexOf('\n', index)
+  const line = text.slice(start, end < 0 ? undefined : end)
+  const before = line.slice(0, index - start)
+  if ((file === 'styles.js' && definesToken(before)) || value.startsWith('rgba(0,0,0,')) return true
+  if (!/^#000(?:000)?$/.test(value)) return false
+  return /<mask\b(?!.*<\/mask>)/.test(before) || gradientAround(line, index - start).includes('transparent')
+}
+
+const squeeze = value => value.replace(/\s*([(),/])\s*/g, '$1').replace(/\s+/g, ' ').trim()
+const plain = value => squeeze(value.toLowerCase())
 
 // A step is one corner of a border-radius value; a bare number in a React style is px.
 const steps = value => value.replace(/!important/g, '').replace(/\([^)]*\)/g, group => group.replace(/\s+/g, '')).trim().split(/\s*\/\s*|\s+/)
   .map(step => (/^\d*\.?\d+$/.test(step) && step !== '0' ? `${step}px` : step))
 
+// Each check takes a file name and its code, and returns the values that skip the shared ones.
 export const checks = {
-  colors: (file, line) => (PALETTES.has(file) ? [] : [...line.matchAll(COLOR)]
-    .map(({ 0: value, index }) => ({ value: plain(value), index }))
-    .filter(({ value, index }) => !exempt(value, line, index))
+  colors: (file, text) => (PALETTES.has(file) ? [] : [...colorLiterals(text)]
+    .filter(({ value, index }) => !exempt(file, value, text, index))
     .map(({ value }) => value)),
-  radii: (file, line) => [...line.matchAll(RADIUS)]
-    .flatMap(match => steps(match[1] ?? match[2]))
+  radii: (file, text) => [...text.matchAll(RADIUS)]
+    .flatMap(match => steps(match[1] ?? match[2] ?? match[3]))
     .filter(step => !RADII.includes(step) && !step.startsWith('var(')),
-  springs: (file, line) => (file === 'motion.js' ? [] : [...line.matchAll(SPRING)].map(({ 0: call }) => call.replace(/\s+/g, ''))),
+  springs: (file, text) => (file === 'motion.js' ? [] : [...text.matchAll(SPRING)].map(({ 0: call }) => squeeze(call))),
 }
 
 // Comments are not styles. A trailing comment follows a space, which a URL's `://` lacks.
 const code = text => text.split(/\r?\n/)
   .map(line => (/^\s*(\/\/|\/\*|\*\/|\*\s|\*$)/.test(line) ? '' : line.replace(/\s\/\/\s.*$/, '')))
+  .join('\n')
 
 export function findStyles(dir = CLIENT) {
   const found = Object.fromEntries(Object.keys(checks).map(kind => [kind, {}]))
   for (const file of readdirSync(dir, { recursive: true }).filter(name => name.endsWith('.js')).map(name => name.replaceAll('\\', '/'))) {
-    for (const line of code(readFileSync(join(dir, file), 'utf8'))) {
-      for (const [kind, check] of Object.entries(checks)) {
-        for (const value of check(file, line)) {
-          const counts = (found[kind][file] ??= {})
-          counts[value] = (counts[value] ?? 0) + 1
-        }
+    const text = code(readFileSync(join(dir, file), 'utf8'))
+    for (const [kind, check] of Object.entries(checks)) {
+      for (const value of check(file, text)) {
+        const counts = (found[kind][file] ??= {})
+        counts[value] = (counts[value] ?? 0) + 1
       }
     }
   }
