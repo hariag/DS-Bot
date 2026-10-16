@@ -20,13 +20,6 @@ export const OCR_RETRY_MS = 120_000
 export const OCR_CACHE_MAX = 500
 export const MAX_AVATAR_IMAGE = 160_000
 export const ROUTE = '/api/bot'
-export const MAX_HOPS = 6
-// Messages the whole team may send each other (message_bot, post_to_group) while
-// nobody outside it speaks: the user, a question card's answer or a scheduled task.
-export const MAX_UNATTENDED_MESSAGES = 40
-// Bot requests a Bot's own chat may hold unread; past this the Bot is most likely
-// stuck, and more messages only pile up behind it.
-export const MAX_UNREAD_REQUESTS = 10
 export const MAX_EXCHANGES = 600
 // state.json is written whole on every save, so a long message between Bots or a long
 // group line keeps only its start there. The rest stays where it already is (a message
@@ -76,8 +69,6 @@ export const TEAM_TOOLS = [
   'list_capabilities', 'save_capability', 'delete_capability',
   'attach_capability', 'detach_capability',
 ]
-// Rounds Bots may start in one group by posting, before the user speaks there again.
-export const ROOM_BOT_ROUNDS = 3
 // Answers a group gives to what members post after the round moved on (their finished
 // work, mostly), before the user speaks there again.
 export const ROOM_LATE_ROUNDS = 10

@@ -211,36 +211,80 @@ test('a Bot a post called by name gets no message_bot in that turn', async (t) =
   assert.match(await host.tool('message_bot', { to: 'Writer', message: '进度如何？' }, 'a'), /^Delivered to Writer/)
 })
 
-test('a Bot\'s post keeps its hop through the round, the members it calls and the member\'s late reply', async (t) => {
+// 公开#185: the result went out as the work's first step line, next to one last tool
+// call, and the turn then ended with an empty reply. Chief, which asked for the work,
+// was never called to answer it.
+const resultAsStep = async (t, ask) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
-  host.emit('a', 'turn/start', { turn: 1 })
-  host.emit('a', 'user/message', { content: [{ type: 'text', text: '[Message from Tester]\npost it' }], source: { kind: 'bot', role: 'request', senderSessionId: 'c', senderName: 'Tester', exchangeId: 'x1', hop: 2 } })
-  await host.tool('post_to_group', { group: 'Ops', message: '@Writer 看一下文档' }, 'a')
-  const post = host.takePost()
-  assert.equal(post.source.hop, 3)
-
-  const first = host.round('c1', post)
+  const first = host.round('c1', host.say(ask))
+  if (ask.startsWith('@Chief')) {
+    await settle(() => host.agentOf('ga').calls.length === 1)
+    host.begin('ga')
+    host.finish('ga', '@Writer 把文档整理好')
+  }
   await settle(() => host.agentOf('gb').calls.length === 1)
-  assert.equal(host.begin('gb').source.hop, 3)
-  await host.tool('message_bot', { to: 'Tester', message: '帮我确认一下' }, 'gb')
+  host.begin('gb')
   host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
   t.mock.timers.tick(ROOM_WORK_GRACE_MS)
-  await settle(() => host.agentOf('gc').calls.length === 1)
-  assert.equal(host.begin('gc').source.hop, 3)
-  host.finish('gc', '[PASS]')
   await settle(() => first() !== undefined)
-
   host.emit('gb', 'tool/result', { callId: 'k1' })
-  host.finish('gb', '看完了。')
+  host.emit('gb', 'assistant/message', { message: { content: [{ type: 'text', text: '整理好了，在 docs/ 下。' }, { type: 'tool-call', id: 'k2', name: 'pwsh', arguments: '{}' }] } })
+  host.emit('gb', 'tool/call', { callId: 'k2', name: 'pwsh', arguments: '{}' })
   await settle(() => host.agentOf('r1').calls.length === 1)
-  const late = host.takePost()
-  assert.deepEqual([late.source.late, late.source.hop], [true, 3])
-  const second = host.round('c2', late)
-  await settle(() => host.agentOf('ga').calls.length === 1)
-  assert.equal(host.begin('ga').source.hop, 3)
-  host.finish('ga', '[PASS]')
-  await settle(() => second() !== undefined)
+  const step = host.takePost()
+  assert.deepEqual([step.source.progress, step.source.quiet, text(step)], [true, true, '[Group post from Writer]\n整理好了，在 docs/ 下。'])
+  const stepRound = host.round('c2', step)
+  await settle(() => stepRound() !== undefined)
+  host.emit('gb', 'tool/result', { callId: 'k2' })
+  host.finish('gb', '')
+  return host
+}
+
+test('late work whose result went out as a step line still tells the member that asked, which answers it', async (t) => {
+  const host = await resultAsStep(t, '@Chief 安排一下文档')
+  await settle(() => host.agentOf('r1').calls.length === 1)
+  const done = host.takePost()
+  assert.deepEqual([done.source.done, done.source.late, done.source.askedBy], [true, true, 'a'])
+  const third = host.round('c3', done)
+  await settle(() => host.agentOf('ga').calls.length === 2)
+  const prompt = text(host.agentOf('ga').calls[1])
+  assert.match(prompt, /Writer finished the work you asked for/)
+  assert.match(prompt, /Writer: 整理好了，在 docs\/ 下。/)
+  host.begin('ga')
+  host.finish('ga', '收到，辛苦了。')
+  await settle(() => third() !== undefined)
+  assert.deepEqual(kinds(third()), [['done', 'Writer'], ['message', 'Chief']])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+  const log = JSON.parse(readFileSync(join(host.home, 'state.json'), 'utf8')).rooms.r1.log.map(line => [line.who, line.kind ?? 'message'])
+  assert.deepEqual(log.slice(-3), [['Writer', 'message'], ['Writer', 'done'], ['Chief', 'message']])
+})
+
+test('late work the user asked for directly ends without a post once its result is out', async (t) => {
+  const host = await resultAsStep(t, '@Writer 把文档整理好')
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(host.agentOf('r1').calls, [])
+})
+
+test('replies a post waits for are work handed on: the answer to the Bot that asked waits for them and carries them', async (t) => {
+  const host = await start(t)
+  await host.tool('message_bot', { to: 'Chief', message: '让群里看一下文档' }, 'c')
+  host.begin('a')
+  const posted = await host.tool('post_to_group', { group: 'Ops', message: '@Writer 看一下文档', report_back: true }, 'a')
+  assert.match(posted, /your answer goes to Tester once all of it is back\.$/)
+  host.finish('a', '已经让 Writer 去看了。')
+  const done = host.round('c1', host.takePost())
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.finish('gb', '文档没问题。')
+  await settle(() => done() !== undefined)
+  await settle(() => host.agentOf('a').calls.length === 2)
+  assert.deepEqual(host.agentOf('c').calls, [])
+  const report = host.begin('a')
+  assert.match(text(report), /^\[Group chat "Ops" · replies to your post · for the work Tester asked you for; your answer goes to Tester once everything you handed on is back\]/)
+  host.finish('a', 'Writer 看过了，没问题。')
+  await settle(() => host.agentOf('c').calls.length === 1)
+  assert.equal(text(host.agentOf('c').calls[0]), '[Reply from Chief]\nWriter 看过了，没问题。\n\n[Handed back to Chief for this work]\n\nGroup "Ops":\nReplies to your post (oldest first):\nWriter: 文档没问题。')
 })
 
 test('a member called while still at earlier work lets the round go on at once', async (t) => {
@@ -469,11 +513,11 @@ test('after the round went on, lines a member writes close together reach the gr
 test('a step that calls a member with @ after the round went on starts a round for that member', async (t) => {
   const host = await start(t)
   host.emit('gb', 'turn/start', { turn: 1 })
-  host.emit('gb', 'user/message', { content: [{ type: 'text', text: 'go' }], source: { kind: 'bot', role: 'room', exchangeId: 'x1', roomId: 'r1', hop: 1, askedBy: 'a' } })
+  host.emit('gb', 'user/message', { content: [{ type: 'text', text: 'go' }], source: { kind: 'bot', role: 'room', exchangeId: 'x1', roomId: 'r1', askedBy: 'a' } })
   step(host, 'gb', '@Tester 帮我跑一下测试', 'k1')
   await settle(() => host.agentOf('r1').calls.length === 1)
   const post = host.takePost()
-  assert.deepEqual([post.source.progress, post.source.quiet, post.source.hop], [true, undefined, 1])
+  assert.deepEqual([post.source.progress, post.source.quiet], [true, undefined])
   const result = host.round('c1', post)
   await settle(() => host.agentOf('gc').calls.length === 1)
   assert.equal(host.begin('gc').source.askedBy, 'b')
@@ -548,4 +592,30 @@ test('the team view says what a member is doing in the call\'s own words', async
   step(host, 'ga', '先把 JDK\n下下来。', 'k3', 'pwsh', JSON.stringify({ description: 'Download JDK 21' }))
   const later = (await host.call('state', {})).value
   assert.deepEqual(['said', 'note'].map(key => later.work.bots.a[key]), ['先把 JDK 下下来。', 'Download JDK 21'])
+})
+
+// 公开#124: a Bot deleted while it worked stayed "thinking" until DSH restarted, and the
+// Bot that had asked it something never heard back.
+test('deleting a working Bot clears its activity and tells the Bots waiting for its reply', async (t) => {
+  const host = await start(t)
+  host.emit('b', 'turn/start', { turn: 1 })
+  host.emit('b', 'user/message', { content: [{ type: 'text', text: '[Message from Chief]\nwrite the docs' }], source: { kind: 'bot', role: 'request', senderSessionId: 'a', senderName: 'Chief', exchangeId: 'x1', hop: 1 } })
+  host.emit('b', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  // A second request that Writer has not read yet.
+  host.agentOf('b').inbox.nextStep.push({ id: 'm2', source: { kind: 'bot', role: 'request', senderSessionId: 'c', senderName: 'Tester', exchangeId: 'x2', hop: 1 } })
+  assert.equal((await host.call('state', {})).value.activity.b, 'working')
+
+  const deleted = await host.call('delete-bot', { id: 'b' })
+  assert.equal(deleted.ok, true)
+  assert.equal((await host.call('state', {})).value.activity.b, undefined)
+  await settle(() => host.agentOf('a').calls.length === 1 && host.agentOf('c').calls.length === 1)
+  for (const [to, exchangeId] of [['a', 'x1'], ['c', 'x2']]) {
+    const reply = host.agentOf(to).calls[0]
+    assert.deepEqual([reply.source.role, reply.source.replyTo], ['reply', exchangeId])
+    assert.equal(text(reply), '[Reply from Writer]\nWriter was deleted before it could answer your message.')
+  }
+  // The stopped turn ends after the delete; it brings nothing back.
+  host.emit('b', 'turn/start', { turn: 2 })
+  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  assert.equal((await host.call('state', {})).value.activity.b, undefined)
 })

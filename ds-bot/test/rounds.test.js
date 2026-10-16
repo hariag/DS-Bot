@@ -253,32 +253,6 @@ test('in admin mode a plain mid-round message goes to the admin', async (t) => {
   assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer', 'User', 'Chief'])
 })
 
-test('a mid-round user line resets the room\'s bot-round budget', async (t) => {
-  const { call, emit, userMessage, compose, relay, answer, stop, sent, ctx, home } = start()
-  t.after(stop)
-  const room = await team(call, sent)
-
-  await emit(room.id, userMessage('Start'))
-  const running = relay(room.id, 'relay')
-  const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'one', 1)
-  const second = await turnFor(sent, first)
-
-  // A Main Bot posts into the room while the last member is still answering:
-  // that spends one bot-round budget.
-  const posted = await ctx.registeredTools.get('post_to_group').execute({ group: 'R1', message: 'bot note' }, { agent: { id: first.sessionId } })
-  const roomState = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).rooms[room.id]
-  assert.equal(roomState().botRounds, 1, String(posted))
-
-  // The user's mid-round message counts as the user speaking: the budget reopens.
-  await compose(room.id, '@Writer user back mid-round')
-  await answer(second.sessionId, second.message.source.exchangeId, 'two', 2)
-  const third = await turnFor(sent, first, second)
-  await answer(third.sessionId, third.message.source.exchangeId, 'three', 3)
-  JSON.parse(await running)
-  assert.equal(roomState().botRounds, 0)
-})
-
 test('a message with an image or a chat reference waits for its own round, and so does what follows it', async (t) => {
   const { call, emit, userMessage, compose, relay, inboxOf, answer, stop, sent } = start()
   t.after(stop)
