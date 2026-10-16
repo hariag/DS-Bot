@@ -33,10 +33,16 @@ test('cleanText hides standalone credentials it was never given', () => {
   assert.equal(out, '[hidden] [hidden] [hidden] [hidden] [hidden] [hidden]')
 })
 
+// `stop()` runs the cleanups, as the plugin's stop does.
 function host(home, extra = {}) {
   const warnings = []
+  const cleanups = []
+  const effect = (execute) => {
+    const cleanup = execute()
+    if (typeof cleanup === 'function') cleanups.push(cleanup)
+  }
   const rt = {
-    ctx: { logger: { warn: (...args) => warnings.push(args) } },
+    ctx: { logger: { warn: (...args) => warnings.push(args) }, effect },
     home,
     config: {},
     state: { bots: { a: { id: 'a', name: 'Chief', model: 'deepseek/deepseek-chat' } }, mainBotIds: ['a'], rooms: {} },
@@ -44,6 +50,7 @@ function host(home, extra = {}) {
     ...extra,
   }
   installDiagnostics(rt)
+  rt.stop = () => Promise.all(cleanups.map(cleanup => cleanup()))
   return rt
 }
 
@@ -73,7 +80,7 @@ test('warnings are kept, cleaned, written to the log, and read back after a rest
   assert.equal(report.entries[0].code, 'RATE_LIMIT', 'newest first')
 
   // Written as JSON lines; a new host reads them back.
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await rt.stop()
   assert.equal(readFileSync(join(home, 'logs', 'diagnostics.jsonl'), 'utf8').trim().split('\n').length, 2)
   const again = host(home)
   assert.deepEqual((await again.diagnostics.entries()).map(entry => entry.code), ['EACCES', 'RATE_LIMIT'])
@@ -131,6 +138,49 @@ test('diagnostics append fallback redacts an error message', async (t) => {
   }
   assert.equal(stderr.join('\n').includes(value), false)
   assert.match(stderr.join('\n'), /api_key=\[hidden\]/)
+})
+
+// #226: a test removed `home` right after the stop while a warning was still being
+// written there, and the removal failed with ENOTEMPTY.
+test('a stop waits for the log writes queued before it, and nothing is written after it', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-diag-'))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  t.mock.method(console, 'error', () => {})
+  const log = join(home, 'logs', 'diagnostics.jsonl')
+  const originalAppend = fsp.appendFile
+  let reached
+  const appending = new Promise((resolve) => { reached = resolve })
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  fsp.appendFile = async (...args) => {
+    reached()
+    await gate
+    return originalAppend(...args)
+  }
+  syncBuiltinESMExports()
+  t.after(() => {
+    fsp.appendFile = originalAppend
+    syncBuiltinESMExports()
+  })
+  const rt = host(home)
+  rt.warn('ds-bot: before the stop')
+  await appending
+  let stopped = false
+  const stopping = rt.stop().then(() => { stopped = true })
+  await Promise.resolve()
+  assert.equal(stopped, false, 'the stop waits for the write in progress')
+  release()
+  await stopping
+  assert.match(readFileSync(log, 'utf8'), /before the stop/)
+
+  rt.warn('ds-bot: after the stop')
+  await rt.diagnostics.clear()
+  // A write queued after the stop would be part of what a second stop waits for.
+  await rt.stop()
+  const lines = readFileSync(log, 'utf8').trim().split('\n')
+  assert.equal(lines.length, 1, 'neither the warning nor the clear reached the file')
+  assert.match(lines[0], /before the stop/)
+  assert.equal((await rt.diagnostics.entries()).length, 0, 'the clear still empties the list in memory')
 })
 
 test('reportMarkdown says when nothing went wrong', () => {
