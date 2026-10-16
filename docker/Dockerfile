@@ -13,14 +13,12 @@ RUN corepack enable \
     && npm config set registry "$NPM_REGISTRY" --global \
     && COREPACK_NPM_REGISTRY="$NPM_REGISTRY" pnpm config set registry "$NPM_REGISTRY" --global \
     && npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
-        --allow-scripts=@deepseek-ai/dsh-subprocess-local,node-pty,koffi,@google/genai,protobufjs \
-    && pnpm --version > /pnpm-version
+        --allow-scripts=@deepseek-ai/dsh-subprocess-local,node-pty,koffi,@google/genai,protobufjs
 
 COPY ds-bot/ /src/ds-bot/
 
 # ds-bot has no build step at install (client.js is committed), so pack it as-is
 # and let `dsh plugin add` set up the web profile from dsh's own template.
-# The tgz is kept for reinstalls into existing volumes at container start.
 RUN cd /src/ds-bot \
     && npm pack --pack-destination /tmp \
     && mv /tmp/ds-bot-*.tgz /tmp/ds-bot.tgz \
@@ -38,16 +36,8 @@ RUN apt-get update \
 
 COPY --from=build /usr/local/ /usr/local/
 COPY --from=build /opt/dsh-template /opt/dsh-template
-COPY --from=build /tmp/ds-bot.tgz /opt/ds-bot/ds-bot.tgz
-COPY --from=build /pnpm-version /opt/ds-bot/pnpm-version
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/docker.patch.yml /opt/ds-bot/docker.patch.yml
-
-# pnpm as a plain global install (same version the build used) so plugin
-# updates work offline for the node user — corepack would re-download it.
-# The build stage's npmrc (with NPM_REGISTRY) came over with /usr/local.
-RUN rm -f /usr/local/bin/pnpm /usr/local/bin/pnpx \
-    && npm install -g "pnpm@$(cat /opt/ds-bot/pnpm-version)"
 
 ENV DSH_HOME=/data \
     DSH_PERMISSION_MODE=danger-full-access

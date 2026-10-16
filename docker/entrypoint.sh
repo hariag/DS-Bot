@@ -25,16 +25,6 @@ if [ -z "$(ls -A /workspace)" ]; then
   chown node:node /workspace
 fi
 
-# Keep an existing volume's ds-bot in step with the image. A failed reinstall
-# is logged but never blocks the start — the old plugin keeps working.
-installed_ver=$(jq -r .version /data/profiles/web/node_modules/ds-bot/package.json 2>/dev/null || echo missing)
-image_ver=$(jq -r .version /opt/dsh-template/profiles/web/node_modules/ds-bot/package.json)
-if [ "$installed_ver" != "$image_ver" ]; then
-  echo "entrypoint: ds-bot $installed_ver -> $image_ver, reinstalling into the web profile"
-  HOME=/home/node gosu node dsh plugin --profile web add /opt/ds-bot/ds-bot.tgz \
-    || echo "entrypoint: ds-bot reinstall failed; continuing with $installed_ver" >&2
-fi
-
 # This dsh release accepts only 127.0.0.1 for --host, so an overlay binds all
 # interfaces instead; the container's publish rule is the network boundary.
 # DSH_LISTEN_PORT only matters with network_mode: host — published ports

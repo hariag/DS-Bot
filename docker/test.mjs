@@ -17,7 +17,7 @@ function docker(args, { allowFailure = false } = {}) {
     maxBuffer: 1024 * 1024,
   })
   if (!allowFailure && (result.error || result.status !== 0)) {
-    throw new Error(`docker ${args[0]} failed: ${result.error?.message ?? result.stderr}`)
+    throw new Error(`docker ${args[0]} failed (${result.status}): ${result.error?.message ?? result.stderr}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
   }
   return result
 }
@@ -94,15 +94,6 @@ try {
   startHelp(1234, 1235)
   checkDataOwner(1234, 1235)
   console.log('PASS: group-only migration and restored files with mixed ownership')
-
-  shell(`
-    node -e 'const fs = require("node:fs"); const path = "/data/profiles/web/node_modules/ds-bot/package.json"; const pkg = JSON.parse(fs.readFileSync(path)); pkg.version = "0.0.1"; fs.writeFileSync(path, JSON.stringify(pkg))'
-  `)
-  startHelp(1234, 1235)
-  shell(`
-    test "$(jq -r .version /data/profiles/web/node_modules/ds-bot/package.json)" = "$(jq -r .version /opt/dsh-template/profiles/web/node_modules/ds-bot/package.json)"
-  `)
-  console.log('PASS: offline plugin reinstall after migration')
 
   const server = `${name}-web`
   containers.add(server)
