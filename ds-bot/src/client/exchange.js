@@ -2,7 +2,8 @@ import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { inkText } from './inks.js'
 import { dayLabel } from './text.js'
 import { colorOf, BotMark } from './mark.js'
-import { Bubbles, WholeNote } from './cells.js'
+import { Bubbles } from './cells.js'
+import { stripLongNote } from './fold.js'
 import { useEscape, usePaneLeft } from './overlay-hooks.js'
 import { t } from './i18n.js'
 
@@ -11,13 +12,6 @@ const SHEET_EXIT_MS = 220
 export function ExchangeDialog({ pair, roster, actions }) {
   const [entries, setEntries] = useState(null)
   const [leaving, setLeaving] = useState(false)
-  // A long message comes with its start only; its whole text is read on request.
-  const [wholes, setWholes] = useState({})
-  const showAll = async (id) => {
-    setWholes(current => ({ ...current, [id]: 'loading' }))
-    const read = await actions.exchangeText(id)
-    setWholes(current => ({ ...current, [id]: read ?? { whole: false } }))
-  }
   // The sheet slides back down before it unmounts.
   const close = () => {
     if (leaving) return
@@ -56,15 +50,13 @@ export function ExchangeDialog({ pair, roster, actions }) {
               const bot = roster.byId[entry.from] ?? { id: entry.from, name: t('You'), color: 'gray' }
               const showDay = entry.time - lastDay > 30 * 60 * 1000
               lastDay = entry.time
-              const read = wholes[entry.id]
-              const cut = entry.length !== undefined
-              const text = typeof read?.text === 'string' ? read.text : cut ? `${entry.text}…` : entry.text
+              // A long message comes with its start only; the rest is read on request.
+              const whole = entry.length === undefined ? undefined : { length: entry.length, load: () => actions.exchangeText(entry.id) }
               return h(Fragment, { key: entry.id },
                 showDay ? h('time', { className: 'bt-time' }, dayLabel(entry.time)) : null,
                 h('div', { className: 'bt-group-msg' },
                   h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name),
-                  h(Bubbles, { texts: [text], roster, selfId: bot.id, actions, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) }),
-                  cut ? h(WholeNote, { length: entry.length, kept: entry.text, read, onShow: () => showAll(entry.id) }) : null))
+                  h(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) })))
             })),
       h('div', { className: 'bt-dialog-foot' }, h('button', { type: 'button', className: 'bt-soft', onClick: close }, t('Close Chat')))))
 }
