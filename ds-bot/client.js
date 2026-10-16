@@ -1357,8 +1357,12 @@ function themeVars(mode, dark, accent = mode.accent) {
   };
 }
 var declarations = (vars) => Object.entries(vars).map(([name, value]) => `${name}:${value}`).join(";");
+var darkAccent = (accent) => {
+  const ink = ACCENT_INKS.find((id) => INKS[id][0] === accent);
+  return ink === void 0 ? accent : INKS[ink][1];
+};
 var themeCss = (theme, accent) => `html body{${declarations(themeVars(theme.light, false, accent ?? theme.light.accent))}}
-html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, accent ?? theme.dark.accent))}}
+html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, darkAccent(accent) ?? theme.dark.accent))}}
 ${theme.css ?? ""}`;
 var shellTokens = ({ light, dark }) => ({
   "--dsw-alias-bg-base": { light: light.bg, dark: dark.bg },

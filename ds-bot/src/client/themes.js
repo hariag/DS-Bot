@@ -1,4 +1,4 @@
-import { isHex, luminance } from './inks.js'
+import { ACCENT_INKS, INKS, isHex, luminance } from './inks.js'
 import { SHAPES, markupCache, maskCache } from './characters.js'
 import { createSource } from './sources.js'
 
@@ -47,9 +47,16 @@ function themeVars(mode, dark, accent = mode.accent) {
   }
 }
 const declarations = vars => Object.entries(vars).map(([name, value]) => `${name}:${value}`).join(';')
+// A preset accent is saved as its light value; in dark mode it takes the preset's dark
+// value, as Bot names do, so Charcoal does not vanish on a dark background. A custom
+// accent is the same in both modes. A preset is matched the way Settings marks it.
+const darkAccent = (accent) => {
+  const ink = ACCENT_INKS.find(id => INKS[id][0] === accent)
+  return ink === undefined ? accent : INKS[ink][1]
+}
 // `html body` outranks the base sheet's `body` rules without !important.
 export const themeCss = (theme, accent) => `html body{${declarations(themeVars(theme.light, false, accent ?? theme.light.accent))}}
-html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, accent ?? theme.dark.accent))}}
+html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, darkAccent(accent) ?? theme.dark.accent))}}
 ${theme.css ?? ''}`
 export const shellTokens = ({ light, dark }) => ({
   '--dsw-alias-bg-base': { light: light.bg, dark: dark.bg },

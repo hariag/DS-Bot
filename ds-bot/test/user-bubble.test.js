@@ -82,11 +82,13 @@ test('the user ink reads on the user surface in every built-in theme and mode', 
 
 // Text on the accent (send key, new-message pill, primary buttons) takes whichever
 // of the two inks reads better: white on Tangerine was 2.89:1, near-black is 6.38:1.
+// The variables themeCss sets for one mode.
+const varsOf = (theme, accent, dark) => {
+  const block = themeCss(theme, accent).split('\n').find(line => line.startsWith(dark ? 'html body[data-ds-dark-theme]{' : 'html body{'))
+  return Object.fromEntries(block.slice(block.indexOf('{') + 1, -1).split(';').map(item => item.split(':')))
+}
+
 test('the accent ink is the more readable of the two inks for every accent', () => {
-  const inkOf = (theme, accent, dark) => {
-    const block = themeCss(theme, accent).split('\n').find(line => line.startsWith(dark ? 'html body[data-ds-dark-theme]{' : 'html body{'))
-    return Object.fromEntries(block.slice(block.indexOf('{') + 1, -1).split(';').map(item => item.split(':')))
-  }
   const cases = []
   for (const id of ['deepseek', 'mono', 'paper', 'moonlight']) {
     for (const dark of [false, true]) cases.push([`${id} ${dark ? 'dark' : 'light'}`, allThemes()[id], undefined, dark])
@@ -95,10 +97,29 @@ test('the accent ink is the more readable of the two inks for every accent', () 
     for (const dark of [false, true]) cases.push([`${ink} ${dark ? 'dark' : 'light'}`, allThemes().deepseek, INKS[ink][0], dark])
   }
   for (const [name, theme, accent, dark] of cases) {
-    const vars = inkOf(theme, accent, dark)
+    const vars = varsOf(theme, accent, dark)
     const paper = vars['--bt-accent'], ink = vars['--bt-accent-ink']
     const other = ink === '#ffffff' ? '#141414' : '#ffffff'
     assert.ok(contrast(ink, paper) >= contrast(other, paper), `${name}: ${ink} on ${paper} is ${contrast(ink, paper).toFixed(2)}:1, ${other} would be ${contrast(other, paper).toFixed(2)}:1`)
+  }
+})
+
+// A preset accent is saved as its light value. Dark mode used it too, so Charcoal
+// (#141416) was 1.00:1 on the dark background, Graphite 1.34:1 and Cobalt 2.48:1.
+test('a preset accent takes its dark value in dark mode; a custom accent stays the same', () => {
+  for (const [id, theme] of Object.entries(allThemes())) {
+    for (const ink of ACCENT_INKS) {
+      const [light, dark] = INKS[ink]
+      assert.equal(varsOf(theme, light, false)['--bt-accent'], light)
+      assert.equal(varsOf(theme, light, true)['--bt-accent'], dark, `${id} ${ink}`)
+      const ratio = contrast(dark, theme.dark.bg)
+      assert.ok(ratio >= 3, `${id} ${ink}: ${dark} on ${theme.dark.bg} is ${ratio.toFixed(2)}:1`)
+    }
+    // A color picked by hand is not a preset, even when it spells one in lower case.
+    for (const custom of ['#123456', INKS.deepseek[0].toLowerCase()]) {
+      assert.equal(varsOf(theme, custom, true)['--bt-accent'], custom)
+    }
+    assert.equal(varsOf(theme, undefined, true)['--bt-accent'], theme.dark.accent)
   }
 })
 
