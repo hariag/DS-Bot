@@ -20,7 +20,7 @@
 |---|---|
 | 壳 | Electron 主进程。只开一个实例；窗口用 `dsh-app://app` 加载页面，把请求转发给引擎；管引擎进程的启动和退出 |
 | 引擎 | 子进程，用 Electron 自带的 Node 运行。通过 `@deepseek-ai/dsh/profile-boot` 的 `runProfile()` 启动 profile `ds-bot`，只监听 `127.0.0.1` 上系统分配的端口。环境变量 `DS_BOT_APP=1` 告诉 ds-bot 它跑在桌面应用里 |
-| 界面 | DS Bot 自己写的网页（React + Vite），只通过 ds-bot 的 `/api/bot` 和 DSH 的 HTTP 接口读写数据 |
+| 界面 | DS Bot 自己写的网页（React + Vite）。只认 DS Bot 自己的接口：引擎里的 ds-bot 用 HTTP 和事件流提供团队、对话和设置的数据，界面不直接调 DSH 的接口，也不引用 `@deepseek-ai/*` 的包。DSH 只出现在引擎这一层 |
 
 - 插件版和桌面应用用同一份 `ds-bot`，插件版不变。
 - 安装包和 `ds-bot` 用同一个版本号。
