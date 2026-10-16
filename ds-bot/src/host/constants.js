@@ -36,6 +36,12 @@ export const TEXT_KEPT = 2000
 export const GROUP_LINE_READ = 20_000
 // The Bot exchange dialog shows at most this much of one message.
 export const TEXT_SHOW_MAX = 200_000
+// A message a Bot sends past this goes as a DSH file, which the recipient reads with its
+// file tools; the message keeps its first LONG_HEAD characters.
+export const MESSAGE_INLINE_MAX = GROUP_LINE_READ
+export const LONG_HEAD = 1000
+// DSH's read tool shows this much of one line (dsh-tool-fs `readMaxLineLength`, default).
+export const READ_LINE_MAX = 2000
 export const ROOM_REPLY_TIMEOUT_MS = 240_000
 // Lines a member writes less than this apart while it works reach its group together.
 export const ROOM_STEP_GAP_MS = 30_000

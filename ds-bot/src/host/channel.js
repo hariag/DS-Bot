@@ -78,7 +78,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -134,6 +134,12 @@ export function install(rt) {
           const entry = state.exchanges.find(item => item.id === body.id)
           if (entry === undefined) return fail('This message is no longer kept', 'bot/stale')
           return ok(await rt.exchangeText(entry))
+        }
+        // A long Bot post's file (attachLong), for the group chat's "Show all".
+        case 'file-text': {
+          if (typeof body.file?.attachmentId !== 'string') return fail('No file named', 'bot/invalid')
+          const read = await rt.fileText(body.file)
+          return read === undefined ? fail('This file cannot be read here', 'bot/unavailable') : ok(read)
         }
         case 'earlier':
           await rt.load()

@@ -2,23 +2,11 @@ import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { inkText } from './inks.js'
 import { dayLabel } from './text.js'
 import { colorOf, BotMark } from './mark.js'
-import { Bubbles } from './cells.js'
+import { Bubbles, WholeNote } from './cells.js'
 import { useEscape, usePaneLeft } from './overlay-hooks.js'
 import { t } from './i18n.js'
 
 const SHEET_EXIT_MS = 220
-
-// Under a long message: the button that reads it whole, or why only part of it shows.
-function WholeNote({ entry, read, onShow }) {
-  if (read === undefined || read === 'loading') {
-    return h('button', { type: 'button', className: 'bt-more bt-whole', disabled: read === 'loading', onClick: onShow }, t('Show all · {count} characters', { count: entry.length.toLocaleString() }))
-  }
-  if (read.whole) return null
-  const note = typeof read.text === 'string' && read.text.length > entry.text.length
-    ? t('Showing the first {count} characters', { count: read.text.length.toLocaleString() })
-    : t('Only the start of this message is kept here')
-  return h('span', { className: 'bt-more bt-whole', 'data-note': '' }, note)
-}
 
 export function ExchangeDialog({ pair, roster, actions }) {
   const [entries, setEntries] = useState(null)
@@ -76,7 +64,7 @@ export function ExchangeDialog({ pair, roster, actions }) {
                 h('div', { className: 'bt-group-msg' },
                   h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name),
                   h(Bubbles, { texts: [text], roster, selfId: bot.id, actions, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) }),
-                  cut ? h(WholeNote, { entry, read, onShow: () => showAll(entry.id) }) : null))
+                  cut ? h(WholeNote, { length: entry.length, kept: entry.text, read, onShow: () => showAll(entry.id) }) : null))
             })),
       h('div', { className: 'bt-dialog-foot' }, h('button', { type: 'button', className: 'bt-soft', onClick: close }, t('Close Chat')))))
 }

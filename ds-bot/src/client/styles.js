@@ -327,9 +327,9 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-exchange .bt-dialog{position:relative}
 .bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 76px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
-.bt-exchange .bt-whole{align-self:flex-start;margin-left:30px}
-.bt-exchange .bt-whole[data-note]{cursor:default}
-.bt-exchange .bt-whole[data-note]:hover{color:var(--bt-ink-3)}
+.bt-whole{display:block;align-self:flex-start;margin-left:30px}
+.bt-whole[data-note]{cursor:default}
+.bt-whole[data-note]:hover{color:var(--bt-ink-3)}
 .bt-exchange .bt-dialog-foot{position:absolute;left:0;right:0;bottom:0;height:76px;box-sizing:border-box;align-items:flex-end;padding:0 0 28px;background:var(--bt-main);z-index:3;animation:bt-foot-in .3s cubic-bezier(.22,1,.36,1) .3s both}
 .bt-exchange .bt-dialog-foot::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:40px;background:linear-gradient(to top,var(--bt-main),transparent);pointer-events:none}
 .bt-exchange[data-leaving] .bt-dialog-foot{animation:bt-foot-out .22s cubic-bezier(.4,0,1,1) forwards}

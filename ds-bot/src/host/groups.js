@@ -110,6 +110,8 @@ const roomKickoff = language => `The user just created this group and has not wr
 
 const ROOM_READ_MAX = 30
 
+const fileLine = file => `[File "${file.name}" (${file.bytes} bytes) attached]`
+
 export function install(rt) {
   const { ctx } = rt
 
@@ -200,6 +202,7 @@ export function install(rt) {
 
   // Lines from before the round's opening message are kept apart from this round, so
   // an earlier round (an old count-off, say) never reads as part of the current one.
+  // `files` are the files of the lines shown, which go to the member with the prompt.
   function roomPrompt(room, member, round) {
     const peers = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
       .map(bot => `${bot.name}${rt.isAdminOf(room, bot.id) ? ' (admin)' : ''}`)
@@ -213,9 +216,9 @@ export function install(rt) {
     const after = round.slots.length - index - 1
     const members = `Members: the user${peers.length ? `, ${peers.join(', ')}` : ''} and you${leads ? ' (admin)' : ''}. Members speak one at a time; each message is posted before the next speaker starts. ${ROOM_CALLS}`
     const notice = room.notice ? `Group notice (shared instructions for every member):\n${room.notice}` : ''
-    if (round.kickoff) return [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n')
+    if (round.kickoff) return { text: [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n'), files: [] }
     const working = workingIn(room).filter(item => item.bot.id !== member.id)
-    return [
+    const text = [
       members,
       notice,
       leads ? adminNote(room) : '',
@@ -229,6 +232,7 @@ export function install(rt) {
       `You are number ${index + 1} of ${round.slots.length}. ${before === 0 ? 'Nobody spoke before you' : `${before} went before you`}${after === 0 ? ', and you are the last.' : `; ${after} after you will see your message.`}`,
       ROOM_REPLY,
     ].filter(Boolean).join('\n\n')
+    return { text, files: [...earlier, ...current].flatMap(line => line.files ?? []) }
   }
 
   // Members whose turn in this group is running, and since when.
@@ -254,7 +258,7 @@ export function install(rt) {
   // member's Session, so a member at work is never cut off. `by` is the member that
   // called it, which answers what the turn posts after the round moved on. What the
   // member writes before its last step is posted at once and collected in `said`.
-  async function roomTurn(room, member, sessionId, text, note, signal, round, by, said = []) {
+  async function roomTurn(room, member, sessionId, { text, files }, note, signal, round, by, said = []) {
     if (signal.aborted) return null
     const exchangeId = randomUUID()
     const turn = { botId: member.id, sessionId, exchangeId }
@@ -288,7 +292,7 @@ export function install(rt) {
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, hop: round.hop, ...(by ? { askedBy: by } : {}) })
+      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, hop: round.hop, ...(by ? { askedBy: by } : {}) })
       // Still held by an earlier request: this turn cannot start until the user answers.
       if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
       // Still at earlier work: the call waits in its inbox and is answered after that.
@@ -415,9 +419,9 @@ export function install(rt) {
       await loadGroupLines(room)
       const prompt = roomPrompt(room, member, round)
       round.shown?.push(member.id)
-      const text = session.brief === undefined ? prompt : `${session.brief}\n\n${prompt}`
+      const text = session.brief === undefined ? prompt.text : `${session.brief}\n\n${prompt.text}`
       const said = []
-      const reply = await roomTurn(room, member, session.id, text, slot.note ?? 'your turn', signal, round, slot.by, said)
+      const reply = await roomTurn(room, member, session.id, { text, files: prompt.files }, slot.note ?? 'your turn', signal, round, slot.by, said)
       round.speaking = null
       const final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       if (reply?.failure !== undefined) {
@@ -476,10 +480,14 @@ export function install(rt) {
       const event = item => item.failed || item.resumed || item.stopped
       for (const post of posts.filter(item => !item.kickoff && !event(item))) {
         // Image readings go into the log only; `@` names are picked from what the user typed.
-        const text = post.images === undefined ? post.text : [post.text, ...await rt.imagesForGroup(post.images, room.id)].filter(Boolean).join('\n')
-        appendRoom(room, post.botId
-          ? { who: rt.botOf(post.botId)?.name ?? post.name ?? 'Bot', botId: post.botId, text }
-          : { who: 'User', text })
+        // A file stays with its line and reaches each member the line is shown to.
+        const readings = post.images === undefined ? [] : await rt.imagesForGroup(post.images, room.id)
+        const text = [post.text, ...readings, ...(post.files ?? []).map(fileLine)].filter(Boolean).join('\n')
+        appendRoom(room, {
+          ...(post.botId ? { who: rt.botOf(post.botId)?.name ?? post.name ?? 'Bot', botId: post.botId } : { who: 'User' }),
+          text,
+          ...(post.files === undefined ? {} : { files: post.files }),
+        })
       }
       if (posts.some(post => !post.botId && !post.kickoff)) {
         room.botRounds = 0
@@ -652,10 +660,10 @@ export function install(rt) {
   }
 
   // A Bot's message into the group's own Session, which relays it as a new round.
-  async function postToRoom(room, sender, text, extra = {}) {
+  async function postToRoom(room, sender, text, extra = {}, files = []) {
     const agent = await rt.resolveAgent(room.id)
     agent.followup(createUserMessage({
-      content: [{ type: 'text', text: `[Group post from ${sender.name}]\n${text}` }],
+      content: [{ type: 'text', text: `[Group post from ${sender.name}]\n${text}` }, ...files.map(attachment => ({ type: 'file', attachment }))],
       source: { kind: SOURCE_KIND, form: 'relay', role: 'post', exchangeId: randomUUID(), senderName: sender.name, senderSessionId: sender.id, roomId: room.id, hop: 0, ...extra },
     }))
     await ctx.sessions.flush(agent.session)

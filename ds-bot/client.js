@@ -2151,9 +2151,9 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-exchange .bt-dialog{position:relative}
 .bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 76px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
-.bt-exchange .bt-whole{align-self:flex-start;margin-left:30px}
-.bt-exchange .bt-whole[data-note]{cursor:default}
-.bt-exchange .bt-whole[data-note]:hover{color:var(--bt-ink-3)}
+.bt-whole{display:block;align-self:flex-start;margin-left:30px}
+.bt-whole[data-note]{cursor:default}
+.bt-whole[data-note]:hover{color:var(--bt-ink-3)}
 .bt-exchange .bt-dialog-foot{position:absolute;left:0;right:0;bottom:0;height:76px;box-sizing:border-box;align-items:flex-end;padding:0 0 28px;background:var(--bt-main);z-index:3;animation:bt-foot-in .3s cubic-bezier(.22,1,.36,1) .3s both}
 .bt-exchange .bt-dialog-foot::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:40px;background:linear-gradient(to top,var(--bt-main),transparent);pointer-events:none}
 .bt-exchange[data-leaving] .bt-dialog-foot{animation:bt-foot-out .22s cubic-bezier(.4,0,1,1) forwards}
@@ -2334,14 +2334,9 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 /* Shell chrome reshaped for the team view. Selectors use stable data attributes where the
    shell offers them and CSS-module name suffixes elsewhere. */
 [class*="_logoRow"],[class*="_newSession"],nav[class*="_panelList"]{display:none!important}
-/* The footer ends in the Bot row: the whale's settings seat, then Connect plugins. Every
-   other plugin's entry takes a whole row above it, in the shell's order, so none of them
-   squeezes the Bot row. */
-[class*="_footArea"]{display:grid!important;grid-template-columns:auto minmax(0,1fr);grid-auto-flow:row dense;align-items:center;gap:4px 9px;padding:8px 6px 6px!important}
-[class*="_footArea"]>[class*="_footerActions"],[class*="_footArea"]>[class*="_footerActions"]>div{display:contents!important}
-[class*="_footArea"]>[class*="_footerActions"]>div>*{grid-column:1/-1}
-[class*="_footArea"]>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2;order:1}
-[class*="_footArea"]>[class*="_settingsArea"]{grid-column:1;order:1;width:auto!important}
+[class*="_footArea"]{display:flex!important;flex-direction:row-reverse;align-items:center;gap:9px;padding:8px 6px 6px!important}
+[class*="_footArea"]>[class*="_footerActions"]{flex:1 1 auto;min-width:0}
+[class*="_footArea"]>[class*="_settingsArea"]{flex:none;width:auto!important}
 [class*="_footArea"] button[aria-label="Settings"]{width:auto!important;padding:0!important;background:none!important;border-radius:50%!important;height:auto!important}
 ${SKIN_FOOT}{display:flex!important;flex-direction:row!important;align-items:center!important;gap:9px!important}
 ${SKIN_FOOT}>div:has(> [data-slot="sidebar.footer.action"]){display:flex!important;align-items:center!important;flex:1 1 auto!important;min-width:0!important}
@@ -4002,6 +3997,27 @@ function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
   });
   return (0, import_react6.createElement)("div", { className: "bt-event" }, parts);
 }
+function WholeNote({ length, kept, read, onShow }) {
+  if (read === void 0 || read === "loading") {
+    return (0, import_react6.createElement)("button", { type: "button", className: "bt-more bt-whole", disabled: read === "loading", onClick: onShow }, t("Show all · {count} characters", { count: length.toLocaleString() }));
+  }
+  if (read.whole) return null;
+  const note = typeof read.text === "string" && read.text.length > kept.length ? t("Showing the first {count} characters", { count: read.text.length.toLocaleString() }) : t("Only the start of this message is kept here");
+  return (0, import_react6.createElement)("span", { className: "bt-more bt-whole", "data-note": "" }, note);
+}
+function LongPost({ file, length, ...props }) {
+  const [read, setRead] = (0, import_react6.useState)();
+  const show = async () => {
+    setRead("loading");
+    setRead(await props.actions.fileText(file) ?? { whole: false });
+  };
+  return (0, import_react6.createElement)(
+    import_react6.Fragment,
+    null,
+    (0, import_react6.createElement)(GroupMessage, { ...props, text: typeof read?.text === "string" ? read.text : props.text }),
+    (0, import_react6.createElement)(WholeNote, { length, kept: props.text, read, onShow: show })
+  );
+}
 function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi }) {
   const lead = (0, import_react6.createElement)(
     "button",
@@ -4185,7 +4201,9 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         if (source.failed !== void 0 || source.resumed === true || source.stopped === true) return null;
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
-        return (0, import_react6.createElement)(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room: room2, roster, actions, msgKey: `${sessionId}:post:${data.seq ?? node.key}`, useUi });
+        const post = { bot: poster, text: stripHeader(contentText(data.content)), room: room2, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi };
+        const file = source.length === void 0 ? void 0 : (data.content ?? []).find((block) => block?.type === "file")?.attachment;
+        return file ? (0, import_react6.createElement)(LongPost, { ...post, file, length: source.length }) : (0, import_react6.createElement)(GroupMessage, post);
       }
       if (source.role === "report") {
         return (0, import_react6.createElement)(GroupEvent, { prefix: t("Replies from"), room: roster.roomsById[source.roomId], name: t("a group chat"), roster, actions });
@@ -5484,10 +5502,11 @@ var SIDEBAR_CSS = `
 .bt-rail .bt-row{position:relative}
 .bt-rail .bt-pin{position:absolute;top:3px;left:calc(50% + 12px)}
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
-[class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
-[class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
+[class*="_footArea"]:has(.bt-foot-account){display:flex!important;flex-direction:row!important;align-items:center;gap:6px}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"],[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div{display:contents!important}
+.bt-foot-account{order:-1;flex:none;display:inline-flex}
+[class*="_footArea"]:has(.bt-foot-account) .bt-connect-foot{order:0;flex:1 1 auto;min-width:0;width:auto}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{order:1;flex:none}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
 /* The update cloud springs in when a newer DS Bot shows up; its arrow drops in a
@@ -8622,14 +8641,6 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
 // src/client/exchange.js
 var import_react21 = require("react");
 var SHEET_EXIT_MS = 220;
-function WholeNote({ entry, read, onShow }) {
-  if (read === void 0 || read === "loading") {
-    return (0, import_react21.createElement)("button", { type: "button", className: "bt-more bt-whole", disabled: read === "loading", onClick: onShow }, t("Show all · {count} characters", { count: entry.length.toLocaleString() }));
-  }
-  if (read.whole) return null;
-  const note = typeof read.text === "string" && read.text.length > entry.text.length ? t("Showing the first {count} characters", { count: read.text.length.toLocaleString() }) : t("Only the start of this message is kept here");
-  return (0, import_react21.createElement)("span", { className: "bt-more bt-whole", "data-note": "" }, note);
-}
 function ExchangeDialog({ pair, roster, actions }) {
   const [entries2, setEntries] = (0, import_react21.useState)(null);
   const [leaving, setLeaving] = (0, import_react21.useState)(false);
@@ -8703,7 +8714,7 @@ function ExchangeDialog({ pair, roster, actions }) {
               { className: "bt-group-msg" },
               (0, import_react21.createElement)("span", { className: "bt-group-name", style: { color: inkText(colorOf(bot)) } }, bot.name),
               (0, import_react21.createElement)(Bubbles, { texts: [text], roster, selfId: bot.id, actions, lead: (0, import_react21.createElement)("span", { className: "bt-lead" }, (0, import_react21.createElement)(BotMark, { bot, size: 22 })) }),
-              cut ? (0, import_react21.createElement)(WholeNote, { entry, read, onShow: () => showAll(entry.id) }) : null
+              cut ? (0, import_react21.createElement)(WholeNote, { length: entry.length, kept: entry.text, read, onShow: () => showAll(entry.id) }) : null
             )
           );
         })
@@ -12723,60 +12734,6 @@ ${marked}
 var readPageScript = (limits = READ_LIMITS) => `(${readPage})(${JSON.stringify(limits)})`;
 var READ_PAGE_SCRIPT = readPageScript();
 
-// src/client/shared-map.js
-function sharedMap(key, storage = globalThis.localStorage) {
-  const read = (fallback = {}) => {
-    if (!storage) return fallback;
-    try {
-      const value = JSON.parse(storage.getItem(key) ?? "{}");
-      return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
-    } catch {
-      return fallback;
-    }
-  };
-  const update = (change, fallback = {}) => {
-    const base = read(fallback);
-    const next = change(base);
-    if (next === base) return next;
-    try {
-      storage?.setItem(key, JSON.stringify(next));
-    } catch {
-    }
-    return next;
-  };
-  return { key, read, update };
-}
-function setEntry(map, id, value) {
-  if (value === void 0) {
-    if (!Object.hasOwn(map, id)) return map;
-    const { [id]: _, ...rest } = map;
-    return rest;
-  }
-  return { ...map, [id]: value };
-}
-function toggleReaction(reactions, key, index, emoji) {
-  const entry = { ...reactions[key] };
-  const list = entry[index] ?? [];
-  entry[index] = list.includes(emoji) ? list.filter((item) => item !== emoji) : [...list, emoji];
-  if (entry[index].length === 0) delete entry[index];
-  const next = { ...reactions };
-  if (Object.keys(entry).length) next[key] = entry;
-  else delete next[key];
-  return next;
-}
-function setUnread(unread, id, value) {
-  if (Boolean(unread[id]) === value) return unread;
-  const next = { ...unread };
-  if (value) next[id] = true;
-  else delete next[id];
-  return next;
-}
-function noteLeft(seen, ids, now) {
-  const next = { ...seen };
-  for (const id of ids) next[id] = Math.max(Number(next[id]) || 0, now);
-  return next;
-}
-
 // src/client/bot-browsers.js
 var STORE_KEY = STORAGE.browsers;
 var MAX_LIVE = 6;
@@ -12810,8 +12767,12 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
   const owner = /* @__PURE__ */ new Map();
   const tabs = createSource2({});
   const pages = createSource2({});
-  const store = sharedMap(STORE_KEY, storage);
-  let saved = store.read();
+  let saved = {};
+  try {
+    saved = JSON.parse(storage?.getItem(STORE_KEY) ?? "{}") ?? {};
+  } catch {
+    saved = {};
+  }
   let layer;
   let shown = null;
   let rect = null;
@@ -12824,16 +12785,29 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     const botId = owner.get(tabId);
     return { ...state, [tabId]: { ...EMPTY, ...savedTab(botId, tabId), ...state[tabId], ...patch } };
   });
-  const save = (botId, entry) => {
-    saved = store.update((stored) => setEntry(stored, botId, entry), saved);
+  const writeSaved = () => {
+    try {
+      storage?.setItem(STORE_KEY, JSON.stringify(saved));
+    } catch {
+    }
   };
   const persist = (botId) => {
     const state = tabs.getSnapshot()[botId];
-    const snapshot = pages.getSnapshot();
-    save(botId, state && {
-      tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
-      active: state.active
-    });
+    if (state === void 0) {
+      if (saved[botId] === void 0) return;
+      const { [botId]: _, ...rest } = saved;
+      saved = rest;
+    } else {
+      const snapshot = pages.getSnapshot();
+      saved = {
+        ...saved,
+        [botId]: {
+          tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
+          active: state.active
+        }
+      };
+    }
+    writeSaved();
   };
   const ensureTabs = (botId) => {
     if (tabs.getSnapshot()[botId] !== void 0) return;
@@ -13089,7 +13063,11 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
       const { [botId]: _, ...rest } = snapshot;
       return rest;
     });
-    save(botId, void 0);
+    if (saved[botId] !== void 0) {
+      const { [botId]: _, ...rest } = saved;
+      saved = rest;
+      writeSaved();
+    }
   }
   return {
     tabs,
@@ -13414,11 +13392,28 @@ function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get("locale")), "ds-bot: interface copy");
   const roster = createSource(EMPTY_ROSTER);
   migrateStorage();
-  const unreadStore = sharedMap(STORAGE.unread);
-  const reactionStore = sharedMap(STORAGE.reactions);
-  const seenStore = sharedMap(STORAGE.seen);
-  let seenAt = seenStore.read();
-  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {} });
+  const UNREAD_KEY = STORAGE.unread;
+  let savedUnread = {};
+  try {
+    savedUnread = JSON.parse(localStorage.getItem(UNREAD_KEY) ?? "{}") ?? {};
+  } catch {
+    savedUnread = {};
+  }
+  const REACTIONS_KEY = STORAGE.reactions;
+  let savedReactions = {};
+  try {
+    savedReactions = JSON.parse(localStorage.getItem(REACTIONS_KEY) ?? "{}") ?? {};
+  } catch {
+    savedReactions = {};
+  }
+  const SEEN_KEY = STORAGE.seen;
+  let seenAt = {};
+  try {
+    seenAt = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}") ?? {};
+  } catch {
+    seenAt = {};
+  }
+  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: savedUnread, reactions: savedReactions, visits: {} });
   const surface = createSource({ mode: readMode(), plain: false });
   let agentSessionCache = /* @__PURE__ */ new Set();
   try {
@@ -13439,23 +13434,18 @@ function apply(ctx) {
   const dropPanels = () => ui2.set((state) => state.details || state.renaming ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
   const seenKey = (id) => roster.getSnapshot().byId?.[id]?.id ?? id;
   const leaveVisits = (ids) => {
-    seenAt = seenStore.update((seen) => noteLeft(seen, ids.map(seenKey), Date.now()), seenAt);
+    const now = Date.now();
+    for (const id of ids) seenAt[seenKey(id)] = now;
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(seenAt));
+    } catch {
+    }
   };
   ctx.effect(() => {
     const onPageHide = () => leaveVisits(Object.keys(ui2.getSnapshot().visits ?? {}));
     window.addEventListener("pagehide", onPageHide);
     return () => window.removeEventListener("pagehide", onPageHide);
   }, "ds-bot: remember visits on page hide");
-  ctx.effect(() => {
-    const onStorage = (event) => {
-      if (event.storageArea !== localStorage) return;
-      if (event.key === null || event.key === unreadStore.key) ui2.set((state) => ({ ...state, unread: unreadStore.read(state.unread) }));
-      if (event.key === null || event.key === reactionStore.key) ui2.set((state) => ({ ...state, reactions: reactionStore.read(state.reactions) }));
-      if (event.key === null || event.key === seenStore.key) seenAt = seenStore.read(seenAt);
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, "ds-bot: follow other windows");
   const activity = createSource({});
   const work = createSource({ bots: {}, approvals: [] });
   let workKey = "";
@@ -13482,10 +13472,17 @@ function apply(ctx) {
   } catch {
     savedPrefs = {};
   }
-  const writeUnread = (id, value) => {
-    const unread = unreadStore.update((marks) => setUnread(marks, id, value), ui2.getSnapshot().unread);
-    ui2.set((state) => JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread });
-  };
+  const setUnread = (id, value) => ui2.set((state) => {
+    if (Boolean(state.unread[id]) === value) return state;
+    const unread = { ...state.unread };
+    if (value) unread[id] = true;
+    else delete unread[id];
+    try {
+      localStorage.setItem(UNREAD_KEY, JSON.stringify(unread));
+    } catch {
+    }
+    return { ...state, unread };
+  });
   const refreshed = /* @__PURE__ */ new Set();
   let pulls = 0;
   let applied = 0;
@@ -13893,7 +13890,7 @@ function apply(ctx) {
         });
       }
     },
-    markUnread: (id) => writeUnread(id, true),
+    markUnread: (id) => setUnread(id, true),
     beginVisit: (id) => {
       const made = roster.getSnapshot().byId[id] ?? roster.getSnapshot().roomsById[id];
       const seen = seenAt[seenKey(id)] ?? (made?.createdBy && Number.isFinite(made.createdAt) ? made.createdAt : null);
@@ -13908,13 +13905,23 @@ function apply(ctx) {
         return { ...state, visits };
       });
     },
-    toggleReaction: (key, index, emoji) => {
-      const reactions = reactionStore.update((saved) => toggleReaction(saved, key, index, emoji), ui2.getSnapshot().reactions);
-      ui2.set((state) => ({ ...state, reactions }));
-    },
+    toggleReaction: (key, index, emoji) => ui2.set((state) => {
+      const entry = { ...state.reactions?.[key] ?? {} };
+      const list = entry[index] ?? [];
+      entry[index] = list.includes(emoji) ? list.filter((item) => item !== emoji) : [...list, emoji];
+      if (entry[index].length === 0) delete entry[index];
+      const reactions = { ...state.reactions };
+      if (Object.keys(entry).length) reactions[key] = entry;
+      else delete reactions[key];
+      try {
+        localStorage.setItem(REACTIONS_KEY, JSON.stringify(reactions));
+      } catch {
+      }
+      return { ...state, reactions };
+    }),
     quote: (sessionId, text) => ui2.set((state) => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
     clearQuote: (token) => ui2.set((state) => state.quote?.token === token ? { ...state, quote: null } : state),
-    clearUnread: (id) => writeUnread(id, false),
+    clearUnread: (id) => setUnread(id, false),
     setFlags: (id, flags) => after(call("set-flags", { id, ...flags })),
     deleteRoom: (id) => after(call("delete-room", { id })),
     openMenu: (menu) => {
@@ -13963,6 +13970,7 @@ function apply(ctx) {
     scheduleDelete: (sessionId, id) => call("schedule-delete", { sessionId, id }),
     exchange: (a, b) => call("exchange", { a, b }).catch(() => []),
     exchangeText: (id) => call("exchange-text", { id }).catch(() => void 0),
+    fileText: (file) => call("file-text", { file }).catch(() => void 0),
     roomProgress: (roomId) => call("room-progress", { roomId }).catch(() => []),
     earlier: (sessionId, cursor) => call("earlier", { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.

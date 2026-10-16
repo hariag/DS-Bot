@@ -1,7 +1,7 @@
 // Delivery: how one Bot, the user, or DS Bot itself puts a message into a Bot Session.
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { HISTORY_TIMEOUT_MS, SOURCE_KIND, TEXT_KEPT, TEXT_SHOW_MAX } from './constants.js'
+import { HISTORY_TIMEOUT_MS, LONG_HEAD, MESSAGE_INLINE_MAX, READ_LINE_MAX, SOURCE_KIND, TEXT_KEPT, TEXT_SHOW_MAX } from './constants.js'
 import { headOf, textOf } from './text.js'
 
 export function install(rt) {
@@ -41,7 +41,8 @@ export function install(rt) {
   // group turn (groups.js). `fromRoomId`: the group whose Session the sender wrote
   // from; the reply goes back to that Session (turns.js). `files` go along as file
   // blocks, which DSH turns into a read-only path the recipient's tools can read.
-  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, askedBy, fromRoomId, files = [] }) {
+  // `length`: the whole message's length when it went as a file (attachLong).
+  async function deliver({ fromId, toId, sessionId, text, role, hop = 0, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, askedBy, fromRoomId, files = [], length }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -67,9 +68,10 @@ export function install(rt) {
     }
     const targetSessionId = sessionId ?? rt.chatOf(toId)
     if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried && !resent) {
-      // The whole text is in the Session it goes to; exchangeText reads it back there.
+      // The whole text is in its file, or in the Session it goes to; exchangeText reads
+      // it back there.
       const kept = headOf(text, TEXT_KEPT)
-      const whole = kept.length < text.length ? { length: text.length, sessionId: targetSessionId } : {}
+      const whole = length !== undefined ? { length, files } : kept.length < text.length ? { length: text.length, sessionId: targetSessionId } : {}
       state.exchanges.push({ id: exchangeId, from: fromId, to: toId, text: kept, ...whole, role, time: Date.now(), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}) })
       void rt.save().catch(() => {})
     }
@@ -95,6 +97,7 @@ export function install(rt) {
   // be read (the Session is gone, or the message is past what the dialog shows).
   async function exchangeText(entry) {
     if (entry.length === undefined) return { text: entry.text, whole: true }
+    if (entry.files?.length > 0) return await fileText(entry.files[0]) ?? { text: entry.text, whole: false }
     try {
       for await (const event of rt.eventsBackwards(entry.sessionId ?? rt.chatOf(entry.to), AbortSignal.timeout(HISTORY_TIMEOUT_MS))) {
         if (event.type !== 'user/message' || event.data?.source?.exchangeId !== entry.id) continue
@@ -108,5 +111,42 @@ export function install(rt) {
     return { text: entry.text, whole: false }
   }
 
-  Object.assign(rt, { resolveAgent, deliver, exchangeText })
+  // A message a Bot sends past MESSAGE_INLINE_MAX goes as a DSH file: it is stored once,
+  // not in every Session it reaches, and the model reads it with its file tools when it
+  // needs it. Undefined when this DSH cannot store files.
+  async function attachLong(text, name) {
+    if (text.length <= MESSAGE_INLINE_MAX) return { text, files: [] }
+    try {
+      const file = await ctx.get?.('attachments')?.saveFile({ data: new TextEncoder().encode(text), name })
+      if (file === undefined) return undefined
+      // The file stays verbatim, so a line past what the read tool shows needs another way.
+      const wide = text.split('\n').some(line => line.length > READ_LINE_MAX)
+      const note = `[A long message: ${text.length} characters. Its start is below; all of it is in the attached file. Read the file before you act on it.${wide ? ` Some lines are longer than the ${READ_LINE_MAX} characters the read tool shows of a line; read those with a shell command.` : ''}]`
+      return { text: `${note}\n${headOf(text, LONG_HEAD)}…`, files: [file], length: text.length }
+    } catch (error) {
+      rt.warn('ds-bot: long message not stored as a file: %s', error)
+      return undefined
+    }
+  }
+
+  // The text of a stored file, up to what the dialogs show.
+  async function fileText(file) {
+    const attachments = ctx.get?.('attachments')
+    if (attachments === undefined) return undefined
+    const decoder = new TextDecoder()
+    let text = ''
+    try {
+      for await (const chunk of attachments.readFileStream(file, AbortSignal.timeout(HISTORY_TIMEOUT_MS))) {
+        text += decoder.decode(chunk, { stream: true })
+        if (text.length > TEXT_SHOW_MAX) return { text: headOf(text, TEXT_SHOW_MAX), whole: false }
+      }
+    } catch (error) {
+      rt.warn('ds-bot: file %s not read: %s', file?.name, error)
+      return undefined
+    }
+    text += decoder.decode()
+    return { text, whole: true }
+  }
+
+  Object.assign(rt, { resolveAgent, deliver, exchangeText, attachLong, fileText })
 }

@@ -2,7 +2,7 @@
 // question card. Group rounds and reading chats are in groups.js.
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { COLORS, EXTRA_COLORS, MAX_HOPS, MAX_UNATTENDED_MESSAGES, MAX_UNREAD_REQUESTS, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
+import { COLORS, EXTRA_COLORS, MAX_HOPS, MAX_UNATTENDED_MESSAGES, MAX_UNREAD_REQUESTS, MESSAGE_INLINE_MAX, ROOM_BOT_ROUNDS, ROOM_MODES, SOURCE_KIND } from './constants.js'
 import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
@@ -95,6 +95,7 @@ export function install(rt) {
     return 1 + Math.max(turn?.info?.hop ?? 0, ...(turn?.joined ?? []).map(joined => joined.info?.hop ?? 0))
   }
   const CHAIN_TOO_LONG = 'This chain of Bot messages is already long. Stop here and report to the user instead.'
+  const tooLong = text => `Not sent: the message has ${text.length} characters, more than ${MESSAGE_INLINE_MAX}, and this DeepSeek Harness cannot send it as a file. Write it to a file in your working folder and send its path instead.`
   const checkUnattended = () => {
     if (rt.unattended.sent < MAX_UNATTENDED_MESSAGES) return
     refuse(`Not sent: the team has sent ${MAX_UNATTENDED_MESSAGES} Bot messages since the user last wrote. Stop messaging other Bots and tell the user what is still open.`)
@@ -134,10 +135,12 @@ export function install(rt) {
       if (unread >= MAX_UNREAD_REQUESTS) {
         refuse(`Not sent: ${target.name} has not read the last ${unread} messages from Bots yet, so it is most likely stuck, for example waiting for the user. Do not send it more; tell the user that ${target.name} is not responding.`)
       }
+      const long = await rt.attachLong(String(args.message), `Message from ${sender.name}.txt`)
+      if (long === undefined) return tooLong(String(args.message))
       const toUser = args.reply_to === 'user'
       const working = rt.live.get(chat)?.turn !== undefined
       const steer = args.when !== 'queue' && !toUser
-      await rt.deliver({ fromId: sender.id, toId: target.id, text: args.message, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
+      await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: long.files, length: long.length, role: 'request', hop, steer, ...(toUser ? { audience: 'user' } : callerRoom(exec)) })
       rt.unattended.sent += 1
       const sent = toUser
         ? `Delivered to ${target.name}. It will answer the user in its own chat; nothing comes back to you, so point the user to ${target.name}'s chat instead of relaying.`
@@ -423,11 +426,13 @@ export function install(rt) {
       if (text === '') return 'Write a message to post.'
       if ((room.botRounds ?? 0) >= ROOM_BOT_ROUNDS) return `Bots already started ${ROOM_BOT_ROUNDS} rounds in "${room.name}" since the user last spoke there. Wait for the user.`
       checkUnattended()
+      const long = await rt.attachLong(text, `Post from ${sender.name}.txt`)
+      if (long === undefined) return tooLong(text)
       room.botRounds = (room.botRounds ?? 0) + 1
       await rt.save()
       const reportBack = args.report_back === true
       try {
-        await rt.postToRoom(room, sender, text, { hop, ...(reportBack ? { reportBack: true } : {}) })
+        await rt.postToRoom(room, sender, long.text, { hop, ...(reportBack ? { reportBack: true } : {}), ...(long.length ? { length: long.length } : {}) }, long.files)
       } catch (failure) {
         return `Could not post in "${room.name}": ${failure.message}`
       }

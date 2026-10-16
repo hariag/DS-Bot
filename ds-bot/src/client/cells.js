@@ -100,28 +100,10 @@ function MessageTools({ text, name, sessionId, react, actions }) {
       item(t('Copy'), CopyIcon, copy), item(t('Download'), DownloadIcon, download)), document.body) : null)
 }
 
-// Few readers go through a whole chain of thought, so the row opens on its last lines;
-// the box scrolls for the rest. It stays at the end as later steps add reasoning,
-// unless the reader has scrolled up.
 function ThinkingRow({ text }) {
-  const box = useRef(null)
-  const atEnd = useRef(true)
-  const [fade, setFade] = useState(undefined)
-  const measure = () => {
-    const el = box.current
-    atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 2
-    const above = el.scrollTop > 0
-    setFade(above && !atEnd.current ? 'both' : above ? 'top' : !atEnd.current ? 'bottom' : undefined)
-  }
-  useLayoutEffect(() => {
-    const el = box.current
-    if (atEnd.current) el.scrollTop = el.scrollHeight
-    measure()
-  }, [text])
-  const title = t('Thought it through')
-  return h('div', { className: 'bt-think' },
-    h('div', { className: 'bt-think-title' }, title),
-    h('div', { ref: box, className: 'bt-think-text', role: 'region', 'aria-label': title, tabIndex: 0, 'data-fade': fade, onScroll: measure }, text))
+  return h('details', { className: 'bt-think' },
+    h('summary', null, t('Thought it through')),
+    h('div', { className: 'bt-think-text' }, text))
 }
 
 // The files a finished turn changed or delivered, linked from inline code in its
@@ -189,6 +171,31 @@ function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
 }
 
 // One Bot message inside a group chat: avatar, name (with its group role), bubble.
+// Under a long message that shows only its start: the button that reads it whole, or
+// why only part of it shows. `kept` is the text shown before; `read` what came back.
+export function WholeNote({ length, kept, read, onShow }) {
+  if (read === undefined || read === 'loading') {
+    return h('button', { type: 'button', className: 'bt-more bt-whole', disabled: read === 'loading', onClick: onShow }, t('Show all · {count} characters', { count: length.toLocaleString() }))
+  }
+  if (read.whole) return null
+  const note = typeof read.text === 'string' && read.text.length > kept.length
+    ? t('Showing the first {count} characters', { count: read.text.length.toLocaleString() })
+    : t('Only the start of this message is kept here')
+  return h('span', { className: 'bt-more bt-whole', 'data-note': '' }, note)
+}
+
+// A Bot's post past what a message holds came as a file: its start shows, all of it on request.
+function LongPost({ file, length, ...props }) {
+  const [read, setRead] = useState()
+  const show = async () => {
+    setRead('loading')
+    setRead(await props.actions.fileText(file) ?? { whole: false })
+  }
+  return h(Fragment, null,
+    h(GroupMessage, { ...props, text: typeof read?.text === 'string' ? read.text : props.text }),
+    h(WholeNote, { length, kept: props.text, read, onShow: show }))
+}
+
 function GroupMessage({ bot, text, texts = [text], room, roster, actions, msgKey, useUi }) {
   const lead = h('button', { type: 'button', className: 'bt-lead', 'aria-label': t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) },
     h(BotMark, { bot, size: 22 }))
@@ -369,13 +376,14 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
       if (source.role === 'post') {
-        // A member's late failure, its work picked up after a restart, its work the user
-        // stopped, or the end of its work shows as an event of the round it opens.
-        if (source.failed !== undefined || source.resumed === true || source.stopped === true || source.done === true) return null
+        // A member's late failure, its work picked up after a restart, or its work the user
+        // stopped shows as an event of the round it opens.
+        if (source.failed !== undefined || source.resumed === true || source.stopped === true) return null
         const room = roster.roomsById[sessionId]
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
-        // A trigger's data carries no turn; its event seq is the one durable name of this post.
-        return h(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room, roster, actions, msgKey: `${sessionId}:post:${data.seq ?? node.key}`, useUi })
+        const post = { bot: poster, text: stripHeader(contentText(data.content)), room, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi }
+        const file = source.length === undefined ? undefined : (data.content ?? []).find(block => block?.type === 'file')?.attachment
+        return file ? h(LongPost, { ...post, file, length: source.length }) : h(GroupMessage, post)
       }
       if (source.role === 'report') {
         return h(GroupEvent, { prefix: t('Replies from'), room: roster.roomsById[source.roomId], name: t('a group chat'), roster, actions })
@@ -637,9 +645,6 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === 'stopped') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("You stopped {name}'s work", { name: bot.name }))
-      }
-      if (reply.kind === 'done') {
-        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t('{name} finished its work', { name: bot.name }))
       }
       return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi })
     }),

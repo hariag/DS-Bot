@@ -372,8 +372,11 @@ export function install(rt) {
           }
         }
         if (source?.kind === SOURCE_KIND && source.role === 'post' && rt.roomOf(id)) {
+          // A long post comes as a file (attachLong), which stays with its line.
+          const files = (Array.isArray(event.data.content) ? event.data.content : []).filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment)
           queueRoomMessage(id, {
             text: textOf(event.data.content).replace(/^\[Group post from [^\]]*\]\n?/, ''),
+            ...(files.length > 0 ? { files } : {}),
             botId: source.senderSessionId,
             name: source.senderName,
             reportBack: source.reportBack === true,
