@@ -61,6 +61,7 @@ export function App() {
   }
   return h('div', { className: 'dsb-frame', 'data-rail': wide ? undefined : '' },
     h('aside', { className: 'dsb-side' },
+      h('div', { className: 'dsb-band' }),
       h('div', { className: 'dsb-side-list' },
         wide ? null : h('button', { type: 'button', className: 'dsb-expand', 'aria-label': t('Expand sidebar'), title: t('Expand sidebar'), onClick: () => actions.toggleSidebar() }, h(BrandMark, { size: 22 })),
         h(TeamSidebar, { ...views, wide })),
@@ -68,6 +69,7 @@ export function App() {
         h('button', { type: 'button', className: 'dsb-settings', title: t('Settings'), onClick: () => actions.openSettings() }, h(YouAvatar)))),
     // The details panel makes room by giving the shell's `_centerCol` column a right margin.
     h('main', { className: 'dsb-main dsb_centerCol' },
+      h('div', { className: 'dsb-band' }),
       shown ? h(Fragment, { key: shown },
         h('div', { className: 'dsb-head' }, h(HeaderPill, { ...views, sessionId: shown, useSession: team.sessionHook(shown) })),
         h(Chat, { sessionId: shown, team })) : null),

@@ -19,6 +19,8 @@ import './app.css'
 
 installLocale(createLocale(navigator.language))
 document.documentElement.lang = navigator.language
+// macOS puts the window buttons at the band's left end, over the sidebar (app.css).
+if (/mac/iu.test(navigator.userAgentData?.platform ?? navigator.platform)) document.documentElement.dataset.mac = ''
 
 // The Bot views' own stylesheets, the same ones the plugin puts in DSH.
 for (const [tag, text] of [
