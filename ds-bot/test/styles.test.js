@@ -30,6 +30,9 @@ const react = {
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
+// DS Bot's style tags in a document, all of them or those of one group.
+const tagged = (document, tag) => [...document.head.querySelectorAll('style')]
+  .filter(style => style.dataset.dshBot !== undefined && (tag === undefined || style.dataset.dshBot === tag))
 
 // The client-modules bundle registers itself through the page's __ModuleLoader__
 // facade when it loads; capture that registration once to reach its exports.
@@ -97,7 +100,7 @@ test('every DS Bot style is owned by the ds-bot client module', async () => {
 
   const plain = installStyles('a{color:red}', 'mentions')
   installCompiledStyles('.b{position:fixed}', 'shell')
-  const compiled = document.querySelector('style[data-dsh-bot="shell"]')
+  const [compiled] = tagged(document, 'shell')
   const stray = document.createElement('style')
   stray.textContent = 'stray{}'
   document.head.appendChild(stray)
@@ -107,16 +110,17 @@ test('every DS Bot style is owned by the ds-bot client module', async () => {
     assert.equal(style.matches('style:not([data-plugin])'), false)
   }
 
-  // Another module materializing claims only untagged styles; ours keep their owner.
+  // Another module materializing claims untagged styles (DSH 0.2.0-rc.2 does; other
+  // versions may not); ours keep their owner either way.
   materialize('other')
-  assert.equal(stray.dataset.plugin, 'other')
+  const claimed = stray.dataset.plugin === 'other'
   assert.equal(plain.dataset.plugin, 'ds-bot')
   assert.equal(compiled.dataset.plugin, 'ds-bot')
 
-  // A newer revision of that module replaces it: its owned styles go, ours stay.
+  // A newer revision of that module replaces it: what it claimed goes, ours stay.
   update('r2')
   await tick()
-  assert.equal(stray.isConnected, false)
+  if (claimed) assert.equal(stray.isConnected, false)
   assert.equal(plain.isConnected, true)
   assert.equal(compiled.isConnected, true)
 })
@@ -126,7 +130,7 @@ test('a compiled style removed from outside comes back, until its cleanup runs',
   const { installCompiledStyles } = module.exports
   const { document } = window
   const dispose = installCompiledStyles('.b{position:fixed}', 'shell')
-  const style = document.querySelector('style[data-dsh-bot="shell"]')
+  const [style] = tagged(document, 'shell')
   assert.ok(style.isConnected)
 
   style.remove()
@@ -153,7 +157,7 @@ test('mounting and unmounting compiled styles twice leaves no extra nodes', asyn
     dispose()
   }
   await tick()
-  assert.equal(document.querySelectorAll('style[data-dsh-bot]').length, 0)
+  assert.equal(tagged(document).length, 0)
 })
 
 test('the chat-room rule is installed through installStyles, so it is owned too', () => {
