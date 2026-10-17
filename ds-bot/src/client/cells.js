@@ -1,6 +1,6 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { MarkdownText } from './dsh-primitives.js'
 import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
@@ -293,36 +293,59 @@ function EarlierParts({ sessionId, roster, actions }) {
     observer.observe(node)
     return () => observer.disconnect()
   }, [view.cursor, view.loading, view.failed])
-  const selfId = roster.byId[sessionId]?.id
-  const rows = []
-  for (const item of view.items) {
-    const last = rows.at(-1)
-    if (item.kind === 'bot' && last?.kind === 'bot') last.texts.push(item.text)
-    else rows.push(item.kind === 'bot' ? { kind: 'bot', texts: [item.text] } : item)
-  }
   return h('div', { className: 'bt-earlier', role: 'feed', 'aria-label': t('Earlier messages'), 'aria-busy': view.loading },
     h('div', { ref: top, className: 'bt-earlier-top' },
       view.loading ? h(Shimmer, null, t('Loading earlier messages…'))
         : view.failed ? h('button', { type: 'button', className: 'bt-soft', onClick: () => load(view.cursor) }, t('Couldn’t load earlier messages · Retry'))
           : view.cursor ? h('button', { type: 'button', className: 'bt-soft', onClick: () => load(view.cursor) }, t('Load earlier')) : null),
-    rows.map((row, index) => {
-      // Pages are prepended, so a row keeps its distance from the end.
-      const key = rows.length - index
-      switch (row.kind) {
-        case 'divider': return h(PartLine, { key, time: row.time })
-        case 'user': return h(EarlierUser, { key, row })
-        case 'answer': return h(AnsweredCell, { key, node: { data: row } })
-        case 'bot': return h(Bubbles, { key, texts: row.texts, roster, selfId, actions, fold: FOLD_HUGE })
-        case 'event': {
-          if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
-          const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
-          const prefix = { stopped: t('Stopped by'), reply: t('Reply from') }[row.role] ?? t('Message from')
-          return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
-        }
-        default: return null
-      }
-    }),
+    h(ChatRows, { items: view.items, sessionId, roster, actions }),
     h(PartLine, { time: view.startedAt }))
+}
+
+// A Bot chat's entries as the host lists them (the `earlier` and `chat` endpoints): the
+// Bot's messages in a row are one block, and a thin line marks where a part begins.
+// `clock` adds the time separators: one above the first entry, and one after each pause.
+export function ChatRows({ items, sessionId, roster, actions, useUi, clock = false }) {
+  const selfId = roster.byId[sessionId]?.id
+  const rows = []
+  for (const item of items) {
+    const last = rows.at(-1)
+    if (item.kind === 'bot' && last?.kind === 'bot') {
+      last.texts.push(item.text)
+      last.end = item.time
+    } else rows.push(item.kind === 'bot' ? { kind: 'bot', texts: [item.text], time: item.time, end: item.time } : item)
+  }
+  let before
+  return rows.flatMap((row, index) => {
+    // Pages are prepended, so a row keeps its distance from the end.
+    const key = rows.length - index
+    const shown = chatRow(row, key, { sessionId, selfId, roster, actions, useUi })
+    // A part's first entry shows its time under the part's line, as a chat's first one does.
+    if (row.kind === 'divider') {
+      before = undefined
+      return [shown]
+    }
+    const pause = clock && Number.isFinite(row.time) && (before === undefined || row.time - before >= SEPARATOR_GAP_MS)
+    if (Number.isFinite(row.end ?? row.time)) before = row.end ?? row.time
+    return pause ? [h('div', { key: `${key}:clock`, className: 'bt-time-sep', role: 'separator' }, clockLabel(row.time)), shown] : [shown]
+  })
+}
+
+// `useUi` gives a block its reactions and its Reply tool.
+function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
+  switch (row.kind) {
+    case 'divider': return h(PartLine, { key, time: row.time })
+    case 'user': return h(EarlierUser, { key, row })
+    case 'answer': return h(AnsweredCell, { key, node: { data: row } })
+    case 'bot': return h(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : undefined, msgKey: useUi ? `${sessionId}:${row.time}` : undefined, useUi, fold: FOLD_HUGE })
+    case 'event': {
+      if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
+      const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
+      const prefix = { stopped: t('Stopped by'), reply: t('Reply from') }[row.role] ?? t('Message from')
+      return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
+    }
+    default: return null
+  }
 }
 
 export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, useUi, actions }) {
