@@ -24,10 +24,10 @@ const TEAM = {
 const userMessage = (text, time) => ({ type: 'user/message', time, data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
 const botMessage = (text, time, turn = 1) => ({ type: 'assistant/message', time, data: { turn, message: { content: [{ type: 'text', text }] } } })
 
-function start({ pages = {} } = {}) {
+function start({ pages = {}, services = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-feed-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
-  const ctx = fakeContext()
+  const ctx = fakeContext({ services })
   ctx.sessionController = {
     resolveAgent: async sessionId => ({ agent: { session: { id: sessionId, seq: 100 } } }),
     // Two pages per Session, newest first, keyed by the cursor that asks for them.
@@ -160,4 +160,28 @@ test('the chat endpoint pages a Bot\'s own chat from the newest part back', asyn
   const third = (await call('chat', { botId: 'm1', cursor: second.cursor })).value
   assert.deepEqual([third.items, third.cursor], [[{ kind: 'user', text: 'long ago', time: 5 }], null])
   assert.equal((await call('chat', { botId: 'nobody' })).error.code, 'bot/not-found')
+})
+
+test('the run-stats endpoint reads DSH\'s figures for the current part of a Bot\'s chat', async (t) => {
+  const views = { sessionStats: { turns: 3 }, tokenUsage: { cacheReadTokens: 9 }, contextPressure: { contextWindow: 100 } }
+  const read = []
+  const sessionProjections = {
+    snapshot: (session, keys) => {
+      read.push([session.id, keys])
+      return { asOfSeq: 7, values: views }
+    },
+  }
+  const { call, stop } = start({ services: { sessionProjections } })
+  t.after(stop)
+  await call('state')
+  assert.deepEqual((await call('run-stats', { botId: 'm1' })).value, views)
+  assert.deepEqual(read, [['m1c', ['sessionStats', 'tokenUsage', 'contextPressure']]])
+  assert.equal((await call('run-stats', { botId: 'nobody' })).error.code, 'bot/not-found')
+})
+
+test('without DSH\'s session projections the run-stats endpoint has nothing to show', async (t) => {
+  const { call, stop } = start()
+  t.after(stop)
+  await call('state')
+  assert.deepEqual(await call('run-stats', { botId: 'm1' }), { ok: true, value: null })
 })
