@@ -1057,13 +1057,7 @@ export function install(rt) {
     return items
   }
 
-  async function earlierPage(sessionId, cursor) {
-    const past = rt.pastOwners.get(sessionId)
-    const botId = rt.chatOwners.get(sessionId) ?? (past?.roomId === undefined ? past?.botId : undefined)
-    const parts = botId === undefined ? [] : partsOf(botId)
-    const at = parts.findIndex(part => part.sessionId === sessionId)
-    const index = Number.isInteger(cursor?.part) ? cursor.part : at - 1
-    if (at <= 0 || index < 0 || index >= at) return { items: [], cursor: null, startedAt: parts[at]?.startedAt ?? null }
+  async function partPage(parts, index, cursor) {
     const part = parts[index]
     const agent = await rt.resolveAgent(part.sessionId)
     const page = await ctx.sessionController.page({
@@ -1077,12 +1071,28 @@ export function install(rt) {
     const more = page.hasMore && events.length > 0
     // The line above a part's first message marks where it began.
     if (!more && index > 0) items.unshift({ kind: 'divider', time: part.startedAt })
-    return {
-      items,
-      cursor: more ? { part: index, beforeSeq: events[0].seq } : index > 0 ? { part: index - 1 } : null,
-      startedAt: parts[at].startedAt,
-    }
+    return { items, cursor: more ? { part: index, beforeSeq: events[0].seq } : index > 0 ? { part: index - 1 } : null }
   }
 
-  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, followFolder, switchJobs: () => switches.values() })
+  async function earlierPage(sessionId, cursor) {
+    const past = rt.pastOwners.get(sessionId)
+    const botId = rt.chatOwners.get(sessionId) ?? (past?.roomId === undefined ? past?.botId : undefined)
+    const parts = botId === undefined ? [] : partsOf(botId)
+    const at = parts.findIndex(part => part.sessionId === sessionId)
+    const index = Number.isInteger(cursor?.part) ? cursor.part : at - 1
+    if (at <= 0 || index < 0 || index >= at) return { items: [], cursor: null, startedAt: parts[at]?.startedAt ?? null }
+    return { ...(await partPage(parts, index, cursor)), startedAt: parts[at].startedAt }
+  }
+
+  // A Bot's whole own chat, newest page first: the current part, then the earlier
+  // ones, for a window that draws the conversation itself.
+  async function chatPage(botId, cursor) {
+    const parts = partsOf(botId)
+    if (parts.length === 0) throw Object.assign(new Error('Unknown Bot'), { code: 'bot/not-found' })
+    const index = Number.isInteger(cursor?.part) ? cursor.part : parts.length - 1
+    if (index < 0 || index >= parts.length) return { sessionId: parts.at(-1).sessionId, items: [], cursor: null }
+    return { sessionId: parts.at(-1).sessionId, ...(await partPage(parts, index, cursor)) }
+  }
+
+  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, followFolder, switchJobs: () => switches.values() })
 }
