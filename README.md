@@ -101,6 +101,10 @@ The plugin source is in [`ds-bot/`](ds-bot/). For options and internals, see [`d
   - [obelisk](https://github.com/tommy0103/obelisk): chat search with a SQLite full-text index.
 - Everyone who tries DS Bot, asks questions and reports bugs.
 
+## Support
+
+[PayPal](https://paypal.me/Fei2411)
+
 ## License
 
 [Apache License 2.0](LICENSE). Provided "as is", without any warranty. Third-party code and its license are listed in [NOTICE](NOTICE).
