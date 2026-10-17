@@ -3069,9 +3069,11 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-part-line{display:flex;align-items:center;gap:10px;margin:10px 0 6px;font-size:11px;line-height:14px;color:var(--bt-ink-3)}
 .bt-part-line::before,.bt-part-line::after{content:"";flex:1;height:1px;background:var(--bt-line)}
 `;
+var PLUGIN_ID = "ds-bot";
 function installStyles(text, tag) {
   const style = document.createElement("style");
   style.dataset.dshBot = tag;
+  style.dataset.plugin = PLUGIN_ID;
   style.textContent = text;
   document.head.appendChild(style);
   return style;
@@ -3105,8 +3107,11 @@ function compileFragmentSelectors(text, names) {
 }
 function installCompiledStyles(text, tag) {
   const style = installStyles("", tag);
+  let disposed = false;
   const cache = /* @__PURE__ */ new WeakMap();
   const render = () => {
+    if (disposed) return;
+    if (!style.isConnected) document.head.appendChild(style);
     const names = /* @__PURE__ */ new Set();
     for (const sheet of document.styleSheets) {
       if (sheet.ownerNode?.dataset?.dshBot) continue;
@@ -3131,11 +3136,13 @@ function installCompiledStyles(text, tag) {
   };
   const shell = (node) => node.dataset?.dshBot === void 0;
   const observer = new MutationObserver((records) => {
+    if (records.some((record) => [...record.removedNodes].includes(style))) render();
     if (records.some((record) => [...record.addedNodes, ...record.removedNodes].some(shell))) schedule();
   });
   observer.observe(document.head, { childList: true });
   document.addEventListener("load", onLoad, true);
   return () => {
+    disposed = true;
     observer.disconnect();
     document.removeEventListener("load", onLoad, true);
     clearTimeout(timer);
@@ -12185,10 +12192,7 @@ var roomRule = () => {
   if (live && !selector) return room.rule;
   const declarations2 = room.rule?.style.cssText ?? "";
   room.rule?.parentStyleSheet?.ownerNode?.remove();
-  const style = document.createElement("style");
-  style.dataset.dshBot = "chat-room";
-  style.textContent = `${selector || '[class*="_centerCol"]'}{${declarations2}}`;
-  document.head.append(style);
+  const style = installStyles(`${selector || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
   room.rule = style.sheet.cssRules[0];
   room.selector = selector;
   return room.rule;
@@ -14498,10 +14502,7 @@ function apply(ctx) {
     () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
     () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
   ];
-  ctx.effect(() => {
-    const style = installStyles(RETURN_CSS, "return");
-    return () => style.remove();
-  }, "ds-bot: return styles");
+  ctx.effect(() => installCompiledStyles(RETURN_CSS, "return"), "ds-bot: return styles");
   shadow("sidebar.footer.action", { id: "bot-return", order: -300, inject: face }, BotReturn);
   ctx.effect(() => {
     let previous;

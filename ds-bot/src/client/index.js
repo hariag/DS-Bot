@@ -690,10 +690,7 @@ export function apply(ctx) {
     () => shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
   ]
   // The return button belongs to neither group: it renders only in Agent mode.
-  ctx.effect(() => {
-    const style = installStyles(RETURN_CSS, 'return')
-    return () => style.remove()
-  }, 'ds-bot: return styles')
+  ctx.effect(() => installCompiledStyles(RETURN_CSS, 'return'), 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
 
   // The main view decides `plain`: a DSH Agent Session keeps the Bot shell but

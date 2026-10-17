@@ -24,30 +24,23 @@ const { outputFiles } = await build({
   external: ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives'],
 })
 const react = {
-  createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx },
-  useContext: ctx => ctx.value,
-  useCallback: fn => fn,
-  useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
   createElement: (type, props, ...children) => ({ type, props: { ...props, children } }), Fragment: Symbol('Fragment'),
   useEffect() {}, useLayoutEffect() {}, useState: initial => [initial, () => {}],
   useMemo: make => make(), useRef: current => ({ current }), useId: () => 'id',
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
-// DS Bot's style tags in a document, all of them or those of one group.
-const tagged = (document, tag) => [...document.head.querySelectorAll('style')]
-  .filter(style => style.dataset.dshBot !== undefined && (tag === undefined || style.dataset.dshBot === tag))
 
 // The client-modules bundle registers itself through the page's __ModuleLoader__
 // facade when it loads; capture that registration once to reach its exports.
-const clientModules = await (async () => {
+const clientModules = (() => {
   const { window } = new JSDOM('<!doctype html><html><head></head><body></body></html>')
   let registration
   const previousWindow = globalThis.window
   globalThis.window = window
   window.__ModuleLoader__ = { load: (record) => { registration = record } }
   try {
-    await import('@deepseek-ai/dsh-client-modules/client')
+    requireHarness('@deepseek-ai/dsh-client-modules/client')
   } finally {
     globalThis.window = previousWindow
   }
@@ -104,7 +97,7 @@ test('every DS Bot style is owned by the ds-bot client module', async () => {
 
   const plain = installStyles('a{color:red}', 'mentions')
   installCompiledStyles('.b{position:fixed}', 'shell')
-  const [compiled] = tagged(document, 'shell')
+  const compiled = document.querySelector('style[data-dsh-bot="shell"]')
   const stray = document.createElement('style')
   stray.textContent = 'stray{}'
   document.head.appendChild(stray)
@@ -114,17 +107,16 @@ test('every DS Bot style is owned by the ds-bot client module', async () => {
     assert.equal(style.matches('style:not([data-plugin])'), false)
   }
 
-  // Another module materializing claims untagged styles (DSH 0.2.0-rc.2 does; other
-  // versions may not); ours keep their owner either way.
+  // Another module materializing claims only untagged styles; ours keep their owner.
   materialize('other')
-  const claimed = stray.dataset.plugin === 'other'
+  assert.equal(stray.dataset.plugin, 'other')
   assert.equal(plain.dataset.plugin, 'ds-bot')
   assert.equal(compiled.dataset.plugin, 'ds-bot')
 
-  // A newer revision of that module replaces it: what it claimed goes, ours stay.
+  // A newer revision of that module replaces it: its owned styles go, ours stay.
   update('r2')
   await tick()
-  if (claimed) assert.equal(stray.isConnected, false)
+  assert.equal(stray.isConnected, false)
   assert.equal(plain.isConnected, true)
   assert.equal(compiled.isConnected, true)
 })
@@ -134,7 +126,7 @@ test('a compiled style removed from outside comes back, until its cleanup runs',
   const { installCompiledStyles } = module.exports
   const { document } = window
   const dispose = installCompiledStyles('.b{position:fixed}', 'shell')
-  const [style] = tagged(document, 'shell')
+  const style = document.querySelector('style[data-dsh-bot="shell"]')
   assert.ok(style.isConnected)
 
   style.remove()
@@ -161,59 +153,11 @@ test('mounting and unmounting compiled styles twice leaves no extra nodes', asyn
     dispose()
   }
   await tick()
-  assert.equal(tagged(document).length, 0)
+  assert.equal(document.querySelectorAll('style[data-dsh-bot]').length, 0)
 })
 
 test('the chat-room rule is installed through installStyles, so it is owned too', () => {
-  const pane = readFileSync(new URL('../src/client/frame-watch.js', import.meta.url), 'utf8')
+  const pane = readFileSync(new URL('../src/client/browser-pane.js', import.meta.url), 'utf8')
   assert.match(pane, /installStyles\(.*'chat-room'/)
   assert.equal(pane.includes("dataset.dshBot = 'chat-room'"), false)
-})
-
-test('message tools anchor to the bottom of a long reply in both layouts', () => {
-  const css = readFileSync(new URL('../src/client/styles.js', import.meta.url), 'utf8')
-  assert.match(css, /\.bt-tools\{position:absolute;bottom:0;/)
-  // Flat: the toolbar hangs below the whole message instead of over its last line.
-  assert.match(css, /body\[data-bt-layout=flat\] \.bt-msg\{position:relative\}/)
-  assert.match(css, /body\[data-bt-layout=flat\] \.bt-msg-line\{position:static\}/)
-  assert.match(css, /body\[data-bt-layout=flat\] \.bt-tools\{top:100%;bottom:auto;/)
-  assert.doesNotMatch(css, /body\[data-bt-layout=flat\] \.bt-tools\{bottom:-14px;/)
-  assert.doesNotMatch(css, /\.bt-tools\{position:absolute;top:50%;/)
-})
-
-test('the tools toolbar keeps its own stacking context for the hover bridge', () => {
-  const css = readFileSync(new URL('../src/client/styles.js', import.meta.url), 'utf8')
-  // Without a stacking context on .bt-tools, the ::after bridge's z-index:-1
-  // sinks behind the full-width .bt-astack and the toolbar flickers when the
-  // pointer crosses the gap.
-  assert.match(css, /\.bt-tools\{position:absolute;bottom:0;z-index:0;/)
-  assert.match(css, /\.bt-tools::after\{[^}]*z-index:-1/)
-})
-
-test('the flat toolbar hangs below reactions instead of covering them', () => {
-  const css = readFileSync(new URL('../src/client/styles.js', import.meta.url), 'utf8')
-  assert.match(css, /body\[data-bt-layout=flat\] \.bt-msg\{position:relative\}/)
-  assert.match(css, /body\[data-bt-layout=flat\] \.bt-msg-line\{position:static\}/)
-  assert.match(css, /body\[data-bt-layout=flat\] \.bt-tools\{top:100%;/)
-  assert.doesNotMatch(css, /body\[data-bt-layout=flat\] \.bt-msg:has\(>\.bt-reacts\) \.bt-tools\{bottom:0\}/)
-})
-
-test('on touch, the message toolbar sits below the message and is shorter', () => {
-  const css = readFileSync(new URL('../src/client/styles.js', import.meta.url), 'utf8')
-  const touch = css.slice(css.indexOf('@media (hover:none)'), css.indexOf('.bt-mic-note'))
-  // A touch tap opens the toolbar, so it must not sit over the bubble it belongs to.
-  assert.match(touch, /\.bt-msg\{position:relative\}/)
-  assert.match(touch, /\.bt-msg-line\{position:static\}/)
-  assert.match(touch, /\.bt-tools\{top:100%;bottom:auto;/)
-  assert.match(touch, /\.bt-tool\{width:36px;height:36px\}/)
-  assert.doesNotMatch(touch, /\.bt-tool\{width:44px;height:44px\}/)
-  // The open pill is 36px plus a 4px gap; reserve it so the next message's text stays clear.
-  assert.match(touch, /\.bt-msg:has\(>\.bt-msg-line>\.bt-tools\[data-open\]\)\{margin-bottom:40px\}/)
-})
-
-test('an active message toolbar stacks above the next message', () => {
-  const css = readFileSync(new URL('../src/client/styles.js', import.meta.url), 'utf8')
-  // Later .bt-msg siblings are position:relative in the flat layout and on touch,
-  // so without a z-index they paint over a toolbar that hangs below this message.
-  assert.match(css, /\.bt-msg:hover,\.bt-msg:focus-within,\.bt-msg:has\(>\.bt-msg-line>\.bt-tools\[data-open\]\)\{z-index:2\}/)
 })

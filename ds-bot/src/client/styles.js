@@ -997,9 +997,15 @@ div:has(> nav [class*="_marks"]){display:none!important}
 
 // -------------------------------------------------------------------------
 
+// DSH's ClientModuleSystem claims every <style> without a `data-plugin` for the module
+// it is materializing and deletes a module's styles when it unloads. Ours carry our
+// module id from the start, so another plugin's claim or teardown never takes them.
+const PLUGIN_ID = 'ds-bot'
+
 export function installStyles(text, tag) {
   const style = document.createElement('style')
   style.dataset.dshBot = tag
+  style.dataset.plugin = PLUGIN_ID
   style.textContent = text
   document.head.appendChild(style)
   return style
@@ -1039,8 +1045,12 @@ function compileFragmentSelectors(text, names) {
 
 export function installCompiledStyles(text, tag) {
   const style = installStyles('', tag)
+  let disposed = false
   const cache = new WeakMap()
   const render = () => {
+    if (disposed) return
+    // A tag removed out from under us (not by the module system, which owns it) goes back.
+    if (!style.isConnected) document.head.appendChild(style)
     const names = new Set()
     for (const sheet of document.styleSheets) {
       if (sheet.ownerNode?.dataset?.dshBot) continue
@@ -1057,14 +1067,17 @@ export function installCompiledStyles(text, tag) {
   const schedule = () => { clearTimeout(timer); timer = setTimeout(render, 120) }
   const onLoad = (event) => { if (event.target instanceof HTMLLinkElement) schedule() }
   // Our own sheets name no shell classes, so adding one (the panel's first open adds the
-  // chat column's rule) recompiles nothing.
+  // chat column's rule) recompiles nothing. Our own node coming out is a removal to undo,
+  // which render sees without a recompile.
   const shell = node => node.dataset?.dshBot === undefined
   const observer = new MutationObserver((records) => {
+    if (records.some(record => [...record.removedNodes].includes(style))) render()
     if (records.some(record => [...record.addedNodes, ...record.removedNodes].some(shell))) schedule()
   })
   observer.observe(document.head, { childList: true })
   document.addEventListener('load', onLoad, true)
   return () => {
+    disposed = true
     observer.disconnect()
     document.removeEventListener('load', onLoad, true)
     clearTimeout(timer)
