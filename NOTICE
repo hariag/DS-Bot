@@ -14,15 +14,14 @@ MIT License, Copyright (c) 2026 DeepSeek
     apps/desktop/scripts/dev.ts in DeepSeek Harness and reuses a few of its
     lines (the release record and the Electron launch arguments). It is a
     developer script for screenshots on Linux and is not in the npm package.
-  - app/src/web.mjs adapts apps/desktop/src/web-document.ts: the Web document
-    with the boot gate, the launch-token cookie exchange and the request
-    forwarding.
+  - app/src/web.mjs adapts apps/desktop/src/web-document.ts: the launch-token
+    cookie exchange and the request forwarding.
   - app/src/host.mjs follows apps/desktop-host/src/index.ts: the profile boot
     and the ready, fatal and shutdown messages.
   - app/src/host-process.mjs follows apps/desktop/src/host-process.ts: the
     Host in Electron's Node mode and the shutdown escalation.
-  - app/src/main.mjs follows apps/desktop/src/main.ts for the dsh-app scheme,
-    the request routing and the WebSocket header rewrite.
+  - app/src/main.mjs follows apps/desktop/src/main.ts for the dsh-app scheme
+    and the request routing.
 
   Full license text:
 
@@ -48,7 +47,9 @@ No other third-party code is copied into this repository. At run time the
 plugin uses the @deepseek-ai/* packages of the DeepSeek Harness install it
 runs in; they are not bundled. esbuild is a build tool only. The desktop app
 in app/ installs the pinned @deepseek-ai/* packages, Electron and pnpm from
-npm; they keep their own licenses.
+npm; they keep their own licenses. The build of its window (app/ui) bundles
+React and React DOM (MIT, Copyright (c) Meta Platforms, Inc. and affiliates)
+from npm; Vite is a build tool only.
 
 ==============================================================================
 Projects that gave us ideas (no code copied)
