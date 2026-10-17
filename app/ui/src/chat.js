@@ -69,9 +69,16 @@ function useChat(bot, bus) {
     }
   }), [bus, bot.id, load])
 
+  // Shown at once: the message can come back on the feed before the request returns.
   const send = async (text) => {
-    await call('send', { sessionId: bot.id, text })
-    setPending(list => [...list, { text, time: Date.now() }])
+    const entry = { text, time: Date.now() }
+    setPending(list => [...list, entry])
+    try {
+      await call('send', { sessionId: bot.id, text })
+    } catch (error) {
+      setPending(list => list.filter(item => item !== entry))
+      throw error
+    }
   }
   return { view, stream, pending, load, send, keep }
 }
@@ -162,10 +169,11 @@ function Composer({ bot, disabled, placeholder, onSend }) {
     if (value === '' || sending || disabled) return
     setSending(true)
     setError(null)
+    setText('')
     try {
       await onSend(value)
-      setText('')
     } catch (failure) {
+      setText(current => (current === '' ? value : current))
       setError(failure.message)
     } finally {
       setSending(false)
