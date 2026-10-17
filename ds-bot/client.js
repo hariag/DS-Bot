@@ -6923,11 +6923,11 @@ function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffo
       { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== void 0 ? " bt-menu-up" : ""}`, role: "menu", "aria-label": t("Model for {name}", { name: bot.name }), style: shownPlace, "data-leaving": leaving || void 0 },
       models.length > 0 ? (0, import_react14.createElement)(ModelRows, { roster, current, onPick: pick2 }) : (0, import_react14.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
       effortRows(reasoning).length > 0 ? (0, import_react14.createElement)(EffortRows, { reasoning, current: picked, onPick: pickEffort }) : null,
-      (0, import_react14.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
-      (0, import_react14.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
+      actions.openHarnessSettings ? (0, import_react14.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
+      actions.openHarnessSettings ? (0, import_react14.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
         close();
-        openHarnessSettings();
-      } }, (0, import_react14.createElement)(SlidersIcon), (0, import_react14.createElement)("span", { className: "bt-menu-label" }, t("Models and providers…")))
+        actions.openHarnessSettings();
+      } }, (0, import_react14.createElement)(SlidersIcon), (0, import_react14.createElement)("span", { className: "bt-menu-label" }, t("Models and providers…"))) : null
     ), document.body) : null
   );
 }
@@ -6969,7 +6969,7 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
         onClick: () => pick2(model.ref)
       }, model.name, busy === model.ref ? (0, import_react14.createElement)("span", { className: "bt-model-spin", "aria-label": t("Saving…") }) : null)))
     )),
-    (0, import_react14.createElement)("button", { key: "manage", type: "button", className: "bt-model-chip bt-model-chip-quiet", onClick: openHarnessSettings }, (0, import_react14.createElement)(SlidersIcon), t("Manage models"))
+    actions.openHarnessSettings ? (0, import_react14.createElement)("button", { key: "manage", type: "button", className: "bt-model-chip bt-model-chip-quiet", onClick: actions.openHarnessSettings }, (0, import_react14.createElement)(SlidersIcon), t("Manage models")) : null
   ];
   return (0, import_react14.createElement)(
     "div",
@@ -6995,8 +6995,8 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
 function setupChoices(actions) {
   return [
     actions.canSignIn?.() ? [t("Sign in to DeepSeek"), () => actions.signIn()] : null,
-    [t("Enter a DeepSeek API key"), () => openHarnessOnboarding("deepseek-official")],
-    [t("Open settings to set up a custom model"), openHarnessSettings]
+    actions.openHarnessOnboarding ? [t("Enter a DeepSeek API key"), () => actions.openHarnessOnboarding("deepseek-official")] : null,
+    actions.openHarnessSettings ? [t("Open settings to set up a custom model"), actions.openHarnessSettings] : null
   ].filter(Boolean);
 }
 function DeepSeekSignIn({ useUi, actions }) {
@@ -7017,7 +7017,7 @@ function SignInHost({ entry, actions }) {
     complete: close,
     useApiKey: () => {
       close();
-      openHarnessOnboarding("deepseek-official");
+      actions.openHarnessOnboarding("deepseek-official");
     }
   });
 }
@@ -7429,21 +7429,21 @@ function TaskForm({ roster, actions, start, onDone, onCancel }) {
     )
   );
 }
-function AutomationOff() {
+function AutomationOff({ actions }) {
   return (0, import_react16.createElement)(
     "div",
     { className: "bt-set-card bt-task-off" },
     (0, import_react16.createElement)("span", { className: "bt-task-off-mark" }, (0, import_react16.createElement)(ClockIcon)),
     (0, import_react16.createElement)("span", { className: "bt-task-off-title" }, t("Turn on Automation tasks in DSH")),
     (0, import_react16.createElement)("span", { className: "bt-set-hint" }, t("Switch on Automation tasks on the Plugins page in Harness settings.")),
-    (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: openHarnessSettings }, t("Open Harness settings"))
+    actions.openHarnessSettings ? (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: actions.openHarnessSettings }, t("Open Harness settings")) : null
   );
 }
 function SchedulesPage({ roster, actions, start }) {
   const view = useSchedules(actions);
   const [adding, setAdding] = (0, import_react16.useState)(Boolean(start));
   if (view === null) return (0, import_react16.createElement)("div", { className: "bt-set-hint" }, t("Loading…"));
-  if (!view.available) return (0, import_react16.createElement)(AutomationOff);
+  if (!view.available) return (0, import_react16.createElement)(AutomationOff, { actions });
   const shown = (next) => {
     publish(next);
     setAdding(false);
@@ -7477,7 +7477,7 @@ function BotSchedules({ bot, roster, actions }) {
         "div",
         { className: "bt-set-row bt-bs-row" },
         (0, import_react16.createElement)("span", { className: "bt-set-copy" }, (0, import_react16.createElement)("span", { className: "bt-set-hint" }, t("Switch on Automation tasks on the Plugins page in Harness settings."))),
-        (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: openHarnessSettings }, t("Open Harness settings"))
+        actions.openHarnessSettings ? (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: actions.openHarnessSettings }, t("Open Harness settings")) : null
       ) : [
         ...tasks.map((task) => (0, import_react16.createElement)(TaskRow, { key: task.id, task, actions, roster, onView: publish })),
         (0, import_react16.createElement)("button", { key: "new", type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => actions.openSettings("schedules", bot.id) }, (0, import_react16.createElement)(PlusIcon), t("New task"))
@@ -11081,7 +11081,7 @@ function GeneralPage({ roster, actions, run }) {
         )
       )
     ),
-    (0, import_react30.createElement)(
+    actions.setSurface ? (0, import_react30.createElement)(
       SetSection,
       { key: "mode", title: t("Mode") },
       (0, import_react30.createElement)(
@@ -11089,7 +11089,7 @@ function GeneralPage({ roster, actions, run }) {
         { label: t("Classic Agent mode") },
         (0, import_react30.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => actions.setSurface("agent") }, t("Switch"))
       )
-    )
+    ) : null
   ];
 }
 function MainBotsSection({ roster, actions, run }) {
@@ -11258,15 +11258,15 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false 
           "aria-current": shown === key ? "page" : void 0,
           onClick: () => actions.openSettings(key)
         }, (0, import_react30.createElement)(PAGE_ICONS[key]), t(text))),
-        (0, import_react30.createElement)("button", {
+        actions.openHarnessSettings ? (0, import_react30.createElement)("button", {
           type: "button",
           className: "bt-settings-item bt-settings-shell",
           title: t("Models, providers, and the rest of DeepSeek Harness"),
           onClick: () => {
             close();
-            openHarnessSettings();
+            actions.openHarnessSettings();
           }
-        }, (0, import_react30.createElement)(SlidersIcon), t("Harness settings"))
+        }, (0, import_react30.createElement)(SlidersIcon), t("Harness settings")) : null
       ),
       (0, import_react30.createElement)(
         "div",
@@ -14256,6 +14256,8 @@ function apply(ctx) {
   actions.closeSignIn = () => ui2.set((state) => ({ ...state, signIn: null }));
   actions.accountT = () => ctx.get("locale").bind("settings.account");
   actions.speech = () => ctx.get("remote.speech") ?? void 0;
+  actions.openHarnessSettings = openHarnessSettings;
+  actions.openHarnessOnboarding = openHarnessOnboarding;
   actions.voiceSetup = () => {
     const navigation = ctx.get("pluginNavigation");
     return navigation ? () => navigation.openBundle(VOICE_BUNDLE) : null;

@@ -33,13 +33,17 @@ function nodes(tree, match) {
   return [...(match(tree) ? [tree] : []), ...(tree.children ?? []).flatMap(child => nodes(child, match))]
 }
 
-function dock(models, { model, ready = true } = {}) {
+// `harness`: the window has DSH's own settings to send the user to, as the plugin does.
+function dock(models, { model, ready = true, harness = true } = {}) {
   const picked = []
   const bot = { id: 'chief', name: 'Chief', model }
   const roster = { ready, byId: { chief: bot }, models, defaultModel: models[0]?.ref }
   const tree = ModelChoiceDock({
     sessionId: bot.id, useRoster: select => select(roster),
-    actions: { updateBot: (id, patch) => { picked.push([id, patch.model]); return Promise.resolve() } },
+    actions: {
+      updateBot: (id, patch) => { picked.push([id, patch.model]); return Promise.resolve() },
+      ...(harness ? { openHarnessSettings: () => {}, openHarnessOnboarding: () => {} } : {}),
+    },
   })
   return { tree, picked }
 }
@@ -91,6 +95,12 @@ test('an empty catalog offers setup choices, and a ready model needs no choice d
   ])
   assert.equal(dock(models, { model: models[0].ref }).tree, null)
   assert.equal(dock(models, { ready: false }).tree, null)
+})
+
+test('without DSH\'s own settings, the choice offers no way into them', () => {
+  const buttons = tree => nodes(tree, node => node.type === 'button').map(button => button.children[0])
+  assert.deepEqual(buttons(dock(models, { harness: false }).tree), ['DeepSeek Flash', 'DeepSeek Pro', 'DeepSeek Flash'])
+  assert.deepEqual(buttons(dock([], { harness: false }).tree), [])
 })
 
 test('the Thinking section always offers Default, so a picked level can be cleared', () => {
