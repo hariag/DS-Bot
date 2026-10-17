@@ -444,6 +444,9 @@ export function install(rt) {
             ...(source.stopped ? { stopped: true } : {}),
             ...(source.done ? { done: true } : {}),
             ...(source.askedBy ? { askedBy: source.askedBy } : {}),
+            // A post written into a running round already carries its log seq, or true
+            // when its event needed none; the relay must not write it again.
+            ...(source.logged !== undefined ? { logged: source.logged } : {}),
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
-import { fakeContext } from './fake-ctx.js'
-import { ROOM_LATE_ROUNDS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
+import { fakeAttachments, fakeContext } from './fake-ctx.js'
+import { MESSAGE_INLINE_MAX, ROOM_LATE_ROUNDS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 
 // Chief, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
 const seed = (room = {}) => ({
@@ -25,10 +25,10 @@ const seed = (room = {}) => ({
   revision: 0,
 })
 
-async function start(t, room) {
+async function start(t, room, services) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-work-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(seed(room)))
-  const ctx = fakeContext()
+  const ctx = fakeContext({ services })
   const agents = new Map()
   const agentOf = (sessionId) => {
     if (!agents.has(sessionId)) {
@@ -383,6 +383,158 @@ test('the late round limit makes a late post quiet', async (t) => {
   host.finish('gb', '做完了。')
   await settle(() => host.agentOf('r1').calls.length === 1)
   assert.equal(host.takePost().source.quiet, true)
+})
+
+// #198: a post during a running round waited for the round's own relay before
+// anyone could see it. It is written into the log and the running round at once,
+// and the relay it still opens shows it again nowhere.
+const logLines = host => JSON.parse(readFileSync(join(host.home, 'state.json'), 'utf8')).rooms.r1.log
+const busyRound = async (t, room, services) => {
+  const host = await start(t, room, services)
+  const first = host.round('c1', host.say('@Writer 整理文档'))
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  await settle(() => true)
+  return { host, first }
+}
+
+test('a post during a running round is in the log at once, once, and shows in the round', async (t) => {
+  const { host, first } = await busyRound(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档' }, 'a')
+  const during = logLines(host)
+  const logged = during.at(-1)
+  assert.deepEqual([logged.who, logged.botId, logged.text], ['Chief', 'a', '@Tester 看一下文档'])
+  const post = host.takePost()
+  assert.equal(post.source.logged, logged.seq)
+  host.finish('gb', '整理好了。')
+  await settle(() => first() !== undefined)
+  assert.ok(first().replies.some(reply => reply.botId === 'a' && reply.text === '@Tester 看一下文档'))
+
+  // The relay the post opened skips its line but still calls the member it named.
+  const second = host.round('c2', post)
+  await settle(() => host.agentOf('gc').calls.length === 1)
+  assert.equal(host.begin('gc').source.askedBy, 'a')
+  assert.match(text(host.agentOf('gc').calls[0]), /Chief: @Tester 看一下文档/)
+  host.finish('gc', '看过了。')
+  await settle(() => second() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === '@Tester 看一下文档').length, 1)
+})
+
+test('a post during a running round with report_back reports only the round it opened', async (t) => {
+  const { host, first } = await busyRound(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档', report_back: true }, 'a')
+  const post = host.takePost()
+  assert.equal(typeof post.source.logged, 'number')
+  host.finish('gb', '整理好了。')
+  await settle(() => first() !== undefined)
+  const second = host.round('c2', post)
+  await settle(() => host.agentOf('gc').calls.length === 1)
+  host.begin('gc')
+  host.finish('gc', '看过了。')
+  await settle(() => second() !== undefined)
+  await settle(() => host.agentOf('a').calls.length === 1)
+  const report = host.agentOf('a').calls[0]
+  assert.match(text(report), /Tester: 看过了。/)
+  assert.doesNotMatch(text(report), /看一下文档/)
+})
+
+test('a late reply during a running round is logged at once and not repeated', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const host = await start(t)
+  const first = host.round('c1', host.say('@Chief 安排一下文档'))
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  host.finish('ga', '@Writer 把文档整理好')
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  // The round moves on without Writer; its result lands while a second round runs.
+  t.mock.timers.tick(ROOM_WORK_GRACE_MS)
+  await settle(() => first() !== undefined)
+  const second = host.round('c2', host.say('@Chief 再确认一下'))
+  await settle(() => host.agentOf('ga').calls.length === 2)
+  host.begin('ga')
+  host.emit('gb', 'tool/result', { callId: 'k1' })
+  host.finish('gb', '整理好了，在 docs/ 下。')
+  await settle(() => host.agentOf('r1').calls.length === 1)
+  const post = host.takePost()
+  assert.equal(post.source.late, true)
+  assert.equal(typeof post.source.logged, 'number')
+  assert.ok(logLines(host).some(line => line.who === 'Writer' && line.text === '整理好了，在 docs/ 下。'))
+  host.finish('ga', '确认过了。')
+  await settle(() => second() !== undefined)
+  assert.ok(second().replies.some(reply => reply.botId === 'b' && reply.text === '整理好了，在 docs/ 下。'))
+
+  // The relay it opens still calls the member that asked, and writes the line nowhere again.
+  const third = host.round('c3', post)
+  await settle(() => host.agentOf('ga').calls.length === 3)
+  host.begin('ga')
+  host.finish('ga', '[PASS]')
+  await settle(() => third() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === '整理好了，在 docs/ 下。').length, 1)
+})
+
+test('a member stopped during a running round is logged at once and not repeated', async (t) => {
+  const host = await start(t)
+  const first = host.round('c1', host.say('@Writer @Tester 整理文档'))
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  // The user stops Writer while its turn still runs inside the round.
+  const stopped = await host.call('stop-member-work', { roomId: 'r1', botId: 'b' })
+  assert.deepEqual([stopped.ok, stopped.value], [true, true])
+  const last = logLines(host).at(-1)
+  assert.deepEqual([last.who, last.botId, last.kind], ['Writer', 'b', 'stopped'])
+  const post = host.takePost()
+  assert.equal(post.source.stopped, true)
+  assert.equal(typeof post.source.logged, 'number')
+  host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  await settle(() => host.agentOf('gc').calls.length === 1)
+  host.begin('gc')
+  host.finish('gc', '在整理了。')
+  await settle(() => first() !== undefined)
+  assert.ok(first().replies.some(reply => reply.kind === 'stopped' && reply.botId === 'b'))
+
+  // The relay the stopped post opens writes no second event line.
+  const second = host.round('c2', post)
+  await settle(() => second() !== undefined)
+  assert.equal(logLines(host).filter(line => line.kind === 'stopped').length, 1)
+})
+
+test('a Main Bot outside the group posts into its running round, and a long post keeps its file line', async (t) => {
+  const { host, first } = await busyRound(t,
+    { members: ['b', 'c'], admin: 'b', sessions: { b: 'gb', c: 'gc' } },
+    { attachments: fakeAttachments() })
+  const long = '很长的一段。'.repeat(MESSAGE_INLINE_MAX)
+  await host.tool('post_to_group', { group: 'Ops', message: long }, 'a')
+  const line = logLines(host).at(-1)
+  assert.deepEqual([line.who, line.botId], ['Chief', 'a'])
+  assert.equal(line.files?.length, 1)
+  assert.match(line.text, /\[File "Post from Chief\.txt"/)
+  const post = host.takePost()
+  assert.equal(typeof post.source.logged, 'number')
+  host.finish('gb', '整理好了。')
+  await settle(() => first() !== undefined)
+  const second = host.round('c2', post)
+  await settle(() => host.agentOf('gb').calls.length === 2)
+  host.begin('gb')
+  host.finish('gb', '收到，看一下。')
+  await settle(() => second() !== undefined)
+  assert.equal(logLines(host).filter(entry => entry.files?.length === 1).length, 1)
+})
+
+test('a post with no round running keeps the old way: queued, no logged mark', async (t) => {
+  const host = await start(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '@Writer 看一下文档' }, 'a')
+  const post = host.takePost()
+  assert.equal(post.source.logged, undefined)
+  const first = host.round('c1', post)
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.finish('gb', '看了。')
+  await settle(() => first() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === '@Writer 看一下文档').length, 1)
 })
 
 // Such a message was sent before message_bot from a group stayed in that group.
