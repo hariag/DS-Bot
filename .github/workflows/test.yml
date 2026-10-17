@@ -54,6 +54,24 @@ jobs:
         env:
           SCAN_EXTRA_PATTERNS: ${{ secrets.SCAN_EXTRA_PATTERNS }}
 
+  app:
+    name: Desktop app profile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The test composes the profile and starts no window, so it needs no Electron binary.
+      - run: npm ci --no-fund --no-audit
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm test
+
   docker:
     name: Docker startup and data migration
     runs-on: ubuntu-latest
@@ -95,11 +113,11 @@ jobs:
 
   # The one check that branch rules require. A job whose needs failed is skipped,
   # and GitHub counts a skipped required check as passed, so this job always runs
-  # and fails unless the matrix, leak scan and Docker checks passed.
+  # and fails unless the matrix, leak scan, app and Docker checks passed.
   result:
     name: Test result
-    needs: [test, scan, docker]
+    needs: [test, scan, app, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success && test "${{ needs.docker.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success && test "${{ needs.app.result }}" = success && test "${{ needs.docker.result }}" = success

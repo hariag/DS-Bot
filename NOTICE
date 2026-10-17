@@ -16,12 +16,19 @@ MIT License, Copyright (c) 2026 DeepSeek
     developer script for screenshots on Linux and is not in the npm package.
   - app/src/web.mjs adapts apps/desktop/src/web-document.ts: the launch-token
     cookie exchange and the request forwarding.
-  - app/src/host.mjs follows apps/desktop-host/src/index.ts: the profile boot
-    and the ready, fatal and shutdown messages.
+  - app/src/host.mjs and app/src/profile.mjs follow
+    apps/desktop-host/src/index.ts: the profile boot and the ready, fatal and
+    shutdown messages.
   - app/src/host-process.mjs follows apps/desktop/src/host-process.ts: the
     Host in Electron's Node mode and the shutdown escalation.
   - app/src/main.mjs follows apps/desktop/src/main.ts for the dsh-app scheme
     and the request routing.
+  - app/engine/cordis.patch.yml follows the bundle patch of
+    @deepseek-ai/dsh-web-app (packages/bundle/web-app/cordis.patch.yml): the
+    transport and host-service rows and the agent-plane rows it turns off.
+    app/engine/preset-standard.patch.yml copies its standard preset
+    (presets/standard.patch.yml), including the plan-mode prompt text,
+    without the goal rows.
 
   Full license text:
 

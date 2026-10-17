@@ -21,7 +21,21 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 
 The Host reads model settings and keys the way DSH does: environment variables such as `DEEPSEEK_API_KEY`, and `.env` and `.credentials.yaml` in the data location.
 
+## The profile
+
+The Host's profile `ds-bot` is in `profiles/ds-bot` in the data location. It stacks three bundles, and after them the bundles that the user installs:
+
+| Bundle | What it adds |
+|---|---|
+| `@deepseek-ai/dsh-base` | DSH's shared core: models, Sessions, tools, settings, plugin management |
+| `deepseek-bot-engine` (`engine/`) | The loopback transport for ds-bot's channel, the host services that ds-bot uses, and the `standard` agent preset that Bot Sessions run on, without the goal command and tool. It has no row of DSH's Web front end |
+| `ds-bot` | The Bot team |
+
+At every start the Host puts these three bundles at the head of the profile's bundle list. Settings for one machine go into the profile's `cordis.patch.yml`, as in DSH. The `@deepseek-ai/dsh` package still installs DSH's Web front end, but the profile does not load it. When the app moves to another DSH version, compare `engine/` with the `dsh-web-app` bundle patch and the standard preset of that version.
+
 ## Check a change
+
+`npm test` checks the composition of the profile.
 
 `scripts/shot.mjs` starts the app on throwaway folders, saves a screenshot of its window, prints the page text, closes the window the way a user does and waits until the app exits. Build the window first (`npm run build`). Use the mock model of the plugin, `../ds-bot/dev/mock-llm.mjs` (`MOCK_PORT=<port> node ../ds-bot/dev/mock-llm.mjs`).
 
@@ -40,7 +54,10 @@ Never point `DS_BOT_HOME` at `~/.dsh` or at the data of an app that you use.
 |---|---|
 | `src/main.mjs` | Main process: one instance, the `dsh-app://app` scheme (the window's build, and `/api/` forwarded to the Host), the window |
 | `src/host-process.mjs` | Starts the Host in Electron's Node mode and owns its exit |
-| `src/host.mjs` | The Host: creates the profile `ds-bot` (`dsh-base`, `dsh-web-app`, `ds-bot`), boots it with `runProfile()` on a loopback port and reports the launch URL |
+| `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL |
+| `src/profile.mjs` | The profile: its name, its bundles, and its creation and update |
+| `engine/` | The bundle `deepseek-bot-engine`: `cordis.patch.yml`, `preset-standard.patch.yml`, and `index.js`, which trades the launch token for the Host cookie |
+| `test/` | `npm test`: the composition of the profile |
 | `src/web.mjs` | The window's files, the launch-token cookie exchange and the request forwarding |
 | `ui/` | The window: React, built with Vite (`vite.config.js`) into `ui/dist`. It uses ds-bot's `api/bot` channel and its live feed `api/bot/feed`, and takes the Bot marks, themes and copy from `../ds-bot/src/client/` |
 

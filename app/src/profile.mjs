@@ -1,18 +1,12 @@
 // The app's own DSH profile: its name, its bundles and its installation.
 import { fileURLToPath } from 'node:url'
-import { LEGACY_ENGINE } from './legacy.mjs'
 import { initProfile, loadProfileDirectory, readProfileManifest, resolveProfileDir, writeProfileBundles } from '@deepseek-ai/dsh-app-boot'
 
 export const PROFILE = 'ds-bot'
-// DSH's shared core, DSH's web front end (the window) and voice input, then the Bot team.
-// Bundles the user installs follow.
-export const BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-experimental-voice-input-bundle', 'ds-bot']
-// The first-run check reads a copy of the team's chats without the Bot team running on them.
-// DSH reads a log the same way whatever the profile mounts.
-export const CHECK_PROFILE = 'import-check'
-export const CHECK_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
-// Bundles that earlier builds of the app put in its profile: the engine layer of its own window (../engine).
-const RETIRED_BUNDLES = [LEGACY_ENGINE, 'dsbot-engine']
+// DSH's shared core, the app's engine layer (../engine), then the Bot team. Bundles the user installs follow.
+export const BUNDLES = ['@deepseek-ai/dsh-base', 'deepseek-bot-engine', 'ds-bot']
+// Bundles that earlier builds of the app put in its profile.
+const RETIRED_BUNDLES = ['@deepseek-ai/dsh-web-app']
 // The app's own manifest is the installation: DSH imports plugins only from the installation's dependency
 // graph, resolves bundles there first, and keeps the bundles it names as direct dependencies from removal.
 export const INSTALL_ANCHOR = fileURLToPath(new URL('../package.json', import.meta.url))
@@ -38,19 +32,8 @@ export function loadAppProfile() {
   const dir = resolveProfileDir(PROFILE)
   initProfile(dir, BUNDLES)
   claimBundles(dir)
-  return loadOwnBundles(dir, BUNDLES)
-}
-
-/** The profile of the first-run check, under the current DSH_HOME. */
-export function loadCheckProfile() {
-  const dir = resolveProfileDir(CHECK_PROFILE)
-  initProfile(dir, CHECK_BUNDLES)
-  return loadOwnBundles(dir, CHECK_BUNDLES)
-}
-
-function loadOwnBundles(dir, bundles) {
   const profile = loadProfileDirectory('dsh', dir, INSTALL_ANCHOR)
-  const lost = profile.skippedBundles.filter(({ packageName }) => bundles.includes(packageName))
+  const lost = profile.skippedBundles.filter(({ packageName }) => BUNDLES.includes(packageName))
   if (lost.length > 0) throw new Error(`The app could not load its own bundles:\n${lost.map(({ packageName, reason }) => `${packageName}: ${reason}`).join('\n')}`)
   return profile
 }
