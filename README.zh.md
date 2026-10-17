@@ -101,10 +101,6 @@ ds bot 拥有群聊功能。群聊是非常好的多 bot 协作方式，但它�
   - [obelisk](https://github.com/tommy0103/obelisk)：用 SQLite 全文索引搜索聊天记录。
 - 每一位试用 ds bot、提问题、报 bug 的人。
 
-## 赞助
-
-[PayPal](https://paypal.me/Fei2411)
-
 ## 许可
 
 [Apache License 2.0](LICENSE)。按“原样”提供，不附带任何担保。用到的第三方代码和它的许可见 [NOTICE](NOTICE)。
