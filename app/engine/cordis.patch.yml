@@ -54,6 +54,11 @@
     - id: directory-picker
       name: '@deepseek-ai/dsh-host-directory-picker-auto'
 
+    # The sessionStats projection: the turns and output speed in a Bot's
+    # details.
+    - id: session-stats
+      name: '@deepseek-ai/dsh-session-stats'
+
     # Read by the standard preset's subagent tool (modelSelectionSettings).
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'

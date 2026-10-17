@@ -37,7 +37,7 @@ describe('the app profile', () => {
 
   test('mounts the transport, the services ds-bot uses and the Bot team', () => {
     const on = new Set(entries.filter((entry) => entry.disabled !== true).map((entry) => entry.id))
-    for (const id of ['webserver', 'connection', 'engine-index', 'file-upload', 'workspace', 'session-controller', 'directory-picker', 'agent-preset-registry', 'preset-standard', 'bot']) {
+    for (const id of ['webserver', 'connection', 'engine-index', 'file-upload', 'workspace', 'session-controller', 'session-stats', 'directory-picker', 'agent-preset-registry', 'preset-standard', 'bot']) {
       assert.ok(on.has(id), `${id} is mounted`)
     }
   })
