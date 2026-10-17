@@ -1696,6 +1696,11 @@ function relativeShort(ms) {
   if (diff < 30 * 864e5) return t("{n} d", { n: Math.floor(diff / 864e5) });
   return new Date(ms).toLocaleDateString(dateLocale(), { month: "short", day: "numeric" });
 }
+function elapsedLabel(ms) {
+  const total = Math.max(0, Math.floor(ms / 1e3));
+  const hours = Math.floor(total / 3600);
+  return `${hours > 0 ? `${hours}h ` : ""}${total >= 60 ? `${Math.floor(total / 60) % 60}m ` : ""}${total % 60}s`;
+}
 var contentText = (content) => (content ?? []).filter((block) => block?.type === "text").map((block) => block.text).join("\n");
 var HEADER = /^\[(Message from|Reply from|Group chat|Group post from|Bot team setup|Handoff · part|Secret card)[^\]]*\]\n?/;
 var currentPart = (bot) => bot.sessionId ?? bot.id;
@@ -2934,7 +2939,7 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 .bt-typing-text{display:flex;align-items:center;flex:1 1 auto;min-width:0;animation:bt-typing-label .22s ease-out .2s backwards}
 .bt-typing-label{display:inline-flex;align-items:center;gap:6px;min-width:0;animation:bt-typing-label .22s ease-out backwards}
 .bt-typing-label>.bt-shimmer{font-size:14px;line-height:22px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-typing-time{flex-shrink:0;font-size:12px;line-height:22px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bt-typing-time{flex-shrink:0;margin-left:6px;font-size:12px;line-height:22px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 @keyframes bt-typing-in{from{opacity:0;transform:scale(.9)}}
 @keyframes bt-typing-out{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(.92);filter:blur(3px)}}
 @keyframes bt-typing-label{from{opacity:0;filter:blur(5px);transform:translateY(3px)}}
@@ -4680,6 +4685,20 @@ function TurnTailCell({ turn: location2, sessionId, useTurnClock, useUi, actions
 function Shimmer({ children }) {
   return (0, import_react7.createElement)("span", { className: "bt-shimmer" }, children);
 }
+function Elapsed({ at, className }) {
+  const [now, setNow] = (0, import_react7.useState)(Date.now);
+  (0, import_react7.useEffect)(() => {
+    let timer = 0;
+    const tick = () => {
+      const time = Date.now();
+      setNow(time);
+      timer = setTimeout(tick, 1e3 - ((time - at) % 1e3 + 1e3) % 1e3);
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [at]);
+  return (0, import_react7.createElement)("span", { className }, `· ${elapsedLabel(Math.max(1e3, now - at))}`);
+}
 var PHRASES = {
   thinking: ["Thinking about it", "Weighing the options", "Working out a plan", "Sorting out the details"],
   working: ["On it", "Busy with it", "Moving ahead", "Taking care of it", "Making headway"]
@@ -4982,14 +5001,6 @@ var import_react8 = require("react");
 var import_react_dom2 = require("react-dom");
 var PHRASE_HOLD_MS = 800;
 var drawPhrase = (pool) => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))]);
-function elapsedLabel(ms) {
-  const seconds = Math.max(0, Math.floor(ms / 1e3));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return seconds % 60 === 0 ? `${minutes}m` : `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`;
-}
 function useRunningHost(active) {
   const [host, setHost] = (0, import_react8.useState)(null);
   (0, import_react8.useEffect)(() => {
@@ -5062,9 +5073,13 @@ function useRowEntrances(replacing) {
     };
   }, []);
 }
-function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useSession, actions }) {
+function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useSession, useWork, actions }) {
   const roster = useRoster((value) => value);
   const running = useSessionStatus((map) => map.get(sessionId)?.running === true);
+  const turnAt = useWork?.((work) => work.turns?.[sessionId]);
+  const runAt = (0, import_react8.useRef)(0);
+  if (!running) runAt.current = 0;
+  else if (runAt.current === 0) runAt.current = Date.now();
   const liveKey = useLive((state) => JSON.stringify(state[sessionId] ?? {}));
   const pendingInput = useSession((snapshot) => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter((sub) => sub.placement !== "queued").map((sub) => sub.time)));
   const bot = roster.byId[sessionId];
@@ -5126,16 +5141,8 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
     if (!running) actions.clearLive(sessionId);
   }, [running, sessionId]);
   useRowEntrances(() => leaving.current || Date.now() - endedAt.current < 300);
-  const [now, setNow] = (0, import_react8.useState)(Date.now);
-  (0, import_react8.useEffect)(() => {
-    if (phase !== "in") return void 0;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1e3);
-    return () => clearInterval(timer);
-  }, [phase]);
   const host = useRunningHost(running);
   if (!host || phase === null || !shown) return null;
-  const elapsed = now - shown.at >= 1e3 ? elapsedLabel(now - shown.at) : null;
   return (0, import_react_dom2.createPortal)((0, import_react8.createElement)(
     "div",
     { className: "bt-typing", "data-exiting": phase === "out" ? "" : void 0, "aria-hidden": true },
@@ -5143,12 +5150,8 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
     (0, import_react8.createElement)(
       "span",
       { className: "bt-typing-text" },
-      (0, import_react8.createElement)(
-        "span",
-        { key: `${shown.key}:${shown.at}`, className: "bt-typing-label" },
-        (0, import_react8.createElement)(Shimmer, null, `${shown.text}…`),
-        elapsed ? (0, import_react8.createElement)("span", { className: "bt-typing-time" }, `· ${elapsed}`) : null
-      )
+      (0, import_react8.createElement)("span", { key: `${shown.key}:${shown.at}`, className: "bt-typing-label" }, (0, import_react8.createElement)(Shimmer, null, `${shown.text}…`)),
+      (0, import_react8.createElement)(Elapsed, { at: Math.max(turnAt ?? runAt.current, inputAt), className: "bt-typing-time" })
     )
   ), host);
 }
@@ -5953,7 +5956,7 @@ function MemoryNotice({ shown }) {
     (0, import_react10.createElement)("span", { className: "bt-pill-mem-in", ref: inner }, (0, import_react10.createElement)("span", { className: "bt-pill-mem-ico" }, (0, import_react10.createElement)(MemoryIcon)), label)
   );
 }
-function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, actions }) {
+function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
   const roster = useRoster((value) => value);
   const title = useSessions((list) => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? "");
   const firstTurns = useSessions((list) => {
@@ -6017,7 +6020,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     ),
     (0, import_react10.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
     (0, import_react10.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    (0, import_react10.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
+    (0, import_react10.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions }),
     // DSH's way into its right sidebar sits in the session header this pill replaces.
     actions.hasRightSidebar?.() ? (0, import_react10.createElement)("button", { type: "button", className: "bt-icon-btn bt-head-side", "data-bt-right-sidebar": "", "aria-label": t("Show or hide the right sidebar"), title: t("Right sidebar"), onClick: () => actions.toggleRightSidebar() }, (0, import_react10.createElement)(SidePanelIcon)) : null
   );
@@ -11641,17 +11644,12 @@ function MemberDock({ sessionId, useRoster, useWork, actions }) {
     )
   );
 }
-function useNow2(active) {
-  const [now, setNow] = (0, import_react32.useState)(Date.now);
-  (0, import_react32.useEffect)(() => {
-    if (!active) return void 0;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1e3);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
-}
-var since = (now, at) => typeof at === "number" && now - at >= 1e3 ? ` · ${elapsedLabel(now - at)}` : "";
+var stateLine = (className, at, ...what) => (0, import_react32.createElement)(
+  "span",
+  { className },
+  (0, import_react32.createElement)("span", { className: "bt-member-what" }, ...what),
+  typeof at === "number" ? (0, import_react32.createElement)(Elapsed, { at, className: "bt-member-time" }) : null
+);
 function ApprovalCard({ approval, bot, actions }) {
   const [busy, setBusy] = (0, import_react32.useState)(false);
   const answer = (choice) => {
@@ -11677,17 +11675,11 @@ function ApprovalCard({ approval, bot, actions }) {
     )
   );
 }
-function MemberState({ entry, bot, room: room2, roster, now }) {
-  if (entry?.state === "ask") return (0, import_react32.createElement)("span", { className: "bt-member-state bt-mw-ask" }, `${t("Waiting for your approval")}${since(now, entry.approvals[0].at)}`);
-  if (entry?.state !== "work") return bot.role ? (0, import_react32.createElement)("span", { className: "bt-member-state" }, bot.role) : null;
+function MemberState({ entry, bot, room: room2, roster }) {
+  if (entry?.state === "ask") return stateLine("bt-member-state bt-mw-ask", entry.approvals[0].at, t("Waiting for your approval"));
+  if (entry?.state !== "work") return bot.role ? stateLine("bt-member-state", void 0, bot.role) : null;
   const where = entry.doing.roomId === room2.id ? "" : entry.doing.roomId ? t("in {name}", { name: roster.roomsById[entry.doing.roomId]?.name ?? t("a group chat") }) : t("in its own chat");
-  return (0, import_react32.createElement)(
-    "span",
-    { className: "bt-member-state" },
-    (0, import_react32.createElement)(Shimmer, null, `${workPhrase(entry.doing)}…`),
-    where ? ` ${where}` : "",
-    since(now, entry.doing.since)
-  );
+  return stateLine("bt-member-state", entry.doing.since, (0, import_react32.createElement)(Shimmer, null, `${workPhrase(entry.doing)}…`), where ? ` ${where}` : "");
 }
 function StopMemberWork({ entry, bot, room: room2, actions }) {
   const [stopping, setStopping] = (0, import_react32.useState)(false);
@@ -11704,9 +11696,7 @@ function MemberApprovals({ entry, bot, actions }) {
 }
 function useMemberWork(room2, useWork) {
   const work = useWork?.((value) => value) ?? NO_WORK;
-  const entries2 = room2 ? memberWork(room2, work) : [];
-  const now = useNow2(entries2.some((entry) => entry.state !== "idle"));
-  return { entries: entries2, now };
+  return { entries: room2 ? memberWork(room2, work) : [] };
 }
 var MEMBER_CSS = `
 .bt-mw-dock{display:flex;justify-content:center;margin:0 auto 8px;pointer-events:none}
@@ -11739,7 +11729,9 @@ body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
 .bt-member-line{display:flex;align-items:center;gap:6px;min-width:0}
 .bt-member-name{min-width:0;font-size:14px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-member-line>.bt-tag{font-size:11px;line-height:15px;padding:0 5px}
-.bt-member-state{min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-member-state{display:flex;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);white-space:nowrap}
+.bt-member-what{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.bt-member-time{flex:none;margin-left:.3em;font-variant-numeric:tabular-nums}
 .bt-member-state.bt-mw-ask{color:#b7791f}
 body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
 .bt-member-stop{flex:none;height:26px;padding:0 11px;border:0;border-radius:13px;background:var(--bt-main);box-shadow:inset 0 0 0 .5px var(--bt-line-2);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
@@ -11907,7 +11899,7 @@ function MemberPile({ room: room2, roster }) {
   );
 }
 var markOf = (entry) => entry?.state === "ask" ? "alert" : entry?.state === "work" ? workState(entry.doing) : "idle";
-function MemberRow({ member, entry, room: room2, roster, actions, now }) {
+function MemberRow({ member, entry, room: room2, roster, actions }) {
   return (0, import_react33.createElement)(
     "div",
     { role: "listitem", className: "bt-member" },
@@ -11927,7 +11919,7 @@ function MemberRow({ member, entry, room: room2, roster, actions, now }) {
             (0, import_react33.createElement)("span", { className: "bt-member-name" }, member.name),
             room2.admin === member.id ? (0, import_react33.createElement)("span", { className: "bt-tag" }, t("Admin")) : null
           ),
-          (0, import_react33.createElement)(MemberState, { entry, bot: member, room: room2, roster, now })
+          (0, import_react33.createElement)(MemberState, { entry, bot: member, room: room2, roster })
         )
       ),
       (0, import_react33.createElement)(StopMemberWork, { entry, bot: member, room: room2, actions })
@@ -11937,7 +11929,7 @@ function MemberRow({ member, entry, room: room2, roster, actions, now }) {
 }
 function GroupOverview({ room: room2, roster, actions, usage, useWork, openSettings }) {
   const members = room2.members.map((id) => roster.byId[id]).filter(Boolean);
-  const { entries: entries2, now } = useMemberWork(room2, useWork);
+  const { entries: entries2 } = useMemberWork(room2, useWork);
   return [
     room2.notice ? (0, import_react33.createElement)(About, { key: "notice", title: "Notice", text: room2.notice }) : (0, import_react33.createElement)("button", { key: "notice", type: "button", className: "bt-more", onClick: openSettings }, t("Add a notice in group settings")),
     (0, import_react33.createElement)(
@@ -11950,8 +11942,7 @@ function GroupOverview({ room: room2, roster, actions, usage, useWork, openSetti
         entry: entries2.find((item) => item.id === member.id),
         room: room2,
         roster,
-        actions,
-        now
+        actions
       })))
     ),
     (0, import_react33.createElement)(
@@ -13810,7 +13801,7 @@ var USER_MESSAGE_CSS = `
 `;
 
 // src/client/approval-notices.js
-function noticeApprovals({ work, roster, shownSession, openSession, since: since2 = Date.now() }) {
+function noticeApprovals({ work, roster, shownSession, openSession, since = Date.now() }) {
   const told = /* @__PURE__ */ new Set();
   const notify = () => {
     const approvals = work.getSnapshot().approvals ?? [];
@@ -13821,7 +13812,7 @@ function noticeApprovals({ work, roster, shownSession, openSession, since: since
     for (const entry of approvals) {
       if (told.has(entry.id)) continue;
       told.add(entry.id);
-      if ((entry.at ?? 0) < since2) continue;
+      if ((entry.at ?? 0) < since) continue;
       const place = entry.roomId ?? entry.sessionId;
       if (document.visibilityState === "visible" && shownSession() === place) continue;
       const { byId, roomsById } = roster.getSnapshot();

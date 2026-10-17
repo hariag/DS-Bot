@@ -297,6 +297,11 @@ export function install(rt) {
     return bots
   }
 
+  // Per Session, when its running turn began.
+  const turnsView = () => Object.fromEntries([...live]
+    .filter(([, entry]) => entry.turn !== undefined && entry.since !== undefined)
+    .map(([id, entry]) => [id, entry.since]))
+
   // Per group, the members whose turn there is running or who move on to a fresh part;
   // the round's current speaker is marked, since its round shows it.
   const roomWorkView = () => {
@@ -622,5 +627,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, callDetail, doingOf, stopRoomTurn, releaseBot })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, callDetail, doingOf, stopRoomTurn, releaseBot })
 }

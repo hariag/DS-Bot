@@ -133,7 +133,7 @@ const markOf = entry => (entry?.state === 'ask' ? 'alert' : entry?.state === 'wo
 
 // One member: its mark, name and what it is doing on one surface that opens its chat;
 // Stop beside it while it works here, and the approvals it waits on below.
-function MemberRow({ member, entry, room, roster, actions, now }) {
+function MemberRow({ member, entry, room, roster, actions }) {
   return h('div', { role: 'listitem', className: 'bt-member' },
     h('div', { className: 'bt-member-row' },
       h('button', { type: 'button', className: 'bt-member-open', title: t("Open {name}'s chat", { name: member.name }), onClick: () => actions.openSession(member.id) },
@@ -142,7 +142,7 @@ function MemberRow({ member, entry, room, roster, actions, now }) {
           h('span', { className: 'bt-member-line' },
             h('span', { className: 'bt-member-name' }, member.name),
             room.admin === member.id ? h('span', { className: 'bt-tag' }, t('Admin')) : null),
-          h(MemberState, { entry, bot: member, room, roster, now }))),
+          h(MemberState, { entry, bot: member, room, roster }))),
       h(StopMemberWork, { entry, bot: member, room, actions })),
     h(MemberApprovals, { entry, bot: member, actions }))
 }
@@ -151,7 +151,7 @@ function MemberRow({ member, entry, room, roster, actions, now }) {
 // remembers. Changes are made in its settings.
 function GroupOverview({ room, roster, actions, usage, useWork, openSettings }) {
   const members = room.members.map(id => roster.byId[id]).filter(Boolean)
-  const { entries, now } = useMemberWork(room, useWork)
+  const { entries } = useMemberWork(room, useWork)
   return [
     room.notice
       ? h(About, { key: 'notice', title: 'Notice', text: room.notice })
@@ -159,7 +159,7 @@ function GroupOverview({ room, roster, actions, usage, useWork, openSettings }) 
     h('div', { key: 'members' },
       h('div', { className: 'bt-section-title' }, t('Members · {count}', { count: members.length })),
       h('div', { className: 'bt-members', role: 'list' }, members.map(member => h(MemberRow, {
-        key: member.id, member, entry: entries.find(item => item.id === member.id), room, roster, actions, now,
+        key: member.id, member, entry: entries.find(item => item.id === member.id), room, roster, actions,
       })))),
     h('div', { key: 'mode' }, h('div', { className: 'bt-section-title' }, t('Who answers')),
       h('div', { className: 'bt-kv' }, h('span', null, t(ROOM_MODES.find(([id]) => id === shownMode(room, roster))?.[1] ?? 'Everyone')))),

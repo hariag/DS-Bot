@@ -45,6 +45,13 @@ export function relativeShort(ms) {
   return new Date(ms).toLocaleDateString(dateLocale(), { month: 'short', day: 'numeric' })
 }
 
+// A running clock: "8s", "1m 8s", "1h 2m 8s", in every language.
+export function elapsedLabel(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  return `${hours > 0 ? `${hours}h ` : ''}${total >= 60 ? `${Math.floor(total / 60) % 60}m ` : ''}${total % 60}s`
+}
+
 export const contentText = content => (content ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n')
 export const HEADER = /^\[(Message from|Reply from|Group chat|Group post from|Bot team setup|Handoff · part|Secret card)[^\]]*\]\n?/
 export const currentPart = bot => bot.sessionId ?? bot.id

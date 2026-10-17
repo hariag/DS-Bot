@@ -596,6 +596,20 @@ test('the team view says what a member is doing in the call\'s own words', async
   assert.deepEqual(['said', 'note'].map(key => later.work.bots.a[key]), ['先把 JDK 下下来。', 'Download JDK 21'])
 })
 
+test('the team view says when each Session\'s running turn began, for the clock at its tail', async (t) => {
+  const host = await start(t)
+  const before = Date.now()
+  host.emit('gb', 'turn/start', { turn: 1 })
+  host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  const { value } = await host.call('state', {})
+  assert.deepEqual(Object.keys(value.work.turns), ['gb'])
+  assert.ok(value.work.turns.gb >= before && value.work.turns.gb <= Date.now())
+  assert.equal(value.work.turns.gb, value.work.bots.b.since)
+  host.emit('gb', 'tool/result', { callId: 'k1' })
+  host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  assert.deepEqual((await host.call('state', {})).value.work.turns, {})
+})
+
 // 公开#124: a Bot deleted while it worked stayed "thinking" until DSH restarted, and the
 // Bot that had asked it something never heard back.
 test('deleting a working Bot clears its activity and tells the Bots waiting for its reply', async (t) => {
