@@ -54,9 +54,11 @@ No other third-party code is copied into this repository. At run time the
 plugin uses the @deepseek-ai/* packages of the DeepSeek Harness install it
 runs in; they are not bundled. esbuild is a build tool only. The desktop app
 in app/ installs the pinned @deepseek-ai/* packages, Electron and pnpm from
-npm; they keep their own licenses. The build of its window (app/ui) bundles
-React and React DOM (MIT, Copyright (c) Meta Platforms, Inc. and affiliates)
-from npm; Vite is a build tool only.
+npm; they keep their own licenses. The build of its window (app/ui) bundles,
+from npm, React and React DOM (MIT, Copyright (c) Meta Platforms, Inc. and
+affiliates), and react-markdown and remark-gfm with the packages they use
+(MIT, most of them Copyright (c) Titus Wormer; @ungap/structured-clone is ISC,
+Copyright (c) Andrea Giammarchi). Vite is a build tool only.
 
 ==============================================================================
 Projects that gave us ideas (no code copied)
