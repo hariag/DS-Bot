@@ -1,5 +1,7 @@
 node_modules/
 *.tgz
+# The desktop app's window build (npm run build in app/).
+/app/ui/dist/
 
 # A DeepSeek Harness checkout for the tests and the test bench.
 /deepseek-harness/

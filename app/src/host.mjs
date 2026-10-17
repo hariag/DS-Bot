@@ -46,7 +46,7 @@ async function main() {
   process.once('disconnect', () => { void stop() })
   const { ctx } = await application
   const url = ctx.connection.authenticatedUrl(`http://127.0.0.1:${String(ctx.webServer.port)}`)
-  await send({ type: 'ready', url, injections: ctx.webServer.collectIndexInjections() })
+  await send({ type: 'ready', url })
 }
 
 main().catch(async (error) => {

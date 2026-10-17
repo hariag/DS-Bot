@@ -1,22 +1,20 @@
 // Electron main process: one window for the Bot team, served by the app's own DSH Host.
-// The dsh-app scheme, the request forwarding and the WebSocket header rewrite follow
-// DeepSeek Harness apps/desktop/src/main.ts (MIT); see NOTICE.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
-import { mkdirSync } from 'node:fs'
-import { createRequire } from 'node:module'
+// The dsh-app scheme and the request forwarding follow DeepSeek Harness
+// apps/desktop/src/main.ts (MIT); see NOTICE.
+import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, shell } from 'electron'
+import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HostProcess } from './host-process.mjs'
-import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
+import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveFile } from './web.mjs'
 
 // DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
 const SCHEME = 'dsh-app'
-const IPC = { boot: 'ds-bot:boot', bootFailed: 'ds-bot:boot-failed' }
-const STATIC_PATHS = new Set(['/', '/index.html', '/manifest.webmanifest'])
 
 const here = dirname(fileURLToPath(import.meta.url))
-const webDist = join(dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
+// The window is the app's own build (ui/, `npm run build`); everything under /api/ goes to the Host.
+const uiDist = join(here, '..', 'ui', 'dist')
 const dataDir = process.env.DS_BOT_HOME || join(homedir(), '.ds-bot')
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
 
@@ -48,6 +46,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function start() {
+  if (!existsSync(join(uiDist, 'index.html'))) throw new Error('The window is not built. Run npm run build in app/.')
   const profileDir = join(dataDir, 'profiles', 'ds-bot')
   mkdirSync(profileDir, { recursive: true })
   host = new HostProcess({
@@ -63,32 +62,14 @@ function start() {
   })
   ready.catch(fail)
 
-  protocol.handle(SCHEME, (request) => {
+  // The window opens while the Host boots; its first requests wait for the Host.
+  protocol.handle(SCHEME, async (request) => {
     const url = new URL(request.url)
     if (url.hostname !== 'app') return new Response(null, { status: 404 })
-    if (STATIC_PATHS.has(url.pathname) || url.pathname.startsWith('/assets/')) return serveWebDocument(request, webDist)
-    if (hostState === undefined) return new Response(null, { status: 503 })
-    return forwardWebRequest(request, hostState.url, hostState.cookie)
-  })
-
-  ipcMain.handle(IPC.boot, async (event) => {
-    assertWindow(event)
-    const { url, injections } = await ready
-    return { injections, streamBaseUrl: new URL(url).origin }
-  })
-  ipcMain.handle(IPC.bootFailed, (event, message) => {
-    assertWindow(event)
-    fail(new Error(String(message)))
-  })
-
-  // The stream connects to the Host directly; the Host accepts only its own origin and cookie.
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*'] }, (details, callback) => {
-    if (hostState === undefined || details.webContentsId !== mainWindow?.webContents.id) { callback({}); return }
-    const target = new URL(hostState.url)
-    if (new URL(details.url).host !== target.host) { callback({}); return }
-    const headers = Object.fromEntries(Object.entries(details.requestHeaders).map(([name, value]) => [name.toLowerCase(), value]))
-    if (headers.origin !== APP_ORIGIN) { callback({ cancel: true }); return }
-    callback({ requestHeaders: { ...headers, origin: target.origin, cookie: hostState.cookie, 'sec-fetch-site': 'same-origin' } })
+    if (!url.pathname.startsWith('/api/')) return serveFile(request, uiDist)
+    const target = hostState ?? await ready.catch(() => undefined)
+    if (target === undefined) return new Response(null, { status: 503 })
+    return forwardWebRequest(request, target.url, target.cookie)
   })
 
   setMenu()
@@ -99,8 +80,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320, height: 860, minWidth: 720, minHeight: 480,
     title: 'DeepSeek Bot', show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#ffffff',
-    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141414' : '#fcfcfc',
+    webPreferences: { contextIsolation: true, sandbox: true },
   })
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
   mainWindow.on('page-title-updated', (event) => { event.preventDefault() })
@@ -130,12 +111,6 @@ function focusWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
-}
-
-function assertWindow(event) {
-  const contents = mainWindow?.webContents
-  if (contents === undefined || event.sender !== contents || event.senderFrame !== contents.mainFrame
-    || !event.senderFrame.url.startsWith(`${APP_ORIGIN}/`)) throw new Error('DeepSeek Bot: rejected IPC from an unknown page')
 }
 
 function openOutside(url) {

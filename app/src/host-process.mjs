@@ -27,7 +27,7 @@ export class HostProcess {
    */
   constructor(options) { this.#options = options }
 
-  /** @returns {Promise<{ url: string, injections: unknown[] }>} the Host's launch URL and index injections */
+  /** @returns {Promise<{ url: string }>} the Host's launch URL */
   start() {
     this.#ready ??= new Promise((resolve, reject) => {
       const { entry, cwd, env, pnpm } = this.#options
@@ -43,7 +43,7 @@ export class HostProcess {
         this.#stderr = (this.#stderr + chunk).slice(-STDERR_TAIL_CHARS)
       })
       child.on('message', (message) => {
-        if (message?.type === 'ready') resolve({ url: message.url, injections: message.injections })
+        if (message?.type === 'ready') resolve({ url: message.url })
         else if (message?.type === 'fatal') this.#fail(new Error(message.message), reject)
       })
       child.once('error', (error) => { this.#fail(error, reject) })
