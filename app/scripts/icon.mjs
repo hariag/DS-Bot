@@ -32,7 +32,7 @@ function tile(size, inset) {
 // draws its icons nearly edge to edge, so its sizes use a fuller tile.
 function iconSvg(plate, size = 1024) {
   const inset = (size * (1 - plate)) / 2
-  const whaleWidth = (size - 2 * inset) * 0.8
+  const whaleWidth = (size - 2 * inset) * 0.85
   const scale = whaleWidth / WHALE.width
   // The head carries the weight, so the whale sits a little left of and above center.
   const x = size / 2 - WHALE.cx * scale - whaleWidth * 0.015
