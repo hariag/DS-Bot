@@ -9359,16 +9359,33 @@ var presetDanger = (value) => DANGER.has(value);
 var presetName = (value, catalog) => LABELS[value] ? t(LABELS[value]) : catalog?.options?.find((option) => option.value === value)?.name ?? value;
 function PermissionPicker({ catalog, saved, onPick, repick = false }) {
   const [pending, setPending] = (0, import_react24.useState)(null);
+  const flight = (0, import_react24.useRef)({ value: void 0, latest: void 0 });
   (0, import_react24.useEffect)(() => {
-    if (pending === saved) setPending(null);
+    const flying = flight.current.value;
+    if (pending === saved && (flying === void 0 || flying === pending)) setPending(null);
   }, [pending, saved]);
+  const send = (value) => {
+    flight.current.value = value;
+    void Promise.resolve(onPick(value)).then((done) => done !== false, () => false).then((ok) => {
+      const wanted = flight.current.latest;
+      flight.current.latest = void 0;
+      if (wanted !== void 0 && !(wanted === value && ok)) {
+        send(wanted);
+        return;
+      }
+      flight.current.value = void 0;
+      if (!ok) setPending(null);
+    });
+  };
   const current = pending ?? saved;
   const pick2 = (value) => {
     if (value === current && !repick) return;
     setPending(value);
-    void Promise.resolve(onPick(value)).then((done) => {
-      if (done === false) setPending(null);
-    });
+    if (flight.current.value !== void 0) {
+      flight.current.latest = value;
+      return;
+    }
+    send(value);
   };
   return (0, import_react24.createElement)(
     Segmented,
