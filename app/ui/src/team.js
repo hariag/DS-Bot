@@ -168,6 +168,8 @@ export function createTeam() {
       const reactions = reactionStore.update(saved => toggleReaction(saved, key, index, emoji), ui.getSnapshot().reactions)
       ui.set(state => ({ ...state, reactions }))
     },
+    // The window has no DSH status bar, so the Bot's details show its figures.
+    runStats: botId => call('run-stats', { botId }),
     // Nothing else draws in the window: no shell panels, right sidebar, "@" menu or voice plugin.
     hasRightSidebar: () => false,
     canReferenceChat: () => false,

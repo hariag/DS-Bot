@@ -447,6 +447,12 @@ var ZH = {
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 缓存命中 {hit}%",
+  "1 turn": "1 轮",
+  "{count} turns": "{count} 轮",
+  "{speed} tok/s": "{speed} tok/s",
+  "Cache hit {hit}%": "缓存命中 {hit}%",
+  "Context {percent}%": "上下文 {percent}%",
+  "{used} of {total} tokens of context in use": "上下文已用 {used} / {total} tokens",
   // Transcript
   Footnotes: "脚注",
   "Remove reaction {emoji}": "移除表情 {emoji}",
@@ -1827,6 +1833,36 @@ function usageOf(list, ids) {
   const hit = input > 0 ? Math.round(cacheRead / input * 100) : 0;
   return t("{tokens} tok · Cache hit {hit}%", { tokens: formatTokens(input + output), hit });
 }
+function percentText(part, whole) {
+  if (part >= whole) return "100";
+  for (let places = 0; places < 3; places += 1) {
+    const text = (part / whole * 100).toFixed(places);
+    if (Number(text) < 100) return text;
+  }
+  return "99.99";
+}
+function runStatsOf(values) {
+  const stats = values?.sessionStats;
+  const usage = values?.tokenUsage;
+  const pressure = values?.contextPressure;
+  const shown = [];
+  if (stats?.turns > 0) shown.push({ key: "turns", text: stats.turns === 1 ? t("1 turn") : t("{count} turns", { count: stats.turns }) });
+  if (stats?.decodeMs > 0 && stats.decodeTokens > 0) {
+    const speed = stats.decodeTokens / (stats.decodeMs / 1e3);
+    shown.push({ key: "speed", text: t("{speed} tok/s", { speed: speed >= 10 ? Math.round(speed) : Math.round(speed * 10) / 10 }) });
+  }
+  const prompt = (usage?.uncachedInputTokens ?? 0) + (usage?.cacheReadTokens ?? 0) + (usage?.cacheWriteTokens ?? 0);
+  if (prompt > 0) shown.push({ key: "cache", text: t("Cache hit {hit}%", { hit: percentText(usage.cacheReadTokens ?? 0, prompt) }) });
+  const used = pressure?.projectedTokens ?? pressure?.pressureTokens;
+  if (Number.isFinite(used) && pressure.contextWindow > 0) {
+    shown.push({
+      key: "context",
+      text: t("Context {percent}%", { percent: Math.min(100, Math.round(used / pressure.contextWindow * 100)) }),
+      title: t("{used} of {total} tokens of context in use", { used: formatTokens(used), total: formatTokens(pressure.contextWindow) })
+    });
+  }
+  return shown;
+}
 
 // src/client/motion.js
 var import_react = require("react");
@@ -2404,6 +2440,8 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bt-kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:20px;color:var(--bt-ink-2)}
 .bt-kv span:last-child{color:var(--bt-ink);font-variant-numeric:tabular-nums}
+.bt-run-stats{display:flex;flex-wrap:wrap;justify-content:center;gap:0 6px;margin-top:-6px;font-size:12px;line-height:18px;color:var(--bt-ink-2);font-variant-numeric:tabular-nums}
+.bt-run-sep{color:var(--bt-ink-3)}
 .bt-danger{color:var(--bt-danger)}
 
 /* Bot settings: fields, the avatar editor popover, and the details-pane sub-view. */
@@ -11747,6 +11785,36 @@ function PermissionRow({ bot, roster, actions, run }) {
     (0, import_react33.createElement)(PermissionPicker, { catalog, saved: bot.permission ?? catalog.defaultPreset, repick: bot.permission === void 0, onPick: (permission) => run(actions.updateBot(bot.id, { permission })) })
   );
 }
+function RunStats({ bot, part, running, actions }) {
+  const [values, setValues] = (0, import_react33.useState)(null);
+  (0, import_react33.useEffect)(() => {
+    if (!actions.runStats) return void 0;
+    let current = true;
+    actions.runStats(bot.id).then(
+      (next) => {
+        if (current) setValues(next);
+      },
+      // The line stays as it was until the next read works.
+      () => {
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [bot.id, part, running]);
+  const shown = runStatsOf(values);
+  if (shown.length === 0) return null;
+  return (0, import_react33.createElement)(
+    "div",
+    { className: "bt-run-stats" },
+    shown.map((entry, index) => (0, import_react33.createElement)(
+      import_react33.Fragment,
+      { key: entry.key },
+      index > 0 ? (0, import_react33.createElement)("span", { className: "bt-run-sep", "aria-hidden": true }, "·") : null,
+      (0, import_react33.createElement)("span", { title: entry.title }, entry.text)
+    ))
+  );
+}
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
   const state = useBrowserTabs((map) => map[bot.id] ?? EMPTY_TABS);
   const pages = useBrowserPages((map) => map);
@@ -12017,6 +12085,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
       errorLine,
       room2 && tab === "details" ? (0, import_react33.createElement)(GroupOverview, { room: room2, roster, actions, usage, useWork, openSettings: () => setView("settings") }) : null,
       bot && tab === "details" ? [
+        (0, import_react33.createElement)(RunStats, { key: "stats", bot, part, running, actions }),
         (0, import_react33.createElement)(
           "div",
           { key: "model", className: "bt-drawer-model" },

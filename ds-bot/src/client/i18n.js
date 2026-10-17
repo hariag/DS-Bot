@@ -391,6 +391,12 @@ const ZH = {
   'Today {time}': '今天 {time}',
   'Yesterday {time}': '昨天 {time}',
   '{tokens} tok · Cache hit {hit}%': '{tokens} tok · 缓存命中 {hit}%',
+  '1 turn': '1 轮',
+  '{count} turns': '{count} 轮',
+  '{speed} tok/s': '{speed} tok/s',
+  'Cache hit {hit}%': '缓存命中 {hit}%',
+  'Context {percent}%': '上下文 {percent}%',
+  '{used} of {total} tokens of context in use': '上下文已用 {used} / {total} tokens',
 
   // Transcript
   Footnotes: '脚注',

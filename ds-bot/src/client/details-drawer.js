@@ -1,8 +1,8 @@
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import { isMainOf } from './sources.js'
-import { HEADER, currentPart, stripHeader, usageOf } from './text.js'
+import { HEADER, currentPart, runStatsOf, stripHeader, usageOf } from './text.js'
 import { PlusIcon, ShareIcon, CloseIcon, ChevronLeftIcon, GearIcon } from './icons.js'
-import { botState, toolState, BotMark, BotAvatar } from './mark.js'
+import { botState, BotMark, BotAvatar } from './mark.js'
 import { GlobeIcon, Favicon } from './browser-pane.js'
 import { useEscape } from './overlay-hooks.js'
 import { BotSettingsForm } from './bot-settings.js'
@@ -11,8 +11,9 @@ import { ModelMenu, modelOf } from './model-menu.js'
 import { FolderMenu } from './folder-menu.js'
 import { MemoryRow } from './memory-panel.js'
 import { ScheduleSummary } from './schedules.js'
-import { Segmented, useGlide, useMorph } from './motion.js'
-import { MemberApprovals, MemberState, StopMemberWork, useMemberWork } from './member-status.js'
+import { useGlide, useMorph } from './motion.js'
+import { MemberApprovals, MemberState, StopMemberWork, useMemberWork, workState } from './member-status.js'
+import { PermissionPicker, presetDanger, presetName } from './permission-picker.js'
 import { t } from './i18n.js'
 
 function transcriptOf(list, id, name, hiddenTurns = []) {
@@ -33,35 +34,40 @@ const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, '
 const shortUrl = url => String(url ?? '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '')
 const EMPTY_TABS = { ids: [], active: null }
 
-// The Bot's browser inside the details page: its tabs as small window cards on
-// Desktop, a pointer there on web.
-const PERMISSION_LABELS = { 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' }
-const DANGER = new Set(['danger-full-access'])
-
 // The Bot's permission preset, from the presets DeepSeek Harness offers.
 function PermissionRow({ bot, roster, actions, run }) {
-  const [pending, setPending] = useState(null)
   const catalog = roster.permissions
-  const saved = bot.permission ?? catalog?.defaultPreset
-  useEffect(() => { if (pending === saved) setPending(null) }, [pending, saved])
   if (!catalog?.options?.length) return null
-  const current = pending ?? saved
-  const pick = (value) => {
-    // A Bot without its own preset may run on another one set in DSH, so its first pick always applies.
-    if (value === current && bot.permission !== undefined) return
-    setPending(value)
-    void run(actions.updateBot(bot.id, { permission: value })).catch(() => setPending(null))
-  }
   return h('div', { className: 'bt-drawer-permission' },
     h('div', { className: 'bt-section-title' }, t('Permissions')),
-    h(Segmented, { label: t('Permissions'), value: current },
-      catalog.options.map(option => h('button', {
-        key: option.value, type: 'button', 'aria-pressed': option.value === current,
-        title: option.description, onClick: () => pick(option.value),
-        className: DANGER.has(option.value) ? 'bt-perm-danger' : undefined,
-      }, PERMISSION_LABELS[option.value] ? t(PERMISSION_LABELS[option.value]) : option.name))))
+    // A Bot without its own preset may run on another one set in DSH, so its first pick always applies.
+    h(PermissionPicker, { catalog, saved: bot.permission ?? catalog.defaultPreset, repick: bot.permission === undefined, onPick: permission => run(actions.updateBot(bot.id, { permission })) }))
 }
 
+// The current part's turns, speed, cache hits and context, for a window without DSH's
+// status bar (actions.runStats). It reads them again when a turn starts or ends.
+function RunStats({ bot, part, running, actions }) {
+  const [values, setValues] = useState(null)
+  useEffect(() => {
+    if (!actions.runStats) return undefined
+    let current = true
+    actions.runStats(bot.id).then(
+      (next) => { if (current) setValues(next) },
+      // The line stays as it was until the next read works.
+      () => {},
+    )
+    return () => { current = false }
+  }, [bot.id, part, running])
+  const shown = runStatsOf(values)
+  if (shown.length === 0) return null
+  return h('div', { className: 'bt-run-stats' },
+    shown.map((entry, index) => h(Fragment, { key: entry.key },
+      index > 0 ? h('span', { className: 'bt-run-sep', 'aria-hidden': true }, '·') : null,
+      h('span', { title: entry.title }, entry.text))))
+}
+
+// The Bot's browser inside the details page: its tabs as small window cards on
+// Desktop, a pointer there on web.
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
   const state = useBrowserTabs(map => map[bot.id] ?? EMPTY_TABS)
   const pages = useBrowserPages(map => map)
@@ -123,7 +129,7 @@ function MemberPile({ room, roster }) {
     more > 0 ? h('span', { key: 'more', className: 'bt-pile-face bt-pile-more', style: { animationDelay: `${shown.length * 40}ms` } }, `+${more}`) : null)
 }
 
-const markOf = entry => (entry?.state === 'ask' ? 'alert' : entry?.state === 'work' ? toolState(entry.doing.tool ?? '') : 'idle')
+const markOf = entry => (entry?.state === 'ask' ? 'alert' : entry?.state === 'work' ? workState(entry.doing) : 'idle')
 
 // One member: its mark, name and what it is doing on one surface that opens its chat;
 // Stop beside it while it works here, and the approvals it waits on below.
@@ -157,6 +163,8 @@ function GroupOverview({ room, roster, actions, usage, useWork, openSettings }) 
       })))),
     h('div', { key: 'mode' }, h('div', { className: 'bt-section-title' }, t('Who answers')),
       h('div', { className: 'bt-kv' }, h('span', null, t(ROOM_MODES.find(([id]) => id === shownMode(room, roster))?.[1] ?? 'Everyone')))),
+    room.permission ? h('div', { key: 'permission' }, h('div', { className: 'bt-section-title' }, t('Permissions')),
+      h('div', { className: 'bt-kv' }, h('span', { className: presetDanger(room.permission) ? 'bt-perm-danger' : undefined }, presetName(room.permission, roster.permissions)))) : null,
     usage ? h('div', { key: 'usage' }, h('div', { className: 'bt-section-title' }, t('Usage')),
       h('div', { className: 'bt-kv' }, h('span', null, room.name), h('span', null, usage))) : null,
   ]
@@ -252,6 +260,7 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
       errorLine,
       room && tab === 'details' ? h(GroupOverview, { room, roster, actions, usage, useWork, openSettings: () => setView('settings') }) : null,
       bot && tab === 'details' ? [
+        h(RunStats, { key: 'stats', bot, part, running, actions }),
         h('div', { key: 'model', className: 'bt-drawer-model' },
           h('div', { className: 'bt-section-title' }, t('Model')),
           h(ModelMenu, { bot, roster, actions, run, wide: true }),
