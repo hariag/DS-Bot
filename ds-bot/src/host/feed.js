@@ -11,6 +11,9 @@ export const FEED_ROUTE = `${ROUTE}/feed`
 const KEEPALIVE_MS = 20_000
 // Status changes come in bursts (a turn starts several Sessions); one notice covers them.
 const LIVE_DELAY_MS = 150
+// A window that stops reading is dropped once this many events wait for it; it
+// reconnects and catches up from `hello`.
+const MAX_QUEUED = 512
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -18,6 +21,10 @@ export function install(rt) {
   /** @type {Set<ReadableStreamDefaultController<Uint8Array>>} */
   const clients = new Set()
   const send = (controller, chunk) => {
+    if ((controller.desiredSize ?? 0) < -MAX_QUEUED) {
+      leave(controller)
+      return
+    }
     try { controller.enqueue(chunk) } catch { clients.delete(controller) }
   }
   const publish = (event, data) => {

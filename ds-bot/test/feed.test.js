@@ -122,6 +122,20 @@ test('the live feed tells a window about saves, new chat entries and the reply b
   assert.equal(await next(), undefined)
 })
 
+test('a window that stops reading the feed is dropped', { timeout: 10_000 }, async (t) => {
+  const { ctx, call, stop, routes } = start()
+  t.after(stop)
+  await call('state')
+  const response = await routes['/api/bot/feed'].fetch(new Request('http://localhost/api/bot/feed'))
+  const onEvent = ctx.listeners.get('session/event').at(-1)
+  for (let index = 0; index < 1000; index += 1) onEvent({ id: 'm1c' }, userMessage(`line ${index}`, index))
+  // What was queued before the drop still arrives, then the stream ends.
+  const next = reader(response)
+  let count = 0
+  while (await next() !== undefined) count += 1
+  assert.equal(count > 1 && count < 1000, true)
+})
+
 test('the chat endpoint pages a Bot\'s own chat from the newest part back', async (t) => {
   const record = (event, seq) => ({ event: { ...event, seq } })
   const { call, stop } = start({
