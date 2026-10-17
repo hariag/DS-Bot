@@ -247,6 +247,7 @@ export function install(rt) {
       instructions: { type: 'string', required: true, description: 'What this Bot is responsible for and how it should work' },
       brief: { type: 'string', description: 'Why the user wants it, passed to the new Bot as its first context' },
       model: { type: 'string', description: 'Model the Bot runs on, as provider/model or a model id. Only when the user names one; otherwise the model you run on.' },
+      effort: { type: 'string', description: 'Thinking level for the model, as list_models shows it. Only when the user names one.' },
       work_dir: WORK_DIR_PARAM,
     },
     output,
@@ -262,7 +263,7 @@ export function install(rt) {
         const creator = callerBot(exec)
         const served = creator?.model && (await rt.catalog()).some(entry => entry.ref === creator.model)
         const model = args.model || (served ? creator.model : undefined)
-        const bot = await rt.createBot({ ...args, model, workDir, createdBy: creator?.id })
+        const bot = await rt.createBot({ ...args, model, workDir, effort: args.effort, createdBy: creator?.id })
         return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}. It is greeting the user now.`
       } catch (error) {
         return `Could not create the Bot: ${error.message}`
@@ -272,7 +273,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'update_bot',
-    description: 'Change a Bot\'s name, role, color, model, working folder, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
+    description: 'Change a Bot\'s name, role, color, model, thinking level, working folder, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
     parameters: {
       bot: { type: 'string', description: 'Current name of the Bot to change; leave out to change yourself' },
       name: { type: 'string', description: 'New name' },
@@ -280,6 +281,7 @@ export function install(rt) {
       instructions: { type: 'string', description: 'Replacement instructions' },
       color: { type: 'string', description: `One of ${[...COLORS, ...EXTRA_COLORS].join(', ')}` },
       model: { type: 'string', description: 'Move the Bot to another model, as provider/model or a model id' },
+      effort: { type: 'string', description: 'Thinking level for the Bot\'s model, as list_models shows; an empty string returns to the model\'s default' },
       work_dir: { ...WORK_DIR_PARAM, description: `${WORK_DIR_PARAM.description}; an empty string returns it to the team workspace` },
     },
     output,
@@ -292,11 +294,11 @@ export function install(rt) {
       if (bot === undefined) return `No Bot named ${args.bot}.`
       if (bot.id !== caller.id && !rt.isMain(self)) return 'Only a Main Bot can change another Bot. Leave out bot to change yourself, or ask a Main Bot with message_bot.'
       try {
-        const { name: newName, role, instructions, color, model } = args
+        const { name: newName, role, instructions, color, model, effort } = args
         const moving = typeof args.work_dir === 'string'
         const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
         if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
-        const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}), ...(moving ? { workDir: workDir ?? '' } : {}) })
+        const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}), ...(effort === undefined ? {} : { effort }), ...(moving ? { workDir: workDir ?? '' } : {}) })
         if (!moving) return `Updated ${next.name}.`
         const folder = workDir ?? 'the team workspace'
         return bot.id === caller.id ? `Updated ${next.name}. From your next step on, you work in ${folder}.` : `Updated ${next.name}. It now works in ${folder}.`
@@ -308,14 +310,20 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'list_models',
-    description: 'List the models a Bot can run on, as provider/model refs for create_bot and update_bot.',
+    description: 'List the models a Bot can run on, as provider/model refs for create_bot and update_bot. A model in use also lists the thinking levels it serves.',
     parameters: {},
     output,
     async execute() {
-      const models = await rt.catalog()
+      const models = await rt.catalog({ fresh: true })
       if (models.length === 0) return 'No models are configured. Ask the user to add one in Settings → Models.'
       const fallback = rt.defaultRef()
-      return models.map(entry => `- ${entry.ref}${entry.name !== entry.id ? ` (${entry.name})` : ''}${entry.input?.includes('image') ? ', reads images' : ''}${entry.ref === fallback ? ', default' : ''}`).join('\n')
+      // Only catalog entries that already carry `reasoning` (models a Bot runs on)
+      // show levels; asking every model for its levels would take a call each.
+      return models.map((entry) => {
+        const levels = entry.reasoning?.efforts?.map(effort => effort.id) ?? []
+        const thinking = levels.length > 0 ? `, thinking: ${levels.join(', ')}${entry.reasoning.defaultEffort === undefined ? '' : ` (default: ${entry.reasoning.defaultEffort})`}` : ''
+        return `- ${entry.ref}${entry.name !== entry.id ? ` (${entry.name})` : ''}${entry.input?.includes('image') ? ', reads images' : ''}${entry.ref === fallback ? ', default' : ''}${thinking}`
+      }).join('\n')
     },
   }))
 
