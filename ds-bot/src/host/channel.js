@@ -245,7 +245,7 @@ export function install(rt) {
           return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
         case 'dismiss-question':
           await rt.load()
-          if (state.questions[body.sessionId] !== undefined) {
+          if (rt.own(state.questions, body.sessionId) !== undefined) {
             delete state.questions[body.sessionId]
             await rt.save()
           }
@@ -277,7 +277,7 @@ export function install(rt) {
           await rt.load()
           const past = rt.pastOwners.get(body.sessionId)
           const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
-          const question = state.questions[sessionId]
+          const question = rt.own(state.questions, sessionId)
           if (question === undefined || question.id !== body.questionId) return fail('This question is no longer open', 'bot/stale')
           const reply = questionReply(question, body.answer)
           if (reply === undefined) return fail('Nothing to send', 'bot/invalid')

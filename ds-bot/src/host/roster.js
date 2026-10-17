@@ -243,7 +243,7 @@ export function install(rt) {
   }
 
   async function setFlags(id, { pinned, hidden }) {
-    const entry = rt.botOf(id) ?? rt.roomOf(id) ?? state.agents[id]
+    const entry = rt.botOf(id) ?? rt.roomOf(id) ?? rt.own(state.agents, id)
     if (entry === undefined) throw new Error('Unknown conversation')
     if (typeof pinned === 'boolean') entry.pinned = pinned
     if (typeof hidden === 'boolean') entry.hidden = hidden

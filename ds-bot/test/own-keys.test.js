@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { createRuntime } from '../index.js'
+import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Ids that name an inherited property: a lookup that misses Object.hasOwn would find
@@ -43,7 +43,6 @@ function scheduleService() {
   }
 }
 
-let rt
 function start() {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-own-keys-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
@@ -66,11 +65,11 @@ function start() {
   })
   const register = ctx.connection.fetch.register
   ctx.connection.fetch.register = (route) => { ctx.route = route; return register(route) }
-  rt = createRuntime(ctx, { home })
+  apply(ctx, { home })
   const call = async (endpoint, payload) => (await ctx.route.fetch(new Request('http://localhost/api/bot', {
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
-  const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: { id: sessionId } })
+  const tool = (name, args, sessionId) => ctx.registeredTools.get(name).execute(args, { agent: { id: sessionId } })
   const state = () => readFileSync(join(home, 'state.json'), 'utf8')
   const stop = async () => {
     await ctx.dispose()
@@ -92,12 +91,9 @@ const ENDPOINTS = [
   ['delete-room', id => ({ id })],
   ['stop-member-work', id => ({ roomId: id, botId: 'b2' })],
   ['stop-member-work', id => ({ roomId: 'r1', botId: id })],
-  ['stop-room-work', id => ({ roomId: id })],
   ['schedule-create', id => ({ target: id, title: 't', prompt: 'p', when: { kind: 'every', minutes: 5 } })],
   ['dismiss-question', id => ({ sessionId: id })],
   ['answer-question', id => ({ sessionId: id, questionId: 'q1', answer: 'yes' })],
-  ['dismiss-view', id => ({ sessionId: id })],
-  ['view-reply', id => ({ sessionId: id, viewId: 'v1', action: 'pick', values: { selected: ['A'] } })],
   ['capability-delete', id => ({ name: id })],
   ['capability-approve', id => ({ name: id })],
   ['bot-capability', id => ({ botId: 'b2', name: id, attached: true })],

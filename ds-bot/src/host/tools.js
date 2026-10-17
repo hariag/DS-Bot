@@ -704,9 +704,9 @@ export function install(rt) {
         if (!rt.botOf(self)) return `Only Bots on the team can use ${name}.`
         try {
           const result = await rt.changeCapabilityAttachment(endpoint, args, self)
-          const attached = state.capabilities.items[args.name]
+          const attached = rt.own(state.capabilities.items, args.name)
           const members = attached?.kind === 'pack'
-            ? (attached.items ?? []).map(child => state.capabilities.items[child]).filter(Boolean)
+            ? (attached.items ?? []).map(child => rt.own(state.capabilities.items, child)).filter(Boolean)
             : attached ? [attached] : []
           const approvals = members
             .filter(item => item.kind === 'mcp' && item.transport === 'stdio' && item.approved !== true)

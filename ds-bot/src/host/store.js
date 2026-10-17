@@ -8,6 +8,12 @@ import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, TEXT_KEPT } from './constants
 import { homeLock } from './home-lock.js'
 import { currentColor, headOf, normalize, unquote } from './text.js'
 
+// A table read that sees only the keys the table holds itself. Ids that come from
+// outside (a request body, a tool argument, a name a model gives) go through this, so
+// "__proto__" and other inherited names read as "not there" instead of returning
+// Object.prototype.
+export const own = (table, key) => (table != null && Object.hasOwn(table, key) ? table[key] : undefined)
+
 export function install(rt) {
   const { ctx, home, statePath } = rt
 
@@ -304,8 +310,8 @@ export function install(rt) {
     return writing.finally(() => lock.release())
   }, 'ds-bot: state lock')
 
-  const botOf = id => (id === undefined ? undefined : state.bots[id])
-  const roomOf = id => (id === undefined ? undefined : state.rooms[id])
+  const botOf = id => (id === undefined ? undefined : own(state.bots, id))
+  const roomOf = id => (id === undefined ? undefined : own(state.rooms, id))
   const isMain = id => id !== undefined && state.mainBotIds.includes(id)
 
   // Group Sessions. A member speaks in each group from a hidden Session of its own,
@@ -361,21 +367,23 @@ export function install(rt) {
   }
   const findBot = (ref) => {
     if (ref === undefined) return undefined
-    if (state.bots[ref]) return state.bots[ref]
+    const byId = own(state.bots, ref)
+    if (byId) return byId
     const wanted = normalize(ref).replace(/^@/, '')
     return Object.values(state.bots).find(bot => normalize(bot.name) === wanted)
   }
   // Every group chat whose id or name matches; callers refuse an ambiguous name.
   const findRooms = (ref) => {
     if (ref === undefined || ref === null) return []
-    if (state.rooms[ref]) return [state.rooms[ref]]
+    const byId = own(state.rooms, ref)
+    if (byId) return [byId]
     const wanted = normalize(unquote(ref))
     return Object.values(state.rooms).filter(room => normalize(room.name) === wanted)
   }
   const isAdminOf = (room, id) => id !== undefined && room.admin === id
 
   Object.assign(rt, {
-    state, load, save, refresh, readOnly,
+    state, load, save, refresh, readOnly, own,
     botOf, roomOf, isMain, chatOf, selfOf, isBotSession,
     chatOwners, groupOwners, pastOwners,
     groupSessionsOf, dropGroupSession, findBot, findRooms, isAdminOf,

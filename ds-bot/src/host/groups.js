@@ -756,7 +756,7 @@ export function install(rt) {
     await rt.load()
     const room = rt.roomOf(roomId)
     const member = rt.botOf(botId)
-    const sessionId = room?.sessions?.[botId]
+    const sessionId = rt.own(room?.sessions, botId)
     if (room === undefined || member === undefined || sessionId === undefined || rt.live.get(sessionId)?.turn === undefined) return false
     const agent = await rt.resolveAgent(sessionId)
     agent.cancel({ kind: 'user' })

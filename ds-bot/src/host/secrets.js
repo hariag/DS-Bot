@@ -171,7 +171,14 @@ export function install(rt) {
     usedTimer.unref?.()
   }
 
-  const requestsOf = botId => ((state.secretRequests ??= {})[botId] ??= [])
+  // A Bot's pending secret cards, keyed by its id. A key that is not a real Bot (and
+  // never an inherited name like "__proto__", which a plain assignment would not even
+  // set as a key) gets a throwaway list instead of a stored one.
+  const requestsOf = (botId) => {
+    const requests = (state.secretRequests ??= {})
+    if (!Object.hasOwn(requests, botId) && rt.botOf(botId) === undefined) return []
+    return (requests[botId] ??= [])
+  }
   const findRequest = (id) => {
     for (const [botId, list] of Object.entries(state.secretRequests ?? {})) {
       const request = list.find(entry => entry.id === id)

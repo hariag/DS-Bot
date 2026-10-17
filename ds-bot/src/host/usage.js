@@ -454,7 +454,7 @@ export function install(rt) {
       }
       if (key.startsWith('agent:')) {
         const id = key.slice('agent:'.length)
-        const agent = state.agents?.[id]
+        const agent = rt.own(state.agents, id)
         return { key, kind: 'agent', id, name: agent?.name ?? name, ...(agent ? {} : { deleted: true }) }
       }
       const bot = rt.botOf(key)
