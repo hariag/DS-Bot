@@ -85,6 +85,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on system-prompt/assemble (prepend)',
     'on agent/request-error (prepend)',
     'on agent/request-error (prepend)',
+    'effect ds-bot: hand on input kept in earlier parts',
     'on agent/status',
     'on llm/stream',
     'on llm/stream',

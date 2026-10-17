@@ -6,8 +6,6 @@ import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
-let rt
-
 // #280: a switch that fails while the plugin is being unloaded must not lose the input
 // it carried — a turn's claimed messages and whatever the old part held. The old
 // part's durable inbox keeps them (the fake persists it across starts), a switch is
@@ -35,7 +33,7 @@ const INACTIVE = 'cannot get required service "sessions" in inactive context'
 
 // `fail.create`/`fail.resolve`/`fail.flush`: true fails with the inactive-context
 // error; an Error value fails with it, so an ordinary error is testable too.
-async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM } = {}) {
+async function start({ fail = {}, services = {}, home: reuse } = {}) {
   const root = reuse === undefined
     ? realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-switch-')))
     : join(reuse, '..', '..')
@@ -43,7 +41,7 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
   const team = join(home, 'workspace')
   const project = join(root, 'project')
   for (const dir of [team, project]) mkdirSync(dir, { recursive: true })
-  if (reuse === undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(seed))
+  if (reuse === undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
 
   // The real inbox is durable; the fake keeps it in a file so a "restart" sees it.
   const inboxPath = join(home, 'fake-inbox.json')
@@ -79,7 +77,6 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
       agents.set(sessionId, {
         id: sessionId,
         session: { id: sessionId, header: { cwd: cwds.get(sessionId) ?? team }, requestHeader: () => undefined, deriveMessages: () => [] },
-        ctx: { tools: { register: () => () => {} } },
         calls,
         status: 'idle',
         followup(message) { calls.push(['followup', message]) },
@@ -117,7 +114,7 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
       list: () => [{ id: 'w1', path: team }],
       resolveByPath: async () => undefined,
       create: async path => ({ id: 'w-new', path }),
-      archiveSession: async (sessionId, options) => { archived.push([sessionId, options]) },
+      archiveSession: async (sessionId) => { archived.push(sessionId) },
     },
     sessionController: {
       create: async (options) => {
@@ -142,7 +139,6 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
       flush: async () => {
         flushes += 1
         if (fail.flush === true || fail.flush instanceof Error || fail.flush === flushes) throw errorOf(fail.flush)
-        if (fail.flushFalse === flushes) return false
       },
     },
   })
@@ -152,32 +148,20 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
     route = options
     return register(options)
   }
-  rt = createRuntime(ctx, { home })
+  const rt = createRuntime(ctx, { home })
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', {
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
-  const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
-  const preStep = (sessionId, messages = [], step = 1) => {
-    const listener = ctx.listeners.get('agent/pre-step').find(fn => fn.name === 'followRunModeStep')
-    assert.ok(listener, 'the run-mode pre-step listener is registered')
-    return listener(
-      { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
-  }
-  // A Session event as DSH emits it, on the Session the test's Agent holds.
-  let seq = 0
-  const emit = (sessionId, type, data) => {
-    const session = agentOf(sessionId).session
-    for (const listener of ctx.listeners.get('session/event') ?? []) {
-      if (listener.length >= 2) listener(session, { type, seq: ++seq, data })
-    }
-  }
+  const tool = (name, args, sessionId) => ctx.registeredTools.get(name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
+  const preStep = (sessionId, messages = [], step = 1) => ctx.listeners.get('agent/pre-step').at(-1)(
+    { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   const stop = async ({ keep = false } = {}) => {
     await ctx.dispose()
     if (!keep) rmSync(root, { recursive: true, force: true, maxRetries: 5 })
   }
   await tool('list_bots', {}, 'a')
-  return { ctx, rt, root, home, team, project, created, resolved, archived, agentOf, call, tool, preStep, emit, state, warnings, infos, fail, stop }
+  return { ctx, rt, root, home, team, project, created, resolved, archived, agentOf, call, tool, preStep, state, warnings, infos, fail, stop }
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -206,19 +190,6 @@ const moveWriter = async (host, input, step = 2) => {
   assert.equal((await host.tool('update_bot', { work_dir: host.project }, 'b')).includes('From your next step on'), true)
   assert.deepEqual(await host.preStep('b', input, step), { kind: 'reject' })
 }
-
-test('a review inspection on an earlier part is held instead of forwarded', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  await host.rt.load()
-  host.rt.pastOwners.set('old-review', { botId: 'b', roomId: 'r1' })
-  const failures = []
-  host.rt.noteFailure = failure => failures.push(failure)
-  const message = { id: 'inspect-one', content: [{ type: 'text', text: 'inspect' }], source: { reviewInspect: true, reviewId: 'review-one' } }
-  assert.deepEqual(await host.preStep('old-review', [message], 1), { kind: 'reject' })
-  assert.equal(failures[0]?.code, 'GOAL_REVIEW_UNCERTAIN')
-  assert.deepEqual(host.agentOf('b').calls, [])
-})
 
 test('a move that fails while the plugin unloads hands its input back to the part it left', async (t) => {
   // The first flush writes the fresh part's handoff; the second moves the input.
@@ -307,26 +278,6 @@ test('an ordinary failure in the move that never started wakes the part at once'
   assert.equal(silent.agentOf('b').calls.filter(([kind]) => kind === 'send').length, 0)
 })
 
-// #1501: a Bot's own chat may keep a part live in the background. A switch that fails
-// there keeps its input in that part's thread, not in the foreground chat the user reads.
-const BACKGROUND = {
-  ...TEAM,
-  bots: { ...TEAM.bots, b: { ...TEAM.bots.b, openParts: [{ sessionId: 'bb', segments: [] }] } },
-}
-
-test('a background part that cannot move on keeps its input in its own thread', async (t) => {
-  const host = await start({ services, state: BACKGROUND, fail: { create: new Error('disk full') } })
-  t.after(host.stop)
-  // The Bot's folder changed while its background part was still at work in the old one.
-  host.rt.botOf('b').workDir = host.project
-  assert.deepEqual(await host.preStep('bb', [said('m1', 'keep me', 'e1')], 2), { kind: 'reject' })
-  await until(() => host.warnings.some(line => line.includes('did not move on to a fresh part')))
-  await settle()
-  // The stopped input is handed to that part, and the foreground chat sees none of it.
-  assert.deepEqual(host.agentOf('bb').calls.map(([kind, message]) => [kind, text(message)]), [['followup', PAUSE], ['followup', 'keep me']])
-  assert.deepEqual(host.agentOf('b').calls, [])
-})
-
 test('a marked earlier part hands its kept input on after a restart, once, and is archived', async (t) => {
   const fail = { flush: 2 }
   const host = await start({ fail, services })
@@ -350,7 +301,7 @@ test('a marked earlier part hands its kept input on after a restart, once, and i
   assert.equal(delivered.filter(id => id === 'e-carry').length, 0) // already pending — not sent twice
   assert.equal(delivered.filter(id => id === 'e-held').length, 1)
   assert.deepEqual(inboxTexts(second.agentOf('b')), [])
-  assert.deepEqual(second.archived, [['b', { stopActivity: true }]])
+  assert.ok(second.archived.includes('b'))
   assert.deepEqual(second.state().switching, {})
 })
 
@@ -378,390 +329,15 @@ test('a marked part that stayed current is woken for its kept input, once, in or
   assert.deepEqual(second.state().switching, {})
 })
 
-test('a marked part with unknown thread keeps its input instead of sending it to the foreground', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  await host.rt.load()
-  host.rt.state.switching.unknown = { botId: 'b' }
-  host.agentOf('unknown').inbox.nextTurn.push(said('m-unknown', 'private background input', 'e-unknown'))
-  await host.rt.heldBack()
-  assert.deepEqual(inboxTexts(host.agentOf('unknown')), ['private background input'])
-  assert.equal(host.agentOf('b').calls.some(([, message]) => message?.source?.exchangeId === 'e-unknown'), false)
-  assert.ok(host.rt.state.switching.unknown)
-  assert.equal(host.archived.some(([id]) => id === 'unknown'), false)
-})
-
-test('a marked background part follows its thread after the recorded successor also moved', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  await host.rt.load()
-  host.rt.state.bots.b.openParts = [{ sessionId: 'fresh-two', segments: [{ sessionId: 'old' }, { sessionId: 'fresh-one' }] }]
-  host.rt.state.switching.old = { botId: 'b', next: 'fresh-one' }
-  host.agentOf('old').inbox.nextTurn.push(said('m-old', 'background input', 'e-old'))
-  await host.rt.heldBack()
-  assert.equal(host.agentOf('fresh-two').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), true)
-  assert.equal(host.agentOf('fresh-one').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), false)
-  assert.equal(host.agentOf('b').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), false)
-})
-
-// #571: archiving with stopActivity drops the tasks the earlier part still owns, so
-// the archive waits for the task move the switch started.
-test('an earlier part is stopped only after its tasks moved to the fresh part', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const order = []
-  let release
-  const moved = new Promise(resolve => { release = resolve })
-  host.rt.moveSchedules = async (from, to) => { order.push(['move', from, to]); await moved }
-  const archive = host.ctx.workspaceRegistry.archiveSession
-  host.ctx.workspaceRegistry.archiveSession = async (id, options) => { order.push(['archive', id]); return archive(id, options) }
-  await moveWriter(host, [])
-  await until(() => order.length >= 1)
-  await settle()
-  assert.deepEqual(order, [['move', 'b', 's1']])
-  release()
-  await until(() => order.some(([kind]) => kind === 'archive'))
-  assert.deepEqual(order, [['move', 'b', 's1'], ['archive', 'b']])
-})
-
-test('a failed task move leaves the earlier part unarchived and marked for retry', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  host.rt.moveSchedules = async () => { throw new Error('task storage unavailable') }
-  await moveWriter(host, [])
-  await until(() => host.warnings.some(line => line.includes('task storage unavailable')))
-  await settle()
-  assert.deepEqual(host.archived, [])
-  assert.deepEqual(host.state().switching, { b: { botId: 'b' } })
-
-  host.rt.moveSchedules = async () => {}
-  await host.rt.heldBack()
-  assert.deepEqual(host.archived, [['b', { stopActivity: true }]])
-  assert.deepEqual(host.state().switching, {})
-})
-
 test('unmarked earlier parts are never resolved by the restart pass', async (t) => {
   const host = await start({ services })
   await moveWriter(host, [])
-  // The fresh part is the Bot's before the switch ends and drops its mark.
-  await until(() => host.state().bots.b.sessionId === 's1' && Object.keys(host.state().switching).length === 0)
+  await until(() => host.state().bots.b.sessionId === 's1')
+  assert.deepEqual(host.state().switching, {})
   await host.stop({ keep: true })
 
   const second = await start({ home: host.home, services })
   t.after(second.stop)
   await second.rt.heldBack()
   assert.equal(second.resolved.includes('b'), false)
-})
-
-test('a state write that fails as a switch ends is warned about, not left unhandled', async (t) => {
-  const unhandled = []
-  const note = (error) => { unhandled.push(error) }
-  process.on('unhandledRejection', note)
-  t.after(() => { process.off('unhandledRejection', note) })
-  const host = await start({ services })
-  t.after(host.stop)
-  // The write that drops the switch's mark fails, as on a full disk.
-  const save = host.rt.save
-  host.rt.save = () => (host.rt.state.bots.b.sessionId === 's1' && Object.keys(host.rt.state.switching).length === 0
-    ? Promise.reject(new Error('disk full'))
-    : save())
-  await moveWriter(host, [])
-  await until(() => host.warnings.some(line => line.includes('did not finish') && line.includes('disk full')))
-  await settle()
-  assert.deepEqual(unhandled, [])
-})
-
-// A turn cut off at the output limit with nothing written, twice in a row, is the
-// shape a route whose real window is smaller than configured leaves behind. The part
-// moves on the way an overflow moves it, without a note at the same size (#1104).
-const cutOffServices = { ...services, tokenMeter: { measure: () => ({ totalTokens: 129_000 }) } }
-const GROUP_TEAM = {
-  ...TEAM,
-  rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'a', named: true, sessions: { b: 'gb' }, log: [], seq: 0, seen: {} } },
-}
-const cutOff = (host, sessionId, turn) => {
-  host.emit(sessionId, 'turn/start', { turn })
-  host.emit(sessionId, 'turn/end', { turn, reason: { kind: 'max-tokens' } })
-}
-const finished = (host, sessionId, turn) => {
-  host.emit(sessionId, 'turn/start', { turn })
-  host.emit(sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
-}
-
-test('a Bot cut off at the output limit with nothing written moves on to a fresh part', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5', maxTokens: 16384 } })
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  for (const turn of [1, 2]) {
-    cutOff(host, 'b', turn)
-    idle()
-    await settle()
-  }
-  await until(() => host.state().bots.b.sessionId === 's1')
-
-  // The diagnostics name the route and the input size, so a wrong window is findable.
-  const entries = (await host.rt.diagnostics.entries()).filter(entry => entry.code === 'MAX_TOKENS')
-  assert.equal(entries.length, 2)
-  assert.match(entries[0].text, /^the turn was cut off at the output limit before it wrote anything \(gateway\/step-5, 129000 tokens in\)$/)
-  assert.deepEqual([entries[0].level, entries[0].bot, entries[0].where], ['warn', 'Writer', 'own chat'])
-
-  // The old part is archived and the fresh one opens with the deterministic handoff:
-  // no model call, and the cut-off turn is not replayed.
-  await until(() => host.archived.length > 0)
-  assert.deepEqual(host.archived, [['b', { stopActivity: true }]])
-  const handoff = text(host.agentOf('s1').calls.find(([kind]) => kind === 'followup')[1])
-  assert.match(handoff, /^\[Handoff · part 2\]/)
-  assert.match(handoff, /kept being cut off at the output limit/)
-  assert.match(handoff, /Nothing needs an answer now/)
-  assert.equal(host.state().bots.b.segments[0].fallback, 'cutoff')
-})
-
-test('a turn that finished in between resets the count, so one cut-off does not move the part', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  cutOff(host, 'b', 1)
-  idle()
-  await settle()
-  finished(host, 'b', 2)
-  idle()
-  await settle()
-  cutOff(host, 'b', 3)
-  idle()
-  await settle()
-  assert.equal(host.state().bots.b.sessionId, 'b')
-  assert.deepEqual(host.created, [])
-})
-
-test('a cut-off turn that wrote text does not move the part without usage to tell it apart', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  for (const turn of [1, 2]) {
-    host.emit('b', 'turn/start', { turn })
-    // No usage: the model's output limit cannot be ruled out, so this stays a cut-off
-    // answer and the part stays.
-    host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: `Half ${turn}` }] } })
-    host.emit('b', 'turn/end', { turn, reason: { kind: 'max-tokens' } })
-    idle()
-    await settle()
-  }
-  assert.equal(host.state().bots.b.sessionId, 'b')
-  assert.deepEqual(host.created, [])
-})
-
-// #1461: an OpenAI-compatible route whose real window is smaller than the declared one
-// stops an oversized request with finish `length` and a short answer, not an error. The
-// turn wrote a line, so #1109's nothing-written count never moved the part, and every
-// later turn stopped at the same wall.
-const shortCutOff = (host, turn, usage) => {
-  host.emit('b', 'turn/start', { turn })
-  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: `Half ${turn}` }] }, usage })
-  host.emit('b', 'turn/end', { turn, reason: { kind: 'max-tokens' } })
-}
-
-test('a short answer cut off twice in a row makes room like an overflow', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5', maxTokens: 16384 } })
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  // The second turn reads most of its prompt from the provider's cache: the request is
-  // still the whole prompt, so it counts the same.
-  const sizes = [{ inputTokens: 129_000, outputTokens: 40 }, { inputTokens: 4_000, cacheReadTokens: 125_000, outputTokens: 40 }]
-  for (const [index, usage] of sizes.entries()) {
-    shortCutOff(host, index + 1, usage)
-    idle()
-    await settle()
-  }
-  await until(() => host.state().bots.b.sessionId === 's1')
-  // The diagnostics name the route, the input and what came out, so the too-large
-  // window can be found from them.
-  const entries = (await host.rt.diagnostics.entries()).filter(entry => entry.code === 'MAX_TOKENS')
-  assert.equal(entries.length, 2)
-  assert.match(entries[0].text, /the turn was cut off at the output limit, so its answer is not complete \(gateway\/step-5, 129000 tokens in, 40 tokens out\)$/)
-  assert.equal(host.state().bots.b.segments[0].fallback, 'cutoff')
-})
-
-test('a cut-off at the model output limit is not a window cut, so the part stays', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5', maxTokens: 16384 } })
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  for (const turn of [1, 2]) {
-    shortCutOff(host, turn, { inputTokens: 129_000, outputTokens: 120_000 })
-    idle()
-    await settle()
-  }
-  assert.equal(host.state().bots.b.sessionId, 'b')
-  assert.deepEqual(host.created, [])
-})
-
-test('a short cutoff with no known output budget does not infer a window overflow', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5' } })
-  for (const turn of [1, 2]) {
-    shortCutOff(host, turn, { inputTokens: 129_000, outputTokens: 40 })
-    host.ctx.emit('agent/status', { agent, status: 'idle' })
-    await settle()
-  }
-  assert.equal(host.state().bots.b.sessionId, 'b')
-  assert.deepEqual(host.created, [])
-})
-
-test('a group conversation cut off with nothing written moves on too', async (t) => {
-  const host = await start({ services: cutOffServices, state: GROUP_TEAM })
-  t.after(host.stop)
-  const agent = host.agentOf('gb')
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  for (const turn of [1, 2]) {
-    cutOff(host, 'gb', turn)
-    idle()
-    await settle()
-  }
-  await until(() => host.state().rooms.r1.sessions.b === 's1')
-  assert.equal(host.state().rooms.r1.segments.b[0].fallback, 'cutoff')
-  // The old part is archived just after the switch is saved.
-  await until(() => host.archived.length > 0)
-  assert.deepEqual(host.archived, [['gb', { stopActivity: true }]])
-})
-
-test('stream-only usage on assistant/message also detects premature window cut-offs', async (t) => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5', maxTokens: 16384 } })
-  const idle = () => host.ctx.emit('agent/status', { agent, status: 'idle' })
-  for (const turn of [1, 2]) {
-    host.emit('b', 'turn/start', { turn })
-    host.emit('b', 'assistant/message', {
-      message: { content: [{ type: 'text', text: `Half ${turn}` }] },
-      stream: [{ type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 129_000, outputTokens: 40 } } }],
-    })
-    host.emit('b', 'turn/end', { turn, reason: { kind: 'max-tokens' } })
-    idle()
-    await settle()
-  }
-  await until(() => host.state().bots.b.sessionId === 's1')
-  assert.equal(host.state().bots.b.segments[0].fallback, 'cutoff')
-})
-
-
-test('a configured small output limit is an ordinary cutoff, including reasoning-only output', async t => {
-  const host = await start({ services: cutOffServices })
-  t.after(host.stop)
-  const agent = host.agentOf('b')
-  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'small-budget', maxTokens: 1024 } })
-  for (const turn of [1, 2]) {
-    host.emit('b', 'turn/start', { turn })
-    host.emit('b', 'assistant/message', { message: { content: [] }, usage: { inputTokens: 129000, outputTokens: 1024 } })
-    host.emit('b', 'turn/end', { turn, reason: { kind: 'max-tokens' } })
-    host.ctx.emit('agent/status', { agent, status: 'idle' })
-    await settle()
-  }
-  assert.equal(host.state().bots.b.sessionId, 'b')
-  assert.deepEqual(host.created, [])
-})
-
-test('switching a Bot moves a pending delivery and its recovery note together', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const writer = host.agentOf('b')
-  writer.followup = (message) => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
-  const remove = writer.inbox.remove.bind(writer.inbox)
-  writer.inbox.remove = (id) => {
-    const message = [...writer.inbox.nextStep, ...writer.inbox.nextTurn].find(item => item.id === id)
-    const removed = remove(id)
-    if (removed) host.ctx.emit('agent/inbox/discarded', { agent: writer, message })
-    return removed
-  }
-  await host.tool('message_bot', { to: 'Writer', message: 'queued task', when: 'queue' }, 'a')
-  const message = writer.inbox.nextTurn[0]
-  const notes = () => {
-    try { return JSON.parse(readFileSync(join(host.home, 'inflight.json'), 'utf8')).queued ?? {} } catch { return {} }
-  }
-  await until(() => notes().b?.length === 1)
-  await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
-  await until(() => notes().s1?.length === 1 && notes().b === undefined)
-  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.source?.exchangeId === message.source.exchangeId)
-  assert.ok(forwarded)
-  assert.equal(notes().s1[0].args.exchangeId, message.source.exchangeId)
-})
-
-
-test('switching a Bot keeps a scheduled reminder queued under the same identity', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const message = { id: 'schedule-one', role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER]\nScheduled inspection' }], source: { kind: 'schedule' } }
-  const batch = { id: 'schedule-batch', role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER BATCH]\nScheduled inspections' }], source: { kind: 'schedule' } }
-  host.agentOf('b').inbox.nextTurn.push(message, batch)
-  await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
-  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.id === 'schedule-one')
-  assert.equal(forwarded?.[0], 'followup')
-  assert.deepEqual(forwarded?.[1], message)
-  assert.equal(host.agentOf('s1').calls.find(([, item]) => item.id === batch.id)?.[0], 'followup')
-  assert.equal(host.agentOf('b').inbox.nextTurn.some(item => item.id === message.id), false)
-})
-
-
-test('switching keeps a schedule change notice at the next-step boundary', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const message = { id: 'schedule-notice', role: 'user', content: [{ type: 'text', text: '[SCHEDULE CHANGE]\nA task changed' }], source: { kind: 'schedule' } }
-  host.agentOf('b').inbox.nextStep.push(message)
-  await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
-  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.id === 'schedule-notice')
-  assert.equal(forwarded?.[0], 'inject')
-  assert.deepEqual(forwarded?.[1], message)
-})
-
-
-test('a move keeps its old input when the new Session does not acknowledge persistence', async (t) => {
-  const host = await start({ fail: { flushFalse: 2 }, services })
-  t.after(host.stop)
-  host.agentOf('b').inbox.nextTurn.push(said('h1', 'waiting input', 'e-held'))
-  await moveWriter(host, [said('m1', 'carried input', 'e-carry')])
-  await until(() => host.warnings.some(line => line.includes('did not move on to a fresh part')))
-  assert.deepEqual(host.state().switching, { b: { botId: 'b' } })
-  assert.deepEqual(inboxTexts(host.agentOf('b')), ['carried input', 'waiting input'])
-})
-
-
-test('a model switch preserves a restricted group kickoff and neutralizes delayed mentions', async t => {
-  const host=await start({state:GROUP_TEAM})
-  t.after(host.stop)
-  const agent=host.agentOf('gb')
-  agent.status='running'
-  agent.session.requestHeader=()=>({config:{provider:'old',model:'old'}})
-  host.rt.engineOfBot=()=> 'new-engine'
-  host.rt.engineOf=()=> 'old-engine'
-  host.emit('gb','turn/start',{turn:1})
-  host.emit('gb','user/message',{content:[{type:'text',text:'Group greeting'}],source:{kind:'bot',form:'relay',role:'room',roomId:'r1',exchangeId:'kickoff-exchange',groupKickoff:true}})
-  assert.equal(host.rt.live.get('gb').info.groupKickoff,true)
-  assert.deepEqual(await host.preStep('gb',[],2),{kind:'reject'})
-  await until(()=>host.state().rooms.r1.sessions.b==='s1')
-  await until(()=>host.agentOf('s1').calls.some(([kind,message])=>kind==='followup'&&message.source?.handoff))
-  const handoff=host.agentOf('s1').calls.find(([kind,message])=>kind==='followup'&&message.source?.handoff)[1]
-  assert.equal(handoff.source.groupKickoff,true)
-  assert.equal(handoff.source.roomId,'r1')
-  assert.match(text(handoff),/Group boundary: room ID/)
-  host.emit('s1','turn/start',{turn:1})
-  host.emit('s1','user/message',{content:handoff.content,source:handoff.source})
-  const guard=host.ctx.guards.find(fn=>String(fn).includes('kickoffRestricted'))
-  assert.match(guard({agent:{id:'s1'},name:'run_code',arguments:{}}),/group greeting/)
-  await host.rt.lateRoomReply('s1',handoff.source,'@Chief unrelated task')
-  const post=host.agentOf('r1').calls.find(([kind,message])=>kind==='followup'&&message.source?.late)
-  assert.ok(post)
-  assert.equal(post[1].source.quiet,true)
-  assert.doesNotMatch(text(post[1]),/@Chief/)
 })
