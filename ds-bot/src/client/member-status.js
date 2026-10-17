@@ -5,6 +5,8 @@ import { elapsedLabel } from './activity-row.js'
 import { SPRING_SHAPE, SPRING_TAP, spring, useLinger } from './motion.js'
 import { t } from './i18n.js'
 
+export { elapsedLabel }
+
 // -------------------------------------------------------------------------
 // What a group's members are doing: above the group's composer, one capsule for the
 // members at work or waiting for an approval; above a Bot's own composer, one for the
@@ -126,13 +128,14 @@ function useNow(active) {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (!active) return undefined
-    const timer = setInterval(() => setNow(Date.now()), 30000)
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [active])
   return now
 }
 
-const since = (now, at) => (typeof at === 'number' && now - at >= 60000 ? ` · ${elapsedLabel(now - at)}` : '')
+const since = (now, at) => (typeof at === 'number' && now - at >= 1000 ? ` · ${elapsedLabel(now - at)}` : '')
 
 function ApprovalCard({ approval, bot, actions }) {
   const [busy, setBusy] = useState(false)
@@ -223,7 +226,7 @@ body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
 .bt-member-line{display:flex;align-items:center;gap:6px;min-width:0}
 .bt-member-name{min-width:0;font-size:14px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-member-line>.bt-tag{font-size:11px;line-height:15px;padding:0 5px}
-.bt-member-state{min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-member-state{min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-member-state.bt-mw-ask{color:#b7791f}
 body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
 .bt-member-stop{flex:none;height:26px;padding:0 11px;border:0;border-radius:13px;background:var(--bt-main);box-shadow:inset 0 0 0 .5px var(--bt-line-2);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, 'scale')}}

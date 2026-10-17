@@ -22,7 +22,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return platform[name]
   },
 })
-const { busyMembers, summaryText, MemberDock } = module.exports
+const { busyMembers, summaryText, MemberDock, MemberState, elapsedLabel } = module.exports
 // Values from the bundle's realm compare by content only.
 const plain = value => JSON.parse(JSON.stringify(value))
 // The dock's capsule in an element tree.
@@ -97,4 +97,20 @@ test('a row says what a member does in its call\'s own words, and that it moves 
     approvals: [],
   }
   assert.deepEqual(rowLabels(dock('r1', work)), ['Anvil · Download Ghidra 12.1.4 and check its hash…', 'Flint · Opening a file · dump.py…', 'Prism · Moving to a fresh conversation…', 'Quill · 解压 Ghidra，顺便写脚本…'])
+})
+
+test('elapsedLabel counts seconds first, then minutes and seconds, then hours', () => {
+  assert.equal(elapsedLabel(0), '0s')
+  assert.equal(elapsedLabel(1_000), '1s')
+  assert.equal(elapsedLabel(59_999), '59s')
+  assert.equal(elapsedLabel(60_000), '1m')
+  assert.equal(elapsedLabel(61_000), '1m 1s')
+  assert.equal(elapsedLabel(125_000), '2m 5s')
+  assert.equal(elapsedLabel(3_599_000), '59m 59s')
+  assert.equal(elapsedLabel(3_600_000), '1h')
+  assert.equal(elapsedLabel(3_900_000), '1h 5m')
+  const stateText = (entry, now) => MemberState({ entry, bot: { id: 'a', name: 'Anvil' }, room: { id: 'r1' }, roster: team, now }).children.map(child => (typeof child === 'string' ? child : child.children.join(''))).join('')
+  assert.equal(stateText({ state: 'work', doing: { roomId: 'r1', tool: 'pwsh', since: 1_000 } }, 1_500), 'Running shell commands…')
+  assert.equal(stateText({ state: 'work', doing: { roomId: 'r1', tool: 'pwsh', since: 1_000 } }, 9_000), 'Running shell commands… · 8s')
+  assert.equal(stateText({ state: 'ask', approvals: [{ at: 1_000 }] }, 75_000), 'Waiting for your approval · 1m 14s')
 })

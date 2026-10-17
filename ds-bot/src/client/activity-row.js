@@ -13,8 +13,10 @@ import { t } from './i18n.js'
 const PHRASE_HOLD_MS = 800
 const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
 export function elapsedLabel(ms) {
-  const minutes = Math.floor(ms / 60000)
-  if (minutes < 60) return `${Math.max(1, minutes)}m`
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return seconds % 60 === 0 ? `${minutes}m` : `${minutes}m ${seconds % 60}s`
   const hours = Math.floor(minutes / 60)
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`
 }
@@ -154,12 +156,13 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (phase !== 'in') return undefined
-    const timer = setInterval(() => setNow(Date.now()), 10000)
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [phase])
   const host = useRunningHost(running)
   if (!host || phase === null || !shown) return null
-  const elapsed = now - shown.at >= 60000 ? elapsedLabel(now - shown.at) : null
+  const elapsed = now - shown.at >= 1000 ? elapsedLabel(now - shown.at) : null
   return createPortal(h('div', { className: 'bt-typing', 'data-exiting': phase === 'out' ? '' : undefined, 'aria-hidden': true },
     bot ? h(BotMark, { bot, size: 28, state: markState.current, live: true, pokeable: true }) : h(RoomAvatar, { room, roster, size: 28 }),
     h('span', { className: 'bt-typing-text' },
