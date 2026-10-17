@@ -1,9 +1,11 @@
-import { createElement as h, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { dateLocale, t } from '../../../ds-bot/src/client/i18n.js'
+import { createElement as h, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { call } from '../../../ds-bot/src/client/api.js'
+import { Bubbles, ChatRows, Shimmer } from '../../../ds-bot/src/client/cells.js'
+import { ComposerPlus, ComposerVoice } from '../../../ds-bot/src/client/composer.js'
+import { t } from '../../../ds-bot/src/client/i18n.js'
 import { ArrowUpIcon } from '../../../ds-bot/src/client/icons.js'
-import { BotAvatar } from '../../../ds-bot/src/client/mark.js'
-import { call } from './api.js'
-import { stateOf } from './sidebar.js'
+import { ModelChoiceDock } from '../../../ds-bot/src/client/model-menu.js'
+import { PendingQuestion } from '../../../ds-bot/src/client/questions.js'
 
 // The chat follows its end while the user is this close to it.
 const FOLLOW_PX = 80
@@ -11,8 +13,8 @@ const sameItem = (a, b) => a.kind === b.kind && a.time === b.time && a.text === 
 
 // A Bot's own chat: pages from the `chat` endpoint, new entries and the reply being
 // written from the feed. Entries that arrive while the first page loads wait for it.
-function useChat(bot, bus) {
-  const [view, setView] = useState({ sessionId: null, items: [], cursor: null, loading: true, failed: false })
+function useChat(botId, part, feed) {
+  const [view, setView] = useState({ sessionId: null, items: [], cursor: null, loading: botId !== undefined, failed: false })
   const [stream, setStream] = useState(null)
   const [pending, setPending] = useState([])
   const ready = useRef(false)
@@ -21,12 +23,12 @@ function useChat(bot, bus) {
   const keep = useRef(null)
 
   const load = useCallback(async (cursor, scroller) => {
-    if (busy.current) return
+    if (busy.current || botId === undefined) return
     busy.current = true
     if (cursor === undefined) ready.current = false
     setView(current => ({ ...current, loading: true, failed: false }))
     try {
-      const page = await call('chat', { botId: bot.id, ...(cursor ? { cursor } : {}) })
+      const page = await call('chat', { botId, ...(cursor ? { cursor } : {}) })
       if (cursor === undefined) {
         const later = early.current.filter(entry => entry.sessionId === page.sessionId && !page.items.some(item => sameItem(item, entry.item)))
         early.current = []
@@ -43,15 +45,15 @@ function useChat(bot, bus) {
     } finally {
       busy.current = false
     }
-  }, [bot.id])
+  }, [botId])
 
-  // A new part (bot.sessionId) starts the chat over.
-  useEffect(() => { void load(undefined) }, [load, bot.sessionId])
+  // A new part starts the chat over.
+  useEffect(() => { void load(undefined) }, [load, part])
 
-  useEffect(() => bus.on((event, data) => {
+  useEffect(() => feed.on((event, data) => {
     // The feed came back after a break: entries may have been missed.
     if (event === 'hello') { if (ready.current) void load(undefined); return }
-    if (data?.botId !== bot.id) return
+    if (botId === undefined || data?.botId !== botId) return
     if (event === 'message') {
       if (!ready.current) { early.current.push(data); return }
       setView(current => (data.sessionId !== current.sessionId || current.items.some(item => sameItem(item, data.item)) ? current : { ...current, items: [...current.items, data.item] }))
@@ -67,14 +69,15 @@ function useChat(bot, bus) {
       else if (data.phase === 'end') setStream(current => (current?.attemptId === data.attemptId ? null : current))
       else setStream(current => (current?.attemptId === data.attemptId ? { ...current, text: current.text + data.text } : current))
     }
-  }), [bus, bot.id, load])
+  }), [feed, botId, load])
 
   // Shown at once: the message can come back on the feed before the request returns.
-  const send = async (text) => {
-    const entry = { text, time: Date.now() }
+  const send = async (text, actions, sessionId) => {
+    const entry = { kind: 'user', text, time: Date.now() }
     setPending(list => [...list, entry])
+    actions.noteSent(sessionId)
     try {
-      await call('send', { sessionId: bot.id, text })
+      await actions.send(sessionId, text)
     } catch (error) {
       setPending(list => list.filter(item => item !== entry))
       throw error
@@ -83,91 +86,32 @@ function useChat(bot, bus) {
   return { view, stream, pending, load, send, keep }
 }
 
-const timeText = time => (Number.isFinite(time) ? new Date(time).toLocaleString(dateLocale(), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
-
-function answerText(item) {
-  return (item.answers ?? []).map(answer => [...(answer.selected ?? []), ...(answer.custom ? [answer.custom] : [])].join(', ')).filter(Boolean).join('\n')
+// What the Bot views' voice button asks of a composer (DSH's composer in the plugin):
+// where the caret is, and text put in there.
+function useInput(field, setText) {
+  return useMemo(() => ({
+    captureInsertion: () => (field.current ? { start: field.current.selectionStart, end: field.current.selectionEnd } : null),
+    insertText: (value, at) => setText((current) => {
+      const start = Math.min(at?.start ?? current.length, current.length)
+      return current.slice(0, start) + value + current.slice(Math.max(start, at?.end ?? start))
+    }),
+  }), [field, setText])
 }
 
-function EventLine({ item, team }) {
-  if (item.role === 'report') return h('div', { className: 'chat-event' }, `${t('Replies from')} ${team.rooms?.find(room => room.id === item.roomId)?.name ?? t('a group chat')}`)
-  const other = team.bots.find(bot => bot.id === item.botId)
-  const prefix = { stopped: t('Stopped by'), reply: t('Reply from') }[item.role] ?? t('Message from')
-  return h('div', { className: 'chat-event' }, `${prefix} ${other?.name ?? item.name ?? t('a Bot')}`)
-}
-
-// Consecutive bubbles from one side share their inner corners.
-function Rows({ items, team }) {
-  return items.map((item, index) => {
-    const key = `${index}:${item.kind}:${item.time ?? ''}`
-    if (item.kind === 'divider') return h('div', { key, className: 'chat-divider' }, h('span', null, timeText(item.time)))
-    if (item.kind === 'event') return h(EventLine, { key, item, team })
-    const side = item.kind === 'bot' ? 'bot' : 'user'
-    const sideOf = other => (other?.kind === 'bot' ? 'bot' : other?.kind === 'user' || other?.kind === 'answer' || other?.pending ? 'user' : null)
-    const text = item.kind === 'answer' ? answerText(item) : item.text
-    return h('div', {
-      key,
-      className: `chat-row chat-${side}`,
-      'data-prev': sideOf(items[index - 1]) === side || undefined,
-      'data-next': sideOf(items[index + 1]) === side || undefined,
-      'data-pending': item.pending || undefined,
-    },
-    h('div', { className: 'chat-bubble' }, text,
-      item.images ? h('span', { className: 'chat-note' }, item.images === 1 ? t('1 image') : t('{count} images', { count: item.images })) : null))
-  })
-}
-
-function ModelChoice({ bot, models }) {
-  const [busy, setBusy] = useState(null)
-  const [error, setError] = useState(null)
-  const pick = async (ref) => {
-    setBusy(ref)
-    setError(null)
-    try { await call('update-bot', { id: bot.id, model: ref }) } catch (failure) { setError(failure.message); setBusy(null) }
-  }
-  return h('div', { className: 'chat-card' },
-    h('p', null, t("Hi, I'm {name}. Pick a model for me first. You can change it later in my details.", { name: bot.name })),
-    models.length === 0
-      ? h('p', { className: 'chat-muted' }, t("Add a provider and a model in DeepSeek Harness first, or pick one in the Bot's chat later."))
-      : h('div', { className: 'chat-choices' }, models.map(model => h('button', {
-        key: model.ref, type: 'button', className: 'chat-choice', disabled: busy !== null, 'aria-busy': busy === model.ref || undefined, onClick: () => pick(model.ref),
-      }, h('span', null, model.name ?? model.ref), model.providerName ? h('span', { className: 'chat-muted' }, model.providerName) : null))),
-    error ? h('p', { className: 'chat-error', role: 'alert' }, error) : null)
-}
-
-function QuestionCard({ bot, question }) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
-  const answer = async (label) => {
-    setBusy(true)
-    setError(null)
-    try { await call('answer-question', { sessionId: bot.id, questionId: question.id, answer: { selected: [label], custom: '' } }) } catch (failure) { setError(failure.message) } finally { setBusy(false) }
-  }
-  return h('div', { className: 'chat-card' },
-    h('p', { className: 'chat-question' }, question.question),
-    question.detail ? h('p', { className: 'chat-muted' }, question.detail) : null,
-    h('div', { className: 'chat-choices' }, (question.options ?? []).map(option => h('button', {
-      key: option.label, type: 'button', className: 'chat-choice', disabled: busy, onClick: () => answer(option.label),
-    }, h('span', null, option.label), option.description ? h('span', { className: 'chat-muted' }, option.description) : null))),
-    error ? h('p', { className: 'chat-error', role: 'alert' }, error) : null)
-}
-
-function Composer({ bot, disabled, placeholder, onSend }) {
+function Composer({ sessionId, placeholder, disabled, onSend, actions, useUi, useRoster }) {
   const [text, setText] = useState('')
   const [error, setError] = useState(null)
-  const [sending, setSending] = useState(false)
   const field = useRef(null)
+  const inputActions = useInput(field, setText)
   useLayoutEffect(() => {
     const node = field.current
-    if (!node) return
     node.style.height = 'auto'
-    node.style.height = `${Math.min(node.scrollHeight, 120)}px`
+    node.style.height = `${node.scrollHeight}px`
   }, [text])
-  useEffect(() => { if (!disabled) field.current?.focus() }, [bot.id, disabled])
+  useEffect(() => { if (!disabled) field.current?.focus() }, [sessionId, disabled])
   const submit = async () => {
     const value = text.trim()
-    if (value === '' || sending || disabled) return
-    setSending(true)
+    if (value === '' || disabled) return
     setError(null)
     setText('')
     try {
@@ -175,73 +119,83 @@ function Composer({ bot, disabled, placeholder, onSend }) {
     } catch (failure) {
       setText(current => (current === '' ? value : current))
       setError(failure.message)
-    } finally {
-      setSending(false)
     }
   }
-  return h('div', { className: 'composer-wrap' },
-    error ? h('p', { className: 'chat-error', role: 'alert' }, error) : null,
-    h('form', { className: 'composer', 'data-multiline': text.includes('\n') || undefined, onSubmit: (event) => { event.preventDefault(); void submit() } },
-      h('textarea', {
-        ref: field,
-        rows: 1,
-        value: text,
-        disabled,
-        placeholder,
-        'aria-label': placeholder,
-        onChange: event => setText(event.target.value),
-        onKeyDown: (event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault()
-            void submit()
-          }
-        },
-      }),
-      h('button', { type: 'submit', className: 'composer-send', disabled: disabled || sending || text.trim() === '', 'aria-label': t('Send message') }, h(ArrowUpIcon))))
+  return h('div', { className: 'dsb-composer-wrap' },
+    error ? h('p', { className: 'dsb-composer-error', role: 'alert' }, error) : null,
+    h('div', { className: 'dsb-composer', 'data-composer-card': '', 'data-multiline': text.includes('\n') || undefined },
+      h('div', { className: 'dsb-composer-tools' }, h(ComposerPlus, { sessionId, inputActions, useRoster, actions })),
+      h('div', { className: 'dsb-composer-input', 'data-input-scroll': '' },
+        h('textarea', {
+          ref: field,
+          rows: 1,
+          value: text,
+          disabled,
+          placeholder,
+          'aria-label': placeholder,
+          'data-composer-input': '',
+          onChange: event => setText(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              void submit()
+            }
+          },
+        })),
+      h('div', { className: 'dsb-composer-trailing' },
+        h(ComposerVoice, { sessionId, inputActions, actions, useUi }),
+        h('button', { type: 'button', className: 'dsb-send', disabled: disabled || text.trim() === '', 'aria-label': t('Send message'), title: t('Send message'), onClick: () => { void submit() } }, h(ArrowUpIcon)))))
 }
 
-export function Chat({ bot, team, live, bus }) {
-  const { view, stream, pending, load, send, keep } = useChat(bot, bus)
+// One conversation in the main view, drawn with the Bot views' own rows, cards and docks.
+export function Chat({ sessionId, team }) {
+  const { actions, hooks, chat: feed } = team
+  const roster = hooks.useRoster(value => value)
+  const bot = roster.byId[sessionId]
+  const name = bot?.name ?? roster.roomsById[sessionId]?.name ?? ''
+  const { view, stream, pending, load, send, keep } = useChat(bot?.id, sessionId, feed)
   const scroller = useRef(null)
   const follow = useRef(true)
-  const question = team.questions?.[bot.sessionId]
-  const working = live.work?.bots?.[bot.id] !== undefined
-  const items = [...view.items, ...pending.map(entry => ({ kind: 'user', text: entry.text, time: entry.time, pending: true }))]
+  const question = roster.questions?.[sessionId]
+  const running = hooks.useSessionStatus(map => map.get(sessionId)?.running === true)
 
   useLayoutEffect(() => {
     const node = scroller.current
-    if (!node) return
     if (keep.current !== null) {
       node.scrollTop = node.scrollHeight - keep.current
       keep.current = null
     } else if (follow.current) node.scrollTop = node.scrollHeight
-  }, [view.items, stream, pending, working, question])
+  }, [view.items, stream, pending, running, question])
 
   const onScroll = () => {
     const node = scroller.current
     follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < FOLLOW_PX
   }
+  const earlier = view.loading && view.sessionId !== null ? h(Shimmer, null, t('Loading earlier messages…'))
+    : view.failed ? h('button', { type: 'button', className: 'bt-soft', onClick: () => load(view.cursor ?? undefined, scroller.current) }, t('Couldn’t load earlier messages · Retry'))
+      : view.cursor ? h('button', { type: 'button', className: 'bt-soft', onClick: () => load(view.cursor, scroller.current) }, t('Load earlier')) : null
+  const waiting = bot?.waiting === true
 
-  return h('section', { className: 'chat', 'aria-label': bot.name },
-    h('header', { className: 'chat-head' },
-      h(BotAvatar, { bot, size: 28, state: stateOf(bot, live, team.questions ?? {}), main: (team.mainBotIds ?? []).includes(bot.id), badge: false }),
-      h('span', { className: 'chat-title' }, bot.name),
-      bot.role ? h('span', { className: 'chat-role' }, bot.role) : null),
-    h('div', { ref: scroller, className: 'chat-scroll', onScroll },
-      h('div', { className: 'chat-column', role: 'feed', 'aria-busy': view.loading },
-        h('div', { className: 'chat-top' },
-          view.loading ? h('span', { className: 'chat-muted' }, t('Loading earlier messages…'))
-            : view.failed ? h('button', { type: 'button', className: 'chat-soft', onClick: () => load(view.cursor ?? undefined, scroller.current) }, t('Couldn’t load earlier messages · Retry'))
-              : view.cursor ? h('button', { type: 'button', className: 'chat-soft', onClick: () => load(view.cursor, scroller.current) }, t('Load earlier')) : null),
-        h(Rows, { items, team }),
-        stream?.text ? h('div', { className: 'chat-row chat-bot' }, h('div', { className: 'chat-bubble' }, stream.text)) : null,
-        working && !stream?.text ? h('div', { className: 'chat-row chat-bot' }, h('div', { className: 'chat-bubble chat-typing', 'aria-label': t('Working') }, h('i'), h('i'), h('i'))) : null,
-        bot.waiting ? h(ModelChoice, { bot, models: team.models ?? [] }) : null,
-        question ? h(QuestionCard, { bot, question }) : null)),
-    h(Composer, {
-      bot,
-      disabled: bot.waiting === true,
-      placeholder: bot.waiting ? t('Pick a model and {name} can start.', { name: bot.name }) : t('Message {name}', { name: bot.name }),
-      onSend: send,
-    }))
+  return h('div', { className: 'dsb-chat' },
+    h('div', { ref: scroller, className: 'dsb-scroll', 'data-conversation-scroll': '', onScroll },
+      h('div', { className: 'dsb-column' },
+        earlier ? h('div', { className: 'bt-earlier-top' }, earlier) : null,
+        h('div', { className: 'dsb-flow', 'data-chat-flow': '', role: 'feed', 'aria-label': name, 'aria-busy': view.loading },
+          h(ChatRows, { items: view.items, sessionId, roster, actions, useUi: hooks.useUi, clock: true }),
+          pending.length ? h('div', { className: 'dsb-pending' }, h(ChatRows, { items: pending, sessionId, roster, actions })) : null,
+          stream?.text ? h(Bubbles, { texts: [stream.text], roster, selfId: bot?.id, actions, streaming: true, sessionId }) : null,
+          // The Bot views' activity row (from the header pill) draws itself in here.
+          h('div', { 'data-chat-running': '' }),
+          question ? h(PendingQuestion, { sessionId, question, actions, inline: true }) : null))),
+    h('div', { className: 'dsb-composer-root' },
+      h(ModelChoiceDock, { sessionId, useRoster: hooks.useRoster, actions }),
+      h(Composer, {
+        sessionId,
+        disabled: waiting,
+        placeholder: waiting ? t('Pick a model and {name} can start.', { name }) : name ? t('Message {name}', { name }) : t('Message'),
+        onSend: text => send(text, actions, sessionId),
+        actions,
+        useUi: hooks.useUi,
+        useRoster: hooks.useRoster,
+      })))
 }

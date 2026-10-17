@@ -59,7 +59,7 @@ Never point `DS_BOT_HOME` at `~/.dsh` or at the data of an app that you use.
 | `engine/` | The bundle `deepseek-bot-engine`: `cordis.patch.yml`, `preset-standard.patch.yml`, and `index.js`, which trades the launch token for the Host cookie |
 | `test/` | `npm test`: the composition of the profile |
 | `src/web.mjs` | The window's files, the launch-token cookie exchange and the request forwarding |
-| `ui/` | The window: React, built with Vite (`vite.config.js`) into `ui/dist`. It uses ds-bot's `api/bot` channel and its live feed `api/bot/feed`, and takes the Bot marks, themes and copy from `../ds-bot/src/client/` |
+| `ui/` | The window: React, built with Vite (`vite.config.js`) into `ui/dist`. It draws the plugin's own Bot views from `../ds-bot/src/client/` (sidebar, chat rows, docks, dialogs and their stylesheets) and puts its own Markdown in place of DSH's. It uses ds-bot's `api/bot` channel and its live feed `api/bot/feed` |
 
 The Host installs plugins with the app's own pnpm (`node_modules/pnpm`).
 

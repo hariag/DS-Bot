@@ -1,24 +1,5 @@
 // The window talks only to ds-bot's own channel in the engine: POST api/bot for reads and
-// actions, and the live feed api/bot/feed for what changes.
-import { hostText, t } from '../../../ds-bot/src/client/i18n.js'
-
-export async function call(endpoint, payload) {
-  let response
-  try {
-    response = await fetch('api/bot', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ endpoint, payload: payload ?? null }),
-    })
-  } catch (error) {
-    throw Object.assign(new Error(t('Could not reach DSH. Check that it is still running.')), { code: 'NETWORK', cause: error })
-  }
-  if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { code: `HTTP_${response.status}` })
-  const result = await response.json()
-  if (!result.ok) throw Object.assign(new Error(hostText(result.error?.message ?? 'Request failed')), { code: result.error?.code ?? 'bot/error' })
-  return result.value
-}
-
+// actions (the Bot views' own `call`), and the live feed api/bot/feed for what changes.
 const RETRY_MS = [500, 1000, 2000, 5000]
 
 function parseEvent(block) {
