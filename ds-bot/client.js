@@ -11683,7 +11683,7 @@ function MemberState({ entry, bot, room: room2, roster }) {
 }
 function StopMemberWork({ entry, bot, room: room2, actions }) {
   const [stopping, setStopping] = (0, import_react32.useState)(false);
-  if (entry?.state !== "work" || !entry.here) return null;
+  if (!entry?.here || entry.state !== "work" && entry.state !== "ask") return null;
   const stop = () => {
     setStopping(true);
     void Promise.resolve(actions.stopMemberWork(room2.id, bot.id)).catch((error) => actions.reportError(error, "stop")).finally(() => setStopping(false));

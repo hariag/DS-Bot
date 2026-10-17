@@ -160,10 +160,10 @@ export function MemberState({ entry, bot, room, roster }) {
 }
 
 // Work in this group can be stopped from its details, since the user cannot reach the
-// member's group Session otherwise.
+// member's group Session otherwise; a turn waiting for an approval still holds its work.
 export function StopMemberWork({ entry, bot, room, actions }) {
   const [stopping, setStopping] = useState(false)
-  if (entry?.state !== 'work' || !entry.here) return null
+  if (!entry?.here || (entry.state !== 'work' && entry.state !== 'ask')) return null
   const stop = () => {
     setStopping(true)
     void Promise.resolve(actions.stopMemberWork(room.id, bot.id))
