@@ -1037,8 +1037,12 @@ export function install(rt) {
     const items = []
     for (const event of events) {
       if (event.type === 'assistant/message') {
-        const text = textOf(event.data?.message?.content)
-        if (text !== '' && !hidden.has(event.data?.turn)) items.push({ kind: 'bot', text, time: event.time })
+        if (hidden.has(event.data?.turn)) continue
+        // One entry per text block: the chat shows each block in a bubble of its own.
+        const content = Array.isArray(event.data?.message?.content) ? event.data.message.content : []
+        for (const block of content) {
+          if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') items.push({ kind: 'bot', text: block.text, time: event.time })
+        }
         continue
       }
       if (event.type !== 'user/message') continue
