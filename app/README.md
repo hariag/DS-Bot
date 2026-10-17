@@ -60,6 +60,7 @@ Never point `DS_BOT_HOME` at `~/.dsh` or at the data of an app that you use.
 | `test/` | `npm test`: the composition of the profile |
 | `src/web.mjs` | The window's files, the launch-token cookie exchange and the request forwarding |
 | `ui/` | The window: React, built with Vite (`vite.config.js`) into `ui/dist`. It draws the plugin's own Bot views from `../ds-bot/src/client/` (sidebar, chat rows, docks, dialogs and their stylesheets) and puts its own Markdown in place of DSH's. It uses ds-bot's `api/bot` channel and its live feed `api/bot/feed` |
+| `assets/` | The app icon: `icon.svg`, `icon.png` (1024 px) and `icon.ico` (Windows, 16 to 256 px). `npm run icon` (`scripts/icon.mjs`) draws them again from the Main Bot's whale in `../ds-bot` |
 
 The Host installs plugins with the app's own pnpm (`node_modules/pnpm`).
 

@@ -18,6 +18,8 @@ const BAND = 48
 const here = dirname(fileURLToPath(import.meta.url))
 // The window is the app's own build (ui/, `npm run build`); everything under /api/ goes to the Host.
 const uiDist = join(here, '..', 'ui', 'dist')
+// Drawn by scripts/icon.mjs. Windows takes the .ico for its several sizes.
+const iconFile = join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
 const dataDir = process.env.DS_BOT_HOME || join(homedir(), '.ds-bot')
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
 
@@ -76,6 +78,8 @@ function start() {
   })
 
   setMenu()
+  // A packaged app has the icon in its bundle; Electron's own run shows Electron's.
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(iconFile)
   createWindow()
   nativeTheme.on('updated', () => {
     if (mainWindow === undefined) return
@@ -93,7 +97,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: Math.min(1320, Math.round(area.width * 0.9)), height: Math.min(860, Math.round(area.height * 0.9)),
     minWidth: 720, minHeight: 480,
-    title: 'DeepSeek Bot', show: false,
+    title: 'DeepSeek Bot', show: false, icon: iconFile,
     titleBarStyle: 'hidden',
     // macOS keeps its traffic lights, centered in the band; Windows and Linux draw their
     // buttons over the band's right end.
