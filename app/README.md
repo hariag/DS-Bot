@@ -35,7 +35,7 @@ At every start the Host puts these three bundles at the head of the profile's bu
 
 ## Check a change
 
-`npm test` checks the composition of the profile.
+`npm test` checks the composition of the profile, and that every package the app runs on is a dependency (see [Package](#package)).
 
 `scripts/shot.mjs` starts the app on throwaway folders, saves a screenshot of its window, prints the page text, closes the window the way a user does and waits until the app exits. Build the window first (`npm run build`). Use the mock model of the plugin, `../ds-bot/dev/mock-llm.mjs` (`MOCK_PORT=<port> node ../ds-bot/dev/mock-llm.mjs`).
 
@@ -58,7 +58,9 @@ npm run dist           # the installer: dist-pack/DeepSeek-Bot-<version>-win-x64
 npm run check-packed   # starts the packaged app on throwaway folders with the mock model, chats once, closes it
 ```
 
-`check-packed` takes another executable as its first argument, and a file for a screenshot of the window as its second.
+`check-packed` takes another executable as its first argument, and a file for a screenshot of the window as its second. It runs an app that lies inside this checkout from a copy in its throwaway folder: from inside the checkout, Node would find a module that the package left out in the checkout's own `node_modules`.
+
+electron-builder packs only the packages that it finds through `dependencies` and `optionalDependencies`. The DSH packages ask for many packages as peers, which npm installs but electron-builder would leave out, so `package.json` lists them as dependencies. `npm test` fails when one is missing and names it.
 
 The Windows installer installs for the current user only, without administrator rights, by default into `%LOCALAPPDATA%\Programs\DeepSeek Bot` (`build/installer.nsh` skips the page that asks for all users or only for the current one). The uninstaller removes the program and keeps the data location and the app's own data. CI builds the Windows installer on every pull request, checks the packaged app, then installs it, checks the installed app and uninstalls it.
 
@@ -71,7 +73,7 @@ The Windows installer installs for the current user only, without administrator 
 | `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL |
 | `src/profile.mjs` | The profile: its name, its bundles, and its creation and update |
 | `engine/` | The bundle `deepseek-bot-engine`: `cordis.patch.yml`, `preset-standard.patch.yml`, and `index.js`, which trades the launch token for the Host cookie |
-| `test/` | `npm test`: the composition of the profile |
+| `test/` | `npm test`: the composition of the profile, and the dependencies that the package needs |
 | `src/web.mjs` | The window's files, the launch-token cookie exchange and the request forwarding |
 | `ui/` | The window: React, built with Vite (`vite.config.js`) into `ui/dist`. It draws the plugin's own Bot views from `../ds-bot/src/client/` (sidebar, chat rows, docks, dialogs and their stylesheets) and puts its own Markdown in place of DSH's. It uses ds-bot's `api/bot` channel and its live feed `api/bot/feed` |
 | `assets/` | The app icon: `icon.svg`, `icon.png` (1024 px) and `icon.ico` (Windows, 16 to 256 px). `npm run icon` (`scripts/icon.mjs`) draws them again from the Main Bot's whale in `../ds-bot` |

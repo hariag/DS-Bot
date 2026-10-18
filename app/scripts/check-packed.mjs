@@ -4,9 +4,9 @@
 // Usage: node scripts/check-packed.mjs [app executable] [screenshot.png]
 // The executable defaults to the one that `npm run pack` or `npm run dist` writes into dist-pack/.
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
@@ -29,6 +29,34 @@ if (!existsSync(executable)) {
 const work = mkdtempSync(join(tmpdir(), 'ds-bot-packed-'))
 mkdirSync(join(work, 'home'))
 const children = []
+
+function stopChildren() {
+  for (const child of children) {
+    if (child.exitCode !== null || child.signalCode !== null) continue
+    // On Windows a plain kill ends only the main process; /T takes the Host and Electron's helpers along.
+    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    else child.kill()
+  }
+}
+
+// An app that hangs, for example behind its error box, must not hold up CI.
+setTimeout(() => {
+  console.error('check-packed: FAILED: gave up after 8 minutes')
+  stopChildren()
+  process.exit(1)
+}, 8 * 60_000).unref()
+
+// Run from inside this checkout, the app would find a module that the build left out in the
+// checkout's own node_modules, so the check runs a copy of the app from the throwaway folder.
+function outsideCheckout(file) {
+  const fromCheckout = relative(resolve(root, '..'), file)
+  if (fromCheckout.startsWith('..') || isAbsolute(fromCheckout)) return file
+  const appDir = process.platform === 'darwin' ? resolve(file, '..', '..', '..') : dirname(file)
+  const copy = join(work, basename(appDir))
+  cpSync(appDir, copy, { recursive: true, verbatimSymlinks: true })
+  console.log(`check-packed: runs a copy of ${appDir} in ${work}`)
+  return join(copy, relative(appDir, file))
+}
 
 function startMock() {
   const mock = spawn(process.execPath, [join(root, '..', 'ds-bot', 'dev', 'mock-llm.mjs')], {
@@ -82,7 +110,12 @@ function devtools(url, problems) {
   })
   const call = (method, params = {}) => new Promise((done, reject) => {
     const id = next++
-    pending.set(id, { resolve: done, reject })
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      reject(new Error(`the window did not answer ${method}`))
+    }, 30_000)
+    const settle = action => (value) => { clearTimeout(timer); action(value) }
+    pending.set(id, { resolve: settle(done), reject: settle(reject) })
     socket.send(JSON.stringify({ id, method, params }))
   })
   return { opened, call }
@@ -125,7 +158,7 @@ try {
     DS_BOT_HOME: join(work, 'home'), DS_BOT_SHELL_DATA: join(work, 'shell'),
     DEEPSEEK_BASE_URL: modelUrl, DEEPSEEK_API_KEY: 'mock-key',
   })
-  const app = spawn(executable, [`--remote-debugging-port=${String(port)}`], { stdio: 'inherit', env })
+  const app = spawn(outsideCheckout(resolve(executable)), [`--remote-debugging-port=${String(port)}`], { stdio: 'inherit', env })
   children.push(app)
   const exited = new Promise((done) => { app.once('exit', (code, signal) => { done({ code, signal }) }) })
   const cdp = devtools((await appPage(port, Date.now() + 120_000)).webSocketDebuggerUrl, problems)
@@ -150,12 +183,7 @@ try {
   failed = true
   console.error(`check-packed: FAILED: ${error instanceof Error ? error.message : String(error)}`)
 }
-for (const child of children) {
-  if (child.exitCode !== null || child.signalCode !== null) continue
-  // On Windows a plain kill ends only the main process; /T takes the Host and Electron's helpers along.
-  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-  else child.kill()
-}
+stopChildren()
 await sleep(500)
 rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
 process.exit(failed ? 1 : 0)
