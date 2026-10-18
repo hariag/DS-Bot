@@ -112,8 +112,9 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM }
     await until(() => agentOf(state().bots[botId].sessionId).session.header.cwd === dir)
     await settle()
   }
-  const stop = () => {
-    ctx.dispose()
+  const stop = async () => {
+    // The writes still running finish before their folder goes.
+    await ctx.dispose()
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
     rmSync(root, { recursive: true, force: true, maxRetries: 5 })
@@ -500,8 +501,8 @@ test('a team copied from another DSH_HOME moves on to a fresh part in the folder
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-app-workspace-')))
   process.env.DS_BOT_WORKSPACE = root
   const { agentOf, created, state, preStep, stop } = await start({ team: copied })
-  t.after(() => {
-    stop()
+  t.after(async () => {
+    await stop()
     if (previous === undefined) delete process.env.DS_BOT_WORKSPACE
     else process.env.DS_BOT_WORKSPACE = previous
     rmSync(root, { recursive: true, force: true })
