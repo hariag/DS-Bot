@@ -75,13 +75,15 @@ jobs:
   app-package:
     name: Desktop app package (Windows)
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
         working-directory: app
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -92,7 +94,7 @@ jobs:
       # The runner is a fresh machine, so the installer may run here. It must install for the
       # current user only, the installed app must pass the same check, and the uninstaller must
       # remove it again.
-      - name: Install, check and uninstall
+      - name: Install and check
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -110,6 +112,54 @@ jobs:
           if (Find-Entry 'HKLM:') { throw 'The installer installed for all users' }
           node scripts/check-packed.mjs $exe
           if ($LASTEXITCODE -ne 0) { throw 'The installed app failed its check' }
+
+      # The update builds the app a second time, so it runs only for changes to the app or the
+      # workflows. A build of the next version is the feed; the installed app downloads it, checks
+      # its sha512, and installs it as it quits.
+      - name: Does the change touch the app?
+        id: scope
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" | grep -qE '^(app/|\.github/workflows/)'; then
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build the next version
+        if: steps.scope.outputs.update == 'true'
+        run: |
+          next="$(node -p "const [a, b, c] = require('./package.json').version.split(/[.-]/u); [a, b, Number(c) + 1].join('.')")"
+          echo "NEXT_VERSION=$next" >> "$GITHUB_ENV"
+          npx electron-builder --publish never -c.extraMetadata.version="$next" -c.directories.output=dist-next
+      - name: Update the installed app and check it
+        if: steps.scope.outputs.update == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Bot\DeepSeek Bot.exe'
+          node scripts/check-update.mjs $exe dist-next
+          if ($LASTEXITCODE -ne 0) { throw 'The installed app did not take the update' }
+          # The installer goes on after the app has quit.
+          function Installed-Version {
+            Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+              ForEach-Object { Get-ItemProperty $_.PSPath } |
+              Where-Object { $_.DisplayName -like 'DeepSeek Bot*' } |
+              Select-Object -ExpandProperty DisplayVersion
+          }
+          $deadline = (Get-Date).AddSeconds(240)
+          while ((Installed-Version) -ne $env:NEXT_VERSION -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+          if ((Installed-Version) -ne $env:NEXT_VERSION) { throw "The installed version is $(Installed-Version), not $env:NEXT_VERSION" }
+          while ((Get-Process | Where-Object { $_.Path -like '*deepseek-bot-updater*' }) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          node scripts/check-packed.mjs $exe
+          if ($LASTEXITCODE -ne 0) { throw 'The updated app failed its check' }
+
+      - name: Uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Find-Entry($root) {
+            Get-ChildItem "$root\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
+              Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -like 'DeepSeek Bot*' }
+          }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Bot'
+          $exe = Join-Path $dir 'DeepSeek Bot.exe'
           # The uninstaller removes the program only: the data location and the app's own data stay.
           $kept = foreach ($folder in (Join-Path $HOME '.ds-bot'), (Join-Path $env:APPDATA 'DeepSeek Bot')) {
             New-Item -ItemType Directory -Force $folder | Out-Null
