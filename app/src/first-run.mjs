@@ -24,6 +24,7 @@ const TEXT = {
     quit: 'Quit', startEmpty: 'Start without the team',
     whichModels: 'Which model settings should DeepSeek Bot use?',
     failed: message => `The team could not be copied: ${message}\n\nDeepSeek Bot starts with a new team. The team in DeepSeek Harness is unchanged.`,
+    notStarted: 'DeepSeek Bot could not start.',
   },
   zh: {
     welcome: '欢迎使用 DeepSeek Bot',
@@ -42,6 +43,7 @@ const TEXT = {
     quit: '退出', startEmpty: '不带团队开始',
     whichModels: 'DeepSeek Bot 用哪一份模型设置？',
     failed: message => `团队没有复制成功：${message}\n\nDeepSeek Bot 会用一个新团队开始。DeepSeek Harness 里的团队没有变化。`,
+    notStarted: 'DeepSeek Bot 没能启动。',
   },
 }
 export const localeText = table => (app.getLocale().toLowerCase().startsWith('zh') ? table.zh : table.en)
