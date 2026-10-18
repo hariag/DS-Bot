@@ -1002,7 +1002,11 @@ export function install(rt) {
     const cwd = agent.session.header?.cwd
     if (place === undefined || cwd === undefined || (midTurn && place.roomId !== undefined) || Date.now() < (folderRetry.get(agent.id) ?? 0)) return undefined
     const wanted = rt.workDirOf(place)
-    const target = wanted !== undefined && await rt.isFolder(wanted) ? wanted : rt.teamFolder()
+    const usable = wanted !== undefined && await rt.isFolder(wanted)
+    // A team copied from another DSH_HOME has no team workspace here until one is made, and its
+    // Sessions still work in the old one.
+    if (!usable && rt.teamFolder() === undefined) await rt.ensureWorkspace()
+    const target = usable ? wanted : rt.teamFolder()
     return target === undefined || target === cwd ? undefined : target
   }
 

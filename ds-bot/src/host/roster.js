@@ -23,7 +23,8 @@ export function install(rt) {
       await keepTeamFolder()
       return state.workspaceId
     }
-    const path = config.workspace ?? join(home, 'workspace')
+    // The desktop app names the folder the user chose for the Bots' files.
+    const path = config.workspace ?? (process.env.DS_BOT_WORKSPACE?.trim() || join(home, 'workspace'))
     await mkdir(path, { recursive: true })
     const workspace = await ctx.workspaceRegistry.resolveByPath(path) ?? await ctx.workspaceRegistry.create(path, 'DS Bot')
     state.workspaceId = workspace.id
