@@ -150,6 +150,12 @@ var ZH = {
   "{model} is not available anymore. Pick another model for me.": "{model} 已经不可用了。给我换一个模型吧。",
   "Hi, I'm {name}. I don't have a model yet. How do you want to set one up?": "你好，我是 {name}。我还没有可用的模型。你想怎么配置？",
   "Hi, I'm {name}. Pick a model for me first. You can change it later in my details.": "你好，我是 {name}。先给我选一个模型吧，以后可以在我的详情里换。",
+  "Hi, I'm {name}. I need a {provider} API key before I can start.": "你好，我是 {name}。开始之前，我需要一个 {provider} API key。",
+  "{provider} API key": "{provider} API key",
+  "Enter the API key": "请填入 API key",
+  "Paste only the key, not a NAME=value line": "只粘贴 key 本身，不要带「名字=」",
+  "Paste the key without quotes": "粘贴时不要带引号",
+  "An API key has no spaces or special characters": "API key 里不能有空格或特殊字符",
   "Mode": "模式",
   "Sign in to DeepSeek": "登录 DeepSeek 账号",
   "Enter a DeepSeek API key": "填入 DeepSeek API key",
@@ -914,6 +920,8 @@ var ZH = {
 };
 var HOST_ERRORS = [
   [/^Model (.+) is not available\. Available: (.*)$/, "模型 $1 不可用。可用的：$2"],
+  [/^The API key for (.+) is set outside DS Bot and cannot be changed here$/, "$1 的 API key 是在 DS Bot 之外设置的，这里改不了"],
+  [/^(.+) takes no API key here$/, "$1 不能在这里填 API key"],
   [/^A Bot named (.+) already exists$/, "已经有叫 $1 的 Bot 了"],
   [/^Name (.*) is not available$/, "名字 $1 不可用"],
   [/^"(.+)" calls everyone in a group, so it cannot be a Bot name$/, "「$1」在群里表示所有人，不能用作 Bot 名字"],
@@ -7001,8 +7009,10 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
   }, [shown, sessionId]);
   if (!bot || currentPart(bot) !== sessionId || !roster.ready) return null;
   const models = roster.models ?? [];
+  const usable = models.filter((model) => !model.needsKey);
   const lost = bot.model ? !models.some((model) => model.ref === bot.model) : false;
   if (bot.model && (!lost || models.length === 0)) return null;
+  const keyFor = usable.length === 0 && actions.saveModelKey ? models.find((model) => model.needsKey) : void 0;
   const pick2 = (ref) => {
     setBusy(ref);
     setError("");
@@ -7011,9 +7021,9 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
       void actions.refreshModels?.();
     }).finally(() => setBusy(""));
   };
-  const text = lost ? t("{model} is not available anymore. Pick another model for me.", { model: bot.model.split("/").slice(1).join("/") }) : models.length === 0 ? t("Hi, I'm {name}. I don't have a model yet. How do you want to set one up?", { name: bot.name }) : t("Hi, I'm {name}. Pick a model for me first. You can change it later in my details.", { name: bot.name });
-  const choices = models.length === 0 ? setupChoices(actions).map(([label, run]) => (0, import_react14.createElement)("button", { key: label, type: "button", className: "bt-model-chip", onClick: run }, label)) : [
-    ...groupModels(models).map(([provider, list]) => (0, import_react14.createElement)(
+  const text = lost ? t("{model} is not available anymore. Pick another model for me.", { model: bot.model.split("/").slice(1).join("/") }) : keyFor ? t("Hi, I'm {name}. I need a {provider} API key before I can start.", { name: bot.name, provider: keyFor.providerName ?? keyFor.provider }) : usable.length === 0 ? t("Hi, I'm {name}. I don't have a model yet. How do you want to set one up?", { name: bot.name }) : t("Hi, I'm {name}. Pick a model for me first. You can change it later in my details.", { name: bot.name });
+  const choices = usable.length === 0 ? setupChoices(actions).map(([label, run]) => (0, import_react14.createElement)("button", { key: label, type: "button", className: "bt-model-chip", onClick: run }, label)) : [
+    ...groupModels(usable).map(([provider, list]) => (0, import_react14.createElement)(
       "div",
       { key: list[0].provider ?? provider, className: "bt-model-choice-group", role: "group", "aria-label": provider },
       (0, import_react14.createElement)("div", { className: "bt-model-choice-provider", "aria-hidden": true }, provider),
@@ -7047,8 +7057,33 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
         )
       )
     ),
-    (0, import_react14.createElement)("div", { className: "bt-model-chips", role: "group", "aria-label": t("Choose a model") }, choices),
+    keyFor ? (0, import_react14.createElement)(ModelKeyCard, { key: keyFor.provider, model: keyFor, actions }) : (0, import_react14.createElement)("div", { className: "bt-model-chips", role: "group", "aria-label": t("Choose a model") }, choices),
     error ? (0, import_react14.createElement)("div", { className: "bt-secret-error bt-model-error", role: "alert" }, error) : null
+  );
+}
+function ModelKeyCard({ model, actions }) {
+  const [value, setValue] = (0, import_react14.useState)("");
+  const [busy, setBusy] = (0, import_react14.useState)(false);
+  const [error, setError] = (0, import_react14.useState)("");
+  const label = t("{provider} API key", { provider: model.providerName ?? model.provider });
+  const ready = value.trim() !== "" && !busy;
+  const save = () => {
+    if (!ready) return;
+    setBusy(true);
+    setError("");
+    void Promise.resolve(actions.saveModelKey(model.provider, value)).then(() => setValue(""), (failure) => setError(hostText(failure?.message ?? String(failure)))).finally(() => setBusy(false));
+  };
+  return (0, import_react14.createElement)(
+    "div",
+    { className: "bt-q bt-model-key", role: "group", "aria-label": label },
+    (0, import_react14.createElement)("div", { className: "bt-model-key-title" }, (0, import_react14.createElement)(KeyIcon), label),
+    (0, import_react14.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react14.createElement)(MaskedInput, { value, onChange: setValue, onEnter: save, label, autoFocus: true })),
+    error ? (0, import_react14.createElement)("div", { className: "bt-secret-error", role: "alert" }, error) : null,
+    (0, import_react14.createElement)(
+      "div",
+      { className: "bt-q-foot" },
+      (0, import_react14.createElement)("button", { type: "button", className: "bt-q-submit", disabled: !ready, onClick: save }, busy ? t("Saving…") : t("Save"))
+    )
   );
 }
 function setupChoices(actions) {
@@ -7111,6 +7146,10 @@ var MODEL_CSS = `
 .bt-model-chip:disabled{cursor:default}
 .bt-model-chip:disabled:not([aria-busy]){opacity:.5}
 .bt-model-error{margin-left:30px}
+.bt-q.bt-model-key{margin:0 0 0 30px;width:min(480px,calc(100% - 30px));gap:10px}
+.bt-model-key-title{display:flex;align-items:center;gap:6px;font-size:13px;line-height:18px;font-weight:500;color:var(--bt-ink-2)}
+.bt-model-key-title svg{flex:none;width:16px;height:16px}
+.bt-model-key .bt-q-foot{margin-top:2px}
 @keyframes bt-model-in{from{opacity:0;transform:translateY(6px)}}
 .bt-model-spin{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--bt-line-2);border-top-color:var(--bt-ink-2);animation:bt-model-spin .7s linear infinite}
 @keyframes bt-model-spin{to{transform:rotate(360deg)}}

@@ -19,7 +19,7 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 | `DS_BOT_HOME` | The data location: the `DSH_HOME` of the app | `~/.ds-bot` |
 | `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`) |
 
-The Host reads model settings and keys the way DSH does: environment variables such as `DEEPSEEK_API_KEY`, and `.env` and `.credentials.yaml` in the data location.
+The Host reads model settings and keys the way DSH does: environment variables such as `DEEPSEEK_API_KEY`, and `.env` and `.credentials.yaml` in the data location. When no model has its API key, the first Main Bot asks for one in its chat and saves it to `.credentials.yaml`.
 
 ## The profile
 

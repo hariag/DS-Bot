@@ -109,3 +109,29 @@ test('the Thinking section always offers Default, so a picked level can be clear
   assert.deepEqual([...effortRows({ efforts }).map(row => row.effort)], [undefined, 'low', 'high'])
   assert.equal(effortRows({ efforts: [] }).length, 0)
 })
+
+const keyless = [
+  { ref: 'official/flash', provider: 'official', providerName: 'DeepSeek', name: 'DeepSeek Flash', needsKey: true },
+  { ref: 'official/pro', provider: 'official', providerName: 'DeepSeek', name: 'DeepSeek Pro', needsKey: true },
+]
+
+test('models that need an API key are no choice', () => {
+  const buttons = tree => nodes(tree, node => node.type === 'button').map(button => button.children[0])
+  assert.deepEqual(buttons(dock([...keyless, models[1]], { harness: false }).tree), ['DeepSeek Flash'])
+  // Where DSH's own settings are, they take the key.
+  assert.deepEqual(buttons(dock(keyless).tree), ['Enter a DeepSeek API key', 'Open settings to set up a custom model'])
+})
+
+test('a window without DSH settings asks for the missing API key in the first choice', () => {
+  const saved = []
+  const bot = { id: 'chief', name: 'Chief' }
+  const tree = ModelChoiceDock({
+    sessionId: bot.id,
+    useRoster: select => select({ ready: true, byId: { chief: bot }, models: keyless }),
+    actions: { saveModelKey: (provider, value) => { saved.push([provider, value]) } },
+  })
+  assert.match(nodes(tree, node => node.props.className === 'bt-bubble')[0].children[0], /need a DeepSeek API key/)
+  const [card] = nodes(tree, node => node.props.model !== undefined)
+  assert.equal(card.props.model.provider, 'official')
+  assert.equal(nodes(tree, node => node.props.className === 'bt-model-chips').length, 0)
+})

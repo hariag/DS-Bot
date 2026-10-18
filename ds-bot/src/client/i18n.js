@@ -115,6 +115,12 @@ const ZH = {
   '{model} is not available anymore. Pick another model for me.': '{model} 已经不可用了。给我换一个模型吧。',
   "Hi, I'm {name}. I don't have a model yet. How do you want to set one up?": '你好，我是 {name}。我还没有可用的模型。你想怎么配置？',
   "Hi, I'm {name}. Pick a model for me first. You can change it later in my details.": '你好，我是 {name}。先给我选一个模型吧，以后可以在我的详情里换。',
+  "Hi, I'm {name}. I need a {provider} API key before I can start.": '你好，我是 {name}。开始之前，我需要一个 {provider} API key。',
+  '{provider} API key': '{provider} API key',
+  'Enter the API key': '请填入 API key',
+  'Paste only the key, not a NAME=value line': '只粘贴 key 本身，不要带「名字=」',
+  'Paste the key without quotes': '粘贴时不要带引号',
+  'An API key has no spaces or special characters': 'API key 里不能有空格或特殊字符',
   'Mode': '模式',
   'Sign in to DeepSeek': '登录 DeepSeek 账号',
   'Enter a DeepSeek API key': '填入 DeepSeek API key',
@@ -868,6 +874,8 @@ const ZH = {
 // interface shows them. Static ones go through ZH, these carry names or numbers.
 const HOST_ERRORS = [
   [/^Model (.+) is not available\. Available: (.*)$/, '模型 $1 不可用。可用的：$2'],
+  [/^The API key for (.+) is set outside DS Bot and cannot be changed here$/, '$1 的 API key 是在 DS Bot 之外设置的，这里改不了'],
+  [/^(.+) takes no API key here$/, '$1 不能在这里填 API key'],
   [/^A Bot named (.+) already exists$/, '已经有叫 $1 的 Bot 了'],
   [/^Name (.*) is not available$/, '名字 $1 不可用'],
   [/^"(.+)" calls everyone in a group, so it cannot be a Bot name$/, '「$1」在群里表示所有人，不能用作 Bot 名字'],

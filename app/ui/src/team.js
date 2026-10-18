@@ -170,6 +170,8 @@ export function createTeam() {
     },
     // The window has no DSH status bar, so the Bot's details show its figures.
     runStats: botId => call('run-stats', { botId }),
+    // Nor DSH's settings, so a first model choice takes a missing API key itself.
+    saveModelKey: (provider, value) => after(call('model-key', { provider, value })),
     // Nothing else draws in the window: no shell panels, right sidebar, "@" menu or voice plugin.
     hasRightSidebar: () => false,
     canReferenceChat: () => false,
