@@ -31,10 +31,11 @@ const readJson = path => JSON.parse(readFileSync(path, 'utf8'))
 
 /** Every Session the team names: each Bot's and group's parts and the group conversations. */
 export function sessionIdsOf(team) {
-  const parts = entry => (entry.segments ?? []).map(part => part.sessionId)
+  const ids = segments => segments.map(part => part?.sessionId)
   return [...new Set([
-    ...Object.values(team.bots ?? {}).flatMap(bot => [bot.id, bot.sessionId, ...parts(bot)]),
-    ...Object.values(team.rooms ?? {}).flatMap(room => [...Object.values(room.sessions ?? {}), ...parts(room)]),
+    ...Object.values(team.bots ?? {}).flatMap(bot => [bot.id, bot.sessionId, ...ids(bot.segments ?? [])]),
+    // A group keeps the earlier parts per member: { [botId]: segments }.
+    ...Object.values(team.rooms ?? {}).flatMap(room => [...Object.values(room.sessions ?? {}), ...ids(Object.values(room.segments ?? {}).flat())]),
   ].filter(id => typeof id === 'string' && id !== ''))]
 }
 
@@ -57,7 +58,14 @@ function modelProfiles(from) {
   return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).flatMap((entry) => {
     const file = join(dir, entry.name, 'cordis.patch.yml')
     if (!existsSync(file)) return []
-    const patch = parse(readFileSync(file, 'utf8'))
+    let patch
+    try {
+      patch = parse(readFileSync(file, 'utf8'))
+    } catch (error) {
+      // An unreadable profile has no model settings to copy; the team is still there.
+      console.warn(`DeepSeek Bot: skipped the model settings in ${file}: ${error instanceof Error ? error.message : String(error)}`)
+      return []
+    }
     const rows = Array.isArray(patch) ? patch.filter(row => MODEL_ROWS.includes(row?.id)) : []
     return rows.length > 0 ? [{ name: entry.name, rows }] : []
   })

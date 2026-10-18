@@ -27,7 +27,8 @@ function treeHash(dir) {
   return hash.digest('hex')
 }
 
-// A user's DSH home: Chief in two parts, Writer, a group, the team's own files, two profiles.
+// A user's DSH home: Chief in two parts, Writer, a group where Chief is in two parts, the
+// team's own files, two profiles and one that DSH cannot read.
 const TEAM = {
   version: 1,
   workspaceId: 'w-old',
@@ -36,9 +37,16 @@ const TEAM = {
     'session-a': { id: 'session-a', name: 'Chief', sessionId: 'session-a2', segments: [{ sessionId: 'session-a' }] },
     'session-b': { id: 'session-b', name: 'Writer', workDir: '/projects/site' },
   },
-  rooms: { r1: { id: 'r1', name: 'Ops', members: ['session-a', 'session-b'], sessions: { 'session-a': 'session-g', 'session-b': 'session-gone' } } },
+  rooms: {
+    r1: {
+      id: 'r1', name: 'Ops', members: ['session-a', 'session-b'],
+      sessions: { 'session-a': 'session-g', 'session-b': 'session-gone' },
+      segments: { 'session-a': [{ sessionId: 'session-g0', endedAt: 1 }] },
+    },
+  },
   agents: { x: { id: 'x' } },
 }
+const TEAM_SESSIONS = [['--team--', 'session-a'], ['--team--', 'session-a2'], ['--team--', 'session-g'], ['--team--', 'session-g0'], ['--site--', 'session-b']]
 
 function oldHome(root) {
   const from = join(root, 'dsh')
@@ -48,9 +56,7 @@ function oldHome(root) {
   write(join(from, 'bot', 'memory', 'session-a.md'), 'remember')
   write(join(from, 'bot', 'workspace', 'notes.txt'), 'old notes')
   write(join(from, 'bot', 'workspace', 'kept.txt'), 'old kept')
-  for (const [group, id] of [['--team--', 'session-a'], ['--team--', 'session-a2'], ['--team--', 'session-g'], ['--site--', 'session-b']]) {
-    write(join(from, 'sessions', group, id, 'session.v4.jsonl.zstd'), id)
-  }
+  for (const [group, id] of TEAM_SESSIONS) write(join(from, 'sessions', group, id, 'session.v4.jsonl.zstd'), id)
   write(join(from, 'sessions', '--team--', 'session-other', 'session.v4.jsonl.zstd'), 'not the team')
   write(join(from, 'attachments', 'ab', 'cdef'), 'file')
   write(join(from, '.credentials.yaml'), 'DEEPSEEK_API_KEY: fake\n')
@@ -61,6 +67,7 @@ function oldHome(root) {
     '- id: some-plugin', '  name: some-plugin', '',
   ].join('\n'))
   write(join(from, 'profiles', 'web', 'cordis.patch.yml'), '- id: some-plugin\n  name: some-plugin\n')
+  write(join(from, 'profiles', 'broken', 'cordis.patch.yml'), '- id: llm-deepseek\n  config: [unclosed\n')
   return from
 }
 
@@ -95,12 +102,10 @@ describe('importTeam', () => {
   })
 
   test('copies every Session the team names into the same folder group, and only those', () => {
-    for (const [group, id] of [['--team--', 'session-a'], ['--team--', 'session-a2'], ['--team--', 'session-g'], ['--site--', 'session-b']]) {
-      assert.equal(readFileSync(join(to, 'sessions', group, id, 'session.v4.jsonl.zstd'), 'utf8'), id)
-    }
+    for (const [group, id] of TEAM_SESSIONS) assert.equal(readFileSync(join(to, 'sessions', group, id, 'session.v4.jsonl.zstd'), 'utf8'), id)
     assert.equal(existsSync(join(to, 'sessions', '--team--', 'session-other')), false)
     assert.deepEqual(summary.missingSessions, ['session-gone'])
-    assert.equal(summary.sessions, 4)
+    assert.equal(summary.sessions, 5)
   })
 
   test('copies the attachments, the keys, and the model rows of the chosen profile', () => {
@@ -120,7 +125,7 @@ describe('importTeam', () => {
   test('records the import, leaves nothing staged and changes nothing in the old home', () => {
     const record = readJson(join(to, 'bot', 'imported.json'))
     assert.deepEqual({ ...record, at: undefined }, {
-      from, at: undefined, dsh: '0.2.0-rc.2', bots: 2, rooms: 1, sessions: 4, missingSessions: ['session-gone'],
+      from, at: undefined, dsh: '0.2.0-rc.2', bots: 2, rooms: 1, sessions: 5, missingSessions: ['session-gone'],
       keys: ['.credentials.yaml', '.env'], modelSettings: 'desktop',
     })
     assert.deepEqual(readdirSync(to).filter(name => name.startsWith('.import-')), [])
@@ -140,7 +145,7 @@ describe('finding the team', () => {
   })
   after(() => { rmSync(root, { recursive: true, force: true }) })
 
-  test('counts the Bots and groups and lists only the profiles with model settings', () => {
+  test('counts the Bots and groups and lists only the readable profiles with model settings', () => {
     const found = findTeam(from)
     assert.equal(found.bots, 2)
     assert.equal(found.rooms, 1)
@@ -149,13 +154,14 @@ describe('finding the team', () => {
   })
 
   test('names each Session of the team once', () => {
-    assert.deepEqual(sessionIdsOf(TEAM), ['session-a', 'session-a2', 'session-b', 'session-g', 'session-gone'])
+    assert.deepEqual(sessionIdsOf(TEAM), ['session-a', 'session-a2', 'session-b', 'session-g', 'session-gone', 'session-g0'])
   })
 
   test('finds Sessions written in a newer format than the pinned DSH reads', () => {
     assert.deepEqual(newerSessions(from, TEAM), [])
     write(join(from, 'sessions', '--site--', 'session-b', 'session.v99.jsonl.zstd'), 'newer')
-    assert.deepEqual(newerSessions(from, TEAM), ['session-b'])
+    write(join(from, 'sessions', '--team--', 'session-g0', 'session.v99.jsonl.zstd'), 'newer')
+    assert.deepEqual(newerSessions(from, TEAM), ['session-b', 'session-g0'])
   })
 
   test('takes the team for in use while a live process on this machine or a fresh lock elsewhere holds it', () => {
