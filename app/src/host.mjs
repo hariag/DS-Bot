@@ -22,7 +22,7 @@ async function main() {
     profile: PROFILE,
     resolvedProfile: { profile, installAnchor: INSTALL_ANCHOR },
     patchFiles: [],
-    args: [],
+    args: ['--no-open', '--port', '0'],
     ...(pnpm === undefined ? {} : {
       packageManager: { command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' } },
     }),
@@ -42,7 +42,7 @@ async function main() {
   // A profile patch can turn these rows off; then the window has nothing to talk to.
   if (webServer === undefined || connection === undefined) throw new Error(`The profile in ${profile.dir} does not start the engine's web server and connection.`)
   const url = connection.authenticatedUrl(`http://127.0.0.1:${String(webServer.port)}`)
-  await send({ type: 'ready', url })
+  await send({ type: 'ready', url, injections: webServer.collectIndexInjections() })
 }
 
 main().catch(async (error) => {

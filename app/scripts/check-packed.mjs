@@ -131,20 +131,27 @@ async function chat(cdp) {
     }
     throw new Error(`timed out waiting for ${label}`)
   }
-  const bubbles = "document.querySelectorAll('.dsb-flow .bt-bubble')"
+  // DSH shows a preview notice once per profile; it would keep the focus away from the composer.
+  const dismissNotice = () => evaluate("[...document.querySelectorAll('[role=dialog] button')].find(node => /^(Continue|继续)$/u.test(node.textContent.trim()))?.click()")
+  const text = needle => `document.body.innerText.includes(${JSON.stringify(needle)})`
   await cdp.call('Runtime.enable')
   await cdp.call('Log.enable')
-  await until("document.querySelector('.bt-model-chip')", 'the model choice')
+  await until("document.querySelector('.bt-tile, .bt-row')", 'the team')
+  await dismissNotice()
+  const main = await evaluate("fetch('api/bot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: 'state', payload: {} }) }).then(r => r.json()).then(r => r.value.mainBotId)")
+  await evaluate(`document.querySelector(${JSON.stringify(`[data-bot-id="${main}"]`)}).click()`)
+  await until("document.querySelector('.bt-model-chip:not(.bt-model-chip-quiet)')", 'the model choice')
   await evaluate("document.querySelector('.bt-model-chip:not(.bt-model-chip-quiet)').click()")
-  await until(`${bubbles}.length > 1 && !document.querySelector('.dsb-pending')`, 'the greeting')
-  const before = await evaluate(`${bubbles}.length`)
-  await evaluate("document.querySelector('[data-composer-input]').focus()")
+  // The mock model's greeting for a new team.
+  await until(text('先让团队帮你做哪块'), 'the greeting')
+  await dismissNotice()
+  await evaluate("[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1).focus()")
   await cdp.call('Input.insertText', { text: 'packaged app check' })
   for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
   // The mock model starts its reply with 收到： and the message.
-  await until(`${bubbles}.length > ${String(before)} && [...${bubbles}].some(node => node.textContent.includes('收到：packaged app check'))`, 'the reply')
+  await until(text('收到：packaged app check'), 'the reply')
   await sleep(1000)
-  console.log(`check-packed: chat ${JSON.stringify(await evaluate("document.querySelector('.dsb-flow').innerText.slice(-200)"))}`)
+  console.log(`check-packed: chat ${JSON.stringify(await evaluate('document.body.innerText.slice(-200)'))}`)
 }
 
 let failed = false

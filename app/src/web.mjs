@@ -1,6 +1,5 @@
-// The window's files and the authenticated request forwarding to the Host.
-// The launch-token exchange and the forwarding adapt DeepSeek Harness
-// apps/desktop/src/web-document.ts (MIT); see NOTICE.
+// The local Web document and the authenticated request forwarding for the app window.
+// Adapted from DeepSeek Harness apps/desktop/src/web-document.ts (MIT); see NOTICE.
 import { readFile } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 
@@ -11,14 +10,16 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json',
   '.woff2': 'font/woff2', '.png': 'image/png', '.ico': 'image/x-icon',
 }
+// The Web entry waits on this gate until the shell hands over the Host's index injections.
+const BOOT = '<script>globalThis.__DSH_BOOT_READY__ = Promise.withResolvers()</script>'
 
 /**
- * Serve a file of the window's build.
+ * Serve a file of the DSH Web build; the index gets the boot gate.
  * @param {Request} request - request from the app origin
- * @param {string} root - the build's directory
+ * @param {string} root - the Web build's `dist` directory
  * @returns {Promise<Response>}
  */
-export async function serveFile(request, root) {
+export async function serveWebDocument(request, root) {
   if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405 })
   const url = new URL(request.url)
   let pathname
@@ -27,10 +28,12 @@ export async function serveFile(request, root) {
   if (!target.startsWith(resolve(root) + sep)) return new Response(null, { status: 403 })
   let body
   try { body = await readFile(target) } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'EISDIR') return new Response(null, { status: 404 })
+    if (error.code === 'ENOENT') return new Response(null, { status: 404 })
     throw error
   }
-  return new Response(request.method === 'HEAD' ? null : new Uint8Array(body), {
+  const content = pathname === '/' || pathname === '/index.html'
+    ? body.toString().replace('<head>', '<head>' + BOOT) : new Uint8Array(body)
+  return new Response(request.method === 'HEAD' ? null : content, {
     headers: { 'content-type': MIME[extname(target)] ?? 'application/octet-stream' },
   })
 }
@@ -56,10 +59,11 @@ const WITHHELD_RESPONSE_HEADERS = [
   'content-encoding', 'content-length',
   'transfer-encoding', 'connection', 'keep-alive', 'te', 'trailer', 'upgrade', 'proxy-authenticate', 'proxy-authorization',
 ]
+// The Host marks plugin bundles immutable under a revision that changes every launch.
+const PLUGIN_BUNDLE_PATH = /^\/plugins\//u
 
 /**
  * Forward a request from the app origin to the Host as a same-origin request with the Host cookie.
- * The response streams through, so the live feed arrives as it is written.
  * @param {Request} request - request from the app origin
  * @param {string} host - Host URL
  * @param {string} cookie - Host cookie pair
@@ -80,5 +84,6 @@ export async function forwardWebRequest(request, host, cookie) {
   })
   const outgoing = new Headers(response.headers)
   for (const name of WITHHELD_RESPONSE_HEADERS) outgoing.delete(name)
+  if (PLUGIN_BUNDLE_PATH.test(source.pathname)) outgoing.set('cache-control', 'no-store')
   return new Response(response.body, { status: response.status, headers: outgoing })
 }

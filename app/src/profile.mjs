@@ -3,10 +3,10 @@ import { fileURLToPath } from 'node:url'
 import { initProfile, loadProfileDirectory, readProfileManifest, resolveProfileDir, writeProfileBundles } from '@deepseek-ai/dsh-app-boot'
 
 export const PROFILE = 'ds-bot'
-// DSH's shared core, the app's engine layer (../engine), then the Bot team. Bundles the user installs follow.
-export const BUNDLES = ['@deepseek-ai/dsh-base', 'deepseek-bot-engine', 'ds-bot']
-// Bundles that earlier builds of the app put in its profile.
-const RETIRED_BUNDLES = ['@deepseek-ai/dsh-web-app']
+// DSH's shared core, DSH's web front end (the window), then the Bot team. Bundles the user installs follow.
+export const BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'ds-bot']
+// Bundles that earlier builds of the app put in its profile: the engine layer of its own window (../engine).
+const RETIRED_BUNDLES = ['deepseek-bot-engine']
 // The app's own manifest is the installation: DSH imports plugins only from the installation's dependency
 // graph, resolves bundles there first, and keeps the bundles it names as direct dependencies from removal.
 export const INSTALL_ANCHOR = fileURLToPath(new URL('../package.json', import.meta.url))

@@ -1,23 +1,22 @@
 // Electron main process: one window for the Bot team, served by the app's own DSH Host.
-// The dsh-app scheme and the request forwarding follow DeepSeek Harness
-// apps/desktop/src/main.ts (MIT); see NOTICE.
-import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
-import { existsSync, mkdirSync } from 'node:fs'
+// The dsh-app scheme, the request forwarding and the WebSocket header rewrite follow
+// DeepSeek Harness apps/desktop/src/main.ts (MIT); see NOTICE.
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
+import { mkdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HostProcess } from './host-process.mjs'
-import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveFile } from './web.mjs'
+import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
 
 // DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
 const SCHEME = 'dsh-app'
-// The window has no title bar: its page draws a band this high along the top (--dsb-band
-// in ui/src/app.css), and the system's window buttons sit in it.
-const BAND = 48
+const IPC = { boot: 'ds-bot:boot', bootFailed: 'ds-bot:boot-failed' }
+const STATIC_PATHS = new Set(['/', '/index.html', '/manifest.webmanifest'])
 
 const here = dirname(fileURLToPath(import.meta.url))
-// The window is the app's own build (ui/, `npm run build`); everything under /api/ goes to the Host.
-const uiDist = join(here, '..', 'ui', 'dist')
+const webDist = join(dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
 // Drawn by scripts/icon.mjs. Windows takes the .ico for its several sizes.
 const iconFile = join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
 const dataDir = process.env.DS_BOT_HOME || join(homedir(), '.ds-bot')
@@ -51,7 +50,6 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function start() {
-  if (!existsSync(join(uiDist, 'index.html'))) throw new Error('The window is not built. Run npm run build in app/.')
   const profileDir = join(dataDir, 'profiles', 'ds-bot')
   mkdirSync(profileDir, { recursive: true })
   host = new HostProcess({
@@ -67,43 +65,46 @@ function start() {
   })
   ready.catch(fail)
 
-  // The window opens while the Host boots; its first requests wait for the Host.
-  protocol.handle(SCHEME, async (request) => {
+  protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url)
     if (url.hostname !== 'app') return new Response(null, { status: 404 })
-    if (!url.pathname.startsWith('/api/')) return serveFile(request, uiDist)
-    const target = hostState ?? await ready.catch(() => undefined)
-    if (target === undefined) return new Response(null, { status: 503 })
-    return forwardWebRequest(request, target.url, target.cookie)
+    if (STATIC_PATHS.has(url.pathname) || url.pathname.startsWith('/assets/')) return serveWebDocument(request, webDist)
+    if (hostState === undefined) return new Response(null, { status: 503 })
+    return forwardWebRequest(request, hostState.url, hostState.cookie)
+  })
+
+  ipcMain.handle(IPC.boot, async (event) => {
+    assertWindow(event)
+    const { url, injections } = await ready
+    return { injections, streamBaseUrl: new URL(url).origin }
+  })
+  ipcMain.handle(IPC.bootFailed, (event, message) => {
+    assertWindow(event)
+    fail(new Error(String(message)))
+  })
+
+  // The stream connects to the Host directly; the Host accepts only its own origin and cookie.
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*'] }, (details, callback) => {
+    if (hostState === undefined || details.webContentsId !== mainWindow?.webContents.id) { callback({}); return }
+    const target = new URL(hostState.url)
+    if (new URL(details.url).host !== target.host) { callback({}); return }
+    const headers = Object.fromEntries(Object.entries(details.requestHeaders).map(([name, value]) => [name.toLowerCase(), value]))
+    if (headers.origin !== APP_ORIGIN) { callback({ cancel: true }); return }
+    callback({ requestHeaders: { ...headers, origin: target.origin, cookie: hostState.cookie, 'sec-fetch-site': 'same-origin' } })
   })
 
   setMenu()
   // A packaged app has the icon in its bundle; Electron's own run shows Electron's.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(iconFile)
   createWindow()
-  nativeTheme.on('updated', () => {
-    if (mainWindow === undefined) return
-    mainWindow.setBackgroundColor(windowFill())
-    if (process.platform !== 'darwin') mainWindow.setTitleBarOverlay(windowButtons())
-  })
 }
 
-const windowFill = () => (nativeTheme.shouldUseDarkColors ? '#141414' : '#fcfcfc')
-// Clear, so the buttons sit on the page's own colors; the symbols take its text color.
-const windowButtons = () => ({ color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#f2f2f2' : '#141414', height: BAND })
-
 function createWindow() {
-  const area = screen.getPrimaryDisplay().workAreaSize
   mainWindow = new BrowserWindow({
-    width: Math.min(1320, Math.round(area.width * 0.9)), height: Math.min(860, Math.round(area.height * 0.9)),
-    minWidth: 720, minHeight: 480,
+    width: 1320, height: 860, minWidth: 720, minHeight: 480,
     title: 'DeepSeek Bot', show: false, icon: iconFile,
-    titleBarStyle: 'hidden',
-    // macOS keeps its traffic lights, centered in the band; Windows and Linux draw their
-    // buttons over the band's right end.
-    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 18, y: (BAND - 12) / 2 } } : { titleBarOverlay: windowButtons() }),
-    backgroundColor: windowFill(),
-    webPreferences: { contextIsolation: true, sandbox: true },
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#ffffff',
+    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
   })
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
   mainWindow.on('page-title-updated', (event) => { event.preventDefault() })
@@ -133,6 +134,12 @@ function focusWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+function assertWindow(event) {
+  const contents = mainWindow?.webContents
+  if (contents === undefined || event.sender !== contents || event.senderFrame !== contents.mainFrame
+    || !event.senderFrame.url.startsWith(`${APP_ORIGIN}/`)) throw new Error('DeepSeek Bot: rejected IPC from an unknown page')
 }
 
 function openOutside(url) {

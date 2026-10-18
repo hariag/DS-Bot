@@ -7,8 +7,6 @@ directories:
 files:
   - package.json
   - src/**
-  - engine/**
-  - ui/dist/**
   - assets/**
 # The Host runs pnpm as a separate Node process to install plugins, so it must be a plain file.
 asarUnpack:
