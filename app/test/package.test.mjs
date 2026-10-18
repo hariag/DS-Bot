@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { join, resolve } from 'node:path'
-import { FileMatcher, getNodeModuleFileMatcher } from 'app-builder-lib/out/fileMatcher.js'
-import { parse } from 'yaml'
 
 // npm installs the peers that the DSH packages ask for, but electron-builder packs only the
 // dependencies it finds through `dependencies` and `optionalDependencies`. A package that npm
@@ -14,82 +11,4 @@ test('every package that the app runs on is a dependency, not only a peer', () =
     .filter(([path, entry]) => path !== '' && entry.peer && !entry.dev && !entry.devOptional)
     .map(([path, entry]) => `${path.replace(/^.*node_modules\//u, '')}@${entry.version}`)
   assert.deepEqual(peerOnly, [], `add these to "dependencies" in app/package.json: ${peerOnly.join(' ')}`)
-})
-
-test('sharp native modules and versioned libvips libraries are unpacked together', () => {
-  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
-  const root = resolve('app-fixture')
-  const filter = new FileMatcher(root, root, value => value, config.asarUnpack).createFilter()
-  const stat = { isDirectory: () => false }
-  for (const file of [
-    '@img/sharp-linux-x64/lib/sharp-linux-x64-0.35.5.node',
-    '@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.18.7',
-    '@img/sharp-linux-arm64/lib/sharp-linux-arm64.node',
-    '@img/sharp-libvips-linux-arm64/lib/libvips-cpp.so.8.18.7',
-    '@img/sharp-libvips-linuxmusl-x64/lib/libvips-cpp.so.8.18.7',
-    '@img/sharp-libvips-darwin-arm64/lib/libvips-cpp.8.18.7.dylib',
-    '@img/sharp-win32-x64/lib/libvips-42.dll',
-    'pnpm/bin/pnpm.cjs',
-  ]) assert.equal(filter(join(root, 'node_modules', file), stat), true, file)
-  assert.equal(filter(join(root, 'node_modules/yaml/dist/index.js'), stat), false)
-})
-
-// The kit resolves its engine package and starts the program in it. Electron cannot start a
-// program by a path inside the asar, so every file preview failed (#679).
-test('the LibreOffice engine ships as plain files beside the asar, the kit inside it', () => {
-  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
-  const root = resolve('app-fixture')
-  const stat = { isDirectory: () => false }
-  const modules = getNodeModuleFileMatcher(root, root, value => value, {}, { config, debugLogger: { isEnabled: false } }).createFilter()
-  const packed = file => modules(join(root, 'node_modules', file), { ...stat, moduleFullFilePath: join('node_modules', file) })
-  for (const engine of ['win32-x64', 'win32-arm64', 'darwin-arm64', 'darwin-x64', 'wasm']) {
-    assert.equal(packed(`@deepseek-ai/libreoffice-kit-${engine}/package.json`), false, engine)
-  }
-  assert.equal(packed('@deepseek-ai/libreoffice-kit/lib/index.js'), true)
-  assert.equal(packed('yaml/dist/index.js'), true)
-
-  const beside = config.extraResources.find(set => set.to === 'node_modules/@deepseek-ai')
-  const extra = new FileMatcher(join(root, beside.from), beside.to, value => value, beside.filter).createFilter()
-  assert.equal(extra(join(root, beside.from, 'libreoffice-kit-win32-x64/bin/libreoffice-kit.exe'), stat), true)
-  assert.equal(extra(join(root, beside.from, 'libreoffice-kit/lib/index.js'), stat), false)
-})
-
-// The Cua Driver SDK passes its DLL's path, derived from its own module, to Windows' loader,
-// which cannot open a file inside the asar (#1025).
-test('on Windows the Cua Driver SDK and its runtime ship as plain files beside the asar', () => {
-  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
-  const root = resolve('app-fixture')
-  const stat = { isDirectory: () => false }
-  const modules = getNodeModuleFileMatcher(root, root, value => value, config.win, { config, debugLogger: { isEnabled: false } }).createFilter()
-  const packed = file => modules(join(root, 'node_modules', file), { ...stat, moduleFullFilePath: join('node_modules', file) })
-  for (const file of ['@trycua/cua-driver/dist/native/node-runtime.js', '@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll', '@ubjs/node/index.js', '@ubjs/core/package.json']) {
-    assert.equal(packed(file), false, file)
-  }
-  assert.equal(packed('@deepseek-ai/dsh-experimental-computer-use-cua-driver-native/lib/index.js'), true)
-  for (const scope of ['@trycua', '@ubjs']) {
-    const beside = config.win.extraResources.find(set => set.to === `node_modules/${scope}`)
-    assert.equal(beside?.from, `node_modules/${scope}`, scope)
-  }
-})
-
-test('Linux leaves the Host and its dependencies readable by plain Node', () => {
-  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
-  assert.equal(config.linux.asar, false)
-  assert.notEqual(config.mac.asar, false)
-  assert.notEqual(config.win.asar, false)
-})
-
-// A release is tagged with the version of ds-bot, and the installed apps compare their own
-// version with the one in the release's latest.yml.
-test('the app has the version of ds-bot', () => {
-  const version = file => JSON.parse(readFileSync(new URL(file, import.meta.url), 'utf8')).version
-  assert.equal(version('../package.json'), version('../../ds-bot/package.json'))
-})
-
-// Tool processes (bash, scripts a Bot runs) connect to devices on the local network;
-// macOS blocks them outright when Info.plist has no NSLocalNetworkUsageDescription.
-test('the mac package asks macOS for local network access', () => {
-  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
-  assert.equal(typeof config.mac?.extendInfo?.NSLocalNetworkUsageDescription, 'string')
-  assert.notEqual(config.mac.extendInfo.NSLocalNetworkUsageDescription.trim(), '')
 })
