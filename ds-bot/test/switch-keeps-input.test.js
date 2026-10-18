@@ -332,12 +332,30 @@ test('a marked part that stayed current is woken for its kept input, once, in or
 test('unmarked earlier parts are never resolved by the restart pass', async (t) => {
   const host = await start({ services })
   await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1')
-  assert.deepEqual(host.state().switching, {})
+  // The fresh part is the Bot's before the switch ends and drops its mark.
+  await until(() => host.state().bots.b.sessionId === 's1' && Object.keys(host.state().switching).length === 0)
   await host.stop({ keep: true })
 
   const second = await start({ home: host.home, services })
   t.after(second.stop)
   await second.rt.heldBack()
   assert.equal(second.resolved.includes('b'), false)
+})
+
+test('a state write that fails as a switch ends is warned about, not left unhandled', async (t) => {
+  const unhandled = []
+  const note = (error) => { unhandled.push(error) }
+  process.on('unhandledRejection', note)
+  t.after(() => { process.off('unhandledRejection', note) })
+  const host = await start({ services })
+  t.after(host.stop)
+  // The write that drops the switch's mark fails, as on a full disk.
+  const save = host.rt.save
+  host.rt.save = () => (host.rt.state.bots.b.sessionId === 's1' && Object.keys(host.rt.state.switching).length === 0
+    ? Promise.reject(new Error('disk full'))
+    : save())
+  await moveWriter(host, [])
+  await until(() => host.warnings.some(line => line.includes('did not finish') && line.includes('disk full')))
+  await settle()
+  assert.deepEqual(unhandled, [])
 })

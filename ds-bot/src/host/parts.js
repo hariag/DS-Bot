@@ -787,6 +787,9 @@ export function install(rt) {
         })
         await rt.save()
       })
+      // A state write that fails here (full disk, a file another program holds, a lost lock)
+      // must not end up as an unhandled rejection, which stops the whole host.
+      .catch(error => rt.warn('ds-bot: the switch of %s did not finish: %s', agent.id, error))
   }
 
   async function runSwitch(agent, job) {
