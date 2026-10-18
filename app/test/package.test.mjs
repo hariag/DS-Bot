@@ -12,3 +12,10 @@ test('every package that the app runs on is a dependency, not only a peer', () =
     .map(([path, entry]) => `${path.replace(/^.*node_modules\//u, '')}@${entry.version}`)
   assert.deepEqual(peerOnly, [], `add these to "dependencies" in app/package.json: ${peerOnly.join(' ')}`)
 })
+
+// A release is tagged with the version of ds-bot, and the installed apps compare their own
+// version with the one in the release's latest.yml.
+test('the app has the version of ds-bot', () => {
+  const version = file => JSON.parse(readFileSync(new URL(file, import.meta.url), 'utf8')).version
+  assert.equal(version('../package.json'), version('../../ds-bot/package.json'))
+})

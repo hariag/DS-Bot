@@ -1,6 +1,8 @@
 name: Release
 
-# Publishes ds-bot to npm when a GitHub release is published.
+# Publishes ds-bot to npm when a GitHub release is published, then attaches the desktop app's
+# Windows installer, its block map and latest.yml to the release. The installed apps update
+# from the newest release: latest.yml names the installer and its sha512.
 #
 # npm Trusted Publishing: npm trusts this workflow through GitHub's OIDC token, so the
 # repository keeps no npm token, and every version gets a provenance statement. It is set
@@ -65,6 +67,15 @@ jobs:
             exit 1
           fi
 
+      - name: Check the app version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          app="$(node -p "require('../app/package.json').version")"
+          if [ "$app" != "$version" ]; then
+            echo "::error::app/package.json has version $app, but ds-bot/package.json has $version. Give both the same version."
+            exit 1
+          fi
+
       - run: npm ci --no-fund --no-audit
       - run: npm run harness
       - run: npm test
@@ -91,3 +102,31 @@ jobs:
         run: |
           npm pack
           gh release upload "$TAG" "ds-bot-$(node -p "require('./package.json').version").tgz" --clobber
+
+  app-windows:
+    name: Desktop app installer (Windows)
+    needs: publish
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --no-fund --no-audit
+      - run: npm run dist
+      - name: Check the packaged app
+        run: node scripts/check-packed.mjs
+
+      - name: Attach the installer to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          installer="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-win-x64.exe"
+          gh release upload "$TAG" "$installer" "$installer.blockmap" dist-pack/latest.yml --clobber
