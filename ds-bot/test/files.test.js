@@ -22,6 +22,21 @@ test('replaces a file that another program holds open for a moment', { skip: pro
   assert.equal(readFileSync(path, 'utf8'), 'new')
 })
 
+test('stops trying when the check before a new try throws, and leaves the file as it was', { skip: process.platform !== 'win32' && 'only Windows refuses it' }, async (t) => {
+  const dir = folder(t)
+  const path = join(dir, 'state.json')
+  writeFileSync(path, 'old')
+  writeFileSync(`${path}.tmp`, 'new')
+  const reader = openSync(path, 'r')
+  const lost = new Error('lost the lock')
+  try {
+    await assert.rejects(replaceFile(`${path}.tmp`, path, () => { throw lost }), lost)
+  } finally {
+    closeSync(reader)
+  }
+  assert.equal(readFileSync(path, 'utf8'), 'old')
+})
+
 test('gives up at once on an error that waiting does not fix', async (t) => {
   const dir = folder(t)
   const started = Date.now()
