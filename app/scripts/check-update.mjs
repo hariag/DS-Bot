@@ -31,13 +31,28 @@ const server = createServer((request, response) => {
 await new Promise((done) => { server.listen(0, '127.0.0.1', done) })
 const feed = `http://127.0.0.1:${String(server.address().port)}/`
 
+// Closes the window from inside the page, as check-packed does; the app then quits as it does
+// when a user closes it. The page goes away with the window, so the call gets no answer.
+async function closeWindow(port) {
+  const targets = await (await fetch(`http://127.0.0.1:${String(port)}/json/list`)).json()
+  const page = targets.find(target => target.type === 'page' && target.url.startsWith('dsh-app://app'))
+  if (!page) throw new Error('the app window is not there')
+  const socket = new WebSocket(page.webSocketDebuggerUrl)
+  await new Promise((done, reject) => {
+    socket.addEventListener('open', done, { once: true })
+    socket.addEventListener('error', reject, { once: true })
+  })
+  socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'window.close()' } }))
+}
+
 let failed = false
 let app
 try {
   // A terminal inside an Electron-based editor may set ELECTRON_RUN_AS_NODE, which turns the app into plain Node.
   const { ELECTRON_RUN_AS_NODE: _runAsNode, ...env } = process.env
   Object.assign(env, { DS_BOT_HOME: join(work, 'home'), DS_BOT_SHELL_DATA: join(work, 'shell'), DS_BOT_UPDATE_URL: feed })
-  app = spawn(resolve(executable), [], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const port = 9300 + Math.floor(Math.random() * 600)
+  app = spawn(resolve(executable), [`--remote-debugging-port=${String(port)}`], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const exited = new Promise((done) => { app.once('exit', (code) => { done(code) }) })
   let output = ''
   for (const stream of [app.stdout, app.stderr]) {
@@ -58,8 +73,7 @@ try {
     await exited
     console.log('check-update: ended the app, so nothing was installed')
   } else {
-    // Without /F, taskkill asks the window to close, as a user closing it does.
-    spawnSync('taskkill', ['/pid', String(app.pid)], { stdio: 'ignore' })
+    await closeWindow(port)
     const code = await Promise.race([exited, sleep(60_000).then(() => 'timeout')])
     if (code === 'timeout') throw new Error('the app did not exit after its window closed')
     if (code !== 0) throw new Error(`the app exited with code ${String(code)}, so it does not install the update`)
