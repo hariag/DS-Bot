@@ -91,4 +91,4 @@
 - 2026-10-17：引擎的 profile 换成桌面应用自己的组合，不再加载 DSH 的网页前端，PR #291。
 - 2026-10-18：应用标识定为 `io.github.fei2411.deepseekbot`；Windows 只给当前用户安装，更新下载完提示重启；安装包不按 profile 删减 DSH 的文件，PR #303。
 - 2026-10-18：设置里加「模型」页，服务商和 key 存在 DSH 里，PR #319。
-- 2026-10-18：自己的界面先停下，窗口换回 DSH 的网页前端和系统标题栏；引擎的 profile 换回 `dsh-base`、`dsh-web-app`、`ds-bot`。
+- 2026-10-18：自己的界面先停下，窗口换回 DSH 的网页前端和系统标题栏；引擎的 profile 换回 `dsh-base`、`dsh-web-app`、`ds-bot`，PR #323。
