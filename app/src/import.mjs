@@ -148,7 +148,8 @@ export async function importTeam({ from, to, workspace, profile, dsh }) {
   const oldBot = join(from, 'bot')
   await cp(oldBot, join(stage, 'bot'), { recursive: true, filter: path => !LEFT_BEHIND.has(relative(oldBot, path).split(/[\\/]/u)[0]) })
   const team = readJson(join(stage, 'bot', 'state.json'))
-  // The new data location registers its own team workspace, and the app has no Agent mode.
+  // The new data location registers its own team workspace. A DSH Agent's Sessions do not move
+  // to a fresh part, so they would go on working in the old team folder in the user's DSH home.
   delete team.workspaceId
   team.agents = {}
   await writeFile(join(stage, 'bot', 'state.json'), JSON.stringify(team, null, 2))
