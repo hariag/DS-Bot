@@ -17,47 +17,6 @@ export function install(rt) {
   ctx.on?.('llm/adapters-updated', () => { catalogCache = { at: 0, value: [] }; reasoningCache.clear() })
   for (const name of ['credentials/reference-updated', 'settings/document-updated']) ctx.on?.(name, () => { catalogCache = { at: 0, value: [] } })
 
-  // Per served provider, the credential its DSH settings name as its API key
-  // (`apiKeyEnv`). A provider with none authenticates some other way.
-  async function keyRefs() {
-    const settings = ctx.get?.('settings')
-    if (settings === undefined || ctx.get?.('credentials') === undefined || ctx.llm.listConfigurableProviders === undefined) return new Map()
-    const [directory, sections] = await Promise.all([ctx.llm.listConfigurableProviders(), settings.describe({ redactSecrets: true })])
-    const values = new Map(sections.map(section => [section.ns, section.value]))
-    const refs = new Map()
-    for (const entry of directory) {
-      const ref = entry.settingsPath.reduce((value, key) => value?.[key], values.get(entry.settingsNs))?.apiKeyEnv
-      if (typeof ref === 'string' && ref !== '') refs.set(entry.provider, ref)
-    }
-    return refs
-  }
-
-  // DSH serves a provider's models whether or not its key is set; without one, every
-  // turn on them fails.
-  async function missingKeys(providers) {
-    const refs = await keyRefs().catch(() => new Map())
-    const credentials = ctx.get?.('credentials')
-    const missing = new Set()
-    await Promise.all(providers.filter(id => refs.has(id)).map(async (id) => {
-      const info = await credentials.describe(refs.get(id)).catch(() => undefined)
-      if (info?.configured === false) missing.add(id)
-    }))
-    return missing
-  }
-
-  // A key typed in a window that has no DSH settings of its own. It goes to DSH's
-  // credential store under the provider's reference and is never read back.
-  async function setModelKey(provider, value) {
-    const ref = (await keyRefs()).get(provider)
-    if (ref === undefined) throw new Error(`${provider} takes no API key here`)
-    const key = checkKey(value)
-    const credentials = ctx.get('credentials')
-    if ((await credentials.describe(ref)).writable === false) throw new Error(`The API key for ${provider} is set outside DS Bot and cannot be changed here`)
-    await credentials.set(ref, key)
-    catalogCache = { at: 0, value: [] }
-    await catalog({ fresh: true })
-  }
-
   // The thinking levels a model serves: `{efforts: [{id, name, description?}],
   // defaultEffort?}`, or undefined when it has none or the provider cannot say.
   async function reasoningOf(ref) {
@@ -93,7 +52,9 @@ export function install(rt) {
         })
       }
     }
-    const missing = await missingKeys([...new Set(entries.map(entry => entry.provider))])
+    // DSH serves a provider's models whether or not its key is set; without one, every
+    // turn on them fails.
+    const missing = await rt.missingKeys?.([...new Set(entries.map(entry => entry.provider))]) ?? new Set()
     for (const entry of entries) if (missing.has(entry.provider)) entry.needsKey = true
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
     await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
@@ -241,17 +202,7 @@ export function install(rt) {
   Object.assign(rt, {
     catalog, cachedCatalog: () => catalogCache.value, cachedDefault: () => pickDefault(catalogCache.value),
     defaultRef, defaultModel, resolveModel, desiredModel, reasoningOf, resolveEffort, desiredEffort,
-    selectSessionModel, applyModel, waitForModel, syncModels, setModelKey,
+    selectSessionModel, applyModel, waitForModel, syncModels,
+    dropCatalog: () => { catalogCache = { at: 0, value: [] } },
   })
-}
-
-// What an HTTP header can carry, like DSH's own key check: a pasted `NAME=value` line
-// or a quoted value would be stored as the key and refused by the provider.
-export function checkKey(value) {
-  const key = typeof value === 'string' ? value.trim() : ''
-  if (key === '') throw new Error('Enter the API key')
-  if (/^[A-Za-z_][A-Za-z0-9_]*=[^=]/.test(key)) throw new Error('Paste only the key, not a NAME=value line')
-  if (/^(["']).*\1$/.test(key)) throw new Error('Paste the key without quotes')
-  if (!/^[\x21-\x7E]+$/.test(key)) throw new Error('An API key has no spaces or special characters')
-  return key
 }

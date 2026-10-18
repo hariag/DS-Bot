@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { checkKey, install } from '../src/host/models.js'
+import { install } from '../src/host/models.js'
 
 const PROVIDERS = {
   deepseek: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'deepseek-v4-pro' }],
@@ -185,90 +185,4 @@ test('a Bot on the default model with its own thinking level leaves the default 
   }
   await rt.applyModel({ id: 'b1', model: 'deepseek/v4-flash', effort: 'low' })
   assert.deepEqual(current(), fallback)
-})
-
-// DSH's settings name each provider's key; the credential store says which are set.
-function keyed({ keys = {}, writable = true } = {}) {
-  const store = { ...keys }
-  const writes = []
-  const listeners = new Map()
-  const services = {
-    settings: {
-      describe: async () => [
-        { ns: 'llm-deepseek', value: { apiKeyEnv: 'DEEPSEEK_API_KEY' } },
-        { ns: 'llm-pi-ai', value: { providers: { relay: { apiKeyEnv: 'RELAY_API_KEY' }, bedrock: {} } } },
-      ],
-    },
-    credentials: {
-      describe: async ref => ({ configured: ref in store, writable }),
-      set: async (ref, value) => { writes.push(ref); store[ref] = value },
-    },
-  }
-  const ctx = {
-    on(name, listener) { listeners.set(name, listener); return () => listeners.delete(name) },
-    get: name => services[name],
-    llm: {
-      listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }, { id: 'relay', name: 'Relay' }, { id: 'bedrock' }],
-      listModels: async id => [{ id: `${id}-model` }],
-      listConfigurableProviders: async () => [
-        { provider: 'deepseek-official', settingsNs: 'llm-deepseek', settingsPath: [] },
-        { provider: 'relay', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'relay'] },
-        { provider: 'bedrock', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'bedrock'] },
-      ],
-    },
-  }
-  const rt = { ctx, state: { bots: {} } }
-  install(rt)
-  return { rt, store, writes, listeners }
-}
-
-const needing = async rt => (await rt.catalog({ fresh: true })).filter(entry => entry.needsKey).map(entry => entry.provider)
-
-test('models of a provider whose API key is set nowhere need the key', async () => {
-  assert.deepEqual(await needing(keyed().rt), ['deepseek-official', 'relay'])
-  assert.deepEqual(await needing(keyed({ keys: { DEEPSEEK_API_KEY: 'k' } }).rt), ['relay'])
-  // A provider without a key reference authenticates some other way.
-  assert.ok((await keyed().rt.catalog()).some(entry => entry.provider === 'bedrock' && !entry.needsKey))
-})
-
-test('without DSH settings or credentials no model needs a key', async () => {
-  const { rt } = keyed()
-  rt.ctx.get = () => undefined
-  assert.deepEqual(await needing(rt), [])
-})
-
-test('a saved API key goes to the provider\'s reference and frees its models', async () => {
-  const { rt, store, writes } = keyed()
-  await rt.catalog()
-  await rt.setModelKey('deepseek-official', '  sk-test  ')
-  assert.deepEqual(writes, ['DEEPSEEK_API_KEY'])
-  assert.equal(store.DEEPSEEK_API_KEY, 'sk-test')
-  assert.deepEqual(rt.cachedCatalog().filter(entry => entry.needsKey).map(entry => entry.provider), ['relay'])
-  await assert.rejects(rt.setModelKey('bedrock', 'sk-test'), /bedrock takes no API key here/)
-})
-
-test('a key set outside DS Bot is not overwritten', async () => {
-  const { rt, writes } = keyed({ writable: false })
-  await assert.rejects(rt.setModelKey('deepseek-official', 'sk-test'), /set outside DS Bot/)
-  assert.deepEqual(writes, [])
-})
-
-test('a changed credential drops the cached catalog', async () => {
-  const { rt, store, listeners } = keyed()
-  assert.deepEqual(await needing(rt), ['deepseek-official', 'relay'])
-  store.RELAY_API_KEY = 'k'
-  assert.deepEqual((await rt.catalog()).filter(entry => entry.needsKey).map(entry => entry.provider), ['deepseek-official', 'relay'])
-  listeners.get('credentials/reference-updated')()
-  assert.deepEqual((await rt.catalog()).filter(entry => entry.needsKey).map(entry => entry.provider), ['deepseek-official'])
-})
-
-test('an API key is what an HTTP header carries, without a NAME= or quotes', () => {
-  assert.equal(checkKey(' sk-abc '), 'sk-abc')
-  assert.equal(checkKey('YWJj=='), 'YWJj==')
-  assert.throws(() => checkKey('   '), /Enter the API key/)
-  assert.throws(() => checkKey(undefined), /Enter the API key/)
-  assert.throws(() => checkKey('DEEPSEEK_API_KEY=sk-abc'), /not a NAME=value line/)
-  assert.throws(() => checkKey('"sk-abc"'), /without quotes/)
-  assert.throws(() => checkKey('sk abc'), /no spaces/)
-  assert.throws(() => checkKey('sk-密钥'), /no spaces/)
 })
