@@ -7,9 +7,11 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
-import { chooseLocations, text } from './first-run.mjs'
+import electronUpdater from 'electron-updater'
+import { chooseLocations, localeText, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
 import { importTeam } from './import.mjs'
+import { UPDATE_TEXT, watchUpdates } from './updates.mjs'
 import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
 
 // DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
@@ -31,6 +33,7 @@ protocol.registerSchemesAsPrivileged([{
 let mainWindow
 let host
 let hostState
+let hostStop
 let stopping = false
 let stopped = false
 let failed = false
@@ -44,10 +47,15 @@ if (!app.requestSingleInstanceLock()) {
     if (stopped || host === undefined) return
     event.preventDefault()
     if (stopping) return
-    stopping = true
-    host.stop().catch((error) => { console.error(error) }).finally(() => { stopped = true; app.quit() })
+    void stopHost().then(() => { app.quit() })
   })
   app.whenReady().then(start).catch(fail)
+}
+
+function stopHost() {
+  stopping = true
+  hostStop ??= (host?.stop() ?? Promise.resolve()).catch((error) => { console.error(error) }).finally(() => { stopped = true })
+  return hostStop
 }
 
 function start() {
@@ -70,6 +78,7 @@ function start() {
     return hostState
   })()
   ready.catch(fail)
+  ready.then(startUpdates, () => {})
 
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url)
@@ -122,6 +131,22 @@ async function copyTeam(where, newHost) {
   } finally {
     mainWindow?.setProgressBar(-1)
   }
+}
+
+// The installed app on Windows updates itself. A run on throwaway folders (DS_BOT_HOME) checks
+// only the feed it is given (DS_BOT_UPDATE_URL) and never asks, so the update waits for the quit.
+function startUpdates() {
+  const feed = process.env.DS_BOT_UPDATE_URL || undefined
+  const throwaway = Boolean(process.env.DS_BOT_HOME)
+  if (!app.isPackaged || process.platform !== 'win32' || (throwaway && feed === undefined)) return
+  watchUpdates({ updater: electronUpdater.autoUpdater, feed, ask: throwaway ? undefined : askRestart, beforeInstall: stopHost })
+}
+
+async function askRestart(version) {
+  const t = localeText(UPDATE_TEXT)
+  const options = { type: 'info', title: 'DeepSeek Bot', message: t.ready(version), detail: t.readyDetail, buttons: [t.restart, t.later], defaultId: 0, cancelId: 1, noLink: true }
+  const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+  return response === 0
 }
 
 function createWindow() {

@@ -44,7 +44,8 @@ const TEXT = {
     failed: message => `团队没有复制成功：${message}\n\nDeepSeek Bot 会用一个新团队开始。DeepSeek Harness 里的团队没有变化。`,
   },
 }
-export const text = () => (app.getLocale().toLowerCase().startsWith('zh') ? TEXT.zh : TEXT.en)
+export const localeText = table => (app.getLocale().toLowerCase().startsWith('zh') ? table.zh : table.en)
+export const text = () => localeText(TEXT)
 
 const PROFILE_NAMES = { desktop: 'DSH Desktop', web: 'DSH Web' }
 const ask = options => dialog.showMessageBoxSync({ title: 'DeepSeek Bot', noLink: true, ...options })
