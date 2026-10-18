@@ -2,9 +2,10 @@
 // host on the same data from writing it, and the indexes that map a Session to the Bot
 // or group chat it belongs to.
 import { mkdirSync, statSync } from 'node:fs'
-import { copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, TEXT_KEPT } from './constants.js'
+import { replaceFile } from './files.js'
 import { homeLock } from './home-lock.js'
 import { currentColor, headOf, normalize, unquote } from './text.js'
 
@@ -289,7 +290,7 @@ export function install(rt) {
         ensureLock()
         await writeFile(temp, snapshot, 'utf8')
         ensureLock()
-        await rename(temp, statePath)
+        await replaceFile(temp, statePath)
         seen = stamp()
         rt.capabilitiesStateSaved?.()
         rt.stateSaved?.()
