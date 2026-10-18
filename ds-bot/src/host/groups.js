@@ -490,8 +490,10 @@ export function install(rt) {
       }
       if (posts.some(post => !post.botId && !post.kickoff)) room.lateRounds = 0
       await rt.save()
-      // An event post never picks the speakers over a message queued with it.
-      const opener = posts.findLast(post => !event(post)) ?? posts.at(-1)
+      // An event post, and a member post that calls nobody, never pick the speakers
+      // over a message queued with them.
+      const callsNobody = post => post.member === true && openingSpeakers(room, post).length === 0
+      const opener = posts.findLast(post => !event(post) && !callsNobody(post)) ?? posts.findLast(post => !event(post)) ?? posts.at(-1)
       const references = posts.flatMap(post => post.references ?? [])
       // A member a Bot's post calls by name works for that Bot.
       const named = opener.botId === undefined ? [] : mentionsIn(opener.text ?? '', room.members.map(rt.botOf).filter(Boolean)).found
@@ -650,6 +652,7 @@ export function install(rt) {
     const found = named.filter(bot => bot.id !== opener.botId)
     if (opener.progress) return found
     if (opener.late) return found.length > 0 ? found : members.filter(bot => bot.id === opener.askedBy)
+    if (opener.member) return found
     if (found.length > 0 && !all) return found
     if (!all && room.mode === 'admin' && admin) return [admin]
     return admin ? [admin, ...members.filter(bot => bot !== admin)] : members

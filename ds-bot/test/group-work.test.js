@@ -8,7 +8,7 @@ import { fakeAttachments, fakeContext } from './fake-ctx.js'
 import { MESSAGE_INLINE_MAX, ROOM_LATE_ROUNDS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 
 // Chief, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
-const seed = (room = {}) => ({
+const seed = (room = {}, extraRooms = {}) => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
@@ -16,7 +16,7 @@ const seed = (room = {}) => ({
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
     c: { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 },
   },
-  rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b', 'c'], mode: 'admin', admin: 'a', named: true, sessions: { a: 'ga', b: 'gb', c: 'gc' }, log: [], seq: 0, seen: {}, ...room } },
+  rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b', 'c'], mode: 'admin', admin: 'a', named: true, sessions: { a: 'ga', b: 'gb', c: 'gc' }, log: [], seq: 0, seen: {}, ...room }, ...extraRooms },
   agents: {},
   exchanges: [],
   exchangeTurns: {},
@@ -25,9 +25,9 @@ const seed = (room = {}) => ({
   revision: 0,
 })
 
-async function start(t, room, services) {
+async function start(t, room, services, extraRooms) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-work-'))
-  writeFileSync(join(home, 'state.json'), JSON.stringify(seed(room)))
+  writeFileSync(join(home, 'state.json'), JSON.stringify(seed(room, extraRooms)))
   const ctx = fakeContext({ services })
   const agents = new Map()
   const agentOf = (sessionId) => {
@@ -535,6 +535,113 @@ test('a post with no round running keeps the old way: queued, no logged mark', a
   host.finish('gb', '看了。')
   await settle(() => first() !== undefined)
   assert.equal(logLines(host).filter(line => line.text === '@Writer 看一下文档').length, 1)
+})
+
+// A member posts into a group it is in; nobody answers a post that names nobody.
+test('an ordinary member posts into its group from its own chat; nobody answers', async (t) => {
+  const host = await start(t)
+  const posted = await host.tool('post_to_group', { group: 'Ops', message: '文档有了新进展' }, 'b')
+  assert.match(posted, /Nobody answers it: your post only calls the members you name with @Name\.$/)
+  assert.equal(host.agentOf('r1').calls.length, 1)
+
+  const first = host.round('c1', host.takePost())
+  await settle(() => first() !== undefined)
+  const lines = logLines(host).filter(line => line.text === '文档有了新进展')
+  assert.equal(lines.length, 1)
+  assert.equal(lines[0].botId, 'b')
+  assert.deepEqual(host.agentOf('ga').calls, [])
+  assert.deepEqual(host.agentOf('gb').calls, [])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+})
+
+test('a member post calls only the members it names', async (t) => {
+  const host = await start(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档' }, 'b')
+  const first = host.round('c1', host.takePost())
+  await settle(() => host.agentOf('gc').calls.length === 1)
+  assert.equal(host.begin('gc').source.askedBy, 'b')
+  assert.match(text(host.agentOf('gc').calls[0]), /Writer: @Tester 看一下文档/)
+  host.finish('gc', '看过了。')
+  await settle(() => first() !== undefined)
+  assert.deepEqual(host.agentOf('ga').calls, [])
+  assert.deepEqual(host.agentOf('gb').calls.filter(call => call.source?.role !== 'post'), [])
+})
+
+test('a member post that names only itself calls nobody', async (t) => {
+  const host = await start(t)
+  const rejected = await host.tool('post_to_group', { group: 'Ops', message: '@Writer 记一下', report_back: true }, 'b')
+  assert.match(rejected, /Nobody would answer: your post only calls the members you name/)
+  assert.equal(host.agentOf('r1').calls.length, 0)
+  assert.equal(logLines(host).length, 0)
+
+  const posted = await host.tool('post_to_group', { group: 'Ops', message: '@Writer 记一下' }, 'b')
+  assert.match(posted, /Nobody answers it: your post only calls the members you name with @Name\.$/)
+  const first = host.round('c1', host.takePost())
+  await settle(() => first() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === '@Writer 记一下').length, 1)
+  assert.deepEqual(host.agentOf('ga').calls, [])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+})
+
+test('a member post with @all calls nobody', async (t) => {
+  const host = await start(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '@all 看一下文档' }, 'b')
+  const first = host.round('c1', host.takePost())
+  await settle(() => first() !== undefined)
+  assert.deepEqual(host.agentOf('ga').calls, [])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+  assert.equal(logLines(host).filter(line => line.text === '@all 看一下文档').length, 1)
+})
+
+test('a member post that names nobody is rejected with report_back', async (t) => {
+  const host = await start(t)
+  const posted = await host.tool('post_to_group', { group: 'Ops', message: '快看文档', report_back: true }, 'b')
+  assert.match(posted, /Nobody would answer: your post only calls the members you name/)
+  assert.equal(host.agentOf('r1').calls.length, 0)
+  assert.equal(logLines(host).length, 0)
+  assert.deepEqual(JSON.parse(readFileSync(join(host.home, 'state.json'), 'utf8')).works ?? {}, {})
+})
+
+test('a member post during a running round is logged at once and calls nobody next', async (t) => {
+  const { host, first } = await busyRound(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '群里的进展' }, 'b')
+  const during = logLines(host)
+  const logged = during.at(-1)
+  assert.deepEqual([logged.who, logged.botId, logged.text], ['Writer', 'b', '群里的进展'])
+  const post = host.takePost()
+  assert.equal(post.source.logged, logged.seq)
+  host.finish('gb', '整理好了。')
+  await settle(() => first() !== undefined)
+
+  const second = host.round('c2', post)
+  await settle(() => second() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === '群里的进展').length, 1)
+  assert.deepEqual(host.agentOf('ga').calls, [])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+})
+
+test('a member post that calls nobody does not pick the speakers over a user message', async (t) => {
+  const host = await start(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '让群里注意' }, 'b')
+  // Both land in the same relay; the user's message picks the speakers.
+  host.emit('r1', 'user/message', host.takePost())
+  const first = host.round('c1', host.say('检查一下文档'))
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  host.finish('ga', '看过了。')
+  await settle(() => first() !== undefined)
+  assert.deepEqual(host.agentOf('gb').calls.filter(call => call.source?.role !== 'post'), [])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+})
+
+test('a member cannot post into a group it is not in', async (t) => {
+  const host = await start(t, {}, undefined, {
+    r2: { id: 'r2', name: 'Lab', members: ['a', 'c'], mode: 'admin', admin: 'a', named: true, sessions: {}, log: [], seq: 0, seen: {} },
+  })
+  const posted = await host.tool('post_to_group', { group: 'Lab', message: '看一下' }, 'b')
+  assert.match(posted, /No group chat called "Lab" that you can see/)
+  assert.equal(host.agentOf('r2').calls.length, 0)
+  assert.equal(logLines(host).length, 0)
 })
 
 // Such a message was sent before message_bot from a group stayed in that group.

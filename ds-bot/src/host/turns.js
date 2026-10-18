@@ -434,6 +434,7 @@ export function install(rt) {
             botId: source.senderSessionId,
             name: source.senderName,
             reportBack: source.reportBack === true,
+            ...(source.member ? { member: true } : {}),
             ...(source.sub ? { sub: source.sub } : {}),
             ...(source.late ? { late: true } : {}),
             ...(source.progress ? { progress: true } : {}),
