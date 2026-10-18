@@ -1,144 +1,132 @@
-// The first start: where the app keeps its data and the Bots' files (the default places, or the
-// one folder picked from the start page), and whether it copies the Bot team of the user's own
-// DSH. The answers are kept in the app's own data.
-import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+// The first start: where the app keeps its data and the Bots' files, and whether it copies the
+// Bot team of the user's own DSH. The answers are kept in the app's own data.
+import { app, dialog } from 'electron'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import { findTeam, userDshHome } from './import.mjs'
-import { installFolder } from './move-data.mjs'
-import { freeSpace } from './place.mjs'
-import { langOf, t } from './start/text.mjs'
+import { dirname, join } from 'node:path'
+import { findTeam, newerSessions, teamInUse, userDshHome, within } from './import.mjs'
 
-// The app's picker and the cards in the team window speak the language of the start page
-// (main.mjs gives it the same locale).
-export const lang = () => langOf(app.getLocale())
-export const tx = (key, vars) => t(lang(), key, vars)
+const TEXT = {
+  en: {
+    welcome: 'Welcome to DeepSeek Bot',
+    places: (data, workspace) => `Data: ${data}\nFiles that Bots make: ${workspace}`,
+    start: 'Start', change: 'Change…',
+    pickData: 'Folder for DeepSeek Bot data', pickWorkspace: 'Folder for files that Bots make',
+    dataInWorkspace: 'The data folder cannot be inside the folder for Bot files.',
+    workspaceInData: 'The folder for Bot files cannot be inside the data folder.',
+    inDsh: home => `Choose a folder outside the DeepSeek Harness data (${home}).`,
+    inProgram: 'Choose a folder outside the program folder: uninstalling removes it.',
+    found: (bots, rooms) => `DeepSeek Harness has a Bot team: ${bots} Bot${bots === 1 ? '' : 's'}${rooms > 0 ? `, ${rooms} group${rooms === 1 ? '' : 's'}` : ''}. Copy it into DeepSeek Bot?`,
+    foundDetail: home => `The copy takes the Bots, groups, memories, chats, files, keys and model settings. Nothing in ${home} changes, and the two teams do not stay in step.`,
+    copy: 'Copy', skip: 'Do not copy',
+    inUse: 'DeepSeek Harness is using this team. Close it, then try again.', retry: 'Try again',
+    newer: count => `${count} chat${count === 1 ? ' was' : 's were'} written by a newer DeepSeek Harness than this DeepSeek Bot can read. Update DeepSeek Bot, then start it again to copy the team.`,
+    quit: 'Quit', startEmpty: 'Start without the team',
+    whichModels: 'Which model settings should DeepSeek Bot use?',
+    failed: message => `The team could not be copied: ${message}\n\nDeepSeek Bot starts with a new team. The team in DeepSeek Harness is unchanged.`,
+  },
+  zh: {
+    welcome: '欢迎使用 DeepSeek Bot',
+    places: (data, workspace) => `数据：${data}\nBot 写出的文件：${workspace}`,
+    start: '开始使用', change: '更改位置…',
+    pickData: '选择 DeepSeek Bot 的数据文件夹', pickWorkspace: '选择 Bot 写出的文件放在哪个文件夹',
+    dataInWorkspace: '数据文件夹不能放在 Bot 文件夹里面。',
+    workspaceInData: 'Bot 文件夹不能放在数据文件夹里面。',
+    inDsh: home => `请选择 DeepSeek Harness 数据（${home}）以外的文件夹。`,
+    inProgram: '请选择程序文件夹以外的位置：卸载时会删掉程序文件夹。',
+    found: (bots, rooms) => `DeepSeek Harness 里有一个 Bot 团队：${bots} 个 Bot${rooms > 0 ? `、${rooms} 个群` : ''}。要复制到 DeepSeek Bot 吗？`,
+    foundDetail: home => `会复制 Bot、群、记忆、对话、文件、密钥和模型设置。${home} 里的内容不会改变；复制以后两个团队各自独立。`,
+    copy: '复制', skip: '不复制',
+    inUse: 'DeepSeek Harness 正在使用这个团队。请先关掉它，再重试。', retry: '重试',
+    newer: count => `有 ${count} 段对话是更新版本的 DeepSeek Harness 写的，这个版本的 DeepSeek Bot 读不了。请先更新 DeepSeek Bot，再打开它来复制团队。`,
+    quit: '退出', startEmpty: '不带团队开始',
+    whichModels: 'DeepSeek Bot 用哪一份模型设置？',
+    failed: message => `团队没有复制成功：${message}\n\nDeepSeek Bot 会用一个新团队开始。DeepSeek Harness 里的团队没有变化。`,
+  },
+}
+export const text = () => (app.getLocale().toLowerCase().startsWith('zh') ? TEXT.zh : TEXT.en)
 
-const locationsFile = () => join(app.getPath('userData'), 'locations.json')
+const PROFILE_NAMES = { desktop: 'DSH Desktop', web: 'DSH Web' }
+const ask = options => dialog.showMessageBoxSync({ title: 'DeepSeek Bot', noLink: true, ...options })
 
-const PICKER_LABELS = ['places', 'drives', 'home', 'desktop', 'documents', 'downloads', 'path', 'go', 'up', 'newFolder', 'newName', 'create', 'name', 'cancel', 'chooseFolder', 'open', 'save', 'replace', 'loading']
-const PICKER_LINES = ['empty', 'noFolders', 'more']
-const PICKER_ERRORS = ['missing', 'drive', 'denied', 'notFolder', 'notFile', 'tooLong', 'unreadable', 'name', 'exists', 'isFolder', 'replace']
-
-/** The words of the app's picker (preload.cjs showPicker), which has no text of its own. */
-export function pickerLabels() {
-  return Object.fromEntries([
-    ...PICKER_LABELS.map(key => [key, tx(`picker.${key}`)]),
-    ...PICKER_LINES.map(key => [key, tx(`dialog.picker.${key}`)]),
-    ...PICKER_ERRORS.map(key => [`error.${key}`, tx(`dialog.picker.${key}`)]),
-  ])
+function pick(title, current) {
+  const picked = dialog.showOpenDialogSync({ title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
+  return picked?.[0] ?? current
 }
 
-// A quit request while the picker is open stops the first run right after it.
-class Quit extends Error {}
-
-async function pick(title, from, signal, ui) {
-  const picked = await ui.asking(ui.pick({ mode: 'folder', title, start: existsSync(from) ? from : dirname(from) }))
-  await new Promise(resolve => setImmediate(resolve))
-  if (signal.aborted) throw new Quit()
-  return picked ?? undefined
-}
-
-export const programFolder = () => installFolder(app.getPath('exe'))
-
-/**
- * The picker of 「换个位置…」 on the start page: one folder, from which the root rule
- * (place.mjs) makes the places. Undefined when the picker was cancelled or the app is quitting.
- * @param {string} from the folder the picker opens in
- */
-export async function pickRoot(from, signal, ui) {
-  try {
-    return await pick(tx('dialog.pickRoot'), from, signal, ui)
-  } catch (error) {
-    if (error instanceof Quit) return undefined
-    throw error
+function placeProblem(t, dataDir, workspace) {
+  const dsh = userDshHome()
+  const program = dirname(app.getPath('exe'))
+  if (within(dataDir, workspace)) return t.dataInWorkspace
+  if (within(workspace, dataDir)) return t.workspaceInData
+  for (const path of [dataDir, workspace]) {
+    if (within(path, dsh) || within(dsh, path)) return t.inDsh(dsh)
+    if (app.isPackaged && within(path, program)) return t.inProgram
   }
+  return undefined
 }
 
-/** The places a first start offers. */
-export const defaultPlaces = () => ({ dataDir: join(homedir(), '.ds-bot'), workspace: join(homedir(), 'DS Bot') })
-
-/** The Bot team in a data folder, if it has one. */
-export function teamIn(dataDir) {
+function hasTeam(dataDir) {
   try {
-    return findTeam(dataDir)
+    return Object.keys(JSON.parse(readFileSync(join(dataDir, 'bot', 'state.json'), 'utf8')).bots ?? {}).length > 0
   } catch {
-    return undefined
+    return false
   }
 }
 
-/**
- * What the start window can say before the first-run questions: the team that a reinstall keeps,
- * or whether the user's own DSH has a team to offer.
- */
-export function teamsAt(dataDir = defaultPlaces().dataDir) {
-  const team = teamIn(dataDir)
-  return { team, offered: team === undefined && teamIn(userDshHome()) !== undefined }
-}
-
-/**
- * The team that the user's own DSH offers to a data folder without one, if any. The start page
- * asks about it on the import card (import-flow.mjs).
- * @returns {ReturnType<typeof findTeam>}
- */
-function offerOf(dataDir) {
+function offerImport(t, dataDir) {
+  const from = userDshHome()
+  let found
   try {
-    return teamIn(dataDir) === undefined ? findTeam(userDshHome()) : undefined
+    found = hasTeam(dataDir) ? undefined : findTeam(from)
   } catch (error) {
     console.error(error)
+  }
+  if (found === undefined) return undefined
+  if (ask({ type: 'question', message: t.found(found.bots, found.rooms), detail: t.foundDetail(from), buttons: [t.copy, t.skip], defaultId: 0, cancelId: 1 }) === 1) return undefined
+  while (teamInUse(from)) {
+    if (ask({ type: 'warning', message: t.inUse, buttons: [t.retry, t.skip], defaultId: 0, cancelId: 1 }) === 1) return undefined
+  }
+  const newer = newerSessions(from, found.team)
+  if (newer.length > 0) {
+    if (ask({ type: 'warning', message: t.newer(newer.length), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 }) === 0) return { quit: true }
     return undefined
   }
+  const { profiles } = found
+  const profile = profiles.length < 2 ? profiles[0]?.name
+    : profiles[ask({ type: 'question', message: t.whichModels, buttons: profiles.map(entry => PROFILE_NAMES[entry.name] ?? entry.name), defaultId: 0, cancelId: 0 })].name
+  return { from, profile }
 }
 
 /**
- * Write the chosen places once the first run is finished; quitting before that asks again. The
- * free space of the data's drive when the data goes to a folder is kept as long as it stays
- * there: a later start shows the place line again once a fifth of it is left (start-window §5).
- */
-export function saveLocations({ dataDir, workspace }) {
-  const file = locationsFile()
-  mkdirSync(dirname(file), { recursive: true })
-  const saved = readSaved(file)
-  const kept = saved !== undefined && typeof saved.dataDir === 'string' && resolve(saved.dataDir) === resolve(dataDir) && roomOf(saved.freeAtStart) !== undefined
-  // A full drive gives no room to measure a fifth of: the next save measures again.
-  const freeAtStart = kept ? saved.freeAtStart : roomOf(freeSpace(dataDir))
-  // A write that fails half way leaves the places that were there.
-  writeFileSync(`${file}.tmp`, `${JSON.stringify({ dataDir, workspace, freeAtStart }, null, 2)}\n`)
-  renameSync(`${file}.tmp`, file)
-}
-
-const roomOf = bytes => (Number.isFinite(bytes) && bytes > 0 ? bytes : undefined)
-
-function readSaved(file) {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8'))
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * Where the app keeps its data and the Bots' files: the saved places, or at the first start the
- * default ones without a question (the start page says where the data goes and offers
- * 「换个位置…」; windows-onboarding §3). A team in the user's own DSH comes back as `offer`: the
- * places are saved once the import card has its answer, so that quitting before that asks again.
- * A run on throwaway folders (DS_BOT_HOME, for development and tests) asks nothing and copies
- * nothing. `freeAtStart` is the free space of the data's drive that saveLocations() kept, none
- * when it kept none yet.
- * @returns {{ dataDir: string, workspace?: string, freeAtStart?: number, offer?: NonNullable<ReturnType<typeof findTeam>> }}
+ * Where the app keeps its data and the Bots' files, asked at the first start.
+ * A run on throwaway folders (DS_BOT_HOME, for development and tests) asks nothing and copies nothing.
+ * @returns {{ dataDir: string, workspace?: string, import?: { from: string, profile?: string }, quit?: true }}
  */
 export function chooseLocations() {
   if (process.env.DS_BOT_HOME) return { dataDir: process.env.DS_BOT_HOME, workspace: process.env.DS_BOT_WORKSPACE || undefined }
-  const file = locationsFile()
+  const file = join(app.getPath('userData'), 'locations.json')
   if (existsSync(file)) {
     const saved = JSON.parse(readFileSync(file, 'utf8'))
-    return { dataDir: saved.dataDir, workspace: saved.workspace, freeAtStart: roomOf(saved.freeAtStart) }
+    return { dataDir: saved.dataDir, workspace: saved.workspace }
   }
-  const { dataDir, workspace } = defaultPlaces()
-  const offer = offerOf(dataDir)
-  if (offer !== undefined) return { dataDir, workspace, offer }
-  // There is nothing to copy, so the first run ends with the chosen places.
-  saveLocations({ dataDir, workspace })
-  return { dataDir, workspace }
+  const t = text()
+  let dataDir = join(homedir(), '.ds-bot')
+  let workspace = join(homedir(), 'DeepSeek Bot')
+  for (;;) {
+    const choice = ask({ type: 'info', message: t.welcome, detail: t.places(dataDir, workspace), buttons: [t.start, t.change], defaultId: 0, cancelId: 0 })
+    if (choice === 1) {
+      dataDir = pick(t.pickData, dataDir)
+      workspace = pick(t.pickWorkspace, workspace)
+      continue
+    }
+    const problem = placeProblem(t, dataDir, workspace)
+    if (problem === undefined) break
+    ask({ type: 'warning', message: problem, buttons: ['OK'] })
+  }
+  const imported = offerImport(t, dataDir)
+  if (imported?.quit) return { dataDir, workspace, quit: true }
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, `${JSON.stringify({ dataDir, workspace }, null, 2)}\n`)
+  return { dataDir, workspace, ...(imported ? { import: imported } : {}) }
 }

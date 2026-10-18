@@ -16,8 +16,15 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 
 | Variable | What it sets | Default |
 |---|---|---|
-| `DS_BOT_HOME` | The data location: the `DSH_HOME` of the app | `~/.ds-bot` |
-| `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`) |
+| `DS_BOT_HOME` | The data location: the `DSH_HOME` of the app. When it is set, the app asks nothing at its first start and imports nothing | The folder chosen at the first start |
+| `DS_BOT_WORKSPACE` | With `DS_BOT_HOME`: the folder for the files that Bots make | `bot/workspace` in the data location |
+| `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage, `locations.json`) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`) |
+
+## First start and import
+
+At its first start the app asks, in system dialogs, for the data location (`~/.ds-bot` by default) and the folder for the files that Bots make (`~/DeepSeek Bot`), and keeps the answer in `locations.json` in its own data. Neither folder may be inside the other or inside the user's DSH data.
+
+When the user's DSH (`DSH_HOME`, else `~/.dsh`) has a Bot team, the app offers to copy it (`src/import.mjs`). It only reads there. Before the copy it checks that no running DSH holds the team and that no chat is in a newer session format than the pinned DSH reads, and it starts the Host once on the new data location, so that DSH does not register the copied Sessions' folders as projects. The copy takes `bot/` (without its lock, turns in flight and workspace), every Session the team names, `attachments/`, `.credentials.yaml`, `.env`, the model rows of one profile's `cordis.patch.yml`, and the old team workspace's files, which go into the new folder without replacing a file there. `bot/imported.json` records it. At its next turn, each Bot and group moves on to a fresh part in the new folder.
 
 The Host reads model settings and keys the way DSH does: environment variables such as `DEEPSEEK_API_KEY`, and `.env` and `.credentials.yaml` in the data location. DSH's settings in the window set up model providers and their keys; DSH keeps the providers in the profile's `cordis.patch.yml` and the keys in `.credentials.yaml`.
 
@@ -35,7 +42,7 @@ At every start the Host puts these three bundles at the head of the profile's bu
 
 ## Check a change
 
-`npm test` checks the composition of the profile, and that every package the app runs on is a dependency (see [Package](#package)).
+`npm test` checks the composition of the profile, the import on throwaway folders, and that every package the app runs on is a dependency (see [Package](#package)).
 
 `scripts/shot.mjs` starts the app on throwaway folders, saves a screenshot of its window, prints the page text, closes the window the way a user does and waits until the app exits. Use the mock model of the plugin, `../ds-bot/dev/mock-llm.mjs` (`MOCK_PORT=<port> node ../ds-bot/dev/mock-llm.mjs`).
 
@@ -72,6 +79,8 @@ The Windows installer installs for the current user only, without administrator 
 | `src/host-process.mjs` | Starts the Host in Electron's Node mode and owns its exit |
 | `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL and the page injections |
 | `src/profile.mjs` | The profile: its name, its bundles, and its creation and update |
+| `src/first-run.mjs` | The first start's dialogs: the two folders and the offer to import |
+| `src/import.mjs` | The import of a Bot team from the user's DSH |
 | `engine/` | On hold, not installed: the bundle `deepseek-bot-engine` for the app's own window in `ui/` |
 | `test/` | `npm test`: the composition of the profile, and the dependencies that the package needs |
 | `src/web.mjs` | DSH's Web front end document, the launch-token cookie exchange and the request forwarding |

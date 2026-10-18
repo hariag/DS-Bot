@@ -4,10 +4,12 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
+import { chooseLocations, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
+import { importTeam } from './import.mjs'
 import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
 
 // DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
@@ -19,7 +21,6 @@ const here = dirname(fileURLToPath(import.meta.url))
 const webDist = join(dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
 // Drawn by scripts/icon.mjs. Windows takes the .ico for its several sizes.
 const iconFile = join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
-const dataDir = process.env.DS_BOT_HOME || join(homedir(), '.ds-bot')
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
 
 protocol.registerSchemesAsPrivileged([{
@@ -50,19 +51,24 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function start() {
-  const profileDir = join(dataDir, 'profiles', 'ds-bot')
+  const where = chooseLocations()
+  if (where.quit) { app.exit(0); return }
+  const profileDir = join(where.dataDir, 'profiles', 'ds-bot')
   mkdirSync(profileDir, { recursive: true })
-  host = new HostProcess({
+  const newHost = () => new HostProcess({
     entry: join(here, 'host.mjs'),
     cwd: profileDir,
-    env: { ...process.env, DSH_HOME: dataDir, DS_BOT_APP: '1' },
+    env: { ...process.env, DSH_HOME: where.dataDir, DS_BOT_APP: '1', ...(where.workspace ? { DS_BOT_WORKSPACE: where.workspace } : {}) },
     pnpm: join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs'),
     onFailure: fail,
   })
-  const ready = host.start().then(async (started) => {
+  const ready = (async () => {
+    if (where.import) await copyTeam(where, newHost)
+    host = newHost()
+    const started = await host.start()
     hostState = { ...started, cookie: await authenticateWebHost(started.url) }
     return hostState
-  })
+  })()
   ready.catch(fail)
 
   protocol.handle(SCHEME, (request) => {
@@ -97,6 +103,25 @@ function start() {
   // A packaged app has the icon in its bundle; Electron's own run shows Electron's.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(iconFile)
   createWindow()
+}
+
+// The Host starts once on the new data location first: DSH then sets up its project list
+// without the copied Sessions' folders, so the old team's folders are not offered as projects.
+async function copyTeam(where, newHost) {
+  host = newHost()
+  try {
+    await host.start()
+    mainWindow?.setProgressBar(2)
+    await host.stop()
+    host = undefined
+    const summary = await importTeam({ ...where.import, to: where.dataDir, workspace: where.workspace, dsh: getDshRuntimeVersion() })
+    console.log(`DeepSeek Bot: copied ${String(summary.bots)} Bots and ${String(summary.sessions)} Sessions from ${summary.from}`)
+  } catch (error) {
+    console.error(error)
+    await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)) })
+  } finally {
+    mainWindow?.setProgressBar(-1)
+  }
 }
 
 function createWindow() {
