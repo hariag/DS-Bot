@@ -825,6 +825,7 @@ var ZH = {
   "Update checks are off.": "已关闭更新检查。",
   "Installed from a local folder; update it there.": "从本地文件夹安装，请在那里更新。",
   "Updates are not offered for this install.": "这种安装方式不提供更新。",
+  "Updates come with the DeepSeek Bot app.": "随 DeepSeek Bot 应用一起更新。",
   Links: "链接",
   "Source code": "源代码",
   "Release notes": "发布说明",
@@ -11067,6 +11068,7 @@ function botHint(update) {
   if (update.phase === "installed") return t("Restart DSH to start using DS Bot {version}.", { version: update.installed ?? update.latest });
   if (update.phase === "failed") return t("The update did not finish: {reason}", { reason: hostText(update.error ?? "") });
   if (update.available) return t("DS Bot {version} is available", { version: update.latest });
+  if (update.source === "app") return t("Updates come with the DeepSeek Bot app.");
   if (update.enabled === false) return t("Update checks are off.");
   if (update.source === "path") return t("Installed from a local folder; update it there.");
   if (!update.checkedAt) return null;
@@ -11119,7 +11121,7 @@ function AboutPage({ useUpdate, actions, run, Section, Row: Row3 }) {
   const markState = checking ? "searching" : phase === "installing" || dshPhase === "installing" ? "working" : cheer ? "done" : "idle";
   const dshNew = showsDshRow(dsh, update.app);
   const dshShown = dshNew && dsh.available;
-  const botControl = phase === "installed" ? null : update.available || phase === "installing" ? (0, import_react29.createElement)(
+  const botControl = phase === "installed" || update.source === "app" ? null : update.available || phase === "installing" ? (0, import_react29.createElement)(
     "button",
     { type: "button", className: "bt-fb-primary", disabled: phase === "installing", onClick: () => run(actions.installUpdate()) },
     phase === "installing" ? t("Updating…") : phase === "failed" ? t("Try again") : t("Update")

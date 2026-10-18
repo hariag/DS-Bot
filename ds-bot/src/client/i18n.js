@@ -779,6 +779,7 @@ const ZH = {
   'Update checks are off.': '已关闭更新检查。',
   'Installed from a local folder; update it there.': '从本地文件夹安装，请在那里更新。',
   'Updates are not offered for this install.': '这种安装方式不提供更新。',
+  'Updates come with the DeepSeek Bot app.': '随 DeepSeek Bot 应用一起更新。',
   Links: '链接',
   'Source code': '源代码',
   'Release notes': '发布说明',
