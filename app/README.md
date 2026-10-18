@@ -19,6 +19,7 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 | `DS_BOT_HOME` | The data location: the `DSH_HOME` of the app. When it is set, the app asks nothing at its first start and imports nothing | The folder chosen at the first start |
 | `DS_BOT_WORKSPACE` | With `DS_BOT_HOME`: the folder for the files that Bots make | `bot/workspace` in the data location |
 | `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage, `locations.json`) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`) |
+| `DS_BOT_UPDATE_URL` | A folder URL with a `latest.yml` and the installer it names, which the installed app updates from (see [Updates](#updates)). With `DS_BOT_HOME`, the app checks for updates only when this is set | The newest GitHub release |
 
 ## First start and import
 
@@ -68,7 +69,22 @@ npm run check-packed   # starts the packaged app on throwaway folders with the m
 
 electron-builder packs only the packages that it finds through `dependencies` and `optionalDependencies`. The DSH packages ask for many packages as peers, which npm installs but electron-builder would leave out, so `package.json` lists them as dependencies. `npm test` fails when one is missing and names it.
 
-The Windows installer installs for the current user only, without administrator rights, by default into `%LOCALAPPDATA%\Programs\DeepSeek Bot` (`build/installer.nsh` skips the page that asks for all users or only for the current one). The uninstaller removes the program and keeps the data location and the app's own data. CI builds the Windows installer on every pull request, checks the packaged app, then installs it, checks the installed app and uninstalls it.
+The Windows installer installs for the current user only, without administrator rights, by default into `%LOCALAPPDATA%\Programs\DeepSeek Bot` (`build/installer.nsh` skips the page that asks for all users or only for the current one). The uninstaller removes the program and keeps the data location and the app's own data. CI builds the Windows installer on every pull request, checks the packaged app, then installs it, checks the installed app and uninstalls it. For a change to `app/` or the workflows, it also updates the installed app before the uninstall (see [Updates](#updates)).
+
+## Updates
+
+The installed app on Windows updates itself with electron-updater (`src/updates.mjs`). At its start and every 4 hours it reads `latest.yml` of the newest GitHub release, which names the installer and its sha512. It downloads that installer in the background and checks its sha512. When the download is done, a dialog on the window asks whether to restart now: then the app stops its Host and runs the installer, which opens the app again. Otherwise the installer runs when the app quits.
+
+`app-update.yml` in the package tells the app where its releases are; `npm run dist` writes it from `publish` in `electron-builder.yml`, together with `latest.yml` beside the installer (`npm run pack` writes neither). Neither command publishes. The release workflow (`.github/workflows/release.yml`) builds the installer when a release is published and attaches the installer, its `.blockmap` and `latest.yml` to the release. The release tag is the version of `ds-bot`, and `npm test` checks that the app has the same version.
+
+On throwaway folders (`DS_BOT_HOME`) the app checks for updates only from `DS_BOT_UPDATE_URL`, and it never asks: the update waits until the app quits. `scripts/check-update.mjs` checks the update of a packaged app with such a feed:
+
+```sh
+npx electron-builder --publish never -c.extraMetadata.version=<next version> -c.directories.output=dist-next   # the feed
+node scripts/check-update.mjs "dist-pack/win-unpacked/DeepSeek Bot.exe" dist-next --kill
+```
+
+It serves the feed folder, starts the app on throwaway folders and waits until the app has downloaded the update and checked its sha512. Then it closes the app as a user does, so that the app installs the update as it quits; with `--kill` it ends the app, so that nothing is installed. On your own machine use `--kill`: the installer would install into `%LOCALAPPDATA%\Programs\DeepSeek Bot`. The download stays in `%LOCALAPPDATA%\deepseek-bot-updater`. CI runs it without `--kill` on its installed app, then checks that the installed version is the new one and that the updated app passes `check-packed`.
 
 ## Layout
 
@@ -81,6 +97,7 @@ The Windows installer installs for the current user only, without administrator 
 | `src/profile.mjs` | The profile: its name, its bundles, and its creation and update |
 | `src/first-run.mjs` | The first start's dialogs: the two folders and the offer to import |
 | `src/import.mjs` | The import of a Bot team from the user's DSH |
+| `src/updates.mjs` | The updates of the installed app on Windows: the checks, the background download and the question to restart |
 | `engine/` | On hold, not installed: the bundle `deepseek-bot-engine` for the app's own window in `ui/` |
 | `test/` | `npm test`: the composition of the profile, and the dependencies that the package needs |
 | `src/web.mjs` | DSH's Web front end document, the launch-token cookie exchange and the request forwarding |
@@ -88,6 +105,7 @@ The Windows installer installs for the current user only, without administrator 
 | `assets/` | The app icon: `icon.svg`, `icon.png` (1024 px) and `icon.ico` (Windows, 16 to 256 px). `npm run icon` (`scripts/icon.mjs`) draws them again from the Main Bot's whale in `../ds-bot` |
 | `electron-builder.yml`, `build/` | The package and the installer: app identity, files, icons, the Windows installer and the macOS disk image |
 | `scripts/check-packed.mjs` | `npm run check-packed`: the check of a packaged app |
+| `scripts/check-update.mjs` | The check of a packaged app's update from a feed folder |
 
 The Host installs plugins with the app's own pnpm (`node_modules/pnpm`).
 
