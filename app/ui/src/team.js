@@ -170,8 +170,14 @@ export function createTeam() {
     },
     // The window has no DSH status bar, so the Bot's details show its figures.
     runStats: botId => call('run-stats', { botId }),
-    // Nor DSH's settings, so a first model choice takes a missing API key itself.
-    saveModelKey: (provider, value) => after(call('model-key', { provider, value })),
+    // Nor DSH's settings: model providers and their keys have a Models page here, and a
+    // first model choice takes a missing API key itself.
+    providers: () => call('providers'),
+    setProviderKey: (provider, value) => after(call('provider-key', { provider, value })),
+    addProvider: body => after(call('provider-add', body)),
+    providerModels: body => call('provider-models', body),
+    removeProvider: provider => after(call('provider-remove', { provider })),
+    openModels: () => actions.openSettings('models'),
     // Nothing else draws in the window: no shell panels, right sidebar, "@" menu or voice plugin.
     hasRightSidebar: () => false,
     canReferenceChat: () => false,

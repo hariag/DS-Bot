@@ -167,6 +167,7 @@ export function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onP
     else if (effort !== bot.effort) void run(actions.updateBot(bot.id, { effort: effort ?? null }))
   }
   const models = roster.models ?? []
+  const manage = manageModels(actions)
   return h(Fragment, null,
     h('button', {
       ref: button, type: 'button', className: 'bt-model-trigger', 'data-wide': wide || undefined,
@@ -183,8 +184,8 @@ export function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onP
       models.length > 0 ? h(ModelRows, { roster, current, onPick: pick })
         : h('div', { className: 'bt-model-none' }, t('No models are set up in DeepSeek Harness yet.')),
       effortRows(reasoning).length > 0 ? h(EffortRows, { reasoning, current: picked, onPick: pickEffort }) : null,
-      actions.openHarnessSettings ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
-      actions.openHarnessSettings ? h('button', { type: 'button', role: 'menuitem', onClick: () => { close(); actions.openHarnessSettings() } }, h(SlidersIcon), h('span', { className: 'bt-menu-label' }, t('Models and providers…'))) : null), document.body) : null)
+      manage ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
+      manage ? h('button', { type: 'button', role: 'menuitem', onClick: () => { close(); manage() } }, h(SlidersIcon), h('span', { className: 'bt-menu-label' }, t('Models and providers…'))) : null), document.body) : null)
 }
 
 // The card a Bot's chat opens on while the Bot has no model, or has one that is no
@@ -204,7 +205,8 @@ export function ModelChoiceDock({ sessionId, useRoster, actions }) {
   // An unknown catalog (none listed) cannot tell a lost model from a slow provider.
   if (bot.model && (!lost || models.length === 0)) return null
   // A window without DSH's own settings takes the missing key here.
-  const keyFor = usable.length === 0 && actions.saveModelKey ? models.find(model => model.needsKey) : undefined
+  const keyFor = usable.length === 0 && actions.setProviderKey ? models.find(model => model.needsKey) : undefined
+  const manage = manageModels(actions)
   const pick = (ref) => {
     setBusy(ref)
     setError('')
@@ -231,7 +233,7 @@ export function ModelChoiceDock({ sessionId, useRoster, actions }) {
             title: model.ref === roster.defaultModel ? `${model.ref} · ${t('Harness default')}` : model.ref,
             onClick: () => pick(model.ref),
           }, model.name, busy === model.ref ? h('span', { className: 'bt-model-spin', 'aria-label': t('Saving…') }) : null))))),
-        actions.openHarnessSettings ? h('button', { key: 'manage', type: 'button', className: 'bt-model-chip bt-model-chip-quiet', onClick: actions.openHarnessSettings }, h(SlidersIcon), t('Manage models')) : null,
+        manage ? h('button', { key: 'manage', type: 'button', className: 'bt-model-chip bt-model-chip-quiet', onClick: manage }, h(SlidersIcon), t('Manage models')) : null,
       ]
   return h('div', { className: 'bt-model-dock' },
     h('div', { className: 'bt-astack', 'data-lead': '' },
@@ -257,7 +259,7 @@ function ModelKeyCard({ model, actions }) {
     if (!ready) return
     setBusy(true)
     setError('')
-    void Promise.resolve(actions.saveModelKey(model.provider, value))
+    void Promise.resolve(actions.setProviderKey(model.provider, value))
       .then(() => setValue(''), failure => setError(hostText(failure?.message ?? String(failure))))
       .finally(() => setBusy(false))
   }
@@ -266,8 +268,12 @@ function ModelKeyCard({ model, actions }) {
     h('label', { className: 'bt-q-field bt-secret-field' }, h(MaskedInput, { value, onChange: setValue, onEnter: save, label, autoFocus: true })),
     error ? h('div', { className: 'bt-secret-error', role: 'alert' }, error) : null,
     h('div', { className: 'bt-q-foot' },
+      actions.openModels ? h('button', { type: 'button', className: 'bt-q-btn bt-model-key-other', onClick: actions.openModels }, t('Another provider')) : null,
       h('button', { type: 'button', className: 'bt-q-submit', disabled: !ready, onClick: save }, busy ? t('Saving…') : t('Save'))))
 }
+
+// Where the providers are set up: the window's own Models page, else DSH's settings.
+const manageModels = actions => actions.openModels ?? actions.openHarnessSettings
 
 // Ways to get a first model. The DeepSeek sign-in exists only where the shell carries
 // its account plugin (the Desktop); the API key and custom models use the shell's
@@ -338,6 +344,7 @@ export const MODEL_CSS = `
 .bt-model-key-title{display:flex;align-items:center;gap:6px;font-size:13px;line-height:18px;font-weight:500;color:var(--bt-ink-2)}
 .bt-model-key-title svg{flex:none;width:16px;height:16px}
 .bt-model-key .bt-q-foot{margin-top:2px}
+.bt-model-key-other{margin-right:auto}
 @keyframes bt-model-in{from{opacity:0;transform:translateY(6px)}}
 .bt-model-spin{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--bt-line-2);border-top-color:var(--bt-ink-2);animation:bt-model-spin .7s linear infinite}
 @keyframes bt-model-spin{to{transform:rotate(360deg)}}

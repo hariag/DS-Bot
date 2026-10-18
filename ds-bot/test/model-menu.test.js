@@ -105,8 +105,9 @@ test('without DSH\'s own settings, the choice offers no way into them', () => {
 
 test('the Thinking section always offers Default, so a picked level can be cleared', () => {
   const efforts = [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }]
-  assert.deepEqual([...effortRows({ efforts, defaultEffort: 'high' }).map(row => row.effort)], [undefined, 'low', 'high'])
-  assert.deepEqual([...effortRows({ efforts }).map(row => row.effort)], [undefined, 'low', 'high'])
+  // Array.from: the rows come from the bundle's realm, whose arrays are not this one's.
+  assert.deepEqual(Array.from(effortRows({ efforts, defaultEffort: 'high' }), row => row.effort), [undefined, 'low', 'high'])
+  assert.deepEqual(Array.from(effortRows({ efforts }), row => row.effort), [undefined, 'low', 'high'])
   assert.equal(effortRows({ efforts: [] }).length, 0)
 })
 
@@ -128,7 +129,7 @@ test('a window without DSH settings asks for the missing API key in the first ch
   const tree = ModelChoiceDock({
     sessionId: bot.id,
     useRoster: select => select({ ready: true, byId: { chief: bot }, models: keyless }),
-    actions: { saveModelKey: (provider, value) => { saved.push([provider, value]) } },
+    actions: { setProviderKey: (provider, value) => { saved.push([provider, value]) } },
   })
   assert.match(nodes(tree, node => node.props.className === 'bt-bubble')[0].children[0], /need a DeepSeek API key/)
   const [card] = nodes(tree, node => node.props.model !== undefined)
