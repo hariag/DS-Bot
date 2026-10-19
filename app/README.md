@@ -67,7 +67,7 @@ npm run dist           # the installer: dist-pack/DeepSeek-Bot-<version>-win-x64
 npm run check-packed   # starts the packaged app on throwaway folders with the mock model, chats once, closes it
 ```
 
-macOS produces one DMG per architecture. Build arm64 on an Apple chip Mac and x64 on an Intel Mac. Do not cross-build: it packages native modules from `node_modules`; a combined build put 12 arm64-only native modules in its x64 app. The app is ad-hoc signed so downloaded copies are sealed. On first open, use System Settings → Privacy & Security → Open Anyway. Do not disable Gatekeeper.
+macOS produces one DMG per architecture. Build arm64 on an Apple chip Mac and x64 on an Intel Mac, or under Rosetta with an x64 Node that also ran `npm ci`. Do not cross-build: it packages native modules from `node_modules`; a combined build put 12 arm64-only native modules in its x64 app. `scripts/before-pack.mjs` stops a build whose architecture is not the one of the Node that runs it. The app is ad-hoc signed so downloaded copies are sealed. On first open, use System Settings → Privacy & Security → Open Anyway. Do not disable Gatekeeper.
 
 `check-packed` takes another executable as its first argument, and a file for a screenshot of the window as its second. It runs an app that lies inside this checkout from a copy in its throwaway folder: from inside the checkout, Node would find a module that the package left out in the checkout's own `node_modules`.
 
