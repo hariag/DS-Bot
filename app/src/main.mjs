@@ -147,7 +147,7 @@ function startUpdates() {
   if (!app.isPackaged || (throwaway && feed === undefined)) return undefined
   if (process.platform === 'darwin') {
     return watchReleases({
-      current: app.getVersion(), feed, ask: throwaway ? undefined : askDownload, open: url => shell.openExternal(url),
+      current: app.getVersion(), arch: process.arch, feed, ask: throwaway ? undefined : askDownload, open: url => shell.openExternal(url),
     })
   }
   if (process.platform === 'win32') {

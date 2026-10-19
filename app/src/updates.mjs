@@ -24,7 +24,7 @@ export const UPDATE_TEXT = {
 }
 
 const CHECK_EVERY_MS = 4 * 60 * 60_000
-export const RELEASES_URL = 'https://api.github.com/repos/Fei2411/DeepSeek-Bot/releases/latest'
+export const RELEASES_URL = 'https://api.github.com/repos/Fei2411/DeepSeek-Bot/releases?per_page=20'
 
 function parseVersion(version) {
   if (typeof version !== 'string') return null
@@ -64,7 +64,16 @@ export function isNewer(candidate, current) {
   return false
 }
 
-export function watchReleases({ current, fetch = globalThis.fetch, ask, open, feed = RELEASES_URL, log = console }) {
+function isHttpsPage(page) {
+  if (typeof page !== 'string') return false
+  try {
+    return new URL(page).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+export function watchReleases({ current, arch, fetch = globalThis.fetch, ask, open, feed = RELEASES_URL, log = console }) {
   let asked
   let latest = Promise.resolve(null)
   const check = () => {
@@ -77,17 +86,33 @@ export function watchReleases({ current, fetch = globalThis.fetch, ask, open, fe
           log.error(`DeepSeek Bot: update check failed: HTTP ${String(response.status)}`)
           return null
         }
-        const { tag_name, html_url: page } = await response.json()
-        const version = typeof tag_name === 'string' ? tag_name.replace(/^v/u, '') : ''
-        if (!isNewer(version, current)) return null
-        if (typeof page !== 'string' || new URL(page).protocol !== 'https:') throw new Error('release page URL is not HTTPS')
-        const found = { version, page }
-        log.info(`DeepSeek Bot: update ${version} available`)
-        if (ask !== undefined && asked !== version) {
-          asked = version
-          void Promise.resolve().then(() => ask(version))
-            .then(yes => (yes ? open(page) : undefined))
-            .catch((error) => { log.error(`DeepSeek Bot: update ${version} not opened: ${error instanceof Error ? error.message : String(error)}`) })
+        const releases = await response.json()
+        if (!Array.isArray(releases)) {
+          log.error('DeepSeek Bot: update check failed: releases response is not an array')
+          return null
+        }
+        const currentVersion = parseVersion(current)
+        const allowPrerelease = currentVersion !== null && currentVersion.pre !== null
+        let found
+        for (const release of releases) {
+          if (release === null || typeof release !== 'object' || release.draft === true
+            || (release.prerelease === true && !allowPrerelease)) continue
+          const version = typeof release.tag_name === 'string' ? release.tag_name.replace(/^v/u, '') : ''
+          if (!isNewer(version, current)) continue
+          if (!Array.isArray(release.assets) || !release.assets.some(asset => asset?.name === `DeepSeek-Bot-${version}-mac-${arch}.dmg`)) continue
+          if (!isHttpsPage(release.html_url)) {
+            log.error('DeepSeek Bot: update check failed: release page URL is not HTTPS')
+            continue
+          }
+          if (found === undefined || isNewer(version, found.version)) found = { version, page: release.html_url }
+        }
+        if (found === undefined) return null
+        log.info(`DeepSeek Bot: update ${found.version} available`)
+        if (ask !== undefined && asked !== found.version) {
+          asked = found.version
+          void Promise.resolve().then(() => ask(found.version))
+            .then(yes => (yes ? open(found.page) : undefined))
+            .catch((error) => { log.error(`DeepSeek Bot: update ${found.version} not opened: ${error instanceof Error ? error.message : String(error)}`) })
         }
         return found
       } catch (error) {

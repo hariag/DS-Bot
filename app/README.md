@@ -19,7 +19,7 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 | `DS_BOT_HOME` | The data location: the `DSH_HOME` of the app. When it is set, the app asks nothing at its first start and imports nothing | The folder chosen at the first start |
 | `DS_BOT_WORKSPACE` | With `DS_BOT_HOME`: the folder for the files that Bots make | `bot/workspace` in the data location |
 | `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage, `locations.json`) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`; macOS: `~/Library/Application Support/DeepSeek Bot`) |
-| `DS_BOT_UPDATE_URL` | Windows: a folder URL with `latest.yml` and its installer. macOS: a URL returning JSON like `releases/latest`, with `tag_name` and `html_url` (see [Updates](#updates)). With `DS_BOT_HOME`, the app checks only when this is set | The newest GitHub release |
+| `DS_BOT_UPDATE_URL` | Windows: a folder URL with `latest.yml` and its installer. macOS: a URL returning a JSON list like GitHub's `releases` API; a release counts only when this Mac's DMG is attached. Prereleases count only for prerelease installs (see [Updates](#updates)). With `DS_BOT_HOME`, the app checks only when this is set | The newest GitHub release |
 
 On macOS, Electron's default `userData` directory for `productName` "DeepSeek Bot" is `~/Library/Application Support/DeepSeek Bot`.
 
@@ -81,7 +81,7 @@ The installed app on Windows updates itself with electron-updater (`src/updates.
 
 The checks start before the Host (after a first start's import), so that a version whose Host does not start can still update. When the start fails, the app waits up to 15 seconds for the newest check. When it found a newer version, the error box says so; after the box the app waits for the download, then installs it and opens again.
 
-On macOS, the app checks GitHub's latest release at start and every 4 hours. It asks once per version. Download opens the release page; Later closes the dialog. The app does not install the update itself. `DS_BOT_UPDATE_URL` on macOS points to JSON like the `releases/latest` API response, with `tag_name` and an HTTPS `html_url`.
+On macOS, the app checks GitHub's releases at start and every 4 hours. It asks once per version, after that release's DMG for this Mac is attached. Stable installs ignore prereleases; prerelease installs can see them. Download opens the release page; Later closes the dialog. The app does not install the update itself. `DS_BOT_UPDATE_URL` on macOS points to a JSON list like the `releases` API response. A release needs `tag_name`, an HTTPS `html_url`, and the matching architecture's DMG in `assets`.
 
 On Windows, `app-update.yml` tells the app where its releases are; `npm run dist` writes it from `publish` in `electron-builder.yml`, together with `latest.yml` beside the installer (`npm run pack` writes neither). Neither command publishes. The release workflow (`.github/workflows/release.yml`) builds the installer when a release is published and attaches the installer, its `.blockmap` and `latest.yml` to the release. The release tag is the version of `ds-bot`, and `npm test` checks that the app has the same version. The macOS release job builds each DMG on a matching-architecture runner and attaches only the DMG.
 

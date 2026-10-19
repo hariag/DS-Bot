@@ -32,9 +32,16 @@ const quietLog = () => {
   return { lines, info: (line) => { lines.push(line) }, error: (line) => { lines.push(line) } }
 }
 
-const release = (version, page = 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.9') => ({
-  tag_name: `v${version}`, html_url: page,
-})
+const release = (version, options = {}) => {
+  const arch = options.arch ?? 'arm64'
+  return {
+    tag_name: `v${version}`,
+    html_url: options.page ?? `https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v${version}`,
+    draft: options.draft ?? false,
+    prerelease: options.prerelease ?? false,
+    assets: options.assets ?? [{ name: `DeepSeek-Bot-${version}-mac-${arch}.dmg` }],
+  }
+}
 
 const releaseResponse = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -65,9 +72,9 @@ describe('watchReleases', () => {
     const calls = []
     const fetch = async (url, options) => {
       calls.push({ url, options })
-      return releaseResponse(release('0.1.7'))
+      return releaseResponse([release('0.1.7')])
     }
-    const updates = watchReleases({ current: '0.1.7', fetch, log: quietLog() })
+    const updates = watchReleases({ current: '0.1.7', arch: 'arm64', fetch, log: quietLog() })
     t.after(updates.stop)
     assert.equal(await updates.latest(), null)
     assert.deepEqual(calls[0], {
@@ -76,7 +83,7 @@ describe('watchReleases', () => {
     })
 
     const feed = 'http://127.0.0.1:8080/'
-    const custom = watchReleases({ current: '0.1.7', fetch, feed, log: quietLog() })
+    const custom = watchReleases({ current: '0.1.7', arch: 'arm64', fetch, feed, log: quietLog() })
     t.after(custom.stop)
     await custom.latest()
     assert.equal(calls[1].url, feed)
@@ -88,7 +95,7 @@ describe('watchReleases', () => {
       const asked = []
       const opened = []
       const updates = watchReleases({
-        current: '0.1.7', fetch: async () => releaseResponse(release('0.1.9', page)), log: quietLog(),
+        current: '0.1.7', arch: 'arm64', fetch: async () => releaseResponse([release('0.1.9', { page })]), log: quietLog(),
         ask: async version => { asked.push(version); return accepted },
         open: url => { opened.push(url) },
       })
@@ -104,7 +111,7 @@ describe('watchReleases', () => {
     for (const version of ['0.1.7', '0.1.6']) {
       const asked = []
       const updates = watchReleases({
-        current: '0.1.7', fetch: async () => releaseResponse(release(version)), log: quietLog(),
+        current: '0.1.7', arch: 'arm64', fetch: async () => releaseResponse([release(version)]), log: quietLog(),
         ask: async value => { asked.push(value); return true }, open: () => {},
       })
       t.after(updates.stop)
@@ -120,7 +127,8 @@ describe('watchReleases', () => {
     const asked = []
     const updates = watchReleases({
       current: '0.1.7',
-      fetch: async () => { checks += 1; return releaseResponse(release(version)) },
+      arch: 'arm64',
+      fetch: async () => { checks += 1; return releaseResponse([release(version)]) },
       ask: async value => { asked.push(value); return false },
       open: () => {},
       log: quietLog(),
@@ -144,7 +152,7 @@ describe('watchReleases', () => {
   test('reports releases without asking in throwaway runs', async (t) => {
     let opens = 0
     const updates = watchReleases({
-      current: '0.1.7', fetch: async () => releaseResponse(release('0.1.9')),
+      current: '0.1.7', arch: 'arm64', fetch: async () => releaseResponse([release('0.1.9')]),
       ask: undefined, open: () => { opens += 1 }, log: quietLog(),
     })
     t.after(updates.stop)
@@ -157,15 +165,95 @@ describe('watchReleases', () => {
       [async () => releaseResponse({}, 403), 'DeepSeek Bot: update check failed: HTTP 403'],
       [async () => { throw new Error('offline') }, 'DeepSeek Bot: update check failed: offline'],
       [async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad JSON') } }), 'DeepSeek Bot: update check failed: bad JSON'],
-      [async () => releaseResponse(release('0.1.9', 'http://github.com/Fei2411/DeepSeek-Bot')), 'DeepSeek Bot: update check failed: release page URL is not HTTPS'],
+      [async () => releaseResponse([release('0.1.9', { page: 'http://github.com/Fei2411/DeepSeek-Bot' })]), 'DeepSeek Bot: update check failed: release page URL is not HTTPS'],
     ]
     for (const [fetch, message] of cases) {
       const log = quietLog()
-      const updates = watchReleases({ current: '0.1.7', fetch, log })
+      const updates = watchReleases({ current: '0.1.7', arch: 'arm64', fetch, log })
       t.after(updates.stop)
       assert.equal(await updates.latest(), null)
       assert.deepEqual(log.lines, [message])
     }
+  })
+
+  test('logs a non-array release response once', async (t) => {
+    const log = quietLog()
+    const updates = watchReleases({
+      current: '0.1.7', arch: 'arm64', fetch: async () => releaseResponse({ releases: [] }), log,
+    })
+    t.after(updates.stop)
+    assert.equal(await updates.latest(), null)
+    assert.deepEqual(log.lines, ['DeepSeek Bot: update check failed: releases response is not an array'])
+  })
+
+  test('waits for the matching-architecture DMG before asking', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    let attached = false
+    const asked = []
+    const updates = watchReleases({
+      current: '0.1.7',
+      arch: 'arm64',
+      fetch: async () => releaseResponse([release('0.1.9', { arch: attached ? 'arm64' : 'x64' })]),
+      ask: async version => { asked.push(version); return false },
+      open: () => {},
+      log: quietLog(),
+    })
+    t.after(updates.stop)
+
+    assert.equal(await updates.latest(), null)
+    await sleep(0)
+    assert.deepEqual(asked, [])
+    attached = true
+    t.mock.timers.tick(4 * 60 * 60_000)
+    assert.deepEqual(await updates.latest(), {
+      version: '0.1.9', page: 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.9',
+    })
+    await sleep(0)
+    assert.deepEqual(asked, ['0.1.9'])
+  })
+
+  test('ignores prereleases for a stable installation', async (t) => {
+    const updates = watchReleases({
+      current: '0.1.7', arch: 'arm64',
+      fetch: async () => releaseResponse([release('0.2.0-rc.2', { prerelease: true })]),
+      log: quietLog(),
+    })
+    t.after(updates.stop)
+    assert.equal(await updates.latest(), null)
+  })
+
+  test('includes prereleases when the installed version is a prerelease', async (t) => {
+    const updates = watchReleases({
+      current: '0.2.0-rc.1', arch: 'arm64',
+      fetch: async () => releaseResponse([release('0.2.0-rc.2', { prerelease: true })]),
+      log: quietLog(),
+    })
+    t.after(updates.stop)
+    assert.deepEqual(await updates.latest(), {
+      version: '0.2.0-rc.2', page: 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.2.0-rc.2',
+    })
+  })
+
+  test('ignores draft releases', async (t) => {
+    const updates = watchReleases({
+      current: '0.1.7', arch: 'arm64',
+      fetch: async () => releaseResponse([release('0.1.9', { draft: true })]),
+      log: quietLog(),
+    })
+    t.after(updates.stop)
+    assert.equal(await updates.latest(), null)
+  })
+
+  test('chooses the highest newer release with a matching DMG', async (t) => {
+    const updates = watchReleases({
+      current: '0.1.7', arch: 'arm64',
+      fetch: async () => releaseResponse([release('0.1.9'), release('0.1.10'), release('0.1.8')]),
+      log: quietLog(),
+    })
+    t.after(updates.stop)
+    assert.deepEqual(await updates.latest(), {
+      version: '0.1.10', page: 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.10',
+    })
   })
 
   test('logs a rejected prompt without an unhandled rejection', async (t) => {
@@ -175,7 +263,7 @@ describe('watchReleases', () => {
     t.after(() => { process.off('unhandledRejection', note) })
     const log = quietLog()
     const updates = watchReleases({
-      current: '0.1.7', fetch: async () => releaseResponse(release('0.1.9')),
+      current: '0.1.7', arch: 'arm64', fetch: async () => releaseResponse([release('0.1.9')]),
       ask: async () => { throw new Error('dialog failed') }, open: () => {}, log,
     })
     t.after(updates.stop)
@@ -189,7 +277,8 @@ describe('watchReleases', () => {
     t.mock.timers.enable({ apis: ['setInterval'] })
     let checks = 0
     const updates = watchReleases({
-      current: '0.1.7', fetch: async () => { checks += 1; return releaseResponse(release('0.1.7')) }, log: quietLog(),
+      current: '0.1.7', arch: 'arm64',
+      fetch: async () => { checks += 1; return releaseResponse([release('0.1.7')]) }, log: quietLog(),
     })
     await updates.latest()
     updates.stop()
