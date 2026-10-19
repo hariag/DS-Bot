@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, hostname, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
@@ -29,7 +29,8 @@ const TEAM = {
 // DSH_HOME, the team's data inside it, and a project folder beside it. Every Session
 // starts in the team workspace unless it is made with a cwd. `services` are what
 // ctx.get finds, such as the sandbox policy and approvals.
-async function start({ services = {}, workspaces = [], llm, team: saved = TEAM } = {}) {
+// `locked`: another dsh holds the team, so this one only shows it.
+async function start({ services = {}, workspaces = [], llm, team: saved = TEAM, locked = false } = {}) {
   // The native realpath, as fs/promises uses: on Windows the JS one keeps 8.3 short names.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
   const dsh = join(root, 'dsh')
@@ -38,6 +39,7 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM }
   const project = join(root, 'project')
   for (const dir of [team, project]) mkdirSync(dir, { recursive: true })
   writeFileSync(join(home, 'state.json'), JSON.stringify(saved))
+  if (locked) writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: process.ppid, host: hostname(), token: 'other' }))
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = dsh
 
@@ -704,4 +706,17 @@ test('Sessions that are not a Bot\'s keep DSH\'s own working_directory', async (
   assert.deepEqual(await changeDirectory(ctx, service, agentOf('x'), project), { result: { isError: false, value: { cwd: project } }, ran: true })
   assert.equal(requests.length, 0)
   assert.deepEqual(Object.values(state().bots).map(bot => bot.workDir), [undefined, undefined])
+})
+
+test('while another dsh has the team open, a Bot cannot leave its working folder', async (t) => {
+  const { service } = folderService()
+  const { services } = approvalServices('allowed-once')
+  const { ctx, agentOf, team, project, state, stop } = await start({ services: { ...services, workingDirectory: service }, locked: true })
+  t.after(stop)
+  mkdirSync(join(team, 'site'))
+  assert.equal((await changeDirectory(ctx, service, agentOf('b'), 'site')).ran, true)
+  const out = await changeDirectory(ctx, service, agentOf('b'), project)
+  assert.match(out.error, /^Your working folder cannot change now: The Bot team in .* is open in another dsh/)
+  assert.equal(out.ran, false)
+  assert.equal(state().bots.b.workDir, undefined)
 })

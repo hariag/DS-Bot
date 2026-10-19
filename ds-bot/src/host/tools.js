@@ -318,7 +318,7 @@ export function install(rt) {
   ctx.on('tools/execute', async (exec, next) => {
     const cd = exec.name === WORKING_DIRECTORY_TOOL && typeof exec.arguments?.cd === 'string' ? exec.arguments.cd.trim() : ''
     const session = exec.agent?.session
-    if (cd === '' || session === undefined || rt.readOnly() !== undefined) return next()
+    if (cd === '' || session === undefined) return next()
     await rt.load()
     const bot = callerBot(exec)
     if (bot === undefined) return next()
@@ -327,6 +327,8 @@ export function install(rt) {
     const target = await rt.folderAt(rt.sessionFolder(session), cd)
     if (target === undefined || home === undefined || within(target, await rt.real(home))) return next()
     if (room?.workDir) throw new Error(`Every member of "${room.name}" works in ${room.workDir} here, so you stay inside it. The user or a Main Bot can change the group's folder.`)
+    const readOnly = rt.readOnly()
+    if (readOnly !== undefined) throw new Error(`Your working folder cannot change now: ${readOnly}`)
     const workDir = await rt.cleanWorkDir(target)
     await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
     const result = await next()
