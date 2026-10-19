@@ -137,6 +137,33 @@ describe('importTeam', () => {
   })
 })
 
+describe('a copy that stopped', () => {
+  let root, from
+  before(() => {
+    root = mkdtempSync(join(tmpdir(), 'ds-bot-app-stopped-'))
+    from = oldHome(root)
+  })
+  after(() => { rmSync(root, { recursive: true, force: true }) })
+
+  test('a copy that stopped part way runs again', async () => {
+    const { to, workspace } = newHome(root)
+    write(join(to, '.import-1', 'junk.txt'), 'left over')
+    write(join(to, 'sessions', '--site--', 'session-b', 'session.v4.jsonl.zstd'), 'junk')
+    const summary = await importTeam({ from, to, workspace })
+    assert.equal(summary.sessions, 5)
+    assert.deepEqual(Object.keys(readJson(join(to, 'bot', 'state.json')).bots), ['session-a', 'session-b'])
+    assert.equal(readFileSync(join(to, 'sessions', '--site--', 'session-b', 'session.v4.jsonl.zstd'), 'utf8'), 'session-b')
+    assert.deepEqual(readdirSync(to).filter(name => /^\.import-\d+$/u.test(name)), [])
+  })
+
+  test('a stopped copy leaves no Bot team', async () => {
+    const to = join(root, 'stopped')
+    mkdirSync(to, { recursive: true })
+    await assert.rejects(importTeam({ from, to, workspace: join(root, 'stopped-files'), signal: AbortSignal.abort() }), { name: 'AbortError' })
+    assert.equal(existsSync(join(to, 'bot')), false)
+  })
+})
+
 describe('finding the team', () => {
   let root, from
   before(() => {

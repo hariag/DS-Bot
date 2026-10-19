@@ -1,7 +1,7 @@
 // The first start: where the app keeps its data and the Bots' files, and whether it copies the
 // Bot team of the user's own DSH. The answers are kept in the app's own data.
 import { app, dialog } from 'electron'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { findTeam, newerSessions, teamInUse, userDshHome, within } from './import.mjs'
@@ -50,17 +50,24 @@ export const localeText = table => (app.getLocale().toLowerCase().startsWith('zh
 export const text = () => localeText(TEXT)
 
 const PROFILE_NAMES = { desktop: 'DSH Desktop', web: 'DSH Web' }
-const ask = options => dialog.showMessageBoxSync({ title: 'DeepSeek Bot', noLink: true, ...options })
 const locationsFile = () => join(app.getPath('userData'), 'locations.json')
 
-/** Ask for the places and the copy again at the next start, as after quitting the first start. */
-export function forgetLocations() {
-  rmSync(locationsFile(), { force: true })
+// A quit request while a first-run dialog is open stops the first run right after that dialog.
+class Quit extends Error {}
+
+async function ask(options, signal) {
+  const { response } = await dialog.showMessageBox({ title: 'DeepSeek Bot', noLink: true, ...options, signal })
+  // A quit that arrived while a synchronous macOS box was open gets to run first.
+  await new Promise(resolve => setImmediate(resolve))
+  if (signal.aborted) throw new Quit()
+  return response
 }
 
-function pick(title, current) {
-  const picked = dialog.showOpenDialogSync({ title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
-  return picked?.[0] ?? current
+async function pick(title, current, signal) {
+  const { canceled, filePaths } = await dialog.showOpenDialog({ title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
+  await new Promise(resolve => setImmediate(resolve))
+  if (signal.aborted) throw new Quit()
+  return canceled ? current : filePaths[0]
 }
 
 function placeProblem(t, dataDir, workspace) {
@@ -83,7 +90,7 @@ function hasTeam(dataDir) {
   }
 }
 
-function offerImport(t, dataDir) {
+async function offerImport(t, dataDir, signal) {
   const from = userDshHome()
   let found
   try {
@@ -92,27 +99,34 @@ function offerImport(t, dataDir) {
     console.error(error)
   }
   if (found === undefined) return undefined
-  if (ask({ type: 'question', message: t.found(found.bots, found.rooms), detail: t.foundDetail(from), buttons: [t.copy, t.skip], defaultId: 0, cancelId: 1 }) === 1) return undefined
+  if (await ask({ type: 'question', message: t.found(found.bots, found.rooms), detail: t.foundDetail(from), buttons: [t.copy, t.skip], defaultId: 0, cancelId: 1 }, signal) === 1) return undefined
   while (teamInUse(from)) {
-    if (ask({ type: 'warning', message: t.inUse, buttons: [t.retry, t.skip], defaultId: 0, cancelId: 1 }) === 1) return undefined
+    if (await ask({ type: 'warning', message: t.inUse, buttons: [t.retry, t.skip], defaultId: 0, cancelId: 1 }, signal) === 1) return undefined
   }
   const newer = newerSessions(from, found.team)
   if (newer.length > 0) {
-    if (ask({ type: 'warning', message: t.newer(newer.length), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 }) === 0) return { quit: true }
+    if (await ask({ type: 'warning', message: t.newer(newer.length), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 }, signal) === 0) return { quit: true }
     return undefined
   }
   const { profiles } = found
   const profile = profiles.length < 2 ? profiles[0]?.name
-    : profiles[ask({ type: 'question', message: t.whichModels, buttons: profiles.map(entry => PROFILE_NAMES[entry.name] ?? entry.name), defaultId: 0, cancelId: 0 })].name
+    : profiles[await ask({ type: 'question', message: t.whichModels, buttons: profiles.map(entry => PROFILE_NAMES[entry.name] ?? entry.name), defaultId: 0, cancelId: 0 }, signal)].name
   return { from, profile }
+}
+
+/** Write the chosen places once the first run is finished; quitting before that asks again. */
+export function saveLocations({ dataDir, workspace }) {
+  const file = locationsFile()
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, `${JSON.stringify({ dataDir, workspace }, null, 2)}\n`)
 }
 
 /**
  * Where the app keeps its data and the Bots' files, asked at the first start.
  * A run on throwaway folders (DS_BOT_HOME, for development and tests) asks nothing and copies nothing.
- * @returns {{ dataDir: string, workspace?: string, import?: { from: string, profile?: string }, quit?: true }}
+ * @returns {Promise<{ dataDir: string, workspace?: string, import?: { from: string, profile?: string }, quit?: true }>}
  */
-export function chooseLocations() {
+export async function chooseLocations(signal) {
   if (process.env.DS_BOT_HOME) return { dataDir: process.env.DS_BOT_HOME, workspace: process.env.DS_BOT_WORKSPACE || undefined }
   const file = locationsFile()
   if (existsSync(file)) {
@@ -122,20 +136,27 @@ export function chooseLocations() {
   const t = text()
   let dataDir = join(homedir(), '.ds-bot')
   let workspace = join(homedir(), 'DeepSeek Bot')
-  for (;;) {
-    const choice = ask({ type: 'info', message: t.welcome, detail: t.places(dataDir, workspace), buttons: [t.start, t.change], defaultId: 0, cancelId: 0 })
-    if (choice === 1) {
-      dataDir = pick(t.pickData, dataDir)
-      workspace = pick(t.pickWorkspace, workspace)
-      continue
+  try {
+    for (;;) {
+      const choice = await ask({ type: 'info', message: t.welcome, detail: t.places(dataDir, workspace), buttons: [t.start, t.change, t.quit], defaultId: 0, cancelId: 2 }, signal)
+      if (choice === 2) return { quit: true }
+      if (choice === 1) {
+        dataDir = await pick(t.pickData, dataDir, signal)
+        workspace = await pick(t.pickWorkspace, workspace, signal)
+        continue
+      }
+      const problem = placeProblem(t, dataDir, workspace)
+      if (problem === undefined) break
+      await ask({ type: 'warning', message: problem, buttons: ['OK'] }, signal)
     }
-    const problem = placeProblem(t, dataDir, workspace)
-    if (problem === undefined) break
-    ask({ type: 'warning', message: problem, buttons: ['OK'] })
+    const imported = await offerImport(t, dataDir, signal)
+    if (imported?.quit) return { quit: true }
+    if (imported !== undefined) return { dataDir, workspace, import: imported }
+  } catch (error) {
+    if (error instanceof Quit) return { quit: true }
+    throw error
   }
-  const imported = offerImport(t, dataDir)
-  if (imported?.quit) return { dataDir, workspace, quit: true }
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify({ dataDir, workspace }, null, 2)}\n`)
-  return { dataDir, workspace, ...(imported ? { import: imported } : {}) }
+  // There is nothing to copy, so the first run ends with the chosen places.
+  saveLocations({ dataDir, workspace })
+  return { dataDir, workspace }
 }

@@ -2,7 +2,7 @@
 // The dsh-app scheme, the request forwarding and the WebSocket header rewrite follow
 // DeepSeek Harness apps/desktop/src/main.ts (MIT); see NOTICE.
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
-import { chooseLocations, forgetLocations, localeText, text } from './first-run.mjs'
+import { chooseLocations, localeText, saveLocations, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
 import { copySessions, findTeam, importTeam } from './import.mjs'
 import { CHECK_PROFILE, PROFILE } from './profile.mjs'
@@ -43,9 +43,11 @@ let updates
 let stopping = false
 let stopped = false
 let failed = false
-// Quitting waits for the first-run check, so that its copy of the team's chats goes as well.
-let checking
-const checkAbort = new AbortController()
+// Quitting while a first-run dialog is open stops the first run, and during the copy it waits
+// for the copy to stop at a safe point, so that it leaves no half team and no temporary copy.
+let choosing
+let copying
+const copyAbort = new AbortController()
 
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)
@@ -53,11 +55,16 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => { app.quit() })
   app.on('before-quit', (event) => {
-    if (checking !== undefined) {
+    if (choosing !== undefined) {
       event.preventDefault()
-      if (checkAbort.signal.aborted) return
-      checkAbort.abort()
-      void checking.finally(() => { checking = undefined; app.quit() })
+      choosing.abort()
+      return
+    }
+    if (copying !== undefined) {
+      event.preventDefault()
+      if (copyAbort.signal.aborted) return
+      copyAbort.abort()
+      void copying.finally(() => { copying = undefined; app.quit() })
       return
     }
     if (stopped || host === undefined) return
@@ -74,8 +81,9 @@ function stopHost() {
   return hostStop
 }
 
-function start() {
-  const where = chooseLocations()
+async function start() {
+  choosing = new AbortController()
+  const where = await chooseLocations(choosing.signal).finally(() => { choosing = undefined })
   if (where.quit) { app.exit(0); return }
   const pnpm = join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
   const profileDir = join(where.dataDir, 'profiles', PROFILE)
@@ -94,11 +102,13 @@ function start() {
     return new HostProcess({ entry: join(here, 'host.mjs'), cwd, env: { ...process.env, DSH_HOME: home, DS_BOT_CHECK: list }, pnpm, onFailure: () => {} })
   }
   const ready = (async () => {
-    const copied = where.import ? await copyTeam(where, newHost, newCheck) : undefined
-    if (copied === 'quit') {
-      forgetLocations()
-      app.exit(0)
+    let copied
+    if (where.import) {
+      copying = copyTeam(where, newHost, newCheck, copyAbort.signal)
+      copied = await copying
+      copying = undefined
     }
+    if (copied === 'quit') app.exit(0)
     // The window may be waiting for the Host; it goes away with the app.
     if (copied !== undefined) return new Promise(() => {})
     // Not during the import, which a restart would cut short; before the Host, so that an
@@ -150,36 +160,47 @@ function start() {
 // Before that, the app's own DSH reads every chat of the team once: a newer DSH can write
 // records that this one refuses while the log format stays the same. Such a chat stops the
 // copy, as a newer log format does; 'quit' means the user updates DeepSeek Bot first, and
-// 'stopped' that the app quit during the check.
-async function copyTeam(where, newHost, newCheck) {
-  checking = checkTeam(where, newCheck, checkAbort.signal)
-  const unreadable = await checking
-  if (checkAbort.signal.aborted) return 'stopped'
-  checking = undefined
+// 'stopped' that the app quit during the copy.
+async function copyTeam(where, newHost, newCheck, signal) {
+  const unreadable = await checkTeam(where, newCheck, signal)
+  if (signal.aborted) return 'stopped'
   if (unreadable > 0) {
     const t = text()
     const { response } = await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 })
-    return response === 0 ? 'quit' : undefined
+    if (response === 0) return 'quit'
+    saveLocations(where)
+    return undefined
   }
-  host = newHost()
+  const warm = newHost()
+  host = warm
+  const stopWarm = () => { void warm.stop() }
+  signal.addEventListener('abort', stopWarm, { once: true })
   try {
-    await host.start()
+    await warm.start()
+    if (signal.aborted) return 'stopped'
     mainWindow?.setProgressBar(2)
-    await host.stop()
+    await warm.stop()
     host = undefined
-    const summary = await importTeam({ ...where.import, to: where.dataDir, workspace: where.workspace, dsh: getDshRuntimeVersion() })
+    const summary = await importTeam({ ...where.import, to: where.dataDir, workspace: where.workspace, dsh: getDshRuntimeVersion(), signal })
     console.log(`DeepSeek Bot: copied ${String(summary.bots)} Bots and ${String(summary.sessions)} Sessions from ${summary.from}`)
   } catch (error) {
+    if (signal.aborted) return 'stopped'
     console.error(error)
     await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)) })
   } finally {
+    signal.removeEventListener('abort', stopWarm)
     mainWindow?.setProgressBar(-1)
   }
+  saveLocations(where)
   return undefined
 }
 
 // A copy of the chats in a DSH home of its own, so that nothing of the check stays in the data.
 async function checkTeam(where, newCheck, signal) {
+  // A run that was killed can leave its temporary check home behind.
+  for (const name of readdirSync(where.dataDir).filter(entry => /^\.import-check-\d+$/u.test(entry))) {
+    await rm(join(where.dataDir, name), { recursive: true, force: true }).catch((error) => { console.error(error) })
+  }
   const home = join(where.dataDir, `.import-check-${String(Date.now())}`)
   try {
     const found = findTeam(where.import.from)
