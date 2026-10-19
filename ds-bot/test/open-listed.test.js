@@ -5,29 +5,19 @@ import { listedOpener } from '../src/client/open-listed.js'
 const store = (ids = []) => {
   const listeners = new Set()
   const snapshot = { byId: {} }
-  const notify = () => { for (const fn of listeners) fn() }
-  const put = (id, main) => { snapshot.byId[id] = main ? { id, retainedBy: { mainView: 1 } } : { id } }
-  for (const id of ids) put(id)
+  for (const id of ids) snapshot.byId[id] = { id }
   return {
     getSnapshot: () => snapshot,
     subscribe: (fn) => { listeners.add(fn); return () => { listeners.delete(fn) } },
-    set: (id) => { put(id); notify() },
-    setMain: (id) => { for (const row of Object.values(snapshot.byId)) delete row.retainedBy; put(id, true); notify() },
+    set: (id) => { snapshot.byId[id] = { id }; for (const fn of listeners) fn() },
   }
 }
 
-const mainViewOf = list => Object.values(list.getSnapshot().byId).find(row => (row?.retainedBy?.mainView ?? 0) > 0)?.id
-
 const rig = (list) => {
   const opened = []
-  const began = []
-  const finished = []
   let refreshes = 0
-  const show = listedOpener({
-    list, open: id => opened.push(id), refresh: () => { refreshes += 1 }, current: () => mainViewOf(list),
-    begin: id => began.push(id), done: id => finished.push(id),
-  })
-  return { show, opened, began, finished, refreshes: () => refreshes }
+  const show = listedOpener({ list, open: id => opened.push(id), refresh: () => { refreshes += 1 } })
+  return { show, opened, refreshes: () => refreshes }
 }
 
 test('a listed Session opens at once and no refresh is asked for', () => {
@@ -67,42 +57,4 @@ test('two waits in a row keep only the last one', () => {
   list.set('a')
   list.set('b')
   assert.deepEqual(opened, ['b'])
-})
-
-test('a navigation elsewhere drops the wait', () => {
-  const list = store(['x'])
-  list.setMain('x')
-  const { show, opened } = rig(list)
-  show('a')
-  list.setMain('y')
-  list.set('a')
-  assert.deepEqual(opened, [])
-})
-
-test('a wait is reported from the moment the Session is missing', () => {
-  const list = store(['bot-1'])
-  const { show, opened, began, finished } = rig(list)
-  show('bot-2')
-  assert.deepEqual(began, ['bot-2'])
-  assert.deepEqual(finished, [])
-  assert.deepEqual(opened, [])
-  list.set('bot-2')
-  assert.deepEqual(opened, ['bot-2'])
-  assert.deepEqual(finished, ['bot-2'])
-})
-
-test('a listed Session opens without reporting a wait', () => {
-  const { show, began, finished } = rig(store(['bot-1']))
-  show('bot-1')
-  assert.deepEqual(began, [])
-  assert.deepEqual(finished, [])
-})
-
-test('a newer navigation ends the wait it took over', () => {
-  const list = store(['bot-1'])
-  const { show, began, finished } = rig(list)
-  show('bot-2')
-  show('bot-1')
-  assert.deepEqual(began, ['bot-2'])
-  assert.deepEqual(finished, ['bot-2'])
 })

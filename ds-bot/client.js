@@ -14251,6 +14251,31 @@ function noticeApprovals({ work, roster, shownSession, openSession, since = Date
   return work.subscribe(notify);
 }
 
+// src/client/open-listed.js
+function listedOpener({ list, open, refresh }) {
+  let drop = () => {
+  };
+  return (target) => {
+    drop();
+    drop = () => {
+    };
+    const listed = () => list.getSnapshot().byId?.[target] !== void 0;
+    if (listed()) {
+      open(target);
+      return;
+    }
+    const off = list.subscribe(() => {
+      if (!listed()) return;
+      off();
+      drop = () => {
+      };
+      open(target);
+    });
+    drop = off;
+    refresh?.();
+  };
+}
+
 // src/client/index.js
 var inject = ["sessions", "uiWorkspace", "uiConversation", "slots", "theme", "layout"];
 function apply(ctx) {
@@ -14568,6 +14593,10 @@ function apply(ctx) {
     for (const [id, owner] of pendingAdopt) if (owner === agentId && !ids.includes(id)) ids.push(id);
     return ids;
   };
+  const show = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly("refresh sessions")), open: (target) => {
+    expected = target;
+    ctx.uiWorkspace.openSession(target);
+  } });
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, turnClock }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
@@ -14578,16 +14607,14 @@ function apply(ctx) {
       ui2.set((state) => state.newChat || state.exchange || state.menu || state.palette ? { ...state, newChat: null, exchange: null, menu: null, palette: null } : state);
       setPlain(false);
       const target = partFor(id);
-      expected = target;
-      ctx.uiWorkspace.openSession(target);
+      show(target);
     },
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
       ui2.set((state) => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, details: null, view: "details", renaming: false, tab: null }));
       setPlain(true);
-      expected = sessionId;
-      ctx.uiWorkspace.openSession(sessionId);
+      show(sessionId);
     },
     addAgent: async () => {
       const agent = await after(call("add-agent"));
@@ -14645,8 +14672,7 @@ function apply(ctx) {
       const bot = last ? roster.getSnapshot().byId[last.botId] : void 0;
       setPlain(false);
       const target = bot && currentPart(bot) !== last.sessionId ? currentPart(bot) : partFor(id);
-      expected = target;
-      ctx.uiWorkspace.openSession(target);
+      show(target);
     },
     selectPanel: (id) => {
       ctx.layout.selectPanel(id);
