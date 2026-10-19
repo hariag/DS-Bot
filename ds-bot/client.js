@@ -14252,7 +14252,7 @@ function noticeApprovals({ work, roster, shownSession, openSession, since = Date
 }
 
 // src/client/open-listed.js
-function listedOpener({ list, open, refresh }) {
+function listedOpener({ list, open, refresh, current }) {
   let drop = () => {
   };
   return (target) => {
@@ -14264,7 +14264,14 @@ function listedOpener({ list, open, refresh }) {
       open(target);
       return;
     }
+    const from = current?.();
     const off = list.subscribe(() => {
+      if (current?.() !== from) {
+        off();
+        drop = () => {
+        };
+        return;
+      }
       if (!listed()) return;
       off();
       drop = () => {
@@ -14593,10 +14600,11 @@ function apply(ctx) {
     for (const [id, owner] of pendingAdopt) if (owner === agentId && !ids.includes(id)) ids.push(id);
     return ids;
   };
+  const mainView = () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
   const show = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly("refresh sessions")), open: (target) => {
     expected = target;
     ctx.uiWorkspace.openSession(target);
-  } });
+  }, current: mainView });
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, turnClock }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them

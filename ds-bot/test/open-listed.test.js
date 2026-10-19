@@ -5,18 +5,23 @@ import { listedOpener } from '../src/client/open-listed.js'
 const store = (ids = []) => {
   const listeners = new Set()
   const snapshot = { byId: {} }
-  for (const id of ids) snapshot.byId[id] = { id }
+  const notify = () => { for (const fn of listeners) fn() }
+  const put = (id, main) => { snapshot.byId[id] = main ? { id, retainedBy: { mainView: 1 } } : { id } }
+  for (const id of ids) put(id)
   return {
     getSnapshot: () => snapshot,
     subscribe: (fn) => { listeners.add(fn); return () => { listeners.delete(fn) } },
-    set: (id) => { snapshot.byId[id] = { id }; for (const fn of listeners) fn() },
+    set: (id) => { put(id); notify() },
+    setMain: (id) => { for (const row of Object.values(snapshot.byId)) delete row.retainedBy; put(id, true); notify() },
   }
 }
+
+const mainViewOf = list => Object.values(list.getSnapshot().byId).find(row => (row?.retainedBy?.mainView ?? 0) > 0)?.id
 
 const rig = (list) => {
   const opened = []
   let refreshes = 0
-  const show = listedOpener({ list, open: id => opened.push(id), refresh: () => { refreshes += 1 } })
+  const show = listedOpener({ list, open: id => opened.push(id), refresh: () => { refreshes += 1 }, current: () => mainViewOf(list) })
   return { show, opened, refreshes: () => refreshes }
 }
 
@@ -57,4 +62,14 @@ test('two waits in a row keep only the last one', () => {
   list.set('a')
   list.set('b')
   assert.deepEqual(opened, ['b'])
+})
+
+test('a navigation elsewhere drops the wait', () => {
+  const list = store(['x'])
+  list.setMain('x')
+  const { show, opened } = rig(list)
+  show('a')
+  list.setMain('y')
+  list.set('a')
+  assert.deepEqual(opened, [])
 })
