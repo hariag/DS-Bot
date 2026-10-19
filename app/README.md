@@ -18,8 +18,10 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 |---|---|---|
 | `DS_BOT_HOME` | The data location: the `DSH_HOME` of the app. When it is set, the app asks nothing at its first start and imports nothing | The folder chosen at the first start |
 | `DS_BOT_WORKSPACE` | With `DS_BOT_HOME`: the folder for the files that Bots make | `bot/workspace` in the data location |
-| `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage, `locations.json`) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`) |
-| `DS_BOT_UPDATE_URL` | A folder URL with a `latest.yml` and the installer it names, which the installed app updates from (see [Updates](#updates)). With `DS_BOT_HOME`, the app checks for updates only when this is set | The newest GitHub release |
+| `DS_BOT_SHELL_DATA` | The app's own data (window, Chromium storage, `locations.json`) | Electron's `userData` (Windows: `%APPDATA%\DeepSeek Bot`; macOS: `~/Library/Application Support/DeepSeek Bot`) |
+| `DS_BOT_UPDATE_URL` | Windows: a folder URL with `latest.yml` and its installer. macOS: a URL returning JSON like `releases/latest`, with `tag_name` and `html_url` (see [Updates](#updates)). With `DS_BOT_HOME`, the app checks only when this is set | The newest GitHub release |
+
+On macOS, Electron's default `userData` directory for `productName` "DeepSeek Bot" is `~/Library/Application Support/DeepSeek Bot`.
 
 ## First start and import
 
@@ -65,6 +67,8 @@ npm run dist           # the installer: dist-pack/DeepSeek-Bot-<version>-win-x64
 npm run check-packed   # starts the packaged app on throwaway folders with the mock model, chats once, closes it
 ```
 
+macOS produces one DMG per architecture. Build arm64 on an Apple chip Mac and x64 on an Intel Mac. Do not cross-build: it packages native modules from `node_modules`; a combined build put 12 arm64-only native modules in its x64 app. The app is ad-hoc signed so downloaded copies are sealed. On first open, use System Settings → Privacy & Security → Open Anyway. Do not disable Gatekeeper.
+
 `check-packed` takes another executable as its first argument, and a file for a screenshot of the window as its second. It runs an app that lies inside this checkout from a copy in its throwaway folder: from inside the checkout, Node would find a module that the package left out in the checkout's own `node_modules`.
 
 electron-builder packs only the packages that it finds through `dependencies` and `optionalDependencies`. The DSH packages ask for many packages as peers, which npm installs but electron-builder would leave out, so `package.json` lists them as dependencies. `npm test` fails when one is missing and names it.
@@ -77,7 +81,9 @@ The installed app on Windows updates itself with electron-updater (`src/updates.
 
 The checks start before the Host (after a first start's import), so that a version whose Host does not start can still update. When the start fails, the app waits up to 15 seconds for the newest check. When it found a newer version, the error box says so; after the box the app waits for the download, then installs it and opens again.
 
-`app-update.yml` in the package tells the app where its releases are; `npm run dist` writes it from `publish` in `electron-builder.yml`, together with `latest.yml` beside the installer (`npm run pack` writes neither). Neither command publishes. The release workflow (`.github/workflows/release.yml`) builds the installer when a release is published and attaches the installer, its `.blockmap` and `latest.yml` to the release. The release tag is the version of `ds-bot`, and `npm test` checks that the app has the same version.
+On macOS, the app checks GitHub's latest release at start and every 4 hours. It asks once per version. Download opens the release page; Later closes the dialog. The app does not install the update itself. `DS_BOT_UPDATE_URL` on macOS points to JSON like the `releases/latest` API response, with `tag_name` and an HTTPS `html_url`.
+
+On Windows, `app-update.yml` tells the app where its releases are; `npm run dist` writes it from `publish` in `electron-builder.yml`, together with `latest.yml` beside the installer (`npm run pack` writes neither). Neither command publishes. The release workflow (`.github/workflows/release.yml`) builds the installer when a release is published and attaches the installer, its `.blockmap` and `latest.yml` to the release. The release tag is the version of `ds-bot`, and `npm test` checks that the app has the same version. The macOS release job builds each DMG on a matching-architecture runner and attaches only the DMG.
 
 On throwaway folders (`DS_BOT_HOME`) the app checks for updates only from `DS_BOT_UPDATE_URL`, and it never asks: the update waits until the app quits. `scripts/check-update.mjs` checks the update of a packaged app with such a feed:
 
@@ -87,6 +93,14 @@ node scripts/check-update.mjs "dist-pack/win-unpacked/DeepSeek Bot.exe" dist-nex
 ```
 
 It serves the feed folder, starts the app on throwaway folders and waits until the app has downloaded the update and checked its sha512. Then it closes the app as a user does, so that the app installs the update as it quits; with `--kill` it ends the app, so that nothing is installed. On your own machine use `--kill`: the installer would install into `%LOCALAPPDATA%\Programs\DeepSeek Bot`. The download stays in `%LOCALAPPDATA%\deepseek-bot-updater`. CI runs it without `--kill` on its installed app, then checks that the installed version is the new one and that the updated app passes `check-packed`.
+
+On macOS, pass the app executable and a version to mock a newer release:
+
+```sh
+node scripts/check-update.mjs "<app executable>" 99.0.0
+```
+
+The script serves a throwaway `releases/latest` JSON response, starts the app with throwaway data folders, waits for the available-update log, and closes the window. It does not open a browser.
 
 ## Layout
 
@@ -99,7 +113,7 @@ It serves the feed folder, starts the app on throwaway folders and waits until t
 | `src/profile.mjs` | The profile: its name, its bundles, and its creation and update |
 | `src/first-run.mjs` | The first start's dialogs: the two folders and the offer to import |
 | `src/import.mjs` | The import of a Bot team from the user's DSH |
-| `src/updates.mjs` | The updates of the installed app on Windows: the checks, the background download and the question to restart |
+| `src/updates.mjs` | The Windows installer updates and macOS release-page checks |
 | `engine/` | On hold, not installed: the bundle `deepseek-bot-engine` for the app's own window in `ui/` |
 | `test/` | `npm test`: the composition of the profile, and the dependencies that the package needs |
 | `src/web.mjs` | DSH's Web front end document, the launch-token cookie exchange and the request forwarding |
@@ -107,7 +121,7 @@ It serves the feed folder, starts the app on throwaway folders and waits until t
 | `assets/` | The app icon: `icon.svg`, `icon.png` (1024 px) and `icon.ico` (Windows, 16 to 256 px). `npm run icon` (`scripts/icon.mjs`) draws them again from the Main Bot's whale in `../ds-bot` |
 | `electron-builder.yml`, `build/` | The package and the installer: app identity, files, icons, the Windows installer and the macOS disk image |
 | `scripts/check-packed.mjs` | `npm run check-packed`: the check of a packaged app |
-| `scripts/check-update.mjs` | The check of a packaged app's update from a feed folder |
+| `scripts/check-update.mjs` | The check of a packaged app's update from a Windows feed folder or a macOS release |
 
 The Host installs plugins with the app's own pnpm (`node_modules/pnpm`).
 
