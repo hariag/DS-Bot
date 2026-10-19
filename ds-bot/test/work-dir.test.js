@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, hostname, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -731,4 +731,21 @@ test('the folder is checked as DSH gets it, spaces and all', { skip: process.pla
   mkdirSync(spaced)
   assert.deepEqual(await changeDirectory(ctx, service, agentOf('b'), spaced), { error: `${JSON.stringify(spaced)} cannot be a working folder: its name starts or ends with a space or a quote mark.`, ran: false })
   assert.equal(state().bots.b.workDir, undefined)
+})
+
+test('a Bot changes back to the team workspace when the team workspace is known by a link', async (t) => {
+  const { service } = folderService()
+  const { requests, services } = approvalServices('allowed-once')
+  const { ctx, call, agentOf, root, team, project, state, stop } = await start({ services: { ...services, workingDirectory: service } })
+  t.after(stop)
+  const link = join(root, 'team-link')
+  symlinkSync(team, link, 'junction')
+  ctx.workspaceRegistry.get('w1').path = link
+  assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
+  await until(() => state().bots.b.sessionId === 's1')
+  const back = await changeDirectory(ctx, service, agentOf('s1'), team)
+  assert.equal(back.ran, true)
+  assert.equal(state().bots.b.workDir, undefined)
+  // The user set the first folder, and the team workspace widens nothing, so nobody is asked.
+  assert.equal(requests.length, 0)
 })

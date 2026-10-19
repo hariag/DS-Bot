@@ -24,6 +24,11 @@ export function install(rt) {
   const workDirOf = ({ botId, roomId } = {}) => rt.roomOf(roomId)?.workDir ?? rt.botOf(botId)?.workDir
   const isFolder = path => stat(path).then(info => info.isDirectory(), () => false)
   const real = path => realpath(path).catch(() => resolve(path))
+  // The registry keeps the team workspace as it was given; folders compare as real paths.
+  const realTeam = async () => {
+    const team = teamFolder()
+    return team === undefined ? undefined : real(team)
+  }
   // Where `input` leads from `base`, as a real path, the way DSH's working_directory resolves
   // a change; undefined when nothing is there.
   const folderAt = (base, input) => realpath(resolve(base, input)).catch(() => undefined)
@@ -38,7 +43,7 @@ export function install(rt) {
   // A Bot that could write where DSH or the team keeps its data could change its own
   // permissions or the team, so neither those folders nor one that holds them is allowed.
   async function guarded(path) {
-    const team = teamFolder()
+    const team = await realTeam()
     for (const root of [rt.dshHome, rt.home]) {
       const data = await real(root)
       if (within(data, path)) return true
@@ -67,7 +72,7 @@ export function install(rt) {
   // A folder, as a real path, as a working folder: undefined for the team workspace.
   async function workFolder(path) {
     if (await guarded(path)) throw new Error(`${path} holds DeepSeek Harness data, so Bots cannot work there`)
-    return path === teamFolder() ? undefined : path
+    return path === await realTeam() ? undefined : path
   }
 
   // Every Session of a Bot: its own chat and its conversation in each of its groups.
