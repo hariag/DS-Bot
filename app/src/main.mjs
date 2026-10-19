@@ -12,7 +12,7 @@ import electronUpdater from 'electron-updater'
 import { chooseLocations, localeText, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
 import { importTeam } from './import.mjs'
-import { UPDATE_TEXT, watchUpdates } from './updates.mjs'
+import { UPDATE_TEXT, watchReleases, watchUpdates } from './updates.mjs'
 import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
 
 // DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
@@ -139,13 +139,21 @@ async function copyTeam(where, newHost) {
   }
 }
 
-// The installed app on Windows updates itself. A run on throwaway folders (DS_BOT_HOME) checks
-// only the feed it is given (DS_BOT_UPDATE_URL) and never asks, so the update waits for the quit.
+// Windows updates itself; macOS asks to download the new version. Throwaway runs check only a
+// given feed and never ask.
 function startUpdates() {
   const feed = process.env.DS_BOT_UPDATE_URL || undefined
   const throwaway = Boolean(process.env.DS_BOT_HOME)
-  if (!app.isPackaged || process.platform !== 'win32' || (throwaway && feed === undefined)) return undefined
-  return watchUpdates({ updater: electronUpdater.autoUpdater, feed, ask: throwaway ? undefined : askRestart, beforeInstall: stopHost })
+  if (!app.isPackaged || (throwaway && feed === undefined)) return undefined
+  if (process.platform === 'darwin') {
+    return watchReleases({
+      current: app.getVersion(), feed, ask: throwaway ? undefined : askDownload, open: url => shell.openExternal(url),
+    })
+  }
+  if (process.platform === 'win32') {
+    return watchUpdates({ updater: electronUpdater.autoUpdater, feed, ask: throwaway ? undefined : askRestart, beforeInstall: stopHost })
+  }
+  return undefined
 }
 
 async function askRestart(version) {
@@ -153,6 +161,14 @@ async function askRestart(version) {
   if (failed) return false
   const t = localeText(UPDATE_TEXT)
   const options = { type: 'info', title: 'DeepSeek Bot', message: t.ready(version), detail: t.readyDetail, buttons: [t.restart, t.later], defaultId: 0, cancelId: 1, noLink: true }
+  const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+  return response === 0
+}
+
+async function askDownload(version) {
+  if (failed) return false
+  const t = localeText(UPDATE_TEXT)
+  const options = { type: 'info', title: 'DeepSeek Bot', message: t.available(version), detail: t.availableDetail, buttons: [t.download, t.later], defaultId: 0, cancelId: 1, noLink: true }
   const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
   return response === 0
 }
@@ -204,16 +220,21 @@ function openOutside(url) {
   if (/^https?:\/\//iu.test(url)) void shell.openExternal(url)
 }
 
-// A new version may fix what keeps this one from starting. So a failed start waits for the
-// newest update check and, when it found a version, for its download; the installer then
-// opens the app again.
+// A new version may fix what keeps this one from starting.
 async function fail(error) {
   console.error(error)
   if (failed || stopping) return
   failed = true
   const found = await Promise.race([updates?.latest() ?? null, sleep(UPDATE_CHECK_WAIT_MS).then(() => null)])
-  const next = found ? `\n\n${localeText(UPDATE_TEXT).onFailure(found.version)}` : ''
+  const throwaway = Boolean(process.env.DS_BOT_HOME)
+  const t = localeText(UPDATE_TEXT)
+  const next = found ? `\n\n${found.page ? t.onFailurePage(found.version) : t.onFailure(found.version)}` : ''
   dialog.showErrorBox('DeepSeek Bot', `${text().notStarted}\n\n${error instanceof Error ? error.message : String(error)}${next}`)
+  if (found?.page) {
+    if (!throwaway) await shell.openExternal(found.page)
+    app.quit()
+    return
+  }
   if (found) {
     mainWindow?.hide()
     if (await Promise.race([found.downloaded, sleep(UPDATE_DOWNLOAD_WAIT_MS).then(() => false)])) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { describe, test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { watchUpdates } from '../src/updates.mjs'
+import { isNewer, RELEASES_URL, watchReleases, watchUpdates } from '../src/updates.mjs'
 
 // electron-updater's AppUpdater, as far as the app uses it. `found` makes the answer of a
 // check that finds a version, with the download that autoDownload starts.
@@ -31,6 +31,172 @@ const quietLog = () => {
   const lines = []
   return { lines, info: (line) => { lines.push(line) }, error: (line) => { lines.push(line) } }
 }
+
+const release = (version, page = 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.9') => ({
+  tag_name: `v${version}`, html_url: page,
+})
+
+const releaseResponse = (body, status = 200) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  json: async () => body,
+})
+
+describe('isNewer', () => {
+  for (const [candidate, current, expected] of [
+    ['0.1.8', '0.1.7', true],
+    ['v0.2.0', '0.1.9', true],
+    ['0.1.7', '0.1.7', false],
+    ['0.1.6', '0.1.7', false],
+    ['0.2.0', '0.2.0-rc.2', true],
+    ['0.2.0-rc.2', '0.2.0', false],
+    ['0.2.0-rc.10', '0.2.0-rc.2', true],
+    ['0.1.10', '0.1.9', true],
+    ['nightly', '0.1.7', false],
+  ]) {
+    test(`${candidate} compared with ${current}`, () => {
+      assert.equal(isNewer(candidate, current), expected)
+    })
+  }
+})
+
+describe('watchReleases', () => {
+  test('checks the latest release at once with the GitHub headers, or uses a given feed', async (t) => {
+    const calls = []
+    const fetch = async (url, options) => {
+      calls.push({ url, options })
+      return releaseResponse(release('0.1.7'))
+    }
+    const updates = watchReleases({ current: '0.1.7', fetch, log: quietLog() })
+    t.after(updates.stop)
+    assert.equal(await updates.latest(), null)
+    assert.deepEqual(calls[0], {
+      url: RELEASES_URL,
+      options: { headers: { accept: 'application/vnd.github+json', 'user-agent': 'DeepSeek-Bot/0.1.7' } },
+    })
+
+    const feed = 'http://127.0.0.1:8080/'
+    const custom = watchReleases({ current: '0.1.7', fetch, feed, log: quietLog() })
+    t.after(custom.stop)
+    await custom.latest()
+    assert.equal(calls[1].url, feed)
+  })
+
+  test('reports a newer release and opens its page only when accepted', async (t) => {
+    const page = 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.9'
+    for (const accepted of [true, false]) {
+      const asked = []
+      const opened = []
+      const updates = watchReleases({
+        current: '0.1.7', fetch: async () => releaseResponse(release('0.1.9', page)), log: quietLog(),
+        ask: async version => { asked.push(version); return accepted },
+        open: url => { opened.push(url) },
+      })
+      t.after(updates.stop)
+      assert.deepEqual(await updates.latest(), { version: '0.1.9', page })
+      await sleep(0)
+      assert.deepEqual(asked, ['0.1.9'])
+      assert.deepEqual(opened, accepted ? [page] : [])
+    }
+  })
+
+  test('ignores the same or an older release', async (t) => {
+    for (const version of ['0.1.7', '0.1.6']) {
+      const asked = []
+      const updates = watchReleases({
+        current: '0.1.7', fetch: async () => releaseResponse(release(version)), log: quietLog(),
+        ask: async value => { asked.push(value); return true }, open: () => {},
+      })
+      t.after(updates.stop)
+      assert.equal(await updates.latest(), null)
+      assert.deepEqual(asked, [])
+    }
+  })
+
+  test('asks once per version and asks again for a later version', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    let version = '0.1.9'
+    let checks = 0
+    const asked = []
+    const updates = watchReleases({
+      current: '0.1.7',
+      fetch: async () => { checks += 1; return releaseResponse(release(version)) },
+      ask: async value => { asked.push(value); return false },
+      open: () => {},
+      log: quietLog(),
+    })
+    t.after(updates.stop)
+
+    await updates.latest()
+    await sleep(0)
+    t.mock.timers.tick(4 * 60 * 60_000)
+    await updates.latest()
+    await sleep(0)
+    version = '0.1.10'
+    t.mock.timers.tick(4 * 60 * 60_000)
+    await updates.latest()
+    await sleep(0)
+
+    assert.equal(checks, 3)
+    assert.deepEqual(asked, ['0.1.9', '0.1.10'])
+  })
+
+  test('reports releases without asking in throwaway runs', async (t) => {
+    let opens = 0
+    const updates = watchReleases({
+      current: '0.1.7', fetch: async () => releaseResponse(release('0.1.9')),
+      ask: undefined, open: () => { opens += 1 }, log: quietLog(),
+    })
+    t.after(updates.stop)
+    assert.equal((await updates.latest()).version, '0.1.9')
+    assert.equal(opens, 0)
+  })
+
+  test('logs failed requests, invalid JSON, and non-HTTPS release pages without throwing', async (t) => {
+    const cases = [
+      [async () => releaseResponse({}, 403), 'DeepSeek Bot: update check failed: HTTP 403'],
+      [async () => { throw new Error('offline') }, 'DeepSeek Bot: update check failed: offline'],
+      [async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad JSON') } }), 'DeepSeek Bot: update check failed: bad JSON'],
+      [async () => releaseResponse(release('0.1.9', 'http://github.com/Fei2411/DeepSeek-Bot')), 'DeepSeek Bot: update check failed: release page URL is not HTTPS'],
+    ]
+    for (const [fetch, message] of cases) {
+      const log = quietLog()
+      const updates = watchReleases({ current: '0.1.7', fetch, log })
+      t.after(updates.stop)
+      assert.equal(await updates.latest(), null)
+      assert.deepEqual(log.lines, [message])
+    }
+  })
+
+  test('logs a rejected prompt without an unhandled rejection', async (t) => {
+    const unhandled = []
+    const note = error => { unhandled.push(error) }
+    process.on('unhandledRejection', note)
+    t.after(() => { process.off('unhandledRejection', note) })
+    const log = quietLog()
+    const updates = watchReleases({
+      current: '0.1.7', fetch: async () => releaseResponse(release('0.1.9')),
+      ask: async () => { throw new Error('dialog failed') }, open: () => {}, log,
+    })
+    t.after(updates.stop)
+    await updates.latest()
+    await sleep(20)
+    assert.deepEqual(log.lines, ['DeepSeek Bot: update 0.1.9 available', 'DeepSeek Bot: update 0.1.9 not opened: dialog failed'])
+    assert.deepEqual(unhandled, [])
+  })
+
+  test('stop clears the interval', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    let checks = 0
+    const updates = watchReleases({
+      current: '0.1.7', fetch: async () => { checks += 1; return releaseResponse(release('0.1.7')) }, log: quietLog(),
+    })
+    await updates.latest()
+    updates.stop()
+    t.mock.timers.tick(4 * 60 * 60_000)
+    assert.equal(checks, 1)
+  })
+})
 
 describe('watchUpdates', () => {
   test('downloads in the background, installs at the quit, and checks at once', (t) => {

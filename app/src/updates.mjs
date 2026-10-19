@@ -1,7 +1,4 @@
-// Updates of the installed app on Windows. electron-updater reads latest.yml of the newest
-// GitHub release, downloads the installer in the background and checks its sha512. When the
-// download is done, the window asks whether to restart now; otherwise the installer runs at
-// the next quit.
+// Windows downloads and installs updates; macOS asks before opening the release page.
 
 export const UPDATE_TEXT = {
   en: {
@@ -9,16 +6,100 @@ export const UPDATE_TEXT = {
     readyDetail: 'Restart now to update, or it is installed the next time you quit.',
     restart: 'Restart now', later: 'Later',
     onFailure: version => `DeepSeek Bot ${version} is installed when its download is done, and then DeepSeek Bot opens again.`,
+    available: version => `DeepSeek Bot ${version} is available.`,
+    availableDetail: 'This version cannot update itself. Download the new version from its release page, then replace DeepSeek Bot in Applications.',
+    download: 'Download',
+    onFailurePage: version => `DeepSeek Bot ${version} is available. After this box, its download page opens.`,
   },
   zh: {
     ready: version => `DeepSeek Bot ${version} 已经下载好。`,
     readyDetail: '现在重启就能更新；不重启的话，下次退出时安装。',
     restart: '立即重启', later: '稍后',
     onFailure: version => `DeepSeek Bot ${version} 下载完会自动安装，然后重新打开。`,
+    available: version => `DeepSeek Bot ${version} 已经发布。`,
+    availableDetail: '这个版本不能自己更新。请到发布页下载新版，再用它替换「应用程序」里的 DeepSeek Bot。',
+    download: '下载',
+    onFailurePage: version => `DeepSeek Bot ${version} 已经发布。关掉这个对话框后，会打开它的下载页面。`,
   },
 }
 
 const CHECK_EVERY_MS = 4 * 60 * 60_000
+export const RELEASES_URL = 'https://api.github.com/repos/Fei2411/DeepSeek-Bot/releases/latest'
+
+function parseVersion(version) {
+  if (typeof version !== 'string') return null
+  const value = version.replace(/^v/u, '')
+  const separator = value.indexOf('-')
+  const core = separator < 0 ? value : value.slice(0, separator)
+  const pre = separator < 0 ? null : value.slice(separator + 1).split('.')
+  const parts = core.split('.')
+  if (parts.length > 3 || parts.some(part => !/^\d+$/u.test(part)) || pre?.some(part => part === '')) return null
+  return {
+    core: [0, 1, 2].map(index => (index < parts.length ? BigInt(parts[index]) : 0n)),
+    pre,
+  }
+}
+
+export function isNewer(candidate, current) {
+  const newer = parseVersion(candidate)
+  const older = parseVersion(current)
+  if (newer === null || older === null) return false
+  for (let index = 0; index < 3; index += 1) {
+    if (newer.core[index] !== older.core[index]) return newer.core[index] > older.core[index]
+  }
+  if (newer.pre === null) return older.pre !== null
+  if (older.pre === null) return false
+  for (let index = 0; index < Math.max(newer.pre.length, older.pre.length); index += 1) {
+    const left = newer.pre[index]
+    const right = older.pre[index]
+    if (left === undefined) return false
+    if (right === undefined) return true
+    if (left === right) continue
+    const leftNumeric = /^\d+$/u.test(left)
+    const rightNumeric = /^\d+$/u.test(right)
+    if (leftNumeric && rightNumeric) return BigInt(left) > BigInt(right)
+    if (leftNumeric !== rightNumeric) return !leftNumeric
+    return left > right
+  }
+  return false
+}
+
+export function watchReleases({ current, fetch = globalThis.fetch, ask, open, feed = RELEASES_URL, log = console }) {
+  let asked
+  let latest = Promise.resolve(null)
+  const check = () => {
+    latest = (async () => {
+      try {
+        const response = await fetch(feed, {
+          headers: { accept: 'application/vnd.github+json', 'user-agent': `DeepSeek-Bot/${current}` },
+        })
+        if (!response.ok) {
+          log.error(`DeepSeek Bot: update check failed: HTTP ${String(response.status)}`)
+          return null
+        }
+        const { tag_name, html_url: page } = await response.json()
+        const version = typeof tag_name === 'string' ? tag_name.replace(/^v/u, '') : ''
+        if (!isNewer(version, current)) return null
+        if (typeof page !== 'string' || new URL(page).protocol !== 'https:') throw new Error('release page URL is not HTTPS')
+        const found = { version, page }
+        log.info(`DeepSeek Bot: update ${version} available`)
+        if (ask !== undefined && asked !== version) {
+          asked = version
+          void Promise.resolve().then(() => ask(version))
+            .then(yes => (yes ? open(page) : undefined))
+            .catch((error) => { log.error(`DeepSeek Bot: update ${version} not opened: ${error instanceof Error ? error.message : String(error)}`) })
+        }
+        return found
+      } catch (error) {
+        log.error(`DeepSeek Bot: update check failed: ${error instanceof Error ? error.message : String(error)}`)
+        return null
+      }
+    })()
+  }
+  check()
+  const timer = setInterval(check, CHECK_EVERY_MS)
+  return { stop: () => { clearInterval(timer) }, latest: () => latest }
+}
 
 /**
  * @param {{
