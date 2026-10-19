@@ -735,17 +735,23 @@ test('the folder is checked as DSH gets it, spaces and all', { skip: process.pla
 
 test('a Bot changes back to the team workspace when the team workspace is known by a link', async (t) => {
   const { service } = folderService()
-  const { requests, services } = approvalServices('allowed-once')
+  const { requests, services } = approvalServices('rejected')
   const { ctx, call, agentOf, root, team, project, state, stop } = await start({ services: { ...services, workingDirectory: service } })
   t.after(stop)
   const link = join(root, 'team-link')
   symlinkSync(team, link, 'junction')
   ctx.workspaceRegistry.get('w1').path = link
+  mkdirSync(join(team, 'site'))
+  // The team workspace widens nothing, so nobody is asked, also for a folder inside it.
   assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
   await until(() => state().bots.b.sessionId === 's1')
+  assert.equal((await changeDirectory(ctx, service, agentOf('s1'), join(team, 'site'))).ran, true)
+  assert.equal(state().bots.b.workDir, join(team, 'site'))
+
+  assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
+  await until(() => state().bots.b.workDir === project)
   const back = await changeDirectory(ctx, service, agentOf('s1'), team)
   assert.equal(back.ran, true)
   assert.equal(state().bots.b.workDir, undefined)
-  // The user set the first folder, and the team workspace widens nothing, so nobody is asked.
   assert.equal(requests.length, 0)
 })
