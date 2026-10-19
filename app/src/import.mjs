@@ -163,7 +163,7 @@ export async function importTeam({ from, to, workspace, profile, dsh, signal }) 
   if (found === undefined) throw new Error(`There is no Bot team in ${from}`)
   const present = existsSync(join(to, 'bot', 'state.json')) ? readJson(join(to, 'bot', 'state.json')) : undefined
   if (Object.keys(present?.bots ?? {}).length > 0) throw new Error(`${to} already has a Bot team`)
-  for (const name of readdirSync(to).filter(entry => /^\.import-\d+$/u.test(entry))) {
+  for (const name of (existsSync(to) ? readdirSync(to) : []).filter(entry => /^\.import-\d+$/u.test(entry))) {
     await rm(join(to, name), { recursive: true, force: true })
   }
   const stage = join(to, `.import-${String(Date.now())}`)

@@ -166,7 +166,8 @@ async function copyTeam(where, newHost, newCheck, signal) {
   if (signal.aborted) return 'stopped'
   if (unreadable > 0) {
     const t = text()
-    const { response } = await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 })
+    const { response } = await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0, signal })
+    if (signal.aborted) return 'stopped'
     if (response === 0) return 'quit'
     saveLocations(where)
     return undefined
@@ -186,7 +187,8 @@ async function copyTeam(where, newHost, newCheck, signal) {
   } catch (error) {
     if (signal.aborted) return 'stopped'
     console.error(error)
-    await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)) })
+    await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)), signal })
+    if (signal.aborted) return 'stopped'
   } finally {
     signal.removeEventListener('abort', stopWarm)
     mainWindow?.setProgressBar(-1)
