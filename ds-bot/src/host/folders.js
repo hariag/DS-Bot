@@ -24,6 +24,9 @@ export function install(rt) {
   const workDirOf = ({ botId, roomId } = {}) => rt.roomOf(roomId)?.workDir ?? rt.botOf(botId)?.workDir
   const isFolder = path => stat(path).then(info => info.isDirectory(), () => false)
   const real = path => realpath(path).catch(() => resolve(path))
+  // Where `input` leads from `base`, as a real path, the way DSH's working_directory resolves
+  // a change; undefined when nothing is there.
+  const folderAt = (base, input) => realpath(resolve(base, input)).catch(() => undefined)
   // Where a Session works: the folder DSH has for it, else the one DS Bot made it for.
   const sessionFolder = (session) => {
     const reported = session?.header === undefined ? undefined : ctx.get?.('workingDirectory')?.get?.(session) ?? session.header.cwd
@@ -138,5 +141,5 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { teamFolder, workDirOf, sessionFolder, isFolder, cleanWorkDir, sessionsOfBot, approveFolder, folderEndpoint })
+  Object.assign(rt, { teamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, sessionsOfBot, approveFolder, folderEndpoint })
 }
