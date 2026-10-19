@@ -84,7 +84,7 @@ jobs:
 
       - name: Pack (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: npm publish --dry-run --access public
+        run: npm pack --dry-run
 
       - name: Publish
         if: github.event_name == 'release' || (!inputs.dry_run && github.ref == 'refs/heads/main')
