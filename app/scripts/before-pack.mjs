@@ -8,14 +8,19 @@ const WHERE = {
 }
 
 /** @returns {string | undefined} why this Node cannot build an app for `target` */
-export function archProblem({ target, platform, host = process.arch }) {
+export function archProblem({ target, platform, host = process.arch, targets = [] }) {
+  // electron-builder packs a universal app one architecture at a time: the hook only sees the
+  // inner x64/arm64 builds, so a universal request is known from the requested targets.
+  if (target === 'universal' || targets.includes('universal')) return 'A universal app would need the native modules of both architectures. Build one app per architecture.'
   if (target === host) return undefined
-  if (target === 'universal') return 'A universal app would need the native modules of both architectures. Build one app per architecture.'
   const where = WHERE[platform]?.[target] ?? `with an ${target} Node`
   return `This Node runs on ${host}, so npm installed ${host} native modules, and an ${target} app with them would not start. Install the dependencies and build ${where}.`
 }
 
 export async function beforePack(context) {
-  const problem = archProblem({ target: Arch[context.arch], platform: context.electronPlatformName })
+  const targets = []
+  for (const archToNames of context.packager?.packagerOptions?.targets?.values() ?? [])
+    for (const arch of archToNames.keys()) targets.push(Arch[arch])
+  const problem = archProblem({ target: Arch[context.arch], platform: context.electronPlatformName, targets })
   if (problem !== undefined) throw new Error(problem)
 }
