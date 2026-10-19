@@ -29,6 +29,9 @@ nsis:
   multiLanguageInstaller: true
 mac:
   target: dmg
+  # Ad-hoc signing seals the bundle; no Developer ID or notarization.
+  identity: '-'
+  hardenedRuntime: false
   icon: assets/icon.png
   category: public.app-category.productivity
 # Where the installed app looks for updates (app-update.yml in the package). The build writes

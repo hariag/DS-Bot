@@ -1,8 +1,8 @@
 name: Release
 
 # Publishes ds-bot to npm when a GitHub release is published, then attaches the desktop app's
-# Windows installer, its block map and latest.yml to the release. The installed apps update
-# from the newest release: latest.yml names the installer and its sha512.
+# Windows installer and macOS DMGs to the release. Windows updates from latest.yml; macOS opens
+# the release page for a manual download.
 #
 # npm Trusted Publishing: npm trusts this workflow through GitHub's OIDC token, so the
 # repository keeps no npm token, and every version gets a provenance statement. It is set
@@ -130,3 +130,36 @@ jobs:
         run: |
           installer="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-win-x64.exe"
           gh release upload "$TAG" "$installer" "$installer.blockmap" dist-pack/latest.yml --clobber
+
+  app-macos:
+    name: Desktop app dmg (macOS ${{ matrix.arch }})
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, runner: macos-latest }
+          - { arch: x64, runner: macos-26-intel }
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --no-fund --no-audit
+      - run: npm run dist
+      - name: Check the packaged app
+        run: node scripts/check-packed.mjs
+      - name: Attach the dmg to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
+          gh release upload "$TAG" "$dmg" --clobber

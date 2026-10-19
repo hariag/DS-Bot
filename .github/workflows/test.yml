@@ -176,6 +176,52 @@ jobs:
           if (Find-Entry 'HKCU:') { throw 'The uninstaller left its uninstall entry' }
           foreach ($file in $kept) { if (-not (Test-Path $file)) { throw "The uninstaller removed $file" } }
 
+  app-package-macos:
+    name: Desktop app package (macOS ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, runner: macos-latest }
+          - { arch: x64, runner: macos-26-intel }
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --no-fund --no-audit
+      - run: npm run dist
+      - name: Check the DMG
+        run: |
+          dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
+          test -f "$dmg"
+      - name: Check the packaged app
+        run: node scripts/check-packed.mjs
+      - name: Install from the dmg and check
+        run: |
+          mkdir -p "$RUNNER_TEMP/dmg"
+          dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "$dmg"
+          ditto "$RUNNER_TEMP/dmg/DeepSeek Bot.app" "/Applications/DeepSeek Bot.app"
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          app="/Applications/DeepSeek Bot.app"
+          exe="$app/Contents/MacOS/DeepSeek Bot"
+          codesign --verify --deep --strict "$app"
+          file "$exe"
+          expected="${{ matrix.arch }}"
+          if [ "$expected" = x64 ]; then expected=x86_64; fi
+          file -b "$exe" | grep -F "$expected"
+          node scripts/check-packed.mjs "$exe"
+          node scripts/check-update.mjs "$exe" 99.0.0
+
   docker:
     name: Docker startup and data migration
     runs-on: ubuntu-latest
@@ -220,8 +266,8 @@ jobs:
   # and fails unless the matrix, leak scan, app, app package and Docker checks passed.
   result:
     name: Test result
-    needs: [test, scan, app, app-package, docker]
+    needs: [test, scan, app, app-package, app-package-macos, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success && test "${{ needs.app.result }}" = success && test "${{ needs.app-package.result }}" = success && test "${{ needs.docker.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success && test "${{ needs.app.result }}" = success && test "${{ needs.app-package.result }}" = success && test "${{ needs.app-package-macos.result }}" = success && test "${{ needs.docker.result }}" = success
