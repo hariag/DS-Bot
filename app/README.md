@@ -100,7 +100,7 @@ On macOS, pass the app executable and a version to mock a newer release:
 node scripts/check-update.mjs "<app executable>" 99.0.0
 ```
 
-The script serves a throwaway `releases/latest` JSON response, starts the app with throwaway data folders, waits for the available-update log, and closes the window. It does not open a browser.
+The script serves a releases list with one release of that version that has this Mac's DMG, starts the app on throwaway folders with it, waits until the app logs the new version, and closes the window. It does not open a browser.
 
 ## Layout
 
