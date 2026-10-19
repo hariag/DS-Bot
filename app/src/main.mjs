@@ -270,7 +270,7 @@ function createWindow() {
 
 function setMenu() {
   if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return }
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' }]))
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' }]))
 }
 
 function focusWindow() {
