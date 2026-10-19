@@ -720,3 +720,15 @@ test('while another dsh has the team open, a Bot cannot leave its working folder
   assert.equal(out.ran, false)
   assert.equal(state().bots.b.workDir, undefined)
 })
+
+// The trimmed path names no folder, so a check of it would let DSH move out unchecked.
+test('the folder is checked as DSH gets it, spaces and all', { skip: process.platform === 'win32' && 'Windows drops trailing spaces from names' }, async (t) => {
+  const { service } = folderService()
+  const { services } = approvalServices('allowed-once')
+  const { ctx, agentOf, root, state, stop } = await start({ services: { ...services, workingDirectory: service } })
+  t.after(stop)
+  const spaced = join(root, 'outside ')
+  mkdirSync(spaced)
+  assert.deepEqual(await changeDirectory(ctx, service, agentOf('b'), spaced), { error: `${JSON.stringify(spaced)} cannot be a working folder: its name starts or ends with a space or a quote mark.`, ran: false })
+  assert.equal(state().bots.b.workDir, undefined)
+})

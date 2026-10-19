@@ -61,6 +61,11 @@ export function install(rt) {
       throw new Error(`There is no folder at ${text}`)
     }
     if (!(await isFolder(path))) throw new Error(`${text} is a file, not a folder`)
+    return workFolder(path)
+  }
+
+  // A folder, as a real path, as a working folder: undefined for the team workspace.
+  async function workFolder(path) {
     if (await guarded(path)) throw new Error(`${path} holds DeepSeek Harness data, so Bots cannot work there`)
     return path === teamFolder() ? undefined : path
   }
@@ -141,5 +146,5 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { teamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, sessionsOfBot, approveFolder, folderEndpoint })
+  Object.assign(rt, { teamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, workFolder, sessionsOfBot, approveFolder, folderEndpoint })
 }

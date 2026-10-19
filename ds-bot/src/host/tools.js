@@ -316,7 +316,8 @@ export function install(rt) {
   // sets its working folder instead, with update_bot's checks, and goes on in a fresh part
   // there; a folder inside it only moves this Session there.
   ctx.on('tools/execute', async (exec, next) => {
-    const cd = exec.name === WORKING_DIRECTORY_TOOL && typeof exec.arguments?.cd === 'string' ? exec.arguments.cd.trim() : ''
+    // Resolved as DSH gets it, untrimmed, so that both mean the same folder.
+    const cd = exec.name === WORKING_DIRECTORY_TOOL && typeof exec.arguments?.cd === 'string' ? exec.arguments.cd : ''
     const session = exec.agent?.session
     if (cd === '' || session === undefined) return next()
     await rt.load()
@@ -325,11 +326,13 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(exec.agent.id)?.roomId)
     const home = rt.workDirOf({ botId: bot.id, roomId: room?.id }) ?? rt.teamFolder()
     const target = await rt.folderAt(rt.sessionFolder(session), cd)
-    if (target === undefined || home === undefined || within(target, await rt.real(home))) return next()
+    if (target === undefined || !(await rt.isFolder(target)) || home === undefined || within(target, await rt.real(home))) return next()
     if (room?.workDir) throw new Error(`Every member of "${room.name}" works in ${room.workDir} here, so you stay inside it. The user or a Main Bot can change the group's folder.`)
     const readOnly = rt.readOnly()
     if (readOnly !== undefined) throw new Error(`Your working folder cannot change now: ${readOnly}`)
-    const workDir = await rt.cleanWorkDir(target)
+    // Saved folders are trimmed like typed ones, so such a name would save another folder.
+    if (unquote(target) !== target) throw new Error(`${JSON.stringify(target)} cannot be a working folder: its name starts or ends with a space or a quote mark.`)
+    const workDir = await rt.workFolder(target)
     await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
     const result = await next()
     if (result?.isError !== true) await rt.updateBot(bot.id, { workDir: workDir ?? '' })
