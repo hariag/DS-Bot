@@ -199,6 +199,9 @@ jobs:
           node-version: 24
       - run: npm ci --no-fund --no-audit
       - run: npm run dist
+        env:
+          # Ad-hoc identity '-' uses no certificate or secret, so PR signing is safe; otherwise electron-builder skips signing and leaves an unsealed bundle.
+          CSC_FOR_PULL_REQUEST: 'true'
       - name: Check the DMG
         run: |
           dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
