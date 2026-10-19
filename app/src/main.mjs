@@ -43,6 +43,9 @@ let updates
 let stopping = false
 let stopped = false
 let failed = false
+// Quitting waits for the first-run check, so that its copy of the team's chats goes as well.
+let checking
+const checkAbort = new AbortController()
 
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)
@@ -50,6 +53,13 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => { app.quit() })
   app.on('before-quit', (event) => {
+    if (checking !== undefined) {
+      event.preventDefault()
+      if (checkAbort.signal.aborted) return
+      checkAbort.abort()
+      void checking.finally(() => { checking = undefined; app.quit() })
+      return
+    }
     if (stopped || host === undefined) return
     event.preventDefault()
     if (stopping) return
@@ -84,12 +94,13 @@ function start() {
     return new HostProcess({ entry: join(here, 'host.mjs'), cwd, env: { ...process.env, DSH_HOME: home, DS_BOT_CHECK: list }, pnpm, onFailure: () => {} })
   }
   const ready = (async () => {
-    if (where.import && await copyTeam(where, newHost, newCheck) === 'quit') {
+    const copied = where.import ? await copyTeam(where, newHost, newCheck) : undefined
+    if (copied === 'quit') {
       forgetLocations()
       app.exit(0)
-      // The window may be waiting for the Host; it goes away with the app.
-      return new Promise(() => {})
     }
+    // The window may be waiting for the Host; it goes away with the app.
+    if (copied !== undefined) return new Promise(() => {})
     // Not during the import, which a restart would cut short; before the Host, so that an
     // update can still come when this version's Host does not start.
     updates = startUpdates()
@@ -138,9 +149,13 @@ function start() {
 // without the copied Sessions' folders, so the old team's folders are not offered as projects.
 // Before that, the app's own DSH reads every chat of the team once: a newer DSH can write
 // records that this one refuses while the log format stays the same. Such a chat stops the
-// copy, as a newer log format does; 'quit' means the user updates DeepSeek Bot first.
+// copy, as a newer log format does; 'quit' means the user updates DeepSeek Bot first, and
+// 'stopped' that the app quit during the check.
 async function copyTeam(where, newHost, newCheck) {
-  const unreadable = await checkTeam(where, newCheck)
+  checking = checkTeam(where, newCheck, checkAbort.signal)
+  const unreadable = await checking
+  if (checkAbort.signal.aborted) return 'stopped'
+  checking = undefined
   if (unreadable > 0) {
     const t = text()
     const { response } = await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 })
@@ -164,25 +179,29 @@ async function copyTeam(where, newHost, newCheck) {
 }
 
 // A copy of the chats in a DSH home of its own, so that nothing of the check stays in the data.
-async function checkTeam(where, newCheck) {
+async function checkTeam(where, newCheck, signal) {
   const home = join(where.dataDir, `.import-check-${String(Date.now())}`)
   try {
     const found = findTeam(where.import.from)
-    const ids = found === undefined ? [] : await copySessions(where.import.from, found.team, home)
+    const ids = found === undefined ? [] : await copySessions(where.import.from, found.team, home, signal)
     if (ids.length === 0) return 0
     mainWindow?.setProgressBar(2)
     const list = join(home, 'check.json')
     writeFileSync(list, JSON.stringify(ids))
     const check = newCheck(home, list)
+    const stop = () => { void check.stop() }
+    signal.addEventListener('abort', stop, { once: true })
     try {
+      signal.throwIfAborted()
       const { unreadable } = await check.start()
       if (unreadable.length > 0) console.warn(`DeepSeek Bot: this DSH cannot read ${unreadable.join(', ')}`)
       return unreadable.length
     } finally {
+      signal.removeEventListener('abort', stop)
       await check.stop()
     }
   } catch (error) {
-    console.error('DeepSeek Bot: the chats were not checked before the copy:', error)
+    if (!signal.aborted) console.error('DeepSeek Bot: the chats were not checked before the copy:', error)
     return 0
   } finally {
     mainWindow?.setProgressBar(-1)

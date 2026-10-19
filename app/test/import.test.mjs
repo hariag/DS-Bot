@@ -167,6 +167,12 @@ describe('finding the team', () => {
     assert.equal(treeHash(from), oldTree)
   })
 
+  test('stops copying for the check once the app quits', async () => {
+    const home = join(root, 'check-stopped')
+    await assert.rejects(copySessions(from, TEAM, home, AbortSignal.abort()), { name: 'AbortError' })
+    assert.equal(existsSync(join(home, 'sessions')), false)
+  })
+
   test('finds Sessions written in a newer format than the pinned DSH reads', () => {
     assert.deepEqual(newerSessions(from, TEAM), [])
     write(join(from, 'sessions', '--site--', 'session-b', 'session.v99.jsonl.zstd'), 'newer')

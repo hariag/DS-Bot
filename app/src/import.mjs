@@ -105,14 +105,21 @@ function sessionDirs(from, ids) {
   return { found, missing }
 }
 
-async function copySessionDirs(from, to, sessions) {
-  for (const { id, group } of sessions) await cp(join(from, 'sessions', group, id), join(to, 'sessions', group, id), { recursive: true })
+async function copySessionDirs(from, to, sessions, signal) {
+  for (const { id, group } of sessions) {
+    signal?.throwIfAborted()
+    await cp(join(from, 'sessions', group, id), join(to, 'sessions', group, id), { recursive: true })
+  }
 }
 
-/** Copy the team's Sessions into the DSH home `to`, as they lie in `from`. @returns {Promise<string[]>} their ids */
-export async function copySessions(from, team, to) {
+/**
+ * Copy the team's Sessions into the DSH home `to`, as they lie in `from`; an abort stops it between Sessions.
+ * @param {string} from @param {any} team @param {string} to @param {AbortSignal} [signal]
+ * @returns {Promise<string[]>} their ids
+ */
+export async function copySessions(from, team, to, signal) {
   const { found } = sessionDirs(from, sessionIdsOf(team))
-  await copySessionDirs(from, to, found)
+  await copySessionDirs(from, to, found, signal)
   return found.map(({ id }) => id)
 }
 
