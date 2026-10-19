@@ -121,6 +121,15 @@ jobs:
       - run: npm run dist
       - name: Check the packaged app
         run: node scripts/check-packed.mjs
+      - name: Keep the installer for real-device checks
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeek-Bot-win-x64
+          path: app/dist-pack/DeepSeek-Bot-*-win-x64.exe
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
 
       - name: Attach the installer to the release
         if: github.event_name == 'release'
@@ -155,6 +164,15 @@ jobs:
       - run: npm run dist
       - name: Check the packaged app
         run: node scripts/check-packed.mjs
+      - name: Keep the dmg for real-device checks
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeek-Bot-mac-${{ matrix.arch }}
+          path: app/dist-pack/DeepSeek-Bot-*-mac-${{ matrix.arch }}.dmg
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
       - name: Attach the dmg to the release
         if: github.event_name == 'release'
         env:
