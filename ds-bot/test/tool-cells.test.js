@@ -89,10 +89,69 @@ const program = (subCalls, over = {}) => call('run_code', 'program', { subCalls,
 
 test('a member\'s messages in a row stack under its name, and an event line starts a new block', () => {
   const replies = [
-    { botId: 'writer', text: 'a' }, { botId: 'writer', text: 'b' }, { kind: 'working', botId: 'writer' },
-    { botId: 'writer', text: 'c' }, { botId: 'chief', text: 'd' }, { botId: 'writer', text: 'e' },
+    { botId: 'writer', text: 'a', time: 10, duration: 1000 }, { botId: 'writer', text: 'b', time: 20, duration: 2000 },
+    { kind: 'working', botId: 'writer', time: 30 },
+    { botId: 'writer', text: 'c', time: 40, duration: 4000 }, { botId: 'chief', text: 'd', time: 50, duration: 5000 },
+    { botId: 'writer', text: 'e', time: 60, duration: 6000 },
   ]
   assert.deepEqual(JSON.parse(JSON.stringify(stackReplies(replies).map(item => [item.index, item.texts]))), [[0, ['a', 'b']], [2, []], [3, ['c']], [4, ['d']], [5, ['e']]])
+  // A stacked block carries its last message's time and how long that turn ran.
+  const [stacked, event, single] = stackReplies(replies)
+  assert.deepEqual([stacked.time, stacked.duration], [20, 2000])
+  assert.deepEqual([event.time, event.duration], [30, undefined])
+  assert.deepEqual([single.time, single.duration], [40, 4000])
+})
+
+// A time in the machine's own zone, some days back, so the test does not depend on the zone.
+const at = (daysAgo, hour, minute) => {
+  const today = new Date()
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo, hour, minute).getTime()
+}
+const clockOf = ms => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+const findAll = (node, match) => {
+  const found = []
+  const visit = (entry) => {
+    if (Array.isArray(entry)) { entry.forEach(visit); return }
+    if (!entry || typeof entry !== 'object') return
+    if (match(entry)) found.push(entry)
+    visit(entry.props?.children)
+  }
+  visit(node)
+  return found
+}
+
+test('a group reply shows its time, and how long its turn ran', () => {
+  const today = at(0, 14, 5)
+  const yesterday = at(1, 9, 3)
+  const replies = [
+    { botId: 'writer', text: 'Draft is up.', time: today, duration: 68_000 },
+    { botId: 'chief', text: 'Looks good.', time: yesterday, duration: 2_000 },
+  ]
+  const out = show(call('group_relay', 'direct', { content: { replies } }), { sessionId: 'room' })
+  const times = findAll(out, node => node.props?.className === 'bt-group-time')
+  const tooks = findAll(out, node => node.props?.className === 'bt-group-took')
+  assert.deepEqual(times.map(text), [clockOf(today), `Yesterday ${clockOf(yesterday)}`])
+  assert.deepEqual(times.map(node => node.props.title), [`Today ${clockOf(today)}`, `Yesterday ${clockOf(yesterday)}`])
+  assert.deepEqual(tooks.map(text), ['1m 8s', '2s'])
+  assert.deepEqual(tooks.map(node => node.props.title), ['Ran for 1m 8s', 'Ran for 2s'])
+})
+
+// The trigger of a post in a group chat carries the event's time, not the post's.
+test('a group post drawn from its trigger shows the time it came in', () => {
+  const time = at(0, 16, 42)
+  const node = {
+    key: 'trigger', kind: 'turn-trigger', location: { turn: { turn: 1 } },
+    data: { seq: 7, time, content: text$('Draft is up.'), source: { kind: 'bot', role: 'post', senderSessionId: 'writer', senderName: 'Writer' } },
+  }
+  const out = expand(TriggerCell({
+    node, sessionId: 'room', actions: {},
+    useRoster: select => select(team()), useSessions: select => select({ byId: {} }),
+    useTurnClock: select => select({}), useUi: select => select({ visits: {}, reactions: {} }),
+  }))
+  const stamps = findAll(out, entry => entry.props?.className === 'bt-group-time')
+  assert.equal(stamps.length, 1)
+  assert.equal(text(stamps[0]), clockOf(time))
+  effects = []
 })
 
 const props = (root, { sessionId = chief.id, roster = team(), actions = {}, turn = 1 } = {}) => ({

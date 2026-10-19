@@ -492,6 +492,7 @@ var ZH = {
   // Time and usage
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
+  "Ran for {duration}": "本次用时 {duration}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 缓存命中 {hit}%",
   "1 turn": "1 轮",
   "{count} turns": "{count} 轮",
@@ -1730,11 +1731,25 @@ function mentionTarget(event) {
 function clock(ms) {
   return new Date(ms).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" });
 }
+var midnight = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+var daysBefore = (date, now) => Math.round((midnight(new Date(now)) - midnight(date)) / 864e5);
 function dayLabel(ms) {
   const date = new Date(ms);
   const today = /* @__PURE__ */ new Date();
   const sameDay = date.toDateString() === today.toDateString();
   return sameDay ? t("Today {time}", { time: clock(ms) }) : `${date.toLocaleDateString(dateLocale(), { weekday: "short", month: "short", day: "numeric" })} ${clock(ms)}`;
+}
+function clockLabel(time, now = Date.now()) {
+  const date = new Date(time);
+  const days = daysBefore(date, now);
+  const stamp = clock(time);
+  if (days === 0) return t("Today {time}", { time: stamp });
+  if (days === 1) return t("Yesterday {time}", { time: stamp });
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  return `${date.toLocaleDateString(dateLocale(), { weekday: "short", month: "short", day: "numeric", ...sameYear ? {} : { year: "numeric" } })} ${stamp}`;
+}
+function messageClock(time, now = Date.now()) {
+  return daysBefore(new Date(time), now) === 0 ? clock(time) : clockLabel(time, now);
 }
 function relativeShort(ms) {
   const diff = Math.max(0, Date.now() - ms);
@@ -2315,6 +2330,7 @@ button.bt-lead{border:0;background:none;padding:0;cursor:pointer}
 /* Rows without the avatar start where the bubble beside it starts: 22px avatar + 8px gap. */
 .bt-astack[data-lead]>.bt-msg:not(:last-child)>.bt-msg-line,.bt-astack[data-lead] .bt-reacts{margin-left:30px}
 .bt-group-name{font-size:12px;line-height:16px;font-weight:500;margin-left:42px}
+.bt-group-time,.bt-group-took{margin-left:6px;font-size:11px;line-height:16px;font-weight:400;color:var(--bt-ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
 .bt-x{border:0;background:none;color:var(--bt-ink-2);cursor:pointer;width:24px;height:24px;border-radius:6px;font-size:16px;line-height:24px;padding:0;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
 
@@ -3117,6 +3133,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-ububble [class*="_markdown"],.bt-ububble a{color:inherit!important}
 .bt-ububble p{margin:0;line-height:22px}
 .bt-uimages{display:block;font-size:12px;opacity:.7}
+.bt-utime{margin-top:-4px;font-size:11px;line-height:14px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 .bt-earlier .bt-event{margin:4px 0}
 .bt-part-line{display:flex;align-items:center;gap:10px;margin:10px 0 6px;font-size:11px;line-height:14px;color:var(--bt-ink-3)}
 .bt-part-line::before,.bt-part-line::after{content:"";flex:1;height:1px;background:var(--bt-line)}
@@ -4428,12 +4445,13 @@ function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
   });
   return (0, import_react7.createElement)("div", { className: "bt-event" }, parts);
 }
-function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole }) {
+function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration }) {
   const lead = (0, import_react7.createElement)(
     "button",
     { type: "button", className: "bt-lead", "aria-label": t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) },
     (0, import_react7.createElement)(BotMark, { bot, size: 22 })
   );
+  const took = Number.isFinite(duration) ? elapsedLabel(duration) : void 0;
   return (0, import_react7.createElement)(
     "div",
     { className: "bt-group-msg" },
@@ -4441,7 +4459,9 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, 
       "span",
       { className: "bt-group-name", style: { color: inkText(colorOf(bot)) } },
       bot.name,
-      room2?.admin === bot.id ? (0, import_react7.createElement)("span", { className: "bt-group-role" }, t("Admin")) : null
+      room2?.admin === bot.id ? (0, import_react7.createElement)("span", { className: "bt-group-role" }, t("Admin")) : null,
+      Number.isFinite(time) ? (0, import_react7.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null,
+      took ? (0, import_react7.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
     (0, import_react7.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead, whole })
   );
@@ -4450,8 +4470,11 @@ function stackReplies(replies) {
   const items = [];
   replies.forEach((reply, index) => {
     const last = items.at(-1);
-    if (reply.kind === void 0 && last?.reply.kind === void 0 && last?.reply.botId === reply.botId) last.texts.push(reply.text);
-    else items.push({ reply, index, texts: reply.kind === void 0 ? [reply.text] : [] });
+    if (reply.kind === void 0 && last?.reply.kind === void 0 && last?.reply.botId === reply.botId) {
+      last.texts.push(reply.text);
+      last.time = reply.time;
+      last.duration = reply.duration;
+    } else items.push({ reply, index, texts: reply.kind === void 0 ? [reply.text] : [], time: reply.time, duration: reply.duration });
   });
   return items;
 }
@@ -4644,6 +4667,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
           actions,
           msgKey: `${sessionId}:post:${data.seq ?? node.key}`,
           useUi,
+          time: data.time,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : void 0
         });
       }
@@ -4705,16 +4729,6 @@ function Nothing() {
   return null;
 }
 var SEPARATOR_GAP_MS = 30 * 60 * 1e3;
-function clockLabel(time, now = Date.now()) {
-  const date = new Date(time);
-  const midnight = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-  const days = Math.round((midnight(new Date(now)) - midnight(date)) / 864e5);
-  const clock4 = date.toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" });
-  if (days === 0) return t("Today {time}", { time: clock4 });
-  if (days === 1) return t("Yesterday {time}", { time: clock4 });
-  const sameYear = date.getFullYear() === new Date(now).getFullYear();
-  return `${date.toLocaleDateString(dateLocale(), { weekday: "short", month: "short", day: "numeric", ...sameYear ? {} : { year: "numeric" } })} ${clock4}`;
-}
 function nextTurnStart(turns, turn) {
   let next;
   for (const key in turns) {
@@ -4889,7 +4903,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   return (0, import_react7.createElement)(
     "div",
     { className: "bt-group-replies" },
-    stackReplies(replies).map(({ reply, index, texts: texts2 }) => {
+    stackReplies(replies).map(({ reply, index, texts: texts2, time, duration }) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? "gray" };
       if (reply.kind === "user") {
         return (0, import_react7.createElement)("div", { key: `user-${index}`, className: "bt-urow" }, (0, import_react7.createElement)(
@@ -4939,7 +4953,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       if (reply.kind === "done") {
         return (0, import_react7.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} finished its work", { name: bot.name }));
       }
-      return (0, import_react7.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi });
+      return (0, import_react7.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration });
     }),
     pending.map((id) => {
       const bot = roster.byId[id];
@@ -14163,6 +14177,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
   const referenceLabels = data.referenceLabels ?? [];
   const references = openFile && openSkill ? { openFile, openSkill } : void 0;
   const steering = node.kind === "steering";
+  const groupTime = roster.roomsById?.[sessionId] && Number.isFinite(data.time) ? messageClock(data.time) : void 0;
   const { shown, folded, control } = useFold(text, { markdown: false });
   const body = (0, import_react37.createElement)(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions });
   return (0, import_react37.createElement)(
@@ -14179,7 +14194,8 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
         control,
         rest.map((block, index) => ui.JsonBlock ? (0, import_react37.createElement)(ui.JsonBlock, { key: index, label: t("Content"), payload: block }) : null)
       ) : null,
-      referenceLabels.length > 0 ? (0, import_react37.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null
+      referenceLabels.length > 0 ? (0, import_react37.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null,
+      groupTime ? (0, import_react37.createElement)("div", { className: "bt-utime", title: clockLabel(data.time) }, groupTime) : null
     ),
     text === "" ? null : (0, import_react37.createElement)("div", { className: "bt-utools" }, (0, import_react37.createElement)(CopyButton, { text }))
   );
