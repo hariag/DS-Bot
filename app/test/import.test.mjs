@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { parse } from 'yaml'
-import { findTeam, importTeam, newerSessions, sessionIdsOf, teamInUse, userDshHome } from '../src/import.mjs'
+import { copySessions, findTeam, importTeam, newerSessions, sessionIdsOf, teamInUse, userDshHome } from '../src/import.mjs'
 
 const write = (path, text) => {
   mkdirSync(dirname(path), { recursive: true })
@@ -155,6 +155,16 @@ describe('finding the team', () => {
 
   test('names each Session of the team once', () => {
     assert.deepEqual(sessionIdsOf(TEAM), ['session-a', 'session-a2', 'session-b', 'session-g', 'session-gone', 'session-g0'])
+  })
+
+  test('copies only the Sessions of the team for the check, and changes nothing in the old home', async () => {
+    const oldTree = treeHash(from)
+    const home = join(root, 'check')
+    const ids = await copySessions(from, TEAM, home)
+    assert.deepEqual(ids.toSorted(), TEAM_SESSIONS.map(([, id]) => id).toSorted())
+    for (const [group, id] of TEAM_SESSIONS) assert.equal(readFileSync(join(home, 'sessions', group, id, 'session.v4.jsonl.zstd'), 'utf8'), id)
+    assert.equal(existsSync(join(home, 'sessions', '--team--', 'session-other')), false)
+    assert.equal(treeHash(from), oldTree)
   })
 
   test('finds Sessions written in a newer format than the pinned DSH reads', () => {

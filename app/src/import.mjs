@@ -105,6 +105,17 @@ function sessionDirs(from, ids) {
   return { found, missing }
 }
 
+async function copySessionDirs(from, to, sessions) {
+  for (const { id, group } of sessions) await cp(join(from, 'sessions', group, id), join(to, 'sessions', group, id), { recursive: true })
+}
+
+/** Copy the team's Sessions into the DSH home `to`, as they lie in `from`. @returns {Promise<string[]>} their ids */
+export async function copySessions(from, team, to) {
+  const { found } = sessionDirs(from, sessionIdsOf(team))
+  await copySessionDirs(from, to, found)
+  return found.map(({ id }) => id)
+}
+
 const logVersion = name => parseSessionFormatLogFilename(name.replace(/\.(zstd|zst|gz|br)$/u, ''))
 
 /** The Sessions whose log is in a newer format than the pinned DSH reads. */
@@ -154,7 +165,7 @@ export async function importTeam({ from, to, workspace, profile, dsh }) {
   team.agents = {}
   await writeFile(join(stage, 'bot', 'state.json'), JSON.stringify(team, null, 2))
   const { found: sessions, missing } = sessionDirs(from, sessionIdsOf(found.team))
-  for (const { id, group } of sessions) await cp(join(from, 'sessions', group, id), join(stage, 'sessions', group, id), { recursive: true })
+  await copySessionDirs(from, stage, sessions)
   if (existsSync(join(from, 'attachments'))) await cp(join(from, 'attachments'), join(stage, 'attachments'), { recursive: true })
 
   await mkdir(workspace, { recursive: true })

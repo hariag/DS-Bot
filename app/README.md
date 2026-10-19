@@ -27,7 +27,7 @@ On macOS, Electron's default `userData` directory for `productName` "DeepSeek Bo
 
 At its first start the app asks, in system dialogs, for the data location (`~/.ds-bot` by default) and the folder for the files that Bots make (`~/DeepSeek Bot`), and keeps the answer in `locations.json` in its own data. Neither folder may be inside the other or inside the user's DSH data.
 
-When the user's DSH (`DSH_HOME`, else `~/.dsh`) has a Bot team, the app offers to copy it (`src/import.mjs`). It only reads there. Before the copy it checks that no running DSH holds the team and that no chat is in a newer session format than the pinned DSH reads, and it starts the Host once on the new data location, so that DSH does not register the copied Sessions' folders as projects. The copy takes `bot/` (without its lock, turns in flight and workspace), every Session the team names, the attachments, `.credentials.yaml`, `.env`, the model rows of one profile's `cordis.patch.yml`, and the old team workspace's files, which go into the new folder without replacing a file there. `bot/imported.json` records it. At its next turn, each Bot and group moves on to a fresh part in the new folder.
+When the user's DSH (`DSH_HOME`, else `~/.dsh`) has a Bot team, the app offers to copy it (`src/import.mjs`). It only reads there. Before the copy it checks that no running DSH holds the team and that no chat is in a newer session format than the pinned DSH reads. Then the pinned DSH reads each chat once: a newer DSH can write records that the pinned one refuses in the same format. It reads a throwaway copy in the data location, with a profile of its own (`import-check`: `dsh-base` and `dsh-web-app`, without `ds-bot`), and removes the copy afterwards. A chat that a newer DSH wrote stops the copy as a newer format does; a damaged one does not, since the user's DSH cannot read it either. Then the app starts the Host once on the new data location, so that DSH does not register the copied Sessions' folders as projects. The copy takes `bot/` (without its lock, turns in flight and workspace), every Session the team names, the attachments, `.credentials.yaml`, `.env`, the model rows of one profile's `cordis.patch.yml`, and the old team workspace's files, which go into the new folder without replacing a file there. `bot/imported.json` records it. At its next turn, each Bot and group moves on to a fresh part in the new folder.
 
 The Host reads model settings and keys the way DSH does: environment variables such as `DEEPSEEK_API_KEY`, and `.env` and `.credentials.yaml` in the data location. DSH's settings in the window set up model providers and their keys; DSH keeps the providers in the profile's `cordis.patch.yml` and the keys in `.credentials.yaml`.
 
@@ -45,7 +45,7 @@ At every start the Host puts these three bundles at the head of the profile's bu
 
 ## Check a change
 
-`npm test` checks the composition of the profile, the import on throwaway folders, and that every package the app runs on is a dependency (see [Package](#package)).
+`npm test` checks the composition of the profile, the import on throwaway folders, the first-run check on a chat with a record that the pinned DSH does not know, and that every package the app runs on is a dependency (see [Package](#package)).
 
 `scripts/shot.mjs` starts the app on throwaway folders, saves a screenshot of its window, prints the page text, closes the window the way a user does and waits until the app exits. Use the mock model of the plugin, `../ds-bot/dev/mock-llm.mjs` (`MOCK_PORT=<port> node ../ds-bot/dev/mock-llm.mjs`).
 
@@ -109,8 +109,9 @@ The script serves a releases list with one release of that version that has this
 | `src/main.mjs` | Main process: one instance, the `dsh-app://app` scheme (DSH's Web front end, and everything else forwarded to the Host), the window and its boot data |
 | `src/preload.cjs` | Hands the window the boot data that DSH's Web front end needs |
 | `src/host-process.mjs` | Starts the Host in Electron's Node mode and owns its exit |
-| `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL and the page injections |
-| `src/profile.mjs` | The profile: its name, its bundles, and its creation and update |
+| `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL and the page injections; for the first-run check (`DS_BOT_CHECK`), the chats it cannot read |
+| `src/profile.mjs` | The profiles: the app's own and the first-run check's, their bundles, and their creation and update |
+| `src/session-check.mjs` | Which chats the pinned DSH refuses because a newer DSH wrote them |
 | `src/first-run.mjs` | The first start's dialogs: the two folders and the offer to import |
 | `src/import.mjs` | The import of a Bot team from the user's DSH |
 | `src/updates.mjs` | The Windows installer updates and macOS release-page checks |

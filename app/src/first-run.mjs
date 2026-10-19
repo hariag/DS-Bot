@@ -1,7 +1,7 @@
 // The first start: where the app keeps its data and the Bots' files, and whether it copies the
 // Bot team of the user's own DSH. The answers are kept in the app's own data.
 import { app, dialog } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { findTeam, newerSessions, teamInUse, userDshHome, within } from './import.mjs'
@@ -51,6 +51,12 @@ export const text = () => localeText(TEXT)
 
 const PROFILE_NAMES = { desktop: 'DSH Desktop', web: 'DSH Web' }
 const ask = options => dialog.showMessageBoxSync({ title: 'DeepSeek Bot', noLink: true, ...options })
+const locationsFile = () => join(app.getPath('userData'), 'locations.json')
+
+/** Ask for the places and the copy again at the next start, as after quitting the first start. */
+export function forgetLocations() {
+  rmSync(locationsFile(), { force: true })
+}
 
 function pick(title, current) {
   const picked = dialog.showOpenDialogSync({ title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
@@ -108,7 +114,7 @@ function offerImport(t, dataDir) {
  */
 export function chooseLocations() {
   if (process.env.DS_BOT_HOME) return { dataDir: process.env.DS_BOT_HOME, workspace: process.env.DS_BOT_WORKSPACE || undefined }
-  const file = join(app.getPath('userData'), 'locations.json')
+  const file = locationsFile()
   if (existsSync(file)) {
     const saved = JSON.parse(readFileSync(file, 'utf8'))
     return { dataDir: saved.dataDir, workspace: saved.workspace }
