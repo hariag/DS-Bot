@@ -191,19 +191,21 @@ export async function importTeam({ from, to, workspace, profile, dsh, signal }) 
   const rows = found.profiles.find(entry => entry.name === profile)?.rows ?? []
   if (rows.length > 0) await writeModelRows(to, rows)
 
-  signal?.throwIfAborted()
   for (const { id, group } of sessions) {
+    signal?.throwIfAborted()
     await mkdir(join(to, 'sessions', group), { recursive: true })
     // A copy that stopped can have moved the Session in already.
     await rm(join(to, 'sessions', group, id), { recursive: true, force: true })
     await rename(join(stage, 'sessions', group, id), join(to, 'sessions', group, id))
   }
+  signal?.throwIfAborted()
   if (existsSync(join(stage, 'attachments'))) await cp(join(stage, 'attachments'), join(to, 'attachments'), { recursive: true, force: false })
   const summary = {
     from, at: new Date().toISOString(), ...(dsh ? { dsh } : {}),
     bots: found.bots, rooms: found.rooms, sessions: sessions.length, missingSessions: missing,
     keys, modelSettings: rows.length > 0 ? profile : null,
   }
+  signal?.throwIfAborted()
   await writeFile(join(stage, 'bot', 'imported.json'), `${JSON.stringify(summary, null, 2)}\n`)
   // Until this rename the data has no Bot team, so a copy that stopped can run again.
   await rm(join(to, 'bot'), { recursive: true, force: true })
