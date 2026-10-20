@@ -26,7 +26,7 @@ async function main() {
     profile: check === undefined ? PROFILE : CHECK_PROFILE,
     resolvedProfile: { profile, installAnchor: INSTALL_ANCHOR },
     patchFiles: [],
-    args: ['--no-open', '--port', '0'],
+    args: ['--no-open', '--port', process.env.DS_BOT_PORT || '0'],
     ...(pnpm === undefined ? {} : {
       packageManager: { command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' } },
     }),

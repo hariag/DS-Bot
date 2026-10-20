@@ -1,10 +1,9 @@
 // Electron main process: one window for the Bot team, served by the app's own DSH Host.
-// The dsh-app scheme, the request forwarding and the WebSocket header rewrite follow
-// DeepSeek Harness apps/desktop/src/main.ts (MIT); see NOTICE.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
+// The window loads the Host's loopback address as DSH Web does: DSH's sign-in sends the page's
+// origin as the address the browser comes back to, and accepts only a loopback one.
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { release } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -12,42 +11,33 @@ import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
 import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
+import { hostPort } from './host-port.mjs'
 import { HostProcess } from './host-process.mjs'
 import { copySessions, findTeam, importTeam, teamInUse, userDshHome } from './import.mjs'
 import { copyData, moveProblem } from './move-data.mjs'
 import { CHECK_PROFILE, PROFILE } from './profile.mjs'
 import { UPDATE_TEXT, watchReleases, watchUpdates } from './updates.mjs'
-import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
 import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './window-frame.mjs'
 
-// DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
-const SCHEME = 'dsh-app'
 const IPC = {
-  boot: 'ds-bot:boot', bootFailed: 'ds-bot:boot-failed',
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
 }
 const MOVE_PROBLEMS = { drive: 'moveDrive', nested: 'moveNested', workspace: 'moveWorkspace', program: 'inProgram', notEmpty: 'moveNotEmpty' }
-const STATIC_PATHS = new Set(['/', '/index.html', '/manifest.webmanifest'])
 const UPDATE_CHECK_WAIT_MS = 15_000
 const UPDATE_DOWNLOAD_WAIT_MS = 15 * 60_000
 
 const here = dirname(fileURLToPath(import.meta.url))
-const webDist = join(dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
 // Drawn by scripts/icon.mjs. Windows takes the .ico for its several sizes.
 const iconFile = join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
 // Windows 11 draws Mica behind the page; mica.css lets it through the sidebar.
 const mica = micaAvailable(process.platform, release())
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
 
-protocol.registerSchemesAsPrivileged([{
-  scheme: SCHEME,
-  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true, codeCache: true },
-}])
-
 let mainWindow
 let host
-let hostState
+// The Host's loopback origin, which the window loads.
+let origin
 let hostStop
 let updates
 let stopping = false
@@ -98,13 +88,15 @@ async function start() {
   const where = await chooseLocations(choosing.signal).finally(() => { choosing = undefined })
   if (where.quit) { app.exit(0); return }
   places = { dataDir: where.dataDir, workspace: where.workspace }
+  const port = await hostPort(join(app.getPath('userData'), 'host-port.json'))
+  origin = `http://127.0.0.1:${String(port)}`
   const pnpm = join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
   const profileDir = join(where.dataDir, 'profiles', PROFILE)
   mkdirSync(profileDir, { recursive: true })
   const newHost = () => new HostProcess({
     entry: join(here, 'host.mjs'),
     cwd: profileDir,
-    env: { ...process.env, DSH_HOME: where.dataDir, DS_BOT_APP: '1', DS_BOT_USER_DSH_HOME: userDshHome(), ...(where.workspace ? { DS_BOT_WORKSPACE: where.workspace } : {}) },
+    env: { ...process.env, DSH_HOME: where.dataDir, DS_BOT_PORT: String(port), DS_BOT_APP: '1', DS_BOT_USER_DSH_HOME: userDshHome(), ...(where.workspace ? { DS_BOT_WORKSPACE: where.workspace } : {}) },
     pnpm,
     onFailure: fail,
   })
@@ -128,29 +120,9 @@ async function start() {
     // update can still come when this version's Host does not start.
     updates = startUpdates()
     host = newHost()
-    const started = await host.start()
-    hostState = { ...started, cookie: await authenticateWebHost(started.url) }
-    return hostState
+    return host.start()
   })()
   ready.catch(fail)
-
-  protocol.handle(SCHEME, (request) => {
-    const url = new URL(request.url)
-    if (url.hostname !== 'app') return new Response(null, { status: 404 })
-    if (STATIC_PATHS.has(url.pathname) || url.pathname.startsWith('/assets/')) return serveWebDocument(request, webDist)
-    if (hostState === undefined) return new Response(null, { status: 503 })
-    return forwardWebRequest(request, hostState.url, hostState.cookie)
-  })
-
-  ipcMain.handle(IPC.boot, async (event) => {
-    assertWindow(event)
-    const { url, injections } = await ready
-    return { injections, streamBaseUrl: new URL(url).origin }
-  })
-  ipcMain.handle(IPC.bootFailed, (event, message) => {
-    assertWindow(event)
-    fail(new Error(String(message)))
-  })
   // A throwaway run (DS_BOT_HOME) keeps its folders where it was told.
   const fixed = Boolean(process.env.DS_BOT_HOME)
   ipcMain.handle(IPC.dataLocation, (event) => {
@@ -180,20 +152,12 @@ async function start() {
     })
   }
 
-  // The stream connects to the Host directly; the Host accepts only its own origin and cookie.
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*'] }, (details, callback) => {
-    if (hostState === undefined || details.webContentsId !== mainWindow?.webContents.id) { callback({}); return }
-    const target = new URL(hostState.url)
-    if (new URL(details.url).host !== target.host) { callback({}); return }
-    const headers = Object.fromEntries(Object.entries(details.requestHeaders).map(([name, value]) => [name.toLowerCase(), value]))
-    if (headers.origin !== APP_ORIGIN) { callback({ cancel: true }); return }
-    callback({ requestHeaders: { ...headers, origin: target.origin, cookie: hostState.cookie, 'sec-fetch-site': 'same-origin' } })
-  })
-
   setMenu()
   // A packaged app has the icon in its bundle; Electron's own run shows Electron's.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(iconFile)
   createWindow()
+  // The launch URL trades its token for the Host's cookie and goes on to the page.
+  void ready.then(({ url }) => mainWindow?.loadURL(url)).catch(() => {})
 }
 
 // The Host starts once on the new data location first: DSH then sets up its project list
@@ -299,7 +263,7 @@ async function moveData(workspace) {
   const signal = copyAbort.signal
   copying = (async () => {
     // The settings go away first, so that nothing moves the team workspace from here on.
-    void mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(movingPage(t.moving))}`)
+    void mainWindow?.loadURL(notePage(t.moving))
     await stopHost()
     // The app may have heard of a team workspace change while the Host stopped.
     if (await refused()) {
@@ -337,8 +301,8 @@ async function moveData(workspace) {
   return true
 }
 
-const movingPage = message => `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
-<body style="margin:0;height:100vh;display:grid;place-items:center;font:14px system-ui,sans-serif;background:Canvas;color:CanvasText">${message.replace(/[&<>]/gu, char => `&#${String(char.charCodeAt(0))};`)}</body>`
+const notePage = message => `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<body style="margin:0;height:100vh;display:grid;place-items:center;font:14px system-ui,sans-serif;background:Canvas;color:CanvasText">${message.replace(/[&<>]/gu, char => `&#${String(char.charCodeAt(0))};`)}</body>`)}`
 
 // Windows updates itself; macOS asks to download the new version. Throwaway runs check only a
 // given feed and never ask.
@@ -390,7 +354,7 @@ function createWindow() {
     } : {}),
     webPreferences: {
       preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true,
-      additionalArguments: win32 ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(mica ? ['--ds-bot-mica'] : [])] : [],
+      additionalArguments: [`--ds-bot-origin=${origin}`, ...(win32 ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(mica ? ['--ds-bot-mica'] : [])] : [])],
     },
   })
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
@@ -409,9 +373,24 @@ function createWindow() {
     const css = readFileSync(join(here, 'mica.css'), 'utf8')
     contents.on('dom-ready', () => { void contents.insertCSS(css) })
   }
-  contents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' } })
+  contents.setWindowOpenHandler(({ url }) => {
+    // DSH's sign-in opens a blank window during the click and sends it to the sign-in page later.
+    if (url === 'about:blank') return { action: 'allow', overrideBrowserWindowOptions: { show: false, webPreferences: { sandbox: true } } }
+    openOutside(url)
+    return { action: 'deny' }
+  })
+  contents.on('did-create-window', (child) => {
+    const away = (event, url) => {
+      if (url === 'about:blank') return
+      event.preventDefault()
+      openOutside(url)
+      child.destroy()
+    }
+    child.webContents.on('will-navigate', away)
+    child.webContents.on('will-redirect', away)
+  })
   contents.on('will-navigate', (event, url) => {
-    if (url.startsWith(`${APP_ORIGIN}/`)) return
+    if (url.startsWith(`${origin}/`)) return
     event.preventDefault()
     openOutside(url)
   })
@@ -420,7 +399,7 @@ function createWindow() {
       if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) contents.toggleDevTools()
     })
   }
-  void mainWindow.loadURL(`${APP_ORIGIN}/`)
+  void mainWindow.loadURL(notePage(text().starting))
 }
 
 function setMenu() {
@@ -438,7 +417,7 @@ function focusWindow() {
 function assertWindow(event) {
   const contents = mainWindow?.webContents
   if (contents === undefined || event.sender !== contents || event.senderFrame !== contents.mainFrame
-    || !event.senderFrame.url.startsWith(`${APP_ORIGIN}/`)) throw new Error('DeepSeek Bot: rejected IPC from an unknown page')
+    || !event.senderFrame.url.startsWith(`${origin}/`)) throw new Error('DeepSeek Bot: rejected IPC from an unknown page')
 }
 
 function fromWindow(event) {

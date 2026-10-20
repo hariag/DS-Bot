@@ -1,15 +1,12 @@
-// Gives the DSH Web entry the boot handshake it uses inside an app window. On Windows it also
-// marks the page for the frameless window the way DSH Desktop's preload does
+// Gives the page that the app's Host serves the app's own bridge. On Windows it also marks the
+// page for the frameless window the way DSH Desktop's preload does
 // (apps/desktop/src/preload-windows.ts, preload-platform.ts and preload-theme.ts; see NOTICE),
 // but without data-platform: that puts DSH's shortcuts on native menu input, which this
 // window does not have.
 const { contextBridge, ipcRenderer } = require('electron')
 
-if (location.protocol === 'dsh-app:' && location.hostname === 'app') {
-  contextBridge.exposeInMainWorld('dshDesktopBoot', {
-    ready: () => ipcRenderer.invoke('ds-bot:boot'),
-    failed: (message) => ipcRenderer.invoke('ds-bot:boot-failed', String(message)),
-  })
+const host = process.argv.find(value => value.startsWith('--ds-bot-origin='))?.slice('--ds-bot-origin='.length)
+if (host !== undefined && location.origin === host) {
   // DS Bot's settings show and move the app's data location through this.
   contextBridge.exposeInMainWorld('dsBotApp', {
     dataLocation: () => ipcRenderer.invoke('ds-bot:data-location'),

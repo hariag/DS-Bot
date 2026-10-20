@@ -51,7 +51,7 @@ const feed = `http://127.0.0.1:${String(server.address().port)}/`
 // when a user closes it. The page goes away with the window, so the call gets no answer.
 async function closeWindow(port, waitForReady = false) {
   const targets = await (await fetch(`http://127.0.0.1:${String(port)}/json/list`)).json()
-  const page = targets.find(target => target.type === 'page' && target.url.startsWith('dsh-app://app'))
+  const page = targets.find(target => target.type === 'page' && /^http:\/\/127\.0\.0\.1:\d+\//u.test(target.url))
   if (!page) throw new Error('the app window is not there')
   const socket = new WebSocket(page.webSocketDebuggerUrl)
   await new Promise((done, reject) => {
