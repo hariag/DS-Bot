@@ -132,6 +132,7 @@ test('links in the data lead inside the copy, not back into the old folder', asy
   if (process.platform !== 'win32') {
     symlinkSync(join('..', 'sessions'), join(from, 'bot', 'relative'), 'dir')
     symlinkSync(join('..', '..', 'elsewhere'), join(from, 'bot', 'relative-outside'), 'dir')
+    symlinkSync(join('..', '..', 'data-alias', 'sessions'), join(from, 'bot', 'relative-alias'), 'dir')
   }
   // Deeper than the old folder, so that a relative link out of it would lead elsewhere.
   const to = join(root, 'deeper', 'new')
@@ -143,6 +144,7 @@ test('links in the data lead inside the copy, not back into the old folder', asy
   if (process.platform !== 'win32') {
     assert.equal(target('relative'), join('..', 'sessions'))
     assert.equal(target('relative-outside'), join(root, 'elsewhere'))
+    assert.equal(target('relative-alias'), join(to, 'sessions'))
   }
   assert.equal(readFileSync(join(to, 'bot', 'absolute', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
 })

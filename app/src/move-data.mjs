@@ -63,12 +63,13 @@ async function relink(source, path, roots, to) {
   const written = resolve(dirname(source), text)
   // Through another link the target can lead inside the old folder too.
   const physical = await realpath(written).catch(() => written)
-  const target = roots.some(folder => within(written, folder)) ? written : physical
+  const direct = roots.some(folder => within(written, folder))
+  const target = direct ? written : physical
   const root = roots.find(folder => within(target, folder))
   const folder = (await stat(source).catch(() => undefined))?.isDirectory() === true
   const windows = process.platform === 'win32'
   const inside = root === undefined ? written : join(to, relative(root, target))
-  await symlink(root !== undefined && !isAbsolute(text) && !(windows && folder) ? text : inside, path, folder ? (windows ? 'junction' : 'dir') : 'file')
+  await symlink(direct && !isAbsolute(text) && !(windows && folder) ? text : inside, path, folder ? (windows ? 'junction' : 'dir') : 'file')
 }
 
 /**
