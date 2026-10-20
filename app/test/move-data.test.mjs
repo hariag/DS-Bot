@@ -112,14 +112,21 @@ test('a folder that a link leads into counts as that folder', (t) => {
 test('links in the data lead inside the copy, not back into the old folder', async (t) => {
   const { root, from } = setup(t)
   symlinkSync(join(from, 'sessions'), join(from, 'bot', 'absolute'), folderLink)
-  if (process.platform !== 'win32') symlinkSync(join('..', 'sessions'), join(from, 'bot', 'relative'), 'dir')
   write(join(root, 'elsewhere', 'file.txt'), 'x')
   symlinkSync(join(root, 'elsewhere'), join(from, 'bot', 'outside'), folderLink)
-  const to = join(root, 'new')
+  if (process.platform !== 'win32') {
+    symlinkSync(join('..', 'sessions'), join(from, 'bot', 'relative'), 'dir')
+    symlinkSync(join('..', '..', 'elsewhere'), join(from, 'bot', 'relative-outside'), 'dir')
+  }
+  // Deeper than the old folder, so that a relative link out of it would lead elsewhere.
+  const to = join(root, 'deeper', 'new')
   await copyData(from, to)
   const target = name => readlinkSync(join(to, 'bot', name)).replace(/^\\\\\?\\/u, '').replace(/[\\/]+$/u, '')
   assert.equal(target('absolute'), join(to, 'sessions'))
   assert.equal(target('outside'), join(root, 'elsewhere'))
-  if (process.platform !== 'win32') assert.equal(readlinkSync(join(to, 'bot', 'relative')), join('..', 'sessions'))
+  if (process.platform !== 'win32') {
+    assert.equal(target('relative'), join('..', 'sessions'))
+    assert.equal(target('relative-outside'), join(root, 'elsewhere'))
+  }
   assert.equal(readFileSync(join(to, 'bot', 'absolute', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
 })

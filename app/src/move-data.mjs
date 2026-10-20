@@ -46,17 +46,18 @@ export function moveProblem(places) {
 
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 
-// Links keep their text, so relative ones still lead inside the copy; absolute ones that led
-// into the old folder lead into the new one. Windows gives a junction's target with \\?\, and
-// makes only junctions without special rights.
+// A link that leads inside the old folder leads to the same place inside the copy: a relative
+// one keeps its text, an absolute one is moved over. One that leads outside keeps leading
+// there, as an absolute link. Windows gives a junction's target with \\?\, and makes only
+// junctions, which hold absolute paths, without special rights.
 async function relink(source, path, roots, to) {
-  const text = await readlink(source)
-  const target = text.replace(/^\\\\\?\\/u, '')
-  const root = isAbsolute(target) ? roots.find(folder => within(target, folder)) : undefined
+  const text = (await readlink(source)).replace(/^\\\\\?\\/u, '')
+  const target = resolve(dirname(source), text)
+  const root = roots.find(folder => within(target, folder))
   const folder = (await stat(source).catch(() => undefined))?.isDirectory() === true
   const windows = process.platform === 'win32'
-  if (root !== undefined) await symlink(join(to, relative(root, target)), path, folder ? (windows ? 'junction' : 'dir') : 'file')
-  else await symlink(windows && folder ? target : text, path, folder ? (windows ? 'junction' : 'dir') : 'file')
+  const inside = root === undefined ? target : join(to, relative(root, target))
+  await symlink(root !== undefined && !isAbsolute(text) && !(windows && folder) ? text : inside, path, folder ? (windows ? 'junction' : 'dir') : 'file')
 }
 
 /**
