@@ -1,4 +1,4 @@
-import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FishLogo } from './dsh-primitives.js'
 import { isMainOf } from './sources.js'
@@ -401,36 +401,15 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
-// The footer entry to the shell's plugin panel, marked as not yet adapted: the red
-// badge and a hover tip explain that plugin support lands step by step.
+// The footer entry to the shell's plugin panel.
 export function ConnectPlugins({ wide, actions }) {
-  const tipId = useId()
-  const [tip, setTip] = useState(false)
-  const timer = useRef(0)
-  const button = useRef(null)
-  const [box, setBox] = useState(null)
-  useEffect(() => () => clearTimeout(timer.current), [])
   if (!wide) return null
-  const show = () => {
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => {
-      const rect = button.current?.getBoundingClientRect()
-      if (!rect) return
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 268))
-      setBox({ left, bottom: window.innerHeight - rect.top + 10 })
-      setTip(true)
-    }, 250)
-  }
-  const hide = () => { clearTimeout(timer.current); setTip(false) }
   return h('span', { className: 'bt-connect-wrap' },
     h('button', {
-      ref: button, type: 'button', className: 'bt-connect bt-connect-foot', 'aria-describedby': tip ? tipId : undefined,
-      onMouseEnter: show, onMouseLeave: hide, onFocus: show, onBlur: hide,
+      type: 'button', className: 'bt-connect bt-connect-foot',
       onClick: () => actions.selectPanel('plugins'),
     },
-    h(PlugIcon), t('Connect plugins'), h('span', { className: 'bt-connect-warn', 'aria-hidden': true }, '!')),
-    tip && box ? createPortal(h('span', { role: 'tooltip', id: tipId, className: 'bt-connect-tip', style: box },
-      t('Plugin compatibility is not fully verified.')), document.body) : null)
+    h(PlugIcon), t('Connect plugins')))
 }
 
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
