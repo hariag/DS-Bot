@@ -13,7 +13,7 @@ import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
 import { chooseLocations, localeText, saveLocations, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
-import { copySessions, findTeam, importTeam, userDshHome } from './import.mjs'
+import { copySessions, findTeam, importTeam, teamInUse, userDshHome } from './import.mjs'
 import { copyData, moveProblem } from './move-data.mjs'
 import { CHECK_PROFILE, PROFILE } from './profile.mjs'
 import { UPDATE_TEXT, watchReleases, watchUpdates } from './updates.mjs'
@@ -293,6 +293,12 @@ async function moveData(workspace) {
   const signal = copyAbort.signal
   copying = (async () => {
     await stopHost()
+    // Another DSH on the same data would go on writing while the copy is made.
+    if (teamInUse(places.dataDir)) {
+      await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: t.moveInUse })
+      app.relaunch()
+      return
+    }
     void mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(movingPage(t.moving))}`)
     mainWindow?.setProgressBar(2)
     try {
