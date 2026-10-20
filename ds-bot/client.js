@@ -4421,32 +4421,42 @@ function useThinkingMs({ sessionId, turn, settledSteps, skip }) {
   }, [key, skip]);
   return ms;
 }
-function ThinkingRow({ text, live, at, ms }) {
+var rowViews = /* @__PURE__ */ new Map();
+function ThinkingRow({ text, live, at, ms, viewKey }) {
   const box = (0, import_react8.useRef)(null);
-  const atEnd = (0, import_react8.useRef)(true);
-  const [open, setOpen] = (0, import_react8.useState)(false);
+  const view = (0, import_react8.useRef)(rowViews.get(viewKey));
+  const atEnd = (0, import_react8.useRef)(view.current?.atEnd ?? true);
+  const [open, setOpen] = (0, import_react8.useState)(view.current?.open ?? false);
   const [fade, setFade] = (0, import_react8.useState)(void 0);
+  const remember = (patch) => {
+    if (viewKey !== void 0) rowViews.set(viewKey, { ...rowViews.get(viewKey), ...patch });
+  };
   const measure = () => {
     const el = box.current;
     atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+    remember({ atEnd: atEnd.current, top: el.scrollTop });
     const above = el.scrollTop > 0;
     setFade(above && !atEnd.current ? "both" : above ? "top" : !atEnd.current ? "bottom" : void 0);
   };
   const toggle = (event) => {
     const next = event.currentTarget.open;
     if (next) atEnd.current = true;
+    remember({ open: next });
     setOpen(next);
   };
   (0, import_react8.useLayoutEffect)(() => {
     if (!open) return;
     const el = box.current;
+    const restore = view.current;
+    view.current = void 0;
     if (atEnd.current) el.scrollTop = el.scrollHeight;
+    else if (restore?.top !== void 0) el.scrollTop = restore.top;
     measure();
   }, [text, open]);
   const title = live ? t("Thinking") : t("Thought it through");
   return (0, import_react8.createElement)(
     "details",
-    { className: "bt-think", onToggle: toggle },
+    { className: "bt-think", open, onToggle: toggle },
     (0, import_react8.createElement)(
       "summary",
       null,
@@ -4505,6 +4515,7 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
     reasoning ? (0, import_react8.createElement)(ThinkingRow, {
       text: reasoning,
       live: thinking !== void 0,
+      viewKey: `${sessionId}:${data.turn}`,
       // The live clock counts the settled steps too: backing `at` by the settled
       // time makes one Elapsed show settled + running.
       ...thinking !== void 0 ? { at: typeof thinking.time === "number" ? thinking.time - (ms ?? 0) : void 0 } : { ms }

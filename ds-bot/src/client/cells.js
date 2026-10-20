@@ -139,30 +139,40 @@ function useThinkingMs({ sessionId, turn, settledSteps, skip }) {
 // steps add reasoning, unless the reader has scrolled up. While a step of the turn is
 // thinking the row shows immediately and ticks (`at` backs the live clock so it counts
 // the settled steps too); settled, it shows the turn's exact thinking time if known.
-export function ThinkingRow({ text, live, at, ms }) {
+// A live turn's row moves to the step that reasons now, so whether the reader opened it
+// and where they scrolled is kept per turn (`viewKey`), not per row.
+const rowViews = new Map()
+export function ThinkingRow({ text, live, at, ms, viewKey }) {
   const box = useRef(null)
-  const atEnd = useRef(true)
-  const [open, setOpen] = useState(false)
+  const view = useRef(rowViews.get(viewKey))
+  const atEnd = useRef(view.current?.atEnd ?? true)
+  const [open, setOpen] = useState(view.current?.open ?? false)
   const [fade, setFade] = useState(undefined)
+  const remember = patch => { if (viewKey !== undefined) rowViews.set(viewKey, { ...rowViews.get(viewKey), ...patch }) }
   const measure = () => {
     const el = box.current
     atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 2
+    remember({ atEnd: atEnd.current, top: el.scrollTop })
     const above = el.scrollTop > 0
     setFade(above && !atEnd.current ? 'both' : above ? 'top' : !atEnd.current ? 'bottom' : undefined)
   }
   const toggle = event => {
     const next = event.currentTarget.open
     if (next) atEnd.current = true
+    remember({ open: next })
     setOpen(next)
   }
   useLayoutEffect(() => {
     if (!open) return
     const el = box.current
+    const restore = view.current
+    view.current = undefined
     if (atEnd.current) el.scrollTop = el.scrollHeight
+    else if (restore?.top !== undefined) el.scrollTop = restore.top
     measure()
   }, [text, open])
   const title = live ? t('Thinking') : t('Thought it through')
-  return h('details', { className: 'bt-think', onToggle: toggle },
+  return h('details', { className: 'bt-think', open, onToggle: toggle },
     h('summary', null, title,
       live && at !== undefined ? h(Elapsed, { at, className: 'bt-think-time' }) : null,
       !live && ms !== undefined ? h('span', { className: 'bt-think-time' }, `· ${elapsedLabel(Math.max(1000, ms))}`) : null),
@@ -220,7 +230,7 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
       })
     }),
     reasoning ? h(ThinkingRow, {
-      text: reasoning, live: thinking !== undefined,
+      text: reasoning, live: thinking !== undefined, viewKey: `${sessionId}:${data.turn}`,
       // The live clock counts the settled steps too: backing `at` by the settled
       // time makes one Elapsed show settled + running.
       ...(thinking !== undefined ? { at: typeof thinking.time === 'number' ? thinking.time - (ms ?? 0) : undefined } : { ms }),

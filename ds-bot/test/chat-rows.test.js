@@ -54,11 +54,18 @@ test('with the clock, a time separator sits above the first entry and after each
   assert.deepEqual(shape(ChatRows({ items, sessionId: 'b', roster, actions: {}, clock: true })), ['PartLine', 'clock', 'EarlierUser', 'bot:one+two', 'clock', 'EarlierUser'])
 })
 
+test('a reasoning row the reader opened stays open when the turn moves it to a later step', () => {
+  const first = ThinkingRow({ text: 'one', live: true, viewKey: 's:7' })
+  first.props.onToggle({ currentTarget: { open: true } })
+  assert.equal(ThinkingRow({ text: 'one\n\ntwo', live: true, viewKey: 's:7' }).props.open, true)
+  assert.equal(ThinkingRow({ text: 'other', viewKey: 's:8' }).props.open, false)
+})
+
 test('the reasoning row is a closed details that opens to the text', () => {
   const row = ThinkingRow({ text: 'one\ntwo' })
   assert.equal(row.type, 'details')
   assert.equal(row.props.className, 'bt-think')
-  assert.equal('open' in row.props, false)
+  assert.equal(row.props.open, false)
   assert.equal(typeof row.props.onToggle, 'function')
   const [title, box] = row.children
   assert.equal(title.type, 'summary')
