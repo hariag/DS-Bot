@@ -298,14 +298,20 @@ async function moveData(workspace) {
   if (response !== 0 || stopping || await refused()) return false
   const signal = copyAbort.signal
   copying = (async () => {
+    // The settings go away first, so that nothing moves the team workspace from here on.
+    void mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(movingPage(t.moving))}`)
     await stopHost()
+    // The app may have heard of a team workspace change while the Host stopped.
+    if (await refused()) {
+      app.relaunch()
+      return
+    }
     // Another DSH on the same data would go on writing while the copy is made.
     if (teamInUse(places.dataDir)) {
       await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: t.moveInUse })
       app.relaunch()
       return
     }
-    void mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(movingPage(t.moving))}`)
     mainWindow?.setProgressBar(2)
     try {
       await copyData(places.dataDir, to, signal)
