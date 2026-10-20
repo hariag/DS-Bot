@@ -60,6 +60,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     folders: () => call('folders'),
     folderPick: () => call('folder-pick'),
     folderList: path => call('folder-list', { path: path ?? '' }),
+    setTeamWorkspace: path => after(call('team-workspace', { path })),
     deleteBot: id => after(call('delete-bot', { id })),
     duplicateBot: id => after(call('duplicate-bot', { id })),
     setPrefs: prefs => after(call('set-prefs', prefs)),

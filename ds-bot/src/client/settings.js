@@ -17,6 +17,7 @@ import { SchedulesPage } from './schedules.js'
 import { FeedbackIcon, FeedbackPage } from './feedback.js'
 import { AboutPage } from './about.js'
 import { ProvidersPage } from './providers-page.js'
+import { FolderMenu } from './folder-menu.js'
 import { t } from './i18n.js'
 
 const capitalize = word => word[0].toUpperCase() + word.slice(1)
@@ -65,7 +66,29 @@ function GeneralPage({ roster, actions, run }) {
     actions.setSurface ? h(SetSection, { key: 'mode', title: t('Mode') },
       h(SetRow, { label: t('Classic Agent mode') },
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => actions.setSurface('agent') }, t('Switch')))) : null,
+    h(LocationsSection, { key: 'places', actions, run }),
   ]
+}
+
+// The desktop app's preload hands its window `dsBotApp`; only there does the data location
+// show, since DSH keeps the plugin's data where it runs.
+function LocationsSection({ actions, run }) {
+  const app = globalThis.dsBotApp
+  const [team, setTeam] = useState(null)
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    void Promise.resolve(actions.folders()).then(info => setTeam(info?.team ?? null)).catch(() => {})
+    if (app !== undefined) void Promise.resolve(app.dataLocation()).then(setData).catch(() => {})
+  }, [])
+  const pickTeam = path => run(Promise.resolve(actions.setTeamWorkspace(path)).then((answer) => {
+    setTeam(answer.team)
+    app?.teamWorkspaceChanged(answer.team)
+  }))
+  return h(SetSection, { title: t('Locations') },
+    h(SetRow, { label: t('Team workspace'), hint: t('Where Bots without a folder of their own work.') },
+      team === null ? null : h(FolderMenu, { value: team, team: true, actions, run, onPick: pickTeam })),
+    data === null ? null : h(SetRow, { label: t('Data location'), hint: data.path },
+      data.fixed ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => run(app.moveData(team ?? undefined)) }, t('Change…'))))
 }
 
 // The first Main Bot is the sidebar tile. Picking another Bot there hands it the role

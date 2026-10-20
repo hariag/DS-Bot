@@ -223,6 +223,9 @@ export function install(rt) {
         case 'folder-list':
           await rt.load()
           return ok(await rt.folderEndpoint(endpoint, body, signal))
+        case 'team-workspace':
+          await rt.load()
+          return ok({ team: await rt.setTeamWorkspace(String(body.path ?? '')) })
         case 'add-agent':
           await rt.load()
           return ok(await rt.addAgent())

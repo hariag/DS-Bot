@@ -2,7 +2,7 @@
 // there, else a Bot works in its own folder, else in the team workspace. A Session's
 // folder is fixed when it is made, so a change moves the conversation on to a fresh
 // part (parts.js).
-import { realpath, stat } from 'node:fs/promises'
+import { mkdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import { unquote } from './text.js'
@@ -21,6 +21,8 @@ export function install(rt) {
   const { ctx, state } = rt
 
   const teamFolder = () => ctx.workspaceRegistry.get?.(state.workspaceId)?.path
+  // The desktop app names the folder the user chose for the Bots' files.
+  const defaultTeamFolder = () => rt.config.workspace ?? (process.env.DS_BOT_WORKSPACE?.trim() || join(rt.home, 'workspace'))
   const workDirOf = ({ botId, roomId } = {}) => rt.roomOf(roomId)?.workDir ?? rt.botOf(botId)?.workDir
   const isFolder = path => stat(path).then(info => info.isDirectory(), () => false)
   const real = path => realpath(path).catch(() => resolve(path))
@@ -73,6 +75,35 @@ export function install(rt) {
   async function workFolder(path) {
     if (await guarded(path)) throw new Error(`${path} holds DeepSeek Harness data, so Bots cannot work there`)
     return path === await realTeam() ? undefined : path
+  }
+
+  // The user moves the team workspace. Bots and groups without a folder of their own move on
+  // to a fresh part there at their next turn, as for any other change of folder; the old
+  // folder and its files stay as they are.
+  async function setTeamWorkspace(input) {
+    const text = unquote(input)
+    const expanded = expandHome(text)
+    if (text === '' || !isAbsolute(expanded)) throw new Error(`Give the full path of the folder, not ${text}`)
+    // The plugin's own default lies in DSH's data, and going back to it stays possible.
+    const fallback = resolve(defaultTeamFolder())
+    const holdsData = async (path) => {
+      if (path === fallback || path === await real(fallback)) return false
+      for (const root of [rt.dshHome, rt.home]) {
+        const data = await real(root)
+        if (within(path, data) || within(data, path)) return true
+      }
+      return false
+    }
+    if (await holdsData(resolve(expanded))) throw new Error(`${text} holds DeepSeek Harness data, so it cannot be the team workspace`)
+    await mkdir(expanded, { recursive: true })
+    const path = await realpath(expanded)
+    if (!(await isFolder(path))) throw new Error(`${text} is a file, not a folder`)
+    if (await holdsData(path)) throw new Error(`${text} holds DeepSeek Harness data, so it cannot be the team workspace`)
+    if (path === await realTeam()) return path
+    const workspace = await ctx.workspaceRegistry.resolveByPath(path) ?? await ctx.workspaceRegistry.create(path, 'DS Bot')
+    state.workspaceId = workspace.id
+    await rt.save()
+    return path
   }
 
   // Every Session of a Bot: its own chat and its conversation in each of its groups.
@@ -151,5 +182,5 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { teamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, workFolder, sessionsOfBot, approveFolder, folderEndpoint })
+  Object.assign(rt, { teamFolder, defaultTeamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, workFolder, setTeamWorkspace, sessionsOfBot, approveFolder, folderEndpoint })
 }
