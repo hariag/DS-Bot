@@ -94,15 +94,14 @@ export function install(rt) {
     const text = unquote(input)
     const expanded = expandHome(text)
     if (text === '' || !isAbsolute(expanded)) throw new Error(`Give the full path of the folder, not ${text}`)
-    // The plugin's own default lies in DSH's data, and going back to it stays possible.
+    // The plugin's own default lies in DSH's data, and going back to it stays possible, as long
+    // as it holds none of the data itself (a link put in its place could).
     const fallback = resolve(defaultTeamFolder())
     const holdsData = async (path) => {
+      const roots = await Promise.all([rt.dshHome, rt.home].map(real))
+      if (roots.some(data => within(data, path))) return true
       if (path === fallback || path === await real(fallback)) return false
-      for (const root of [rt.dshHome, rt.home]) {
-        const data = await real(root)
-        if (within(path, data) || within(data, path)) return true
-      }
-      return false
+      return roots.some(data => within(path, data))
     }
     // A folder to be made counts where it would be made: a link above it can lead into the data.
     if (await holdsData(await realBeyond(resolve(expanded)))) throw new Error(`${text} holds DeepSeek Harness data, so it cannot be the team workspace`)
