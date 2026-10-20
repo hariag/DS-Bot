@@ -51,7 +51,7 @@ const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 // there, as an absolute link. Windows gives a junction's target with \\?\, and makes only
 // junctions, which hold absolute paths, without special rights.
 async function relink(source, path, roots, to) {
-  const text = (await readlink(source)).replace(/^\\\\\?\\/u, '')
+  const text = (await readlink(source)).replace(/^\\\\\?\\UNC\\/u, '\\\\').replace(/^\\\\\?\\/u, '')
   const written = resolve(dirname(source), text)
   // Through another link the target can lead inside the old folder too.
   const physical = await realpath(written).catch(() => written)
