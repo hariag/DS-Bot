@@ -69,6 +69,8 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
+    answerView: (sessionId, viewId, action, values) => after(call('view-reply', { sessionId: partFor(sessionId), viewId, action, values })),
+    dismissView: sessionId => after(call('dismiss-view', { sessionId: partFor(sessionId) })),
     answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
     stopMemberWork: (roomId, botId) => after(call('stop-member-work', { roomId, botId })),
     // Values go out in these requests and never come back in a response.

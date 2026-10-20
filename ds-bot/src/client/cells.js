@@ -5,7 +5,8 @@ import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
-import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
+import { SettledQuestion, PendingQuestion } from './questions.js'
+import { AnsweredReply, WidgetCell } from './widget-cell.js'
 import { SecretToolCell } from './secret-card.js'
 import { dateLocale, t } from './i18n.js'
 import { call } from './api.js'
@@ -395,7 +396,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
   switch (row.kind) {
     case 'divider': return h(PartLine, { key, time: row.time })
     case 'user': return h(EarlierUser, { key, row })
-    case 'answer': return h(AnsweredCell, { key, node: { data: row } })
+    case 'answer': return h(AnsweredReply, { key, node: { data: row } })
     case 'bot': return h(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : undefined, msgKey: useUi ? `${sessionId}:${row.time}` : undefined, useUi, fold: FOLD_HUGE })
     case 'event': {
       if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
@@ -764,9 +765,9 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
 
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
-const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'show_view', 'read_group_chat', 'remember', 'forget'])
 // Calls whose card a dock above the composer carries when the call is not drawn.
-const CARDS = new Set(['ask_user', 'request_secret'])
+const CARDS = new Set(['ask_user', 'request_secret', 'show_view'])
 
 // The root and its sub-calls in dispatch order, each call once.
 export function callTree(root) {
@@ -848,6 +849,8 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot,
       if (heldCards?.[heldCardKey('question', question.id)] > 0) return null
       return h(PendingQuestion, { key: JSON.stringify([sessionId, question.id]), sessionId, question, actions, inline: true })
     }
+    case 'show_view':
+      return h(WidgetCell, { sessionId, callId: call.callId, args: argValue, roster, actions })
     case 'request_secret':
       return h(SecretToolCell, { sessionId, callId: call.callId, name: arg('name'), done, content: call.content, roster, actions, heldCards })
     case 'ask_user_question': {

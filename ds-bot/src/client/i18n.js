@@ -547,6 +547,12 @@ const ZH = {
   Dismissed: '已关闭',
   'Your answer': '你的回答',
 
+  // Views
+  View: '视图',
+  Confirm: '确认',
+  Progress: '进度',
+  'Dismiss view': '关闭视图',
+
   // Secrets
   'All Bots': '所有 Bot',
   'No Bot': '没有 Bot',

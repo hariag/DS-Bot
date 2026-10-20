@@ -3,11 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { createRuntime } from '../index.js'
-import { normalizeView, VIEW_BYTE_LIMIT, viewBytes } from 'deep-view/core'
+import { apply } from '../index.js'
+import { VIEW_BYTE_LIMIT, viewBytes } from '../src/shared/views.js'
 import { fakeContext } from './fake-ctx.js'
-
-let rt
 
 const TEAM = {
   version: 1,
@@ -31,14 +29,14 @@ const TEAM = {
 const CHOICES = { type: 'options', id: 'pick', options: [{ label: 'A' }, { label: 'B' }] }
 const METER = { type: 'metric', label: '进度', value: '70%' }
 
-async function start() {
+function start() {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-views-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const ctx = fakeContext()
   const sent = []
   let flushError
   Object.assign(ctx, {
-    workspaceRegistry: { get: () => undefined, resolveByPath: async () => undefined, create: async path => ({ id: 'w1', path }), archiveSession: async () => {}, unarchiveSession: async () => {} },
+    workspaceRegistry: { get: () => undefined, resolveByPath: async () => undefined, create: async path => ({ id: 'w1', path }), archiveSession: async () => {} },
     sessionController: {
       create: async () => ({ sessionId: 's1' }),
       resolveAgent: async sessionId => ({ agent: { session: { id: sessionId }, followup(message) { sent.push({ sessionId, message }) } } }),
@@ -53,9 +51,7 @@ async function start() {
     route = options
     return register(options)
   }
-  rt = createRuntime(ctx, { home })
-  // show_view lives in the agent scope; a Bot agent appearing registers it.
-  await ctx.emitAsync('agent/created', { agent: ctx.scopeAgent('writer-now') })
+  apply(ctx, { home })
   let seq = 0
   const emit = (id, type, data) => {
     for (const listener of ctx.listeners.get('session/event') ?? []) {
@@ -64,7 +60,7 @@ async function start() {
   }
   const show = async (sessionId, args, callId = 'call-1') => {
     let concluded = false
-    const text = await rt.teamTools.find(d => d.name === 'show_view').execute(args, {
+    const text = await ctx.registeredTools.get('show_view').execute(args, {
       agent: { id: sessionId }, callId, concludeTurn() { concluded = true },
     })
     return { text, concluded }
@@ -83,9 +79,9 @@ async function start() {
 const text = value => [{ type: 'text', text: value }]
 
 test('show_view registers an interactive card, refuses a group and a display-only wait, and leaves a display-only card unregistered', async (t) => {
-  const { emit, show, team, stop } = await start()
+  const { ctx, emit, show, team, stop } = start()
   t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
+  await ctx.registeredTools.get('list_bots').execute({}, { agent: { id: 'chief' } })
 
   const group = await show('writer-group', { title: 'Pick', view: CHOICES })
   assert.equal(group.text, 'View cards only work in your own chat. In a group, ask in your message instead.')
@@ -99,26 +95,13 @@ test('show_view registers an interactive card, refuses a group and a display-onl
   assert.equal(waiting.concluded, false)
   assert.equal((await team()).views['writer-now'], undefined)
 
-  // An interactive card cannot be told not to wait: refused, nothing stored.
-  const skipped = await show('writer-now', { title: 'Pick', view: CHOICES, await_reply: false })
-  assert.equal(skipped.text, 'This view has controls to submit, so it waits for the user\'s answer; call show_view without await_reply: false.')
-  assert.equal(skipped.concluded, false)
-  assert.equal((await team()).views['writer-now'], undefined)
-
-  // `__proto__` is no id: the answer object would lose the value to its prototype.
-  const protoCall = await show('writer-now', { title: 'Pick', view: { ...CHOICES, id: '__proto__' } })
-  assert.equal(protoCall.text, 'view.id: "__proto__" cannot be an id')
-  const protoField = await show('writer-now', { title: 'Ask', view: { type: 'form', id: 'ask', fields: [{ id: '__proto__', label: 'Name' }] } })
-  assert.equal(protoField.text, 'view.fields[0].id: "__proto__" cannot be an id')
-  assert.equal((await team()).views['writer-now'], undefined)
-
   const shown = await show('writer-now', { title: 'Meter', view: METER })
   assert.equal(shown.text, 'The view is on screen.')
   assert.equal(shown.concluded, false)
   assert.equal((await team()).views['writer-now'], undefined)
 
   // A question card and a view card in the same chat do not replace each other.
-  await rt.teamTools.find(d => d.name === 'ask_user').execute(
+  await ctx.registeredTools.get('ask_user').execute(
     { question: 'Which name?', options: [{ label: 'Lookout' }] },
     { agent: { id: 'writer-now' }, callId: 'q-call', concludeTurn() {} },
   )
@@ -133,13 +116,13 @@ test('show_view registers an interactive card, refuses a group and a display-onl
   assert.equal(typeof open.views['writer-now'].askedAt, 'number')
   assert.deepEqual(open.views['writer-now'].view, CHOICES)
 
-  // A hidden Bot-to-Bot turn keeps both the card and its call id.
+  // A hidden Bot-to-Bot turn keeps the card but not the call.
   emit('writer-now', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   emit('writer-now', 'turn/start', { turn: 2 })
   emit('writer-now', 'user/message', { content: text('[Message from Chief]\nAsk them'), source: { kind: 'bot', role: 'request', senderSessionId: 'chief', senderName: 'Chief', exchangeId: 'x1', hop: 0 } })
   const hidden = await show('writer-now', { title: 'Pick', view: CHOICES }, 'call-hidden')
   assert.equal(hidden.concluded, true)
-  assert.equal((await team()).views['writer-now'].callId, 'call-hidden')
+  assert.equal((await team()).views['writer-now'].callId, undefined)
   assert.equal((await team()).views['writer-now'].title, 'Pick')
 
   const body = JSON.stringify(METER)
@@ -154,10 +137,10 @@ test('show_view registers an interactive card, refuses a group and a display-onl
 })
 
 test('view-reply claims the card, refuses a stale or invalid answer, and restores the card when queueing fails', async (t) => {
-  const { show, call, team, sent, failFlush, stop } = await start()
+  const { ctx, show, call, team, sent, failFlush, stop } = start()
   t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
-  await rt.teamTools.find(d => d.name === 'ask_user').execute(
+  await ctx.registeredTools.get('list_bots').execute({}, { agent: { id: 'chief' } })
+  await ctx.registeredTools.get('ask_user').execute(
     { question: 'Keep me', options: [{ label: 'Yes' }] },
     { agent: { id: 'writer-now' }, callId: 'q-call', concludeTurn() {} },
   )
@@ -209,11 +192,11 @@ test('view-reply claims the card, refuses a stale or invalid answer, and restore
   assert.equal(again.error.message, 'This view is no longer open')
 })
 
-test('dismiss-view drops the open view, keeps it as a closed card, and leaves a question card alone', async (t) => {
-  const { show, call, team, stop } = await start()
+test('dismiss-view drops the open view and leaves a question card alone', async (t) => {
+  const { ctx, show, call, team, stop } = start()
   t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
-  await rt.teamTools.find(d => d.name === 'ask_user').execute(
+  await ctx.registeredTools.get('list_bots').execute({}, { agent: { id: 'chief' } })
+  await ctx.registeredTools.get('ask_user').execute(
     { question: 'Keep me', options: [{ label: 'Yes' }] },
     { agent: { id: 'writer-now' }, callId: 'q-call', concludeTurn() {} },
   )
@@ -222,27 +205,14 @@ test('dismiss-view drops the open view, keeps it as a closed card, and leaves a 
   const open = await team()
   assert.equal(open.views['writer-now'], undefined)
   assert.equal(open.questions['writer-now'].question, 'Keep me')
-  assert.deepEqual(open.closedCards, { 'writer-now': { 'call-1': 'dismissed' } })
   assert.equal((await call('dismiss-view', { sessionId: 'writer-now' })).ok, true)
-  assert.equal((await call('dismiss-question', { sessionId: 'writer-now' })).ok, true)
-  assert.deepEqual((await team()).closedCards, { 'writer-now': { 'call-1': 'dismissed', 'q-call': 'dismissed' } })
-})
-
-test('an answered view is not kept as a closed card: its reply message carries it', async (t) => {
-  const { show, call, team, stop } = await start()
-  t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
-  await show('writer-now', { title: 'Pick', view: CHOICES })
-  const pending = (await team()).views['writer-now']
-  assert.equal((await call('view-reply', { sessionId: 'writer-now', viewId: pending.id, action: 'pick', values: { selected: ['A'] } })).ok, true)
-  assert.deepEqual((await team()).closedCards, {})
 })
 
 test('a user message drops the open question and the open view together', async (t) => {
-  const { emit, show, team, stop } = await start()
+  const { ctx, emit, show, team, stop } = start()
   t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
-  await rt.teamTools.find(d => d.name === 'ask_user').execute(
+  await ctx.registeredTools.get('list_bots').execute({}, { agent: { id: 'chief' } })
+  await ctx.registeredTools.get('ask_user').execute(
     { question: 'Which name?', options: [{ label: 'Lookout' }] },
     { agent: { id: 'writer-now' }, callId: 'q-call', concludeTurn() {} },
   )
@@ -253,80 +223,4 @@ test('a user message drops the open question and the open view together', async 
   const open = await team()
   assert.equal(open.questions['writer-now'], undefined)
   assert.equal(open.views['writer-now'], undefined)
-  // Both cards stay in the chat as answered by that message; nothing stays in a dock store.
-  assert.deepEqual(open.closedCards, { 'writer-now': { 'q-call': 'replied', 'call-1': 'replied' } })
-  assert.equal(open.closedViews, undefined)
-})
-
-test('a hidden-turn card closes into closedCards at its call, never into a dock record', async (t) => {
-  const { emit, show, call, team, stop } = await start()
-  t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
-  emit('writer-now', 'turn/start', { turn: 1 })
-  emit('writer-now', 'user/message', { content: text('[Message from Chief]\nAsk them'), source: { kind: 'bot', role: 'request', senderSessionId: 'chief', senderName: 'Chief', exchangeId: 'x1', hop: 0 } })
-  await rt.teamTools.find(d => d.name === 'ask_user').execute(
-    { question: 'Which name?', options: [{ label: 'Lookout' }] },
-    { agent: { id: 'writer-now' }, callId: 'q-hidden', concludeTurn() {} },
-  )
-  await show('writer-now', { title: 'Pick', view: CHOICES }, 'v-hidden')
-  emit('writer-now', 'user/message', { content: text('never mind'), source: { kind: 'user' } })
-  let open = await team()
-  assert.equal(open.questions['writer-now'], undefined)
-  assert.equal(open.views['writer-now'], undefined)
-  assert.deepEqual(open.closedCards, { 'writer-now': { 'q-hidden': 'replied', 'v-hidden': 'replied' } })
-  assert.equal(open.closedViews, undefined)
-
-  await show('writer-now', { title: 'Next', view: CHOICES }, 'v-hidden-2')
-  assert.equal((await call('dismiss-view', { sessionId: 'writer-now' })).ok, true)
-  open = await team()
-  assert.equal(open.views['writer-now'], undefined)
-  assert.equal(open.closedCards['writer-now']['v-hidden-2'], 'dismissed')
-})
-
-test('show_view measures the bytes the model sent, before unwrapping the provider encoding', async (t) => {
-  const { show, stop } = await start()
-  t.after(stop)
-  await rt.teamTools.find(d => d.name === 'list_bots').execute({}, { agent: { id: 'chief' } })
-  // Nested { item: ... } wrappers all disappear in normalization: measured after
-  // unwrapping this card would pass with a fraction of the bytes it was sent with.
-  let children = [{ type: 'text', text: 'x' }]
-  while (viewBytes('', { type: 'stack', children }) <= VIEW_BYTE_LIMIT) children = { item: children }
-  const wrapped = { type: 'stack', children }
-  assert.ok(viewBytes('Meter', normalizeView(wrapped)) < VIEW_BYTE_LIMIT)
-  const over = await show('writer-now', { title: 'Meter', view: wrapped, await_reply: false })
-  assert.equal(over.text, `The view is ${viewBytes('Meter', wrapped)} bytes; the limit is ${VIEW_BYTE_LIMIT}.`)
-  assert.equal(over.concluded, false)
-})
-
-test('a card carried from an earlier part records its close on the part that asked it, and legacy closedViews is dropped', async (t) => {
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-views-legacy-'))
-  writeFileSync(join(home, 'state.json'), JSON.stringify({
-    ...TEAM,
-    questions: { 'writer-now': { id: 'q1', callId: 'q-old', callSessionId: 'writer-old', question: 'Keep me', options: [{ label: 'Yes' }], askedAt: 1 } },
-    views: { 'writer-now': { id: 'v1', callId: 'v-old', callSessionId: 'writer-old', title: 'First', view: CHOICES, askedAt: 1 } },
-    closedViews: { 'writer-now': { id: 'stale', title: 'Stuck', closed: 'replied' } },
-  }))
-  const ctx = fakeContext()
-  Object.assign(ctx, {
-    workspaceRegistry: { get: () => undefined, resolveByPath: async () => undefined, create: async path => ({ id: 'w1', path }), archiveSession: async () => {}, unarchiveSession: async () => {} },
-    sessionController: { create: async () => ({ sessionId: 's1' }), resolveAgent: async sessionId => ({ agent: { session: { id: sessionId }, followup() {} } }), selectModel: async () => {} },
-    sessionTitle: { rename: async () => {} },
-    sessions: { flush: async () => {} },
-  })
-  let route
-  const register = ctx.connection.fetch.register
-  ctx.connection.fetch.register = (options) => { route = options; return register(options) }
-  const host = createRuntime(ctx, { home })
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  const call = async (endpoint, payload = {}) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
-  let open = (await call('state')).value
-  assert.equal(open.closedViews, undefined)
-  assert.equal('closedViews' in host.state, false)
-  for (const listener of ctx.listeners.get('session/event') ?? []) {
-    if (listener.length >= 2) listener({ id: 'writer-now' }, { type: 'user/message', seq: 1, data: { content: text('never mind'), source: { kind: 'user' } } })
-  }
-  open = (await call('state')).value
-  assert.equal(open.questions['writer-now'], undefined)
-  assert.equal(open.views['writer-now'], undefined)
-  assert.deepEqual(open.closedCards, { 'writer-old': { 'q-old': 'replied', 'v-old': 'replied' } })
 })

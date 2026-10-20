@@ -1,5 +1,5 @@
 // Team tools: the roster, bot-to-bot messages, group chat settings and posts, and the
-// question card. Group rounds and reading chats are in groups.js.
+// question and view cards. Group rounds and reading chats are in groups.js.
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, SOURCE_KIND } from './constants.js'
@@ -7,6 +7,7 @@ import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
 import { unquote } from './text.js'
 import { mentionSpans } from '../shared/mentions.js'
+import { validateView, VIEW_BYTE_LIMIT, viewBytes } from '../shared/views.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
@@ -596,6 +597,52 @@ export function install(rt) {
       await rt.save()
       exec.concludeTurn?.()
       return 'The card is on screen; the user\'s answer arrives as their next message.'
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'show_view',
+    description: 'Show the user a view card in your own chat: text, metrics, a table, progress, choices, a confirmation, or a short form. An interactive card (options, confirm, or form) ends your turn; the answer arrives as the user\'s next message. Keep the view under 8 KB. Never collect a key, token, or password in a form.',
+    parameters: {
+      title: { type: 'string', required: true, description: 'One short title for the card' },
+      view: {
+        type: 'object',
+        required: true,
+        additionalProperties: true,
+        description: 'One component { type, ...props, children? }. type is stack (children, 1 to 16), text ({ text }), metric ({ label, value, tone? }), table ({ columns: [{ key, label }], rows }), options ({ id, options: [{ label, description? }], multi? }), confirm ({ id, confirmLabel?, cancelLabel? }), form ({ id, fields: [{ id, label, placeholder? }], submitLabel? }), or progress ({ label?, percent }).',
+      },
+      await_reply: { type: 'boolean', description: 'Wait for the user to submit the card. Defaults to true when the view has options, confirm, or form, and to false otherwise. A display-only view cannot wait.' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const id = exec.agent?.id
+      if (rt.groupOwners.has(id)) return 'View cards only work in your own chat. In a group, ask in your message instead.'
+      if (!rt.chatOwners.has(id)) return `Only Bots on the team can use show_view. Use ${BLOCKING_QUESTION_TOOL} if it is available in this session, or ask the user in your reply.`
+      let bytes
+      try { bytes = viewBytes(args.title, args.view) } catch { return 'The view is not JSON data.' }
+      if (bytes > VIEW_BYTE_LIMIT) return `The view is ${bytes} bytes; the limit is ${VIEW_BYTE_LIMIT}.`
+      const title = String(args.title ?? '').trim()
+      if (title === '') return 'Give the view a title.'
+      const checked = validateView(args.view)
+      if (!checked.ok) return checked.error
+      if (!checked.interactive && args.await_reply === true) return 'This view has nothing to submit; call show_view with await_reply: false.'
+      const awaitReply = args.await_reply ?? checked.interactive
+      if (!awaitReply) return 'The view is on screen.'
+      // A hidden Bot-to-Bot turn shows none of its calls, so its card goes to the
+      // composer dock, which takes a card without a call.
+      const turn = rt.live.get(id)?.turn
+      const hidden = turn !== undefined && (state.exchangeTurns[id] ?? []).includes(turn)
+      state.views[id] = {
+        id: randomUUID(),
+        ...(exec.callId && !hidden ? { callId: exec.callId } : {}),
+        title,
+        view: args.view,
+        askedAt: Date.now(),
+      }
+      await rt.save()
+      exec.concludeTurn?.()
+      return 'The view is on screen; the user\'s answer arrives as their next message.'
     },
   }))
 

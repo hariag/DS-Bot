@@ -7,14 +7,14 @@ import { t } from './i18n.js'
 // typing in the composer instead answers them. The blocking ask_user_question tool
 // keeps the shell's composer takeover and gains an own-answer field.
 
-const keyLetter = index => String.fromCharCode(65 + index)
+export const keyLetter = index => String.fromCharCode(65 + index)
 const optionsOf = question => (question?.options ?? []).map(option => (typeof option === 'string' ? { label: option } : option))
 const isTypingTarget = node => node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
   || node instanceof HTMLSelectElement || (node instanceof HTMLElement && node.isContentEditable)
 
 // A bare letter picks that option and the letter after the last one
 // jumps to the custom answer; never while typing or while a dialog is open.
-function useOptionKeys(count, onPick, ownRef) {
+export function useOptionKeys(count, onPick, ownRef) {
   const pick = useRef(onPick)
   pick.current = onPick
   useEffect(() => {

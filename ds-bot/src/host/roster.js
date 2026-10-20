@@ -510,6 +510,7 @@ export function install(rt) {
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]
+      if (state.views !== undefined) delete state.views[part]
       delete state.exchangeTurns[part]
       delete state.switching[part]
     }

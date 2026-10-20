@@ -50,7 +50,6 @@ var ZH = {
   "Unread activity": "有未读",
   Search: "搜索",
   "New chat": "新对话",
-  "Back to chat": "返回对话",
   "New…": "新建",
   "Collapse sidebar": "收起侧边栏",
   "Expand sidebar": "展开侧边栏",
@@ -95,6 +94,7 @@ var ZH = {
   "Bot list": "Bot 列表",
   "Setting up your Main Bot…": "正在设置你的主 Bot…",
   "Connect plugins": "连接插件",
+  "Plugin compatibility is not fully verified.": "插件兼容性未完全验证",
   "Automation tasks": "自动化任务",
   Connectors: "连接器",
   "Search connectors": "搜索连接器",
@@ -600,6 +600,11 @@ var ZH = {
   Dismiss: "关闭",
   Dismissed: "已关闭",
   "Your answer": "你的回答",
+  // Views
+  View: "视图",
+  Confirm: "确认",
+  Progress: "进度",
+  "Dismiss view": "关闭视图",
   // Secrets
   "All Bots": "所有 Bot",
   "No Bot": "没有 Bot",
@@ -1287,8 +1292,8 @@ function bodyOf(def, paint, flat = false) {
     return "";
   }
 }
-var eyeMarkup = ([cx, cy, w, h37, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h37 / 2}" width="${w}" height="${h37}" rx="${w / 2}"/></g>`;
-var happyEyeMarkup = ([cx, cy, w, h37, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h37 * 0.14}Q0 ${-h37 * 0.42} ${w * 0.62} ${h37 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
+var eyeMarkup = ([cx, cy, w, h38, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h38 / 2}" width="${w}" height="${h38}" rx="${w / 2}"/></g>`;
+var happyEyeMarkup = ([cx, cy, w, h38, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h38 * 0.14}Q0 ${-h38 * 0.42} ${w * 0.62} ${h38 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
 var maskBox = (size) => `maskUnits="userSpaceOnUse" x="${-size}" y="${-size}" width="${size * 3}" height="${size * 3}"`;
 var holes = (def, eyes) => `<rect x="${-def.size}" y="${-def.size}" width="${def.size * 3}" height="${def.size * 3}" fill="#fff"/>${eyes}`;
 var MASK_ID = "%MASK%";
@@ -1365,7 +1370,6 @@ function isAgentSession(roster, cache, sessionId) {
   if (roster.ready) return roster.agentOf[sessionId] !== void 0;
   return cache.has(sessionId);
 }
-var heldCardKey = (kind, requestId) => JSON.stringify([kind, requestId]);
 function countCards(state, sessionId, callIds, delta) {
   const own = { ...state[sessionId] };
   for (const callId of callIds) {
@@ -1377,7 +1381,7 @@ function countCards(state, sessionId, callIds, delta) {
 }
 
 // src/client/team-actions.js
-function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock }) {
+function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards, turnClock }) {
   return {
     openNewChat: (mode) => {
       ui2.set((state) => ({ ...state, newChat: mode, menu: null, palette: null }));
@@ -1474,6 +1478,8 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     send: (sessionId, text) => after(call2("send", { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call2("answer-question", { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
+    answerView: (sessionId, viewId, action, values) => after(call2("view-reply", { sessionId: partFor(sessionId), viewId, action, values })),
+    dismissView: (sessionId) => after(call2("dismiss-view", { sessionId: partFor(sessionId) })),
     answerApproval: (id, choice) => after(call2("approval-answer", { id, choice })),
     stopMemberWork: (roomId, botId) => after(call2("stop-member-work", { roomId, botId })),
     // Values go out in these requests and never come back in a response.
@@ -1546,9 +1552,6 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     },
     noteCards: (sessionId, callIds, delta) => {
       if (sessionId !== void 0) cards.set((state) => countCards(state, sessionId, callIds, delta));
-    },
-    noteHeldCard: (sessionId, kind, requestId, delta) => {
-      if (sessionId !== void 0) heldCards.set((state) => countCards(state, sessionId, [heldCardKey(kind, requestId)], delta));
     },
     clearLive: (sessionId) => live.set((state) => {
       if (!state[sessionId]) return state;
@@ -1804,6 +1807,7 @@ function isHiddenTurn(roster, sessionId, turn) {
   return (roster.exchangeTurns[sessionId] ?? []).includes(turn);
 }
 var toolName = (root) => root.name || root.call?.name;
+var historyLoading = (snapshot) => snapshot?.openState === "cold" || snapshot?.openState === "loading";
 function toolArgs(root) {
   if (typeof root.args?.text === "function") {
     return { text: (key) => root.args.text(key) ?? void 0, value: (key) => typeof root.args.value === "function" ? root.args.value(key) : void 0 };
@@ -1967,12 +1971,12 @@ function liveSprings(apply2) {
     const dt = Math.min(0.5, Math.max(1e-3, (now - last) / 1e3));
     last = now;
     const steps = Math.ceil(dt * 240);
-    const h37 = dt / steps;
+    const h38 = dt / steps;
     let moving = false;
     for (const value of values.values()) {
       for (let index = 0; index < steps; index += 1) {
-        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h37;
-        value.x += value.v * h37;
+        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h38;
+        value.x += value.v * h38;
       }
       if (Math.abs(value.x - value.to) < 0.05 && Math.abs(value.v) < 1) {
         value.x = value.to;
@@ -2275,6 +2279,10 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-connect:hover{background:var(--bt-hover)}
 .bt-connect svg{flex:none;width:15px;height:15px}
 .bt-connect-wrap{position:relative;display:flex;flex:1 1 auto;min-width:0}
+.bt-connect-warn{flex:none;width:16px;height:16px;border-radius:50%;background:#E5484D;color:#fff;font-size:11px;line-height:16px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+.bt-connect-tip{position:fixed;box-sizing:border-box;width:max-content;max-width:260px;padding:8px 12px;border-radius:10px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 8px 24px -4px rgba(0,0,0,.14);color:var(--bt-ink);font-size:12px;line-height:17px;white-space:normal;text-align:center;z-index:70;transform-origin:bottom left;animation:bt-tip-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
+@keyframes bt-tip-in{from{opacity:0;transform:scale(.96);filter:blur(4px)}}
+@media (prefers-reduced-motion:reduce){.bt-connect-tip{animation:none}}
 
 .bt-head{position:relative;display:flex;justify-content:center;align-items:center;height:40px;flex:none;pointer-events:none}
 .bt-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;height:40px;padding:7.5px 13.5px 7.5px 7.5px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;max-width:70%;box-sizing:border-box;transition:background-color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
@@ -2450,7 +2458,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 @keyframes bt-sheet-in{from{transform:translateY(24px)}}
 @keyframes bt-sheet-out{to{opacity:0;transform:translateY(16px);filter:blur(4px)}}
 .bt-exchange .bt-dialog{position:relative}
-.bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 116px;scrollbar-width:thin}
+.bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 76px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
 .bt-fold{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:4px;white-space:normal}
 .bt-fold-note{font-size:12px;line-height:16px;color:var(--bt-ink-3)}
@@ -2930,9 +2938,6 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 `;
 var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
-.bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
-.bt-think summary::-webkit-details-marker{display:none}
-.bt-think-time{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Five lines of the 18px line height; the rest scrolls inside the box. */
 .bt-think-text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px;padding-left:10px;border-left:2px solid var(--bt-line-2);max-height:90px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;outline:none}
 .bt-think-text:focus-visible{border-left-color:var(--bt-ink-2)}
@@ -3487,32 +3492,15 @@ var FolderIcon = lineIcon(["M3 6A1.5 1.5 0 0 1 4.5 4.5h3.2l1.8 2h6A1.5 1.5 0 0 1
 var ChatsIcon = lineIcon(["M3.5 5.5A1.5 1.5 0 0 1 5 4h7a1.5 1.5 0 0 1 1.5 1.5V10A1.5 1.5 0 0 1 12 11.5H8L5 14v-2.5A1.5 1.5 0 0 1 3.5 10z", "M13.5 7.5H15A1.5 1.5 0 0 1 16.5 9v4.5A1.5 1.5 0 0 1 15 15v2l-2.5-2h-3A1.5 1.5 0 0 1 8 13.5V13"]);
 var SETTINGS_ICONS = { general: GearIcon, bots: PeopleIcon, groups: ChatsIcon, usage: GaugeIcon };
 
-// src/client/card-hold.js
-var import_react4 = require("react");
-function useDockHold(sessionId, kind, requestId, actions, inline) {
-  const release = (0, import_react4.useRef)(null);
-  const note = actions.noteHeldCard;
-  (0, import_react4.useLayoutEffect)(() => () => {
-    const stop = release.current;
-    release.current = null;
-    stop?.();
-  }, [sessionId, kind, requestId, note, inline]);
-  return () => {
-    if (inline || release.current || !note) return;
-    release.current = () => note(sessionId, kind, requestId, -1);
-    note(sessionId, kind, requestId, 1);
-  };
-}
-
 // src/client/questions.js
-var import_react5 = require("react");
+var import_react4 = require("react");
 var keyLetter = (index) => String.fromCharCode(65 + index);
 var optionsOf = (question) => (question?.options ?? []).map((option) => typeof option === "string" ? { label: option } : option);
 var isTypingTarget = (node) => node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement || node instanceof HTMLElement && node.isContentEditable;
 function useOptionKeys(count, onPick, ownRef) {
-  const pick2 = (0, import_react5.useRef)(onPick);
+  const pick2 = (0, import_react4.useRef)(onPick);
   pick2.current = onPick;
-  (0, import_react5.useEffect)(() => {
+  (0, import_react4.useEffect)(() => {
     if (count === 0) return void 0;
     const onKey = (event) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.length !== 1) return;
@@ -3531,18 +3519,16 @@ function useOptionKeys(count, onPick, ownRef) {
     return () => document.removeEventListener("keydown", onKey, true);
   }, [count, ownRef]);
 }
-function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false, ownAnswer = false, raised = false }) {
-  const [own, setOwn] = (0, import_react5.useState)("");
-  const [picked, setPicked] = (0, import_react5.useState)([]);
-  const ownRef = (0, import_react5.useRef)(null);
-  const titleId = (0, import_react5.useId)();
+function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised = false }) {
+  const [own, setOwn] = (0, import_react4.useState)("");
+  const [picked, setPicked] = (0, import_react4.useState)([]);
+  const ownRef = (0, import_react4.useRef)(null);
+  const titleId = (0, import_react4.useId)();
   const options = optionsOf(question);
   const multi = question.multiSelect === true;
   const custom = own.trim();
   const canSubmit = multi ? picked.length > 0 || custom !== "" : custom !== "";
   const choose = (label) => {
-    if (busy) return;
-    onInteract?.();
     if (multi) {
       setPicked((current) => current.includes(label) ? current.filter((item) => item !== label) : [...current, label]);
       return;
@@ -3550,29 +3536,22 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
     onAnswer({ selected: [label] });
   };
   const submit = () => {
-    if (!canSubmit || busy) return;
-    onInteract?.();
+    if (!canSubmit) return;
     onAnswer({ selected: multi ? picked : [], ...custom ? { custom } : {} });
   };
-  useOptionKeys(busy ? 0 : options.length, (index) => choose(options[index].label), ownRef);
+  useOptionKeys(options.length, (index) => choose(options[index].label), ownRef);
   const ownLetter = options.length > 0 ? keyLetter(options.length) : void 0;
-  const field = ownAnswer ? (0, import_react5.createElement)("textarea", {
+  const field = ownAnswer ? (0, import_react4.createElement)("textarea", {
     ref: ownRef,
     rows: 1,
     value: own,
-    readOnly: busy,
     autoComplete: "off",
     spellCheck: false,
     className: "bt-q-input",
     "aria-label": t("Your own answer"),
     placeholder: t("Type your own answer"),
     "aria-keyshortcuts": ownLetter?.toLowerCase(),
-    onChange: (event) => {
-      if (!busy) {
-        onInteract?.();
-        setOwn(event.target.value);
-      }
-    },
+    onChange: (event) => setOwn(event.target.value),
     onKeyDown: (event) => {
       if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
       event.preventDefault();
@@ -3581,77 +3560,73 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
   }) : null;
   const rows = options.map((option, optionIndex) => {
     const selected = multi && picked.includes(option.label);
-    return (0, import_react5.createElement)(
+    return (0, import_react4.createElement)(
       "button",
       {
         key: option.label,
         type: "button",
         className: "bt-q-opt",
-        disabled: busy,
         "aria-pressed": multi ? selected : void 0,
         "aria-keyshortcuts": keyLetter(optionIndex).toLowerCase(),
         onClick: () => choose(option.label)
       },
-      (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(optionIndex)),
-      (0, import_react5.createElement)(
+      (0, import_react4.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(optionIndex)),
+      (0, import_react4.createElement)(
         "span",
         { className: "bt-q-body" },
-        (0, import_react5.createElement)("span", { className: "bt-q-label" }, option.label),
-        option.description ? (0, import_react5.createElement)("span", { className: "bt-q-desc" }, option.description) : null
+        (0, import_react4.createElement)("span", { className: "bt-q-label" }, option.label),
+        option.description ? (0, import_react4.createElement)("span", { className: "bt-q-desc" }, option.description) : null
       ),
-      selected && !raised ? (0, import_react5.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react5.createElement)(CheckIcon)) : null
+      selected && !raised ? (0, import_react4.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react4.createElement)(CheckIcon)) : null
     );
   });
   if (raised && field) {
-    rows.push((0, import_react5.createElement)(
+    rows.push((0, import_react4.createElement)(
       "label",
       { key: "own", className: "bt-q-opt bt-q-ownrow", "data-filled": custom !== "" ? "" : void 0 },
-      ownLetter ? (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, ownLetter) : null,
-      (0, import_react5.createElement)("span", { className: "bt-q-body" }, field)
+      ownLetter ? (0, import_react4.createElement)("span", { className: "bt-key", "aria-hidden": true }, ownLetter) : null,
+      (0, import_react4.createElement)("span", { className: "bt-q-body" }, field)
     ));
   }
   let foot = null;
   if (raised && multi) {
-    foot = (0, import_react5.createElement)(
+    foot = (0, import_react4.createElement)(
       "div",
       { className: "bt-q-foot" },
-      (0, import_react5.createElement)("button", { type: "button", className: "bt-q-btn", onClick: onDismiss, disabled: busy }, t("Skip")),
-      (0, import_react5.createElement)("button", { type: "submit", className: "bt-q-submit", disabled: !canSubmit || busy }, t("Submit"))
+      (0, import_react4.createElement)("button", { type: "button", className: "bt-q-btn", onClick: onDismiss }, t("Skip")),
+      (0, import_react4.createElement)("button", { type: "submit", className: "bt-q-submit", disabled: !canSubmit }, t("Submit"))
     );
   } else if ((raised || multi) && canSubmit) {
-    foot = (0, import_react5.createElement)("div", { className: "bt-q-foot" }, (0, import_react5.createElement)("button", { type: "submit", className: "bt-q-submit", disabled: busy }, t("Submit")));
+    foot = (0, import_react4.createElement)("div", { className: "bt-q-foot" }, (0, import_react4.createElement)("button", { type: "submit", className: "bt-q-submit" }, t("Submit")));
   }
-  return (0, import_react5.createElement)(
+  return (0, import_react4.createElement)(
     "form",
     {
       className: raised ? "bt-q bt-q-raised" : "bt-q",
       "aria-labelledby": titleId,
-      "aria-busy": busy || void 0,
-      onFocusCapture: onInteract,
-      onPointerDownCapture: onInteract,
       onSubmit: (event) => {
         event.preventDefault();
         submit();
       }
     },
-    (0, import_react5.createElement)(
+    (0, import_react4.createElement)(
       "div",
       { className: "bt-q-head" },
-      (0, import_react5.createElement)(
+      (0, import_react4.createElement)(
         "div",
         { className: "bt-q-text" },
-        (0, import_react5.createElement)("p", { className: "bt-q-title", id: titleId }, question.header ? `${question.header} · ` : "", question.question),
-        question.detail ? (0, import_react5.createElement)("div", { className: "bt-q-detail" }, question.detail) : null,
-        raised && multi ? (0, import_react5.createElement)("div", { className: "bt-q-detail" }, t("Choose all that apply")) : null
+        (0, import_react4.createElement)("p", { className: "bt-q-title", id: titleId }, question.header ? `${question.header} · ` : "", question.question),
+        question.detail ? (0, import_react4.createElement)("div", { className: "bt-q-detail" }, question.detail) : null,
+        raised && multi ? (0, import_react4.createElement)("div", { className: "bt-q-detail" }, t("Choose all that apply")) : null
       ),
-      (0, import_react5.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss question"), title: t("Dismiss"), onClick: onDismiss, disabled: busy }, (0, import_react5.createElement)(CloseIcon))
+      (0, import_react4.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss question"), title: t("Dismiss"), onClick: onDismiss }, (0, import_react4.createElement)(CloseIcon))
     ),
-    rows.length > 0 ? (0, import_react5.createElement)("div", { className: "bt-q-list", role: "group" }, rows) : null,
-    field && !raised ? (0, import_react5.createElement)(
+    rows.length > 0 ? (0, import_react4.createElement)("div", { className: "bt-q-list", role: "group" }, rows) : null,
+    field && !raised ? (0, import_react4.createElement)(
       "div",
       { className: "bt-q-custom" },
-      (0, import_react5.createElement)("label", { className: "bt-q-field" }, field),
-      !multi && canSubmit ? (0, import_react5.createElement)("button", { type: "submit", className: "bt-q-submit", disabled: busy }, t("Submit")) : null
+      (0, import_react4.createElement)("label", { className: "bt-q-field" }, field),
+      !multi && canSubmit ? (0, import_react4.createElement)("button", { type: "submit", className: "bt-q-submit" }, t("Submit")) : null
     ) : null,
     foot
   );
@@ -3661,29 +3636,29 @@ function SettledQuestion({ question, answer }) {
   const prompt = question?.question ?? "";
   const chosen = [...answer.selected ?? [], ...answer.custom ? [answer.custom] : []];
   if (chosen.length === 0) {
-    return (0, import_react5.createElement)(
+    return (0, import_react4.createElement)(
       "div",
       { className: "bt-q bt-q-settled bt-q-dismissed", role: "group", "aria-label": prompt },
-      (0, import_react5.createElement)(
+      (0, import_react4.createElement)(
         "div",
         { className: "bt-q-head" },
-        (0, import_react5.createElement)("div", { className: "bt-q-text" }, (0, import_react5.createElement)("p", { className: "bt-q-title" }, prompt)),
-        (0, import_react5.createElement)("span", { className: "bt-q-badge" }, t("Dismissed"))
+        (0, import_react4.createElement)("div", { className: "bt-q-text" }, (0, import_react4.createElement)("p", { className: "bt-q-title" }, prompt)),
+        (0, import_react4.createElement)("span", { className: "bt-q-badge" }, t("Dismissed"))
       )
     );
   }
-  return (0, import_react5.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "bt-q bt-q-settled", role: "group", "aria-label": prompt },
-    prompt ? (0, import_react5.createElement)("div", { className: "bt-q-head" }, (0, import_react5.createElement)("div", { className: "bt-q-text" }, (0, import_react5.createElement)("p", { className: "bt-q-title" }, prompt))) : null,
-    (0, import_react5.createElement)("div", { className: "bt-q-list", role: "group", "aria-label": t("Your answer") }, chosen.map((label, index) => {
+    prompt ? (0, import_react4.createElement)("div", { className: "bt-q-head" }, (0, import_react4.createElement)("div", { className: "bt-q-text" }, (0, import_react4.createElement)("p", { className: "bt-q-title" }, prompt))) : null,
+    (0, import_react4.createElement)("div", { className: "bt-q-list", role: "group", "aria-label": t("Your answer") }, chosen.map((label, index) => {
       const optionIndex = options.findIndex((option) => option.label === label);
-      return (0, import_react5.createElement)(
+      return (0, import_react4.createElement)(
         "div",
         { key: `${label}-${index}`, className: "bt-q-opt" },
-        optionIndex >= 0 ? (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(optionIndex)) : null,
-        (0, import_react5.createElement)("span", { className: "bt-q-body" }, (0, import_react5.createElement)("span", { className: "bt-q-label" }, label)),
-        (0, import_react5.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react5.createElement)(CheckIcon))
+        optionIndex >= 0 ? (0, import_react4.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(optionIndex)) : null,
+        (0, import_react4.createElement)("span", { className: "bt-q-body" }, (0, import_react4.createElement)("span", { className: "bt-q-label" }, label)),
+        (0, import_react4.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react4.createElement)(CheckIcon))
       );
     }))
   );
@@ -3691,8 +3666,8 @@ function SettledQuestion({ question, answer }) {
 function QuestionCard({ matched }) {
   const pending = matched;
   const questions = pending.questions ?? [];
-  const [index, setIndex] = (0, import_react5.useState)(0);
-  const [answers, setAnswers] = (0, import_react5.useState)([]);
+  const [index, setIndex] = (0, import_react4.useState)(0);
+  const [answers, setAnswers] = (0, import_react4.useState)([]);
   const question = questions[index];
   if (question === void 0) return null;
   const onAnswer = (answer) => {
@@ -3704,52 +3679,395 @@ function QuestionCard({ matched }) {
     }
     pending.answer({ answers: next });
   };
-  return (0, import_react5.createElement)(QuestionView, { key: index, question, onAnswer, onDismiss: () => pending.dismiss(), ownAnswer: true, raised: true });
+  return (0, import_react4.createElement)(QuestionView, { key: index, question, onAnswer, onDismiss: () => pending.dismiss(), ownAnswer: true, raised: true });
 }
 function PendingQuestion({ sessionId, question, actions, inline }) {
-  const [answered, setAnswered] = (0, import_react5.useState)(null);
-  const [busy, setBusy] = (0, import_react5.useState)(false);
-  const busyRef = (0, import_react5.useRef)(false);
-  const hold = useDockHold(sessionId, "question", question.id, actions, inline);
+  const [answered, setAnswered] = (0, import_react4.useState)(null);
   if (answered === question.id) return null;
-  const run = (make) => {
-    if (busyRef.current) return;
-    hold();
-    busyRef.current = true;
-    setBusy(true);
-    void Promise.resolve().then(make).then(() => setAnswered(question.id), () => setAnswered(null)).finally(() => {
-      busyRef.current = false;
-      setBusy(false);
-    });
+  const onAnswer = (answer) => {
+    setAnswered(question.id);
+    void actions.answerQuestion(sessionId, question.id, { selected: answer.selected ?? [], custom: answer.custom ?? "" }).catch(() => setAnswered(null));
   };
-  const onAnswer = (answer) => run(() => actions.answerQuestion(sessionId, question.id, { selected: answer.selected ?? [], custom: answer.custom ?? "" }));
-  const onDismiss = () => run(() => actions.dismissQuestion(sessionId));
-  return (0, import_react5.createElement)(
+  const onDismiss = () => {
+    setAnswered(question.id);
+    void actions.dismissQuestion(sessionId);
+  };
+  return (0, import_react4.createElement)(
     "div",
     { className: inline ? "bt-q-inline" : "bt-q-dock" },
-    (0, import_react5.createElement)(QuestionView, { key: question.id, question, onAnswer, onDismiss, onInteract: hold, busy, ownAnswer: question.allowCustom === true, raised: !inline })
+    (0, import_react4.createElement)(QuestionView, { key: question.id, question, onAnswer, onDismiss, ownAnswer: question.allowCustom === true, raised: !inline })
   );
 }
-function QuestionDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
+function QuestionDock({ sessionId, useRoster, useCards, useSession, actions }) {
   const question = useRoster((value) => value.questions?.[sessionId]);
   const drawn = useCards?.((state) => state[sessionId]?.[question?.callId] > 0) === true;
-  const held = useHeldCards?.((state) => state[sessionId]?.[heldCardKey("question", question?.id)] > 0) === true;
-  if (question === void 0 || question.callId && drawn && !held) return null;
-  return (0, import_react5.createElement)(PendingQuestion, { key: JSON.stringify([sessionId, question.id]), sessionId, question, actions, inline: false });
+  const loading = useSession?.(historyLoading) === true;
+  if (question === void 0 || question.callId && (drawn || loading)) return null;
+  return (0, import_react4.createElement)(PendingQuestion, { sessionId, question, actions, inline: false });
 }
 function AnsweredCell({ node }) {
   const data = node.data ?? {};
   const questions = Array.isArray(data.questions) ? data.questions : [];
   if (questions.length === 0) {
-    return data.text ? (0, import_react5.createElement)("div", { className: "bt-urow" }, (0, import_react5.createElement)("div", { className: "bt-ububble" }, data.text)) : null;
+    return data.text ? (0, import_react4.createElement)("div", { className: "bt-urow" }, (0, import_react4.createElement)("div", { className: "bt-ububble" }, data.text)) : null;
   }
   const answers = Array.isArray(data.answers) ? data.answers : [];
-  return (0, import_react5.createElement)("div", { className: "bt-q-inline" }, questions.map((question) => (0, import_react5.createElement)(SettledQuestion, {
+  return (0, import_react4.createElement)("div", { className: "bt-q-inline" }, questions.map((question) => (0, import_react4.createElement)(SettledQuestion, {
     key: question.id,
     question,
     answer: answers.find((answer) => answer.id === question.id) ?? { selected: [] }
   })));
 }
+
+// src/client/widget-cell.js
+var import_react5 = require("react");
+var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
+var optionsOf2 = (node) => (Array.isArray(node?.options) ? node.options : []).map((option) => typeof option === "string" ? { label: option } : option).filter((option) => option !== null && typeof option === "object" && option.label !== void 0);
+var fieldsOf = (node) => (Array.isArray(node?.fields) ? node.fields : []).filter((field) => field !== null && typeof field === "object" && field.id !== void 0);
+var cellText = (value) => value === null || value === void 0 ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
+var INTERACTIVE = /* @__PURE__ */ new Set(["options", "confirm", "form"]);
+var hasInteractive = (node) => {
+  if (node === null || typeof node !== "object") return false;
+  if (INTERACTIVE.has(node.type)) return true;
+  return (Array.isArray(node.children) ? node.children : []).some(hasInteractive);
+};
+var countType = (node, type) => {
+  if (node === null || typeof node !== "object") return 0;
+  const children = Array.isArray(node.children) ? node.children : [];
+  return (node.type === type ? 1 : 0) + children.reduce((sum, child) => sum + countType(child, type), 0);
+};
+var answerValues = (answer, node) => answer?.action === node.id ? answer.values : void 0;
+function OptionsInput({ node, onSubmit, keys }) {
+  const [picked, setPicked] = (0, import_react5.useState)([]);
+  const options = optionsOf2(node);
+  const multi = node.multi === true;
+  const choose = (label) => {
+    if (multi) {
+      setPicked((current) => current.includes(label) ? current.filter((item) => item !== label) : [...current, label]);
+      return;
+    }
+    onSubmit?.(node.id, { selected: [label] });
+  };
+  const submit = () => {
+    if (picked.length > 0) onSubmit?.(node.id, { selected: picked });
+  };
+  const ownRef = (0, import_react5.useRef)(null);
+  useOptionKeys(keys ? options.length : 0, (index) => choose(options[index].label), ownRef);
+  return (0, import_react5.createElement)(
+    import_react5.Fragment,
+    null,
+    (0, import_react5.createElement)("div", { className: "bt-q-list", role: "group" }, options.map((option, index) => {
+      const selected = multi && picked.includes(option.label);
+      return (0, import_react5.createElement)(
+        "button",
+        {
+          key: option.label,
+          type: "button",
+          className: "bt-q-opt",
+          "aria-pressed": multi ? selected : void 0,
+          "aria-keyshortcuts": keys ? keyLetter(index).toLowerCase() : void 0,
+          onClick: () => choose(option.label)
+        },
+        keys ? (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(index)) : null,
+        (0, import_react5.createElement)(
+          "span",
+          { className: "bt-q-body" },
+          (0, import_react5.createElement)("span", { className: "bt-q-label" }, option.label),
+          option.description ? (0, import_react5.createElement)("span", { className: "bt-q-desc" }, option.description) : null
+        ),
+        selected ? (0, import_react5.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react5.createElement)(CheckIcon)) : null
+      );
+    })),
+    multi ? (0, import_react5.createElement)(
+      "div",
+      { className: "bt-q-foot" },
+      (0, import_react5.createElement)("button", { type: "button", className: "bt-q-submit", disabled: picked.length === 0, onClick: submit }, t("Submit"))
+    ) : null
+  );
+}
+function SettledOptions({ node, answer }) {
+  const selected = answerValues(answer, node)?.selected;
+  const chosen = Array.isArray(selected) ? selected : [];
+  return (0, import_react5.createElement)(
+    "div",
+    { className: "bt-q-list", role: "group", "aria-label": t("Your answer") },
+    optionsOf2(node).map((option) => (0, import_react5.createElement)(
+      "div",
+      { key: option.label, className: "bt-q-opt" },
+      (0, import_react5.createElement)(
+        "span",
+        { className: "bt-q-body" },
+        (0, import_react5.createElement)("span", { className: "bt-q-label" }, option.label),
+        option.description ? (0, import_react5.createElement)("span", { className: "bt-q-desc" }, option.description) : null
+      ),
+      chosen.includes(option.label) ? (0, import_react5.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react5.createElement)(CheckIcon)) : null
+    ))
+  );
+}
+function ConfirmInput({ node, onSubmit }) {
+  return (0, import_react5.createElement)(
+    "div",
+    { className: "bt-q-foot" },
+    (0, import_react5.createElement)("button", { type: "button", className: "bt-q-btn", onClick: () => onSubmit?.(node.id, { confirmed: false }) }, node.cancelLabel ?? t("Cancel")),
+    (0, import_react5.createElement)("button", { type: "button", className: "bt-q-submit", onClick: () => onSubmit?.(node.id, { confirmed: true }) }, node.confirmLabel ?? t("Confirm"))
+  );
+}
+function SettledConfirm({ node, answer }) {
+  const confirmed = answerValues(answer, node)?.confirmed;
+  if (confirmed !== true && confirmed !== false) {
+    return (0, import_react5.createElement)(
+      "div",
+      { className: "bt-q-foot" },
+      (0, import_react5.createElement)("button", { type: "button", className: "bt-q-btn", disabled: true }, node.cancelLabel ?? t("Cancel")),
+      (0, import_react5.createElement)("button", { type: "button", className: "bt-q-submit", disabled: true }, node.confirmLabel ?? t("Confirm"))
+    );
+  }
+  const label = confirmed ? node.confirmLabel ?? t("Confirm") : node.cancelLabel ?? t("Cancel");
+  return (0, import_react5.createElement)("span", { className: "bt-q-badge" }, label);
+}
+function FormInput({ node, onSubmit }) {
+  const fields = fieldsOf(node);
+  const [draft, setDraft] = (0, import_react5.useState)({});
+  const submit = () => onSubmit?.(node.id, { fields: Object.fromEntries(fields.map((field) => [field.id, draft[field.id] ?? ""])) });
+  return (0, import_react5.createElement)(
+    "form",
+    {
+      className: "bt-widget-form",
+      onSubmit: (event) => {
+        event.preventDefault();
+        submit();
+      }
+    },
+    fields.map((field) => (0, import_react5.createElement)(
+      "label",
+      { key: field.id, className: "bt-widget-field" },
+      (0, import_react5.createElement)("span", { className: "bt-widget-field-label" }, field.label),
+      (0, import_react5.createElement)(
+        "span",
+        { className: "bt-q-field" },
+        (0, import_react5.createElement)("input", {
+          className: "bt-q-input",
+          type: "text",
+          value: draft[field.id] ?? "",
+          autoComplete: "off",
+          spellCheck: false,
+          "aria-label": field.label,
+          placeholder: field.placeholder ?? void 0,
+          onChange: (event) => setDraft((current) => ({ ...current, [field.id]: event.target.value })),
+          onKeyDown: (event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            submit();
+          }
+        })
+      )
+    )),
+    (0, import_react5.createElement)("div", { className: "bt-q-foot" }, (0, import_react5.createElement)("button", { type: "submit", className: "bt-q-submit" }, node.submitLabel ?? t("Submit")))
+  );
+}
+function SettledForm({ node, answer }) {
+  const fields = answerValues(answer, node)?.fields;
+  const values = fields !== null && typeof fields === "object" ? fields : {};
+  return (0, import_react5.createElement)(
+    "div",
+    { className: "bt-widget-form" },
+    fieldsOf(node).map((field) => (0, import_react5.createElement)(
+      "label",
+      { key: field.id, className: "bt-widget-field" },
+      (0, import_react5.createElement)("span", { className: "bt-widget-field-label" }, field.label),
+      (0, import_react5.createElement)(
+        "span",
+        { className: "bt-q-field" },
+        (0, import_react5.createElement)("input", { className: "bt-q-input", type: "text", value: values[field.id] ?? "", disabled: true, readOnly: true, "aria-label": field.label })
+      )
+    ))
+  );
+}
+function WidgetTable({ node }) {
+  const columns = (Array.isArray(node.columns) ? node.columns : []).filter((column) => column !== null && typeof column === "object");
+  const rows = Array.isArray(node.rows) ? node.rows : [];
+  return (0, import_react5.createElement)(
+    "div",
+    { className: "bt-widget-table" },
+    (0, import_react5.createElement)(
+      "table",
+      null,
+      (0, import_react5.createElement)("thead", null, (0, import_react5.createElement)("tr", null, columns.map((column, index) => (0, import_react5.createElement)("th", { key: column.key ?? index, scope: "col" }, column.label)))),
+      (0, import_react5.createElement)("tbody", null, rows.map((row, rowIndex) => (0, import_react5.createElement)(
+        "tr",
+        { key: rowIndex },
+        columns.map((column, columnIndex) => (0, import_react5.createElement)("td", { key: column.key ?? columnIndex }, cellText(Array.isArray(row) ? row[columnIndex] : void 0)))
+      )))
+    )
+  );
+}
+function WidgetProgress({ node }) {
+  const percent2 = Math.max(0, Math.min(100, Number(node.percent) || 0));
+  return (0, import_react5.createElement)(
+    "div",
+    { className: "bt-widget-progress" },
+    (0, import_react5.createElement)("span", { className: "bt-widget-progress-label" }, (0, import_react5.createElement)("span", null, node.label), (0, import_react5.createElement)("span", null, `${Math.round(percent2)}%`)),
+    (0, import_react5.createElement)("div", {
+      className: "bt-widget-progress-track",
+      role: "progressbar",
+      "aria-valuenow": percent2,
+      "aria-valuemin": 0,
+      "aria-valuemax": 100,
+      "aria-label": node.label ?? t("Progress")
+    }, (0, import_react5.createElement)("div", { className: "bt-widget-progress-fill", style: { width: `${percent2}%` } }))
+  );
+}
+function WidgetNode({ node, ctx }) {
+  if (node === null || typeof node !== "object") return null;
+  switch (node.type) {
+    case "stack": {
+      const children = Array.isArray(node.children) ? node.children : [];
+      return (0, import_react5.createElement)(
+        "div",
+        { className: "bt-widget-stack" },
+        children.map((child, index) => (0, import_react5.createElement)(WidgetNode, { key: child?.id ?? index, node: child, ctx }))
+      );
+    }
+    case "text":
+      return (0, import_react5.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: String(node.text ?? ""), labels: mdLabels(), variant: "compact" });
+    case "metric": {
+      const tone = ["good", "warn", "bad"].includes(node.tone) ? node.tone : void 0;
+      return (0, import_react5.createElement)(
+        "div",
+        { className: "bt-widget-metric", "data-tone": tone },
+        (0, import_react5.createElement)("span", { className: "bt-widget-metric-label" }, node.label),
+        (0, import_react5.createElement)("span", { className: "bt-widget-metric-value" }, node.value)
+      );
+    }
+    case "table":
+      return (0, import_react5.createElement)(WidgetTable, { node });
+    case "options":
+      return ctx.settled ? (0, import_react5.createElement)(SettledOptions, { node, answer: ctx.answer }) : (0, import_react5.createElement)(OptionsInput, { node, onSubmit: ctx.onSubmit, keys: ctx.keys });
+    case "confirm":
+      return ctx.settled ? (0, import_react5.createElement)(SettledConfirm, { node, answer: ctx.answer }) : (0, import_react5.createElement)(ConfirmInput, { node, onSubmit: ctx.onSubmit });
+    case "form":
+      return ctx.settled ? (0, import_react5.createElement)(SettledForm, { node, answer: ctx.answer }) : (0, import_react5.createElement)(FormInput, { node, onSubmit: ctx.onSubmit });
+    case "progress":
+      return (0, import_react5.createElement)(WidgetProgress, { node });
+    default:
+      return null;
+  }
+}
+function WidgetView({ view, onSubmit, settled = false, answer = null }) {
+  const ctx = { onSubmit, settled, answer, keys: !settled && countType(view, "options") === 1 };
+  return (0, import_react5.createElement)(WidgetNode, { node: view, ctx });
+}
+function WidgetCard({ title, view, onSubmit, onDismiss, raised = false, settled = false, answer = null }) {
+  const titleId = (0, import_react5.useId)();
+  return (0, import_react5.createElement)(
+    "div",
+    {
+      className: settled ? "bt-q bt-q-settled" : raised ? "bt-q bt-q-raised" : "bt-q",
+      role: "group",
+      "aria-labelledby": titleId
+    },
+    (0, import_react5.createElement)(
+      "div",
+      { className: "bt-q-head" },
+      (0, import_react5.createElement)("div", { className: "bt-q-text" }, (0, import_react5.createElement)("p", { className: "bt-q-title", id: titleId }, title)),
+      (0, import_react5.createElement)("span", { className: "bt-q-badge" }, t("View")),
+      onDismiss ? (0, import_react5.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss view"), title: t("Dismiss"), onClick: onDismiss }, (0, import_react5.createElement)(CloseIcon)) : null
+    ),
+    (0, import_react5.createElement)(WidgetView, { view, onSubmit, settled, answer })
+  );
+}
+function PendingView({ sessionId, view, actions, inline }) {
+  const [answered, setAnswered] = (0, import_react5.useState)(null);
+  if (answered === view.id) return null;
+  const onSubmit = (action, values) => {
+    setAnswered(view.id);
+    void actions.answerView(sessionId, view.id, action, values).catch(() => setAnswered(null));
+  };
+  const onDismiss = () => {
+    setAnswered(view.id);
+    void actions.dismissView(sessionId);
+  };
+  return (0, import_react5.createElement)(
+    "div",
+    { className: inline ? "bt-q-inline" : "bt-q-dock" },
+    (0, import_react5.createElement)(WidgetCard, { key: view.id, title: view.title ?? "", view: view.view, onSubmit, onDismiss, raised: !inline })
+  );
+}
+function WidgetCell({ sessionId, callId, args, roster, actions }) {
+  const record = roster.views?.[sessionId];
+  if (record !== void 0 && record.callId === callId) {
+    return (0, import_react5.createElement)(PendingView, { sessionId, view: record, actions, inline: true });
+  }
+  const blueprint = args?.("view");
+  if (args?.("await_reply") === true || hasInteractive(blueprint) || blueprint === null || typeof blueprint !== "object") {
+    return (0, import_react5.createElement)("span", { className: "bt-q-gone", hidden: true });
+  }
+  return (0, import_react5.createElement)("div", { className: "bt-q-inline" }, (0, import_react5.createElement)(WidgetCard, { title: args?.("title") ?? "", view: blueprint }));
+}
+function WidgetDock({ sessionId, useRoster, useCards, useSession, actions }) {
+  const view = useRoster((value) => value.views?.[sessionId]);
+  const drawn = useCards?.((state) => state[sessionId]?.[view?.callId] > 0) === true;
+  const loading = useSession?.(historyLoading) === true;
+  if (view === void 0 || view.callId && (drawn || loading)) return null;
+  return (0, import_react5.createElement)(PendingView, { sessionId, view, actions, inline: false });
+}
+function AnsweredView({ node }) {
+  const data = node.data ?? {};
+  let payload = null;
+  if (Array.isArray(data.views)) payload = data;
+  else {
+    try {
+      payload = typeof data.text === "string" ? JSON.parse(data.text) : null;
+    } catch {
+      payload = null;
+    }
+    if (payload?.kind !== "answer_to_pending_view") payload = null;
+  }
+  const view = payload?.views?.[0];
+  if (view === null || typeof view !== "object" || view.view === void 0) return null;
+  const answers = Array.isArray(payload.answers) ? payload.answers : [];
+  const answer = answers.find((entry) => entry?.id === view.id) ?? answers[0] ?? null;
+  return (0, import_react5.createElement)("div", { className: "bt-q-inline" }, (0, import_react5.createElement)(WidgetCard, { title: view.title ?? "", view: view.view, settled: true, answer }));
+}
+function AnsweredReply({ node }) {
+  const data = node?.data ?? {};
+  if (Array.isArray(data.views) && data.views.length > 0) return (0, import_react5.createElement)(AnsweredView, { node });
+  if (!Array.isArray(data.questions) || data.questions.length === 0) {
+    let parsed = null;
+    try {
+      parsed = typeof data.text === "string" ? JSON.parse(data.text) : null;
+    } catch {
+      parsed = null;
+    }
+    if (parsed?.kind === "answer_to_pending_view") return (0, import_react5.createElement)(AnsweredView, { node });
+  }
+  return (0, import_react5.createElement)(AnsweredCell, { node });
+}
+var WIDGET_CSS = `
+.bt-widget-stack{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-widget-stack>.bt-q-badge{align-self:flex-start}
+.bt-widget-metric{display:flex;flex-direction:column;gap:1px;min-width:0}
+.bt-widget-metric-label{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
+.bt-widget-metric-value{font-size:22px;line-height:28px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--bt-ink);overflow-wrap:anywhere}
+.bt-widget-metric[data-tone=good] .bt-widget-metric-value{color:var(--bt-green)}
+.bt-widget-metric[data-tone=warn] .bt-widget-metric-value{color:var(--bt-star)}
+.bt-widget-metric[data-tone=bad] .bt-widget-metric-value{color:var(--bt-danger)}
+.bt-widget-table{max-width:100%;overflow-x:auto;border:.5px solid var(--bt-line-2);border-radius:10px}
+.bt-widget-table table{border-collapse:collapse;min-width:100%;font-size:13px;line-height:18px}
+.bt-widget-table th{padding:6px 10px;font-weight:500;text-align:start;white-space:nowrap;color:var(--bt-ink-2);border-bottom:.5px solid var(--bt-line-2)}
+.bt-widget-table td{padding:6px 10px;max-width:280px;color:var(--bt-ink);overflow-wrap:anywhere}
+.bt-widget-table tbody tr+tr td{border-top:.5px solid var(--bt-line)}
+.bt-widget-form{display:flex;flex-direction:column;gap:8px;margin:0}
+.bt-widget-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.bt-widget-field-label{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
+.bt-widget-field .bt-q-field:has(.bt-q-input:disabled){cursor:default;opacity:.75}
+.bt-widget-progress{display:flex;flex-direction:column;gap:5px;min-width:0}
+.bt-widget-progress-label{display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:16px;color:var(--bt-ink-2)}
+.bt-widget-progress-track{height:6px;border-radius:999px;background:var(--bt-hover);overflow:hidden}
+.bt-widget-progress-fill{height:100%;border-radius:inherit;background:var(--bt-accent)}
+.bt-q-raised .bt-widget-stack{padding:0 16px 14px}
+.bt-q-raised .bt-widget-stack>.bt-q-list{padding:0}
+`;
 
 // src/client/secret-card.js
 var import_react6 = require("react");
@@ -3836,40 +4154,32 @@ function SecretHead({ bot, title, detail, name, onClose }) {
     onClose ? (0, import_react6.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Cancel the request"), title: t("Cancel"), onClick: onClose }, (0, import_react6.createElement)(CloseIcon)) : null
   );
 }
-function SecretCard({ sessionId, bot, request, roster, actions, inline = false }) {
+function SecretCard({ bot, request, roster, actions }) {
   const [value, setValue] = (0, import_react6.useState)("");
   const [scope, setScope] = (0, import_react6.useState)("all");
   const [replacing, setReplacing] = (0, import_react6.useState)(false);
   const [busy, setBusy] = (0, import_react6.useState)(false);
   const [error, setError] = (0, import_react6.useState)("");
-  const busyRef = (0, import_react6.useRef)(false);
-  const hold = useDockHold(sessionId, "secret", request.id, actions, inline);
   const noteId = (0, import_react6.useId)();
   const secret = (roster.secrets ?? []).find((entry) => entry.name === request.name);
-  const run = (make) => {
-    if (busyRef.current) return void 0;
-    hold();
-    busyRef.current = true;
+  const run = (promise) => {
     setBusy(true);
     setError("");
-    return Promise.resolve().then(make).then(() => setValue(""), (failure) => setError(failure?.message ?? String(failure))).finally(() => {
-      busyRef.current = false;
-      setBusy(false);
-    });
+    return Promise.resolve(promise).then(() => setValue(""), (failure) => setError(failure?.message ?? String(failure))).finally(() => setBusy(false));
   };
-  const cancel = () => run(() => actions.secretCancel(request.id));
+  const cancel = () => run(actions.secretCancel(request.id));
   const long = value.trim().length >= MIN_VALUE;
   const save = () => {
-    if (long && !busy) void run(() => actions.secretSet({ requestId: request.id, value, scope }));
+    if (long && !busy) void run(actions.secretSet({ requestId: request.id, value, scope }));
   };
   const allow = () => {
-    if (!busy) void run(() => actions.secretAllow(request.id));
+    if (!busy) void run(actions.secretAllow(request.id));
   };
   const filling = request.kind === "fill" || replacing;
   const warn = insecure() ? (0, import_react6.createElement)("div", { className: "bt-secret-warn", role: "note" }, (0, import_react6.createElement)(WarnIcon), t("This page is not on HTTPS: the key crosses the network unencrypted.")) : null;
   return (0, import_react6.createElement)(
     "div",
-    { className: "bt-q bt-secret", role: "group", "aria-describedby": noteId, "data-kind": request.kind, onFocusCapture: hold, onPointerDownCapture: hold },
+    { className: "bt-q bt-secret", role: "group", "aria-describedby": noteId, "data-kind": request.kind },
     (0, import_react6.createElement)(SecretHead, {
       bot,
       title: request.kind === "allow" ? t("Let {bot} use {name}?", { bot: bot.name, name: request.name }) : t("{name} needs a key", { name: bot.name }),
@@ -3881,14 +4191,8 @@ function SecretCard({ sessionId, bot, request, roster, actions, inline = false }
     filling ? (0, import_react6.createElement)(
       "div",
       { className: "bt-secret-body" },
-      (0, import_react6.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react6.createElement)(MaskedInput, { value, onChange: (next) => {
-        hold();
-        setValue(next);
-      }, onEnter: save, label: t("Value of {name}", { name: request.name }), autoFocus: replacing })),
-      request.kind === "fill" ? (0, import_react6.createElement)(ScopeSwitch, { value: scope, onChange: (next) => {
-        hold();
-        setScope(next);
-      }, bot }) : null
+      (0, import_react6.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react6.createElement)(MaskedInput, { value, onChange: setValue, onEnter: save, label: t("Value of {name}", { name: request.name }), autoFocus: replacing })),
+      request.kind === "fill" ? (0, import_react6.createElement)(ScopeSwitch, { value: scope, onChange: setScope, bot }) : null
     ) : null,
     (0, import_react6.createElement)(
       "div",
@@ -3903,10 +4207,7 @@ function SecretCard({ sessionId, bot, request, roster, actions, inline = false }
     (0, import_react6.createElement)(
       "div",
       { className: "bt-q-foot" },
-      request.kind === "allow" && !replacing ? (0, import_react6.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: () => {
-        hold();
-        setReplacing(true);
-      } }, t("Replace value")) : null,
+      request.kind === "allow" && !replacing ? (0, import_react6.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: () => setReplacing(true) }, t("Replace value")) : null,
       (0, import_react6.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: cancel }, t("Cancel")),
       filling ? (0, import_react6.createElement)("button", { type: "button", className: "bt-q-submit", disabled: !long || busy, onClick: save }, busy ? t("Saving…") : t("Save")) : (0, import_react6.createElement)("button", { type: "button", className: "bt-q-submit", disabled: busy, onClick: allow }, busy ? t("Allowing…") : t("Allow"))
     )
@@ -3932,30 +4233,29 @@ function SettledSecret({ bot, request, roster }) {
     )
   );
 }
-function RequestView({ sessionId, bot, request, roster, actions }) {
-  return request.status === "pending" ? (0, import_react6.createElement)(SecretCard, { key: JSON.stringify([sessionId, request.id, request.kind]), sessionId, bot, request, roster, actions, inline: true }) : (0, import_react6.createElement)(SettledSecret, { bot, request, roster });
+function RequestView({ bot, request, roster, actions }) {
+  return request.status === "pending" ? (0, import_react6.createElement)(SecretCard, { key: `${request.id}:${request.kind}`, bot, request, roster, actions }) : (0, import_react6.createElement)(SettledSecret, { bot, request, roster });
 }
-function SecretToolCell({ sessionId, callId, name, done, content, roster, actions, heldCards = NONE }) {
+function SecretToolCell({ sessionId, callId, name, done, content, roster, actions }) {
   const bot = roster.byId[sessionId];
   if (!bot) return null;
   const request = (roster.secretRequests?.[bot.id] ?? []).find((entry) => entry.callId === callId && (entry.sessionId ?? sessionId) === sessionId);
-  if (request?.status === "pending" && heldCards[heldCardKey("secret", request.id)] > 0) return null;
-  if (request) return (0, import_react6.createElement)("div", { className: "bt-q-inline" }, (0, import_react6.createElement)(RequestView, { sessionId, bot, request, roster, actions }));
+  if (request) return (0, import_react6.createElement)("div", { className: "bt-q-inline" }, (0, import_react6.createElement)(RequestView, { bot, request, roster, actions }));
   if (done && /already saved/.test(contentText(content))) {
     return (0, import_react6.createElement)("div", { className: "bt-event" }, (0, import_react6.createElement)("span", { className: "bt-secret-event" }, (0, import_react6.createElement)(KeyIcon), t("{bot} is using {name}", { bot: bot.name, name: name ?? t("a saved key") })));
   }
   return null;
 }
-function SecretDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
+function SecretDock({ sessionId, useRoster, useCards, useSession, actions }) {
   const roster = useRoster((value) => value);
   const shown = useCards?.((state) => state[sessionId]) ?? NONE;
-  const held = useHeldCards?.((state) => state[sessionId]) ?? NONE;
+  const loading = useSession?.(historyLoading) === true;
   const bot = roster.byId[sessionId];
   if (!bot || currentPart(bot) !== sessionId) return null;
-  const drawn = (entry) => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0 && !(held[heldCardKey("secret", entry.id)] > 0);
+  const drawn = (entry) => entry.callId && entry.sessionId === sessionId && (loading || shown[entry.callId] > 0);
   const waiting = (roster.secretRequests?.[bot.id] ?? []).filter((entry) => entry.status === "pending" && !drawn(entry));
   if (waiting.length === 0) return null;
-  return (0, import_react6.createElement)("div", { className: "bt-q-dock bt-secret-dock" }, waiting.map((request) => (0, import_react6.createElement)(SecretCard, { key: JSON.stringify([sessionId, request.id, request.kind]), sessionId, bot, request, roster, actions })));
+  return (0, import_react6.createElement)("div", { className: "bt-q-dock bt-secret-dock" }, waiting.map((request) => (0, import_react6.createElement)(SecretCard, { key: `${request.id}:${request.kind}`, bot, request, roster, actions })));
 }
 function ScopeEditor({ secret, roster, onSave }) {
   const [mode, setMode] = (0, import_react6.useState)(secret.scope === "all" ? "all" : "some");
@@ -4184,11 +4484,10 @@ var SECRET_CSS = `
 function turnReasoning(steps, current) {
   const members = steps.length ? steps : [current];
   if (members.find((step) => stepReasoning(step) !== "")?.step !== current.step) return "";
-  return members.map(stepReasoning).filter(Boolean).join("\n\n");
+  return members.filter((step) => !thinkingLive(step)).map(stepReasoning).filter(Boolean).join("\n\n");
 }
-var thinkingStep = (steps) => steps.find(thinkingLive);
-var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
 var texts = (step) => step.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
+var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
 var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
 
 // src/client/fold.js
@@ -4259,7 +4558,7 @@ function useFold(text, { limit = FOLD_AT, whole, live = false, markdown = true }
 // src/client/cells.js
 var import_react8 = require("react");
 var import_react_dom = require("react-dom");
-var mdLabels = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
+var mdLabels2 = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
 function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions, fold = FOLD_AT, whole }) {
   const onClick = (event) => {
     const target = mentionTarget(event);
@@ -4296,7 +4595,7 @@ function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId,
 function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole }) {
   const { shown, folded, control } = useFold(text, { limit: fold, whole, live });
   const key = msgKey ? `${msgKey}:${index}` : void 0;
-  const body = (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: "compact", fileMentions: mentions });
+  const body = (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels2(), variant: "compact", fileMentions: mentions });
   return (0, import_react8.createElement)(
     "div",
     { className: "bt-msg" },
@@ -4399,29 +4698,9 @@ function MessageTools({ text, name, sessionId, react, actions }) {
     ), document.body) : null
   );
 }
-var thinkingTimes = /* @__PURE__ */ new Map();
-function useThinkingMs({ sessionId, turn, settledSteps, skip }) {
-  const key = `${sessionId}:${turn}:${settledSteps}`;
-  const [ms, setMs] = (0, import_react8.useState)(() => thinkingTimes.get(key));
-  (0, import_react8.useEffect)(() => {
-    if (skip || thinkingTimes.has(key)) {
-      setMs(thinkingTimes.get(key));
-      return void 0;
-    }
-    const control = new AbortController();
-    call("thinking", { sessionId, turn }, control.signal).then((value) => {
-      thinkingTimes.set(key, value?.ms);
-      setMs(value?.ms);
-    }).catch(() => {
-    });
-    return () => control.abort();
-  }, [key, skip]);
-  return ms;
-}
-function ThinkingRow({ text, live, at, ms }) {
+function ThinkingRow({ text }) {
   const box = (0, import_react8.useRef)(null);
   const atEnd = (0, import_react8.useRef)(true);
-  const [open, setOpen] = (0, import_react8.useState)(false);
   const [fade, setFade] = (0, import_react8.useState)(void 0);
   const measure = () => {
     const el = box.current;
@@ -4429,28 +4708,16 @@ function ThinkingRow({ text, live, at, ms }) {
     const above = el.scrollTop > 0;
     setFade(above && !atEnd.current ? "both" : above ? "top" : !atEnd.current ? "bottom" : void 0);
   };
-  const toggle = (event) => {
-    const next = event.currentTarget.open;
-    if (next) atEnd.current = true;
-    setOpen(next);
-  };
   (0, import_react8.useLayoutEffect)(() => {
-    if (!open) return;
     const el = box.current;
     if (atEnd.current) el.scrollTop = el.scrollHeight;
     measure();
-  }, [text, open]);
-  const title = live ? t("Thinking") : t("Thought it through");
+  }, [text]);
+  const title = t("Thought it through");
   return (0, import_react8.createElement)(
-    "details",
-    { className: "bt-think", onToggle: toggle },
-    (0, import_react8.createElement)(
-      "summary",
-      null,
-      title,
-      live && at !== void 0 ? (0, import_react8.createElement)(Elapsed, { at, className: "bt-think-time" }) : null,
-      !live && ms !== void 0 ? (0, import_react8.createElement)("span", { className: "bt-think-time" }, `· ${elapsedLabel(Math.max(1e3, ms))}`) : null
-    ),
+    "div",
+    { className: "bt-think" },
+    (0, import_react8.createElement)("div", { className: "bt-think-title" }, title),
     (0, import_react8.createElement)("div", { ref: box, className: "bt-think-text", role: "region", "aria-label": title, tabIndex: 0, "data-fade": fade, onScroll: measure }, text)
   );
 }
@@ -4473,13 +4740,9 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
   const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
-  const members = steps.length ? steps : [data];
-  const reasoning = groupPart === "response" ? "" : turnReasoning(steps, data);
-  const thinking = groupPart === "response" ? void 0 : thinkingStep(members);
-  const ms = useThinkingMs({ sessionId, turn: data.turn, settledSteps: members.filter((step) => step.status !== "running").length, skip: hidden || reasoning === "" });
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
-  useLiveNote(actions, sessionId, `think:${node.key ?? data.seq}`, !hidden && thinking !== void 0 && reasoning !== "" ? { text: true } : null);
   if (hidden) return null;
+  const reasoning = groupPart === "response" ? "" : turnReasoning(steps, data);
   const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
   if (texts2.length === 0 && !reasoning && relays.length === 0) return null;
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
@@ -4499,13 +4762,7 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
         whole: true
       });
     }),
-    reasoning ? (0, import_react8.createElement)(ThinkingRow, {
-      text: reasoning,
-      live: thinking !== void 0,
-      // The live clock counts the settled steps too: backing `at` by the settled
-      // time makes one Elapsed show settled + running.
-      ...thinking !== void 0 ? { at: typeof thinking.time === "number" ? thinking.time - (ms ?? 0) : void 0 } : { ms }
-    }) : null,
+    reasoning ? (0, import_react8.createElement)(ThinkingRow, { text: reasoning }) : null,
     texts2.length ? (0, import_react8.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi, mentions, fold: FOLD_HUGE }) : null
   );
 }
@@ -4596,7 +4853,7 @@ var scrollParent = (node) => {
 };
 function EarlierUser({ row }) {
   const { shown, folded, control } = useFold(row.text ?? "");
-  const body = row.text ? (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: shown, labels: mdLabels(), variant: "compact" }) : null;
+  const body = row.text ? (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: shown, labels: mdLabels2(), variant: "compact" }) : null;
   return (0, import_react8.createElement)("div", { className: "bt-urow" }, (0, import_react8.createElement)(
     "div",
     { className: "bt-ububble", "data-folded": folded || void 0 },
@@ -4689,7 +4946,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
     case "user":
       return (0, import_react8.createElement)(EarlierUser, { key, row });
     case "answer":
-      return (0, import_react8.createElement)(AnsweredCell, { key, node: { data: row } });
+      return (0, import_react8.createElement)(AnsweredReply, { key, node: { data: row } });
     case "bot":
       return (0, import_react8.createElement)(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : void 0, msgKey: useUi ? `${sessionId}:${row.time}` : void 0, useUi, fold: FOLD_HUGE });
     case "event": {
@@ -5003,7 +5260,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return (0, import_react8.createElement)("div", { key: `user-${index}`, className: "bt-urow" }, (0, import_react8.createElement)(
           "div",
           { className: "bt-ububble" },
-          (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: reply.text, labels: mdLabels(), variant: "compact" })
+          (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: reply.text, labels: mdLabels2(), variant: "compact" })
         ));
       }
       if (reply.kind === "failed") {
@@ -5061,8 +5318,8 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     })
   );
 }
-var DRAWN = /* @__PURE__ */ new Set(["message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "ask_user_question", "read_group_chat", "remember", "forget"]);
-var CARDS = /* @__PURE__ */ new Set(["ask_user", "request_secret"]);
+var DRAWN = /* @__PURE__ */ new Set(["message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "ask_user_question", "show_view", "read_group_chat", "remember", "forget"]);
+var CARDS = /* @__PURE__ */ new Set(["ask_user", "request_secret", "show_view"]);
 function callTree(root) {
   const calls = [];
   const seen = /* @__PURE__ */ new Set();
@@ -5085,7 +5342,7 @@ function useShownCards(actions, sessionId, callIds) {
     return () => actions.noteCards(sessionId, ids, -1);
   }, [sessionId, key]);
 }
-function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot, heldCards }) {
+function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot }) {
   const tool = toolName(call2);
   const done = call2.kind === "tool-result";
   const { text: arg, value: argValue } = toolArgs(call2);
@@ -5133,11 +5390,12 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
     case "ask_user": {
       const question = roster.questions?.[sessionId];
       if (!question || question.callId !== call2.callId) return (0, import_react8.createElement)("span", { className: "bt-q-gone", hidden: true });
-      if (heldCards?.[heldCardKey("question", question.id)] > 0) return null;
-      return (0, import_react8.createElement)(PendingQuestion, { key: JSON.stringify([sessionId, question.id]), sessionId, question, actions, inline: true });
+      return (0, import_react8.createElement)(PendingQuestion, { sessionId, question, actions, inline: true });
     }
+    case "show_view":
+      return (0, import_react8.createElement)(WidgetCell, { sessionId, callId: call2.callId, args: argValue, roster, actions });
     case "request_secret":
-      return (0, import_react8.createElement)(SecretToolCell, { sessionId, callId: call2.callId, name: arg("name"), done, content: call2.content, roster, actions, heldCards });
+      return (0, import_react8.createElement)(SecretToolCell, { sessionId, callId: call2.callId, name: arg("name"), done, content: call2.content, roster, actions });
     case "ask_user_question": {
       if (!done) return null;
       let parsed = null;
@@ -5163,9 +5421,8 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
       return null;
   }
 }
-function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCards, actions }) {
+function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
   const roster = useRoster((value) => value);
-  const heldCards = useHeldCards?.((state) => state[sessionId]);
   const root = node.data.root;
   const turn = node.location?.turn?.turn ?? root.turn;
   const hidden = isHiddenTurn(roster, sessionId, turn);
@@ -5177,7 +5434,7 @@ function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCards, ac
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note);
   useShownCards(actions, sessionId, drawn.filter((call2) => CARDS.has(toolName(call2)) && call2.callId).map((call2) => call2.callId));
   if (drawn.length === 0) return null;
-  const env = { sessionId, roster, actions, useUi, useWork, findBot, heldCards };
+  const env = { sessionId, roster, actions, useUi, useWork, findBot };
   return (0, import_react8.createElement)(import_react8.Fragment, null, drawn.map((call2, index) => (0, import_react8.createElement)(import_react8.Fragment, { key: call2.callId ?? index }, renderCall(call2, env))));
 }
 
@@ -5638,12 +5895,8 @@ function useListGlide(listRef, layout, key) {
   }, [layout, key]);
 }
 function TeamSidebar(props) {
-  const { wide, expandSidebar, useRoster, useUi, useSessions, actions } = props;
+  const { wide, useRoster, useUi, useSessions, actions } = props;
   const listRef = (0, import_react10.useRef)(null);
-  const closing = (0, import_react10.useRef)(false);
-  (0, import_react10.useLayoutEffect)(() => {
-    closing.current = false;
-  });
   const roster = useRoster((value) => value);
   const markedUnread = useUi((value) => value.unread);
   props.useRegistry((value) => value);
@@ -5665,23 +5918,7 @@ function TeamSidebar(props) {
   const main = roster.byId[roster.mainBotId];
   useListGlide(listRef, wide, order.map((entry) => entry.item.id).join(","));
   useLandOnMainBot(roster, useSessions, actions);
-  const navigate = (open, id) => {
-    const result = open(id);
-    if (wide && window.innerWidth < 1024 && !closing.current) {
-      closing.current = true;
-      expandSidebar?.();
-      actions.toggleSidebar();
-    }
-    return result;
-  };
-  const rowActions = {
-    ...actions,
-    openSession: (id) => navigate(actions.openSession, id),
-    openAgent: (id) => navigate(actions.openAgent, id),
-    openAgentSession: (id) => navigate(actions.openAgentSession, id),
-    newAgentSession: (id) => navigate(actions.newAgentSession, id)
-  };
-  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide };
+  const rowProps = { roster, actions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide };
   const typeToSearch = (event) => {
     if (event.defaultPrevented || event.key.length !== 1 || event.key === " " || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return;
     if (event.target instanceof Element && event.target.closest("input,textarea,[contenteditable]")) return;
@@ -5821,20 +6058,52 @@ function UpdateButton({ useUpdate, actions }) {
   );
 }
 function ConnectPlugins({ wide, actions }) {
+  const tipId = (0, import_react10.useId)();
+  const [tip, setTip] = (0, import_react10.useState)(false);
+  const timer = (0, import_react10.useRef)(0);
+  const button = (0, import_react10.useRef)(null);
+  const [box, setBox] = (0, import_react10.useState)(null);
+  (0, import_react10.useEffect)(() => () => clearTimeout(timer.current), []);
   if (!wide) return null;
+  const show = () => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const rect = button.current?.getBoundingClientRect();
+      if (!rect) return;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 268));
+      setBox({ left, bottom: window.innerHeight - rect.top + 10 });
+      setTip(true);
+    }, 250);
+  };
+  const hide = () => {
+    clearTimeout(timer.current);
+    setTip(false);
+  };
   return (0, import_react10.createElement)(
     "span",
     { className: "bt-connect-wrap" },
     (0, import_react10.createElement)(
       "button",
       {
+        ref: button,
         type: "button",
         className: "bt-connect bt-connect-foot",
+        "aria-describedby": tip ? tipId : void 0,
+        onMouseEnter: show,
+        onMouseLeave: hide,
+        onFocus: show,
+        onBlur: hide,
         onClick: () => actions.selectPanel("plugins")
       },
       (0, import_react10.createElement)(PlugIcon),
-      t("Connect plugins")
-    )
+      t("Connect plugins"),
+      (0, import_react10.createElement)("span", { className: "bt-connect-warn", "aria-hidden": true }, "!")
+    ),
+    tip && box ? (0, import_react_dom3.createPortal)((0, import_react10.createElement)(
+      "span",
+      { role: "tooltip", id: tipId, className: "bt-connect-tip", style: box },
+      t("Plugin compatibility is not fully verified.")
+    ), document.body) : null
   );
 }
 function YouAvatar() {
@@ -6135,10 +6404,8 @@ function MemoryNotice({ shown }) {
     (0, import_react11.createElement)("span", { className: "bt-pill-mem-in", ref: inner }, (0, import_react11.createElement)("span", { className: "bt-pill-mem-ico" }, (0, import_react11.createElement)(MemoryIcon)), label)
   );
 }
-function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
+function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
   const roster = useRoster((value) => value);
-  const selectedView = useStore?.((state) => state.view);
-  const away = useConversationViews?.((views) => views.some((view) => view.id === selectedView && view.id !== "chat")) === true && typeof selectView === "function";
   const title = useSessions((list) => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? "");
   const firstTurns = useSessions((list) => {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline;
@@ -6180,7 +6447,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       delete document.body.dataset.btRoom;
     };
   }, [Boolean(room2)]);
-  const memoryNotice = !away && notice && changed !== null && roster.memory !== false;
+  const memoryNotice = notice && changed !== null && roster.memory !== false;
   return (0, import_react11.createElement)(
     "div",
     { className: "bt-head" },
@@ -6189,14 +6456,13 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       {
         type: "button",
         className: "bt-pill",
-        "aria-expanded": away ? void 0 : detailsOpen,
+        "aria-expanded": detailsOpen,
         "data-memory": memoryNotice ? "updated" : void 0,
-        "aria-label": away ? t("Back to chat") : memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t("View conversation details"),
-        title: away ? name : void 0,
-        onClick: () => away ? selectView("chat") : memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)
+        "aria-label": memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t("View conversation details"),
+        onClick: () => memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)
       },
       bot ? (0, import_react11.createElement)(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== void 0), badge: false }) : room2 ? (0, import_react11.createElement)(RoomAvatar, { room: room2, roster, size: 24 }) : null,
-      (0, import_react11.createElement)("span", { className: "bt-pill-name" }, away ? t("Back to chat") : bot?.name ?? room2?.name ?? (title || t("New chat"))),
+      (0, import_react11.createElement)("span", { className: "bt-pill-name" }, bot?.name ?? room2?.name ?? (title || t("New chat"))),
       (0, import_react11.createElement)(MemoryNotice, { shown: memoryNotice }),
       (0, import_react11.createElement)("span", { className: "bt-pill-go", "aria-hidden": true }, (0, import_react11.createElement)(GoArrow))
     ),
@@ -6735,171 +7001,6 @@ function turnDetector({ loud = 0.12, quiet = 0.06, quietMs = 1200 } = {}) {
     if (!spokeAt) return "waiting";
     if (level < quiet) quietSince ||= now;
     return quietSince && now - quietSince >= quietMs ? "done" : "speech";
-  };
-}
-
-// src/client/storage.js
-var STORAGE = {
-  unread: "ds-bot:unread",
-  reactions: "ds-bot:reactions",
-  seen: "ds-bot:seen",
-  prefs: "ds-bot:prefs",
-  surface: "ds-bot:surface",
-  agentSessions: "ds-bot:agent-sessions",
-  browserWidth: "ds-bot:browser-width",
-  browsers: "ds-bot.browser.v2"
-};
-var LEGACY_PREFIXES = ["dsh-bot:", "dsh-bot-team:"];
-var LEGACY_BROWSER_KEYS = ["ds-bot.browser.v1", "dsh-bot.browser.v1"];
-var LEGACY_THEMES = { grok: "mono" };
-function legacyKeys(key) {
-  if (key === STORAGE.browsers) return LEGACY_BROWSER_KEYS;
-  const name = key.slice(key.indexOf(":") + 1);
-  return LEGACY_PREFIXES.map((prefix) => `${prefix}${name}`);
-}
-var migrateBrowsers = (storage) => {
-  if (storage.getItem(STORAGE.browsers) !== null) {
-    for (const key of LEGACY_BROWSER_KEYS) storage.removeItem(key);
-    return;
-  }
-  for (const key of LEGACY_BROWSER_KEYS) {
-    try {
-      const value = storage.getItem(key);
-      if (value === null) continue;
-      const previous = JSON.parse(value) ?? {};
-      const tabs = Object.fromEntries(Object.entries(previous).filter(([, page]) => page && typeof page === "object").map(([botId, page]) => {
-        const tab = { id: `v1-${botId}`, url: page.url ?? "", title: page.title ?? "" };
-        return [botId, { tabs: [tab], active: tab.id }];
-      }));
-      storage.setItem(STORAGE.browsers, JSON.stringify(tabs));
-      for (const earlier of LEGACY_BROWSER_KEYS) storage.removeItem(earlier);
-      return;
-    } catch {
-    }
-  }
-};
-function migrateStorage(storage = globalThis.localStorage) {
-  for (const key of Object.values(STORAGE)) {
-    if (key === STORAGE.browsers) continue;
-    for (const legacy of legacyKeys(key)) {
-      try {
-        const value = storage.getItem(legacy);
-        if (value !== null && storage.getItem(key) === null) storage.setItem(key, value);
-        storage.removeItem(legacy);
-      } catch {
-      }
-    }
-  }
-  try {
-    migrateBrowsers(storage);
-  } catch {
-  }
-  try {
-    const prefs = JSON.parse(storage.getItem(STORAGE.prefs) ?? "null");
-    if (prefs && Object.hasOwn(LEGACY_THEMES, prefs.theme ?? "")) {
-      storage.setItem(STORAGE.prefs, JSON.stringify({ ...prefs, theme: LEGACY_THEMES[prefs.theme] }));
-    }
-  } catch {
-  }
-}
-
-// src/client/surface.js
-function groupsFor({ mode, plain = false }) {
-  return { shell: mode === "bot", conversation: mode === "bot" && !plain };
-}
-var GROUPS = ["shell", "conversation"];
-function disposeAll(disposers, label) {
-  for (const dispose of [...disposers].reverse()) {
-    try {
-      dispose?.();
-    } catch (error) {
-      console.warn(`[ds-bot] ${label}`, error);
-    }
-  }
-}
-function surfaceGroups(install, { onError } = {}) {
-  const mounted = { shell: [], conversation: [] };
-  const withdraw = (group) => {
-    const disposers = mounted[group];
-    mounted[group] = [];
-    disposeAll(disposers, `withdraw ${group}`);
-  };
-  return {
-    reconcile(wanted) {
-      for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
-      for (const group of GROUPS) {
-        if (!wanted[group] || mounted[group].length > 0) continue;
-        const disposers = [];
-        try {
-          for (const step of install[group]()) if (step) disposers.push(step());
-          mounted[group] = disposers;
-        } catch (error) {
-          disposeAll(disposers, `roll back ${group}`);
-          console.warn(`[ds-bot] install ${group}`, error);
-          onError?.(group, error);
-          break;
-        }
-      }
-    },
-    dispose() {
-      for (const group of [...GROUPS].reverse()) withdraw(group);
-    }
-  };
-}
-function freePriority(entries2, { priority, key, id }) {
-  if (priority === void 0) return void 0;
-  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
-  return Math.min(priority, ...taken);
-}
-function readMode(storage = globalThis.localStorage) {
-  try {
-    return storage.getItem(STORAGE.surface) === "agent" ? "agent" : "bot";
-  } catch {
-    return "bot";
-  }
-}
-function writeMode(mode, storage = globalThis.localStorage) {
-  try {
-    storage.setItem(STORAGE.surface, mode);
-  } catch {
-  }
-}
-
-// src/client/header-navigation.js
-var navigationEntry = (entries2) => entries2.find((entry) => entry.store && typeof entry.inject === "function");
-function headerNavigation(entries2, face) {
-  const source = navigationEntry(entries2);
-  return {
-    ...source ? { store: source.store } : {},
-    inject: (...args) => {
-      const navigation = source?.inject(...args) ?? {};
-      const own = face();
-      return { ...navigation, ...own, hooks: { ...navigation.hooks, ...own.hooks } };
-    }
-  };
-}
-function installHeaderNavigation(slots, face, component, priority) {
-  const name = "conversation.session.header";
-  let source;
-  let dispose;
-  const refresh = () => {
-    const entries2 = slots.entries(name).filter((entry) => entry.component !== component);
-    const next = navigationEntry(entries2);
-    if (dispose && source === next) return;
-    dispose?.();
-    source = next;
-    dispose = slots.register({ name, priority: freePriority(entries2, { priority }), ...headerNavigation(entries2, face) }, component);
-  };
-  const unsubscribe = slots.subscribe(name, refresh);
-  try {
-    refresh();
-  } catch (error) {
-    unsubscribe();
-    throw error;
-  }
-  return () => {
-    unsubscribe();
-    dispose?.();
   };
 }
 
@@ -9400,11 +9501,6 @@ var SHEET_EXIT_MS = 220;
 function ExchangeDialog({ pair, roster, actions }) {
   const [entries2, setEntries] = (0, import_react23.useState)(null);
   const [leaving, setLeaving] = (0, import_react23.useState)(false);
-  const log = (0, import_react23.useRef)(null);
-  const atEnd = (0, import_react23.useRef)(true);
-  (0, import_react23.useLayoutEffect)(() => {
-    if (entries2 !== null && atEnd.current && log.current) log.current.scrollTop = log.current.scrollHeight;
-  }, [entries2]);
   const close = () => {
     if (leaving) return;
     setLeaving(true);
@@ -9415,8 +9511,6 @@ function ExchangeDialog({ pair, roster, actions }) {
     let stop = false;
     let timer;
     let seen = null;
-    atEnd.current = true;
-    setEntries(null);
     const load = async () => {
       const result = await actions.exchange(pair[0], pair[1]);
       if (stop) return;
@@ -9454,10 +9548,7 @@ function ExchangeDialog({ pair, roster, actions }) {
       )),
       (0, import_react23.createElement)(
         "div",
-        { ref: log, className: "bt-dialog-log", role: "log", "aria-label": t("Bot exchange transcript"), onScroll: (event) => {
-          const node = event.currentTarget;
-          atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 2;
-        } },
+        { className: "bt-dialog-log", role: "log", "aria-label": t("Bot exchange transcript") },
         entries2 === null ? (0, import_react23.createElement)("div", { className: "bt-hint" }, t("Loading…")) : entries2.length === 0 ? (0, import_react23.createElement)("div", { className: "bt-hint" }, t("No messages yet")) : entries2.map((entry) => {
           const bot = roster.byId[entry.from] ?? { id: entry.from, name: t("You"), color: "gray" };
           const showDay = entry.time - lastDay > 30 * 60 * 1e3;
@@ -12205,6 +12296,71 @@ function AgentMenu({ menu, roster, actions, leaving }) {
   );
 }
 
+// src/client/storage.js
+var STORAGE = {
+  unread: "ds-bot:unread",
+  reactions: "ds-bot:reactions",
+  seen: "ds-bot:seen",
+  prefs: "ds-bot:prefs",
+  surface: "ds-bot:surface",
+  agentSessions: "ds-bot:agent-sessions",
+  browserWidth: "ds-bot:browser-width",
+  browsers: "ds-bot.browser.v2"
+};
+var LEGACY_PREFIXES = ["dsh-bot:", "dsh-bot-team:"];
+var LEGACY_BROWSER_KEYS = ["ds-bot.browser.v1", "dsh-bot.browser.v1"];
+var LEGACY_THEMES = { grok: "mono" };
+function legacyKeys(key) {
+  if (key === STORAGE.browsers) return LEGACY_BROWSER_KEYS;
+  const name = key.slice(key.indexOf(":") + 1);
+  return LEGACY_PREFIXES.map((prefix) => `${prefix}${name}`);
+}
+var migrateBrowsers = (storage) => {
+  if (storage.getItem(STORAGE.browsers) !== null) {
+    for (const key of LEGACY_BROWSER_KEYS) storage.removeItem(key);
+    return;
+  }
+  for (const key of LEGACY_BROWSER_KEYS) {
+    try {
+      const value = storage.getItem(key);
+      if (value === null) continue;
+      const previous = JSON.parse(value) ?? {};
+      const tabs = Object.fromEntries(Object.entries(previous).filter(([, page]) => page && typeof page === "object").map(([botId, page]) => {
+        const tab = { id: `v1-${botId}`, url: page.url ?? "", title: page.title ?? "" };
+        return [botId, { tabs: [tab], active: tab.id }];
+      }));
+      storage.setItem(STORAGE.browsers, JSON.stringify(tabs));
+      for (const earlier of LEGACY_BROWSER_KEYS) storage.removeItem(earlier);
+      return;
+    } catch {
+    }
+  }
+};
+function migrateStorage(storage = globalThis.localStorage) {
+  for (const key of Object.values(STORAGE)) {
+    if (key === STORAGE.browsers) continue;
+    for (const legacy of legacyKeys(key)) {
+      try {
+        const value = storage.getItem(legacy);
+        if (value !== null && storage.getItem(key) === null) storage.setItem(key, value);
+        storage.removeItem(legacy);
+      } catch {
+      }
+    }
+  }
+  try {
+    migrateBrowsers(storage);
+  } catch {
+  }
+  try {
+    const prefs = JSON.parse(storage.getItem(STORAGE.prefs) ?? "null");
+    if (prefs && Object.hasOwn(LEGACY_THEMES, prefs.theme ?? "")) {
+      storage.setItem(STORAGE.prefs, JSON.stringify({ ...prefs, theme: LEGACY_THEMES[prefs.theme] }));
+    }
+  } catch {
+  }
+}
+
 // src/client/member-status.js
 var import_react34 = require("react");
 var NO_WORK = { bots: {}, rooms: {}, approvals: [] };
@@ -13573,7 +13729,7 @@ ${fence}`;
     }
     return keep(lines.join("\n"));
   };
-  const cellText = (cell, ctx) => block(children(cell, ctx)).replace(/\n+/g, " <br> ").replace(/\|/g, "\\|");
+  const cellText2 = (cell, ctx) => block(children(cell, ctx)).replace(/\n+/g, " <br> ").replace(/\|/g, "\\|");
   const layoutTable = (table, rows) => {
     const role = table.getAttribute("role");
     if (role === "presentation" || role === "none") return true;
@@ -13607,7 +13763,7 @@ ${children(cell, ctx)}
       for (const cell of row.cells) {
         place();
         if (styleOf(cell).display === "none") continue;
-        const text2 = cellText(cell, ctx);
+        const text2 = cellText2(cell, ctx);
         const span = Math.max(1, Math.min(limits.tableCols, Number(cell.colSpan) || 1));
         const down = Math.max(1, Math.min(limits.tableRows, Number(cell.rowSpan) || 1));
         for (let offset = 0; offset < span; offset += 1) {
@@ -14282,6 +14438,68 @@ function serveBrowserReads({ browsers, post, clientId = globalThis.crypto.random
   };
 }
 
+// src/client/surface.js
+function groupsFor({ mode, plain = false }) {
+  return { shell: mode === "bot", conversation: mode === "bot" && !plain };
+}
+var GROUPS = ["shell", "conversation"];
+function disposeAll(disposers, label) {
+  for (const dispose of [...disposers].reverse()) {
+    try {
+      dispose?.();
+    } catch (error) {
+      console.warn(`[ds-bot] ${label}`, error);
+    }
+  }
+}
+function surfaceGroups(install, { onError } = {}) {
+  const mounted = { shell: [], conversation: [] };
+  const withdraw = (group) => {
+    const disposers = mounted[group];
+    mounted[group] = [];
+    disposeAll(disposers, `withdraw ${group}`);
+  };
+  return {
+    reconcile(wanted) {
+      for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
+      for (const group of GROUPS) {
+        if (!wanted[group] || mounted[group].length > 0) continue;
+        const disposers = [];
+        try {
+          for (const step of install[group]()) if (step) disposers.push(step());
+          mounted[group] = disposers;
+        } catch (error) {
+          disposeAll(disposers, `roll back ${group}`);
+          console.warn(`[ds-bot] install ${group}`, error);
+          onError?.(group, error);
+          break;
+        }
+      }
+    },
+    dispose() {
+      for (const group of [...GROUPS].reverse()) withdraw(group);
+    }
+  };
+}
+function freePriority(entries2, { priority, key, id }) {
+  if (priority === void 0) return void 0;
+  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
+  return Math.min(priority, ...taken);
+}
+function readMode(storage = globalThis.localStorage) {
+  try {
+    return storage.getItem(STORAGE.surface) === "agent" ? "agent" : "bot";
+  } catch {
+    return "bot";
+  }
+}
+function writeMode(mode, storage = globalThis.localStorage) {
+  try {
+    storage.setItem(STORAGE.surface, mode);
+  } catch {
+  }
+}
+
 // src/client/user-message.js
 var import_react38 = require("react");
 var ui = __toESM(require("@deepseek-ai/dsh-client-ui-primitives"), 1);
@@ -14513,7 +14731,6 @@ function apply(ctx) {
   let workKey = "";
   const live = createSource({});
   const cards = createSource({});
-  const heldCards = createSource({});
   const turnClock = createSource({});
   let activityKey = "{}";
   const memoryNews = createSource({});
@@ -14784,7 +15001,7 @@ function apply(ctx) {
     ctx.uiWorkspace.openSession(target);
   }, current: mainView });
   const actions = {
-    ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock }),
+    ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, turnClock }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
     // or the click appears to do nothing.
     isAgentSession: (id) => isAgentSessionId(id),
@@ -14995,7 +15212,7 @@ function apply(ctx) {
   };
   const browserPages = browsers?.pages ?? createSource({});
   const browserTabs = browsers?.tabs ?? createSource({});
-  const face = () => ({ actions, hooks: { roster, ui: ui2, activity, work, memoryNews, registry, turnClock, live, cards, heldCards, browserPages, browserTabs, surface, update } });
+  const face = () => ({ actions, hooks: { roster, ui: ui2, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } });
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -15025,7 +15242,6 @@ function apply(ctx) {
     ...options,
     ...options.priority === void 0 ? {} : { priority: freePriority(ctx.slots.entries(name), options) }
   }, component));
-  const installHeader = () => ctx.slots.inject("conversation.session.header", () => installHeaderNavigation(ctx.slots, face, HeaderPill, BOT_PRIORITY));
   let atMenu = null;
   const installAtMenu = () => {
     const fiber = ctx.inject(["inputTriggers"], (scope) => {
@@ -15063,6 +15279,7 @@ function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, "about"),
     () => installCompiledStyles(MEMBER_CSS, "members"),
     () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
+    () => installCompiledStyles(WIDGET_CSS, "widgets"),
     browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
     () => installTheme(),
     () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
@@ -15082,7 +15299,7 @@ function apply(ctx) {
     () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
     () => installMentions(),
     () => installAtMenu(),
-    installHeader,
+    () => shadow("conversation.session.header", { priority: BOT_PRIORITY, inject: face }, HeaderPill),
     () => shadow("conversation.chat.node", { key: "assistant-step", priority: BOT_PRIORITY, locale: "chat", inject: assistantFace }, AssistantCell),
     () => shadow("conversation.chat.node", { key: "turn-trigger", priority: BOT_PRIORITY, locale: "chat", inject: face }, TriggerCell),
     () => shadow("conversation.chat.node", { key: "tool-call", priority: BOT_PRIORITY, locale: "chat", inject: face }, ToolCell),
@@ -15092,7 +15309,7 @@ function apply(ctx) {
     () => shadow("conversation.chat.turnTail", { id: "bot-turn-separators", order: 1e3, inject: face }, TurnTailCell),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
-    () => shadow("conversation.chat.node", { key: "question-reply", priority: BOT_PRIORITY, locale: "chat" }, AnsweredCell),
+    () => shadow("conversation.chat.node", { key: "question-reply", priority: BOT_PRIORITY, locale: "chat" }, AnsweredReply),
     () => shadow("conversation.chat.node", { key: "compaction", priority: BOT_PRIORITY, locale: "chat" }, Nothing),
     ...canDrawUserMessages() ? ["user", "steering"].map((key) => () => shadow("conversation.chat.node", { key, priority: BOT_PRIORITY, locale: "chat", inject: face }, UserMessageCell)) : [],
     () => shadow("conversation.input.permission", { priority: BOT_PRIORITY }, Nothing),
@@ -15111,6 +15328,7 @@ function apply(ctx) {
     () => shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
     () => shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
     () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
+    () => shadow("conversation.input.dock", { id: "bot-view", order: -95, inject: face }, WidgetDock),
     () => shadow("conversation.input.dock", { id: "bot-secret", order: -90, inject: face }, SecretDock)
   ];
   ctx.effect(() => installCompiledStyles(RETURN_CSS, "return"), "ds-bot: return styles");

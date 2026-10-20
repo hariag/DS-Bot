@@ -1,7 +1,8 @@
 // Client channel: the team view the browser renders, and the POST /api/bot endpoints.
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { questionReply } from './parts.js'
+import { questionReply, viewReply } from './parts.js'
+import { validateViewAnswer } from '../shared/views.js'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const LANGUAGES = { zh: 'Chinese (简体中文)', en: 'English' }
@@ -48,6 +49,7 @@ export function install(rt) {
     }),
     exchangeTurns: state.exchangeTurns,
     questions: state.questions,
+    views: state.views ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.
@@ -276,6 +278,13 @@ export function install(rt) {
             await rt.save()
           }
           return ok(true)
+        case 'dismiss-view':
+          await rt.load()
+          if (rt.own(state.views, body.sessionId) !== undefined) {
+            delete state.views[body.sessionId]
+            await rt.save()
+          }
+          return ok(true)
         case 'secret-set':
         case 'secret-allow':
         case 'secret-cancel':
@@ -315,6 +324,31 @@ export function install(rt) {
             await ctx.sessions.flush(agent.session)
           } catch (error) {
             state.questions[sessionId] ??= question
+            throw error
+          }
+          await rt.save()
+          return ok(true)
+        }
+        case 'view-reply': {
+          if (typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
+          await rt.load()
+          const past = rt.pastOwners.get(body.sessionId)
+          const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
+          const pending = rt.own(state.views, sessionId)
+          if (pending === undefined || pending.id !== body.viewId) return fail('This view is no longer open', 'bot/stale')
+          const checked = validateViewAnswer(pending.view, body.action, body.values)
+          if (checked.error !== undefined) return fail(checked.error, 'bot/invalid')
+          const reply = viewReply(pending, body.action, body.values)
+          if (reply === undefined) return fail('Nothing to send', 'bot/invalid')
+          // Claim the view before queueing so a second answer is refused.
+          delete state.views[sessionId]
+          try {
+            await rt.ensureCapabilities(sessionId)
+            const agent = await rt.resolveAgent(sessionId)
+            agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
+            await ctx.sessions.flush(agent.session)
+          } catch (error) {
+            state.views[sessionId] ??= pending
             throw error
           }
           await rt.save()

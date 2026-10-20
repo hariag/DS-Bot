@@ -129,7 +129,7 @@ export function install(rt) {
   const showCall = (id, entry) => {
     const name = [...(entry.calls?.values() ?? [])].at(-1)?.name
     entry.tool = name
-    if (name !== undefined) setActivity(id, name === 'ask_user' ? undefined : activityOf(name))
+    if (name !== undefined) setActivity(id, name === 'ask_user' || name === 'show_view' ? undefined : activityOf(name))
     else if (entry.turn !== undefined) setActivity(id, 'thinking')
   }
   const startCall = (id, entry, callId, name, args) => {
@@ -484,11 +484,17 @@ export function install(rt) {
           }
           const own = rt.chatOwners.get(id)
           if (own !== undefined) rt.dropKickoff(own)
-          // Any user message answers or supersedes the open question card.
+          // Any user message answers or supersedes the open question card and view card.
+          let dropped = false
           if (state.questions[id] !== undefined) {
             delete state.questions[id]
-            void rt.save().catch(() => {})
+            dropped = true
           }
+          if (state.views?.[id] !== undefined) {
+            delete state.views[id]
+            dropped = true
+          }
+          if (dropped) void rt.save().catch(() => {})
         }
         break
       }
