@@ -1,22 +1,41 @@
 // Moving the app's data to another folder. The copy is put together in a folder beside the new
 // one and takes its name only once it is whole, so a copy that stopped or failed leaves nothing
 // that looks like data. The old folder stays as it was.
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { cp, mkdir, rename, rm, rmdir } from 'node:fs/promises'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { cp, lstat, mkdir, readlink, rename, rm, rmdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { within } from './import.mjs'
 
 // The engine's lock on the team belongs to the old folder; the first-run copy and its check
 // leave their temporary folders only when they were cut short.
 const LEFT_BEHIND = [/^bot[\\/]state\.lock$/u, /^\.import(-check)?-\d+$/u]
+// Marks a staging folder as this app's, so that only those are removed.
+const MARK = '.ds-bot-moving'
+
+// The path as the file system has it: through links and junctions, from the deepest part that
+// exists. A link can make a path that looks apart from a folder lead into it.
+function real(path) {
+  const rest = []
+  let at = resolve(path)
+  while (!existsSync(at)) {
+    const up = dirname(at)
+    if (up === at) return resolve(path)
+    rest.unshift(basename(at))
+    at = up
+  }
+  return join(realpathSync.native(at), ...rest)
+}
 
 /**
  * What keeps `to` from being the new data location, or undefined.
  * @param {{ from: string, to: string, workspace?: string, dshHome: string, program?: string }} places
  * @returns {'drive' | 'nested' | 'workspace' | 'dsh' | 'program' | 'notEmpty' | undefined}
  */
-export function moveProblem({ from, to, workspace, dshHome, program }) {
-  if (dirname(resolve(to)) === resolve(to)) return 'drive'
+export function moveProblem(places) {
+  const [from, to, dshHome] = [places.from, places.to, places.dshHome].map(real)
+  const workspace = places.workspace === undefined ? undefined : real(places.workspace)
+  const program = places.program === undefined ? undefined : real(places.program)
+  if (dirname(to) === to) return 'drive'
   if (within(to, from) || within(from, to)) return 'nested'
   if (workspace !== undefined && (within(to, workspace) || within(workspace, to))) return 'workspace'
   if (within(to, dshHome) || within(dshHome, to)) return 'dsh'
@@ -25,7 +44,20 @@ export function moveProblem({ from, to, workspace, dshHome, program }) {
   return undefined
 }
 
-const stagePrefix = to => `.${basename(to)}.moving-`
+const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+
+// Links keep their text, so relative ones still lead inside the copy; absolute ones that led
+// into the old folder lead into the new one. Windows gives a junction's target with \\?\, and
+// makes only junctions without special rights.
+async function relink(source, path, roots, to) {
+  const text = await readlink(source)
+  const target = text.replace(/^\\\\\?\\/u, '')
+  const root = isAbsolute(target) ? roots.find(folder => within(target, folder)) : undefined
+  const folder = (await stat(source).catch(() => undefined))?.isDirectory() === true
+  const windows = process.platform === 'win32'
+  if (root !== undefined) await symlink(join(to, relative(root, target)), path, folder ? (windows ? 'junction' : 'dir') : 'file')
+  else await symlink(windows && folder ? target : text, path, folder ? (windows ? 'junction' : 'dir') : 'file')
+}
 
 /**
  * Copy the data in `from` to `to`, an empty or new folder. The signal stops it between files.
@@ -35,20 +67,33 @@ export async function copyData(from, to, signal) {
   const parent = dirname(resolve(to))
   await mkdir(parent, { recursive: true })
   // A run that was killed can leave its staging folder behind.
-  for (const name of readdirSync(parent).filter(entry => entry.startsWith(stagePrefix(to)))) {
+  const staging = new RegExp(`^\\.${escaped(basename(to))}\\.moving-\\d+$`, 'u')
+  for (const name of readdirSync(parent).filter(entry => staging.test(entry) && existsSync(join(parent, entry, MARK)))) {
     await rm(join(parent, name), { recursive: true, force: true, maxRetries: 5 })
   }
-  const stage = join(parent, `${stagePrefix(to)}${String(Date.now())}`)
+  const stage = join(parent, `.${basename(to)}.moving-${String(Date.now())}`)
+  await mkdir(stage)
   try {
+    await writeFile(join(stage, MARK), '')
+    const links = []
     await cp(from, stage, {
       recursive: true,
-      filter: (source) => {
+      filter: async (source) => {
         signal?.throwIfAborted()
         const path = relative(from, source)
-        return !LEFT_BEHIND.some(pattern => pattern.test(path))
+        if (LEFT_BEHIND.some(pattern => pattern.test(path))) return false
+        if (path === '' || !(await lstat(source)).isSymbolicLink()) return true
+        links.push(path)
+        return false
       },
     })
+    const roots = [...new Set([resolve(from), real(from)])]
+    for (const path of links) {
+      signal?.throwIfAborted()
+      await relink(join(from, path), join(stage, path), roots, resolve(to))
+    }
     signal?.throwIfAborted()
+    await rm(join(stage, MARK))
     if (existsSync(to)) await rmdir(to)
     await rename(stage, to)
   } catch (error) {

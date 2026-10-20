@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, parse } from 'node:path'
 import { test } from 'node:test'
@@ -87,9 +87,39 @@ test('a copy that is stopped or fails leaves no new folder and no staging folder
   assert.deepEqual(readdirSync(root).filter(name => name.includes('.moving-')), [])
 })
 
-test('a staging folder that a killed copy left behind goes before the next copy', async (t) => {
+test('only the staging folders of an earlier move go before the next copy', async (t) => {
   const { root, from } = setup(t)
-  write(join(root, '.new.moving-1', 'bot', 'state.json'), '{}')
+  write(join(root, '.new.moving-1', '.ds-bot-moving'), '')
+  write(join(root, '.new.moving-2', 'notes.txt'), 'mine')
+  write(join(root, '.new.moving-backup', 'notes.txt'), 'mine')
   await copyData(from, join(root, 'new'))
-  assert.deepEqual(readdirSync(root).sort(), ['data', 'new'])
+  assert.deepEqual(readdirSync(root).sort(), ['.new.moving-2', '.new.moving-backup', 'data', 'new'])
+  assert.equal(existsSync(join(root, 'new', '.ds-bot-moving')), false)
+})
+
+// Windows makes a junction without special rights; it always holds an absolute path.
+const folderLink = process.platform === 'win32' ? 'junction' : 'dir'
+
+test('a folder that a link leads into counts as that folder', (t) => {
+  const { root, from } = setup(t)
+  mkdirSync(join(root, 'dsh'))
+  symlinkSync(join(root, 'dsh'), join(root, 'dsh-link'), folderLink)
+  assert.equal(moveProblem({ from, to: join(root, 'dsh-link', 'data'), dshHome: join(root, 'dsh') }), 'dsh')
+  symlinkSync(from, join(root, 'data-link'), folderLink)
+  assert.equal(moveProblem({ from, to: join(root, 'data-link', 'inside'), dshHome: join(root, 'dsh') }), 'nested')
+})
+
+test('links in the data lead inside the copy, not back into the old folder', async (t) => {
+  const { root, from } = setup(t)
+  symlinkSync(join(from, 'sessions'), join(from, 'bot', 'absolute'), folderLink)
+  if (process.platform !== 'win32') symlinkSync(join('..', 'sessions'), join(from, 'bot', 'relative'), 'dir')
+  write(join(root, 'elsewhere', 'file.txt'), 'x')
+  symlinkSync(join(root, 'elsewhere'), join(from, 'bot', 'outside'), folderLink)
+  const to = join(root, 'new')
+  await copyData(from, to)
+  const target = name => readlinkSync(join(to, 'bot', name)).replace(/^\\\\\?\\/u, '').replace(/[\\/]+$/u, '')
+  assert.equal(target('absolute'), join(to, 'sessions'))
+  assert.equal(target('outside'), join(root, 'elsewhere'))
+  if (process.platform !== 'win32') assert.equal(readlinkSync(join(to, 'bot', 'relative')), join('..', 'sessions'))
+  assert.equal(readFileSync(join(to, 'bot', 'absolute', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
 })
