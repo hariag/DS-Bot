@@ -30,7 +30,8 @@ nsis:
   installerLanguages: [zh_CN, en_US]
   multiLanguageInstaller: true
 mac:
-  target: dmg
+  # A zip, not a dmg: macOS 26 calls a downloaded unsigned dmg damaged and will not open it (#351).
+  target: zip
   # Ad-hoc signing seals the bundle; no Developer ID or notarization.
   identity: '-'
   hardenedRuntime: false

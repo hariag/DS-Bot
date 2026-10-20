@@ -202,19 +202,16 @@ jobs:
         env:
           # Ad-hoc identity '-' uses no certificate or secret, so PR signing is safe; otherwise electron-builder skips signing and leaves an unsealed bundle.
           CSC_FOR_PULL_REQUEST: 'true'
-      - name: Check the DMG
+      - name: Check the zip
         run: |
-          dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
-          test -f "$dmg"
+          zip="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.zip"
+          test -f "$zip"
       - name: Check the packaged app
         run: node scripts/check-packed.mjs
-      - name: Install from the dmg and check
+      - name: Install from the zip and check
         run: |
-          mkdir -p "$RUNNER_TEMP/dmg"
-          dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
-          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "$dmg"
-          ditto "$RUNNER_TEMP/dmg/DeepSeek Bot.app" "/Applications/DeepSeek Bot.app"
-          hdiutil detach "$RUNNER_TEMP/dmg"
+          zip="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.zip"
+          ditto -x -k "$zip" /Applications
           app="/Applications/DeepSeek Bot.app"
           exe="$app/Contents/MacOS/DeepSeek Bot"
           codesign --verify --deep --strict "$app"

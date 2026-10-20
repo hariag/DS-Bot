@@ -33,7 +33,7 @@ const server = createServer((request, response) => {
       html_url: `https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v${version}`,
       draft: false,
       prerelease: false,
-      assets: [{ name: `DeepSeek-Bot-${version}-mac-${process.arch}.dmg` }],
+      assets: [{ name: `DeepSeek-Bot-${version}-mac-${process.arch}.zip` }],
     }]))
     return
   }

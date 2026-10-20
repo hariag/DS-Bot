@@ -1,7 +1,7 @@
 name: Release
 
 # Publishes ds-bot to npm when a GitHub release is published, then attaches the desktop app's
-# Windows installer and macOS DMGs to the release. Windows updates from latest.yml; macOS opens
+# Windows installer and macOS zips to the release. Windows updates from latest.yml; macOS opens
 # the release page for a manual download.
 #
 # npm Trusted Publishing: npm trusts this workflow through GitHub's OIDC token, so the
@@ -141,7 +141,7 @@ jobs:
           gh release upload "$TAG" "$installer" "$installer.blockmap" dist-pack/latest.yml --clobber
 
   app-macos:
-    name: Desktop app dmg (macOS ${{ matrix.arch }})
+    name: Desktop app zip (macOS ${{ matrix.arch }})
     needs: publish
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -164,20 +164,20 @@ jobs:
       - run: npm run dist
       - name: Check the packaged app
         run: node scripts/check-packed.mjs
-      - name: Keep the dmg for real-device checks
+      - name: Keep the zip for real-device checks
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: DeepSeek-Bot-mac-${{ matrix.arch }}
-          path: app/dist-pack/DeepSeek-Bot-*-mac-${{ matrix.arch }}.dmg
+          path: app/dist-pack/DeepSeek-Bot-*-mac-${{ matrix.arch }}.zip
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
-      - name: Attach the dmg to the release
+      - name: Attach the zip to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          dmg="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
-          gh release upload "$TAG" "$dmg" --clobber
+          zip="dist-pack/DeepSeek-Bot-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.zip"
+          gh release upload "$TAG" "$zip" --clobber
