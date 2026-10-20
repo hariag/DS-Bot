@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlink
 import { tmpdir } from 'node:os'
 import { dirname, join, parse } from 'node:path'
 import { test } from 'node:test'
+import { copyTree } from '../src/copy-tree.mjs'
 import { copyData, installFolder, moveProblem } from '../src/move-data.mjs'
 
 const write = (path, text) => {
@@ -147,4 +148,17 @@ test('links in the data lead inside the copy, not back into the old folder', asy
     assert.equal(target('relative-alias'), join(to, 'sessions'))
   }
   assert.equal(readFileSync(join(to, 'bot', 'absolute', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
+})
+
+// Windows makes a link to nothing that is not a folder only with special rights, which the
+// tests do not have, so there it is a link the copy cannot make again.
+test('a link the move cannot make again stops the move; the import skips it', { skip: process.platform !== 'win32' }, async (t) => {
+  const { root, from } = setup(t)
+  symlinkSync(join(root, 'gone'), join(from, 'lost'), 'junction')
+  const to = join(root, 'new')
+  await assert.rejects(copyData(from, to), { code: 'EPERM' })
+  assert.equal(existsSync(to), false)
+  assert.deepEqual(readdirSync(root).filter(name => name.includes('.moving-')), [])
+  assert.deepEqual(await copyTree(from, join(root, 'files'), { skip: true }), ['lost'])
+  assert.equal(readFileSync(join(root, 'files', 'sessions', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
 })

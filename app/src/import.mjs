@@ -184,7 +184,7 @@ export async function importTeam({ from, to, workspace, profile, dsh, signal }) 
   await mkdir(workspace, { recursive: true })
   if (existsSync(join(oldBot, 'workspace'))) {
     // Bots that ran npm or pnpm there leave links, some of them to nothing.
-    const skipped = await copyTree(join(oldBot, 'workspace'), workspace, { force: false, signal })
+    const skipped = await copyTree(join(oldBot, 'workspace'), workspace, { force: false, skip: true, signal })
     if (skipped.length > 0) console.warn('DeepSeek Bot: the import skipped what it could not read in the old team workspace:', skipped)
   }
   signal?.throwIfAborted()

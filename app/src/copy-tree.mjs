@@ -42,16 +42,17 @@ async function relink(source, path, roots, to) {
 
 /**
  * Copy the folder `from` into `into`, making its links again (fs.cp makes symbolic links, which
- * Windows refuses without special rights). An entry that cannot be read, such as a junction to
- * nothing, or a link that cannot be made again, is skipped and listed.
+ * Windows refuses without special rights). With `skip`, an entry that cannot be read, such as a
+ * junction to nothing, or a link that cannot be made again, is skipped and listed; otherwise it
+ * fails the copy.
  * @param {string} from
  * @param {string} into
- * @param {{ force?: boolean, leave?: (path: string) => boolean, as?: string, signal?: AbortSignal }} [options]
+ * @param {{ force?: boolean, skip?: boolean, leave?: (path: string) => boolean, as?: string, signal?: AbortSignal }} [options]
  *   force: false keeps what is there already; leave: relative paths not to copy; as: where the
  *   copy will end up, when `into` is a staging folder that takes that name later
  * @returns {Promise<string[]>} the relative paths that were skipped
  */
-export async function copyTree(from, into, { force = true, leave = () => false, as = into, signal } = {}) {
+export async function copyTree(from, into, { force = true, skip = false, leave = () => false, as = into, signal } = {}) {
   // The folder can itself be a link; its contents are what is copied.
   const origin = real(from)
   const links = []
@@ -64,7 +65,7 @@ export async function copyTree(from, into, { force = true, leave = () => false, 
       const path = relative(origin, source)
       if (path !== '' && leave(path)) return false
       if (path === '') return true
-      const info = await lstat(source).catch(() => undefined)
+      const info = await lstat(source).catch((error) => { if (!skip) throw error })
       if (info === undefined) skipped.push(path)
       else if (info.isSymbolicLink()) links.push(path)
       return info?.isSymbolicLink() === false
@@ -75,7 +76,10 @@ export async function copyTree(from, into, { force = true, leave = () => false, 
     signal?.throwIfAborted()
     const at = join(into, path)
     if (!force && await lstat(at).then(() => true, () => false)) continue
-    await relink(join(origin, path), at, roots, resolve(as)).catch(() => { skipped.push(path) })
+    await relink(join(origin, path), at, roots, resolve(as)).catch((error) => {
+      if (!skip) throw error
+      skipped.push(path)
+    })
   }
   return skipped
 }

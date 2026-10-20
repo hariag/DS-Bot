@@ -56,8 +56,8 @@ export async function copyData(from, to, signal) {
   await mkdir(stage)
   try {
     await writeFile(join(stage, MARK), '')
-    const skipped = await copyTree(from, stage, { as: to, leave: path => LEFT_BEHIND.some(pattern => pattern.test(path)), signal })
-    if (skipped.length > 0) console.warn('DeepSeek Bot: the data move skipped what it could not read:', skipped)
+    // Anything left out would be missing from the data the app moves on to, so it stops the move.
+    await copyTree(from, stage, { as: to, leave: path => LEFT_BEHIND.some(pattern => pattern.test(path)), signal })
     signal?.throwIfAborted()
     if (existsSync(to)) await rmdir(to)
     await rename(stage, to)
