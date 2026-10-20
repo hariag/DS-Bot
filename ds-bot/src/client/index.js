@@ -14,6 +14,7 @@ import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { VOICE_BUNDLE } from './speech.js'
 import { sameVersion } from './dsh-offer.js'
 import { AnsweredCell, QuestionCard, QuestionDock } from './questions.js'
+import { installHeaderNavigation } from './header-navigation.js'
 import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, ToolCell } from './cells.js'
 import { Overlays } from './overlays.js'
 import { createBotBrowsers, serveBrowserReads } from './bot-browsers.js'
@@ -595,6 +596,7 @@ export function apply(ctx) {
   const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
     name, ...options, ...(options.priority === undefined ? {} : { priority: freePriority(ctx.slots.entries(name), options) }),
   }, component))
+  const installHeader = () => ctx.slots.inject('conversation.session.header', () => installHeaderNavigation(ctx.slots, face, HeaderPill, BOT_PRIORITY))
 
   // The "@" menu's Bot group and the chats "+" references. The composer's controller
   // for a Session is the shell's own, so the chats open at its caret.
@@ -658,7 +660,7 @@ export function apply(ctx) {
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
     () => installMentions(),
     () => installAtMenu(),
-    () => shadow('conversation.session.header', { priority: BOT_PRIORITY, inject: face }, HeaderPill),
+    installHeader,
     () => shadow('conversation.chat.node', { key: 'assistant-step', priority: BOT_PRIORITY, locale: 'chat', inject: assistantFace }, AssistantCell),
     () => shadow('conversation.chat.node', { key: 'turn-trigger', priority: BOT_PRIORITY, locale: 'chat', inject: face }, TriggerCell),
     () => shadow('conversation.chat.node', { key: 'tool-call', priority: BOT_PRIORITY, locale: 'chat', inject: face }, ToolCell),

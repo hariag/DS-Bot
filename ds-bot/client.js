@@ -50,6 +50,7 @@ var ZH = {
   "Unread activity": "有未读",
   Search: "搜索",
   "New chat": "新对话",
+  "Back to chat": "返回对话",
   "New…": "新建",
   "Collapse sidebar": "收起侧边栏",
   "Expand sidebar": "展开侧边栏",
@@ -6071,8 +6072,10 @@ function MemoryNotice({ shown }) {
     (0, import_react10.createElement)("span", { className: "bt-pill-mem-in", ref: inner }, (0, import_react10.createElement)("span", { className: "bt-pill-mem-ico" }, (0, import_react10.createElement)(MemoryIcon)), label)
   );
 }
-function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
+function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
   const roster = useRoster((value) => value);
+  const selectedView = useStore?.((state) => state.view);
+  const away = useConversationViews?.((views) => views.some((view) => view.id === selectedView && view.id !== "chat")) === true && typeof selectView === "function";
   const title = useSessions((list) => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? "");
   const firstTurns = useSessions((list) => {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline;
@@ -6114,7 +6117,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       delete document.body.dataset.btRoom;
     };
   }, [Boolean(room2)]);
-  const memoryNotice = notice && changed !== null && roster.memory !== false;
+  const memoryNotice = !away && notice && changed !== null && roster.memory !== false;
   return (0, import_react10.createElement)(
     "div",
     { className: "bt-head" },
@@ -6123,13 +6126,14 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       {
         type: "button",
         className: "bt-pill",
-        "aria-expanded": detailsOpen,
+        "aria-expanded": away ? void 0 : detailsOpen,
         "data-memory": memoryNotice ? "updated" : void 0,
-        "aria-label": memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t("View conversation details"),
-        onClick: () => memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)
+        "aria-label": away ? t("Back to chat") : memoryNotice ? t("Memory updated. Open {name}'s memory", { name: roster.byId[changed]?.name ?? name }) : t("View conversation details"),
+        title: away ? name : void 0,
+        onClick: () => away ? selectView("chat") : memoryNotice ? actions.openMemory(changed) : actions.toggleDetails(sessionId)
       },
       bot ? (0, import_react10.createElement)(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== void 0), badge: false }) : room2 ? (0, import_react10.createElement)(RoomAvatar, { room: room2, roster, size: 24 }) : null,
-      (0, import_react10.createElement)("span", { className: "bt-pill-name" }, bot?.name ?? room2?.name ?? (title || t("New chat"))),
+      (0, import_react10.createElement)("span", { className: "bt-pill-name" }, away ? t("Back to chat") : bot?.name ?? room2?.name ?? (title || t("New chat"))),
       (0, import_react10.createElement)(MemoryNotice, { shown: memoryNotice }),
       (0, import_react10.createElement)("span", { className: "bt-pill-go", "aria-hidden": true }, (0, import_react10.createElement)(GoArrow))
     ),
@@ -6668,6 +6672,171 @@ function turnDetector({ loud = 0.12, quiet = 0.06, quietMs = 1200 } = {}) {
     if (!spokeAt) return "waiting";
     if (level < quiet) quietSince ||= now;
     return quietSince && now - quietSince >= quietMs ? "done" : "speech";
+  };
+}
+
+// src/client/storage.js
+var STORAGE = {
+  unread: "ds-bot:unread",
+  reactions: "ds-bot:reactions",
+  seen: "ds-bot:seen",
+  prefs: "ds-bot:prefs",
+  surface: "ds-bot:surface",
+  agentSessions: "ds-bot:agent-sessions",
+  browserWidth: "ds-bot:browser-width",
+  browsers: "ds-bot.browser.v2"
+};
+var LEGACY_PREFIXES = ["dsh-bot:", "dsh-bot-team:"];
+var LEGACY_BROWSER_KEYS = ["ds-bot.browser.v1", "dsh-bot.browser.v1"];
+var LEGACY_THEMES = { grok: "mono" };
+function legacyKeys(key) {
+  if (key === STORAGE.browsers) return LEGACY_BROWSER_KEYS;
+  const name = key.slice(key.indexOf(":") + 1);
+  return LEGACY_PREFIXES.map((prefix) => `${prefix}${name}`);
+}
+var migrateBrowsers = (storage) => {
+  if (storage.getItem(STORAGE.browsers) !== null) {
+    for (const key of LEGACY_BROWSER_KEYS) storage.removeItem(key);
+    return;
+  }
+  for (const key of LEGACY_BROWSER_KEYS) {
+    try {
+      const value = storage.getItem(key);
+      if (value === null) continue;
+      const previous = JSON.parse(value) ?? {};
+      const tabs = Object.fromEntries(Object.entries(previous).filter(([, page]) => page && typeof page === "object").map(([botId, page]) => {
+        const tab = { id: `v1-${botId}`, url: page.url ?? "", title: page.title ?? "" };
+        return [botId, { tabs: [tab], active: tab.id }];
+      }));
+      storage.setItem(STORAGE.browsers, JSON.stringify(tabs));
+      for (const earlier of LEGACY_BROWSER_KEYS) storage.removeItem(earlier);
+      return;
+    } catch {
+    }
+  }
+};
+function migrateStorage(storage = globalThis.localStorage) {
+  for (const key of Object.values(STORAGE)) {
+    if (key === STORAGE.browsers) continue;
+    for (const legacy of legacyKeys(key)) {
+      try {
+        const value = storage.getItem(legacy);
+        if (value !== null && storage.getItem(key) === null) storage.setItem(key, value);
+        storage.removeItem(legacy);
+      } catch {
+      }
+    }
+  }
+  try {
+    migrateBrowsers(storage);
+  } catch {
+  }
+  try {
+    const prefs = JSON.parse(storage.getItem(STORAGE.prefs) ?? "null");
+    if (prefs && Object.hasOwn(LEGACY_THEMES, prefs.theme ?? "")) {
+      storage.setItem(STORAGE.prefs, JSON.stringify({ ...prefs, theme: LEGACY_THEMES[prefs.theme] }));
+    }
+  } catch {
+  }
+}
+
+// src/client/surface.js
+function groupsFor({ mode, plain = false }) {
+  return { shell: mode === "bot", conversation: mode === "bot" && !plain };
+}
+var GROUPS = ["shell", "conversation"];
+function disposeAll(disposers, label) {
+  for (const dispose of [...disposers].reverse()) {
+    try {
+      dispose?.();
+    } catch (error) {
+      console.warn(`[ds-bot] ${label}`, error);
+    }
+  }
+}
+function surfaceGroups(install, { onError } = {}) {
+  const mounted = { shell: [], conversation: [] };
+  const withdraw = (group) => {
+    const disposers = mounted[group];
+    mounted[group] = [];
+    disposeAll(disposers, `withdraw ${group}`);
+  };
+  return {
+    reconcile(wanted) {
+      for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
+      for (const group of GROUPS) {
+        if (!wanted[group] || mounted[group].length > 0) continue;
+        const disposers = [];
+        try {
+          for (const step of install[group]()) if (step) disposers.push(step());
+          mounted[group] = disposers;
+        } catch (error) {
+          disposeAll(disposers, `roll back ${group}`);
+          console.warn(`[ds-bot] install ${group}`, error);
+          onError?.(group, error);
+          break;
+        }
+      }
+    },
+    dispose() {
+      for (const group of [...GROUPS].reverse()) withdraw(group);
+    }
+  };
+}
+function freePriority(entries2, { priority, key, id }) {
+  if (priority === void 0) return void 0;
+  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
+  return Math.min(priority, ...taken);
+}
+function readMode(storage = globalThis.localStorage) {
+  try {
+    return storage.getItem(STORAGE.surface) === "agent" ? "agent" : "bot";
+  } catch {
+    return "bot";
+  }
+}
+function writeMode(mode, storage = globalThis.localStorage) {
+  try {
+    storage.setItem(STORAGE.surface, mode);
+  } catch {
+  }
+}
+
+// src/client/header-navigation.js
+var navigationEntry = (entries2) => entries2.find((entry) => entry.store && typeof entry.inject === "function");
+function headerNavigation(entries2, face) {
+  const source = navigationEntry(entries2);
+  return {
+    ...source ? { store: source.store } : {},
+    inject: (...args) => {
+      const navigation = source?.inject(...args) ?? {};
+      const own = face();
+      return { ...navigation, ...own, hooks: { ...navigation.hooks, ...own.hooks } };
+    }
+  };
+}
+function installHeaderNavigation(slots, face, component, priority) {
+  const name = "conversation.session.header";
+  let source;
+  let dispose;
+  const refresh = () => {
+    const entries2 = slots.entries(name).filter((entry) => entry.component !== component);
+    const next = navigationEntry(entries2);
+    if (dispose && source === next) return;
+    dispose?.();
+    source = next;
+    dispose = slots.register({ name, priority: freePriority(entries2, { priority }), ...headerNavigation(entries2, face) }, component);
+  };
+  const unsubscribe = slots.subscribe(name, refresh);
+  try {
+    refresh();
+  } catch (error) {
+    unsubscribe();
+    throw error;
+  }
+  return () => {
+    unsubscribe();
+    dispose?.();
   };
 }
 
@@ -11973,71 +12142,6 @@ function AgentMenu({ menu, roster, actions, leaving }) {
   );
 }
 
-// src/client/storage.js
-var STORAGE = {
-  unread: "ds-bot:unread",
-  reactions: "ds-bot:reactions",
-  seen: "ds-bot:seen",
-  prefs: "ds-bot:prefs",
-  surface: "ds-bot:surface",
-  agentSessions: "ds-bot:agent-sessions",
-  browserWidth: "ds-bot:browser-width",
-  browsers: "ds-bot.browser.v2"
-};
-var LEGACY_PREFIXES = ["dsh-bot:", "dsh-bot-team:"];
-var LEGACY_BROWSER_KEYS = ["ds-bot.browser.v1", "dsh-bot.browser.v1"];
-var LEGACY_THEMES = { grok: "mono" };
-function legacyKeys(key) {
-  if (key === STORAGE.browsers) return LEGACY_BROWSER_KEYS;
-  const name = key.slice(key.indexOf(":") + 1);
-  return LEGACY_PREFIXES.map((prefix) => `${prefix}${name}`);
-}
-var migrateBrowsers = (storage) => {
-  if (storage.getItem(STORAGE.browsers) !== null) {
-    for (const key of LEGACY_BROWSER_KEYS) storage.removeItem(key);
-    return;
-  }
-  for (const key of LEGACY_BROWSER_KEYS) {
-    try {
-      const value = storage.getItem(key);
-      if (value === null) continue;
-      const previous = JSON.parse(value) ?? {};
-      const tabs = Object.fromEntries(Object.entries(previous).filter(([, page]) => page && typeof page === "object").map(([botId, page]) => {
-        const tab = { id: `v1-${botId}`, url: page.url ?? "", title: page.title ?? "" };
-        return [botId, { tabs: [tab], active: tab.id }];
-      }));
-      storage.setItem(STORAGE.browsers, JSON.stringify(tabs));
-      for (const earlier of LEGACY_BROWSER_KEYS) storage.removeItem(earlier);
-      return;
-    } catch {
-    }
-  }
-};
-function migrateStorage(storage = globalThis.localStorage) {
-  for (const key of Object.values(STORAGE)) {
-    if (key === STORAGE.browsers) continue;
-    for (const legacy of legacyKeys(key)) {
-      try {
-        const value = storage.getItem(legacy);
-        if (value !== null && storage.getItem(key) === null) storage.setItem(key, value);
-        storage.removeItem(legacy);
-      } catch {
-      }
-    }
-  }
-  try {
-    migrateBrowsers(storage);
-  } catch {
-  }
-  try {
-    const prefs = JSON.parse(storage.getItem(STORAGE.prefs) ?? "null");
-    if (prefs && Object.hasOwn(LEGACY_THEMES, prefs.theme ?? "")) {
-      storage.setItem(STORAGE.prefs, JSON.stringify({ ...prefs, theme: LEGACY_THEMES[prefs.theme] }));
-    }
-  } catch {
-  }
-}
-
 // src/client/member-status.js
 var import_react33 = require("react");
 var NO_WORK = { bots: {}, rooms: {}, approvals: [] };
@@ -14115,68 +14219,6 @@ function serveBrowserReads({ browsers, post, clientId = globalThis.crypto.random
   };
 }
 
-// src/client/surface.js
-function groupsFor({ mode, plain = false }) {
-  return { shell: mode === "bot", conversation: mode === "bot" && !plain };
-}
-var GROUPS = ["shell", "conversation"];
-function disposeAll(disposers, label) {
-  for (const dispose of [...disposers].reverse()) {
-    try {
-      dispose?.();
-    } catch (error) {
-      console.warn(`[ds-bot] ${label}`, error);
-    }
-  }
-}
-function surfaceGroups(install, { onError } = {}) {
-  const mounted = { shell: [], conversation: [] };
-  const withdraw = (group) => {
-    const disposers = mounted[group];
-    mounted[group] = [];
-    disposeAll(disposers, `withdraw ${group}`);
-  };
-  return {
-    reconcile(wanted) {
-      for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
-      for (const group of GROUPS) {
-        if (!wanted[group] || mounted[group].length > 0) continue;
-        const disposers = [];
-        try {
-          for (const step of install[group]()) if (step) disposers.push(step());
-          mounted[group] = disposers;
-        } catch (error) {
-          disposeAll(disposers, `roll back ${group}`);
-          console.warn(`[ds-bot] install ${group}`, error);
-          onError?.(group, error);
-          break;
-        }
-      }
-    },
-    dispose() {
-      for (const group of [...GROUPS].reverse()) withdraw(group);
-    }
-  };
-}
-function freePriority(entries2, { priority, key, id }) {
-  if (priority === void 0) return void 0;
-  const taken = entries2.filter((entry) => (key === void 0 || entry.options?.key === key) && (id === void 0 || entry.options?.id === id)).map((entry) => (entry.options?.priority ?? 0) - 1);
-  return Math.min(priority, ...taken);
-}
-function readMode(storage = globalThis.localStorage) {
-  try {
-    return storage.getItem(STORAGE.surface) === "agent" ? "agent" : "bot";
-  } catch {
-    return "bot";
-  }
-}
-function writeMode(mode, storage = globalThis.localStorage) {
-  try {
-    storage.setItem(STORAGE.surface, mode);
-  } catch {
-  }
-}
-
 // src/client/user-message.js
 var import_react37 = require("react");
 var ui = __toESM(require("@deepseek-ai/dsh-client-ui-primitives"), 1);
@@ -14921,6 +14963,7 @@ function apply(ctx) {
     ...options,
     ...options.priority === void 0 ? {} : { priority: freePriority(ctx.slots.entries(name), options) }
   }, component));
+  const installHeader = () => ctx.slots.inject("conversation.session.header", () => installHeaderNavigation(ctx.slots, face, HeaderPill, BOT_PRIORITY));
   let atMenu = null;
   const installAtMenu = () => {
     const fiber = ctx.inject(["inputTriggers"], (scope) => {
@@ -14977,7 +15020,7 @@ function apply(ctx) {
     () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
     () => installMentions(),
     () => installAtMenu(),
-    () => shadow("conversation.session.header", { priority: BOT_PRIORITY, inject: face }, HeaderPill),
+    installHeader,
     () => shadow("conversation.chat.node", { key: "assistant-step", priority: BOT_PRIORITY, locale: "chat", inject: assistantFace }, AssistantCell),
     () => shadow("conversation.chat.node", { key: "turn-trigger", priority: BOT_PRIORITY, locale: "chat", inject: face }, TriggerCell),
     () => shadow("conversation.chat.node", { key: "tool-call", priority: BOT_PRIORITY, locale: "chat", inject: face }, ToolCell),
