@@ -303,7 +303,13 @@ async function moveData(workspace) {
     mainWindow?.setProgressBar(2)
     try {
       await copyData(places.dataDir, to, signal)
-      saveLocations({ dataDir: to, workspace })
+      try {
+        saveLocations({ dataDir: to, workspace })
+      } catch (error) {
+        // Unused, the copy would only keep the folder from being chosen again.
+        await rm(to, { recursive: true, force: true, maxRetries: 5 }).catch((failure) => { console.error(failure) })
+        throw error
+      }
     } catch (error) {
       if (signal.aborted) return
       console.error(error)
