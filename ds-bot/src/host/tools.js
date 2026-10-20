@@ -7,7 +7,7 @@ import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
 import { unquote } from './text.js'
 import { mentionSpans } from '../shared/mentions.js'
-import { validateView, VIEW_BYTE_LIMIT, viewBytes } from '../shared/views.js'
+import { normalizeView, validateView, VIEW_BYTE_LIMIT, viewBytes } from '../shared/views.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
@@ -619,12 +619,13 @@ export function install(rt) {
       const id = exec.agent?.id
       if (rt.groupOwners.has(id)) return 'View cards only work in your own chat. In a group, ask in your message instead.'
       if (!rt.chatOwners.has(id)) return `Only Bots on the team can use show_view. Use ${BLOCKING_QUESTION_TOOL} if it is available in this session, or ask the user in your reply.`
+      const view = normalizeView(args.view)
       let bytes
-      try { bytes = viewBytes(args.title, args.view) } catch { return 'The view is not JSON data.' }
+      try { bytes = viewBytes(args.title, view) } catch { return 'The view is not JSON data.' }
       if (bytes > VIEW_BYTE_LIMIT) return `The view is ${bytes} bytes; the limit is ${VIEW_BYTE_LIMIT}.`
       const title = String(args.title ?? '').trim()
       if (title === '') return 'Give the view a title.'
-      const checked = validateView(args.view)
+      const checked = validateView(view)
       if (!checked.ok) return checked.error
       if (!checked.interactive && args.await_reply === true) return 'This view has nothing to submit; call show_view with await_reply: false.'
       const awaitReply = args.await_reply ?? checked.interactive
@@ -637,7 +638,7 @@ export function install(rt) {
         id: randomUUID(),
         ...(exec.callId && !hidden ? { callId: exec.callId } : {}),
         title,
-        view: args.view,
+        view,
         askedAt: Date.now(),
       }
       await rt.save()

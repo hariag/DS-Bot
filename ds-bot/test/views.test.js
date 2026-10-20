@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { validateView, validateViewAnswer, VIEW_BYTE_LIMIT, viewBytes, viewSummary } from '../src/shared/views.js'
+import { normalizeView, validateView, validateViewAnswer, VIEW_BYTE_LIMIT, viewBytes, viewSummary } from '../src/shared/views.js'
 
 const text = (value = 'hello') => ({ type: 'text', text: value })
 const metric = (label = '进度', value = '70%') => ({ type: 'metric', label, value })
@@ -25,6 +25,22 @@ test('validateView accepts every component and reports whether the card can be s
   assert.deepEqual(validateView({ type: 'form', id: 'empty', fields: [] }), { ok: true, interactive: true })
   assert.equal(validateView({ type: 'progress', percent: 0 }).ok, true)
   assert.equal(validateView({ type: 'progress', percent: 100 }).ok, true)
+})
+
+test('normalizeView unwraps XML-style arrays and coerces numeric strings', () => {
+  // Providers may serialize nested arrays as { item: [...] } and numbers as strings.
+  const wrapped = { type: 'stack', children: { item: [text(), { type: 'options', id: 'env', options: { item: [{ label: 'staging' }, { label: 'prod' }] } }] } }
+  const unwrapped = normalizeView(wrapped)
+  assert.ok(Array.isArray(unwrapped.children), 'children unwraps to an array')
+  assert.ok(Array.isArray(unwrapped.children[1].options), 'nested options unwrap to an array')
+  assert.deepEqual(validateView(unwrapped), { ok: true, interactive: true })
+  // Numeric strings land only on the numeric fields, never on labels or text.
+  assert.deepEqual(normalizeView({ type: 'progress', label: '70', percent: '70' }), { type: 'progress', label: '70', percent: 70 })
+  assert.deepEqual(normalizeView({ type: 'metric', label: '70', value: '70' }), { type: 'metric', label: '70', value: 70 })
+  assert.deepEqual(normalizeView(text('70')), text('70'), 'text stays a string')
+  assert.deepEqual(normalizeView(metric('进度', '70%')), metric('进度', '70%'), 'non-numeric string stays a string')
+  // Input is not mutated.
+  assert.equal(Array.isArray(wrapped.children), false)
 })
 
 test('validateView rejects an unknown component with the path and the catalog', () => {

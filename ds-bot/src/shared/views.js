@@ -39,6 +39,24 @@ export function viewBytes(title, view) {
   return new TextEncoder().encode(`${JSON.stringify(view) ?? ''}${title ?? ''}`).length
 }
 
+// Some providers serialize nested arrays as `{ item: [...] }` (XML-style) and
+// numbers as strings. Normalize the blueprint before validation so a model is
+// not asked to retry a call whose only fault is the provider's encoding.
+// Arrays are unwrapped; metric.value and progress.percent accept a numeric
+// string. Returns a new object; the input is not mutated.
+export function normalizeView(value) {
+  if (Array.isArray(value)) return value.map(normalizeView)
+  if (!isRecord(value)) return value
+  const keys = Object.keys(value)
+  if (keys.length === 1 && keys[0] === 'item' && Array.isArray(value.item)) return value.item.map(normalizeView)
+  const out = {}
+  for (const key of keys) out[key] = normalizeView(value[key])
+  for (const field of ['value', 'percent']) {
+    if (typeof out[field] === 'string' && out[field].trim() !== '' && !Number.isNaN(Number(out[field]))) out[field] = Number(out[field])
+  }
+  return out
+}
+
 export function validateView(view) {
   const ctx = { ids: new Set(), nodes: 0, interactive: false }
   const error = checkNode(view, 'view', 1, ctx)
