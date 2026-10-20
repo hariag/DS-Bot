@@ -13,7 +13,7 @@ const Tick = ({ on }) => h('span', { className: 'bt-model-tick', 'aria-hidden': 
 // one a Bot works in the team workspace and a group member in its own folder. `onPick`
 // gets the chosen path, or '' for that default. `team` is the menu for the team workspace
 // itself, which has no default.
-export function FolderMenu({ value, group = false, team = false, actions, run, onPick, wide = false }) {
+export function FolderMenu({ value, group = false, team = false, actions, run, onPick, wide = false, disabled = false }) {
   const { isOpen, shownPlace, leaving, button, menu, open, close } = useAnchoredMenu()
   const [info, setInfo] = useState(null)
   const [view, setView] = useState('list')
@@ -84,7 +84,7 @@ export function FolderMenu({ value, group = false, team = false, actions, run, o
     h('button', {
       ref: button, type: 'button', className: 'bt-model-trigger', 'data-wide': wide || undefined,
       'aria-haspopup': 'menu', 'aria-expanded': isOpen, 'aria-label': team ? t('Team workspace: {folder}', { folder: value ?? '' }) : t('Working folder: {folder}', { folder: value ?? fallback }),
-      title: value, onClick: toggle,
+      title: value, onClick: toggle, disabled,
     },
     h('span', { className: 'bt-model-copy' },
       h('span', { className: 'bt-model-name' }, value ? folderName(value) : fallback),
@@ -106,6 +106,7 @@ export const FOLDER_CSS = `
 .bt-folder-input:focus{border-color:var(--bt-accent)}
 .bt-menu .bt-folder-use{justify-content:center;font-weight:500;color:var(--bt-accent)}
 .bt-menu .bt-folder-use:disabled{color:var(--bt-ink-3);cursor:default;background:none}
+.bt-model-trigger:disabled{opacity:.6;cursor:default}
 .bt-folder-error{padding:4px 8px;font-size:12px;line-height:16px;color:var(--bt-danger);overflow-wrap:anywhere}
 @media (prefers-reduced-motion:reduce){.bt-folder-view{animation:none}}
 `

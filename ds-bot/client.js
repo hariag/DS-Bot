@@ -7253,7 +7253,7 @@ var import_react15 = require("react");
 var import_react_dom7 = require("react-dom");
 var folderName = (path) => String(path).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || String(path);
 var Tick = ({ on }) => (0, import_react15.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, on ? (0, import_react15.createElement)(CheckIcon) : null);
-function FolderMenu({ value, group = false, team = false, actions, run, onPick, wide = false }) {
+function FolderMenu({ value, group = false, team = false, actions, run, onPick, wide = false, disabled = false }) {
   const { isOpen, shownPlace, leaving, button, menu, open, close } = useAnchoredMenu();
   const [info, setInfo] = (0, import_react15.useState)(null);
   const [view, setView] = (0, import_react15.useState)("list");
@@ -7369,7 +7369,8 @@ function FolderMenu({ value, group = false, team = false, actions, run, onPick, 
         "aria-expanded": isOpen,
         "aria-label": team ? t("Team workspace: {folder}", { folder: value ?? "" }) : t("Working folder: {folder}", { folder: value ?? fallback }),
         title: value,
-        onClick: toggle
+        onClick: toggle,
+        disabled
       },
       (0, import_react15.createElement)(
         "span",
@@ -7398,6 +7399,7 @@ var FOLDER_CSS = `
 .bt-folder-input:focus{border-color:var(--bt-accent)}
 .bt-menu .bt-folder-use{justify-content:center;font-weight:500;color:var(--bt-accent)}
 .bt-menu .bt-folder-use:disabled{color:var(--bt-ink-3);cursor:default;background:none}
+.bt-model-trigger:disabled{opacity:.6;cursor:default}
 .bt-folder-error{padding:4px 8px;font-size:12px;line-height:16px;color:var(--bt-danger);overflow-wrap:anywhere}
 @media (prefers-reduced-motion:reduce){.bt-folder-view{animation:none}}
 `;
@@ -11583,6 +11585,7 @@ function LocationsSection({ actions, run }) {
   const [team, setTeam] = (0, import_react31.useState)(null);
   const [data, setData] = (0, import_react31.useState)(null);
   const [moving, setMoving] = (0, import_react31.useState)(false);
+  const busy = (0, import_react31.useRef)(false);
   (0, import_react31.useEffect)(() => {
     void Promise.resolve(actions.folders()).then((info) => setTeam(info?.team ?? null)).catch(() => {
     });
@@ -11590,11 +11593,14 @@ function LocationsSection({ actions, run }) {
     });
   }, []);
   const pickTeam = (path) => {
+    if (busy.current) return void 0;
+    busy.current = true;
     setMoving(true);
     return run(Promise.resolve(actions.setTeamWorkspace(path)).then((answer) => {
       setTeam(answer.team);
       app?.teamWorkspaceChanged(answer.team);
     }).finally(() => {
+      busy.current = false;
       setMoving(false);
     }));
   };
@@ -11604,12 +11610,14 @@ function LocationsSection({ actions, run }) {
     (0, import_react31.createElement)(
       SetRow,
       { label: t("Team workspace"), hint: t("Where Bots without a folder of their own work.") },
-      team === null ? null : (0, import_react31.createElement)(FolderMenu, { value: team, team: true, actions, run, onPick: pickTeam })
+      team === null ? null : (0, import_react31.createElement)(FolderMenu, { value: team, team: true, actions, run, onPick: pickTeam, disabled: moving })
     ),
     data === null ? null : (0, import_react31.createElement)(
       SetRow,
       { label: t("Data location"), hint: data.path },
-      data.fixed ? null : (0, import_react31.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: moving, onClick: () => run(app.moveData(team ?? void 0)) }, t("Change…"))
+      data.fixed ? null : (0, import_react31.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: moving, onClick: () => {
+        if (!busy.current) void run(app.moveData(team ?? void 0));
+      } }, t("Change…"))
     )
   );
 }
