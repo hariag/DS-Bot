@@ -2,7 +2,7 @@
 // one and takes its name only once it is whole, so a copy that stopped or failed leaves nothing
 // that looks like data. The old folder stays as it was.
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { cp, lstat, mkdir, readlink, rename, rm, rmdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, readlink, realpath, rename, rm, rmdir, stat, symlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { within } from './import.mjs'
 
@@ -52,11 +52,14 @@ const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 // junctions, which hold absolute paths, without special rights.
 async function relink(source, path, roots, to) {
   const text = (await readlink(source)).replace(/^\\\\\?\\/u, '')
-  const target = resolve(dirname(source), text)
+  const written = resolve(dirname(source), text)
+  // Through another link the target can lead inside the old folder too.
+  const physical = await realpath(written).catch(() => written)
+  const target = roots.some(folder => within(written, folder)) ? written : physical
   const root = roots.find(folder => within(target, folder))
   const folder = (await stat(source).catch(() => undefined))?.isDirectory() === true
   const windows = process.platform === 'win32'
-  const inside = root === undefined ? target : join(to, relative(root, target))
+  const inside = root === undefined ? written : join(to, relative(root, target))
   await symlink(root !== undefined && !isAbsolute(text) && !(windows && folder) ? text : inside, path, folder ? (windows ? 'junction' : 'dir') : 'file')
 }
 

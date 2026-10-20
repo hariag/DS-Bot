@@ -114,6 +114,9 @@ test('links in the data lead inside the copy, not back into the old folder', asy
   symlinkSync(join(from, 'sessions'), join(from, 'bot', 'absolute'), folderLink)
   write(join(root, 'elsewhere', 'file.txt'), 'x')
   symlinkSync(join(root, 'elsewhere'), join(from, 'bot', 'outside'), folderLink)
+  // Into the data through another link.
+  symlinkSync(from, join(root, 'data-alias'), folderLink)
+  symlinkSync(join(root, 'data-alias', 'sessions'), join(from, 'bot', 'chained'), folderLink)
   if (process.platform !== 'win32') {
     symlinkSync(join('..', 'sessions'), join(from, 'bot', 'relative'), 'dir')
     symlinkSync(join('..', '..', 'elsewhere'), join(from, 'bot', 'relative-outside'), 'dir')
@@ -124,6 +127,7 @@ test('links in the data lead inside the copy, not back into the old folder', asy
   const target = name => readlinkSync(join(to, 'bot', name)).replace(/^\\\\\?\\/u, '').replace(/[\\/]+$/u, '')
   assert.equal(target('absolute'), join(to, 'sessions'))
   assert.equal(target('outside'), join(root, 'elsewhere'))
+  assert.equal(target('chained'), join(to, 'sessions'))
   if (process.platform !== 'win32') {
     assert.equal(target('relative'), join('..', 'sessions'))
     assert.equal(target('relative-outside'), join(root, 'elsewhere'))
