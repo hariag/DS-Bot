@@ -267,7 +267,21 @@ export function TeamSidebar(props) {
   const main = roster.byId[roster.mainBotId]
   useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))
   useLandOnMainBot(roster, useSessions, actions)
-  const rowProps = { roster, actions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide }
+  // The shell gives this slot its live fold state. Only a navigation from its
+  // expanded, narrow sidebar dismisses it; other ways to open a chat never toggle it.
+  const navigate = (open, id) => {
+    const result = open(id)
+    if (wide && window.innerWidth < 1024) actions.toggleSidebar()
+    return result
+  }
+  const rowActions = {
+    ...actions,
+    openSession: id => navigate(actions.openSession, id),
+    openAgent: id => navigate(actions.openAgent, id),
+    openAgentSession: id => navigate(actions.openAgentSession, id),
+    newAgentSession: id => navigate(actions.newAgentSession, id),
+  }
+  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide }
   // Typing while the sidebar has focus starts a search.
   const typeToSearch = (event) => {
     if (event.defaultPrevented || event.key.length !== 1 || event.key === ' ' || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return

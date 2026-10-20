@@ -26,11 +26,63 @@ const react = {
   useMemo: make => make(), useRef: current => ({ current }), useId: () => 'id',
 }
 const module = { exports: {} }
+const viewport = { innerWidth: 1280 }
 runInNewContext(outputFiles[0].text, {
   module, exports: module.exports,
   require: name => (name === 'react' ? react : {}),
+  window: viewport,
 })
 const { SHELL_CSS, SIDEBAR_CSS, TeamSidebar } = module.exports
+
+function navigationSidebar(wide) {
+  const calls = []
+  const bot = { id: 'writer', name: 'Writer', createdAt: 1 }
+  const room = { id: 'room', name: 'Team', members: [], createdAt: 2 }
+  const agent = { id: 'agent', sessions: ['session'], createdAt: 3 }
+  const roster = { bots: [bot], rooms: [room], agents: [agent], byId: { writer: bot }, ready: true }
+  const actions = Object.fromEntries(['openSession', 'openAgent', 'openAgentSession', 'newAgentSession'].map(name => [name, id => { calls.push([name, id]); return id }]))
+  actions.toggleSidebar = () => calls.push(['toggleSidebar'])
+  const tree = TeamSidebar({
+    wide, actions,
+    useRoster: pick => pick(roster), useUi: pick => pick({ unread: {} }), useRegistry: pick => pick({}),
+    useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
+  })
+  const rows = []
+  const walk = (node) => {
+    if (Array.isArray(node)) { node.forEach(walk); return }
+    if (!node || typeof node !== 'object') return
+    if (['BotRow', 'RoomRow', 'AgentRow'].includes(node.type?.name)) rows.push(node)
+    walk(node.props?.children)
+  }
+  walk(tree)
+  return { calls, rows, actions }
+}
+
+for (const width of [390, 1023, 1024, 1280]) {
+  for (const wide of [false, true]) {
+    test(`sidebar navigation at ${width}px with ${wide ? 'expanded content' : 'a collapsed rail'} only closes an open mobile sidebar`, () => {
+      viewport.innerWidth = width
+      const { rows, calls } = navigationSidebar(wide)
+      assert.equal(rows.length, 3)
+      for (const row of rows) {
+        const names = row.type.name === 'AgentRow' ? ['openAgent', 'openAgentSession', 'newAgentSession'] : ['openSession']
+        for (const name of names) {
+          calls.length = 0
+          assert.equal(row.props.actions[name]('selected'), 'selected')
+          assert.deepEqual(calls, wide && width < 1024 ? [[name, 'selected'], ['toggleSidebar']] : [[name, 'selected']])
+        }
+      }
+    })
+  }
+}
+
+test('preparing sidebar navigation leaves actions elsewhere unchanged', () => {
+  viewport.innerWidth = 390
+  const { actions, calls } = navigationSidebar(true)
+  assert.deepEqual(calls, [])
+  actions.openSession('from-another-surface')
+  assert.deepEqual(calls, [['openSession', 'from-another-surface']])
+})
 
 function rulesOf(css) {
   const text = css.replace(/\/\*[\s\S]*?\*\//g, '')
