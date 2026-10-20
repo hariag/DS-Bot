@@ -4,6 +4,7 @@ import { CheckIcon, CloseIcon } from './icons.js'
 import { t } from './i18n.js'
 import { historyLoading } from './text.js'
 import { AnsweredCell, keyLetter, useOptionKeys } from './questions.js'
+import { normalizeView } from '../shared/views.js'
 
 // -------------------------------------------------------------------------
 // View cards (show_view): a Bot draws a small declarative blueprint — text,
@@ -219,12 +220,16 @@ export function PendingView({ sessionId, view, actions, inline }) {
 }
 
 // The show_view call in the transcript.
-export function WidgetCell({ sessionId, callId, args, roster, actions }) {
+export function WidgetCell({ sessionId, callId, args, done, isError, roster, actions }) {
   const record = roster.views?.[sessionId]
   if (record !== undefined && record.callId === callId) {
     return h(PendingView, { sessionId, view: record, actions, inline: true })
   }
-  const blueprint = args?.('view')
+  // A refused call (bad blueprint) drew no card; don't render an empty one.
+  if (done && isError) return h('span', { className: 'bt-q-gone', hidden: true })
+  // Display-only cards draw from the recorded call arguments, which keep the
+  // provider's encoding: unwrap it the same way the host does before storing.
+  const blueprint = normalizeView(args?.('view'))
   // Answered, dismissed or replaced: a card that awaited a reply leaves no gap
   // where it was (same as ask_user). A display-only view stays as content.
   if (args?.('await_reply') === true || hasInteractive(blueprint) || blueprint === null || typeof blueprint !== 'object') {

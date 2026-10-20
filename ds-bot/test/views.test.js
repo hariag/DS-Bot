@@ -41,6 +41,10 @@ test('normalizeView unwraps XML-style arrays and coerces numeric strings', () =>
   assert.deepEqual(normalizeView(metric('进度', '70%')), metric('进度', '70%'), 'non-numeric string stays a string')
   // Input is not mutated.
   assert.equal(Array.isArray(wrapped.children), false)
+  // A provider may nest the wrapper: { item: { item: [...] } } collapses too.
+  const nested = normalizeView({ type: 'stack', children: { item: { item: [text()] } } })
+  assert.ok(Array.isArray(nested.children), 'a nested wrapper still unwraps')
+  assert.deepEqual(validateView(nested), { ok: true, interactive: false })
 })
 
 test('validateView rejects an unknown component with the path and the catalog', () => {

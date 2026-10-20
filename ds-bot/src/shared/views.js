@@ -48,7 +48,11 @@ export function normalizeView(value) {
   if (Array.isArray(value)) return value.map(normalizeView)
   if (!isRecord(value)) return value
   const keys = Object.keys(value)
-  if (keys.length === 1 && keys[0] === 'item' && Array.isArray(value.item)) return value.item.map(normalizeView)
+  // Unwrap recursively: a provider may nest the wrapper, as { item: { item: [...] } }.
+  if (keys.length === 1 && keys[0] === 'item') {
+    const inner = normalizeView(value.item)
+    if (Array.isArray(inner)) return inner
+  }
   const out = {}
   for (const key of keys) out[key] = normalizeView(value[key])
   for (const field of ['value', 'percent']) {
