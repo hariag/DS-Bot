@@ -164,7 +164,8 @@ export function install(rt) {
   async function folderEndpoint(endpoint, body, signal) {
     switch (endpoint) {
       case 'folders': {
-        const team = teamFolder() ?? null
+        // A copied team has its workspace registered at its first turn; until then it is the default.
+        const team = teamFolder() ?? resolve(defaultTeamFolder())
         const known = new Map()
         for (const workspace of ctx.workspaceRegistry.list?.() ?? []) {
           if (workspace.path !== team) known.set(workspace.path, workspace.title)

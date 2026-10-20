@@ -619,6 +619,15 @@ test('the team workspace holds no DeepSeek Harness data, apart from the plugin\'
   assert.equal(state().workspaceId, 'w-new')
 })
 
+test('a copied team shows its default team workspace before the workspace is registered', async (t) => {
+  const copied = { ...TEAM }
+  delete copied.workspaceId
+  const { home, state, call, stop } = await start({ team: copied })
+  t.after(stop)
+  assert.equal(state().workspaceId, undefined)
+  assert.equal((await call('folders', {})).value.team, resolve(join(home, 'workspace')))
+})
+
 test('in the desktop app the user\'s own DSH data is no team workspace and no Bot\'s folder either', async (t) => {
   const { root, state, call, stop } = await start()
   t.after(stop)
