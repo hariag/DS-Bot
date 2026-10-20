@@ -327,7 +327,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 @keyframes bt-sheet-in{from{transform:translateY(24px)}}
 @keyframes bt-sheet-out{to{opacity:0;transform:translateY(16px);filter:blur(4px)}}
 .bt-exchange .bt-dialog{position:relative}
-.bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 76px;scrollbar-width:thin}
+.bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 116px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
 .bt-fold{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:4px;white-space:normal}
 .bt-fold-note{font-size:12px;line-height:16px;color:var(--bt-ink-3)}

@@ -2467,7 +2467,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 @keyframes bt-sheet-in{from{transform:translateY(24px)}}
 @keyframes bt-sheet-out{to{opacity:0;transform:translateY(16px);filter:blur(4px)}}
 .bt-exchange .bt-dialog{position:relative}
-.bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 76px;scrollbar-width:thin}
+.bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 116px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
 .bt-fold{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:4px;white-space:normal}
 .bt-fold-note{font-size:12px;line-height:16px;color:var(--bt-ink-3)}
@@ -9156,6 +9156,11 @@ var SHEET_EXIT_MS = 220;
 function ExchangeDialog({ pair, roster, actions }) {
   const [entries2, setEntries] = (0, import_react22.useState)(null);
   const [leaving, setLeaving] = (0, import_react22.useState)(false);
+  const log = (0, import_react22.useRef)(null);
+  const atEnd = (0, import_react22.useRef)(true);
+  (0, import_react22.useLayoutEffect)(() => {
+    if (entries2 !== null && atEnd.current && log.current) log.current.scrollTop = log.current.scrollHeight;
+  }, [entries2]);
   const close = () => {
     if (leaving) return;
     setLeaving(true);
@@ -9166,6 +9171,8 @@ function ExchangeDialog({ pair, roster, actions }) {
     let stop = false;
     let timer;
     let seen = null;
+    atEnd.current = true;
+    setEntries(null);
     const load = async () => {
       const result = await actions.exchange(pair[0], pair[1]);
       if (stop) return;
@@ -9203,7 +9210,10 @@ function ExchangeDialog({ pair, roster, actions }) {
       )),
       (0, import_react22.createElement)(
         "div",
-        { className: "bt-dialog-log", role: "log", "aria-label": t("Bot exchange transcript") },
+        { ref: log, className: "bt-dialog-log", role: "log", "aria-label": t("Bot exchange transcript"), onScroll: (event) => {
+          const node = event.currentTarget;
+          atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 2;
+        } },
         entries2 === null ? (0, import_react22.createElement)("div", { className: "bt-hint" }, t("Loading…")) : entries2.length === 0 ? (0, import_react22.createElement)("div", { className: "bt-hint" }, t("No messages yet")) : entries2.map((entry) => {
           const bot = roster.byId[entry.from] ?? { id: entry.from, name: t("You"), color: "gray" };
           const showDay = entry.time - lastDay > 30 * 60 * 1e3;
