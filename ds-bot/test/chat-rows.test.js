@@ -14,7 +14,11 @@ runInNewContext(bundle.outputFiles[0].text, {
   module, exports: module.exports, Intl, Date,
   require: (name) => {
     const platform = {
-      react: { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }) },
+      react: {
+        createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
+        useState: initial => [initial, () => {}], useRef: current => ({ current }),
+        useLayoutEffect() {}, useEffect() {}, useMemo: make => make(),
+      },
       'react-dom': {},
       '@deepseek-ai/dsh-client-ui-primitives': {},
     }
@@ -22,7 +26,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return platform[name]
   },
 })
-const { ChatRows } = module.exports
+const { ChatRows, ThinkingRow } = module.exports
 
 const roster = { byId: { b: { id: 'b', name: 'Writer' } }, roomsById: {} }
 const MINUTE = 60_000
@@ -48,4 +52,16 @@ test('with the clock, a time separator sits above the first entry and after each
     { kind: 'user', text: 'back', time: 75 * MINUTE },
   ]
   assert.deepEqual(shape(ChatRows({ items, sessionId: 'b', roster, actions: {}, clock: true })), ['PartLine', 'clock', 'EarlierUser', 'bot:one+two', 'clock', 'EarlierUser'])
+})
+
+test('the reasoning row is a closed details that opens to the text', () => {
+  const row = ThinkingRow({ text: 'one\ntwo' })
+  assert.equal(row.type, 'details')
+  assert.equal(row.props.className, 'bt-think')
+  assert.equal('open' in row.props, false)
+  assert.equal(typeof row.props.onToggle, 'function')
+  const [title, box] = row.children
+  assert.equal(title.type, 'summary')
+  assert.equal(title.children.join(''), 'Thought it through')
+  assert.equal(box.props.className, 'bt-think-text')
 })
