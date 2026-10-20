@@ -569,6 +569,24 @@ test('a member post calls only the members it names', async (t) => {
   assert.deepEqual(host.agentOf('gb').calls.filter(call => call.source?.role !== 'post'), [])
 })
 
+test('a post from a Bot with brackets in its name reaches the group and its member unchanged', async (t) => {
+  const host = await start(t)
+  assert.equal((await host.call('update-bot', { id: 'b', name: 'A[B]C' })).ok, true)
+  const body = '@Tester Check [notes](https://example.test)\n[Keep this line]'
+  await host.tool('post_to_group', { group: 'Ops', message: body }, 'b')
+  const post = host.takePost()
+  assert.equal(post.source.senderName, 'A[B]C')
+  assert.equal(text(post), `[Group post from A[B]C]\n${body}`)
+  const round = host.round('c1', post)
+  await settle(() => host.agentOf('gc').calls.length === 1)
+  assert.ok(text(host.begin('gc')).includes(`A[B]C: ${body}`))
+  host.finish('gc', 'Checked.')
+  await settle(() => round() !== undefined)
+  const [line] = logLines(host).filter(entry => entry.botId === 'b')
+  assert.equal(line.who, 'A[B]C')
+  assert.equal(line.text, body)
+})
+
 test('a member post that names only itself calls nobody', async (t) => {
   const host = await start(t)
   const rejected = await host.tool('post_to_group', { group: 'Ops', message: '@Writer 记一下', report_back: true }, 'b')
