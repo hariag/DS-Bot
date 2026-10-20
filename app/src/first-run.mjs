@@ -1,7 +1,7 @@
 // The first start: where the app keeps its data and the Bots' files, and whether it copies the
 // Bot team of the user's own DSH. The answers are kept in the app's own data.
 import { app, dialog } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { findTeam, newerSessions, teamInUse, userDshHome, within } from './import.mjs'
@@ -140,7 +140,9 @@ async function offerImport(t, dataDir, signal) {
 export function saveLocations({ dataDir, workspace }) {
   const file = locationsFile()
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify({ dataDir, workspace }, null, 2)}\n`)
+  // A write that fails half way leaves the places that were there.
+  writeFileSync(`${file}.tmp`, `${JSON.stringify({ dataDir, workspace }, null, 2)}\n`)
+  renameSync(`${file}.tmp`, file)
 }
 
 /**
