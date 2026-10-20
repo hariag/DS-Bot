@@ -276,7 +276,7 @@ export function TeamSidebar(props) {
     const result = open(id)
     if (wide && window.innerWidth < 1024 && !closing.current) {
       closing.current = true
-      expandSidebar()
+      expandSidebar?.()
       actions.toggleSidebar()
     }
     return result

@@ -38,7 +38,7 @@ runInNewContext(outputFiles[0].text, {
 })
 const { SHELL_CSS, SIDEBAR_CSS, TeamSidebar } = module.exports
 
-function navigationSidebar(wide) {
+function navigationSidebar(wide, { shell = true } = {}) {
   const calls = []
   const refs = []
   let collapsed = !wide
@@ -55,7 +55,7 @@ function navigationSidebar(wide) {
     if (['BotRow', 'RoomRow', 'AgentRow'].includes(node.type?.name)) rows.push(node)
     walk(node.props?.children)
   }
-  const render = (nextWide = wide) => {
+  const render = (nextWide = shell ? wide : !collapsed) => {
     wide = nextWide
     // The public owner action closes over the shell's committed collapsed state;
     // wide may still be true during the shell's 150ms content fade-out.
@@ -64,7 +64,8 @@ function navigationSidebar(wide) {
     refIndex = 0
     layoutEffects = []
     const tree = TeamSidebar({
-      wide, actions, expandSidebar: () => { if (committedCollapsed) actions.toggleSidebar() },
+      wide, actions,
+      ...(shell ? { expandSidebar: () => { if (committedCollapsed) actions.toggleSidebar() } } : {}),
       useRoster: pick => pick(roster), useUi: pick => pick({ unread: {} }), useRegistry: pick => pick({}),
       useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
     })
@@ -104,6 +105,24 @@ test('repeated sidebar navigation before another commit closes only once', () =>
   side.rows[1].props.actions.openSession('second')
   assert.equal(side.collapsed, true)
   assert.deepEqual(side.calls, [['openAgent', 'first'], ['toggleSidebar'], ['openSession', 'second']])
+})
+
+test('the standalone UI can navigate without a shell expansion action', () => {
+  viewport.innerWidth = 390
+  // app/ui passes its actual wide state directly, without the DSH owner action.
+  const side = navigationSidebar(true, { shell: false })
+  side.rows[1].props.actions.openSession('first')
+  side.rows[2].props.actions.openSession('second')
+  assert.equal(side.collapsed, true)
+  assert.deepEqual(side.calls, [['openSession', 'first'], ['toggleSidebar'], ['openSession', 'second']])
+  side.render()
+  side.calls.length = 0
+  side.rows[1].props.actions.openSession('from-rail')
+  assert.deepEqual(side.calls, [['openSession', 'from-rail']])
+  side.actions.toggleSidebar()
+  side.render()
+  side.rows[2].props.actions.openSession('after-expansion')
+  assert.equal(side.collapsed, true)
 })
 
 test('navigation during the shell fade-out keeps the already collapsed sidebar closed', () => {
