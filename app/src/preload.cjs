@@ -41,9 +41,10 @@ function frameless(height, mica) {
   captionColors(mica)
 }
 
-// The caption buttons stand on the conversation with Mica and on the sidebar-colored band
-// without it. Theme variables can resolve apart from what is painted, so the color comes from
-// the element itself: the first one up from it that is not transparent.
+// The caption buttons stand on the rightmost open column with Mica (the right sidebar or the
+// conversation) and on the sidebar-colored band without it. Theme variables can resolve apart
+// from what is painted, so the color comes from the element itself: the first one up from it
+// that is not transparent.
 function captionColors(mica) {
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = 1
@@ -56,8 +57,20 @@ function captionColors(mica) {
     const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data
     return alpha === 0 ? undefined : `rgb(${red}, ${green}, ${blue})`
   }
+  const column = () => {
+    if (!mica) return document.querySelector('div[class*="_sidebarCol"]')
+    const right = document.querySelector('div[class*="_rightbarCol"]')
+    return right !== null && right.getBoundingClientRect().width > 0 ? right : document.querySelector('div[class*="_centerCol"]')
+  }
+  let frame
   const surface = () => {
-    for (let element = document.querySelector(mica ? 'div[class*="_centerCol"]' : 'div[class*="_sidebarCol"]'); element !== null; element = element.parentElement) {
+    const start = column()
+    // Opening or closing the right sidebar changes the frame's columns.
+    if (start !== null && frame === undefined) {
+      frame = start.parentElement
+      observer.observe(frame, { attributes: true, attributeFilter: ['style'] })
+    }
+    for (let element = start; element !== null; element = element.parentElement) {
       const color = opaque(getComputedStyle(element).backgroundColor)
       if (color !== undefined) return [color, opaque(getComputedStyle(element).color)]
     }

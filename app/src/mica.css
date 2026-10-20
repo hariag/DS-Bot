@@ -25,3 +25,10 @@ div[class*="_sidebarCol"] > * > div[class*="_root"] {
 div[class*="_centerCol"] {
   padding-top: var(--dsh-windows-titlebar-height) !important;
 }
+/* The caption buttons stand on the right sidebar while it is open. Its panel is placed
+   absolutely, which padding does not move, but a border does. */
+div[class*="_rightbarCol"] {
+  box-sizing: border-box !important;
+  border-top: var(--dsh-windows-titlebar-height) solid var(--dsw-alias-bg-base) !important;
+  background: var(--dsw-alias-bg-base) !important;
+}
