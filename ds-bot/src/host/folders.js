@@ -52,11 +52,14 @@ export function install(rt) {
     return workDirOf({ botId: rt.selfOf?.(id), roomId: rt.groupOwners?.get(id)?.roomId }) ?? teamFolder()
   }
 
+  // The desktop app runs its own DSH and names the user's, which Bots must not write either.
+  const dataRoots = () => [rt.dshHome, rt.home, process.env.DS_BOT_USER_DSH_HOME?.trim()].filter(Boolean)
+
   // A Bot that could write where DSH or the team keeps its data could change its own
   // permissions or the team, so neither those folders nor one that holds them is allowed.
   async function guarded(path) {
     const team = await realTeam()
-    for (const root of [rt.dshHome, rt.home]) {
+    for (const root of dataRoots()) {
       const data = await real(root)
       if (within(data, path)) return true
       if (within(path, data) && !(team !== undefined && within(path, team))) return true
@@ -99,7 +102,7 @@ export function install(rt) {
     const fallback = resolve(defaultTeamFolder())
     const own = join(await realBeyond(dirname(fallback)), basename(fallback))
     const holdsData = async (path) => {
-      const roots = await Promise.all([rt.dshHome, rt.home].map(real))
+      const roots = await Promise.all(dataRoots().map(real))
       if (roots.some(data => within(data, path))) return true
       if (path === own && await realBeyond(fallback) === own) return false
       return roots.some(data => within(path, data))

@@ -619,6 +619,19 @@ test('the team workspace holds no DeepSeek Harness data, apart from the plugin\'
   assert.equal(state().workspaceId, 'w-new')
 })
 
+test('in the desktop app the user\'s own DSH data is no team workspace and no Bot\'s folder either', async (t) => {
+  const { root, state, call, stop } = await start()
+  t.after(stop)
+  const user = join(root, 'user-dsh')
+  mkdirSync(join(user, 'profiles'), { recursive: true })
+  process.env.DS_BOT_USER_DSH_HOME = user
+  t.after(() => { delete process.env.DS_BOT_USER_DSH_HOME })
+  assert.match((await call('team-workspace', { path: join(user, 'new') })).error?.message, /holds DeepSeek Harness data/)
+  assert.equal(existsSync(join(user, 'new')), false)
+  assert.equal((await call('update-bot', { id: 'b', workDir: join(user, 'profiles') })).error?.message, `${join(user, 'profiles')} holds DeepSeek Harness data, so Bots cannot work there`)
+  assert.equal(state().workspaceId, 'w1')
+})
+
 test('a team folder that was deleted is made again before DSH checks it', async (t) => {
   const { sets, service } = folderService()
   const { ctx, agentOf, team, stop } = await start({ services: { workingDirectory: service } })
