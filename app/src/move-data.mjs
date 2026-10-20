@@ -26,6 +26,14 @@ function real(path) {
   return join(realpathSync.native(at), ...rest)
 }
 
+/** The folder that an update or uninstall replaces: on macOS the whole .app bundle. */
+export function installFolder(exe, platform = process.platform) {
+  if (platform === 'darwin') {
+    for (let at = dirname(exe); dirname(at) !== at; at = dirname(at)) if (at.endsWith('.app')) return at
+  }
+  return dirname(exe)
+}
+
 /**
  * What keeps `to` from being the new data location, or undefined.
  * @param {{ from: string, to: string, workspace?: string, dshHome: string, program?: string }} places

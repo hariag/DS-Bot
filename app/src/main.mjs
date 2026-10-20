@@ -11,7 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
-import { chooseLocations, localeText, saveLocations, text } from './first-run.mjs'
+import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
 import { copySessions, findTeam, importTeam, teamInUse, userDshHome } from './import.mjs'
 import { copyData, moveProblem } from './move-data.mjs'
@@ -283,7 +283,7 @@ async function moveData(workspace) {
   if (canceled || filePaths[0] === undefined) return false
   const to = resolve(filePaths[0])
   const dshHome = userDshHome()
-  const problem = moveProblem({ from: places.dataDir, to, workspace, dshHome, program: app.isPackaged ? dirname(app.getPath('exe')) : undefined })
+  const problem = moveProblem({ from: places.dataDir, to, workspace, dshHome, program: app.isPackaged ? programFolder() : undefined })
   if (problem !== undefined) {
     await dialog.showMessageBox(owner, { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
     return false

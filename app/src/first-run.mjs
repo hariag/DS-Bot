@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { findTeam, newerSessions, teamInUse, userDshHome, within } from './import.mjs'
+import { installFolder } from './move-data.mjs'
 
 const TEXT = {
   en: {
@@ -92,9 +93,11 @@ async function pick(title, current, signal) {
   return canceled ? current : filePaths[0]
 }
 
+export const programFolder = () => installFolder(app.getPath('exe'))
+
 function placeProblem(t, dataDir, workspace) {
   const dsh = userDshHome()
-  const program = dirname(app.getPath('exe'))
+  const program = programFolder()
   if (within(dataDir, workspace)) return t.dataInWorkspace
   if (within(workspace, dataDir)) return t.workspaceInData
   for (const path of [dataDir, workspace]) {
