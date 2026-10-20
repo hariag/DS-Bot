@@ -807,6 +807,7 @@ export const CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
 .bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
 .bt-think summary::-webkit-details-marker{display:none}
+.bt-think-time{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Five lines of the 18px line height; the rest scrolls inside the box. */
 .bt-think-text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px;padding-left:10px;border-left:2px solid var(--bt-line-2);max-height:90px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;outline:none}
 .bt-think-text:focus-visible{border-left-color:var(--bt-ink-2)}

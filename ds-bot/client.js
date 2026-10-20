@@ -2932,6 +2932,7 @@ var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
 .bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
 .bt-think summary::-webkit-details-marker{display:none}
+.bt-think-time{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Five lines of the 18px line height; the rest scrolls inside the box. */
 .bt-think-text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px;padding-left:10px;border-left:2px solid var(--bt-line-2);max-height:90px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;outline:none}
 .bt-think-text:focus-visible{border-left-color:var(--bt-ink-2)}
@@ -4183,10 +4184,11 @@ var SECRET_CSS = `
 function turnReasoning(steps, current) {
   const members = steps.length ? steps : [current];
   if (members.find((step) => stepReasoning(step) !== "")?.step !== current.step) return "";
-  return members.filter((step) => !thinkingLive(step)).map(stepReasoning).filter(Boolean).join("\n\n");
+  return members.map(stepReasoning).filter(Boolean).join("\n\n");
 }
-var texts = (step) => step.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
+var thinkingStep = (steps) => steps.find(thinkingLive);
 var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
+var texts = (step) => step.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
 var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
 
 // src/client/fold.js
@@ -4397,7 +4399,26 @@ function MessageTools({ text, name, sessionId, react, actions }) {
     ), document.body) : null
   );
 }
-function ThinkingRow({ text }) {
+var thinkingTimes = /* @__PURE__ */ new Map();
+function useThinkingMs({ sessionId, turn, settledSteps, skip }) {
+  const key = `${sessionId}:${turn}:${settledSteps}`;
+  const [ms, setMs] = (0, import_react8.useState)(() => thinkingTimes.get(key));
+  (0, import_react8.useEffect)(() => {
+    if (skip || thinkingTimes.has(key)) {
+      setMs(thinkingTimes.get(key));
+      return void 0;
+    }
+    const control = new AbortController();
+    call("thinking", { sessionId, turn }, control.signal).then((value) => {
+      thinkingTimes.set(key, value?.ms);
+      setMs(value?.ms);
+    }).catch(() => {
+    });
+    return () => control.abort();
+  }, [key, skip]);
+  return ms;
+}
+function ThinkingRow({ text, live, at, ms }) {
   const box = (0, import_react8.useRef)(null);
   const atEnd = (0, import_react8.useRef)(true);
   const [open, setOpen] = (0, import_react8.useState)(false);
@@ -4419,11 +4440,17 @@ function ThinkingRow({ text }) {
     if (atEnd.current) el.scrollTop = el.scrollHeight;
     measure();
   }, [text, open]);
-  const title = t("Thought it through");
+  const title = live ? t("Thinking") : t("Thought it through");
   return (0, import_react8.createElement)(
     "details",
     { className: "bt-think", onToggle: toggle },
-    (0, import_react8.createElement)("summary", null, title),
+    (0, import_react8.createElement)(
+      "summary",
+      null,
+      title,
+      live && at !== void 0 ? (0, import_react8.createElement)(Elapsed, { at, className: "bt-think-time" }) : null,
+      !live && ms !== void 0 ? (0, import_react8.createElement)("span", { className: "bt-think-time" }, `· ${elapsedLabel(Math.max(1e3, ms))}`) : null
+    ),
     (0, import_react8.createElement)("div", { ref: box, className: "bt-think-text", role: "region", "aria-label": title, tabIndex: 0, "data-fade": fade, onScroll: measure }, text)
   );
 }
@@ -4446,9 +4473,13 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
   const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
-  useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
-  if (hidden) return null;
+  const members = steps.length ? steps : [data];
   const reasoning = groupPart === "response" ? "" : turnReasoning(steps, data);
+  const thinking = groupPart === "response" ? void 0 : thinkingStep(members);
+  const ms = useThinkingMs({ sessionId, turn: data.turn, settledSteps: members.filter((step) => step.status !== "running").length, skip: hidden || reasoning === "" });
+  useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
+  useLiveNote(actions, sessionId, `think:${node.key ?? data.seq}`, !hidden && thinking !== void 0 && reasoning !== "" ? { text: true } : null);
+  if (hidden) return null;
   const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
   if (texts2.length === 0 && !reasoning && relays.length === 0) return null;
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
@@ -4468,7 +4499,13 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
         whole: true
       });
     }),
-    reasoning ? (0, import_react8.createElement)(ThinkingRow, { text: reasoning }) : null,
+    reasoning ? (0, import_react8.createElement)(ThinkingRow, {
+      text: reasoning,
+      live: thinking !== void 0,
+      // The live clock counts the settled steps too: backing `at` by the settled
+      // time makes one Elapsed show settled + running.
+      ...thinking !== void 0 ? { at: typeof thinking.time === "number" ? thinking.time - (ms ?? 0) : void 0 } : { ms }
+    }) : null,
     texts2.length ? (0, import_react8.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi, mentions, fold: FOLD_HUGE }) : null
   );
 }

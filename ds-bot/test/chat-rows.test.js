@@ -65,3 +65,21 @@ test('the reasoning row is a closed details that opens to the text', () => {
   assert.equal(title.children.join(''), 'Thought it through')
   assert.equal(box.props.className, 'bt-think-text')
 })
+
+test('a live reasoning row titles "Thinking" with a ticking clock', () => {
+  const row = ThinkingRow({ text: 'one\ntwo', live: true, at: Date.now() - 4000 })
+  const title = row.children[0]
+  assert.equal(title.children[0], 'Thinking')
+  assert.equal(title.children[1]?.type?.name, 'Elapsed')
+  assert.equal(title.children[1]?.props.at <= Date.now() - 4000, true)
+})
+
+test('a settled reasoning row shows the turn’s thinking time when known', () => {
+  const timed = ThinkingRow({ text: 'one\ntwo', ms: 12_000 })
+  const [title] = timed.children
+  assert.equal(title.children[0], 'Thought it through')
+  const time = title.children.find(child => child?.type === 'span')
+  assert.equal(time?.children.join(''), '· 12s')
+  const untimed = ThinkingRow({ text: 'one\ntwo' })
+  assert.equal(untimed.children[0].children.join(''), 'Thought it through')
+})
