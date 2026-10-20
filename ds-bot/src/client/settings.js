@@ -28,8 +28,8 @@ const capitalize = word => word[0].toUpperCase() + word.slice(1)
 const SETTINGS_PAGES = [['general', 'General'], ['models', 'Models'], ['bots', 'Bots'], ['groups', 'Group chats'], ['connectors', 'Connectors'], ['capabilities', 'Capabilities'], ['schedules', 'Scheduled tasks'], ['usage', 'Usage'], ['secrets', 'Secrets'], ['feedback', 'Feedback'], ['about', 'About DS Bot']]
 const PAGE_ICONS = { ...SETTINGS_ICONS, models: SlidersIcon, connectors: ConnectorIcon, capabilities: PlugIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon }
 
-function SetSection({ title, children }) {
-  return h('section', { className: 'bt-set-section' }, h('h3', null, title), h('div', { className: 'bt-set-card' }, children))
+function SetSection({ title, className = '', children }) {
+  return h('section', { className: `bt-set-section ${className}`.trim() }, h('h3', null, title), h('div', { className: 'bt-set-card' }, children))
 }
 function SetRow({ label, hint, children }) {
   return h('div', { className: 'bt-set-row' },
@@ -84,7 +84,7 @@ function LocationsSection({ actions, run }) {
     setTeam(answer.team)
     app?.teamWorkspaceChanged(answer.team)
   }))
-  return h(SetSection, { title: t('Locations') },
+  return h(SetSection, { title: t('Locations'), className: 'bt-set-places' },
     h(SetRow, { label: t('Team workspace'), hint: t('Where Bots without a folder of their own work.') },
       team === null ? null : h(FolderMenu, { value: team, team: true, actions, run, onPick: pickTeam })),
     data === null ? null : h(SetRow, { label: t('Data location'), hint: data.path },
