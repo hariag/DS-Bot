@@ -244,8 +244,10 @@ function useListGlide(listRef, layout, key) {
 }
 
 export function TeamSidebar(props) {
-  const { wide, useRoster, useUi, useSessions, actions } = props
+  const { wide, expandSidebar, useRoster, useUi, useSessions, actions } = props
   const listRef = useRef(null)
+  const closing = useRef(false)
+  useLayoutEffect(() => { closing.current = false })
   const roster = useRoster(value => value)
   const markedUnread = useUi(value => value.unread)
   props.useRegistry(value => value)
@@ -267,11 +269,16 @@ export function TeamSidebar(props) {
   const main = roster.byId[roster.mainBotId]
   useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))
   useLandOnMainBot(roster, useSessions, actions)
-  // The shell gives this slot its live fold state. Only a navigation from its
-  // expanded, narrow sidebar dismisses it; other ways to open a chat never toggle it.
+  // The shell keeps wide content during its collapse fade. Normalize through its
+  // public expansion action before toggling; coalesce synchronous activations
+  // until React commits the result.
   const navigate = (open, id) => {
     const result = open(id)
-    if (wide && window.innerWidth < 1024) actions.toggleSidebar()
+    if (wide && window.innerWidth < 1024 && !closing.current) {
+      closing.current = true
+      expandSidebar()
+      actions.toggleSidebar()
+    }
     return result
   }
   const rowActions = {

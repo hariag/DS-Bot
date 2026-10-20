@@ -5548,8 +5548,12 @@ function useListGlide(listRef, layout, key) {
   }, [layout, key]);
 }
 function TeamSidebar(props) {
-  const { wide, useRoster, useUi, useSessions, actions } = props;
+  const { wide, expandSidebar, useRoster, useUi, useSessions, actions } = props;
   const listRef = (0, import_react9.useRef)(null);
+  const closing = (0, import_react9.useRef)(false);
+  (0, import_react9.useLayoutEffect)(() => {
+    closing.current = false;
+  });
   const roster = useRoster((value) => value);
   const markedUnread = useUi((value) => value.unread);
   props.useRegistry((value) => value);
@@ -5573,7 +5577,11 @@ function TeamSidebar(props) {
   useLandOnMainBot(roster, useSessions, actions);
   const navigate = (open, id) => {
     const result = open(id);
-    if (wide && window.innerWidth < 1024) actions.toggleSidebar();
+    if (wide && window.innerWidth < 1024 && !closing.current) {
+      closing.current = true;
+      expandSidebar();
+      actions.toggleSidebar();
+    }
     return result;
   };
   const rowActions = {
