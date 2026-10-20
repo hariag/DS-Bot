@@ -108,11 +108,12 @@ export async function copyData(from, to, signal) {
       await relink(join(origin, path), join(stage, path), roots, resolve(to))
     }
     signal?.throwIfAborted()
-    await rm(join(stage, MARK))
     if (existsSync(to)) await rmdir(to)
     await rename(stage, to)
   } catch (error) {
     await rm(stage, { recursive: true, force: true, maxRetries: 5 })
     throw error
   }
+  // Only now: a staging folder cut short before its rename keeps the mark that lets it go.
+  await rm(join(to, MARK), { force: true })
 }
