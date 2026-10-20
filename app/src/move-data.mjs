@@ -80,21 +80,23 @@ export async function copyData(from, to, signal) {
   try {
     await writeFile(join(stage, MARK), '')
     const links = []
-    await cp(from, stage, {
+    // The data folder can itself be a link; its contents are what moves.
+    const origin = real(from)
+    await cp(origin, stage, {
       recursive: true,
       filter: async (source) => {
         signal?.throwIfAborted()
-        const path = relative(from, source)
+        const path = relative(origin, source)
         if (LEFT_BEHIND.some(pattern => pattern.test(path))) return false
         if (path === '' || !(await lstat(source)).isSymbolicLink()) return true
         links.push(path)
         return false
       },
     })
-    const roots = [...new Set([resolve(from), real(from)])]
+    const roots = [...new Set([resolve(from), origin])]
     for (const path of links) {
       signal?.throwIfAborted()
-      await relink(join(from, path), join(stage, path), roots, resolve(to))
+      await relink(join(origin, path), join(stage, path), roots, resolve(to))
     }
     signal?.throwIfAborted()
     await rm(join(stage, MARK))

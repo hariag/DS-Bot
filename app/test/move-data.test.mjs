@@ -109,6 +109,13 @@ test('a folder that a link leads into counts as that folder', (t) => {
   assert.equal(moveProblem({ from, to: join(root, 'data-link', 'inside'), dshHome: join(root, 'dsh') }), 'nested')
 })
 
+test('a data folder that is itself a link moves with its contents', async (t) => {
+  const { root, from } = setup(t)
+  symlinkSync(from, join(root, 'data-link'), folderLink)
+  await copyData(join(root, 'data-link'), join(root, 'new'))
+  assert.deepEqual(files(join(root, 'new')), ['.credentials.yaml', 'bot/state.json', 'sessions/g/s1/log.jsonl'])
+})
+
 test('links in the data lead inside the copy, not back into the old folder', async (t) => {
   const { root, from } = setup(t)
   symlinkSync(join(from, 'sessions'), join(from, 'bot', 'absolute'), folderLink)
