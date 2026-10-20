@@ -4,7 +4,7 @@
 // part (parts.js).
 import { mkdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { unquote } from './text.js'
 
 const PICK_TIMEOUT_MS = 10 * 60_000
@@ -26,6 +26,16 @@ export function install(rt) {
   const workDirOf = ({ botId, roomId } = {}) => rt.roomOf(roomId)?.workDir ?? rt.botOf(botId)?.workDir
   const isFolder = path => stat(path).then(info => info.isDirectory(), () => false)
   const real = path => realpath(path).catch(() => resolve(path))
+  // The real path of the deepest part that exists, with the rest after it.
+  const realBeyond = async (path) => {
+    const rest = []
+    for (let at = path; ; at = dirname(at)) {
+      const found = await realpath(at).catch(() => undefined)
+      if (found !== undefined) return join(found, ...rest)
+      if (dirname(at) === at) return path
+      rest.unshift(basename(at))
+    }
+  }
   // The registry keeps the team workspace as it was given; folders compare as real paths.
   const realTeam = async () => {
     const team = teamFolder()
@@ -94,7 +104,8 @@ export function install(rt) {
       }
       return false
     }
-    if (await holdsData(resolve(expanded))) throw new Error(`${text} holds DeepSeek Harness data, so it cannot be the team workspace`)
+    // A folder to be made counts where it would be made: a link above it can lead into the data.
+    if (await holdsData(await realBeyond(resolve(expanded)))) throw new Error(`${text} holds DeepSeek Harness data, so it cannot be the team workspace`)
     await mkdir(expanded, { recursive: true })
     const path = await realpath(expanded)
     if (!(await isFolder(path))) throw new Error(`${text} is a file, not a folder`)

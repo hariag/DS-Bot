@@ -599,6 +599,10 @@ test('the team workspace holds no DeepSeek Harness data, apart from the plugin\'
   assert.match(await error(root), /holds DeepSeek Harness data/)
   assert.match(await error('relative'), /full path/)
   assert.equal(existsSync(join(dsh, 'inside')), false)
+  // A folder to be made under a link into the data is refused before anything is made.
+  symlinkSync(dsh, join(root, 'dsh-link'), process.platform === 'win32' ? 'junction' : 'dir')
+  assert.match(await error(join(root, 'dsh-link', 'new')), /holds DeepSeek Harness data/)
+  assert.equal(existsSync(join(dsh, 'new')), false)
   assert.equal(state().workspaceId, 'w1')
   await call('team-workspace', { path: join(root, 'moved') })
   assert.deepEqual((await call('team-workspace', { path: join(home, 'workspace') })).value, { team })
