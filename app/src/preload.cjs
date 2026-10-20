@@ -94,5 +94,7 @@ function captionColors(mica) {
   observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme', 'style'] })
   observer.observe(document.head, { childList: true, subtree: true, characterData: true })
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-ds-theme-source', 'style'] })
+  // A stylesheet link is added before it loads; its rules apply without another mutation.
+  document.head.addEventListener('load', send, true)
   send()
 }
