@@ -4,14 +4,14 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-20
+## [0.2.0] - 2026-10-21
 
 ### Added
 
-- **Desktop app for Windows and macOS**: DeepSeek Bot runs on its own, with its own DeepSeek Harness 0.2.1-rc.2 and its own data, so it does not depend on the DSH you have. Windows gets an installer for your user only (x64); macOS gets a zip for Apple chips and one for Intel. On the first open on macOS, allow it in System Settings → Privacy & Security → Open Anyway. See [Install](README.md#install). ([#303](https://github.com/Fei2411/DeepSeek-Bot/pull/303), [#323](https://github.com/Fei2411/DeepSeek-Bot/pull/323), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334), [#336](https://github.com/Fei2411/DeepSeek-Bot/pull/336), [#351](https://github.com/Fei2411/DeepSeek-Bot/issues/351))
-- At its first start the desktop app asks where to keep its data and the Bots' files, and offers to copy your Bot team from DeepSeek Harness; your DSH data is only read. Before the copy it reads each chat once and asks you to update DeepSeek Bot when a newer DeepSeek Harness wrote one. Quitting before the first start is finished saves nothing, and the next start asks again. ([#324](https://github.com/Fei2411/DeepSeek-Bot/pull/324), [#340](https://github.com/Fei2411/DeepSeek-Bot/pull/340), [#353](https://github.com/Fei2411/DeepSeek-Bot/issues/353))
+- **Desktop app for Windows and macOS**: DeepSeek Bot runs on its own, with its own DeepSeek Harness 0.2.1-rc.2 and its own data, so it does not depend on the DSH you have. You can sign in with your DeepSeek account in it. Windows gets an installer for your user only (x64); macOS gets a zip for Apple chips and one for Intel. On the first open on macOS, allow it in System Settings → Privacy & Security → Open Anyway. See [Install](README.md#install). ([#303](https://github.com/Fei2411/DeepSeek-Bot/pull/303), [#323](https://github.com/Fei2411/DeepSeek-Bot/pull/323), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334), [#336](https://github.com/Fei2411/DeepSeek-Bot/pull/336), [#351](https://github.com/Fei2411/DeepSeek-Bot/issues/351), [#377](https://github.com/Fei2411/DeepSeek-Bot/pull/377))
+- At its first start the desktop app asks where to keep its data and the Bots' files, and offers to copy your Bot team from DeepSeek Harness; your DSH data is only read. Before the copy it reads each chat once and asks you to update DeepSeek Bot when a newer DeepSeek Harness wrote one. Quitting before the first start is finished saves nothing, and the next start asks again. Links that npm or pnpm left in the old team workspace are copied too. ([#324](https://github.com/Fei2411/DeepSeek-Bot/pull/324), [#340](https://github.com/Fei2411/DeepSeek-Bot/pull/340), [#353](https://github.com/Fei2411/DeepSeek-Bot/issues/353), [#375](https://github.com/Fei2411/DeepSeek-Bot/pull/375))
 - The Windows desktop app updates itself: it downloads a new release in the background and asks whether to restart now, or installs it at the next quit. The macOS app tells you when a new version is ready to download. ([#329](https://github.com/Fei2411/DeepSeek-Bot/pull/329), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334))
-- On Windows the desktop app's window has no system frame, and on Windows 11 its sidebar shows the Mica material. On macOS, Cmd+W closes the window (File → Close Window). ([#362](https://github.com/Fei2411/DeepSeek-Bot/issues/362), [#352](https://github.com/Fei2411/DeepSeek-Bot/issues/352))
+- On Windows the desktop app's window has no system frame: the title bar dims with the page under a dialog, and the Bot details panel reaches the top under the window buttons. On Windows 11 its sidebar shows the Mica material. On macOS, Cmd+W closes the window (File → Close Window). ([#362](https://github.com/Fei2411/DeepSeek-Bot/issues/362), [#352](https://github.com/Fei2411/DeepSeek-Bot/issues/352), [#377](https://github.com/Fei2411/DeepSeek-Bot/pull/377), [#392](https://github.com/Fei2411/DeepSeek-Bot/pull/392), [#396](https://github.com/Fei2411/DeepSeek-Bot/pull/396))
 - **Locations in Settings → General**: change the team workspace, where Bots and groups without a folder of their own work; they go on in a fresh part in the new folder. In the desktop app, the data location moves there too. The old folders stay as they were. ([#364](https://github.com/Fei2411/DeepSeek-Bot/issues/364))
 - A Main Bot can set a Bot's thinking level, and is told when the model has no such level. ([#99](https://github.com/Fei2411/DeepSeek-Bot/issues/99))
 - Every Bot in a group chat can post into it from its own chat; its post calls only the members it @-mentions. ([#318](https://github.com/Fei2411/DeepSeek-Bot/pull/318))
@@ -23,6 +23,9 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - The work clock counts from the start of the Bot's turn and reads `8s`, then `1m 8s`. ([#286](https://github.com/Fei2411/DeepSeek-Bot/pull/286), [#302](https://github.com/Fei2411/DeepSeek-Bot/pull/302))
 - The install commands use DeepSeek Harness 0.2.1-rc.2. ([#293](https://github.com/Fei2411/DeepSeek-Bot/pull/293))
 - In the Chinese interface the team workspace is called 总工作区. ([#364](https://github.com/Fei2411/DeepSeek-Bot/issues/364))
+- The reasoning above a Bot's answer starts folded; open it to read its last lines, which scroll for the rest. While the Bot thinks it shows **Thinking** with a running clock, afterwards how long the Bot thought. It stays right above the answer, under the turn's tool lines. ([#381](https://github.com/Fei2411/DeepSeek-Bot/pull/381), [#383](https://github.com/Fei2411/DeepSeek-Bot/pull/383), [#392](https://github.com/Fei2411/DeepSeek-Bot/pull/392))
+- A Bot exchange opens at the newest messages and follows new replies while you stay at the end. ([#370](https://github.com/Fei2411/DeepSeek-Bot/pull/370))
+- In a window narrower than 1024 px, choosing a conversation in the open sidebar closes the sidebar. ([#374](https://github.com/Fei2411/DeepSeek-Bot/pull/374))
 
 ### Fixed
 
@@ -36,11 +39,18 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - Usage totals no longer miss calls when a Session list serves a cached projection watermark. ([#295](https://github.com/Fei2411/DeepSeek-Bot/pull/295))
 - Secret references in the arguments of a stdio MCP server are replaced with their values. ([#305](https://github.com/Fei2411/DeepSeek-Bot/pull/305))
 - Ids and names such as `__proto__` are treated as unknown everywhere instead of being read as an existing Bot or group. ([#290](https://github.com/Fei2411/DeepSeek-Bot/issues/290))
+- A Bot opened in another conversation view has a **Back to chat** button again, and your draft stays. ([#371](https://github.com/Fei2411/DeepSeek-Bot/pull/371))
+- Pending questions and key requests stay usable while the chat history loads, and keep what you were typing. ([#372](https://github.com/Fei2411/DeepSeek-Bot/pull/372))
+- Bot and group names with brackets no longer leave parts of the name in group messages, replayed requests or chat previews. ([#369](https://github.com/Fei2411/DeepSeek-Bot/pull/369))
+- An ordinary DSH session that tries the Bot question tool is told to use a question tool it has, or to ask in plain text. ([#368](https://github.com/Fei2411/DeepSeek-Bot/pull/368))
+- The **Connect plugins** button no longer shows a warning badge all the time. ([#381](https://github.com/Fei2411/DeepSeek-Bot/pull/381))
 
 ### Known limitations
 
 - The desktop app is not signed: at the first start Windows SmartScreen warns, and macOS asks you to allow it in Privacy & Security, which needs an administrator password.
 - On macOS the desktop app's window keeps the system title bar.
+- In Bot mode there is no **Sign out** for a DeepSeek account; sign out in classic Agent mode. ([#398](https://github.com/Fei2411/DeepSeek-Bot/issues/398))
+- When the desktop app's first-run copy puts the team in a new team workspace, each Bot that works in the team workspace goes on in a fresh part there first, so its first reply takes longer. ([#384](https://github.com/Fei2411/DeepSeek-Bot/issues/384))
 
 ## [0.1.7] - 2026-10-16
 
