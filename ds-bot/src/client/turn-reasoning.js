@@ -1,8 +1,9 @@
-// Settled and live reasoning of every loaded step in a Turn, shown once on the first
-// step that has reasoning: only steps with reasoning get a reasoning part to render it.
+// Settled and live reasoning of every loaded step in a Turn, shown once on the last
+// step that has reasoning: only steps with reasoning get a reasoning part to render
+// it. Sitting under the Turn's tool lines keeps the row directly above the reply.
 export function turnReasoning(steps, current) {
   const members = steps.length ? steps : [current]
-  if (members.find(step => stepReasoning(step) !== '')?.step !== current.step) return ''
+  if (members.findLast(step => stepReasoning(step) !== '')?.step !== current.step) return ''
   return members.map(stepReasoning).filter(Boolean).join('\n\n')
 }
 
