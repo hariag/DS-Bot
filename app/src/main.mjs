@@ -283,13 +283,19 @@ async function moveData(workspace) {
   if (canceled || filePaths[0] === undefined) return false
   const to = resolve(filePaths[0])
   const dshHome = userDshHome()
-  const problem = moveProblem({ from: places.dataDir, to, workspace, dshHome, program: app.isPackaged ? programFolder() : undefined })
-  if (problem !== undefined) {
-    await dialog.showMessageBox(owner, { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
+  // The team workspace can move while a dialog is open; the window tells the latest one.
+  const refused = async () => {
+    for (const current of new Set([workspace, places.workspace])) {
+      const problem = moveProblem({ from: places.dataDir, to, workspace: current, dshHome, program: app.isPackaged ? programFolder() : undefined })
+      if (problem === undefined) continue
+      await dialog.showMessageBox(owner, { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
+      return true
+    }
     return false
   }
+  if (await refused()) return false
   const { response } = await dialog.showMessageBox(owner, { type: 'question', title: 'DeepSeek Bot', noLink: true, message: t.moveConfirm(to), detail: t.moveDetail(places.dataDir), buttons: [t.move, t.cancel], defaultId: 0, cancelId: 1 })
-  if (response !== 0 || stopping) return false
+  if (response !== 0 || stopping || await refused()) return false
   const signal = copyAbort.signal
   copying = (async () => {
     await stopHost()
@@ -304,7 +310,7 @@ async function moveData(workspace) {
     try {
       await copyData(places.dataDir, to, signal)
       try {
-        saveLocations({ dataDir: to, workspace })
+        saveLocations({ dataDir: to, workspace: places.workspace ?? workspace })
       } catch (error) {
         // Unused, the copy would only keep the folder from being chosen again.
         await rm(to, { recursive: true, force: true, maxRetries: 5 }).catch((failure) => { console.error(failure) })

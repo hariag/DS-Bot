@@ -76,19 +76,24 @@ function LocationsSection({ actions, run }) {
   const app = globalThis.dsBotApp
   const [team, setTeam] = useState(null)
   const [data, setData] = useState(null)
+  // One change at a time: the data move checks the new folder against the team workspace.
+  const [moving, setMoving] = useState(false)
   useEffect(() => {
     void Promise.resolve(actions.folders()).then(info => setTeam(info?.team ?? null)).catch(() => {})
     if (app !== undefined) void Promise.resolve(app.dataLocation()).then(setData).catch(() => {})
   }, [])
-  const pickTeam = path => run(Promise.resolve(actions.setTeamWorkspace(path)).then((answer) => {
-    setTeam(answer.team)
-    app?.teamWorkspaceChanged(answer.team)
-  }))
+  const pickTeam = (path) => {
+    setMoving(true)
+    return run(Promise.resolve(actions.setTeamWorkspace(path)).then((answer) => {
+      setTeam(answer.team)
+      app?.teamWorkspaceChanged(answer.team)
+    }).finally(() => { setMoving(false) }))
+  }
   return h(SetSection, { title: t('Locations'), className: 'bt-set-places' },
     h(SetRow, { label: t('Team workspace'), hint: t('Where Bots without a folder of their own work.') },
       team === null ? null : h(FolderMenu, { value: team, team: true, actions, run, onPick: pickTeam })),
     data === null ? null : h(SetRow, { label: t('Data location'), hint: data.path },
-      data.fixed ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => run(app.moveData(team ?? undefined)) }, t('Change…'))))
+      data.fixed ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: moving, onClick: () => run(app.moveData(team ?? undefined)) }, t('Change…'))))
 }
 
 // The first Main Bot is the sidebar tile. Picking another Bot there hands it the role

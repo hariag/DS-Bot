@@ -11582,16 +11582,22 @@ function LocationsSection({ actions, run }) {
   const app = globalThis.dsBotApp;
   const [team, setTeam] = (0, import_react31.useState)(null);
   const [data, setData] = (0, import_react31.useState)(null);
+  const [moving, setMoving] = (0, import_react31.useState)(false);
   (0, import_react31.useEffect)(() => {
     void Promise.resolve(actions.folders()).then((info) => setTeam(info?.team ?? null)).catch(() => {
     });
     if (app !== void 0) void Promise.resolve(app.dataLocation()).then(setData).catch(() => {
     });
   }, []);
-  const pickTeam = (path) => run(Promise.resolve(actions.setTeamWorkspace(path)).then((answer) => {
-    setTeam(answer.team);
-    app?.teamWorkspaceChanged(answer.team);
-  }));
+  const pickTeam = (path) => {
+    setMoving(true);
+    return run(Promise.resolve(actions.setTeamWorkspace(path)).then((answer) => {
+      setTeam(answer.team);
+      app?.teamWorkspaceChanged(answer.team);
+    }).finally(() => {
+      setMoving(false);
+    }));
+  };
   return (0, import_react31.createElement)(
     SetSection,
     { title: t("Locations"), className: "bt-set-places" },
@@ -11603,7 +11609,7 @@ function LocationsSection({ actions, run }) {
     data === null ? null : (0, import_react31.createElement)(
       SetRow,
       { label: t("Data location"), hint: data.path },
-      data.fixed ? null : (0, import_react31.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run(app.moveData(team ?? void 0)) }, t("Change…"))
+      data.fixed ? null : (0, import_react31.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: moving, onClick: () => run(app.moveData(team ?? void 0)) }, t("Change…"))
     )
   );
 }
