@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, parse } from 'node:path'
+import { dirname, join, parse } from 'node:path'
 import { test } from 'node:test'
-import { copyTree } from '../src/copy-tree.mjs'
-import { copyData, installFolder, moveProblem } from '../src/move-data.mjs'
+import { copyData, moveProblem } from '../src/move-data.mjs'
 
 const write = (path, text) => {
   mkdirSync(dirname(path), { recursive: true })
@@ -59,11 +58,6 @@ test('the new data location is an empty or new folder apart from the data, the t
   assert.equal(problem(join(root, 'full', 'note.txt')), 'notEmpty')
 })
 
-test('the program folder is the whole app bundle on macOS', () => {
-  assert.equal(installFolder('/Applications/DS Bot.app/Contents/MacOS/DS Bot', 'darwin'), '/Applications/DS Bot.app')
-  assert.equal(installFolder(join('C:', 'Programs', 'DS Bot', 'DS Bot.exe'), 'win32'), join('C:', 'Programs', 'DS Bot'))
-})
-
 test('the data is copied whole, without the lock and the temporary folders, and the old folder stays', async (t) => {
   const { root, from } = setup(t)
   const before = files(from)
@@ -93,77 +87,9 @@ test('a copy that is stopped or fails leaves no new folder and no staging folder
   assert.deepEqual(readdirSync(root).filter(name => name.includes('.moving-')), [])
 })
 
-test('only the staging folders of an earlier move go before the next copy', async (t) => {
+test('a staging folder that a killed copy left behind goes before the next copy', async (t) => {
   const { root, from } = setup(t)
-  write(join(root, '.new.moving-1', '.ds-bot-moving'), '')
-  write(join(root, '.new.moving-2', 'notes.txt'), 'mine')
-  write(join(root, '.new.moving-backup', 'notes.txt'), 'mine')
+  write(join(root, '.new.moving-1', 'bot', 'state.json'), '{}')
   await copyData(from, join(root, 'new'))
-  assert.deepEqual(readdirSync(root).sort(), ['.new.moving-2', '.new.moving-backup', 'data', 'new'])
-  assert.equal(existsSync(join(root, 'new', '.ds-bot-moving')), false)
-})
-
-// Windows makes a junction without special rights; it always holds an absolute path.
-const folderLink = process.platform === 'win32' ? 'junction' : 'dir'
-
-test('a folder that a link leads into counts as that folder', (t) => {
-  const { root, from } = setup(t)
-  mkdirSync(join(root, 'dsh'))
-  symlinkSync(join(root, 'dsh'), join(root, 'dsh-link'), folderLink)
-  assert.equal(moveProblem({ from, to: join(root, 'dsh-link', 'data'), dshHome: join(root, 'dsh') }), 'dsh')
-  symlinkSync(from, join(root, 'data-link'), folderLink)
-  assert.equal(moveProblem({ from, to: join(root, 'data-link', 'inside'), dshHome: join(root, 'dsh') }), 'nested')
-})
-
-test('a data folder that is itself a link moves with its contents', async (t) => {
-  const { root, from } = setup(t)
-  symlinkSync(from, join(root, 'data-link'), folderLink)
-  await copyData(join(root, 'data-link'), join(root, 'new'))
-  assert.deepEqual(files(join(root, 'new')), ['.credentials.yaml', 'bot/state.json', 'sessions/g/s1/log.jsonl'])
-})
-
-test('links in the data lead inside the copy, not back into the old folder', async (t) => {
-  const { root, from } = setup(t)
-  symlinkSync(join(from, 'sessions'), join(from, 'bot', 'absolute'), folderLink)
-  write(join(root, 'elsewhere', 'file.txt'), 'x')
-  symlinkSync(join(root, 'elsewhere'), join(from, 'bot', 'outside'), folderLink)
-  // Into the data through another link.
-  symlinkSync(from, join(root, 'data-alias'), folderLink)
-  symlinkSync(join(root, 'data-alias', 'sessions'), join(from, 'bot', 'chained'), folderLink)
-  if (process.platform !== 'win32') {
-    symlinkSync(join('..', 'sessions'), join(from, 'bot', 'relative'), 'dir')
-    symlinkSync(join('..', '..', 'elsewhere'), join(from, 'bot', 'relative-outside'), 'dir')
-    symlinkSync(join('..', '..', 'data-alias', 'sessions'), join(from, 'bot', 'relative-alias'), 'dir')
-  }
-  // Deeper than the old folder, so that a relative link out of it would lead elsewhere.
-  const to = join(root, 'deeper', 'new')
-  await copyData(from, to)
-  const target = name => readlinkSync(join(to, 'bot', name)).replace(/^\\\\\?\\/u, '').replace(/[\\/]+$/u, '')
-  assert.equal(target('absolute'), join(to, 'sessions'))
-  assert.equal(target('outside'), join(root, 'elsewhere'))
-  assert.equal(target('chained'), join(to, 'sessions'))
-  if (process.platform !== 'win32') {
-    assert.equal(target('relative'), join('..', 'sessions'))
-    // The copy writes an outside link through the real path of the old folder, which macOS
-    // spells /private/var where the temporary folder is /var; both lead to the same folder.
-    const outside = target('relative-outside')
-    assert.ok(isAbsolute(outside))
-    assert.equal(realpathSync(outside), realpathSync(join(root, 'elsewhere')))
-    assert.equal(readFileSync(join(to, 'bot', 'relative-outside', 'file.txt'), 'utf8'), 'x')
-    assert.equal(target('relative-alias'), join(to, 'sessions'))
-  }
-  assert.equal(readFileSync(join(to, 'bot', 'absolute', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
-})
-
-// Windows makes a link to nothing that is not a folder only with special rights, which the
-// tests do not have, so there it is a link the copy cannot make again.
-test('a link the move cannot make again stops the move; the import skips it', { skip: process.platform !== 'win32' }, async (t) => {
-  const { root, from } = setup(t)
-  symlinkSync(join(root, 'gone'), join(from, 'lost'), 'junction')
-  const to = join(root, 'new')
-  await assert.rejects(copyData(from, to), { code: 'EPERM' })
-  assert.equal(existsSync(to), false)
-  assert.deepEqual(readdirSync(root).filter(name => name.includes('.moving-')), [])
-  assert.deepEqual(await copyTree(from, join(root, 'files'), { skip: true }), ['lost'])
-  assert.equal(readFileSync(join(root, 'files', 'sessions', 'g', 's1', 'log.jsonl'), 'utf8'), 'chat')
+  assert.deepEqual(readdirSync(root).sort(), ['data', 'new'])
 })

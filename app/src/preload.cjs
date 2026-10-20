@@ -10,6 +10,12 @@ if (location.protocol === 'dsh-app:' && location.hostname === 'app') {
     ready: () => ipcRenderer.invoke('ds-bot:boot'),
     failed: (message) => ipcRenderer.invoke('ds-bot:boot-failed', String(message)),
   })
+  // DS Bot's settings show and move the app's data location through this.
+  contextBridge.exposeInMainWorld('dsBotApp', {
+    dataLocation: () => ipcRenderer.invoke('ds-bot:data-location'),
+    moveData: (workspace) => ipcRenderer.invoke('ds-bot:move-data', typeof workspace === 'string' ? workspace : undefined),
+    teamWorkspaceChanged: (path) => { ipcRenderer.send('ds-bot:team-workspace', String(path)) },
+  })
   const caption = process.argv.find(value => value.startsWith('--ds-bot-caption='))
   if (caption !== undefined) {
     ipcRenderer.on('ds-bot:fullscreen', (_event, fullscreen) => {

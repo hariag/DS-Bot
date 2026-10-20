@@ -6,14 +6,15 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { release } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
 import { chooseLocations, localeText, saveLocations, text } from './first-run.mjs'
 import { HostProcess } from './host-process.mjs'
-import { copySessions, findTeam, importTeam } from './import.mjs'
+import { copySessions, findTeam, importTeam, userDshHome } from './import.mjs'
+import { copyData, moveProblem } from './move-data.mjs'
 import { CHECK_PROFILE, PROFILE } from './profile.mjs'
 import { UPDATE_TEXT, watchReleases, watchUpdates } from './updates.mjs'
 import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
@@ -24,7 +25,9 @@ const SCHEME = 'dsh-app'
 const IPC = {
   boot: 'ds-bot:boot', bootFailed: 'ds-bot:boot-failed',
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
+  dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
 }
+const MOVE_PROBLEMS = { drive: 'moveDrive', nested: 'moveNested', workspace: 'moveWorkspace', program: 'inProgram', notEmpty: 'moveNotEmpty' }
 const STATIC_PATHS = new Set(['/', '/index.html', '/manifest.webmanifest'])
 const UPDATE_CHECK_WAIT_MS = 15_000
 const UPDATE_DOWNLOAD_WAIT_MS = 15 * 60_000
@@ -50,8 +53,10 @@ let updates
 let stopping = false
 let stopped = false
 let failed = false
-// Quitting while a first-run dialog is open stops the first run, and during the copy it waits
-// for the copy to stop at a safe point, so that it leaves no half team and no temporary copy.
+let places
+// Quitting while a first-run dialog is open stops the first run, and during the copy (of the
+// first run or of a data move) it waits for the copy to stop at a safe point, so that it leaves
+// no half team and no temporary copy.
 let choosing
 let copying
 const copyAbort = new AbortController()
@@ -92,6 +97,7 @@ async function start() {
   choosing = new AbortController()
   const where = await chooseLocations(choosing.signal).finally(() => { choosing = undefined })
   if (where.quit) { app.exit(0); return }
+  places = { dataDir: where.dataDir, workspace: where.workspace }
   const pnpm = join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
   const profileDir = join(where.dataDir, 'profiles', PROFILE)
   mkdirSync(profileDir, { recursive: true })
@@ -144,6 +150,22 @@ async function start() {
   ipcMain.handle(IPC.bootFailed, (event, message) => {
     assertWindow(event)
     fail(new Error(String(message)))
+  })
+  // A throwaway run (DS_BOT_HOME) keeps its folders where it was told.
+  const fixed = Boolean(process.env.DS_BOT_HOME)
+  ipcMain.handle(IPC.dataLocation, (event) => {
+    assertWindow(event)
+    return { path: places.dataDir, fixed }
+  })
+  ipcMain.handle(IPC.moveData, (event, workspace) => {
+    assertWindow(event)
+    return fixed ? false : moveData(typeof workspace === 'string' && isAbsolute(workspace) ? workspace : places.workspace)
+  })
+  // The plugin keeps the team workspace; the app remembers it for its own checks.
+  ipcMain.on(IPC.teamWorkspace, (event, path) => {
+    if (fixed || !fromWindow(event) || typeof path !== 'string' || !isAbsolute(path)) return
+    places = { ...places, workspace: path }
+    saveLocations(places)
   })
   if (process.platform === 'win32') {
     // Windows ignores the alpha of the caption buttons' color, so they take the opaque color
@@ -250,6 +272,49 @@ async function checkTeam(where, newCheck, signal) {
     await rm(home, { recursive: true, force: true, maxRetries: 5 }).catch((error) => { console.error(error) })
   }
 }
+
+// The data moves as a copy while the Host is stopped, and the app starts again on the new
+// folder; after a failed copy it starts again on the old one. The old folder stays.
+async function moveData(workspace) {
+  if (copying !== undefined || stopping || mainWindow === undefined) return false
+  const t = text()
+  const owner = mainWindow
+  const { canceled, filePaths } = await dialog.showOpenDialog(owner, { title: t.pickMove, defaultPath: dirname(places.dataDir), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
+  if (canceled || filePaths[0] === undefined) return false
+  const to = resolve(filePaths[0])
+  const dshHome = userDshHome()
+  const problem = moveProblem({ from: places.dataDir, to, workspace, dshHome, program: app.isPackaged ? dirname(app.getPath('exe')) : undefined })
+  if (problem !== undefined) {
+    await dialog.showMessageBox(owner, { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
+    return false
+  }
+  const { response } = await dialog.showMessageBox(owner, { type: 'question', title: 'DeepSeek Bot', noLink: true, message: t.moveConfirm(to), detail: t.moveDetail(places.dataDir), buttons: [t.move, t.cancel], defaultId: 0, cancelId: 1 })
+  if (response !== 0 || stopping) return false
+  const signal = copyAbort.signal
+  copying = (async () => {
+    await stopHost()
+    void mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(movingPage(t.moving))}`)
+    mainWindow?.setProgressBar(2)
+    try {
+      await copyData(places.dataDir, to, signal)
+      saveLocations({ dataDir: to, workspace })
+    } catch (error) {
+      if (signal.aborted) return
+      console.error(error)
+      await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: t.moveFailed(error instanceof Error ? error.message : String(error)) })
+    } finally {
+      mainWindow?.setProgressBar(-1)
+    }
+    app.relaunch()
+  })()
+  await copying
+  copying = undefined
+  app.quit()
+  return true
+}
+
+const movingPage = message => `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<body style="margin:0;height:100vh;display:grid;place-items:center;font:14px system-ui,sans-serif;background:Canvas;color:CanvasText">${message.replace(/[&<>]/gu, char => `&#${String(char.charCodeAt(0))};`)}</body>`
 
 // Windows updates itself; macOS asks to download the new version. Throwaway runs check only a
 // given feed and never ask.
