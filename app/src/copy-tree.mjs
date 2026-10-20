@@ -1,30 +1,11 @@
 // Copying a folder of the user's whole, with its links, for the first-run import and the data move.
+import { existsSync, realpathSync } from 'node:fs'
+import { cp, lstat, readlink, realpath, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-
-// Electron's fs takes every path that ends in .asar for an archive: a file that is none cannot be
-// read, one that is looks like a folder and stays locked on Windows, and a name that is not there
-// yet is an error that fs.cp stops at. original-fs is the disk as it is, but for a recursive
-// readdir, which still goes through Electron; plain Node has only fs.
-export const disk = process.getBuiltinModule('original-fs') ?? process.getBuiltinModule('node:fs')
-const { existsSync, realpathSync } = disk
-const { cp, lstat, readlink, realpath, stat, symlink } = disk.promises
 
 export const within = (inner, outer) => {
   const path = relative(resolve(outer), resolve(inner))
   return path === '' || (!path.startsWith('..') && !path.startsWith(sep) && !/^[a-z]:/iu.test(path))
-}
-
-/**
- * Why a copy failed, in the words of the start page's cards (reason.copy.*); the rest goes into
- * the details.
- * @returns {'inUse' | 'permission' | 'full' | 'other'}
- */
-export function copyReason(error) {
-  const code = typeof error?.code === 'string' ? error.code : ''
-  if (code === 'EBUSY') return 'inUse'
-  if (code === 'EACCES' || code === 'EPERM') return 'permission'
-  if (code === 'ENOSPC' || code === 'EDQUOT') return 'full'
-  return 'other'
 }
 
 // The path as the file system has it: through links and junctions, from the deepest part that
@@ -61,18 +42,16 @@ async function relink(source, path, roots, to) {
 
 /**
  * Copy the folder `from` into `into`, making its links again (fs.cp makes symbolic links, which
- * Windows refuses without special rights). With `skip`, an entry that cannot be read, such as a
- * junction to nothing, or a link that cannot be made again, is skipped and listed; otherwise it
- * fails the copy.
+ * Windows refuses without special rights). An entry that cannot be read, such as a junction to
+ * nothing, or a link that cannot be made again, is skipped and listed.
  * @param {string} from
  * @param {string} into
- * @param {{ force?: boolean, skip?: boolean, leave?: (path: string) => boolean, as?: string, signal?: AbortSignal, seen?: (bytes: number) => void }} [options]
+ * @param {{ force?: boolean, leave?: (path: string) => boolean, as?: string, signal?: AbortSignal }} [options]
  *   force: false keeps what is there already; leave: relative paths not to copy; as: where the
- *   copy will end up, when `into` is a staging folder that takes that name later; seen: the size
- *   of each file as it is about to be copied
+ *   copy will end up, when `into` is a staging folder that takes that name later
  * @returns {Promise<string[]>} the relative paths that were skipped
  */
-export async function copyTree(from, into, { force = true, skip = false, leave = () => false, as = into, signal, seen } = {}) {
+export async function copyTree(from, into, { force = true, leave = () => false, as = into, signal } = {}) {
   // The folder can itself be a link; its contents are what is copied.
   const origin = real(from)
   const links = []
@@ -85,10 +64,9 @@ export async function copyTree(from, into, { force = true, skip = false, leave =
       const path = relative(origin, source)
       if (path !== '' && leave(path)) return false
       if (path === '') return true
-      const info = await lstat(source).catch((error) => { if (!skip) throw error })
+      const info = await lstat(source).catch(() => undefined)
       if (info === undefined) skipped.push(path)
       else if (info.isSymbolicLink()) links.push(path)
-      else if (info.isFile()) seen?.(info.size)
       return info?.isSymbolicLink() === false
     },
   })
@@ -97,10 +75,7 @@ export async function copyTree(from, into, { force = true, skip = false, leave =
     signal?.throwIfAborted()
     const at = join(into, path)
     if (!force && await lstat(at).then(() => true, () => false)) continue
-    await relink(join(origin, path), at, roots, resolve(as)).catch((error) => {
-      if (!skip) throw error
-      skipped.push(path)
-    })
+    await relink(join(origin, path), at, roots, resolve(as)).catch(() => { skipped.push(path) })
   }
   return skipped
 }

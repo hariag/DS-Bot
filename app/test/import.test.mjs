@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { after, before, describe, test } from 'node:test'
@@ -182,6 +182,29 @@ describe('a copy that stopped', () => {
     assert.deepEqual(Object.keys(readJson(join(to, 'bot', 'state.json')).bots), ['session-a', 'session-b'])
     assert.equal(readFileSync(join(movedIn, 'session.v4.jsonl.zstd'), 'utf8'), 'session-a')
     assert.deepEqual(readdirSync(to).filter(name => /^\.import-\d+$/u.test(name)), [])
+  })
+})
+
+describe('links in the old team workspace', () => {
+  let root
+  before(() => { root = mkdtempSync(join(tmpdir(), 'ds-bot-app-links-')) })
+  after(() => { rmSync(root, { recursive: true, force: true }) })
+
+  test('makes a package link again inside the chosen folder and gets past a link to nothing', async () => {
+    const from = oldHome(root)
+    const old = join(from, 'bot', 'workspace')
+    write(join(old, '.pnpm', 'pkg', 'index.js'), 'package')
+    mkdirSync(join(old, 'node_modules'), { recursive: true })
+    const type = process.platform === 'win32' ? 'junction' : 'dir'
+    symlinkSync(join(old, '.pnpm', 'pkg'), join(old, 'node_modules', 'pkg'), type)
+    mkdirSync(join(old, '.pnpm-store'), { recursive: true })
+    symlinkSync(join(root, 'gone'), join(old, '.pnpm-store', '.ignored_pkg'), type)
+    const { to, workspace } = newHome(root)
+    const summary = await importTeam({ from, to, workspace })
+    assert.equal(summary.sessions, 5)
+    assert.equal(readFileSync(join(workspace, 'node_modules', 'pkg', 'index.js'), 'utf8'), 'package')
+    assert.equal(realpathSync.native(join(workspace, 'node_modules', 'pkg')), realpathSync.native(join(workspace, '.pnpm', 'pkg')))
+    assert.equal(readFileSync(join(workspace, 'notes.txt'), 'utf8'), 'old notes')
   })
 })
 

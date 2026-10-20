@@ -2,10 +2,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { chmod, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir, hostname } from 'node:os'
-import { join, relative, resolve, sep } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { parseSessionFormatLogFilename } from '@deepseek-ai/dsh-session-format'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { parse, stringify } from 'yaml'
+import { copyTree, within } from './copy-tree.mjs'
+
+export { within }
 
 // The rows of a profile patch that hold model settings: DeepSeek's API and account, other
 // providers, the default model and the agent presets. Rows of other plugins may name plugins
@@ -20,11 +23,6 @@ export function userDshHome(env = process.env) {
   const value = env.DSH_HOME?.trim()
   if (!value) return join(homedir(), '.dsh')
   return resolve(value === '~' ? homedir() : /^~[\\/]/u.test(value) ? join(homedir(), value.slice(2)) : value)
-}
-
-export const within = (inner, outer) => {
-  const path = relative(resolve(outer), resolve(inner))
-  return path === '' || (!path.startsWith('..') && !path.startsWith(sep) && !/^[a-z]:/iu.test(path))
 }
 
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'))
@@ -184,7 +182,11 @@ export async function importTeam({ from, to, workspace, profile, dsh, signal }) 
 
   signal?.throwIfAborted()
   await mkdir(workspace, { recursive: true })
-  if (existsSync(join(oldBot, 'workspace'))) await cp(join(oldBot, 'workspace'), workspace, { recursive: true, force: false })
+  if (existsSync(join(oldBot, 'workspace'))) {
+    // Bots that ran npm or pnpm there leave links, some of them to nothing.
+    const skipped = await copyTree(join(oldBot, 'workspace'), workspace, { force: false, signal })
+    if (skipped.length > 0) console.warn('DeepSeek Bot: the import skipped what it could not read in the old team workspace:', skipped)
+  }
   signal?.throwIfAborted()
   const keys = []
   for (const name of ['.credentials.yaml', '.env']) if (await copyKey(from, to, name)) keys.push(name)
