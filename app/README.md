@@ -107,7 +107,8 @@ The script serves a releases list with one release of that version that has this
 | File | What it does |
 |---|---|
 | `src/main.mjs` | Main process: one instance, the `dsh-app://app` scheme (DSH's Web front end, and everything else forwarded to the Host), the window and its boot data |
-| `src/preload.cjs` | Hands the window the boot data that DSH's Web front end needs |
+| `src/preload.cjs` | Hands the window the boot data that DSH's Web front end needs. On Windows it marks the page for the frameless window and sends the caption buttons the colors of the surface under them |
+| `src/window-frame.mjs`, `src/mica.css` | The frameless Windows window: the caption band, when Mica is available (Windows 11 22H2 and later), and the stylesheet that lets Mica through the sidebar |
 | `src/host-process.mjs` | Starts the Host in Electron's Node mode and owns its exit |
 | `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL and the page injections; for the first-run check (`DS_BOT_CHECK`), the chats it cannot read |
 | `src/profile.mjs` | The profiles: the app's own and the first-run check's, their bundles, and their creation and update |

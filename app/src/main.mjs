@@ -2,9 +2,10 @@
 // The dsh-app scheme, the request forwarding and the WebSocket header rewrite follow
 // DeepSeek Harness apps/desktop/src/main.ts (MIT); see NOTICE.
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { release } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -16,10 +17,14 @@ import { copySessions, findTeam, importTeam } from './import.mjs'
 import { CHECK_PROFILE, PROFILE } from './profile.mjs'
 import { UPDATE_TEXT, watchReleases, watchUpdates } from './updates.mjs'
 import { APP_ORIGIN, authenticateWebHost, forwardWebRequest, serveWebDocument } from './web.mjs'
+import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './window-frame.mjs'
 
 // DSH writes dsh-app://app/ into workspace file URLs and Markdown file links, so the window keeps that scheme.
 const SCHEME = 'dsh-app'
-const IPC = { boot: 'ds-bot:boot', bootFailed: 'ds-bot:boot-failed' }
+const IPC = {
+  boot: 'ds-bot:boot', bootFailed: 'ds-bot:boot-failed',
+  caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
+}
 const STATIC_PATHS = new Set(['/', '/index.html', '/manifest.webmanifest'])
 const UPDATE_CHECK_WAIT_MS = 15_000
 const UPDATE_DOWNLOAD_WAIT_MS = 15 * 60_000
@@ -28,6 +33,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const webDist = join(dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
 // Drawn by scripts/icon.mjs. Windows takes the .ico for its several sizes.
 const iconFile = join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
+// Windows 11 draws Mica behind the page; mica.css lets it through the sidebar.
+const mica = micaAvailable(process.platform, release())
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
 
 protocol.registerSchemesAsPrivileged([{
@@ -138,6 +145,18 @@ async function start() {
     assertWindow(event)
     fail(new Error(String(message)))
   })
+  if (process.platform === 'win32') {
+    // Windows ignores the alpha of the caption buttons' color, so they take the opaque color
+    // of the surface under them, which the page measures.
+    ipcMain.on(IPC.caption, (event, color, symbolColor) => {
+      if (fromWindow(event) && cssColor(color) && cssColor(symbolColor)) mainWindow.setTitleBarOverlay({ color, symbolColor })
+    })
+    // Mica and the caption buttons follow the app's theme, not only the system's.
+    ipcMain.on(IPC.nativeTheme, (event, source) => {
+      const value = nativeThemeSource(source)
+      if (fromWindow(event) && value !== undefined) nativeTheme.themeSource = value
+    })
+  }
 
   // The stream connects to the Host directly; the Host accepts only its own origin and cookie.
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*'] }, (details, callback) => {
@@ -267,16 +286,40 @@ async function askDownload(version) {
 }
 
 function createWindow() {
+  const dark = nativeTheme.shouldUseDarkColors
+  const win32 = process.platform === 'win32'
   mainWindow = new BrowserWindow({
     width: 1320, height: 860, minWidth: 720, minHeight: 480,
     title: 'DeepSeek Bot', show: false, icon: iconFile,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#ffffff',
-    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
+    backgroundColor: mica ? '#00000000' : dark ? '#1b1b1c' : '#ffffff',
+    // Frameless as in DSH Desktop: the caption buttons overlay the page's band. They keep the
+    // sidebar's colors until the page sends the colors of the surface under them.
+    ...(win32 ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: { height: CAPTION_HEIGHT, color: dark ? '#1b1b1c' : '#f9fafb', symbolColor: dark ? '#f9fafb' : '#0f1115' },
+      ...(mica ? { backgroundMaterial: 'mica' } : {}),
+    } : {}),
+    webPreferences: {
+      preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true,
+      additionalArguments: win32 ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(mica ? ['--ds-bot-mica'] : [])] : [],
+    },
   })
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
   mainWindow.on('page-title-updated', (event) => { event.preventDefault() })
   mainWindow.on('closed', () => { mainWindow = undefined })
   const contents = mainWindow.webContents
+  if (win32) {
+    // Fullscreen hides the caption buttons, and the page drops its band meanwhile. A reload
+    // registers the page's listener again, so the state goes out after every load too.
+    const sendFullscreen = () => { if (mainWindow !== undefined) contents.send(IPC.fullscreen, mainWindow.isFullScreen()) }
+    mainWindow.on('enter-full-screen', sendFullscreen)
+    mainWindow.on('leave-full-screen', sendFullscreen)
+    contents.on('did-finish-load', sendFullscreen)
+  }
+  if (mica) {
+    const css = readFileSync(join(here, 'mica.css'), 'utf8')
+    contents.on('dom-ready', () => { void contents.insertCSS(css) })
+  }
   contents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' } })
   contents.on('will-navigate', (event, url) => {
     if (url.startsWith(`${APP_ORIGIN}/`)) return
@@ -307,6 +350,10 @@ function assertWindow(event) {
   const contents = mainWindow?.webContents
   if (contents === undefined || event.sender !== contents || event.senderFrame !== contents.mainFrame
     || !event.senderFrame.url.startsWith(`${APP_ORIGIN}/`)) throw new Error('DeepSeek Bot: rejected IPC from an unknown page')
+}
+
+function fromWindow(event) {
+  try { assertWindow(event); return true } catch { return false }
 }
 
 function openOutside(url) {
