@@ -314,9 +314,12 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-send:disabled{opacity:.35;cursor:default}
 .bt-error{padding:0 14px 10px;color:var(--bt-danger);font-size:12px}
 
-/* Side panels stay clear of the Windows caption buttons; a host may set the chrome top to 0
-   so that dialog masks also cover the caption band. */
-html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel){top:var(--dsh-windows-titlebar-height,0px)}
+/* Side panels keep their content clear of the Windows caption buttons. A host may set the
+   chrome top to 0 so that dialog masks also cover the caption band; the panel then reaches
+   the top edge, its own surface under the buttons, and the band over it still drags the
+   window. Where the chrome top already clears the title bar the band is 0. */
+html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel){--bt-caption-band:calc(var(--dsh-windows-titlebar-height,0px) - var(--dsh-frame-chrome-top,0px));padding-top:var(--bt-caption-band)}
+html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::before{content:"";position:absolute;top:0;left:0;right:0;height:var(--bt-caption-band);-webkit-app-region:drag}
 .bt-pane{position:fixed;top:var(--dsh-frame-chrome-top,0px);right:0;bottom:0;z-index:45;pointer-events:auto;background:var(--bt-main);color:var(--bt-ink);display:flex;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 .bt-dialog{flex:1;display:flex;flex-direction:column;min-width:0}
 .bt-dialog .bt-head{height:62px}
