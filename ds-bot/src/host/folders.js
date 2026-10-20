@@ -94,13 +94,14 @@ export function install(rt) {
     const text = unquote(input)
     const expanded = expandHome(text)
     if (text === '' || !isAbsolute(expanded)) throw new Error(`Give the full path of the folder, not ${text}`)
-    // The plugin's own default lies in DSH's data, and going back to it stays possible, as long
-    // as it holds none of the data itself (a link put in its place could).
+    // The plugin's own default lies in DSH's data, and going back to it stays possible: that
+    // folder itself, not where a link put in its place leads.
     const fallback = resolve(defaultTeamFolder())
+    const own = join(await realBeyond(dirname(fallback)), basename(fallback))
     const holdsData = async (path) => {
       const roots = await Promise.all([rt.dshHome, rt.home].map(real))
       if (roots.some(data => within(data, path))) return true
-      if (path === fallback || path === await real(fallback)) return false
+      if (path === own && await realBeyond(fallback) === own) return false
       return roots.some(data => within(path, data))
     }
     // A folder to be made counts where it would be made: a link above it can lead into the data.

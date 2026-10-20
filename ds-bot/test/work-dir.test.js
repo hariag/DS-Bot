@@ -607,10 +607,14 @@ test('the team workspace holds no DeepSeek Harness data, apart from the plugin\'
   await call('team-workspace', { path: join(root, 'moved') })
   assert.deepEqual((await call('team-workspace', { path: join(home, 'workspace') })).value, { team })
   assert.equal(state().workspaceId, 'w1')
-  // The default replaced by a link to the data is the data, and is refused.
+  // The default replaced by a link into the data, to all of it or a part, is refused.
   await call('team-workspace', { path: join(root, 'moved') })
   rmSync(team, { recursive: true, force: true })
   symlinkSync(home, team, process.platform === 'win32' ? 'junction' : 'dir')
+  assert.match(await error(team), /holds DeepSeek Harness data/)
+  rmSync(team, { recursive: true, force: true })
+  mkdirSync(join(dsh, 'profiles'))
+  symlinkSync(join(dsh, 'profiles'), team, process.platform === 'win32' ? 'junction' : 'dir')
   assert.match(await error(team), /holds DeepSeek Harness data/)
   assert.equal(state().workspaceId, 'w-new')
 })
