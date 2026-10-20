@@ -4,6 +4,44 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
+### Added
+
+- **Desktop app for Windows and macOS**: DeepSeek Bot runs on its own, with its own DeepSeek Harness 0.2.1-rc.2 and its own data, so it does not depend on the DSH you have. Windows gets an installer for your user only (x64); macOS gets a zip for Apple chips and one for Intel. On the first open on macOS, allow it in System Settings → Privacy & Security → Open Anyway. See [Install](README.md#install). ([#303](https://github.com/Fei2411/DeepSeek-Bot/pull/303), [#323](https://github.com/Fei2411/DeepSeek-Bot/pull/323), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334), [#336](https://github.com/Fei2411/DeepSeek-Bot/pull/336), [#351](https://github.com/Fei2411/DeepSeek-Bot/issues/351))
+- At its first start the desktop app asks where to keep its data and the Bots' files, and offers to copy your Bot team from DeepSeek Harness; your DSH data is only read. Before the copy it reads each chat once and asks you to update DeepSeek Bot when a newer DeepSeek Harness wrote one. Quitting before the first start is finished saves nothing, and the next start asks again. ([#324](https://github.com/Fei2411/DeepSeek-Bot/pull/324), [#340](https://github.com/Fei2411/DeepSeek-Bot/pull/340), [#353](https://github.com/Fei2411/DeepSeek-Bot/issues/353))
+- The Windows desktop app updates itself: it downloads a new release in the background and asks whether to restart now, or installs it at the next quit. The macOS app tells you when a new version is ready to download. ([#329](https://github.com/Fei2411/DeepSeek-Bot/pull/329), [#334](https://github.com/Fei2411/DeepSeek-Bot/pull/334))
+- On Windows the desktop app's window has no system frame, and on Windows 11 its sidebar shows the Mica material. On macOS, Cmd+W closes the window (File → Close Window). ([#362](https://github.com/Fei2411/DeepSeek-Bot/issues/362), [#352](https://github.com/Fei2411/DeepSeek-Bot/issues/352))
+- **Locations in Settings → General**: change the team workspace, where Bots and groups without a folder of their own work; they go on in a fresh part in the new folder. In the desktop app, the data location moves there too. The old folders stay as they were. ([#364](https://github.com/Fei2411/DeepSeek-Bot/issues/364))
+- A Main Bot can set a Bot's thinking level, and is told when the model has no such level. ([#99](https://github.com/Fei2411/DeepSeek-Bot/issues/99))
+- Every Bot in a group chat can post into it from its own chat; its post calls only the members it @-mentions. ([#318](https://github.com/Fei2411/DeepSeek-Bot/pull/318))
+- Docker: tested images on GHCR, and a startup that reuses the saved profile without upgrading plugins by itself. ([#273](https://github.com/Fei2411/DeepSeek-Bot/pull/273))
+
+### Changed
+
+- When a Bot changes to a folder outside its working folder, that folder becomes its working folder (with your approval when needed) and it goes on in a fresh part there. ([#345](https://github.com/Fei2411/DeepSeek-Bot/pull/345))
+- The work clock counts from the start of the Bot's turn and reads `8s`, then `1m 8s`. ([#286](https://github.com/Fei2411/DeepSeek-Bot/pull/286), [#302](https://github.com/Fei2411/DeepSeek-Bot/pull/302))
+- The install commands use DeepSeek Harness 0.2.1-rc.2. ([#293](https://github.com/Fei2411/DeepSeek-Bot/pull/293))
+- In the Chinese interface the team workspace is called 总工作区. ([#364](https://github.com/Fei2411/DeepSeek-Bot/issues/364))
+
+### Fixed
+
+- Opening a Bot's chat right after start no longer fails with a page error on slow machines. ([#333](https://github.com/Fei2411/DeepSeek-Bot/issues/333))
+- On Windows, a Bot's work is no longer lost now and then when another program reads DS Bot's files at the same moment, and a failed save while a Bot moves to a fresh part no longer stops DeepSeek Harness. ([#328](https://github.com/Fei2411/DeepSeek-Bot/pull/328))
+- A Bot no longer loses its waiting messages when DS Bot reloads or updates while the Bot moves to a fresh part of its chat. ([#280](https://github.com/Fei2411/DeepSeek-Bot/issues/280))
+- A Bot's post into a group chat shows at once, also while the group is busy. ([#310](https://github.com/Fei2411/DeepSeek-Bot/pull/310))
+- A group member that waits for your approval can be stopped from the group's details. ([#156](https://github.com/Fei2411/DeepSeek-Bot/issues/156))
+- Clicking permission presets quickly no longer makes the picker jump back to an older choice. ([#266](https://github.com/Fei2411/DeepSeek-Bot/issues/266))
+- The DS Bot whale and the return button keep their look when other plugins load or reload. ([#228](https://github.com/Fei2411/DeepSeek-Bot/issues/228))
+- Usage totals no longer miss calls when a Session list serves a cached projection watermark. ([#295](https://github.com/Fei2411/DeepSeek-Bot/pull/295))
+- Secret references in the arguments of a stdio MCP server are replaced with their values. ([#305](https://github.com/Fei2411/DeepSeek-Bot/pull/305))
+- Ids and names such as `__proto__` are treated as unknown everywhere instead of being read as an existing Bot or group. ([#290](https://github.com/Fei2411/DeepSeek-Bot/issues/290))
+
+### Known limitations
+
+- The desktop app is not signed: at the first start Windows SmartScreen warns, and macOS asks you to allow it in Privacy & Security, which needs an administrator password.
+- On macOS the desktop app's window keeps the system title bar.
+
 ## [0.1.7] - 2026-10-16
 
 ### Added
@@ -205,7 +243,8 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.4...v0.1.5

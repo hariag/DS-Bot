@@ -9,13 +9,24 @@
 
 English | [中文](README.zh.md)
 
-![version](https://img.shields.io/badge/version-v0.1_preview-blue) ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-4D6BFE) ![license](https://img.shields.io/badge/license-Apache_2.0-green)
+![version](https://img.shields.io/badge/version-v0.2_preview-blue) ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-4D6BFE) ![license](https://img.shields.io/badge/license-Apache_2.0-green)
 
 DeepSeek Bot (DS Bot) is a bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). It turns DSH into bots. You create your own bots, then talk and work with them.
 
 ![Say one sentence to Chief, and it sets up the bots and the group chat](docs/images/team.png)
 
 ## Install
+
+**Desktop app (Windows, macOS)**
+
+The desktop app brings its own DSH, so you don't need to install DSH first. Download it from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases):
+
+- Windows (x64): `DeepSeek-Bot-<version>-win-x64.exe`. Run it; it installs for your user only, without administrator rights. If Windows shows "Windows protected your PC", select **More info** → **Run anyway**.
+- macOS: `DeepSeek-Bot-<version>-mac-arm64.zip` for an Apple chip, `DeepSeek-Bot-<version>-mac-x64.zip` for Intel. Safari unzips it by itself; drag **DeepSeek Bot** into **Applications** and open it. When macOS says it cannot check the app, open **System Settings** → **Privacy & Security** and select **Open Anyway**.
+
+At the first start the app asks where to keep its data and the Bots' files, and offers to copy a Bot team from your DSH (it only reads your DSH). Set up a model in its settings. The Windows app updates itself; the macOS app tells you when a new version is ready to download.
+
+**As a plugin in DSH**
 
 First install DSH and set up at least one model in it. DS Bot uses the models from DSH.
 
@@ -25,7 +36,7 @@ First install DSH and set up at least one model in it. DS Bot uses the models fr
 2. In **Package name or address**, enter `ds-bot`. In mainland China, set **Registry** to **Mainland China mirror**.
 3. Select **Install**, then **Enable now**. If DSH says the change takes effect at the next start, quit DSH completely and open it again.
 
-If npm is not reachable, in step 2 you can also enter the full path of `ds-bot-0.1.7.tgz` downloaded from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases), or `github:Fei2411/DeepSeek-Bot#v0.1.7&path:/ds-bot` (needs Git).
+If npm is not reachable, in step 2 you can also enter the full path of `ds-bot-0.2.0.tgz` downloaded from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases), or `github:Fei2411/DeepSeek-Bot#v0.2.0&path:/ds-bot` (needs Git).
 
 **DSH Web (Windows, macOS, Linux)**
 

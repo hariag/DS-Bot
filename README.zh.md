@@ -9,13 +9,24 @@
 
 [English](README.md) | 中文
 
-![版本](https://img.shields.io/badge/版本-v0.1_预览-blue) ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-4D6BFE) ![许可](https://img.shields.io/badge/许可-Apache_2.0-green)
+![版本](https://img.shields.io/badge/版本-v0.2_预览-blue) ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-4D6BFE) ![许可](https://img.shields.io/badge/许可-Apache_2.0-green)
 
 DeepSeek Bot（简称 DS Bot）是一个基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的 bot 插件，插件将 dsh 改造为 bot 形式。你可以与自己创建的 bot 交流、工作。
 
 ![和 Chief 说一句话，它就把 bot 和群聊建好](docs/images/team.zh.png)
 
 ## 安装
+
+**桌面应用（Windows、macOS）**
+
+桌面应用自带 dsh，不用先装 dsh。在 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载：
+
+- Windows（x64）：`DeepSeek-Bot-<版本>-win-x64.exe`。运行它即可安装，只装给当前用户，不要管理员权限。如果提示“Windows 已保护你的电脑”，点 **更多信息** → **仍要运行**。
+- macOS：Apple 芯片下载 `DeepSeek-Bot-<版本>-mac-arm64.zip`，Intel 下载 `DeepSeek-Bot-<版本>-mac-x64.zip`。Safari 会自动解压；把 **DeepSeek Bot** 拖进 **应用程序**，再打开。如果提示无法检查这个 App，打开 **系统设置** → **隐私与安全性**，点 **仍要打开**。
+
+第一次打开时，App 会问数据和 Bot 的文件放在哪里，并可以从你的 dsh 复制 Bot 团队（只读取你的 dsh，不改它）。在 App 的设置里配好模型就能用。Windows 版会自动更新；macOS 版有新版本时会提示你下载。
+
+**作为 dsh 插件**
 
 先装好 dsh，并在 dsh 里配好至少一个模型。ds bot 直接使用 dsh 里的模型。
 
@@ -25,7 +36,7 @@ DeepSeek Bot（简称 DS Bot）是一个基于 [DeepSeek Harness](https://github
 2. **包名或地址** 填 `ds-bot`。在中国大陆，**安装源** 选 **中国大陆镜像源**。
 3. 点 **安装**，再点 **立即启用**。如果提示“下次启动生效”，完全退出 dsh 再打开。
 
-连不上 npm 时，第 2 步也可以填 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载的 `ds-bot-0.1.7.tgz` 的完整路径，或者 `github:Fei2411/DeepSeek-Bot#v0.1.7&path:/ds-bot`（需要装 Git）。
+连不上 npm 时，第 2 步也可以填 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载的 `ds-bot-0.2.0.tgz` 的完整路径，或者 `github:Fei2411/DeepSeek-Bot#v0.2.0&path:/ds-bot`（需要装 Git）。
 
 **dsh Web（Windows、macOS、Linux）**
 
