@@ -1816,7 +1816,6 @@ function isHiddenTurn(roster, sessionId, turn) {
   return (roster.exchangeTurns[sessionId] ?? []).includes(turn);
 }
 var toolName = (root) => root.name || root.call?.name;
-var historyLoading = (snapshot) => snapshot?.openState === "cold" || snapshot?.openState === "loading";
 function toolArgs(root) {
   if (typeof root.args?.text === "function") {
     return { text: (key) => root.args.text(key) ?? void 0, value: (key) => typeof root.args.value === "function" ? root.args.value(key) : void 0 };
@@ -3709,11 +3708,10 @@ function PendingQuestion({ sessionId, question, actions, inline }) {
     (0, import_react4.createElement)(QuestionView, { key: question.id, question, onAnswer, onDismiss, ownAnswer: question.allowCustom === true, raised: !inline })
   );
 }
-function QuestionDock({ sessionId, useRoster, useCards, useSession, actions }) {
+function QuestionDock({ sessionId, useRoster, useCards, actions }) {
   const question = useRoster((value) => value.questions?.[sessionId]);
   const drawn = useCards?.((state) => state[sessionId]?.[question?.callId] > 0) === true;
-  const loading = useSession?.(historyLoading) === true;
-  if (question === void 0 || question.callId && (drawn || loading)) return null;
+  if (question === void 0 || question.callId && drawn) return null;
   return (0, import_react4.createElement)(PendingQuestion, { sessionId, question, actions, inline: false });
 }
 function AnsweredCell({ node }) {
@@ -3907,13 +3905,12 @@ function SecretToolCell({ sessionId, callId, name, done, content, roster, action
   }
   return null;
 }
-function SecretDock({ sessionId, useRoster, useCards, useSession, actions }) {
+function SecretDock({ sessionId, useRoster, useCards, actions }) {
   const roster = useRoster((value) => value);
   const shown = useCards?.((state) => state[sessionId]) ?? NONE;
-  const loading = useSession?.(historyLoading) === true;
   const bot = roster.byId[sessionId];
   if (!bot || currentPart(bot) !== sessionId) return null;
-  const drawn = (entry) => entry.callId && entry.sessionId === sessionId && (loading || shown[entry.callId] > 0);
+  const drawn = (entry) => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0;
   const waiting = (roster.secretRequests?.[bot.id] ?? []).filter((entry) => entry.status === "pending" && !drawn(entry));
   if (waiting.length === 0) return null;
   return (0, import_react5.createElement)("div", { className: "bt-q-dock bt-secret-dock" }, waiting.map((request) => (0, import_react5.createElement)(SecretCard, { key: `${request.id}:${request.kind}`, bot, request, roster, actions })));

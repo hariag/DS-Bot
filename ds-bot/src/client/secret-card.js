@@ -5,7 +5,7 @@
 import { createElement as h, useEffect, useId, useState } from 'react'
 import { CheckIcon, CloseIcon, TrashIcon } from './icons.js'
 import { BotAvatar, BotMark } from './mark.js'
-import { contentText, currentPart, historyLoading } from './text.js'
+import { contentText, currentPart } from './text.js'
 import { dateLocale, t } from './i18n.js'
 import { SPRING_POP, SPRING_SHAPE, spring } from './motion.js'
 
@@ -155,13 +155,12 @@ export function SecretToolCell({ sessionId, callId, name, done, content, roster,
 
 // A card whose call the transcript does not draw (an earlier part of the chat, a
 // hidden turn, a call outside the loaded history) waits above the composer instead.
-export function SecretDock({ sessionId, useRoster, useCards, useSession, actions }) {
+export function SecretDock({ sessionId, useRoster, useCards, actions }) {
   const roster = useRoster(value => value)
   const shown = useCards?.(state => state[sessionId]) ?? NONE
-  const loading = useSession?.(historyLoading) === true
   const bot = roster.byId[sessionId]
   if (!bot || currentPart(bot) !== sessionId) return null
-  const drawn = entry => entry.callId && entry.sessionId === sessionId && (loading || shown[entry.callId] > 0)
+  const drawn = entry => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0
   const waiting = (roster.secretRequests?.[bot.id] ?? []).filter(entry => entry.status === 'pending' && !drawn(entry))
   if (waiting.length === 0) return null
   return h('div', { className: 'bt-q-dock bt-secret-dock' }, waiting.map(request => h(SecretCard, { key: `${request.id}:${request.kind}`, bot, request, roster, actions })))

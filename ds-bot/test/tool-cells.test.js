@@ -345,14 +345,39 @@ test('a card whose call is not drawn waits in the dock; a drawn one shows only a
   assert.match(docks(store, roster), /Which draft\?.*Chief needs a key/)
 })
 
-test('the docks hold a card back while the history loads, and keep cards without a call', () => {
+test('the docks keep pending cards through history loading until their calls actually mount', () => {
   const store = cardStore()
   const roster = team({ questions: { chief: question('program:ptc:1') }, secretRequests: { chief: [request('program:ptc:2')] } })
+  for (const openState of ['cold', 'loading', 'open', 'error']) {
+    const waiting = docks(store, roster, { openState })
+    assert.equal(count(waiting, 'Which draft?'), 1, openState)
+    assert.equal(count(waiting, 'needs a key'), 1, openState)
+  }
+  const root = program([call('ask_user', 'program:ptc:1'), call('request_secret', 'program:ptc:2', { args: { name: 'DEMO_TOKEN' } })])
+  const { out, unmount } = draw(root, store, { roster })
   assert.equal(docks(store, roster, { openState: 'loading' }), '')
-  assert.equal(docks(store, roster, { openState: 'cold' }), '')
-  assert.match(docks(store, roster, { openState: 'error' }), /Which draft\?.*Chief needs a key/)
+  assert.equal(count(text(out), 'Which draft?'), 1)
+  assert.equal(count(text(out), 'needs a key'), 1)
+  unmount()
+  assert.match(docks(store, roster, { openState: 'loading' }), /Which draft\?.*Chief needs a key/)
   const free = team({ questions: { chief: question(undefined) }, secretRequests: { chief: [request(undefined)] } })
   assert.match(docks(store, free, { openState: 'loading' }), /Which draft\?.*Chief needs a key/)
+})
+
+test('a question can be answered and a secret request canceled before history arrives', async () => {
+  const store = cardStore()
+  const roster = team({ questions: { chief: question('question-call') }, secretRequests: { chief: [request('secret-call')] } })
+  const answers = []
+  const canceled = []
+  const actions = { answerQuestion: async (...args) => answers.push(args), secretCancel: async id => canceled.push(id) }
+  const asking = expand(QuestionDock(dockProps(store, roster, { openState: 'cold', actions })))
+  find(asking, node => node.type === 'button' && node.props.className === 'bt-q-opt').props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(answers)), [['chief', 'question', { selected: ['Short'], custom: '' }]])
+  const secret = expand(SecretDock(dockProps(store, roster, { openState: 'loading', actions })))
+  await find(secret, node => node.props['aria-label'] === 'Cancel the request').props.onClick()
+  assert.deepEqual(canceled, ['request'])
+  effects = []
+  assert.equal(docks(store, team(), { openState: 'loading' }), '')
 })
 
 test('a card from an earlier part waits in the dock even when a call here has the same id', () => {

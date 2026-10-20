@@ -1,7 +1,6 @@
 import { createElement as h, useEffect, useId, useRef, useState } from 'react'
 import { CloseIcon, CheckIcon } from './icons.js'
 import { t } from './i18n.js'
-import { historyLoading } from './text.js'
 
 // -------------------------------------------------------------------------
 // Question cards. `ask_user` cards sit in the transcript and never block the Bot;
@@ -175,12 +174,11 @@ export function PendingQuestion({ sessionId, question, actions, inline }) {
 }
 
 // Questions asked by a tool call render inline at that call (see ToolCell); the dock
-// carries the ones whose call the transcript does not draw.
-export function QuestionDock({ sessionId, useRoster, useCards, useSession, actions }) {
+// carries the ones whose call the transcript does not draw, including while history loads.
+export function QuestionDock({ sessionId, useRoster, useCards, actions }) {
   const question = useRoster(value => value.questions?.[sessionId])
   const drawn = useCards?.(state => state[sessionId]?.[question?.callId] > 0) === true
-  const loading = useSession?.(historyLoading) === true
-  if (question === undefined || (question.callId && (drawn || loading))) return null
+  if (question === undefined || (question.callId && drawn)) return null
   return h(PendingQuestion, { sessionId, question, actions, inline: false })
 }
 
