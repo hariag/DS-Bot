@@ -35,6 +35,8 @@ const useGroupWork = (useWork, pick) => (useWork ? useWork(work => JSON.stringif
 const workKeys = text => JSON.parse(text)
 const doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching })
 const workLine = (lead, doing, more) => h(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ''}`)
+// The row already names the Bot; its own-chat preview is just what it is doing.
+const doingLine = doing => h(Shimmer, null, `${workPhrase(doing)}…`)
 // The Bots and groups a Bot waits for (handoffs.js), by the names they have now.
 const waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map(id => roster.byId[id]?.name), ...(waits?.rooms ?? []).map(id => roster.roomsById[id]?.name)].filter(Boolean)
@@ -58,6 +60,8 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const groups = workKeys(useGroupWork(useWork, rooms => Object.entries(rooms).flatMap(([roomId, entries]) => entries.filter(entry => entry.botId === id).map(entry => ({ id: roomId, ...doingOf(entry) })))))
   const away = !running && groups.length > 0
   const state = botState(running || away, doing, alert)
+  // A Bot running in its own chat previews what it is doing, like a group's row.
+  const runningLine = running && doing ? doingLine(doing) : null
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t('a group chat'), groups[0], groups.length - 1) : null
   const waits = workKeys(useWork ? useWork(work => JSON.stringify(work.waiting?.[id] ?? null)) : 'null')
   const waitsFor = state === 'waiting' ? waitingFor(roster, waits) : ''
@@ -85,9 +89,10 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   pinned && !wide ? h(PinMark) : null,
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, bot.name), pinned ? h(PinMark) : null),
-    awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
-      : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
-        : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
+    runningLine ? h('span', { className: 'bt-row-preview' }, runningLine)
+      : awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
+        : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
+          : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 
