@@ -104,4 +104,7 @@ test('an empty value or a link is refused', async () => {
   // A link is never fetched, so it reaches nothing on this machine or its network.
   await assert.rejects(readAvatar('http://127.0.0.1:1/photo.png'), /not downloaded here.*pass its path, or pass a data URL/)
   await assert.rejects(readAvatar('HTTPS://example.com/photo.png'), /not downloaded here/)
+  // Nor is a network path opened, which on Windows connects and signs in to that host.
+  await assert.rejects(readAvatar('\\\\host.example\\share\\photo.png'), /network path is not read here/)
+  await assert.rejects(readAvatar('//host.example/share/photo.png'), /network path is not read here/)
 })

@@ -46,20 +46,23 @@ const expandHome = (text) => {
 
 async function readLocal(path, baseDir, isData) {
   const full = resolve(baseDir ?? process.cwd(), expandHome(path))
+  // Checked and read at the real path, where links lead, so a link cannot reach into
+  // DSH's data, and one changed after the check is not followed.
+  let real
   let info
   try {
-    info = await stat(full)
+    real = await realpath(full)
+    info = await stat(real)
   } catch (error) {
     if (error?.code === 'ENOENT') throw new Error(`There is no image file at ${full}. Pass the path of an existing image file.`)
     throw new Error(`Cannot read the image at ${full}: ${error?.code === 'EACCES' ? 'permission denied' : error.message}`)
   }
   if (!info.isFile()) throw new Error(`${full} is not an image file. Pass the path of an image file.`)
-  // Where a link leads decides, so a link cannot reach into DSH's data either.
-  if (await isData?.(await realpath(full))) throw new Error(`${full} is in DeepSeek Harness data, so it cannot be a Bot's photo. Pass an image from another folder.`)
+  if (await isData?.(real)) throw new Error(`${full} is in DeepSeek Harness data, so it cannot be a Bot's photo. Pass an image from another folder.`)
   if (info.size > MAX_BYTES) throw new Error(tooLarge(info.size))
   let bytes
   try {
-    bytes = await readFile(full)
+    bytes = await readFile(real)
   } catch (error) {
     throw new Error(`Cannot read the image at ${full}: ${error?.code === 'EACCES' ? 'permission denied' : error.message}`)
   }
@@ -91,5 +94,7 @@ export async function readAvatar(input, { baseDir, isData } = {}) {
   if (/^data:/i.test(value)) return readDataUrl(value)
   if (/^https?:\/\//i.test(value)) throw new Error('An http(s) link is not downloaded here. Save the image to a file and pass its path, or pass a data URL.')
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) throw new Error(`The avatar must be a local image path or a data URL. ${HINT}`)
+  // A network path (\\host\share) would make Windows connect to that host and sign in.
+  if (/^[\\/]{2}/.test(value)) throw new Error('A network path is not read here. Copy the image to this computer and pass its path, or pass a data URL.')
   return readLocal(value, baseDir, isData)
 }
