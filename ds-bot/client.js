@@ -4292,18 +4292,17 @@ function WidgetCard({ title, view, onSubmit, onDismiss, raised = false, settled 
 function PendingView({ sessionId, view, actions, inline }) {
   const [answered, setAnswered] = (0, import_react6.useState)(null);
   const hold = useDockHold(sessionId, "view", view.id, actions, inline);
-  if (answered === view.id) return null;
   const onSubmit = (action, values) => {
     setAnswered(view.id);
     void actions.answerView(sessionId, view.id, action, values).catch(() => setAnswered(null));
   };
   const onDismiss = () => {
     setAnswered(view.id);
-    void actions.dismissView(sessionId);
+    void Promise.resolve(actions.dismissView(sessionId)).catch(() => setAnswered(null));
   };
   return (0, import_react6.createElement)(
     "div",
-    { className: inline ? "bt-q-inline" : "bt-q-dock", onFocusCapture: hold, onPointerDownCapture: hold },
+    { className: inline ? "bt-q-inline" : "bt-q-dock", style: answered === view.id ? { display: "none" } : void 0, onFocusCapture: hold, onPointerDownCapture: hold },
     (0, import_react6.createElement)(WidgetCard, { key: view.id, title: view.title ?? "", view: view.view, onSubmit, onDismiss, raised: !inline })
   );
 }

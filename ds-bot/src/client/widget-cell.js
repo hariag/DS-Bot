@@ -202,16 +202,17 @@ function WidgetCard({ title, view, onSubmit, onDismiss, raised = false, settled 
 export function PendingView({ sessionId, view, actions, inline }) {
   const [answered, setAnswered] = useState(null)
   const hold = useDockHold(sessionId, 'view', view.id, actions, inline)
-  if (answered === view.id) return null
   const onSubmit = (action, values) => {
     setAnswered(view.id)
     void actions.answerView(sessionId, view.id, action, values).catch(() => setAnswered(null))
   }
   const onDismiss = () => {
     setAnswered(view.id)
-    void actions.dismissView(sessionId)
+    void Promise.resolve(actions.dismissView(sessionId)).catch(() => setAnswered(null))
   }
-  return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock', onFocusCapture: hold, onPointerDownCapture: hold },
+  // Hidden, not unmounted, while the answer is on its way: if it fails the card comes
+  // back with what the user had typed or picked.
+  return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock', style: answered === view.id ? { display: 'none' } : undefined, onFocusCapture: hold, onPointerDownCapture: hold },
     h(WidgetCard, { key: view.id, title: view.title ?? '', view: view.view, onSubmit, onDismiss, raised: !inline }))
 }
 
