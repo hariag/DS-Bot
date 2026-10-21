@@ -1,18 +1,24 @@
-// Aside cards (btw) are the earlier single-shot aside: the ask path is gone,
-// but existing cards stay readable until the user deletes them. This file keeps
-// their files, their turn placement, and the shared snapshot/model-call
-// helpers that side chats (side.js) use.
-// Cards live in a file per Bot and part (<home>/btw/<botId>/<partId>.json), not
-// in state.json, so a save never rewrites them; only the host that owns the
-// team writes them.
-import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { replaceFile } from './files.js'
-import { assembleLlmStream } from './models.js'
+// Aside questions (btw): one model call on a snapshot of a Bot's private chat.
+// Nothing is written into the Session, and no tool call is ever dispatched.
+import { randomUUID } from 'node:crypto'
+import { BlockAssembler } from '@deepseek-ai/dsh-llm'
+import { BTW_CARDS_MAX, BTW_CUT, BTW_IN_FLIGHT, BTW_LIMIT, BTW_MAX_TOKENS, BTW_TEXT_MAX } from './constants.js'
+import { headOf } from './text.js'
 
-export const RESTART_ERROR = 'DS Bot restarted before this answer finished.'
-export const TOOL_ERROR = 'The model called a tool again after being told not to, so this aside was not answered.'
-export const EMPTY_ERROR = 'The model wrote nothing.'
+// The mock model recognizes an aside by this first line.
+export const BTW_MARKER = 'ds-bot/btw'
+
+const BTW_PROMPT = [
+  BTW_MARKER,
+  'Answer briefly from the conversation so far, based on progress up to this snapshot.',
+  'Do not call any tool.',
+  'If the answer needs information that is not in the conversation, say so.',
+  'Never claim to have done anything.',
+].join('\n')
+const BTW_RETRY = 'Do not call any tool. Answer in text only.'
+const RESTART_ERROR = 'DS Bot restarted before this answer finished.'
+const TOOL_ERROR = 'The model called a tool again after being told not to, so this aside was not answered.'
+const EMPTY_ERROR = 'The model wrote nothing.'
 // Events that still belong to a turn. A model selection or a title does not.
 const MESSAGE_EVENTS = new Set(['user/message', 'assistant/message', 'tool/call', 'tool/result', 'turn/start', 'turn/end'])
 // Host-only projection. `turnBoundary` clears its open seq on turn/end, so a
@@ -79,6 +85,8 @@ function anchorState(session, projections) {
   return projections.stateOf(session, ANCHOR_KEY)
 }
 
+const keptText = text => (text.length <= BTW_TEXT_MAX ? text : `${headOf(text, BTW_TEXT_MAX)}${BTW_CUT}`)
+
 const callIds = (message) => {
   if (message?.role !== 'assistant' || !Array.isArray(message.content)) return []
   const ids = []
@@ -139,7 +147,7 @@ export function openTurnAt(projections, session, seq) {
 }
 
 // Header, derived history, tool history, and the session id, taken together.
-export function snapshotOf(session, projections) {
+function snapshotOf(session, projections) {
   const header = session.requestHeader()
   const messages = trimToolBoundary(session.deriveMessages())
   const toolHistory = session.toolHistory()
@@ -148,214 +156,289 @@ export function snapshotOf(session, projections) {
   return { header, messages, toolHistory, sessionId, atSeq: committedSeq(session), anchorSeq, turn }
 }
 
-// The same route as the conversation, including temperature, stop, and the output
-// budget: thinking shares it, so an aside must not set a small one of its own. The
-// messages array is tagged for usage. `extra` messages sit between the snapshot
-// and the prompt; a side chat's earlier finished pairs go there.
-export async function callAside(ctx, rt, snapshot, { extra = [], question, promptFor, kind, retry = false, signal }) {
-  const messages = rt.tagUsage([
-    ...snapshot.messages,
-    ...extra,
-    { role: 'user', content: [{ type: 'text', text: promptFor(question, retry) }] },
-  ], { sessionId: snapshot.sessionId, kind })
-  const tools = snapshot.header?.tools
-  const callOptions = {
-    ...snapshot.header?.config,
-    messages,
-    toolHistory: snapshot.toolHistory,
-    ...(tools ? { tools: [...tools] } : {}),
-    sessionId: snapshot.sessionId,
-    signal,
+const promptFor = (question, retry) => [BTW_PROMPT, ...(retry ? [BTW_RETRY] : []), question].join('\n\n')
+
+// Newest first. A card that is still answering is never dropped: the cap gives
+// way, but only for as long as that call is running.
+function retainCards(list) {
+  if (list.length <= BTW_CARDS_MAX) return list
+  let answering = 0
+  for (const card of list) if (card?.status === 'answering') answering += 1
+  if (answering === 0) return list.slice(0, BTW_CARDS_MAX)
+  const finishedRoom = Math.max(BTW_CARDS_MAX, answering) - answering
+  const kept = []
+  let finished = 0
+  for (const card of list) {
+    if (card?.status === 'answering') {
+      kept.push(card)
+      continue
+    }
+    if (finished < finishedRoom) {
+      kept.push(card)
+      finished += 1
+    }
   }
-  const assembler = await (rt?.assembleLlm ? rt.assembleLlm(callOptions) : assembleLlmStream(ctx, callOptions, { backoff: rt?.config?.llmRetryBackoff }))
-  const finish = assembler.finish
-  if (finish.kind === 'error' || finish.kind === 'aborted') {
-    return { failed: finish.failure?.message ?? finish.kind }
-  }
-  const text = assembler.blocks().filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
-  // Checked before a tool-call retry: a truncated tool call is not a request.
-  if (finish.kind === 'max-tokens') return { text, cutOff: true }
-  const toolCalls = finish.kind === 'tool-calls' || assembler.blocks().some(block => block?.type === 'tool-call')
-  return { text, toolCalls }
+  return kept
 }
 
-// A Bot id or an earlier part of its own chat means the current part, as `send` does.
-// `groupError` is the refusal a group chat raises.
-export function locatePrivate(rt, raw, groupError) {
-  const past = rt.pastOwners.get(raw)
-  const sessionId = rt.botOf(raw) ? rt.chatOf(raw) : past && past.roomId === undefined ? rt.chatOf(past.botId) : raw
-  const grouped = rt.roomOf(raw) !== undefined || rt.roomOf(sessionId) !== undefined
-    || rt.groupOwners.has(raw) || rt.groupOwners.has(sessionId)
-    || past?.roomId !== undefined
-  if (grouped) throw new Error(groupError)
-  const botId = rt.chatOwners.get(sessionId) ?? rt.botOf(raw)?.id
-  if (botId === undefined || rt.botOf(botId) === undefined) throw new Error('Unknown Bot')
-  return { sessionId, botId }
+// `recover` is only for the host that owns the team. A reader keeps a live
+// 'answering' card as it is. A bad value becomes an empty map so a later save
+// still loads.
+export function normalizeBtwCards(cards, options = {}) {
+  const recover = options?.recover === true
+  const now = typeof options?.now === 'number' ? options.now : Date.now()
+  if (cards === undefined) return { cards: {}, changed: false }
+  if (cards === null || typeof cards !== 'object' || Array.isArray(cards)) return { cards: {}, changed: true }
+  let changed = false
+  const next = {}
+  for (const [botId, list] of Object.entries(cards)) {
+    if (!Array.isArray(list)) {
+      changed = true
+      continue
+    }
+    const kept = []
+    let touched = false
+    for (const card of list) {
+      if (card === null || typeof card !== 'object' || Array.isArray(card)) {
+        touched = true
+        continue
+      }
+      if (recover && card.status === 'answering') {
+        touched = true
+        kept.push({ ...card, status: 'failed', error: card.error ?? RESTART_ERROR, finishedAt: card.finishedAt ?? now })
+      } else {
+        kept.push(card)
+      }
+    }
+    const capped = retainCards(kept)
+    const stored = !touched && capped.length === list.length && capped.every((card, index) => card === list[index]) ? list : capped
+    if (stored !== list) changed = true
+    if (stored.length > 0) next[botId] = stored
+  }
+  if (Object.keys(next).length !== Object.keys(cards).length) changed = true
+  return { cards: changed ? next : cards, changed }
 }
 
 export function install(rt) {
   const { ctx, state } = rt
   registerAnchor(ctx)
+  /** @type {Map<string, {botId: string, controller: AbortController, done?: Promise<void>}>} */
+  const flights = new Map()
+  /** @type {Map<string, Set<string>>} */
+  const byBot = new Map()
+  // Set before abort, so a call that settles in the abort turn cannot save.
+  let disposing = false
   const dropped = new Set()
 
-  // Cards by Bot and part. A part's list is read from
-  // <home>/btw/<botId>/<partId>.json on first need and kept here; writes are
-  // whole-file replaces, queued so a finish and a cancel never interleave. A
-  // runtime without a home (a bare channel install) keeps cards in memory only.
-  const cardsDir = typeof rt.home === 'string' ? join(rt.home, 'btw') : undefined
-  const partFile = (botId, partId) => join(cardsDir, botId, `${partId}.json`)
-  const partKey = (botId, partId) => `${botId}/${partId}`
-  const writes = () => rt.readOnly?.() === undefined
-  /** @type {Map<string, Map<string, object[]>>} */
-  const cards = new Map()
-  const reading = new Map()
-  let writing = Promise.resolve()
-  let deleting = Promise.resolve()
+  const inflight = botId => byBot.get(botId)?.size ?? 0
+  const track = (id, botId, controller) => {
+    flights.set(id, { botId, controller })
+    const ids = byBot.get(botId) ?? new Set()
+    ids.add(id)
+    byBot.set(botId, ids)
+  }
+  const untrack = (id) => {
+    const flight = flights.get(id)
+    if (flight === undefined) return
+    flights.delete(id)
+    const ids = byBot.get(flight.botId)
+    ids?.delete(id)
+    if (ids?.size === 0) byBot.delete(flight.botId)
+  }
+  const listOf = botId => (Array.isArray(rt.own(state.btwCards, botId)) ? state.btwCards[botId] : [])
+  const findCard = (botId, id) => listOf(botId).find(card => card?.id === id)
+  const abandoned = botId => disposing || dropped.has(botId) || rt.botOf(botId) === undefined
+  const stopError = (botId) => new Error(disposing && !dropped.has(botId) && rt.botOf(botId) !== undefined ? 'DS Bot is stopping.' : 'Unknown Bot')
 
-  const listOf = (botId, partId) => cards.get(botId)?.get(partId) ?? []
-
-  const writePart = (botId, partId) => {
-    const run = writing.then(async () => {
-      if (cardsDir === undefined || !writes() || dropped.has(botId) || rt.botOf(botId) === undefined) return
-      const path = partFile(botId, partId)
-      await mkdir(dirname(path), { recursive: true })
-      const temp = `${path}.${process.pid}.tmp`
-      try {
-        await writeFile(temp, JSON.stringify(cards.get(botId)?.get(partId) ?? [], null, 2), 'utf8')
-        await replaceFile(temp, path)
-      } catch (error) {
-        await unlink(temp).catch(() => {})
-        throw error
+  // Wait until every targeted flight has left. A call still inside resolveAgent
+  // has no `done` yet; yielding lets it notice disposal and drop the slot.
+  async function drain(ids) {
+    const left = () => (ids === undefined ? [...flights.keys()] : ids.filter(id => flights.has(id)))
+    for (;;) {
+      const idsLeft = left()
+      if (idsLeft.length === 0) return
+      const waiting = idsLeft.map(id => flights.get(id)?.done).filter(Boolean)
+      if (waiting.length > 0) {
+        await Promise.allSettled(waiting)
+        continue
       }
-    })
-    writing = run.catch(() => {})
-    return run
+      await new Promise(resolve => { setTimeout(resolve, 0) })
+    }
   }
 
-  // A part's list, reading its file once. The owning host records the restart a
-  // previous process left behind: an 'answering' card could only have failed
-  // with it, and the file is written again. A reading host keeps the cards as
-  // they were saved.
-  async function readPart(botId, partId) {
-    const byBot = cards.get(botId) ?? new Map()
-    cards.set(botId, byBot)
-    const held = byBot.get(partId)
-    if (held !== undefined) return held
-    const key = partKey(botId, partId)
-    const pending = reading.get(key)
-    if (pending !== undefined) return pending
-    const job = (async () => {
-      let list = []
-      if (cardsDir === undefined) {
-        byBot.set(partId, list)
-        return list
-      }
-      try {
-        const parsed = JSON.parse(await readFile(partFile(botId, partId), 'utf8'))
-        if (Array.isArray(parsed)) {
-          list = parsed.filter(card => card !== null && typeof card === 'object' && !Array.isArray(card))
-            .map(card => ({ ...card, botId, partId }))
-        }
-      } catch (error) {
-        if (error?.code !== 'ENOENT') rt.warn('ds-bot: unreadable btw cards %s: %s', partFile(botId, partId), error?.code ?? error)
-      }
-      if (writes()) {
-        const now = Date.now()
-        let touched = false
-        list = list.map((card) => {
-          if (card.status !== 'answering') return card
-          touched = true
-          return { ...card, status: 'failed', error: card.error ?? RESTART_ERROR, finishedAt: card.finishedAt ?? now }
-        })
-        byBot.set(partId, list)
-        if (touched) await writePart(botId, partId).catch(error => rt.warn('ds-bot: btw cards of %s not saved: %s', botId, error))
-      } else {
-        byBot.set(partId, list)
-      }
-      return byBot.get(partId)
-    })()
-    reading.set(key, job)
+  // The same route as the conversation, including temperature and stop. The
+  // aside sets its own output budget. The messages array is tagged for usage.
+  async function callModel(snapshot, question, retry, signal) {
+    const messages = rt.tagUsage([
+      ...snapshot.messages,
+      { role: 'user', content: [{ type: 'text', text: promptFor(question, retry) }] },
+    ], { sessionId: snapshot.sessionId, kind: 'btw' })
+    const assembler = new BlockAssembler()
+    const tools = snapshot.header?.tools
+    for await (const chunk of ctx.llm.stream({
+      ...snapshot.header?.config,
+      messages,
+      toolHistory: snapshot.toolHistory,
+      ...(tools ? { tools: [...tools] } : {}),
+      maxTokens: BTW_MAX_TOKENS,
+      sessionId: snapshot.sessionId,
+      signal,
+    })) assembler.push(chunk)
+    const finish = assembler.finish
+    if (finish.kind === 'error' || finish.kind === 'aborted') {
+      return { failed: finish.failure?.message ?? finish.kind }
+    }
+    const text = assembler.blocks().filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
+    // Checked before a tool-call retry: a truncated tool call is not a request.
+    if (finish.kind === 'max-tokens') return { text, cutOff: true }
+    const toolCalls = finish.kind === 'tool-calls' || assembler.blocks().some(block => block?.type === 'tool-call')
+    return { text, toolCalls }
+  }
+
+  // The card is gone when its Bot was deleted or this host is unloading.
+  function alive(card) {
+    if (disposing || dropped.has(card.botId)) return false
+    if (rt.botOf(card.botId) === undefined) return false
+    return findCard(card.botId, card.id) === card
+  }
+
+  // Only the first writer wins. Cancel sets 'cancelled' before it aborts.
+  function settle(card, patch) {
+    if (card.status !== 'answering' || !alive(card)) return false
+    Object.assign(card, patch, { finishedAt: Date.now() })
+    return true
+  }
+
+  async function complete(card, snapshot, question, signal) {
     try {
-      return await job
-    } finally {
-      reading.delete(key)
-    }
-  }
-
-  // Only each Bot's current part is read up front. An earlier part's file is
-  // read when that part's history is asked for (parts.js's earlier page).
-  const originalLoad = rt.load?.bind(rt)
-  if (typeof originalLoad === 'function') {
-    let ready
-    rt.load = () => (ready ??= (async () => {
-      await originalLoad()
-      for (const botId of Object.keys(state.bots)) await readPart(botId, rt.chatOf(botId))
-    })())
-  }
-
-  const originalRefresh = rt.refresh?.bind(rt)
-  if (typeof originalRefresh === 'function') {
-    rt.refresh = async () => {
-      const wasWriting = writes()
-      await originalRefresh()
-      // Taking over a team the other host closed makes this one the writer:
-      // re-read the loaded parts so a leftover 'answering' is recorded now.
-      if (wasWriting || !writes()) return
-      for (const [botId, byBot] of cards) {
-        const parts = Array.from(byBot.keys())
-        byBot.clear()
-        for (const partId of parts) await readPart(botId, partId)
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (signal.aborted || card.status !== 'answering' || !alive(card)) return
+        const result = await callModel(snapshot, question, attempt === 1, signal)
+        if (signal.aborted || card.status !== 'answering' || !alive(card)) return
+        if (result.failed !== undefined) {
+          // Cancel already left this card, and the check above returned. A provider
+          // that stops on its own still fails the card, so it does not stay 'answering'.
+          if (settle(card, { status: 'failed', error: result.failed, answer: '' })) await rt.save()
+          return
+        }
+        if (result.cutOff) {
+          const answer = result.text ? keptText(result.text) : ''
+          if (settle(card, { status: 'failed', error: BTW_LIMIT, answer, finish: 'max-tokens' })) await rt.save()
+          return
+        }
+        if (result.toolCalls) {
+          if (attempt === 0) continue
+          if (settle(card, { status: 'failed', error: TOOL_ERROR, answer: '' })) await rt.save()
+          return
+        }
+        if (result.text === '') {
+          if (settle(card, { status: 'failed', error: EMPTY_ERROR, answer: '' })) await rt.save()
+          return
+        }
+        if (settle(card, { status: 'done', answer: keptText(result.text) })) await rt.save()
+        return
       }
+    } catch (error) {
+      if (signal.aborted || card.status !== 'answering' || !alive(card)) return
+      const message = error?.message ?? String(error)
+      rt.warn('ds-bot: btw for %s failed: %s', card.botId, message)
+      if (settle(card, { status: 'failed', error: message, answer: '' })) await rt.save()
     }
   }
 
-  // The team view carries each Bot's current part only; earlier parts come with
-  // their history pages.
-  const btwView = () => {
-    const view = {}
-    for (const botId of Object.keys(state.bots)) {
-      const list = listOf(botId, rt.chatOf(botId))
-      if (list.length > 0) view[botId] = list
-    }
-    return view
+  // A Bot id or an earlier part of its own chat means the current part, as `send` does.
+  function locate(raw) {
+    const past = rt.pastOwners.get(raw)
+    const sessionId = rt.botOf(raw) ? rt.chatOf(raw) : past && past.roomId === undefined ? rt.chatOf(past.botId) : raw
+    const grouped = rt.roomOf(raw) !== undefined || rt.roomOf(sessionId) !== undefined
+      || rt.groupOwners.has(raw) || rt.groupOwners.has(sessionId)
+      || past?.roomId !== undefined
+    if (grouped) throw new Error('btw is only available in a Bot\'s private chat.')
+    const botId = rt.chatOwners.get(sessionId) ?? rt.botOf(raw)?.id
+    if (botId === undefined || rt.botOf(botId) === undefined) throw new Error('Unknown Bot')
+    return { sessionId, botId }
   }
 
-  // Deleting a card removes only that saved aside. The whole read-modify-write
-  // is queued so two cards deleted together cannot restore each other. A state
-  // save afterwards bumps the revision, so every window polls the new lists.
-  function btwDelete({ sessionId, cardId }) {
-    const run = deleting.then(async () => {
-      const { botId } = locatePrivate(rt, sessionId, "Side chat is only available in a Bot's private chat.")
-      const list = await readPart(botId, sessionId)
-      const next = list.filter(card => card?.id !== cardId)
-      if (next.length === list.length) return { deleted: false }
-      const byBot = cards.get(botId)
-      byBot.set(sessionId, next)
-      try {
-        await writePart(botId, sessionId)
-      } catch (error) {
-        byBot.set(sessionId, list)
-        throw error
+  async function askBtw({ sessionId: raw, text }) {
+    const question = typeof text === 'string' ? text : ''
+    if (question.trim() === '') throw Object.assign(new Error('Write a question after /btw.'), { code: 'bot/invalid' })
+    const { sessionId, botId } = locate(raw)
+    if (inflight(botId) >= BTW_IN_FLIGHT) throw new Error('Two aside questions are already running for this Bot. Ask again when one finishes.')
+    const id = randomUUID()
+    const controller = new AbortController()
+    track(id, botId, controller)
+    let started = false
+    try {
+      const agent = await rt.resolveAgent(sessionId)
+      if (abandoned(botId)) throw stopError(botId)
+      const snapshot = snapshotOf(agent.session, ctx.get?.('sessionProjections'))
+      const route = snapshot.header?.config
+      if (!route?.provider || !route?.model) throw new Error('This Bot has not called a model yet. Send a normal message first.')
+      const card = {
+        id,
+        botId,
+        partId: snapshot.sessionId,
+        atSeq: snapshot.atSeq,
+        anchorSeq: snapshot.anchorSeq,
+        turn: snapshot.turn,
+        question: keptText(question),
+        answer: '',
+        status: 'answering',
+        createdAt: Date.now(),
       }
+      state.btwCards ??= {}
+      state.btwCards[botId] = retainCards([card, ...listOf(botId)])
       await rt.save()
-      return { deleted: true }
-    })
-    deleting = run.catch(() => {})
-    return run
+      // Unload keeps the saved card for the next owner. Deletion already removed it.
+      if (abandoned(botId) || findCard(botId, id) !== card) {
+        if (disposing && !dropped.has(botId) && findCard(botId, id) === card) return { id }
+        throw new Error('Unknown Bot')
+      }
+      const done = complete(card, snapshot, question, controller.signal).finally(() => untrack(id))
+      const flight = flights.get(id)
+      if (flight !== undefined) flight.done = done
+      started = true
+      return { id }
+    } catch (error) {
+      const list = listOf(botId)
+      if (list.some(card => card.id === id)) {
+        const rest = list.filter(card => card.id !== id)
+        if (rest.length === 0) delete state.btwCards[botId]
+        else state.btwCards[botId] = rest
+      }
+      throw error
+    } finally {
+      if (!started) untrack(id)
+    }
   }
 
-  // Plugin unload; queued deletes and their file writes have to finish.
+  async function cancelBtw({ sessionId: raw, id }) {
+    const { botId } = locate(raw)
+    const card = findCard(botId, id)
+    if (card === undefined) throw new Error('This aside question is no longer here.')
+    if (card.status !== 'answering') return { answering: false }
+    card.status = 'cancelled'
+    card.finishedAt = Date.now()
+    flights.get(id)?.controller.abort()
+    await rt.save()
+    return { answering: true }
+  }
+
+  // Plugin unload. The card stays 'answering'; the next owning host records the restart.
   async function btwDispose() {
-    await deleting
-    await writing
+    disposing = true
+    for (const flight of flights.values()) flight.controller.abort()
+    await drain()
   }
 
-  // Clears the Bot's cards before the roster save.
+  // Clears the Bot's cards before the roster save, and waits out calls that
+  // would otherwise finish into the deleted team.
   async function dropBot(botId) {
     dropped.add(botId)
-    cards.delete(botId)
-    for (const key of reading.keys()) if (key.startsWith(`${botId}/`)) reading.delete(key)
-    if (cardsDir !== undefined && writes()) await rm(join(cardsDir, botId), { recursive: true, force: true }).catch(error => rt.warn('ds-bot: btw cards of %s not removed: %s', botId, error))
+    if (state.btwCards != null) delete state.btwCards[botId]
+    const ids = [...(byBot.get(botId) ?? [])]
+    for (const id of ids) flights.get(id)?.controller.abort()
+    await drain(ids)
   }
 
   // Channel can be installed without the roster (the thinking route test). The
@@ -368,5 +451,7 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { btwDelete, btwDispose, btwView, btwPartCards: readPart })
+  const btwJoin = id => flights.get(id)?.done ?? Promise.resolve()
+
+  Object.assign(rt, { askBtw, cancelBtw, btwJoin, btwDispose })
 }

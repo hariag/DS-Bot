@@ -1,6 +1,7 @@
 // Client channel: the team view the browser renders, and the POST /api/bot endpoints.
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { install as installBtw } from './btw.js'
 import { questionReply, viewReply } from './parts.js'
 import { validateViewAnswer } from '../shared/views.js'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
@@ -19,6 +20,7 @@ export function errorCode(error) {
 }
 
 export function install(rt) {
+  installBtw(rt)
   const { ctx, state } = rt
 
   // The DSH interface language of the last browser that asked for the team.
@@ -50,6 +52,8 @@ export function install(rt) {
     exchangeTurns: state.exchangeTurns,
     questions: state.questions,
     views: state.views ?? {},
+    // Aside answers, per Bot, newest first. Not part of the model-visible history.
+    btwCards: state.btwCards ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.
@@ -369,6 +373,19 @@ export function install(rt) {
           }, AbortSignal.timeout(30_000))
           return ok(true)
         }
+        // An aside on a snapshot of this Bot's private chat. The answer is not written
+        // into the Session; the card fills in after this returns.
+        case 'btw': {
+          if (typeof body.sessionId !== 'string') return fail('Nothing to ask', 'bot/invalid')
+          if (String(body.text ?? '').trim() === '') return fail('Write a question after /btw.', 'bot/invalid')
+          await rt.load()
+          return ok(await rt.askBtw({ sessionId: body.sessionId, text: String(body.text) }))
+        }
+        case 'btw-cancel': {
+          if (typeof body.sessionId !== 'string' || typeof body.id !== 'string' || body.id === '') return fail('Nothing to cancel', 'bot/invalid')
+          await rt.load()
+          return ok(await rt.cancelBtw({ sessionId: body.sessionId, id: body.id }))
+        }
         case 'update-check': {
           const fresh = body.fresh === true
           return ok({ ...(await rt.updateCheck({ fresh })), dsh: (await rt.dshUpdateCheck?.({ fresh })) ?? null })
@@ -424,6 +441,8 @@ export function install(rt) {
 
   ctx.effect(() => {
     void rt.load()
-    return () => {}
+    // Registered last, so this disposer runs before the state lock is released.
+    // In-flight asides abort here; their cards stay answering for the next owner.
+    return () => rt.btwDispose?.()
   }, 'ds-bot: load state')
 }

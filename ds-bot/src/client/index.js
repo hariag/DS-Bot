@@ -11,6 +11,7 @@ import { TeamSidebar, ConnectPlugins, YouAvatar, AccountLauncher, FooterAccount,
 import { HeaderPill } from './header.js'
 import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
+import { BtwDock, BtwTurnTail, btwSource } from './btw.js'
 import { VOICE_BUNDLE } from './speech.js'
 import { sameVersion } from './dsh-offer.js'
 import { QuestionCard, QuestionDock } from './questions.js'
@@ -150,6 +151,7 @@ export function apply(ctx) {
     const live = {}
     if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
     if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
+    if (value.btwCards !== undefined && JSON.stringify(value.btwCards) !== JSON.stringify(current.btwCards ?? {})) live.btwCards = value.btwCards
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
     if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) return
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -589,6 +591,33 @@ export function apply(ctx) {
     } }
   }
 
+  actions.cancelBtw = card => call('btw-cancel', { sessionId: card.partId, id: card.id })
+  // The dock lives outside the chat snapshot, so it subscribes for the turn that
+  // owns a card. Until that turn closes, the card stays by the composer.
+  actions.turnFacts = (sessionId) => {
+    try {
+      const binding = ctx.sessions.binding(sessionId)
+      if (binding === undefined) return { turns: undefined, openTurn: undefined }
+      const conversation = ctx.uiConversation.binding(binding)
+      const chat = conversation.target('chat').getSnapshot()
+      return { turns: chat?.timeline?.turns, openTurn: conversation.openTurn.getSnapshot() }
+    } catch {
+      return { turns: undefined, openTurn: undefined }
+    }
+  }
+  actions.watchTurns = (sessionId, listener) => {
+    try {
+      const binding = ctx.sessions.binding(sessionId)
+      if (binding === undefined) return () => {}
+      const conversation = ctx.uiConversation.binding(binding)
+      const offChat = conversation.target('chat').subscribe(listener)
+      const offOpen = conversation.openTurn.subscribe(listener)
+      return () => { offChat(); offOpen() }
+    } catch {
+      return () => {}
+    }
+  }
+
   // A Bot surface owns the cells it shadows. It starts far below the -10 that plugins
   // commonly use and goes below whatever already holds the cell, so a plugin that
   // shadows the same cell neither breaks the install nor shows through.
@@ -609,7 +638,10 @@ export function apply(ctx) {
           return binding === undefined ? undefined : triggers.sessionOf(binding.ctx)
         }
         const launched = sessionId => controllerOf(sessionId)?.launcher.getSnapshot() === CHATS_SOURCE
-        const offs = atSources({ roster, sessions: ctx.sessions, launched, iconFor: menuIcons(roster) }).map(source => triggers.registerSource(source))
+        const offs = [
+          ...atSources({ roster, sessions: ctx.sessions, launched, iconFor: menuIcons(roster) }).map(source => triggers.registerSource(source)),
+          triggers.registerSource(btwSource({ roster })),
+        ]
         atMenu = { controllerOf }
         return () => {
           atMenu = null
@@ -668,6 +700,9 @@ export function apply(ctx) {
     // DSH's own turn tail stays, so what other plugins add there shows, such as the
     // cards of the files a turn delivered; its copy and branch row is hidden.
     () => shadow('conversation.chat.turnTail', { id: 'bot-turn-separators', order: 1000, inject: face }, TurnTailCell),
+    // A side question is not a transcript row. After its snapshot turn closes it
+    // sits on that turn's tail, ahead of the time separator.
+    () => shadow('conversation.chat.turnTail', { id: 'bot-btw', order: 800, priority: BOT_PRIORITY, inject: face }, BtwTurnTail),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
     () => shadow('conversation.chat.node', { key: 'question-reply', priority: BOT_PRIORITY, locale: 'chat' }, AnsweredReply),
@@ -680,6 +715,7 @@ export function apply(ctx) {
     () => shadow('conversation.input.model', { priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'activity', order: 0, priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'usage', order: 1, priority: BOT_PRIORITY }, Nothing),
+    () => shadow('conversation.composer.dock', { id: 'btw', order: 2, priority: BOT_PRIORITY, inject: face }, BtwDock),
     () => shadow('conversation.input.left', { id: 'bot-plus', order: -100, inject: face }, ComposerPlus),
     () => shadow('conversation.input.right', { id: 'bot-voice', order: 100, inject: face }, ComposerVoice),
     () => shadow('conversation.composer', {

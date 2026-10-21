@@ -14,6 +14,8 @@ import { failureLabel } from './diagnostics.js'
 import { turnReasoning, thinkingStep } from './turn-reasoning.js'
 import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
 import { heldCardKey } from './sources.js'
+import { BtwCardView } from './btw.js'
+import { earlierPartCards, partIndexOf, withBtwRows } from './btw-model.js'
 
 export { clockLabel }
 
@@ -331,38 +333,52 @@ function EarlierUser({ row }) {
 // Pages load from the host as the user scrolls up; a thin line marks where each
 // part begins, the last one where the current part begins.
 function EarlierParts({ sessionId, roster, actions }) {
-  const [view, setView] = useState({ items: [], cursor: undefined, loading: true, failed: false, startedAt: null })
+  const [view, setView] = useState({ pages: [], cursor: undefined, loading: true, failed: false, startedAt: null })
   const top = useRef(null)
   const busy = useRef(false)
-  const alive = useRef(true)
+  const generation = useRef(0)
   const restore = useRef(null)
   const load = (cursor) => {
     if (busy.current) return
+    const mine = generation.current
+    // The host numbers a page by the same part index: cursor.part, or the part before this one.
+    const partIndex = partIndexOf(roster.byId[sessionId], sessionId, cursor)
     busy.current = true
     setView(current => ({ ...current, loading: true, failed: false }))
     actions.earlier(sessionId, cursor).then((page) => {
+      if (mine !== generation.current) return
       busy.current = false
-      if (!alive.current) return
       // The chat's scroller does not anchor content prepended above the viewport,
       // so the page keeps its distance from the end by hand.
       const scroller = top.current && scrollParent(top.current)
       if (scroller) restore.current = { scroller, fromEnd: scroller.scrollHeight - scroller.scrollTop }
-      setView(current => ({ items: [...page.items, ...current.items], cursor: page.cursor, loading: false, failed: false, startedAt: page.startedAt ?? current.startedAt }))
+      const incoming = Array.isArray(page.items) ? page.items : []
+      setView(current => {
+        const pages = current.pages.slice()
+        const at = pages.findIndex(entry => entry.partIndex === partIndex)
+        if (at >= 0) pages[at] = { partIndex, items: [...incoming, ...pages[at].items] }
+        else pages.push({ partIndex, items: incoming })
+        pages.sort((a, b) => a.partIndex - b.partIndex)
+        return { pages, cursor: page.cursor, loading: false, failed: false, startedAt: page.startedAt ?? current.startedAt }
+      })
     }, () => {
+      if (mine !== generation.current) return
       busy.current = false
-      if (alive.current) setView(current => ({ ...current, loading: false, failed: true }))
+      setView(current => ({ ...current, loading: false, failed: true }))
     })
   }
   useEffect(() => {
-    alive.current = true
+    generation.current += 1
+    busy.current = false
+    setView({ pages: [], cursor: undefined, loading: true, failed: false, startedAt: null })
     load(undefined)
-    return () => { alive.current = false }
+    return () => { generation.current += 1 }
   }, [sessionId])
   useLayoutEffect(() => {
     const pending = restore.current
     restore.current = null
     if (pending) pending.scroller.scrollTop = pending.scroller.scrollHeight - pending.fromEnd
-  }, [view.items])
+  }, [view.pages])
   useEffect(() => {
     const node = top.current
     if (!node || view.loading || view.failed || !view.cursor || typeof IntersectionObserver !== 'function') return undefined
@@ -372,12 +388,16 @@ function EarlierParts({ sessionId, roster, actions }) {
     observer.observe(node)
     return () => observer.disconnect()
   }, [view.cursor, view.loading, view.failed])
+  const bot = roster.byId[sessionId]
+  const cards = roster.btwCards?.[bot?.id]
+  const items = []
+  for (const page of view.pages) items.push(...withBtwRows(page.items, earlierPartCards(cards, bot, sessionId, page.partIndex)))
   return h('div', { className: 'bt-earlier', role: 'feed', 'aria-label': t('Earlier messages'), 'aria-busy': view.loading },
     h('div', { ref: top, className: 'bt-earlier-top' },
       view.loading ? h(Shimmer, null, t('Loading earlier messages…'))
         : view.failed ? h('button', { type: 'button', className: 'bt-soft', onClick: () => load(view.cursor) }, t('Couldn’t load earlier messages · Retry'))
           : view.cursor ? h('button', { type: 'button', className: 'bt-soft', onClick: () => load(view.cursor) }, t('Load earlier')) : null),
-    h(ChatRows, { items: view.items, sessionId, roster, actions }),
+    h(ChatRows, { items, sessionId, roster, actions }),
     h(PartLine, { time: view.startedAt }))
 }
 
@@ -417,6 +437,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
     case 'user': return h(EarlierUser, { key, row })
     case 'answer': return h(AnsweredReply, { key, node: { data: row } })
     case 'bot': return h(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : undefined, msgKey: useUi ? `${sessionId}:${row.time}` : undefined, useUi, fold: FOLD_HUGE })
+    case 'btw': return h(BtwCardView, { key, card: row.card, actions })
     case 'event': {
       if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
       const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }

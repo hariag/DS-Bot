@@ -117,6 +117,10 @@ function decide(body) {
   const messages = (body.messages ?? []).filter(m => m.role !== 'system')
   const last = messages.at(-1)
   const blocks = Array.isArray(last?.content) ? last.content : []
+  // An aside (btw.js). The first line is the marker; the reply is fixed and calls nothing.
+  if (last?.role === 'user' && textBlocks(last.content).some(value => value.startsWith('ds-bot/btw\n') || value === 'ds-bot/btw')) {
+    return [text('Based on the conversation so far.')]
+  }
   const me = /You are (.+?), a Bot on the user's team/.exec(system)?.[1] ?? 'Bot'
   const isMain = system.includes('You are the Main Bot')
   const isRelay = system.includes('# Group chat relay')

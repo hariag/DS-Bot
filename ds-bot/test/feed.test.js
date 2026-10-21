@@ -150,15 +150,15 @@ test('the chat endpoint pages a Bot\'s own chat from the newest part back', asyn
   const first = (await call('chat', { botId: 'm1' })).value
   assert.deepEqual(first, {
     sessionId: 'm1c',
-    items: [{ kind: 'user', text: 'second', time: 70 }, { kind: 'bot', text: 'reply', time: 71 }],
+    items: [{ kind: 'user', text: 'second', time: 70, seq: 41 }, { kind: 'bot', text: 'reply', time: 71, seq: 42 }],
     cursor: { part: 1, beforeSeq: 41 },
   })
   // The current part's first message has the line that marks where the part began.
   const second = (await call('chat', { botId: 'm1', cursor: first.cursor })).value
-  assert.deepEqual(second.items, [{ kind: 'divider', time: 50 }, { kind: 'user', text: 'first', time: 60 }])
+  assert.deepEqual(second.items, [{ kind: 'divider', time: 50 }, { kind: 'user', text: 'first', time: 60, seq: 40 }])
   assert.deepEqual(second.cursor, { part: 0 })
   const third = (await call('chat', { botId: 'm1', cursor: second.cursor })).value
-  assert.deepEqual([third.items, third.cursor], [[{ kind: 'user', text: 'long ago', time: 5 }], null])
+  assert.deepEqual([third.items, third.cursor], [[{ kind: 'user', text: 'long ago', time: 5, seq: 3 }], null])
   assert.equal((await call('chat', { botId: 'nobody' })).error.code, 'bot/not-found')
 })
 

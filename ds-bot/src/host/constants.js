@@ -86,3 +86,15 @@ export const OWN_CHAT_SEARCH = 20
 export const HISTORY_PAGE = 200
 export const HISTORY_PAGES_MAX = 50
 export const HISTORY_TIMEOUT_MS = 20_000
+// An aside (btw) keeps this many cards per Bot, newest first.
+export const BTW_CARDS_MAX = 20
+// Question and answer text kept on a card. The model still receives the whole question.
+export const BTW_TEXT_MAX = 2000
+// Appended to a card's question or answer only, and only when that text was cut.
+export const BTW_CUT = ' [truncated]'
+// Aside calls in flight for one Bot. Each one reads the whole conversation.
+export const BTW_IN_FLIGHT = 2
+// Output budget for an aside. The answer is meant to be short; thinking shares it.
+export const BTW_MAX_TOKENS = 2000
+// Shown when an aside stops because it used that whole budget. The partial answer stays.
+export const BTW_LIMIT = 'Answer cut off at the output limit.'
