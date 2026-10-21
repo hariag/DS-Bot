@@ -198,20 +198,25 @@ await step('a Bot is not offered dsh\'s blocking question tool', () => send(botN
     ?? expect(saidText(calls, /^收到：阻塞提问/), 'expected Writer to answer in its reply')
 })
 
-// show_view: an options card waits in state.views; answering it sends the reply to
-// the Bot as its next message and clears the card.
+// show_view: an options card waits in state.views. The key is the chat's Session
+// id — the Bot id until its chat first moves to a fresh part (chatOf).
 await step('Writer shows an options view', () => send(botNamed('Writer').id, '视图选项'), () => {
-  const view = state().views?.[botNamed('Writer').sessionId]
-  return expect(view?.title === 'Pick a lane' && typeof view.id === 'string', `no pending view (${JSON.stringify(view)})`)
+  const chat = botNamed('Writer').sessionId ?? botNamed('Writer').id
+  const view = state().views?.[chat]
+  return expect(view?.title === 'Pick a lane' && typeof view.id === 'string', `no pending view (${JSON.stringify(state().views)})`)
     ?? expect(view.callId !== undefined, 'the view does not carry its call')
 })
-await step('the view answer reaches Writer and clears the card', () => api('view-reply', {
-  sessionId: botNamed('Writer').sessionId,
-  viewId: state().views[botNamed('Writer').sessionId].id,
-  action: 'lane',
-  values: { selected: ['Ship now'] },
-}), (_value, calls) => {
-  return expect(state().views?.[botNamed('Writer').sessionId] === undefined, 'the view is still open')
+await step('the view answer reaches Writer and clears the card', () => {
+  const chat = botNamed('Writer').sessionId ?? botNamed('Writer').id
+  return api('view-reply', {
+    sessionId: chat,
+    viewId: state().views[chat].id,
+    action: 'lane',
+    values: { selected: ['Ship now'] },
+  })
+}, (_value, calls) => {
+  const chat = botNamed('Writer').sessionId ?? botNamed('Writer').id
+  return expect(state().views?.[chat] === undefined, 'the view is still open')
     ?? expect(calls.some(call => call.last?.startsWith('{"kind":"answer_to_pending_view"')), 'the answer did not arrive as the Bot\'s next message')
 })
 
@@ -220,7 +225,7 @@ await step('the view answer reaches Writer and clears the card', () => api('view
 await step('Writer shows a view just under the byte limit', () => send(botNamed('Writer').id, '大视图'), (_value, calls) => {
   return expect(calls.some(call => (call.out ?? []).some(block => block.type === 'tool_use' && block.name === 'show_view')), 'Writer did not call show_view')
 })
-await step('the big view survives a re-read of the part', () => api('earlier', { sessionId: botNamed('Writer').sessionId }), (page) => {
+await step('the big view survives a re-read of the part', () => api('earlier', { sessionId: botNamed('Writer').sessionId ?? botNamed('Writer').id }), (page) => {
   const found = (page?.items ?? []).find(item => JSON.stringify(item).includes('show_view'))
   return expect(found !== undefined, `no show_view call in the part (${JSON.stringify(page?.items?.length)})`)
     ?? expect(JSON.stringify(found).length > 7500, `the call came back without its view (${JSON.stringify(found).length} chars)`)
