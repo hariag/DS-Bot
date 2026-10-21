@@ -10,6 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
+import { canonicalExecPath } from './canonical-path.mjs'
 import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
 import { hostPort } from './host-port.mjs'
 import { HostProcess } from './host-process.mjs'
@@ -51,7 +52,14 @@ let choosing
 let copying
 const copyAbort = new AbortController()
 
-if (!app.requestSingleInstanceLock()) {
+// A packaged app started through an 8.3 short path or a junction restarts once on the
+// canonical path: the lock below and every path the Host sees then agree with the long
+// form, and the profile patch layer stops mixing the two.
+const canonical = app.isPackaged ? canonicalExecPath(process.execPath) : undefined
+if (canonical !== undefined) {
+  app.relaunch({ execPath: canonical, args: process.argv.slice(1) })
+  app.exit(0)
+} else if (!app.requestSingleInstanceLock()) {
   app.exit(0)
 } else {
   app.on('second-instance', focusWindow)

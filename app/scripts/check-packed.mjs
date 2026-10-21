@@ -4,7 +4,7 @@
 // Usage: node scripts/check-packed.mjs [app executable] [screenshot.png]
 // The executable defaults to the one that `npm run pack` or `npm run dist` writes into dist-pack/.
 import { spawn, spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -28,7 +28,7 @@ if (!existsSync(executable)) {
   process.exit(2)
 }
 
-const work = mkdtempSync(join(tmpdir(), 'ds-bot-packed-'))
+const work = realpathSync.native(mkdtempSync(join(realpathSync.native(tmpdir()), 'ds-bot-packed-')))
 mkdirSync(join(work, 'home'))
 const children = []
 
