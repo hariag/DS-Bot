@@ -277,7 +277,13 @@ await step('the group memory panel shows it', () => api('memory-view', { roomId:
 await step('members recall it in the group', () => send(roomNamed('研发群').id, '回忆 out'), (_value, calls) => expect(saidText(calls, new RegExp(`记忆里有：[\\s\\S]*\\[group · MEMORY\\.md\\] ${groupFact}`)), 'no member found it'))
 await step('a member\'s own chat does not read it', () => send(botNamed('Writer').id, '回忆 out'), (_value, calls) => expect(saidText(calls, /记忆里有：\nNothing in your memory and the team memory mentions "out"/), 'Writer\'s own chat found it'))
 await step('a Bot outside the group does not read it', async () => {
+  // A message sent before the new Bot's kickoff turn starts runs first, before its
+  // session has the memory tools; wait for the kickoff's model call to land.
+  const mark = mockLog().length
   const outsider = await api('create-bot', { name: 'Outsider', role: 'Tester', instructions: 'Test.' })
+  for (const deadline = Date.now() + STEP_TIMEOUT_MS; Date.now() < deadline; await sleep(200)) {
+    if (mockLog().slice(mark).some(entry => String(entry.first).includes('just created you'))) break
+  }
   await settle()
   return send(outsider.id, '回忆 out')
 }, (_value, calls) => expect(saidText(calls, /记忆里有：\nNothing in your memory and the team memory mentions "out"/), 'Outsider found it'))
