@@ -20,10 +20,6 @@ node bench/run.mjs
 node bench/render-report.mjs
 ```
 
-`browser_task` 使用调用它的 Bot 在 DSH 中配置的模型。跑基准测试前设置 `BENCH_BASE_URL`、`BENCH_MODEL` 和 `BENCH_API_KEY`。
-
-```sh
-BENCH_BASE_URL=... BENCH_MODEL=... BENCH_API_KEY=... node bench/run.mjs
-```
+模型用环境变量 `DEEPSEEK_API_KEY`，模型 id 是 `deepseek-v4.1-flash`。密钥不要写进仓库。
 
 设计说明在 `docs/plans/2026-10-21-browser-plugins.md`。

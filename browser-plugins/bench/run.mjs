@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { benchConfig, completeBench } from './deepseek.js'
+import { completeDeepseek, deepseekKey, MODEL } from '../../ds-bot/src/host/browser/deepseek.js'
 import { runToolLoop } from '../../ds-bot/src/host/browser/loop.js'
 import * as refs from '../../ds-bot/src/host/browser/refs.js'
 import * as script from '../../ds-bot/src/host/browser/script.js'
@@ -89,14 +89,14 @@ function bind(plugin, session) {
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
-    execute: (args) => tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir, complete: completeBench }),
+    execute: (args) => tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir, complete: completeDeepseek }),
   }))
 }
 
 async function judge(task, answer, pageText) {
   if (task.check) return { ok: false, detail: 'local tasks are judged in code' }
   try {
-    const response = await completeBench({
+    const response = await completeDeepseek({
       messages: [
         { role: 'system', content: 'Judge a web agent. Reply with JSON only: {"success":true|false,"reason":"..."}.' },
         { role: 'user', content: `Task: ${task.goal('')}\nAgent answer:\n${answer || '(empty)'}\nFinal page text:\n${pageText.slice(0, 4000)}` },
@@ -115,10 +115,10 @@ async function runModelTask(plugin, task, session, fixture) {
   const started = Date.now()
   try {
     const result = plugin.id === 'task'
-      ? await runTask({ session, goal, complete: completeBench, maxSteps: task.maxSteps })
+      ? await runTask({ session, goal, complete: completeDeepseek, maxSteps: task.maxSteps })
       : await runToolLoop({
         tools: bind(plugin, session),
-        complete: completeBench,
+        complete: completeDeepseek,
         goal,
         system: plugin.systemPrompt,
         maxSteps: task.maxSteps,
@@ -175,35 +175,27 @@ async function isolate(playwrightUrl) {
   }
 }
 
-const onlyTasks = (process.env.BENCH_TASKS ?? '').split(',').map(item => item.trim()).filter(Boolean)
-const onlyPlugins = (process.env.BENCH_PLUGINS ?? '').split(',').map(item => item.trim()).filter(Boolean)
-const selectedTasks = onlyTasks.length ? tasks.filter(task => onlyTasks.includes(task.id)) : tasks
-const selectedPlugins = onlyPlugins.length
-  ? Object.fromEntries(Object.entries(plugins).filter(([name]) => onlyPlugins.includes(name)))
-  : plugins
-
 const fixture = await startFixture()
 const profileRoot = join(tmpdir(), `bot-browser-bench-${Date.now()}`)
 const driverSession = await openBotBrowser({ botId: 'driver', profileRoot, headless: true, playwrightUrl })
 const driver = await drive(driverSession, fixture)
 await driverSession.close()
 
-const { baseUrl, model, apiKey } = benchConfig()
+const key = deepseekKey()
 const results = {
-  model: model ?? '',
-  endpoint: baseUrl ?? '',
-  key: apiKey ? 'present' : 'missing',
+  model: MODEL,
+  key: key ? 'present' : 'missing',
   driver,
   isolation: await isolate(playwrightUrl),
   plugins: {},
 }
 
-if (!baseUrl || !model || !apiKey) {
-  for (const name of Object.keys(selectedPlugins)) results.plugins[name] = { skipped: 'Set BENCH_BASE_URL, BENCH_MODEL, and BENCH_API_KEY to run model tasks.' }
+if (!key) {
+  for (const name of Object.keys(plugins)) results.plugins[name] = { skipped: 'DEEPSEEK_API_KEY is not set in this environment' }
 } else {
-  for (const [name, plugin] of Object.entries(selectedPlugins)) {
+  for (const [name, plugin] of Object.entries(plugins)) {
     const rows = []
-    for (const task of selectedTasks) {
+    for (const task of tasks) {
       fixture.posted.length = 0
       const session = await openBotBrowser({ botId: `${name}-${task.id}`.replace(/[^a-z0-9-]/gi, '-'), profileRoot, headless: true, playwrightUrl })
       console.log(`run ${name} ${task.id}`)

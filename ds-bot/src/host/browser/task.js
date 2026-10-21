@@ -1,24 +1,19 @@
 // One goal in, one answer out. The plugin runs the ref tools itself and returns
 // the step list, so a Bot can hand off a whole web task and still check what happened.
+import { completeDeepseek } from './deepseek.js'
 import { runToolLoop } from './loop.js'
 import { systemPrompt as refsPrompt, toolDefs as refTools } from './refs.js'
 
-const driverTools = (session, origin, handoffs) => refTools.map(tool => ({
+const driverTools = (session) => refTools.map(tool => ({
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
-    execute: async (args) => {
-      const value = await tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir, origin })
-      if (tool.name === 'browser_handoff') handoffs.push(typeof value === 'string' ? value : String(value?.text ?? ''))
-      return value
-    },
+    execute: (args) => tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir }),
   }))
 
-export async function runTask({ session, goal, complete, origin, maxSteps = 8 }) {
-  if (typeof complete !== 'function') throw new Error('browser_task needs a Bot session model')
-  const handoffs = []
+export async function runTask({ session, goal, complete = completeDeepseek, maxSteps = 8 }) {
   const result = await runToolLoop({
-    tools: driverTools(session, origin, handoffs),
+    tools: driverTools(session),
     complete,
     goal,
     system: refsPrompt,
@@ -28,8 +23,6 @@ export async function runTask({ session, goal, complete, origin, maxSteps = 8 })
   const text = [
     result.answer || '(no answer)',
     '',
-    // The outer Bot needs the handoff instructions even if the nested model omits them.
-    ...(handoffs.length > 0 ? ['Handoffs:', handoffs.join('\n'), ''] : []),
     result.stopped === 'max-steps' ? `Stopped after ${result.steps} steps.` : `Finished in ${result.steps} steps.`,
     'Steps:',
     steps || '(none)',
@@ -39,7 +32,7 @@ export async function runTask({ session, goal, complete, origin, maxSteps = 8 })
 
 export const id = 'task'
 export const label = 'Whole task'
-export const systemPrompt = 'Call browser_task once with the user\'s web goal. The tool runs the browser and returns the answer plus the steps it took. Posting, uploading, downloading, and deleting may need approval; deletes require a second confirmed click after checking the snapshot. Payments, logins, and captchas go to the user via browser_handoff. If an action result is unknown, check with browser_snapshot and never repeat it blindly. Do not browse with any other tool.'
+export const systemPrompt = 'Call browser_task once with the user\'s web goal. The tool runs the browser and returns the answer plus the steps it took. Do not browse with any other tool.'
 
 export const toolDefs = [
   {
@@ -54,7 +47,6 @@ export const toolDefs = [
         session: ctx.session,
         goal: String(args.goal ?? ''),
         complete: ctx.complete,
-        origin: ctx.origin,
       })
       return { text: result.text }
     },

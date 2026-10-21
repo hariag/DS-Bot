@@ -17,8 +17,8 @@ export function openAiTools(tools) {
       parameters: {
         type: 'object',
         properties: Object.fromEntries(Object.entries(tool.parameters ?? {}).map(([key, schema]) => {
-          const property = { ...schema }
-          delete property.required
+          const property = { type: schema.type === 'integer' ? 'integer' : 'string', description: schema.description }
+          if (schema.enum) property.enum = schema.enum
           return [key, property]
         })),
         required: Object.entries(tool.parameters ?? {}).filter(([, schema]) => schema.required).map(([key]) => key),
@@ -57,9 +57,6 @@ export async function runToolLoop({ tools, complete, goal, system, maxSteps = 8 
       role: 'assistant',
       content: message.content ?? '',
       ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
-      ...(message.reasoning_content !== undefined ? { reasoning_content: message.reasoning_content } : {}),
-      ...(message.reasoning !== undefined ? { reasoning: message.reasoning } : {}),
-      ...(message.reasoning_details !== undefined ? { reasoning_details: message.reasoning_details } : {}),
     })
     if (toolCalls.length === 0) {
       return { answer: String(message.content ?? '').trim(), trace, steps: step + 1, vision, stopped: 'answer' }
