@@ -4314,9 +4314,9 @@ function WidgetCell({ sessionId, callId, args, done, isError, roster, actions, h
     return (0, import_react6.createElement)(PendingView, { sessionId, view: record, actions, inline: true });
   }
   if (done && isError) return (0, import_react6.createElement)("span", { className: "bt-q-gone", hidden: true });
-  const blueprint = normalizeView(args?.("view"));
-  const shown = checkShownView(args?.("title"), blueprint);
-  if (shown.error !== void 0 || shown.interactive || args?.("await_reply") === true) {
+  const blueprint = normalizeView(args?.value?.("view"));
+  const shown = checkShownView(args?.text?.("title"), blueprint);
+  if (shown.error !== void 0 || shown.interactive || args?.value?.("await_reply") === true) {
     return (0, import_react6.createElement)("span", { className: "bt-q-gone", hidden: true });
   }
   return (0, import_react6.createElement)("div", { className: "bt-q-inline" }, (0, import_react6.createElement)(WidgetCard, { title: shown.title, view: blueprint }));
@@ -5783,7 +5783,7 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
       return (0, import_react9.createElement)(PendingQuestion, { key: JSON.stringify([sessionId, question.id]), sessionId, question, actions, inline: true });
     }
     case "show_view":
-      return (0, import_react9.createElement)(WidgetCell, { sessionId, callId: call2.callId, args: argValue, done, isError: call2.isError, roster, actions, heldCards });
+      return (0, import_react9.createElement)(WidgetCell, { sessionId, callId: call2.callId, args: { text: arg, value: argValue }, done, isError: call2.isError, roster, actions, heldCards });
     case "request_secret":
       return (0, import_react9.createElement)(SecretToolCell, { sessionId, callId: call2.callId, name: arg("name"), done, content: call2.content, roster, actions, heldCards });
     case "ask_user_question": {

@@ -539,3 +539,18 @@ test('a show_view call the host refused draws nothing; a display-only card draws
   assert.ok(title !== undefined)
   assert.equal(text(title), 'Status')
 })
+
+test('a display-only call still draws when the args come through the value accessor', () => {
+  // DSH's PartialArguments reads strings through text() — value() returns
+  // undefined for them — so the title has to go through the string accessor.
+  const data = { title: 'Status', view: { type: 'metric', label: 'Done', value: '3' } }
+  const callNode = {
+    kind: 'tool-result', name: 'show_view', callId: 'view-call', isError: false,
+    args: { text: key => (typeof data[key] === 'string' ? data[key] : undefined), value: key => (typeof data[key] === 'string' ? undefined : data[key]) },
+    call: { name: 'show_view', argsRaw: JSON.stringify(data) }, content: text$('The view is on screen.'), subCalls: [],
+  }
+  const node = show(callNode, { roster: team({ views: {} }) })
+  const title = find(node, item => item.props?.className === 'bt-q-title')
+  assert.ok(title !== undefined, 'the card draws')
+  assert.equal(text(title), 'Status')
+})

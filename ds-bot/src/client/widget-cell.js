@@ -225,14 +225,15 @@ export function WidgetCell({ sessionId, callId, args, done, isError, roster, act
   // A refused call (bad blueprint) drew no card; don't render an empty one.
   if (done && isError) return h('span', { className: 'bt-q-gone', hidden: true })
   // Display-only cards draw from the recorded call arguments, which keep the
-  // provider's encoding: unwrap it the same way the host does before storing.
-  const blueprint = normalizeView(args?.('view'))
-  const shown = checkShownView(args?.('title'), blueprint)
+  // provider's encoding: unwrap it the same way the host does before storing. The
+  // args accessor reads strings through `text`; `value` drops them.
+  const blueprint = normalizeView(args?.value?.('view'))
+  const shown = checkShownView(args?.text?.('title'), blueprint)
   // A call the host refused — a blueprint it would not show, or a reply it cannot
   // wait for — leaves no card; the model's retry then stays the only one. So does
   // a settled interactive call: answered, dismissed or replaced, it leaves no gap
   // where it was (same as ask_user).
-  if (shown.error !== undefined || shown.interactive || args?.('await_reply') === true) {
+  if (shown.error !== undefined || shown.interactive || args?.value?.('await_reply') === true) {
     return h('span', { className: 'bt-q-gone', hidden: true })
   }
   return h('div', { className: 'bt-q-inline' }, h(WidgetCard, { title: shown.title, view: blueprint }))
