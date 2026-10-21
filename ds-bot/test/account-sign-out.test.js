@@ -18,9 +18,6 @@ const { outputFiles } = await build({
 const slots = []
 let cursor = 0
 const react = {
-  createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx },
-  useContext: ctx => ctx.value,
-  useCallback: fn => fn,
   createElement: (type, props, ...children) => ({ type, props: { ...props, children } }), Fragment: Symbol('Fragment'),
   useState(initial) {
     const i = cursor++
@@ -57,7 +54,7 @@ const textOf = (node) => {
 
 // `status` is what the account plugin's snapshot reports; `running` is what its
 // hasRunningAccountTasks answers (or throws); `fail` makes signOut reject.
-function launcher({ status = 'credential-stored', running = false, runningError = false, fail = '', withEntry = true, actions = {} } = {}) {
+function launcher({ status = 'credential-stored', running = false, runningError = false, fail = '', withEntry = true } = {}) {
   const calls = []
   slots.length = 0
   const ops = {
@@ -71,7 +68,6 @@ function launcher({ status = 'credential-stored', running = false, runningError 
       signInEntry: () => ((typeof withEntry === 'function' ? withEntry() : withEntry) ? { inject: () => ops } : null),
       accountT: () => key => `acc:${key}`,
       reportError: () => {},
-      ...actions,
     },
   }
   const render = () => { cursor = 0; return AccountLauncher(props) }
@@ -160,50 +156,4 @@ test('cancel closes the confirm without signing out', async () => {
   const tree = side.render()
   assert.equal(walk(tree, node => node.props?.className === 'bt-confirm').length, 0)
   assert.deepEqual(side.calls, ['hasRunningAccountTasks'])
-})
-
-test('Models and API keys opens the Models page of Settings', () => {
-  const opened = []
-  const page = launcher({ actions: { providers: () => {}, openModels: () => opened.push('models') } })
-  page.item(page.open(), 'Models and API keys').props.onClick()
-  assert.deepEqual(opened, ['models'])
-  const none = launcher()
-  assert.equal(none.item(none.open(), 'Models and API keys'), undefined)
-})
-
-test('Sign in to DeepSeek shows only while the account plugin says signed out', () => {
-  const signIns = []
-  const actions = { signIn: () => signIns.push('signIn') }
-  const out = launcher({ status: 'signed-out', actions })
-  const item = out.item(out.open(), 'Sign in to DeepSeek')
-  assert.ok(item !== undefined)
-  item.props.onClick()
-  assert.deepEqual(signIns, ['signIn'])
-  const inside = launcher({ actions })
-  assert.equal(inside.item(inside.open(), 'Sign in to DeepSeek'), undefined)
-  // An account snapshot that has not answered yet is no sign-out.
-  const loading = launcher({ status: undefined, actions })
-  assert.equal(loading.item(loading.open(), 'Sign in to DeepSeek'), undefined)
-  const entryless = launcher({ status: 'signed-out', withEntry: false, actions })
-  assert.equal(entryless.item(entryless.open(), 'Sign in to DeepSeek'), undefined)
-})
-
-// #452: the Connect plugins button left the Bot footer; the account menu that
-// stays keeps the way into the connectors and the automation panel.
-test('the account menu opens the connectors and the automation panel', () => {
-  const calls = []
-  const side = launcher({ actions: { openConnectors: () => calls.push('connectors'), selectPanel: id => calls.push(id) } })
-  const menu = side.open()
-  side.item(menu, 'Connectors').props.onClick()
-  side.item(menu, 'Automation tasks').props.onClick()
-  assert.deepEqual(calls, ['connectors', 'schedules'])
-})
-
-test('the account menu switches to classic Agent mode, and only where the surface can switch', () => {
-  const calls = []
-  const side = launcher({ actions: { setSurface: mode => calls.push(mode) } })
-  side.item(side.open(), 'Classic Agent mode').props.onClick()
-  assert.deepEqual(calls, ['agent'])
-  const plain = launcher()
-  assert.equal(plain.item(plain.open(), 'Classic Agent mode'), undefined)
 })

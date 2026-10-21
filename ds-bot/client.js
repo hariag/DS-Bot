@@ -3498,6 +3498,7 @@ var PlugIcon = lineIcon(["M7 3v4M13 3v4", "M5 7h10v2.5a5 5 0 0 1-10 0z", "M10 14
 var CalendarIcon = lineIcon(["M5.5 5h9A1.5 1.5 0 0 1 16 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 14.5v-8A1.5 1.5 0 0 1 5.5 5z", "M4 8.75h12", "M7.25 3.5v3M12.75 3.5v3"]);
 var ConnectorIcon = lineIcon(["M7 10a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z", "M18 10a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z", "M7 10h6"]);
 var SwitchIcon = lineIcon(["M4 7h9.5M10.5 3.5L14 7l-3.5 3.5", "M16 13H6.5M9.5 9.5L6 13l3.5 3.5"]);
+var SignOutIcon = lineIcon(["M8.5 17H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5", "M10 10h6.5", "M13.5 7l3 3-3 3"]);
 var PaperclipIcon = lineIcon(["M15.5 9.5l-5.6 5.6a3.4 3.4 0 0 1-4.8-4.8l6.1-6.1a2.25 2.25 0 0 1 3.2 3.2l-6 6a1.1 1.1 0 0 1-1.6-1.6l5.5-5.5"]);
 var ClockIcon = lineIcon(["M10 3.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z", "M10 6.5V10l2.5 1.5"]);
 var GearIcon = lineIcon(["M10 7.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2z", "M7.85 4.4l.29-1.87a7.7 7.7 0 0 1 3.72 0l.29 1.87a6 6 0 0 1 1.63.94l1.76-.69a7.7 7.7 0 0 1 1.86 3.23l-1.47 1.18a6 6 0 0 1 0 1.88l1.47 1.18a7.7 7.7 0 0 1-1.86 3.23l-1.76-.69a6 6 0 0 1-1.63.94l-.29 1.87a7.7 7.7 0 0 1-3.72 0l-.29-1.87a6 6 0 0 1-1.63-.94l-1.76.69a7.7 7.7 0 0 1-1.86-3.23l1.47-1.18a6 6 0 0 1 0-1.88L2.6 7.88a7.7 7.7 0 0 1 1.86-3.23l1.76.69a6 6 0 0 1 1.63-.94z"]);
@@ -6613,6 +6614,9 @@ function pressSettingsShortcut() {
     metaKey: held.has("meta")
   }));
 }
+var NO_SUBSCRIBE = () => () => {
+};
+var NO_SNAPSHOT = () => null;
 function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboarding, actions }) {
   const [open, setOpen] = (0, import_react11.useState)(false);
   (0, import_react11.useLayoutEffect)(() => {
@@ -6659,11 +6663,53 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
+  const signIn = actions.signInEntry?.() ?? null;
+  const ops = (0, import_react11.useMemo)(() => signIn?.inject?.() ?? {}, [signIn]);
+  const accountSource = ops.hooks?.account;
+  const account = (0, import_react11.useSyncExternalStore)(accountSource?.subscribe ?? NO_SUBSCRIBE, accountSource ? () => accountSource.getSnapshot() : NO_SNAPSHOT);
+  const signedIn = signIn !== null && typeof ops.signOut === "function" && account?.view?.status === "credential-stored";
+  const accountT = actions.accountT?.() ?? ((key) => key);
+  const [confirm, setConfirm] = (0, import_react11.useState)(null);
+  const [busy, setBusy] = (0, import_react11.useState)(false);
+  const [signOutError, setSignOutError] = (0, import_react11.useState)("");
+  const askSignOut = async () => {
+    setSignOutError("");
+    let state = "none";
+    try {
+      if (await ops.hasRunningAccountTasks?.()) state = "running";
+    } catch {
+      state = "unknown";
+    }
+    setConfirm(state);
+  };
+  const cancelSignOut = () => {
+    setConfirm(null);
+    setSignOutError("");
+  };
+  const runSignOut = async () => {
+    setBusy(true);
+    setSignOutError("");
+    try {
+      await ops.signOut();
+      setConfirm(null);
+      setOpen(false);
+    } catch (error) {
+      setSignOutError(String(error?.message ?? error));
+    } finally {
+      setBusy(false);
+    }
+  };
   const toggle = () => {
     const rect = button.current?.getBoundingClientRect();
     if (rect) setBox({ left: rect.left, bottom: window.innerHeight - rect.top + 5 });
     setOpen((value) => !value);
   };
+  (0, import_react11.useEffect)(() => {
+    if (open) return;
+    setConfirm(null);
+    setSignOutError("");
+    setBusy(false);
+  }, [open]);
   const groups = [
     [
       [t("Usage"), GaugeIcon, () => actions.openSettings("usage")],
@@ -6675,6 +6721,7 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
       [t("Switch to classic Agent mode"), SwitchIcon, () => actions.setSurface("agent")]
     ]
   ];
+  if (signedIn) groups.push([[accountT("signOut"), SignOutIcon, askSignOut, void 0, true]]);
   return (0, import_react11.createElement)(
     import_react11.Fragment,
     null,
@@ -6686,16 +6733,29 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
     open && box ? (0, import_react_dom3.createPortal)((0, import_react11.createElement)(
       "div",
       { className: "bt-menu bt-menu-up bt-account-menu", role: "menu", "aria-label": t("Account"), style: box },
-      groups.map((group, index) => (0, import_react11.createElement)(
+      confirm !== null ? (0, import_react11.createElement)(
+        "div",
+        { className: "bt-confirm", role: "alertdialog", "aria-label": accountT("signOut") },
+        (0, import_react11.createElement)("p", { className: "bt-confirm-text" }, accountT(confirm === "running" ? "signOutRunningDescription" : confirm === "unknown" ? "signOutUnknownDescription" : "signOutDescription")),
+        signOutError !== "" ? (0, import_react11.createElement)("p", { className: "bt-confirm-error", role: "alert" }, signOutError) : null,
+        (0, import_react11.createElement)(
+          "div",
+          { className: "bt-confirm-row" },
+          (0, import_react11.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: cancelSignOut }, t("Cancel")),
+          (0, import_react11.createElement)("button", { type: "button", className: "bt-confirm-go", disabled: busy, onClick: () => {
+            void runSignOut();
+          } }, accountT("signOut"))
+        )
+      ) : groups.map((group, index) => (0, import_react11.createElement)(
         import_react11.Fragment,
         { key: index },
         index > 0 ? (0, import_react11.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
-        group.map(([label, Icon, run, hint]) => (0, import_react11.createElement)("button", {
+        group.map(([label, Icon, run, hint, stay]) => (0, import_react11.createElement)("button", {
           key: label,
           type: "button",
           role: "menuitem",
           onClick: () => {
-            setOpen(false);
+            if (stay !== true) setOpen(false);
             void Promise.resolve(run()).catch((error) => actions.reportError(error, "menu"));
           }
         }, (0, import_react11.createElement)(Icon), (0, import_react11.createElement)("span", { className: "bt-menu-label" }, label), hint ? (0, import_react11.createElement)("span", { className: "bt-menu-hint" }, hint) : null))
@@ -6759,6 +6819,14 @@ function BrandName() {
   return (0, import_react11.createElement)("span", { style: { fontWeight: 600, fontSize: 14 } }, "DS Bot");
 }
 var SIDEBAR_CSS = `
+.bt-confirm{width:260px;max-width:72vw;padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px}
+.bt-confirm-text{margin:0;font-size:13px;line-height:19px;color:var(--bt-ink-2)}
+.bt-confirm-error{margin:0;font-size:12px;line-height:17px;color:var(--bt-danger);overflow-wrap:anywhere}
+.bt-confirm-row{display:flex;justify-content:flex-end;gap:8px}
+.bt-menu .bt-confirm button{width:auto;min-height:0}
+.bt-confirm-go{height:28px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease}
+.bt-confirm-go:hover:not(:disabled){opacity:.9}
+.bt-confirm-go:disabled{opacity:.6;cursor:default}
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
 .bt-side-top .bt-brand:hover{background:none}
 .bt-brand .bt-mark{flex:none}

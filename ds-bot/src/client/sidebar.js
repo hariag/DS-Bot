@@ -1,9 +1,9 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { FishLogo } from './dsh-primitives.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, SignOutIcon } from './icons.js'
 import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
@@ -301,7 +301,8 @@ export function TeamSidebar(props) {
       h('span', { className: 'bt-brand' }, h(BrandMark, { size: 22 }), h(BrandName)),
       h(UpdateButton, { useUpdate: props.useUpdate, actions }),
       h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Search'), title: t('Search'), onClick: () => actions.openPalette() }, h(SearchIcon)),
-      h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)))
+      h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
+      h('button', { type: 'button', className: 'bt-round bt-side-collapse', 'aria-label': t('Collapse sidebar'), title: t('Collapse sidebar'), onClick: () => actions.toggleSidebar() }, h(SidebarIcon)))
       : h(Fragment, null,
           h(UpdateButton, { useUpdate: props.useUpdate, actions }),
           h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon))),
@@ -474,6 +475,9 @@ function pressSettingsShortcut() {
   }))
 }
 
+const NO_SUBSCRIBE = () => () => {}
+const NO_SNAPSHOT = () => null
+
 // The footer avatar opens an account menu above itself, with Bot settings as one
 // entry. Shell panels hidden from the Bot sidebar (plugins, automation) live here too.
 // `seat` is the shell's settings.launcher seat: at priority -10 the whale wins it
@@ -511,11 +515,52 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
     window.addEventListener('keydown', onKey, true)
     return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true) }
   }, [open])
+  // The shell's account plugin lends its sign-out operation; the item shows only
+  // when the plugin's entry is there and its account snapshot says signed in. The
+  // entry can arrive after this mounts, so its operations follow the entry.
+  const signIn = actions.signInEntry?.() ?? null
+  const ops = useMemo(() => signIn?.inject?.() ?? {}, [signIn])
+  const accountSource = ops.hooks?.account
+  const account = useSyncExternalStore(accountSource?.subscribe ?? NO_SUBSCRIBE, accountSource ? () => accountSource.getSnapshot() : NO_SNAPSHOT)
+  const signedIn = signIn !== null && typeof ops.signOut === 'function' && account?.view?.status === 'credential-stored'
+  const accountT = actions.accountT?.() ?? (key => key)
+  const [confirm, setConfirm] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [signOutError, setSignOutError] = useState('')
+  const askSignOut = async () => {
+    setSignOutError('')
+    let state = 'none'
+    try {
+      if (await ops.hasRunningAccountTasks?.()) state = 'running'
+    } catch { state = 'unknown' }
+    setConfirm(state)
+  }
+  const cancelSignOut = () => { setConfirm(null); setSignOutError('') }
+  const runSignOut = async () => {
+    setBusy(true)
+    setSignOutError('')
+    try {
+      await ops.signOut()
+      setConfirm(null)
+      setOpen(false)
+    } catch (error) {
+      setSignOutError(String(error?.message ?? error))
+    } finally {
+      setBusy(false)
+    }
+  }
   const toggle = () => {
     const rect = button.current?.getBoundingClientRect()
     if (rect) setBox({ left: rect.left, bottom: window.innerHeight - rect.top + 5 })
     setOpen(value => !value)
   }
+  // Closing the menu drops a half-finished sign-out confirm with it.
+  useEffect(() => {
+    if (open) return
+    setConfirm(null)
+    setSignOutError('')
+    setBusy(false)
+  }, [open])
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
@@ -527,16 +572,23 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
       [t('Switch to classic Agent mode'), SwitchIcon, () => actions.setSurface('agent')],
     ],
   ]
+  if (signedIn) groups.push([[accountT('signOut'), SignOutIcon, askSignOut, undefined, true]])
   return h(Fragment, null,
     h('button', { ref: button, type: 'button', className: 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
       h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 }))),
     open && box ? createPortal(h('div', { className: 'bt-menu bt-menu-up bt-account-menu', role: 'menu', 'aria-label': t('Account'), style: box },
-      groups.map((group, index) => h(Fragment, { key: index },
-        index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
-        group.map(([label, Icon, run, hint]) => h('button', {
-          key: label, type: 'button', role: 'menuitem',
-          onClick: () => { setOpen(false); void Promise.resolve(run()).catch(error => actions.reportError(error, 'menu')) },
-        }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null)
+      confirm !== null ? h('div', { className: 'bt-confirm', role: 'alertdialog', 'aria-label': accountT('signOut') },
+        h('p', { className: 'bt-confirm-text' }, accountT(confirm === 'running' ? 'signOutRunningDescription' : confirm === 'unknown' ? 'signOutUnknownDescription' : 'signOutDescription')),
+        signOutError !== '' ? h('p', { className: 'bt-confirm-error', role: 'alert' }, signOutError) : null,
+        h('div', { className: 'bt-confirm-row' },
+          h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: cancelSignOut }, t('Cancel')),
+          h('button', { type: 'button', className: 'bt-confirm-go', disabled: busy, onClick: () => { void runSignOut() } }, accountT('signOut'))))
+        : groups.map((group, index) => h(Fragment, { key: index },
+          index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
+          group.map(([label, Icon, run, hint, stay]) => h('button', {
+            key: label, type: 'button', role: 'menuitem',
+            onClick: () => { if (stay !== true) setOpen(false); void Promise.resolve(run()).catch(error => actions.reportError(error, 'menu')) },
+          }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null)
 }
 
 // Opens the Main Bot whenever the main view holds no Bot conversation, the way
@@ -608,6 +660,14 @@ export function BrandName() {
 // and Connect plugins; FooterAccount only shows when the seat went to no one. The
 // shell's footer classes are CSS-module names, so they match on their stems.
 export const SIDEBAR_CSS = `
+.bt-confirm{width:260px;max-width:72vw;padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px}
+.bt-confirm-text{margin:0;font-size:13px;line-height:19px;color:var(--bt-ink-2)}
+.bt-confirm-error{margin:0;font-size:12px;line-height:17px;color:var(--bt-danger);overflow-wrap:anywhere}
+.bt-confirm-row{display:flex;justify-content:flex-end;gap:8px}
+.bt-menu .bt-confirm button{width:auto;min-height:0}
+.bt-confirm-go{height:28px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease}
+.bt-confirm-go:hover:not(:disabled){opacity:.9}
+.bt-confirm-go:disabled{opacity:.6;cursor:default}
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
 .bt-side-top .bt-brand:hover{background:none}
 .bt-brand .bt-mark{flex:none}
