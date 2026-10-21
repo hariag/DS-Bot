@@ -44,7 +44,7 @@ Bot 的回答现在只有 Markdown 文本。有些回答天生是结构化的：
 
 标识约束：交互组件的 `id` 在整棵树里唯一；form 内字段 `id` 在该 form 内唯一；options 的选项以 label 为身份（和提问卡一致）。
 
-一张视图可含多个交互组件；**一次提交结算整张卡**：只带触发组件的值 `values`（options：`{ selected: string[] }`；confirm：`{ confirmed: boolean }`；form：`{ fields: { [fieldId]: string } }`），其他组件的草稿丢弃，已答渲染里它们的控件不再可用。空提交：options 至少一项、confirm 必有一个按钮值、form 允许全空字段。文本值上限 2,000 字。
+一张视图可含多个交互组件；**一次提交结算整张卡**：只带触发组件的值 `values`（options：`{ selected: string[] }`；confirm：`{ confirmed: boolean }`；form：`{ fields: { [fieldId]: string } }`），其他组件未提交的输入丢弃，已答渲染里它们的控件不再可用。空提交：options 至少一项、confirm 必有一个按钮值、form 允许全空字段。文本值上限 2,000 字。
 
 ### 状态与生命周期
 
@@ -76,7 +76,7 @@ Bot 的回答现在只有 Markdown 文本。有些回答天生是结构化的：
 
 ## 已知限制
 
-- 蓝图保得住，**填到一半的表单草稿保不住**：虚拟滚动或换段卸载后，未提交的输入回到初始值。
+- 蓝图保得住，**填到一半的表单保不住**：虚拟滚动或换段卸载后，未提交的输入回到初始值。
 - 表达力受目录限制：目录外的展示（自定义图形、地图、编辑器）做不到。
 - 蓝图质量依赖模型按 schema 输出的能力；校验拒绝消耗一次工具调用。
 - 已答视图在会话压缩后只剩一行摘要，Bot 看不到当时的完整蓝图。
@@ -84,6 +84,6 @@ Bot 的回答现在只有 Markdown 文本。有些回答天生是结构化的：
 
 ## 变更
 
-- 2026-10-20：初稿（声明式目录，第二版）。评审：Antigravity 否决第一版 iframe 方案；Codex 一审（ship with changes）：state.views 独立、已答视图在回复节点、交互组合规则、草稿限制、摘要带关键值。
+- 2026-10-20：初稿（声明式目录，第二版）。评审：Antigravity 否决第一版 iframe 方案；Codex 一审（ship with changes）：state.views 独立、已答视图在回复节点、交互组合规则、未提交输入的限制、摘要带关键值。
 - 2026-10-20：Codex 二审（ship with changes）：concludeTurn 绑定生效后的 await_reply；回复格式改判别字段双分支；标识唯一性和 values 形状定死；首次提交结算整张卡；views 与 questions 共存规则写明。
 - 2026-10-20：Codex 三审签字（ship，无需再改）。
