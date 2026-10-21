@@ -1359,7 +1359,7 @@ export function install(rt) {
       keeper, name: `group "${live.name}"`, home: groupScope(live.id), teamWrites: () => false, group: true,
       who: `The group chat: "${live.name}", with the user and ${members.join(', ')}.`,
       tag: { sessionId: live.id, kind: 'memory' },
-      alive: () => rt.botOf(keeper.id) !== undefined && rt.roomOf(live.id) !== undefined,
+      alive: () => rt.botOf(keeper.id) !== undefined && rt.roomOf(live.id)?.members.includes(keeper.id) === true,
       next: () => queueReview({ ...seen, room }),
     })
   }

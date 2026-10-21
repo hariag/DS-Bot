@@ -975,6 +975,32 @@ test('a turn that ends after its member left the group is still reviewed, for th
   assert.equal(existsSync(join(home, 'memory', 'bots', 'b2', 'MEMORY.md')), false)
 })
 
+test('a keeper out of the group during the review keeps the place, and the next keeper reads the lines again', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-'))
+  twoMembers(home)
+  let release
+  const replies = [new Promise(resolve => { release = resolve }), JSON.stringify({ changes: [{ op: 'add', text: 'The user wants everything under one page' }] })]
+  const { ctx, call, read, requests, stop } = start({ home, replies, config: { memoryReviewDelayMs: 0 } })
+  t.after(() => stop())
+  await call('state', {})
+  ctx.emit('agent/status', { agent: { id: 'g3' }, status: 'idle' })
+  await until(() => requests.length === 1)
+  // The admin — the review's keeper — leaves the group before its model answers.
+  assert.equal((await call('update-room', { id: 'r1', remove: ['b3'] })).ok, true)
+  release(JSON.stringify({ changes: [{ op: 'add', text: 'The user wants everything under one page' }] }))
+  await reviewed(call)
+  // Nothing was written and the cursor stayed at the first pass's mark, so the same
+  // lines are read again instead of being skipped for good.
+  assert.throws(() => read('groups', 'r1', 'MEMORY.md'), { code: 'ENOENT' })
+  assert.deepEqual(JSON.parse(read('reviewed.json')), { 'group:r1': 0 })
+  ctx.emit('agent/status', { agent: { id: 'g2' }, status: 'idle' })
+  await reviewed(call)
+  assert.equal(requests.length, 2)
+  assert.match(requests[1].messages[0].content[0].text, /\nUser: Keep everything you send me under one page\n/)
+  assert.match(read('groups', 'r1', 'MEMORY.md'), /- The user wants everything under one page \[source: group "Launch"/)
+  assert.deepEqual(JSON.parse(read('reviewed.json')), { 'group:r1': 3 })
+})
+
 test('a Bot deleted while its review writes keeps no more of it, and its folder stays gone', async (t) => {
   const many = Array.from({ length: 8 }, (_, at) => ({ op: 'add', text: `The user likes thing ${at + 1}` }))
   const { ctx, home, call, stop } = start({ replies: [JSON.stringify({ changes: many })], config: { memoryReviewDelayMs: 0 } })
