@@ -16,12 +16,11 @@
 // read_own_chat searches every part, the condensed messages included.
 import { randomUUID } from 'node:crypto'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { openTurnAt } from './btw.js'
 import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, REPLY_KIND, SOURCE_KIND } from './constants.js'
 import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
 import { RESUME_DELAY_MS } from './resume.js'
 import { clip, createClock, escapeRegExp, estimateTokens, splitRef, textOf } from './text.js'
-import { checkShownView, validateViewAnswer, viewSummary } from '../shared/views.js'
+import { checkShownView, normalizeView, validateViewAnswer, viewSummary } from '../shared/views.js'
 
 // An ask_user card as the user saw it. The user's reply is often just an option label,
 // which means nothing without the card. Arguments the tool would refuse (no question,
@@ -40,21 +39,17 @@ export function cardText(args) {
   return `[Question card] ${question}${detail ? ` (${detail})` : ''}\nOptions: ${options.join(' / ')}`
 }
 
-// A show_view card as the user saw it. A call the tool would refuse (an oversized
-// or invalid view, no title, a display-only card asked to wait or an interactive
-// one told not to) showed no card, so it gives no text. checkShownView runs the
-// tool's own checks, normalization included, so a wrapped card keeps its summary.
+// A show_view card as the user saw it. A call the tool would refuse (no title,
+// or a view that is not a component object) showed no card, so it gives no text.
 export function viewCardText(args) {
   let card = args
   if (typeof card === 'string') {
     try { card = JSON.parse(card) } catch { return '' }
   }
-  const shown = checkShownView(card?.title, card?.view)
-  if (shown.error !== undefined) return ''
-  if (!shown.interactive && card?.await_reply === true) return ''
-  if (shown.interactive && card?.await_reply === false) return ''
-  const summary = viewSummary(shown.view)
-  return summary === '' ? `[View card] ${shown.title}` : `[View card] ${shown.title}\n${summary}`
+  const title = typeof card?.title === 'string' ? card.title.trim() : ''
+  if (title === '' || card?.view === null || typeof card?.view !== 'object' || Array.isArray(card?.view)) return ''
+  const summary = viewSummary(card.view)
+  return summary === '' ? `[View card] ${title}` : `[View card] ${title}\n${summary}`
 }
 
 // What one event adds to a Bot's chat history: an answer of the Bot's (its text, or a
@@ -1218,29 +1213,30 @@ export function install(rt) {
   // Earlier parts of a Bot's own chat, newest page first, for the chat to show above
   // the current part as one conversation.
   const EARLIER_PAGE = 60
-  function displayItems(partId, events, session) {
+  function displayItems(partId, events) {
     const hidden = new Set(state.exchangeTurns[partId] ?? [])
     const items = []
-    // The turn/start still in effect. A steered or queued user message stays in
-    // it; only another turn/start moves on. A later page does not repeat the
-    // turn/start from the page before, so seed that turn when the projection has it.
-    let turn = openTurnAt(ctx.get?.('sessionProjections'), session, events[0]?.seq)
-    const stamp = (event, item) => {
-      if (typeof event.seq === 'number' && Number.isInteger(event.seq)) item.seq = event.seq
-      if (turn !== undefined) item.turn = turn
-      items.push(item)
-    }
     for (const event of events) {
-      if (event.type === 'turn/start') {
-        if (typeof event.data?.turn === 'number' && Number.isInteger(event.data.turn)) turn = event.data.turn
-        continue
-      }
       if (event.type === 'assistant/message') {
         if (hidden.has(event.data?.turn)) continue
         // One entry per text block: the chat shows each block in a bubble of its own.
         const content = Array.isArray(event.data?.message?.content) ? event.data.message.content : []
         for (const block of content) {
-          if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') stamp(event, { kind: 'bot', text: block.text, time: event.time })
+          if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') items.push({ kind: 'bot', text: block.text, time: event.time })
+        }
+        continue
+      }
+      if (event.type === 'tool/call') {
+        // Hidden turns and refused calls never showed a display card. Interactive
+        // cards live in the pending dock or on their answer message instead.
+        if (event.data?.name === 'show_view' && !hidden.has(event.data?.turn)) {
+          let args = event.data?.arguments
+          if (typeof args === 'string') { try { args = JSON.parse(args) } catch { args = undefined } }
+          const view = normalizeView(args?.view)
+          const shown = checkShownView(args?.title, view)
+          if (shown.error === undefined && !shown.interactive && args?.await_reply !== true) {
+            items.push({ kind: 'view', title: shown.title, view, callId: event.data?.callId ?? null, time: event.time })
+          }
         }
         continue
       }
@@ -1249,14 +1245,14 @@ export function install(rt) {
       if (source?.kind === 'user') {
         const content = Array.isArray(event.data.content) ? event.data.content : []
         const images = content.filter(block => block?.type === 'image').length
-        stamp(event, { kind: 'user', text: textOf(content), ...(images > 0 ? { images } : {}), time: event.time })
+        items.push({ kind: 'user', text: textOf(content), ...(images > 0 ? { images } : {}), time: event.time })
       } else if (source?.kind === REPLY_KIND) {
         const text = textOf(event.data.content)
         const reply = readReply(text)
-        if (reply?.questions !== undefined) stamp(event, { kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
-        else if (reply?.views !== undefined) stamp(event, { kind: 'answer', text: replyText(text), views: reply.views, answers: reply.answers, time: event.time })
+        if (reply?.questions !== undefined) items.push({ kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
+        else if (reply?.views !== undefined) items.push({ kind: 'answer', text: replyText(text), views: reply.views, answers: reply.answers, time: event.time })
       } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
-        stamp(event, { kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
+        items.push({ kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
       }
     }
     return items
@@ -1272,7 +1268,7 @@ export function install(rt) {
       maxMessages: EARLIER_PAGE,
     }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
     const events = page.records.map(record => record.event)
-    const items = displayItems(part.sessionId, events, agent.session)
+    const items = displayItems(part.sessionId, events)
     const more = page.hasMore && events.length > 0
     // The line above a part's first message marks where it began.
     if (!more && index > 0) items.unshift({ kind: 'divider', time: part.startedAt })

@@ -498,7 +498,9 @@ function decide(body) {
     })]
   }
   if (/^\s*大视图/.test(userText) && tools.has('show_view')) {
-    return [tool('show_view', { title: 'A long note', view: { type: 'text', text: 'x'.repeat(7800) }, await_reply: false })]
+    // Big but valid: every text node stays under the component limit, the whole
+    // blueprint just under the byte limit.
+    return [tool('show_view', { title: 'A long note', view: { type: 'stack', children: [0, 1, 2, 3].map(() => ({ type: 'text', text: 'x'.repeat(1900) })) }, await_reply: false })]
   }
   // Streams slowly, then checks the team: exercises the activity row stepping aside
   // for a streaming reply and coming back for the tool.
