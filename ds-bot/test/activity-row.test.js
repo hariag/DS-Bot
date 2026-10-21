@@ -15,7 +15,7 @@ const { JSDOM } = createRequire(join(process.env.DSH_HARNESS ?? join(PLUGIN, '..
 const { outputFiles } = await build({
   stdin: {
     contents: [
-      "export { findHost } from './src/client/activity-row.js'",
+      "export { findHost, rowVisible } from './src/client/activity-row.js'",
       "export { clientErrors } from './src/client/diagnostics.js'",
     ].join('\n'),
     resolveDir: PLUGIN,
@@ -39,7 +39,7 @@ runInNewContext(outputFiles[0].text, {
   cancelAnimationFrame: id => clearTimeout(id),
   require: name => (name === 'react' ? react : name === 'react-dom' ? { createPortal: node => node } : {}),
 })
-const { findHost, clientErrors } = module.exports
+const { findHost, rowVisible, clientErrors } = module.exports
 
 test('the activity row mounts at the running slot even under an extra wrapper', () => {
   dom.window.document.body.innerHTML = '<div data-chat-flow><div class="wrap"><div data-chat-running id="slot"></div></div></div>'
@@ -61,4 +61,22 @@ test('a missing chat flow is reported once per page, not on every retry', () => 
   const entries = clientErrors().filter(entry => entry.text.startsWith('activity row:'))
   assert.equal(entries.length, before + 1)
   assert.match(entries.at(-1).text, /activity row:/)
+})
+
+// The row hides while a reply streams — but a turn that streams first and runs a
+// tool after keeps the row once the tool starts.
+test('the row shows while a turn runs, also when text streamed before a tool', () => {
+  const bot = {}
+  const cases = [
+    [{ running: true, streaming: false, tools: [], relaying: false, bot }, true],
+    [{ running: true, streaming: true, tools: [], relaying: false, bot }, false],
+    [{ running: true, streaming: true, tools: [{ label: 'x' }], relaying: false, bot }, true],
+    [{ running: true, streaming: false, tools: [{ label: 'x' }], relaying: false, bot }, true],
+    [{ running: false, streaming: false, tools: [{ label: 'x' }], relaying: false, bot }, false],
+    [{ running: true, streaming: true, tools: [{ relay: true }], relaying: true, bot }, false],
+    [{ running: true, streaming: false, tools: [{ relay: true }], relaying: true, bot }, false],
+    [{ running: true, streaming: false, tools: [], relaying: false }, false],
+    [{ running: true, streaming: false, tools: [], relaying: false, room: {} }, true],
+  ]
+  for (const [input, expected] of cases) assert.equal(rowVisible(input), expected, JSON.stringify(input))
 })

@@ -15,6 +15,11 @@ const PHRASE_HOLD_MS = 800
 const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
 export { reducedMotion }
 
+// A turn that streams text first and runs a tool after keeps its row once the
+// tool starts: streaming alone hides it, but running work must not.
+export const rowVisible = ({ running, streaming, tools, relaying, bot, room }) =>
+  running && (!streaming || tools.length > 0) && !relaying && (bot !== undefined || room !== undefined)
+
 // The shell's running slot can sit under wrappers it adds around the flow, so the
 // search is a descendant one; without the slot the row mounts at the flow's tail.
 // No flow at all is a mount failure, noted once per page — the observer keeps
@@ -114,7 +119,7 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
   const tools = entries.filter(entry => !entry.text).sort((a, b) => a.at - b.at)
   // Group chats show who is typing on their own while members speak.
   const relaying = tools.some(entry => entry.relay)
-  const visible = running && !streaming && !relaying && (bot !== undefined || room !== undefined)
+  const visible = rowVisible({ running, streaming, tools, relaying, bot, room })
   const tool = tools.at(-1)
   const inputRef = useRef(0)
   // A steer keeps the run going, so nothing else resets the row: fresh input is
