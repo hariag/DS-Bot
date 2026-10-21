@@ -503,6 +503,8 @@ const ZH = {
   '{name} looked up its own chat for “{text}”': '{name} 在自己的对话里查找「{text}」',
   '{name} is typing…': '{name} 正在输入…',
   "{name} didn't answer in time": '{name} 没有及时回应',
+  '{names} not called: the per-member limit for this round is reached': '没叫到 {names}：这一轮每人的次数用完了',
+  'The group went quiet: @ mentions in late replies call nobody until you write here': '群进入安静模式：之后迟到回复里的 @ 不再叫人，你在群里说句话就恢复',
   '{name} paused for your approval': '{name} 停下来等你批准',
   '{name} started on it': '{name} 开始做了',
   "You stopped {name}'s work": '你停下了 {name} 的工作',

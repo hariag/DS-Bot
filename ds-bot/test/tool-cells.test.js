@@ -150,6 +150,21 @@ test('a user message inside a group relay shows its time', () => {
   assert.deepEqual(times.map(node => node.props.title), [`Today ${clockOf(today)}`])
 })
 
+// Drops the round kept silent about get a line the user sees: calls past the
+// per-member limit, and the group slipping into quiet mode.
+test('a dropped call and quiet mode show as event lines in the round', () => {
+  const replies = [
+    { kind: 'dropped', names: ['Writer', 'Coder'], cap: 2, time: at(0, 14, 5) },
+    { kind: 'quiet', time: at(0, 14, 6) },
+  ]
+  const out = show(call('group_relay', 'direct', { content: { replies } }), { sessionId: 'room' })
+  const events = findAll(out, node => node.props?.className === 'bt-event').map(text)
+  assert.deepEqual(events, [
+    'Writer and Coder not called: the per-member limit for this round is reached',
+    'The group went quiet: @ mentions in late replies call nobody until you write here',
+  ])
+})
+
 // The trigger of a post in a group chat carries the event's time, not the post's.
 test('a group post drawn from its trigger shows the time it came in', () => {
   const time = at(0, 16, 42)

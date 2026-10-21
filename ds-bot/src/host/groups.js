@@ -22,7 +22,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { GROUP_LINE_READ, ROOM_LATE_ROUNDS, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS, TEXT_KEPT } from './constants.js'
 import { escapeRegExp, headOf, splitRef, textOf } from './text.js'
-import { mentionSpans } from '../shared/mentions.js'
+import { mentionSpans, speakerOf } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
 import { failureLine } from './turns.js'
 
@@ -51,14 +51,27 @@ const unseenLines = (room, memberId) => {
   return room.log.filter(line => line.seq > since && line.botId !== memberId).slice(-ROOM_DELTA_MAX)
 }
 
+// A notice keeps its fields, not a finished sentence: the line members read is written
+// when it is read, so old entries still say what happened when the wording or the
+// constants move on.
+const noticeText = (line) => {
+  if (line.reason === 'cap') {
+    const via = line.admin !== undefined ? ` @${line.admin} can pass it on, or` : ''
+    return `@${(line.names ?? []).join(' and @')} was not called: this round's per-member turn limit (${line.cap}) is reached, so the message is in the log but reaches nobody.${via} end this turn and call again in the next round.`
+  }
+  if (line.reason === 'missed') return `${(line.names ?? []).join(' and ')} did not answer within ${line.minutes} minutes, so this round moved on without it. If it is still working, it posts its result later as a late reply; if it is urgent, the user can write here or the admin can follow up.`
+  if (line.reason === 'quiet') return `The group is in quiet mode: late replies after work have reached the ${ROOM_LATE_ROUNDS}-round limit, so @ names in later posts call nobody, though the messages still reach the log. The user can reset it by writing here, or the current work can finish.`
+  return line.text ?? ''
+}
 // `text` is what to show of a message line, by default what the log keeps of it.
-const lineText = (line, text = line.text) => {
-  if (line.kind === 'lookup') return `[${line.who} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
-  if (line.kind === 'resumed') return `[${line.who}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
-  if (line.kind === 'cut') return `[${line.who}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
-  if (line.kind === 'stopped') return `[The user stopped ${line.who}'s work here]`
-  if (line.kind === 'done') return `[${line.who} finished the work it was asked for]`
-  return `${line.who}: ${text}`
+export const lineText = (line, text = line.text) => {
+  if (line.kind === 'lookup') return `[${speakerOf(line)} looked up its own chat${line.text ? ` for "${line.text}"` : ''}]`
+  if (line.kind === 'resumed') return `[${speakerOf(line)}'s work here was cut off when DeepSeek Harness restarted; it is picking it back up and posts when done]`
+  if (line.kind === 'cut') return `[${speakerOf(line)}'s work here was cut off by a restart again, so it stopped; ask it to go on if it still matters]`
+  if (line.kind === 'stopped') return `[The user stopped ${speakerOf(line)}'s work here]`
+  if (line.kind === 'done') return `[${speakerOf(line)} finished the work it was asked for]`
+  if (line.kind === 'notice') return `[${noticeText(line)}]`
+  return `${speakerOf(line)}: ${text}`
 }
 const transcript = (lines, textOfLine = line => line.text) => lines.map(line => lineText(line, textOfLine(line))).join('\n')
 
@@ -111,6 +124,9 @@ const roomKickoff = language => `The user just created this group and has not wr
 
 const ROOM_READ_MAX = 30
 
+// DSH cannot open the Session at all: it is gone, or its stored log is corrupt. DSH
+// reports a corrupt log only in the message of a generic failure.
+const lostSession = error => error?.code === 'session/not-found' || /\bis corrupt\b|\bcorrupt session log\b/i.test(String(error?.message ?? ''))
 const fileLine = file => `[File "${file.name}" (${file.bytes} bytes) attached]`
 
 export function install(rt) {
@@ -186,6 +202,15 @@ export function install(rt) {
       return { id: known, brief: undefined }
     }
     const id = await rt.createSession(`${member.name} · ${room.name}`, { dir: rt.workDirOf({ botId: member.id, roomId: room.id }) })
+    // While the Session was made the member may have left or been deleted, the group been
+    // deleted, or another turn made the member's Session first: the new one is not kept.
+    // Undefined means the member is gone from the group.
+    const gone = rt.roomOf(room.id) !== room || !room.members.includes(member.id) || rt.botOf(member.id) === undefined
+    if (gone || room.sessions?.[member.id] !== undefined) {
+      void ctx.workspaceRegistry.archiveSession(id, { stopActivity: true })
+        .catch(error => rt.warn('ds-bot: unused group Session of %s in %s not archived: %s', member.name, room.name, error))
+      return gone ? undefined : groupSessionFor(room, member)
+    }
     room.sessions[member.id] = id
     rt.groupOwners.set(id, { botId: member.id, roomId: room.id })
     delete room.seen[member.id]
@@ -219,6 +244,7 @@ export function install(rt) {
     const notice = room.notice ? `Group notice (shared instructions for every member):\n${room.notice}` : ''
     if (round.kickoff) return { text: [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n'), files: [] }
     const working = workingIn(room).filter(item => item.bot.id !== member.id)
+      .map(item => ({ ...item, unread: unreadCount(room, item.bot.id) }))
     const text = [
       members,
       notice,
@@ -228,7 +254,7 @@ export function install(rt) {
         ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room))}`
         : 'Nothing new in this round since your last message.',
       round.shown?.includes(member.id) ? '' : referenceNote(round.references),
-      working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min)`).join(', ')}.` : '',
+      working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.` : '',
       `Speaking order for this round: ${round.slots.map(slotLabel).join(' → ')}.`,
       `You are number ${index + 1} of ${round.slots.length}. ${before === 0 ? 'Nobody spoke before you' : `${before} went before you`}${after === 0 ? ', and you are the last.' : `; ${after} after you will see your message.`}`,
       ROOM_REPLY,
@@ -242,6 +268,12 @@ export function install(rt) {
     const bot = rt.botOf(id)
     return entry?.turn !== undefined && bot !== undefined ? [{ bot, since: entry.since ?? Date.now() }] : []
   })
+  // How many group lines a member has not been shown yet, counted the same way a
+  // round counts the lines it carries over (unseenLines), so the number a speaker
+  // reads is the number the member would get. A turn the reply timeout cut short
+  // may leave them unread, and the member is never called again: the next speaker
+  // is told, so it knows the hand-off it waits on sits behind unread lines.
+  const unreadCount = (room, botId) => unseenLines(room, botId).length
   const minutesSince = at => Math.max(1, Math.round((Date.now() - at) / 60000))
 
   // A member's message in the round: in the log, for the members after it, and in the
@@ -301,7 +333,14 @@ export function install(rt) {
       else if (busy) rt.roomWaiters.get(exchangeId)?.resolve({ working: true })
     } catch (error) {
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
-      rt.roomWaiters.get(exchangeId)?.resolve(null)
+      // A delivery that failed is not a pass: the round shows it. Nothing here can
+      // repair a lost Session, so the member's next turn in the group starts a new one.
+      const lost = lostSession(error)
+      if (lost && room.sessions?.[member.id] === sessionId) {
+        rt.retireGroupSession(room, member.id)
+        void rt.save().catch(() => {})
+      }
+      rt.roomWaiters.get(exchangeId)?.fail({ code: lost ? 'SESSION_RESET' : 'SESSION', message: String(error?.message ?? error).slice(0, 300) })
     }
     const reply = await done
     // A turn that ended leaves nothing for a stop to cancel.
@@ -318,6 +357,11 @@ export function install(rt) {
       || (owner !== undefined && waiter.botId === owner.botId && waiter.roomId === owner.roomId))
   }
   rt.touchRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.touch() }
+  rt.failRoomTurn = (sessionId, failure) => {
+    const waiters = waitersOf(sessionId)
+    for (const waiter of waiters) waiter.fail(failure)
+    return waiters.length > 0
+  }
   rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
   // The team's own tools are quick; any other tool is the start of work.
   const QUICK_TOOLS = new Set(TEAM_TOOLS)
@@ -332,7 +376,14 @@ export function install(rt) {
   function callMembers(round, turns, index, callees, note, cap, by) {
     let next = index + 1
     for (const peer of callees) {
-      if ((turns.get(peer.id) ?? 0) >= cap) continue
+      if ((turns.get(peer.id) ?? 0) >= cap) {
+        // The bound drops the call in silence: the caller's "@Name" sits in the log
+        // and reads as a hand-off, while the member never hears of it. Keep the drop
+        // in the round, so the group is told once (noteDropped).
+        round.dropped ??= []
+        round.dropped.push({ name: peer.name, cap })
+        continue
+      }
       const waiting = round.slots.findIndex((other, at) => at > index && other.id === peer.id && other.status === 'waiting')
       const called = waiting === -1 ? { id: peer.id, name: peer.name, status: 'waiting' } : round.slots.splice(waiting, 1)[0]
       called.note = note
@@ -341,6 +392,27 @@ export function install(rt) {
       round.slots.splice(next, 0, called)
       next += 1
     }
+  }
+
+  // Calls the per-member turn bound dropped, told to the group once per batch of
+  // calls: the drop is found while the caller's own reply is handled, so the group
+  // hears of it with that reply and not at the end of the round — a round may see
+  // several batches, one for the user's message and one for each member's reply.
+  // The log already shows the "@Name" that went out, so without this the hand-off
+  // looks done while nobody was called: the round moved on and the caller waits for
+  // an answer that never starts. The admin can carry the message on, or the round
+  // ends and the next one calls again.
+  const noteDropped = (room, round) => {
+    const dropped = round.dropped ?? []
+    if (dropped.length === 0) return
+    round.dropped = []
+    const names = [...new Set(dropped.map(item => item.name))]
+    const admin = rt.botOf(room.admin)
+    appendRoom(room, { who: 'DS Bot', kind: 'notice', reason: 'cap', names, cap: dropped[0].cap, ...(admin === undefined ? {} : { admin: admin.name }) })
+    // The user's half of the same event: the round's replies carry one line, so the
+    // silence after the "@Name" it just saw is not read as a finished hand-off.
+    round.replies.push({ kind: 'dropped', names, cap: dropped[0].cap, time: Date.now() })
+    void rt.save().catch(() => {})
   }
 
   // The user's messages waiting in the group Session's inbox while a round runs, from
@@ -377,9 +449,12 @@ export function install(rt) {
       const { all, found } = mentionsIn(line.text, members)
       const note = all || found.length > 0 ? 'the user mentioned you' : 'new message from the user'
       callMembers(round, turns, index - 1, openingSpeakers(room, { text: line.text }), note, ROOM_ADMIN_TURNS_EACH)
+      noteDropped(room, round)
     }
     // The user spoke in this room, so late results may call members again.
     room.lateRounds = 0
+    room.quietNoticed = false
+    room.quietShown = false
     void rt.save().catch(() => {})
     return round.slots.length - before
   }
@@ -415,6 +490,11 @@ export function install(rt) {
         round.replies.push({ kind: 'failed', botId: member.id, name: member.name, color: member.color, code: 'SESSION', text: String(error?.message ?? error).slice(0, 300), time: Date.now() })
         continue
       }
+      if (session === undefined) {
+        round.speaking = null
+        slot.status = 'left'
+        continue
+      }
       await loadGroupLines(room)
       const prompt = roomPrompt(room, member, round)
       round.shown?.push(member.id)
@@ -443,7 +523,13 @@ export function install(rt) {
       } else {
         slot.status = typeof reply === 'string' ? 'passed' : 'missed'
         round.passed.push(member.name)
-        if (reply?.missed) round.replies.push({ kind: 'missed', botId: member.id, name: member.name, color: member.color, time: Date.now() })
+        if (reply?.missed) {
+          round.replies.push({ kind: 'missed', botId: member.id, name: member.name, color: member.color, time: Date.now() })
+          // The round moved on without this member: the log shows the call and then
+          // silence, which reads as a lost message. The group is told the baton was
+          // dropped, and what brings the member back.
+          appendRoom(room, { who: 'DS Bot', kind: 'notice', reason: 'missed', names: [member.name], minutes: Math.round(ROOM_REPLY_TIMEOUT_MS / 60000) })
+        }
       }
       const spoken = final === undefined ? said : [...said, final]
       if (spoken.length === 0) continue
@@ -455,6 +541,7 @@ export function install(rt) {
       const found = named.filter(other => other.id !== member.id)
       const callees = leads && all ? [...found, ...others.filter(other => !found.includes(other))] : found
       callMembers(round, turns, index, callees, `${member.name} mentioned you`, leads ? ROOM_ADMIN_TURNS_EACH : ROOM_TURNS_EACH, member.id)
+      noteDropped(room, round)
     }
   }
 
@@ -490,7 +577,14 @@ export function install(rt) {
           ...(post.files === undefined ? {} : { files: post.files }),
         })
       }
-      if (posts.some(post => !post.botId && !post.kickoff)) room.lateRounds = 0
+      // The user wrote here, so late results may call members again and the quiet
+      // notice may be told again: the count and the notice reset together, as they
+      // do for a message that waited in the inbox (drainRoomInbox).
+      if (posts.some(post => !post.botId && !post.kickoff)) {
+        room.lateRounds = 0
+        room.quietNoticed = false
+        room.quietShown = false
+      }
       await rt.save()
       // An event post, and a member post that calls nobody, never pick the speakers
       // over a message queued with them.
@@ -533,6 +627,7 @@ export function install(rt) {
         round.replies.push({ kind, botId: post.botId, name, color: bot?.color, time: Date.now() })
       }
       if (posts.some(post => post.resumed || post.stopped || post.done)) await rt.save()
+      if (posts.some(post => post.quiet === true)) showQuiet(room, round)
       rt.roomProgress.set(exec.callId, round)
       try {
         await runRound(room, round, exec.signal, exec.agent)
@@ -684,6 +779,7 @@ export function install(rt) {
         const line = [text, ...files.map(fileLine)].filter(Boolean).join('\n')
         appendRoom(room, { who: sender.name, botId: sender.id, text: line, ...(files.length > 0 ? { files } : {}) })
         running.replies.push({ botId: sender.id, name: sender.name, color: sender.color, text: line, time: Date.now() })
+        if (extra.quiet === true) showQuiet(room, running)
         logged = room.seq
       }
       await rt.save()
@@ -696,6 +792,26 @@ export function install(rt) {
     await ctx.sessions.flush(agent.session)
   }
   rt.postToRoom = postToRoom
+
+  // Past the late-round limit every later post is quiet: its "@" names call nobody,
+  // while the log still shows them. Members would keep handing work to a room that
+  // no longer answers, so the group is told once when the limit is reached; the
+  // user's next message resets the count (drainRoomInbox) and it may be told again.
+  const noteQuiet = (room) => {
+    if (room.quietNoticed === true) return
+    room.quietNoticed = true
+    appendRoom(room, { who: 'DS Bot', kind: 'notice', reason: 'quiet' })
+    void rt.save().catch(() => {})
+  }
+
+  // The user's half of the same event: one line in the replies of the round the
+  // quiet post reaches, shown once per quiet stretch the way the notice is.
+  const showQuiet = (room, round) => {
+    if (room.quietNoticed !== true || room.quietShown === true || round === undefined) return
+    room.quietShown = true
+    round.replies.push({ kind: 'quiet', time: Date.now() })
+    void rt.save().catch(() => {})
+  }
 
   // A member the round moved on from (it went on working, went quiet or waited for an
   // approval) posts what its turn ended with. The member that asked for it and anyone
@@ -712,7 +828,8 @@ export function install(rt) {
     const done = isPass(text) && shown && info.askedBy !== undefined
     if (isPass(text) && !done) return
     const quiet = (room.lateRounds ?? 0) >= ROOM_LATE_ROUNDS
-    if (!quiet) room.lateRounds = (room.lateRounds ?? 0) + 1
+    if (quiet) noteQuiet(room)
+    else room.lateRounds = (room.lateRounds ?? 0) + 1
     await rt.save()
     await postToRoom(room, member, done ? '' : text, { late: true, ...(done ? { done: true } : {}), ...(info.askedBy ? { askedBy: info.askedBy } : {}), ...(quiet ? { quiet: true } : {}) })
       .catch(error => rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error))
@@ -739,8 +856,14 @@ export function install(rt) {
     ensureRoomLog(room)
     const calls = callsIn(room, member, text)
     const running = [...rt.roomProgress.values()].find(round => round.roomId === room.id)
-    if (!calls && running !== undefined) return postInRound(room, running, member, text)
-    const quiet = !calls || (room.lateRounds ?? 0) >= ROOM_LATE_ROUNDS
+    const limited = (room.lateRounds ?? 0) >= ROOM_LATE_ROUNDS
+    if (limited) noteQuiet(room)
+    if (!calls && running !== undefined) {
+      postInRound(room, running, member, text)
+      if (limited) showQuiet(room, running)
+      return
+    }
+    const quiet = !calls || limited
     if (!quiet) room.lateRounds = (room.lateRounds ?? 0) + 1
     await rt.save()
     await postToRoom(room, member, text, { progress: true, ...(quiet ? { quiet: true } : {}) })

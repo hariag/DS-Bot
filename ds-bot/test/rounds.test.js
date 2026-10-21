@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
+import { lineText } from '../src/host/groups.js'
 import { fakeAttachments, fakeContext } from './fake-ctx.js'
 
 // A fake team of two Bots in one group; member answers are played back through the
@@ -461,4 +462,224 @@ test('a long post goes to the group as a file, and reaches the member with its p
   const line = rt.state.rooms[room.id].log.find(entry => entry.botId === chief)
   assert.deepEqual(line.files, [file])
   assert.equal(line.length, undefined, 'the line is short; no file of its own')
+})
+
+// The per-member turn bound, the late-round quiet limit and the reply timeout drop
+// group hand-offs in silence: the log shows the "@Name" that went out, the called
+// member never hears of it, and the round moves on. Each drop is told to the group
+// instead, so a caller learns its hand-off did not land.
+test('a call past the per-member turn limit is dropped, and the group is told once', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, rt } = start()
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const editor = (await call('create-bot', { name: 'Editor' })).value
+  const room = (await call('create-room', { name: 'R1', members: [chief, writer.id, editor.id] })).value
+  await call('update-room', { id: room.id, mode: 'everyone' })
+  sent.length = 0
+
+  await emit(room.id, userMessage('Start'))
+  const running = relay(room.id, 'relay')
+
+  // Everyone mode, admin first: the three opening turns weave @ calls between them.
+  const first = await turnFor(sent)
+  await answer(first.sessionId, first.message.source.exchangeId, '@Writer one', 1)
+  const second = await turnFor(sent, first)
+  await answer(second.sessionId, second.message.source.exchangeId, '@Editor one', 2)
+  const third = await turnFor(sent, first, second)
+  await answer(third.sessionId, third.message.source.exchangeId, '@Writer back', 3)
+  const fourth = await turnFor(sent, first, second, third)
+  await answer(fourth.sessionId, fourth.message.source.exchangeId, '@Editor two', 4)
+  // Editor's second turn calls Writer a third time: Writer already spoke twice, so
+  // the call is dropped. The log must say so, not show a hand-off that never starts.
+  const fifth = await turnFor(sent, first, second, third, fourth)
+  await answer(fifth.sessionId, fifth.message.source.exchangeId, '@Writer again', 5)
+  await running
+
+  const notices = rt.state.rooms[room.id].log.filter(line => line.kind === 'notice')
+  assert.equal(notices.length, 1, 'one notice for the dropped call, not one per message')
+  assert.deepEqual({ reason: notices[0].reason, names: notices[0].names, cap: notices[0].cap, admin: notices[0].admin },
+    { reason: 'cap', names: ['Writer'], cap: 2, admin: rt.state.bots[rt.state.rooms[room.id].admin]?.name })
+  assert.match(lineText(notices[0]), /@Writer was not called: this round's per-member turn limit \(2\) is reached/)
+  // The round the user watched shows the same drop as one line of its replies.
+  const result = JSON.parse(await running)
+  assert.deepEqual(result.replies.filter(reply => reply.kind === 'dropped').map(reply => [reply.names, reply.cap]), [[['Writer'], 2]])
+  const writerSession = rt.state.rooms[room.id].sessions[writer.id]
+  const writerTurns = sent.filter(entry => entry.sessionId === writerSession && entry.message.source.role === 'room')
+  assert.equal(writerTurns.length, 2, 'Writer was called twice, and the third call never reached it')
+})
+
+test('the quiet mode past the late-round limit is told to the group once, and the user resets it', async (t) => {
+  const { call, emit, userMessage, compose, relay, answer, stop, sent, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  await call('update-room', { id: room.id, mode: 'admin' })
+  const chief = rt.state.mainBotIds[0]
+
+  // One round, so the admin has a group Session to post from.
+  await emit(room.id, userMessage('Start'))
+  const running = relay(room.id, 'relay')
+  const turn = await turnFor(sent)
+  await answer(turn.sessionId, turn.message.source.exchangeId, 'Ready.', 1)
+  await running
+  const groupSession = rt.state.rooms[room.id].sessions[chief]
+  const state = rt.state.rooms[room.id]
+
+  // Late replies after work have reached the limit: the next post is quiet, and the
+  // group hears why its @ names stop calling anybody.
+  state.lateRounds = 10
+  sent.length = 0
+  await rt.roomStepText(groupSession, {}, '@Writer still with me?', false)
+  await waitFor(() => state.log.some(line => line.kind === 'notice'))
+  const notices = state.log.filter(line => line.kind === 'notice')
+  assert.equal(notices.length, 1, 'one notice when the limit is reached')
+  assert.equal(notices[0].reason, 'quiet')
+  assert.match(lineText(notices[0]), /quiet mode/)
+  assert.match(lineText(notices[0]), /10-round limit/)
+  assert.equal(state.lateRounds, 10, 'a quiet post does not push the count further')
+  assert.equal(state.quietNoticed, true)
+
+  // A second quiet post says nothing new.
+  await rt.roomStepText(groupSession, {}, '@Writer again?', false)
+  await waitFor(() => sent.length > 0)
+  assert.equal(state.log.filter(line => line.kind === 'notice').length, 1, 'the notice is not repeated')
+
+  // The user writes in the group: the count resets, so later posts call members again.
+  await compose(room.id, 'carry on')
+  const reset = relay(room.id, 'relay-2')
+  const after = await turnFor(sent)
+  await answer(after.sessionId, after.message.source.exchangeId, 'On it.', 2)
+  await reset
+  assert.equal(state.lateRounds, 0)
+  assert.equal(state.quietNoticed, false)
+
+  await rt.roomStepText(groupSession, {}, '@Writer one more', false)
+  await waitFor(() => state.lateRounds === 1)
+  assert.equal(state.log.filter(line => line.kind === 'notice').length, 1, 'no notice once the group talks again')
+})
+
+test('the quiet mode names itself once in the replies the user sees', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  await call('update-room', { id: room.id, mode: 'admin' })
+  const chief = rt.state.mainBotIds[0]
+
+  await emit(room.id, userMessage('Start'))
+  const running = relay(room.id, 'relay')
+  const turn = await turnFor(sent)
+  await answer(turn.sessionId, turn.message.source.exchangeId, 'Ready.', 1)
+  await running
+  const state = rt.state.rooms[room.id]
+
+  // In quiet mode — the notice already went to the log — a quiet post opens a round,
+  // and the round's replies name the mode once.
+  state.lateRounds = 10
+  state.quietNoticed = true
+  rt.roomInbox.set(room.id, [{ text: '@Writer still there?', botId: chief, late: true, quiet: true }])
+  const first = JSON.parse(await relay(room.id, 'relay-2'))
+  assert.equal(first.replies.filter(reply => reply.kind === 'quiet').length, 1)
+  assert.equal(state.quietShown, true)
+
+  // The next quiet post opens a round too, but the line is not drawn again.
+  rt.roomInbox.set(room.id, [{ text: '@Writer?', botId: chief, late: true, quiet: true }])
+  const second = JSON.parse(await relay(room.id, 'relay-3'))
+  assert.equal(second.replies.filter(reply => reply.kind === 'quiet').length, 0)
+
+  // The user writing in the group resets it: the next quiet stretch says it again.
+  await emit(room.id, userMessage('carry on'))
+  const third = relay(room.id, 'relay-4')
+  const again = await turnFor(sent, turn)
+  await answer(again.sessionId, again.message.source.exchangeId, 'On it.', 2)
+  await third
+  assert.equal(state.quietShown, false)
+})
+
+test('a member the reply timeout cut short is told to the group, not left as silence', async (t) => {
+  const { call, emit, userMessage, relay, stop, sent, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  await call('update-room', { id: room.id, mode: 'admin' })
+
+  await emit(room.id, userMessage('Start'))
+  const running = relay(room.id, 'relay')
+  const turn = await turnFor(sent)
+  // The 4-minute reply timeout, fired now instead of in four minutes: the round
+  // moves on without the member, and the group is told the baton was dropped.
+  rt.roomWaiters.get(turn.message.source.exchangeId).resolve({ missed: true })
+  await running
+
+  const notices = rt.state.rooms[room.id].log.filter(line => line.kind === 'notice')
+  assert.equal(notices.length, 1)
+  assert.deepEqual({ reason: notices[0].reason, names: notices[0].names, minutes: notices[0].minutes },
+    { reason: 'missed', names: ['Chief'], minutes: 4 })
+  assert.match(lineText(notices[0]), /did not answer within 4 minutes/)
+  assert.match(lineText(notices[0]), /late reply/)
+})
+
+test('a member still at work is shown with the group messages it has not read yet', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, rt } = start()
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  const editor = (await call('create-bot', { name: 'Editor' })).value
+  const room = (await call('create-room', { name: 'R1', members: [chief, writer.id, editor.id] })).value
+  await call('update-room', { id: room.id, mode: 'everyone' })
+  sent.length = 0
+
+  // First round: every member speaks once, so each has a group Session and a `seen`.
+  await emit(room.id, userMessage('hello'))
+  const first0 = relay(room.id, 'relay-1')
+  const spoken = []
+  for (const text of ['Chief here.', 'Writer here.', 'Editor here.']) {
+    const turn = await turnFor(sent, ...spoken)
+    await answer(turn.sessionId, turn.message.source.exchangeId, text, 1)
+    spoken.push(turn)
+  }
+  await first0
+
+  // Second round. Editor starts a turn of its own and does not finish it, so when
+  // the round calls it, it is at earlier work and the round moves on.
+  await emit(room.id, userMessage('again'))
+  const second0 = relay(room.id, 'relay-2')
+  const chiefTurn = await turnFor(sent, ...spoken)
+  await emit(rt.state.rooms[room.id].sessions[editor.id], { type: 'turn/start', data: { turn: 9 } })
+  await answer(chiefTurn.sessionId, chiefTurn.message.source.exchangeId, 'Chief again.', 2)
+  spoken.push(chiefTurn)
+
+  // The Writer's prompt names Editor as still at work, with the group lines Editor
+  // has not read: the user's message and the Chief's answer since Editor last spoke.
+  const writerTurn = await turnFor(sent, ...spoken)
+  assert.match(writerTurn.message.content[0].text, /Editor \(1 min, with [1-9]\d* group message\(s\) it has not read yet\)/)
+  await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Writer again.', 2)
+  await second0
+})
+
+test('a user message that opens a round resets the quiet notice, as a queued one does', async (t) => {
+  const { call, emit, userMessage, relay, answer, stop, sent, rt } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  await call('update-room', { id: room.id, mode: 'admin' })
+
+  await emit(room.id, userMessage('Start'))
+  const first = relay(room.id, 'relay-1')
+  const turn = await turnFor(sent)
+  await answer(turn.sessionId, turn.message.source.exchangeId, 'Ready.', 1)
+  await first
+
+  const state = rt.state.rooms[room.id]
+  // The group has gone quiet, and it has been told so.
+  state.lateRounds = 10
+  state.quietNoticed = true
+
+  // The user writes in the group. This message opens a round of its own, rather than
+  // waiting in the inbox for one that is running, and the quiet notice has to reset
+  // with the count: otherwise the group is told about quiet mode only once, ever.
+  await emit(room.id, userMessage('carry on'))
+  const second = relay(room.id, 'relay-2')
+  const again = await turnFor(sent, turn)
+  await answer(again.sessionId, again.message.source.exchangeId, 'On it.', 2)
+  await second
+  assert.equal(state.lateRounds, 0)
+  assert.equal(state.quietNoticed, false, 'the quiet notice can be told again later')
 })

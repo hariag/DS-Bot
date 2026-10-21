@@ -559,6 +559,8 @@ var ZH = {
   "{name} looked up its own chat for “{text}”": "{name} 在自己的对话里查找「{text}」",
   "{name} is typing…": "{name} 正在输入…",
   "{name} didn't answer in time": "{name} 没有及时回应",
+  "{names} not called: the per-member limit for this round is reached": "没叫到 {names}：这一轮每人的次数用完了",
+  "The group went quiet: @ mentions in late replies call nobody until you write here": "群进入安静模式：之后迟到回复里的 @ 不再叫人，你在群里说句话就恢复",
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
@@ -5709,6 +5711,12 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === "missed") {
         return (0, import_react9.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} didn't answer in time", { name: bot.name }));
+      }
+      if (reply.kind === "dropped") {
+        return (0, import_react9.createElement)("div", { key: `dropped-${index}`, className: "bt-event" }, t("{names} not called: the per-member limit for this round is reached", { names: (reply.names ?? []).join(t(" and ")) }));
+      }
+      if (reply.kind === "quiet") {
+        return (0, import_react9.createElement)("div", { key: `quiet-${index}`, className: "bt-event" }, t("The group went quiet: @ mentions in late replies call nobody until you write here"));
       }
       if (reply.kind === "resumed") {
         return (0, import_react9.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} was cut off by a restart and picked its work back up", { name: bot.name }));
