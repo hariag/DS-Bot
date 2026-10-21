@@ -16,6 +16,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - A Main Bot can set a Bot's thinking level, and is told when the model has no such level. ([#99](https://github.com/Fei2411/DeepSeek-Bot/issues/99))
 - Every Bot in a group chat can post into it from its own chat; its post calls only the members it @-mentions. ([#318](https://github.com/Fei2411/DeepSeek-Bot/pull/318))
 - Docker: tested images on GHCR, and a startup that reuses the saved profile without upgrading plugins by itself. ([#273](https://github.com/Fei2411/DeepSeek-Bot/pull/273))
+- **Group memory**: a group chat keeps its own memory. Only its members read it, in that group, and a Bot outside the group no longer gets what the group learned. It shows in the group's details. ([#151](https://github.com/Fei2411/DeepSeek-Bot/issues/151), [#300](https://github.com/Fei2411/DeepSeek-Bot/pull/300))
+- **View cards**: in its own chat a Bot can show a card with `show_view`: text, metrics, a table, progress, choices, a confirmation or a short form. A card with choices, a confirmation or a form waits for your answer. ([#386](https://github.com/Fei2411/DeepSeek-Bot/issues/386), [#388](https://github.com/Fei2411/DeepSeek-Bot/pull/388))
+- `create_bot` and `update_bot` can set a Bot's profile photo, from a local image file or a data URL. A photo that does not load shows the Bot's character. ([#320](https://github.com/Fei2411/DeepSeek-Bot/issues/320), [#343](https://github.com/Fei2411/DeepSeek-Bot/pull/343))
+- Group chat messages show when they were posted, and each Bot reply shows how long its turn ran. ([#254](https://github.com/Fei2411/DeepSeek-Bot/issues/254), [#342](https://github.com/Fei2411/DeepSeek-Bot/pull/342))
 
 ### Changed
 
@@ -51,6 +55,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - On macOS the desktop app's window keeps the system title bar.
 - In Bot mode there is no **Sign out** for a DeepSeek account; sign out in classic Agent mode. ([#398](https://github.com/Fei2411/DeepSeek-Bot/issues/398))
 - When the desktop app's first-run copy puts the team in a new team workspace, each Bot that works in the team workspace goes on in a fresh part there first, so its first reply takes longer. ([#384](https://github.com/Fei2411/DeepSeek-Bot/issues/384))
+- Memory that group chats saved before this version stays in the members' own memory or the team memory. Delete it in the memory panel if a Bot outside the group should not read it. ([#300](https://github.com/Fei2411/DeepSeek-Bot/pull/300))
 
 ## [0.1.7] - 2026-10-16
 
