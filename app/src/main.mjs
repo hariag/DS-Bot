@@ -304,8 +304,8 @@ async function moveData(workspace) {
 const notePage = message => `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
 <body style="margin:0;height:100vh;display:grid;place-items:center;font:14px system-ui,sans-serif;background:Canvas;color:CanvasText">${message.replace(/[&<>]/gu, char => `&#${String(char.charCodeAt(0))};`)}</body>`)}`
 
-// Windows updates itself; macOS asks to download the new version. Throwaway runs check only a
-// given feed and never ask.
+// Windows and a Linux AppImage update themselves; macOS and a Linux deb ask to download the new
+// version. Throwaway runs check only a given feed and never ask.
 function startUpdates() {
   const feed = process.env.DS_BOT_UPDATE_URL || undefined
   const throwaway = Boolean(process.env.DS_BOT_HOME)
@@ -315,7 +315,17 @@ function startUpdates() {
       current: app.getVersion(), arch: process.arch, feed, ask: throwaway ? undefined : askDownload, open: url => shell.openExternal(url),
     })
   }
-  if (process.platform === 'win32') {
+  // electron-updater's Linux updater works only from inside an AppImage (APPIMAGE is set there);
+  // a deb cannot update itself and points at the release page instead, as on macOS. The deb's
+  // file name uses the Debian architecture (x64 → amd64).
+  if (process.platform === 'linux' && process.env.APPIMAGE === undefined) {
+    const debArch = { x64: 'amd64', arm64: 'arm64' }[process.arch] ?? process.arch
+    return watchReleases({
+      current: app.getVersion(), arch: process.arch, feed, ask: throwaway ? undefined : askDownload, open: url => shell.openExternal(url),
+      asset: version => `DeepSeek-Bot-${version}-linux-${debArch}.deb`,
+    })
+  }
+  if (process.platform === 'win32' || process.platform === 'linux') {
     return watchUpdates({ updater: electronUpdater.autoUpdater, feed, ask: throwaway ? undefined : askRestart, beforeInstall: stopHost })
   }
   return undefined

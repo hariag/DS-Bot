@@ -5,6 +5,8 @@
   "private": true,
   "description": "DeepSeek Bot desktop app: the ds-bot team on its own pinned DeepSeek Harness.",
   "author": "Fei2411",
+  "homepage": "https://github.com/Fei2411/DeepSeek-Bot",
+  "desktopName": "deepseek-bot.desktop",
   "license": "Apache-2.0",
   "type": "module",
   "main": "src/main.mjs",
