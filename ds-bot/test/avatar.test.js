@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -21,22 +20,6 @@ const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ds-bot-avatar-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
-}
-
-async function serve(handler) {
-  const server = createServer(handler)
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const { port } = server.address()
-  return {
-    url: `http://127.0.0.1:${port}`,
-    close: () => new Promise((resolve) => {
-      server.closeAllConnections()
-      server.close(resolve)
-    }),
-  }
 }
 
 test('a data URL is stored under the type its bytes really are', async () => {
@@ -113,46 +96,12 @@ test('a malformed data URL is refused', async () => {
   await assert.rejects(readAvatar('data:image/png;base64,abcd'), /must be a PNG, JPEG, WebP, or GIF image/)
 })
 
-test('an empty value or a link that is not http(s) is refused', async () => {
-  await assert.rejects(readAvatar(''), /Give an image path, an http\(s\) link, or a data URL/)
+test('an empty value or a link is refused', async () => {
+  await assert.rejects(readAvatar(''), /Give an image path or a data URL/)
   await assert.rejects(readAvatar('   '), /Give an image path/)
-  await assert.rejects(readAvatar('ftp://example.com/photo.png'), /must be a local image path, an http\(s\) link, or a data URL/)
-  await assert.rejects(readAvatar('file:///tmp/photo.png'), /must be a local image path, an http\(s\) link, or a data URL/)
-})
-
-test('an http link is downloaded, and its content type is not trusted', async (t) => {
-  const server = await serve((request, response) => {
-    if (request.url === '/photo') {
-      response.writeHead(200, { 'content-type': 'text/plain' })
-      response.end(JPEG)
-      return
-    }
-    response.writeHead(404, { 'content-type': 'text/plain' })
-    response.end('no such image')
-  })
-  t.after(server.close)
-  assert.equal(await readAvatar(`${server.url}/photo`), jpegUrl)
-  await assert.rejects(readAvatar(`${server.url}/missing`), /answered 404/)
-})
-
-test('an oversized or slow download is refused', async (t) => {
-  const huge = Buffer.concat([PNG.subarray(0, 8), Buffer.alloc(200_000)])
-  const server = await serve((request, response) => {
-    if (request.url === '/length') {
-      response.writeHead(200, { 'content-length': String(huge.length) })
-      response.end(huge)
-      return
-    }
-    if (request.url === '/chunks') {
-      response.writeHead(200, { 'content-type': 'image/png' })
-      for (let at = 0; at < huge.length; at += 25_000) response.write(huge.subarray(at, at + 25_000))
-      response.end()
-      return
-    }
-    // /slow: keep the request open until the caller's timeout fires.
-  })
-  t.after(server.close)
-  await assert.rejects(readAvatar(`${server.url}/length`), /too large: 200008 bytes/)
-  await assert.rejects(readAvatar(`${server.url}/chunks`), /The avatar image is too large/)
-  await assert.rejects(readAvatar(`${server.url}/slow`, { timeoutMs: 200 }), /did not answer within 0\.2 seconds|did not answer within 1 second/)
+  await assert.rejects(readAvatar('ftp://example.com/photo.png'), /must be a local image path or a data URL/)
+  await assert.rejects(readAvatar('file:///tmp/photo.png'), /must be a local image path or a data URL/)
+  // A link is never fetched, so it reaches nothing on this machine or its network.
+  await assert.rejects(readAvatar('http://127.0.0.1:1/photo.png'), /not downloaded here.*pass its path, or pass a data URL/)
+  await assert.rejects(readAvatar('HTTPS://example.com/photo.png'), /not downloaded here/)
 })

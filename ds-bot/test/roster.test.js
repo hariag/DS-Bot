@@ -764,8 +764,8 @@ test('list_models names the thinking levels of the models a Bot runs on', async 
   assert.doesNotMatch(result.split('\n').find(line => line.includes('deepseek/plain')), /thinking/)
 })
 
-// #320: create_bot and update_bot take a photo from a local path, a data URL, or an
-// http(s) link, and store it in the same data URL the settings page writes.
+// #320: create_bot and update_bot take a photo from a local path or a data URL, and
+// store it in the same data URL the settings page writes.
 const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24, 1)])
 const PNG_DATA_URL = `data:image/png;base64,${PNG_BYTES.toString('base64')}`
 const tempAvatarDir = (t) => {
@@ -781,7 +781,8 @@ test('create_bot and update_bot advertise an optional photo', async (t) => {
     const schema = ctx.registeredTools.get(name).parameters
     assert.equal(schema.properties.avatar?.type, 'string')
     assert.equal(schema.required?.includes('avatar') ?? false, false)
-    assert.match(schema.properties.avatar.description, /local image path.*http\(s\) link.*data URL/)
+    assert.match(schema.properties.avatar.description, /local image path.*data URL/)
+    assert.doesNotMatch(schema.properties.avatar.description, /http/)
     assert.match(schema.properties.avatar.description, /256x256/)
   }
 })

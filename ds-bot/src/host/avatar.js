@@ -1,13 +1,12 @@
-// Avatar input for create_bot and update_bot: a local image path, a data URL, or an
-// http(s) link, read into the data URL a Bot keeps in avatar.image. There is no image
-// library in the host, so images are not resized; a small square image is asked for,
-// and every kind of input is capped at what the stored format holds.
+// Avatar input for create_bot and update_bot: a local image path or a data URL, read
+// into the data URL a Bot keeps in avatar.image. There is no image library in the
+// host, so images are not resized; a small square image is asked for, and every kind
+// of input is capped at what the stored format holds.
 import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { MAX_AVATAR_IMAGE } from './constants.js'
 
-const TIMEOUT_MS = 15_000
 // Base64 is four characters for every three bytes, and the data URL adds a mime
 // prefix, so a raw image must stay under this to fit MAX_AVATAR_IMAGE once stored.
 const LONGEST_PREFIX = 'data:image/jpeg;base64,'
@@ -29,7 +28,6 @@ function mimeOf(bytes) {
 
 const tooLarge = size => `The avatar image is too large: ${size} bytes, and the limit is ${MAX_BYTES} bytes (about 120 KB). ${HINT}`
 const NOT_IMAGE = `The avatar must be a PNG, JPEG, WebP, or GIF image. ${HINT}`
-const CHECK_LINK = 'Check the link, or download the image and pass its path.'
 
 function toDataUrl(bytes) {
   if (bytes.length > MAX_BYTES) throw new Error(tooLarge(bytes.length))
@@ -81,60 +79,14 @@ function readDataUrl(value) {
   return toDataUrl(Buffer.from(payload, 'base64'))
 }
 
-const secondsOf = timeoutMs => {
-  const seconds = Math.max(1, Math.round(timeoutMs / 1000))
-  return `${seconds} second${seconds === 1 ? '' : 's'}`
-}
-const timedOut = timeoutMs => `The image link did not answer within ${secondsOf(timeoutMs)}. ${CHECK_LINK}`
-const isTimeout = error => error?.name === 'TimeoutError' || error?.name === 'AbortError' || error?.cause?.name === 'TimeoutError'
-const discard = async (response) => { try { await response.body?.cancel() } catch {} }
-
-async function readUrl(url, timeoutMs) {
-  let response
-  try {
-    response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) })
-  } catch (error) {
-    if (isTimeout(error)) throw new Error(timedOut(timeoutMs))
-    throw new Error(`Could not download the image: ${error?.cause?.message ?? error?.message ?? 'network error'}. ${CHECK_LINK}`)
-  }
-  if (!response.ok) {
-    await discard(response)
-    throw new Error(`The image link answered ${response.status}${response.statusText ? ` ${response.statusText}` : ''}. ${CHECK_LINK}`)
-  }
-  const length = Number(response.headers.get('content-length'))
-  if (Number.isFinite(length) && length > MAX_BYTES) {
-    await discard(response)
-    throw new Error(tooLarge(length))
-  }
-  const reader = response.body?.getReader()
-  if (reader === undefined) return toDataUrl(Buffer.alloc(0))
-  const chunks = []
-  let size = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      size += value.length
-      if (size > MAX_BYTES) {
-        await reader.cancel().catch(() => {})
-        throw new Error(tooLarge(size))
-      }
-      chunks.push(Buffer.from(value))
-    }
-  } catch (error) {
-    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') throw new Error(timedOut(timeoutMs))
-    throw error
-  }
-  return toDataUrl(Buffer.concat(chunks))
-}
-
 // Returns the data URL for avatar.image, or throws with a line the user can read.
-// `baseDir` is where a relative local path starts, `timeoutMs` covers a whole download.
-export async function readAvatar(input, { baseDir, timeoutMs = TIMEOUT_MS } = {}) {
+// `baseDir` is where a relative local path starts. Links are not fetched: the host
+// would reach addresses, such as local services, that dsh's own web fetch refuses.
+export async function readAvatar(input, { baseDir } = {}) {
   const value = typeof input === 'string' ? input.trim() : ''
-  if (value === '') throw new Error(`Give an image path, an http(s) link, or a data URL. ${HINT}`)
+  if (value === '') throw new Error(`Give an image path or a data URL. ${HINT}`)
   if (/^data:/i.test(value)) return readDataUrl(value)
-  if (/^https?:\/\//i.test(value)) return readUrl(value, timeoutMs)
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) throw new Error(`The avatar must be a local image path, an http(s) link, or a data URL. ${HINT}`)
+  if (/^https?:\/\//i.test(value)) throw new Error('An http(s) link is not downloaded here. Save the image to a file and pass its path, or pass a data URL.')
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) throw new Error(`The avatar must be a local image path or a data URL. ${HINT}`)
   return readLocal(value, baseDir)
 }

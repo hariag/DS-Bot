@@ -24,7 +24,7 @@ const MODE_PARAM = {
 const WORK_DIR_PARAM = { type: 'string', description: 'Full path of the folder to work in, where commands and file tools start. Only when the user asks for it' }
 const AVATAR_PARAM = {
   type: 'string',
-  description: 'Profile picture: a local image path (a relative path starts in your working folder), an http(s) link, or a data URL. PNG, JPEG, WebP, or GIF; square, 256x256 recommended, up to 120 KB. Images are not resized.',
+  description: 'Profile picture: a local image path (a relative path starts in your working folder) or a data URL. PNG, JPEG, WebP, or GIF; square, 256x256 recommended, up to 120 KB. Images are not resized.',
 }
 const WORKING_DIRECTORY_TOOL = 'working_directory'
 
@@ -306,19 +306,18 @@ export function install(rt) {
       if (bot.id !== caller.id && !rt.isMain(self)) return 'Only a Main Bot can change another Bot. Leave out bot to change yourself, or ask a Main Bot with message_bot.'
       try {
         const { name: newName, role, instructions, color, model, effort } = args
-        let avatar
+        let image
         if (args.avatar !== undefined) {
           const input = typeof args.avatar === 'string' ? args.avatar.trim() : args.avatar
-          // The photo rides on the Bot's other avatar fields, as the settings page's
-          // upload does: setting one keeps a custom character, and clearing removes
-          // only the image so the character shows again.
-          avatar = input === null || input === ''
-            ? { ...bot.avatar, image: null }
-            : { ...bot.avatar, image: await readAvatar(String(input), { baseDir: rt.sessionFolder?.(exec.agent?.session ?? exec.agent) }) }
+          image = input === null || input === '' ? null : await readAvatar(String(input), { baseDir: rt.sessionFolder?.(exec.agent?.session ?? exec.agent) })
         }
         const moving = typeof args.work_dir === 'string'
         const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
         if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
+        // The photo rides on the Bot's other avatar fields, as the settings page's upload
+        // does: setting one keeps a custom character, and clearing removes only the image.
+        // They are read here, after the waits above, so a change made meanwhile stays.
+        const avatar = image === undefined ? undefined : { ...rt.botOf(bot.id)?.avatar, image }
         const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(avatar !== undefined ? { avatar } : {}), ...(model ? { model } : {}), ...(effort === undefined ? {} : { effort }), ...(moving ? { workDir: workDir ?? '' } : {}) })
         if (!moving) return `Updated ${next.name}.`
         const folder = workDir ?? 'the team workspace'
