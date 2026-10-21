@@ -1,6 +1,8 @@
-import { createElement as h, useEffect, useId, useRef, useState } from 'react'
+import { createElement as h, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { CloseIcon, CheckIcon } from './icons.js'
 import { t } from './i18n.js'
+import { useDockHold } from './card-hold.js'
+import { createSource, heldCardKey } from './sources.js'
 
 // -------------------------------------------------------------------------
 // Question cards. `ask_user` cards sit in the transcript and never block the Bot;
@@ -14,15 +16,22 @@ const isTypingTarget = node => node instanceof HTMLInputElement || node instance
 
 // A bare letter picks that option and the letter after the last one
 // jumps to the custom answer; never while typing or while a dialog is open.
+// The listener is document-wide, so two open cards with letter keys would both
+// answer the same key: each card registers here and the keys fire only while it
+// is the sole registered card. The count also drives the key hints.
+const optionKeyCards = createSource(0)
 export function useOptionKeys(count, onPick, ownRef) {
   const pick = useRef(onPick)
   pick.current = onPick
+  const listening = useSyncExternalStore(optionKeyCards.subscribe, optionKeyCards.getSnapshot)
   useEffect(() => {
     if (count === 0) return undefined
+    optionKeyCards.set(value => value + 1)
     const onKey = (event) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.length !== 1) return
       if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return
       if (document.querySelector('[role="dialog"], [aria-modal="true"]') !== null) return
+      if (optionKeyCards.getSnapshot() !== 1) return
       const index = event.key.toUpperCase().charCodeAt(0) - 65
       if (index >= 0 && index < count) {
         event.preventDefault()
@@ -33,13 +42,19 @@ export function useOptionKeys(count, onPick, ownRef) {
       }
     }
     document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('keydown', onKey, true)
+      optionKeyCards.set(value => value - 1)
+    }
   }, [count, ownRef])
+  // Before the effect runs the card is not counted yet; read that as alone so a
+  // lone card's hints never flicker on mount.
+  return count > 0 && listening <= 1
 }
 
 // A question shows two ways: as a bubble in the transcript, and raised when it
 // sits in the dock above the composer.
-function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised = false }) {
+function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false, ownAnswer = false, raised = false }) {
   const [own, setOwn] = useState('')
   const [picked, setPicked] = useState([])
   const ownRef = useRef(null)
@@ -49,6 +64,8 @@ function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised
   const custom = own.trim()
   const canSubmit = multi ? picked.length > 0 || custom !== '' : custom !== ''
   const choose = (label) => {
+    if (busy) return
+    onInteract?.()
     if (multi) {
       setPicked(current => current.includes(label) ? current.filter(item => item !== label) : [...current, label])
       return
@@ -56,16 +73,17 @@ function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised
     onAnswer({ selected: [label] })
   }
   const submit = () => {
-    if (!canSubmit) return
+    if (!canSubmit || busy) return
+    onInteract?.()
     onAnswer({ selected: multi ? picked : [], ...(custom ? { custom } : {}) })
   }
-  useOptionKeys(options.length, index => choose(options[index].label), ownRef)
+  useOptionKeys(busy ? 0 : options.length, index => choose(options[index].label), ownRef)
   const ownLetter = options.length > 0 ? keyLetter(options.length) : undefined
   const field = ownAnswer ? h('textarea', {
-    ref: ownRef, rows: 1, value: own, autoComplete: 'off', spellCheck: false, className: 'bt-q-input',
+    ref: ownRef, rows: 1, value: own, readOnly: busy, autoComplete: 'off', spellCheck: false, className: 'bt-q-input',
     'aria-label': t('Your own answer'), placeholder: t('Type your own answer'),
     'aria-keyshortcuts': ownLetter?.toLowerCase(),
-    onChange: event => setOwn(event.target.value),
+    onChange: (event) => { if (!busy) { onInteract?.(); setOwn(event.target.value) } },
     onKeyDown: (event) => {
       if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
       event.preventDefault()
@@ -75,7 +93,7 @@ function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised
   const rows = options.map((option, optionIndex) => {
     const selected = multi && picked.includes(option.label)
     return h('button', {
-      key: option.label, type: 'button', className: 'bt-q-opt',
+      key: option.label, type: 'button', className: 'bt-q-opt', disabled: busy,
       'aria-pressed': multi ? selected : undefined,
       'aria-keyshortcuts': keyLetter(optionIndex).toLowerCase(),
       onClick: () => choose(option.label),
@@ -95,13 +113,15 @@ function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised
   let foot = null
   if (raised && multi) {
     foot = h('div', { className: 'bt-q-foot' },
-      h('button', { type: 'button', className: 'bt-q-btn', onClick: onDismiss }, t('Skip')),
-      h('button', { type: 'submit', className: 'bt-q-submit', disabled: !canSubmit }, t('Submit')))
+      h('button', { type: 'button', className: 'bt-q-btn', onClick: onDismiss, disabled: busy }, t('Skip')),
+      h('button', { type: 'submit', className: 'bt-q-submit', disabled: !canSubmit || busy }, t('Submit')))
   } else if ((raised || multi) && canSubmit) {
-    foot = h('div', { className: 'bt-q-foot' }, h('button', { type: 'submit', className: 'bt-q-submit' }, t('Submit')))
+    foot = h('div', { className: 'bt-q-foot' }, h('button', { type: 'submit', className: 'bt-q-submit', disabled: busy }, t('Submit')))
   }
   return h('form', {
     className: raised ? 'bt-q bt-q-raised' : 'bt-q', 'aria-labelledby': titleId,
+    'aria-busy': busy || undefined,
+    onFocusCapture: onInteract, onPointerDownCapture: onInteract,
     onSubmit: (event) => { event.preventDefault(); submit() },
   },
     h('div', { className: 'bt-q-head' },
@@ -109,11 +129,11 @@ function QuestionView({ question, onAnswer, onDismiss, ownAnswer = false, raised
         h('p', { className: 'bt-q-title', id: titleId }, question.header ? `${question.header} · ` : '', question.question),
         question.detail ? h('div', { className: 'bt-q-detail' }, question.detail) : null,
         raised && multi ? h('div', { className: 'bt-q-detail' }, t('Choose all that apply')) : null),
-      h('button', { type: 'button', className: 'bt-q-x', 'aria-label': t('Dismiss question'), title: t('Dismiss'), onClick: onDismiss }, h(CloseIcon))),
+      h('button', { type: 'button', className: 'bt-q-x', 'aria-label': t('Dismiss question'), title: t('Dismiss'), onClick: onDismiss, disabled: busy }, h(CloseIcon))),
     rows.length > 0 ? h('div', { className: 'bt-q-list', role: 'group' }, rows) : null,
     field && !raised ? h('div', { className: 'bt-q-custom' },
       h('label', { className: 'bt-q-field' }, field),
-      !multi && canSubmit ? h('button', { type: 'submit', className: 'bt-q-submit' }, t('Submit')) : null) : null,
+      !multi && canSubmit ? h('button', { type: 'submit', className: 'bt-q-submit', disabled: busy }, t('Submit')) : null) : null,
     foot)
 }
 
@@ -160,26 +180,37 @@ export function QuestionCard({ matched }) {
 
 export function PendingQuestion({ sessionId, question, actions, inline }) {
   const [answered, setAnswered] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const hold = useDockHold(sessionId, 'question', question.id, actions, inline)
   if (answered === question.id) return null
-  const onAnswer = (answer) => {
-    setAnswered(question.id)
-    void actions.answerQuestion(sessionId, question.id, { selected: answer.selected ?? [], custom: answer.custom ?? '' }).catch(() => setAnswered(null))
+  const run = (make) => {
+    if (busyRef.current) return
+    hold()
+    busyRef.current = true
+    setBusy(true)
+    // Keep QuestionView mounted until success: a failed request must not erase
+    // the selected options, custom answer, or focused field.
+    void Promise.resolve().then(make).then(() => setAnswered(question.id), () => setAnswered(null)).finally(() => {
+      busyRef.current = false
+      setBusy(false)
+    })
   }
-  const onDismiss = () => {
-    setAnswered(question.id)
-    void actions.dismissQuestion(sessionId)
-  }
+  const onAnswer = answer => run(() => actions.answerQuestion(sessionId, question.id, { selected: answer.selected ?? [], custom: answer.custom ?? '' }))
+  const onDismiss = () => run(() => actions.dismissQuestion(sessionId))
   return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock' },
-    h(QuestionView, { key: question.id, question, onAnswer, onDismiss, ownAnswer: question.allowCustom === true, raised: !inline }))
+    h(QuestionView, { key: question.id, question, onAnswer, onDismiss, onInteract: hold, busy, ownAnswer: question.allowCustom === true, raised: !inline }))
 }
 
 // Questions asked by a tool call render inline at that call (see ToolCell); the dock
-// carries the ones whose call the transcript does not draw, including while history loads.
-export function QuestionDock({ sessionId, useRoster, useCards, actions }) {
+// carries the ones whose call the transcript does not draw, including while history
+// loads. A card the user starts editing stays in the dock until it closes.
+export function QuestionDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
   const question = useRoster(value => value.questions?.[sessionId])
   const drawn = useCards?.(state => state[sessionId]?.[question?.callId] > 0) === true
-  if (question === undefined || (question.callId && drawn)) return null
-  return h(PendingQuestion, { sessionId, question, actions, inline: false })
+  const held = useHeldCards?.(state => state[sessionId]?.[heldCardKey('question', question?.id)] > 0) === true
+  if (question === undefined || (question.callId && drawn && !held)) return null
+  return h(PendingQuestion, { key: JSON.stringify([sessionId, question.id]), sessionId, question, actions, inline: false })
 }
 
 // An answered card in the transcript: the question stays where it was asked, with the

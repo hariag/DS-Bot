@@ -5,7 +5,7 @@ import { t } from './i18n.js'
 import { AnsweredCell, keyLetter, useOptionKeys } from './questions.js'
 import { useDockHold } from './card-hold.js'
 import { heldCardKey } from './sources.js'
-import { checkShownView, normalizeView } from '../shared/views.js'
+import { checkShownView } from '../shared/views.js'
 
 // -------------------------------------------------------------------------
 // View cards (show_view): a Bot draws a small declarative blueprint — text,
@@ -32,37 +32,38 @@ const countType = (node, type) => {
 // The values an answer carries belong to the component whose id is its action.
 const answerValues = (answer, node) => (answer?.action === node.id ? answer.values : undefined)
 
-function OptionsInput({ node, onSubmit, keys }) {
+function OptionsInput({ node, onSubmit, keys, busy = false }) {
   const [picked, setPicked] = useState([])
   const options = optionsOf(node)
   const multi = node.multi === true
   const choose = (label) => {
+    if (busy) return
     if (multi) {
       setPicked(current => (current.includes(label) ? current.filter(item => item !== label) : [...current, label]))
       return
     }
     onSubmit?.(node.id, { selected: [label] })
   }
-  const submit = () => { if (picked.length > 0) onSubmit?.(node.id, { selected: picked }) }
+  const submit = () => { if (!busy && picked.length > 0) onSubmit?.(node.id, { selected: picked }) }
   const ownRef = useRef(null)
-  useOptionKeys(keys ? options.length : 0, index => choose(options[index].label), ownRef)
+  const hints = useOptionKeys(busy || !keys ? 0 : options.length, index => choose(options[index].label), ownRef)
   return h(Fragment, null,
     h('div', { className: 'bt-q-list', role: 'group' }, options.map((option, index) => {
       const selected = multi && picked.includes(option.label)
       return h('button', {
-        key: option.label, type: 'button', className: 'bt-q-opt',
+        key: option.label, type: 'button', className: 'bt-q-opt', disabled: busy,
         'aria-pressed': multi ? selected : undefined,
-        'aria-keyshortcuts': keys ? keyLetter(index).toLowerCase() : undefined,
+        'aria-keyshortcuts': hints ? keyLetter(index).toLowerCase() : undefined,
         onClick: () => choose(option.label),
       },
-      keys ? h('span', { className: 'bt-key', 'aria-hidden': true }, keyLetter(index)) : null,
+      hints ? h('span', { className: 'bt-key', 'aria-hidden': true }, keyLetter(index)) : null,
       h('span', { className: 'bt-q-body' },
         h('span', { className: 'bt-q-label' }, option.label),
         option.description ? h('span', { className: 'bt-q-desc' }, option.description) : null),
       selected ? h('span', { className: 'bt-q-check', title: t('Selected') }, h(CheckIcon)) : null)
     })),
     multi ? h('div', { className: 'bt-q-foot' },
-      h('button', { type: 'button', className: 'bt-q-submit', disabled: picked.length === 0, onClick: submit }, t('Submit'))) : null)
+      h('button', { type: 'button', className: 'bt-q-submit', disabled: busy || picked.length === 0, onClick: submit }, t('Submit'))) : null)
 }
 
 function SettledOptions({ node, answer }) {
@@ -76,10 +77,10 @@ function SettledOptions({ node, answer }) {
       chosen.includes(option.label) ? h('span', { className: 'bt-q-check', title: t('Selected') }, h(CheckIcon)) : null)))
 }
 
-function ConfirmInput({ node, onSubmit }) {
+function ConfirmInput({ node, onSubmit, busy = false }) {
   return h('div', { className: 'bt-q-foot' },
-    h('button', { type: 'button', className: 'bt-q-btn', onClick: () => onSubmit?.(node.id, { confirmed: false }) }, node.cancelLabel ?? t('Cancel')),
-    h('button', { type: 'button', className: 'bt-q-submit', onClick: () => onSubmit?.(node.id, { confirmed: true }) }, node.confirmLabel ?? t('Confirm')))
+    h('button', { type: 'button', className: 'bt-q-btn', disabled: busy, onClick: () => onSubmit?.(node.id, { confirmed: false }) }, node.cancelLabel ?? t('Cancel')),
+    h('button', { type: 'button', className: 'bt-q-submit', disabled: busy, onClick: () => onSubmit?.(node.id, { confirmed: true }) }, node.confirmLabel ?? t('Confirm')))
 }
 
 function SettledConfirm({ node, answer }) {
@@ -93,10 +94,10 @@ function SettledConfirm({ node, answer }) {
   return h('span', { className: 'bt-q-badge' }, label)
 }
 
-function FormInput({ node, onSubmit }) {
+function FormInput({ node, onSubmit, busy = false }) {
   const fields = fieldsOf(node)
   const [draft, setDraft] = useState({})
-  const submit = () => onSubmit?.(node.id, { fields: Object.fromEntries(fields.map(field => [field.id, draft[field.id] ?? ''])) })
+  const submit = () => { if (!busy) onSubmit?.(node.id, { fields: Object.fromEntries(fields.map(field => [field.id, draft[field.id] ?? ''])) }) }
   return h('form', {
     className: 'bt-widget-form',
     onSubmit: (event) => { event.preventDefault(); submit() },
@@ -106,16 +107,16 @@ function FormInput({ node, onSubmit }) {
     h('span', { className: 'bt-q-field' },
       h('input', {
         className: 'bt-q-input', type: 'text', value: draft[field.id] ?? '',
-        autoComplete: 'off', spellCheck: false,
+        autoComplete: 'off', spellCheck: false, readOnly: busy,
         'aria-label': field.label, placeholder: field.placeholder ?? undefined,
-        onChange: event => setDraft(current => ({ ...current, [field.id]: event.target.value })),
+        onChange: (event) => { if (!busy) setDraft(current => ({ ...current, [field.id]: event.target.value })) },
         onKeyDown: (event) => {
           if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
           event.preventDefault()
           submit()
         },
       })))),
-  h('div', { className: 'bt-q-foot' }, h('button', { type: 'submit', className: 'bt-q-submit' }, node.submitLabel ?? t('Submit'))))
+  h('div', { className: 'bt-q-foot' }, h('button', { type: 'submit', className: 'bt-q-submit', disabled: busy }, node.submitLabel ?? t('Submit'))))
 }
 
 function SettledForm({ node, answer }) {
@@ -167,9 +168,9 @@ function WidgetNode({ node, ctx }) {
         h('span', { className: 'bt-widget-metric-value' }, node.value))
     }
     case 'table': return h(WidgetTable, { node })
-    case 'options': return ctx.settled ? h(SettledOptions, { node, answer: ctx.answer }) : h(OptionsInput, { node, onSubmit: ctx.onSubmit, keys: ctx.keys })
-    case 'confirm': return ctx.settled ? h(SettledConfirm, { node, answer: ctx.answer }) : h(ConfirmInput, { node, onSubmit: ctx.onSubmit })
-    case 'form': return ctx.settled ? h(SettledForm, { node, answer: ctx.answer }) : h(FormInput, { node, onSubmit: ctx.onSubmit })
+    case 'options': return ctx.settled ? h(SettledOptions, { node, answer: ctx.answer }) : h(OptionsInput, { node, onSubmit: ctx.onSubmit, keys: ctx.keys, busy: ctx.busy })
+    case 'confirm': return ctx.settled ? h(SettledConfirm, { node, answer: ctx.answer }) : h(ConfirmInput, { node, onSubmit: ctx.onSubmit, busy: ctx.busy })
+    case 'form': return ctx.settled ? h(SettledForm, { node, answer: ctx.answer }) : h(FormInput, { node, onSubmit: ctx.onSubmit, busy: ctx.busy })
     case 'progress': return h(WidgetProgress, { node })
     default: return null
   }
@@ -177,43 +178,48 @@ function WidgetNode({ node, ctx }) {
 
 // A whole blueprint. Letter keys answer a lone options block from the keyboard;
 // with more than one in a card the same letter would hit both.
-export function WidgetView({ view, onSubmit, settled = false, answer = null }) {
-  const ctx = { onSubmit, settled, answer, keys: !settled && countType(view, 'options') === 1 }
+export function WidgetView({ view, onSubmit, settled = false, answer = null, busy = false }) {
+  const ctx = { onSubmit, settled, answer, busy, keys: !settled && countType(view, 'options') === 1 }
   return h(WidgetNode, { node: view, ctx })
 }
 
 // The card chrome every view wears, pending or settled: a title bar with a small
 // "View" tag, and a dismiss button while the card still waits for an answer.
-function WidgetCard({ title, view, onSubmit, onDismiss, raised = false, settled = false, answer = null }) {
+function WidgetCard({ title, view, onSubmit, onDismiss, busy = false, raised = false, settled = false, answer = null }) {
   const titleId = useId()
   return h('div', {
     className: settled ? 'bt-q bt-q-settled' : raised ? 'bt-q bt-q-raised' : 'bt-q',
-    role: 'group', 'aria-labelledby': titleId,
+    role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy || undefined,
   },
   h('div', { className: 'bt-q-head' },
     h('div', { className: 'bt-q-text' }, h('p', { className: 'bt-q-title', id: titleId }, title)),
     h('span', { className: 'bt-q-badge' }, t('View')),
-    onDismiss ? h('button', { type: 'button', className: 'bt-q-x', 'aria-label': t('Dismiss view'), title: t('Dismiss'), onClick: onDismiss }, h(CloseIcon)) : null),
-  h(WidgetView, { view, onSubmit, settled, answer }))
+    onDismiss ? h('button', { type: 'button', className: 'bt-q-x', 'aria-label': t('Dismiss view'), title: t('Dismiss'), onClick: onDismiss, disabled: busy }, h(CloseIcon)) : null),
+  h(WidgetView, { view, onSubmit, settled, answer, busy }))
 }
 
 // A view waiting for its answer, inline at its call or raised in the dock. Like a
 // pending question it hides on submit and comes back if the reply fails.
 export function PendingView({ sessionId, view, actions, inline }) {
   const [answered, setAnswered] = useState(null)
+  const busyRef = useRef(false)
   const hold = useDockHold(sessionId, 'view', view.id, actions, inline)
-  const onSubmit = (action, values) => {
+  const flying = answered === view.id
+  const run = (make) => {
+    // The ref, not the state: two clicks in the same frame both read flying=false.
+    if (busyRef.current) return
+    busyRef.current = true
+    hold()
     setAnswered(view.id)
-    void actions.answerView(sessionId, view.id, action, values).catch(() => setAnswered(null))
+    void Promise.resolve().then(make).catch(() => setAnswered(null)).finally(() => { busyRef.current = false })
   }
-  const onDismiss = () => {
-    setAnswered(view.id)
-    void Promise.resolve(actions.dismissView(sessionId)).catch(() => setAnswered(null))
-  }
+  const onSubmit = (action, values) => run(() => actions.answerView(sessionId, view.id, action, values))
+  const onDismiss = () => run(() => actions.dismissView(sessionId))
   // Hidden, not unmounted, while the answer is on its way: if it fails the card comes
-  // back with what the user had typed or picked.
-  return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock', style: answered === view.id ? { display: 'none' } : undefined, onFocusCapture: hold, onPointerDownCapture: hold },
-    h(WidgetCard, { key: view.id, title: view.title ?? '', view: view.view, onSubmit, onDismiss, raised: !inline }))
+  // back with what the user had typed or picked. The inputs stay busy meanwhile, so a
+  // letter key cannot answer a hidden card.
+  return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock', style: flying ? { display: 'none' } : undefined, onFocusCapture: hold, onPointerDownCapture: hold },
+    h(WidgetCard, { key: view.id, title: view.title ?? '', view: view.view, onSubmit, onDismiss, busy: flying, raised: !inline }))
 }
 
 // The show_view call in the transcript.
@@ -226,10 +232,9 @@ export function WidgetCell({ sessionId, callId, args, done, isError, roster, act
   // A refused call (bad blueprint) drew no card; don't render an empty one.
   if (done && isError) return h('span', { className: 'bt-q-gone', hidden: true })
   // Display-only cards draw from the recorded call arguments, which keep the
-  // provider's encoding: unwrap it the same way the host does before storing. The
-  // args accessor reads strings through `text`; `value` drops them.
-  const blueprint = normalizeView(args?.value?.('view'))
-  const shown = checkShownView(args?.text?.('title'), blueprint)
+  // provider's encoding: checkShownView measures and unwraps them as the host did.
+  // The args accessor reads strings through `text`; `value` drops them.
+  const shown = checkShownView(args?.text?.('title'), args?.value?.('view'))
   // A call the host refused — a blueprint it would not show, or a reply it cannot
   // wait for — leaves no card; the model's retry then stays the only one. So does
   // a settled interactive call: answered, dismissed or replaced, it leaves no gap
@@ -237,7 +242,7 @@ export function WidgetCell({ sessionId, callId, args, done, isError, roster, act
   if (shown.error !== undefined || shown.interactive || args?.value?.('await_reply') === true) {
     return h('span', { className: 'bt-q-gone', hidden: true })
   }
-  return h('div', { className: 'bt-q-inline' }, h(WidgetCard, { title: shown.title, view: blueprint }))
+  return h('div', { className: 'bt-q-inline' }, h(WidgetCard, { title: shown.title, view: shown.view }))
 }
 
 // Views asked by a call the transcript does not draw wait above the composer,

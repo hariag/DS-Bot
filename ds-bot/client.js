@@ -3524,15 +3524,19 @@ var import_react5 = require("react");
 var keyLetter = (index) => String.fromCharCode(65 + index);
 var optionsOf = (question) => (question?.options ?? []).map((option) => typeof option === "string" ? { label: option } : option);
 var isTypingTarget = (node) => node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement || node instanceof HTMLElement && node.isContentEditable;
+var optionKeyCards = createSource(0);
 function useOptionKeys(count, onPick, ownRef) {
   const pick2 = (0, import_react5.useRef)(onPick);
   pick2.current = onPick;
+  const listening = (0, import_react5.useSyncExternalStore)(optionKeyCards.subscribe, optionKeyCards.getSnapshot);
   (0, import_react5.useEffect)(() => {
     if (count === 0) return void 0;
+    optionKeyCards.set((value) => value + 1);
     const onKey = (event) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.length !== 1) return;
       if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
       if (document.querySelector('[role="dialog"], [aria-modal="true"]') !== null) return;
+      if (optionKeyCards.getSnapshot() !== 1) return;
       const index = event.key.toUpperCase().charCodeAt(0) - 65;
       if (index >= 0 && index < count) {
         event.preventDefault();
@@ -3543,8 +3547,12 @@ function useOptionKeys(count, onPick, ownRef) {
       }
     };
     document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      optionKeyCards.set((value) => value - 1);
+    };
   }, [count, ownRef]);
+  return count > 0 && listening <= 1;
 }
 function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false, ownAnswer = false, raised = false }) {
   const [own, setOwn] = (0, import_react5.useState)("");
@@ -3807,7 +3815,7 @@ function normalizeView(value) {
     if (Array.isArray(inner)) return inner;
   }
   const out = {};
-  for (const key of keys) out[key] = normalizeView(value[key]);
+  for (const key of keys) Object.defineProperty(out, key, { value: normalizeView(value[key]), writable: true, enumerable: true, configurable: true });
   for (const field of ["value", "percent"]) {
     if (typeof out[field] === "string" && out[field].trim() !== "" && !Number.isNaN(Number(out[field]))) out[field] = Number(out[field]);
   }
@@ -3818,19 +3826,20 @@ function validateView(view) {
   const error = checkNode(view, "view", 1, ctx);
   return error === void 0 ? { ok: true, interactive: ctx.interactive } : { ok: false, error };
 }
-function checkShownView(title, view) {
+function checkShownView(title, sent) {
   let bytes;
   try {
-    bytes = viewBytes(title, view);
+    bytes = viewBytes(title, sent);
   } catch {
     return { error: "The view is not JSON data." };
   }
   if (bytes > VIEW_BYTE_LIMIT) return { error: `The view is ${bytes} bytes; the limit is ${VIEW_BYTE_LIMIT}.` };
   const named = String(title ?? "").trim();
   if (named === "") return { error: "Give the view a title." };
+  const view = normalizeView(sent);
   const checked = validateView(view);
   if (!checked.ok) return { error: checked.error };
-  return { title: named, interactive: checked.interactive };
+  return { title: named, view, interactive: checked.interactive };
 }
 function checkNode(node, path, depth, ctx) {
   if (!isRecord(node)) return `${path}: expected a component object`;
@@ -4050,11 +4059,12 @@ var countType = (node, type) => {
   return (node.type === type ? 1 : 0) + children.reduce((sum, child) => sum + countType(child, type), 0);
 };
 var answerValues = (answer, node) => answer?.action === node.id ? answer.values : void 0;
-function OptionsInput({ node, onSubmit, keys }) {
+function OptionsInput({ node, onSubmit, keys, busy = false }) {
   const [picked, setPicked] = (0, import_react6.useState)([]);
   const options = optionsOf2(node);
   const multi = node.multi === true;
   const choose = (label) => {
+    if (busy) return;
     if (multi) {
       setPicked((current) => current.includes(label) ? current.filter((item) => item !== label) : [...current, label]);
       return;
@@ -4062,10 +4072,10 @@ function OptionsInput({ node, onSubmit, keys }) {
     onSubmit?.(node.id, { selected: [label] });
   };
   const submit = () => {
-    if (picked.length > 0) onSubmit?.(node.id, { selected: picked });
+    if (!busy && picked.length > 0) onSubmit?.(node.id, { selected: picked });
   };
   const ownRef = (0, import_react6.useRef)(null);
-  useOptionKeys(keys ? options.length : 0, (index) => choose(options[index].label), ownRef);
+  const hints = useOptionKeys(busy || !keys ? 0 : options.length, (index) => choose(options[index].label), ownRef);
   return (0, import_react6.createElement)(
     import_react6.Fragment,
     null,
@@ -4077,11 +4087,12 @@ function OptionsInput({ node, onSubmit, keys }) {
           key: option.label,
           type: "button",
           className: "bt-q-opt",
+          disabled: busy,
           "aria-pressed": multi ? selected : void 0,
-          "aria-keyshortcuts": keys ? keyLetter(index).toLowerCase() : void 0,
+          "aria-keyshortcuts": hints ? keyLetter(index).toLowerCase() : void 0,
           onClick: () => choose(option.label)
         },
-        keys ? (0, import_react6.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(index)) : null,
+        hints ? (0, import_react6.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(index)) : null,
         (0, import_react6.createElement)(
           "span",
           { className: "bt-q-body" },
@@ -4094,7 +4105,7 @@ function OptionsInput({ node, onSubmit, keys }) {
     multi ? (0, import_react6.createElement)(
       "div",
       { className: "bt-q-foot" },
-      (0, import_react6.createElement)("button", { type: "button", className: "bt-q-submit", disabled: picked.length === 0, onClick: submit }, t("Submit"))
+      (0, import_react6.createElement)("button", { type: "button", className: "bt-q-submit", disabled: busy || picked.length === 0, onClick: submit }, t("Submit"))
     ) : null
   );
 }
@@ -4117,12 +4128,12 @@ function SettledOptions({ node, answer }) {
     ))
   );
 }
-function ConfirmInput({ node, onSubmit }) {
+function ConfirmInput({ node, onSubmit, busy = false }) {
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-q-foot" },
-    (0, import_react6.createElement)("button", { type: "button", className: "bt-q-btn", onClick: () => onSubmit?.(node.id, { confirmed: false }) }, node.cancelLabel ?? t("Cancel")),
-    (0, import_react6.createElement)("button", { type: "button", className: "bt-q-submit", onClick: () => onSubmit?.(node.id, { confirmed: true }) }, node.confirmLabel ?? t("Confirm"))
+    (0, import_react6.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: () => onSubmit?.(node.id, { confirmed: false }) }, node.cancelLabel ?? t("Cancel")),
+    (0, import_react6.createElement)("button", { type: "button", className: "bt-q-submit", disabled: busy, onClick: () => onSubmit?.(node.id, { confirmed: true }) }, node.confirmLabel ?? t("Confirm"))
   );
 }
 function SettledConfirm({ node, answer }) {
@@ -4138,10 +4149,12 @@ function SettledConfirm({ node, answer }) {
   const label = confirmed ? node.confirmLabel ?? t("Confirm") : node.cancelLabel ?? t("Cancel");
   return (0, import_react6.createElement)("span", { className: "bt-q-badge" }, label);
 }
-function FormInput({ node, onSubmit }) {
+function FormInput({ node, onSubmit, busy = false }) {
   const fields = fieldsOf(node);
   const [draft, setDraft] = (0, import_react6.useState)({});
-  const submit = () => onSubmit?.(node.id, { fields: Object.fromEntries(fields.map((field) => [field.id, draft[field.id] ?? ""])) });
+  const submit = () => {
+    if (!busy) onSubmit?.(node.id, { fields: Object.fromEntries(fields.map((field) => [field.id, draft[field.id] ?? ""])) });
+  };
   return (0, import_react6.createElement)(
     "form",
     {
@@ -4164,9 +4177,12 @@ function FormInput({ node, onSubmit }) {
           value: draft[field.id] ?? "",
           autoComplete: "off",
           spellCheck: false,
+          readOnly: busy,
           "aria-label": field.label,
           placeholder: field.placeholder ?? void 0,
-          onChange: (event) => setDraft((current) => ({ ...current, [field.id]: event.target.value })),
+          onChange: (event) => {
+            if (!busy) setDraft((current) => ({ ...current, [field.id]: event.target.value }));
+          },
           onKeyDown: (event) => {
             if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
             event.preventDefault();
@@ -4175,7 +4191,7 @@ function FormInput({ node, onSubmit }) {
         })
       )
     )),
-    (0, import_react6.createElement)("div", { className: "bt-q-foot" }, (0, import_react6.createElement)("button", { type: "submit", className: "bt-q-submit" }, node.submitLabel ?? t("Submit")))
+    (0, import_react6.createElement)("div", { className: "bt-q-foot" }, (0, import_react6.createElement)("button", { type: "submit", className: "bt-q-submit", disabled: busy }, node.submitLabel ?? t("Submit")))
   );
 }
 function SettledForm({ node, answer }) {
@@ -4255,55 +4271,61 @@ function WidgetNode({ node, ctx }) {
     case "table":
       return (0, import_react6.createElement)(WidgetTable, { node });
     case "options":
-      return ctx.settled ? (0, import_react6.createElement)(SettledOptions, { node, answer: ctx.answer }) : (0, import_react6.createElement)(OptionsInput, { node, onSubmit: ctx.onSubmit, keys: ctx.keys });
+      return ctx.settled ? (0, import_react6.createElement)(SettledOptions, { node, answer: ctx.answer }) : (0, import_react6.createElement)(OptionsInput, { node, onSubmit: ctx.onSubmit, keys: ctx.keys, busy: ctx.busy });
     case "confirm":
-      return ctx.settled ? (0, import_react6.createElement)(SettledConfirm, { node, answer: ctx.answer }) : (0, import_react6.createElement)(ConfirmInput, { node, onSubmit: ctx.onSubmit });
+      return ctx.settled ? (0, import_react6.createElement)(SettledConfirm, { node, answer: ctx.answer }) : (0, import_react6.createElement)(ConfirmInput, { node, onSubmit: ctx.onSubmit, busy: ctx.busy });
     case "form":
-      return ctx.settled ? (0, import_react6.createElement)(SettledForm, { node, answer: ctx.answer }) : (0, import_react6.createElement)(FormInput, { node, onSubmit: ctx.onSubmit });
+      return ctx.settled ? (0, import_react6.createElement)(SettledForm, { node, answer: ctx.answer }) : (0, import_react6.createElement)(FormInput, { node, onSubmit: ctx.onSubmit, busy: ctx.busy });
     case "progress":
       return (0, import_react6.createElement)(WidgetProgress, { node });
     default:
       return null;
   }
 }
-function WidgetView({ view, onSubmit, settled = false, answer = null }) {
-  const ctx = { onSubmit, settled, answer, keys: !settled && countType(view, "options") === 1 };
+function WidgetView({ view, onSubmit, settled = false, answer = null, busy = false }) {
+  const ctx = { onSubmit, settled, answer, busy, keys: !settled && countType(view, "options") === 1 };
   return (0, import_react6.createElement)(WidgetNode, { node: view, ctx });
 }
-function WidgetCard({ title, view, onSubmit, onDismiss, raised = false, settled = false, answer = null }) {
+function WidgetCard({ title, view, onSubmit, onDismiss, busy = false, raised = false, settled = false, answer = null }) {
   const titleId = (0, import_react6.useId)();
   return (0, import_react6.createElement)(
     "div",
     {
       className: settled ? "bt-q bt-q-settled" : raised ? "bt-q bt-q-raised" : "bt-q",
       role: "group",
-      "aria-labelledby": titleId
+      "aria-labelledby": titleId,
+      "aria-busy": busy || void 0
     },
     (0, import_react6.createElement)(
       "div",
       { className: "bt-q-head" },
       (0, import_react6.createElement)("div", { className: "bt-q-text" }, (0, import_react6.createElement)("p", { className: "bt-q-title", id: titleId }, title)),
       (0, import_react6.createElement)("span", { className: "bt-q-badge" }, t("View")),
-      onDismiss ? (0, import_react6.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss view"), title: t("Dismiss"), onClick: onDismiss }, (0, import_react6.createElement)(CloseIcon)) : null
+      onDismiss ? (0, import_react6.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss view"), title: t("Dismiss"), onClick: onDismiss, disabled: busy }, (0, import_react6.createElement)(CloseIcon)) : null
     ),
-    (0, import_react6.createElement)(WidgetView, { view, onSubmit, settled, answer })
+    (0, import_react6.createElement)(WidgetView, { view, onSubmit, settled, answer, busy })
   );
 }
 function PendingView({ sessionId, view, actions, inline }) {
   const [answered, setAnswered] = (0, import_react6.useState)(null);
+  const busyRef = (0, import_react6.useRef)(false);
   const hold = useDockHold(sessionId, "view", view.id, actions, inline);
-  const onSubmit = (action, values) => {
+  const flying = answered === view.id;
+  const run = (make) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    hold();
     setAnswered(view.id);
-    void actions.answerView(sessionId, view.id, action, values).catch(() => setAnswered(null));
+    void Promise.resolve().then(make).catch(() => setAnswered(null)).finally(() => {
+      busyRef.current = false;
+    });
   };
-  const onDismiss = () => {
-    setAnswered(view.id);
-    void Promise.resolve(actions.dismissView(sessionId)).catch(() => setAnswered(null));
-  };
+  const onSubmit = (action, values) => run(() => actions.answerView(sessionId, view.id, action, values));
+  const onDismiss = () => run(() => actions.dismissView(sessionId));
   return (0, import_react6.createElement)(
     "div",
-    { className: inline ? "bt-q-inline" : "bt-q-dock", style: answered === view.id ? { display: "none" } : void 0, onFocusCapture: hold, onPointerDownCapture: hold },
-    (0, import_react6.createElement)(WidgetCard, { key: view.id, title: view.title ?? "", view: view.view, onSubmit, onDismiss, raised: !inline })
+    { className: inline ? "bt-q-inline" : "bt-q-dock", style: flying ? { display: "none" } : void 0, onFocusCapture: hold, onPointerDownCapture: hold },
+    (0, import_react6.createElement)(WidgetCard, { key: view.id, title: view.title ?? "", view: view.view, onSubmit, onDismiss, busy: flying, raised: !inline })
   );
 }
 function WidgetCell({ sessionId, callId, args, done, isError, roster, actions, heldCards }) {
@@ -4313,12 +4335,11 @@ function WidgetCell({ sessionId, callId, args, done, isError, roster, actions, h
     return (0, import_react6.createElement)(PendingView, { sessionId, view: record, actions, inline: true });
   }
   if (done && isError) return (0, import_react6.createElement)("span", { className: "bt-q-gone", hidden: true });
-  const blueprint = normalizeView(args?.value?.("view"));
-  const shown = checkShownView(args?.text?.("title"), blueprint);
+  const shown = checkShownView(args?.text?.("title"), args?.value?.("view"));
   if (shown.error !== void 0 || shown.interactive || args?.value?.("await_reply") === true) {
     return (0, import_react6.createElement)("span", { className: "bt-q-gone", hidden: true });
   }
-  return (0, import_react6.createElement)("div", { className: "bt-q-inline" }, (0, import_react6.createElement)(WidgetCard, { title: shown.title, view: blueprint }));
+  return (0, import_react6.createElement)("div", { className: "bt-q-inline" }, (0, import_react6.createElement)(WidgetCard, { title: shown.title, view: shown.view }));
 }
 function WidgetDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
   const view = useRoster((value) => value.views?.[sessionId]);
