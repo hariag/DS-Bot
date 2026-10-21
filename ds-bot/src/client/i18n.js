@@ -581,6 +581,7 @@ const ZH = {
   Canceled: '已取消',
   Done: '完成',
   '{bot} is using {name}': '{bot} 正在使用 {name}',
+  '{bot} could not ask for a key: this window can only view the team': '{bot} 没能要密钥：这个窗口只能查看团队',
   'a saved key': '一个已保存的密钥',
   'Chosen Bots': '指定的 Bot',
   'Who may use {name}': '谁可以用 {name}',

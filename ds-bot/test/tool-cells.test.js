@@ -360,6 +360,15 @@ const docks = (store, roster, options) => {
   return out
 }
 
+test('a secret request refused on a read-only window says so in one line', () => {
+  const refused = 'No card can be shown now. The Bot team in /somewhere is open in another dsh (Web or Desktop, pid 4 on host-a). This window shows the team but cannot change it; close the other one and reload.'
+  const root = program([call('request_secret', 'program:ro', { args: { name: 'DEMO_TOKEN' }, content: refused })])
+  assert.match(shown(root), /Chief could not ask for a key: this window can only view the team/)
+  // Other refusals stay silent: they are written for the model.
+  const wrong = 'Secret cards only work in your own chat. Tell the group you will ask the user in your own chat, and call request_secret there.'
+  assert.equal(shown(program([call('request_secret', 'program:grp', { args: { name: 'DEMO_TOKEN' }, content: wrong })])), '')
+})
+
 test('a card whose call is not drawn waits in the dock; a drawn one shows only at its call', () => {
   const store = cardStore()
   const roster = team({ questions: { chief: question('program:ptc:1') }, secretRequests: { chief: [request('program:ptc:2')] } })

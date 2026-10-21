@@ -634,6 +634,7 @@ var ZH = {
   Canceled: "已取消",
   Done: "完成",
   "{bot} is using {name}": "{bot} 正在使用 {name}",
+  "{bot} could not ask for a key: this window can only view the team": "{bot} 没能要密钥：这个窗口只能查看团队",
   "a saved key": "一个已保存的密钥",
   "Chosen Bots": "指定的 Bot",
   "Who may use {name}": "谁可以用 {name}",
@@ -4603,6 +4604,9 @@ function SecretToolCell({ sessionId, callId, name, done, content, roster, action
   if (request) return (0, import_react7.createElement)("div", { className: "bt-q-inline" }, (0, import_react7.createElement)(RequestView, { sessionId, bot, request, roster, actions }));
   if (done && /already saved/.test(contentText(content))) {
     return (0, import_react7.createElement)("div", { className: "bt-event" }, (0, import_react7.createElement)("span", { className: "bt-secret-event" }, (0, import_react7.createElement)(KeyIcon), t("{bot} is using {name}", { bot: bot.name, name: name ?? t("a saved key") })));
+  }
+  if (done && contentText(content).startsWith("No card can be shown now")) {
+    return (0, import_react7.createElement)("div", { className: "bt-event" }, (0, import_react7.createElement)("span", { className: "bt-secret-event" }, (0, import_react7.createElement)(KeyIcon), t("{bot} could not ask for a key: this window can only view the team", { bot: bot.name })));
   }
   return null;
 }

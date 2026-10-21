@@ -150,6 +150,11 @@ export function SecretToolCell({ sessionId, callId, name, done, content, roster,
   if (done && /already saved/.test(contentText(content))) {
     return h('div', { className: 'bt-event' }, h('span', { className: 'bt-secret-event' }, h(KeyIcon), t('{bot} is using {name}', { bot: bot.name, name: name ?? t('a saved key') })))
   }
+  // A read-only window shows no card, so the refusal is said in one line, or the Bot
+  // just trails off with nothing on screen.
+  if (done && contentText(content).startsWith('No card can be shown now')) {
+    return h('div', { className: 'bt-event' }, h('span', { className: 'bt-secret-event' }, h(KeyIcon), t('{bot} could not ask for a key: this window can only view the team', { bot: bot.name })))
+  }
   return null
 }
 
