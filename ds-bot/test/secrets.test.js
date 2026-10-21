@@ -243,6 +243,27 @@ test('a Bot outside the scope gets an allow card, and allowing resolves it', asy
   assert.deepEqual(JSON.parse(readFileSync(join(bench.home, 'secrets.json'), 'utf8')).secrets, [])
 })
 
+test('a key\'s purpose can be changed or cleared on its own', async (t) => {
+  const bench = start()
+  t.after(bench.stop)
+  await bench.call('secret-set', { name: 'DEMO_TOKEN', value: fresh(), purpose: 'first', scope: 'all' })
+
+  const changed = await bench.call('secret-update', { name: 'DEMO_TOKEN', purpose: 'renamed' })
+  assert.equal(changed.value.purpose, 'renamed')
+  assert.equal(changed.value.scope, 'all')
+  const cleared = await bench.call('secret-update', { name: 'DEMO_TOKEN', purpose: '' })
+  assert.equal(cleared.value.purpose, '')
+  const scoped = await bench.call('secret-update', { name: 'DEMO_TOKEN', scope: ['b2'] })
+  assert.deepEqual(scoped.value.scope, ['b2'])
+  assert.equal(scoped.value.purpose, '')
+  const both = await bench.call('secret-update', { name: 'DEMO_TOKEN', scope: 'all', purpose: 'kept' })
+  assert.equal(both.value.scope, 'all')
+  assert.equal(both.value.purpose, 'kept')
+  const saved = JSON.parse(readFileSync(join(bench.home, 'secrets.json'), 'utf8')).secrets[0]
+  assert.equal(saved.purpose, 'kept')
+  assert.equal(saved.scope, 'all')
+})
+
 test('cards stay in a Bot\'s own chat; canceling tells the Bot', async (t) => {
   const bench = start()
   t.after(bench.stop)

@@ -1495,7 +1495,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     secretSet: (payload) => after(call2("secret-set", payload)),
     secretAllow: (requestId) => after(call2("secret-allow", { requestId })),
     secretCancel: (requestId) => after(call2("secret-cancel", { requestId })),
-    secretUpdate: (name, scope) => after(call2("secret-update", { name, scope })),
+    secretUpdate: (name, { scope, purpose } = {}) => after(call2("secret-update", { name, scope, purpose })),
     secretDelete: (name) => after(call2("secret-delete", { name })),
     connectorConnect: (id, token) => after(call2("connector-connect", { id, token })),
     connectorDisconnect: (id) => after(call2("connector-disconnect", { id })),
@@ -4648,6 +4648,21 @@ function ScopeEditor({ secret, roster, onSave }) {
     )
   );
 }
+function PurposeEditor({ secret, onSave }) {
+  const [purpose, setPurpose] = (0, import_react7.useState)(secret.purpose ?? "");
+  const same = purpose.trim() === (secret.purpose ?? "");
+  return (0, import_react7.createElement)(
+    "div",
+    { className: "bt-secret-edit-block" },
+    (0, import_react7.createElement)("div", { className: "bt-secret-edit-label" }, t("What it is for")),
+    (0, import_react7.createElement)(
+      "div",
+      { className: "bt-secret-inline" },
+      (0, import_react7.createElement)("input", { className: "bt-input", "aria-label": t("What it is for"), placeholder: t("What it is for"), value: purpose, spellCheck: false, autoComplete: "off", onChange: (event) => setPurpose(event.target.value) }),
+      (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: same, onClick: () => onSave(purpose.trim()) }, t("Save"))
+    )
+  );
+}
 function ValueEditor({ secret, onSave }) {
   const [value, setValue] = (0, import_react7.useState)("");
   const [replaced, setReplaced] = (0, import_react7.useState)(false);
@@ -4707,7 +4722,8 @@ function SecretRow({ secret, roster, actions, run, open, onToggle }) {
     open ? (0, import_react7.createElement)(
       "div",
       { className: "bt-secret-edit" },
-      (0, import_react7.createElement)(ScopeEditor, { key: JSON.stringify(secret.scope), secret, roster, onSave: (scope) => run(actions.secretUpdate(secret.name, scope)) }),
+      (0, import_react7.createElement)(ScopeEditor, { key: JSON.stringify(secret.scope), secret, roster, onSave: (scope) => run(actions.secretUpdate(secret.name, { scope })) }),
+      (0, import_react7.createElement)(PurposeEditor, { key: secret.purpose ?? "", secret, onSave: (purpose) => run(actions.secretUpdate(secret.name, { purpose })) }),
       (0, import_react7.createElement)(ValueEditor, { secret, onSave: (value) => run(actions.secretSet({ name: secret.name, value })) }),
       (0, import_react7.createElement)(
         "div",
@@ -4830,6 +4846,7 @@ var SECRET_CSS = `
 .bt-secret-bot[aria-pressed=true]{background:var(--bt-active);color:var(--bt-ink);border-color:var(--bt-line-2)}
 .bt-secret-bot svg{width:13px;height:13px}
 .bt-secret-inline{display:flex;gap:8px;align-items:center}
+.bt-secret-inline .bt-input{flex:1;height:34px}
 .bt-secret-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .bt-secret-row-actions .bt-set-hint{flex:1}
 .bt-secret-danger{color:var(--bt-danger);display:inline-flex;align-items:center;gap:4px}

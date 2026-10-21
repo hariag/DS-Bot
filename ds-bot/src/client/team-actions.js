@@ -77,7 +77,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     secretSet: payload => after(call('secret-set', payload)),
     secretAllow: requestId => after(call('secret-allow', { requestId })),
     secretCancel: requestId => after(call('secret-cancel', { requestId })),
-    secretUpdate: (name, scope) => after(call('secret-update', { name, scope })),
+    secretUpdate: (name, { scope, purpose } = {}) => after(call('secret-update', { name, scope, purpose })),
     secretDelete: name => after(call('secret-delete', { name })),
     connectorConnect: (id, token) => after(call('connector-connect', { id, token })),
     connectorDisconnect: id => after(call('connector-disconnect', { id })),

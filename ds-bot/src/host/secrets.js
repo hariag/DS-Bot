@@ -374,7 +374,8 @@ export function install(rt) {
     async 'secret-update'(body) {
       const secret = secrets.get(normalizeName(body.name))
       if (secret === undefined) throw new Error('No such key')
-      secret.scope = cleanScope(body.scope)
+      if (body.scope !== undefined) secret.scope = cleanScope(body.scope)
+      if (typeof body.purpose === 'string') secret.purpose = body.purpose.trim().slice(0, 300)
       secret.updatedAt = Date.now()
       const notes = []
       reconcile(secret.name, notes)
