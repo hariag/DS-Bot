@@ -28,7 +28,7 @@ const SUMMARY_PART = 40
 const SUMMARY_COUNT = 8
 // UTF-8 bytes of the blueprint JSON plus the title. Not a wrapped document:
 // the tool rejects a show_view whose viewBytes() is over this before it
-// validates, so the number has to be the bytes the model actually sent.
+// normalizes or validates, so the number has to be the bytes the model sent.
 export const VIEW_BYTE_LIMIT = 8192
 
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -53,8 +53,10 @@ export function normalizeView(value) {
     const inner = normalizeView(value.item)
     if (Array.isArray(inner)) return inner
   }
+  // Define own properties: an incoming "__proto__" key must become data the
+  // validator can reject, not hit the prototype setter and vanish from the JSON.
   const out = {}
-  for (const key of keys) out[key] = normalizeView(value[key])
+  for (const key of keys) Object.defineProperty(out, key, { value: normalizeView(value[key]), writable: true, enumerable: true, configurable: true })
   for (const field of ['value', 'percent']) {
     if (typeof out[field] === 'string' && out[field].trim() !== '' && !Number.isNaN(Number(out[field]))) out[field] = Number(out[field])
   }
@@ -68,16 +70,19 @@ export function validateView(view) {
 }
 
 // What show_view checks before it shows a view: the same answer on the host and
-// in the client. `view` is already normalized; the trimmed title comes back.
-export function checkShownView(title, view) {
+// in the client. The bytes are measured as sent, before normalizeView unwraps the
+// provider's encoding, or a wrapped view could shrink under the byte limit. The
+// normalized view and the trimmed title come back.
+export function checkShownView(title, sent) {
   let bytes
-  try { bytes = viewBytes(title, view) } catch { return { error: 'The view is not JSON data.' } }
+  try { bytes = viewBytes(title, sent) } catch { return { error: 'The view is not JSON data.' } }
   if (bytes > VIEW_BYTE_LIMIT) return { error: `The view is ${bytes} bytes; the limit is ${VIEW_BYTE_LIMIT}.` }
   const named = String(title ?? '').trim()
   if (named === '') return { error: 'Give the view a title.' }
+  const view = normalizeView(sent)
   const checked = validateView(view)
   if (!checked.ok) return { error: checked.error }
-  return { title: named, interactive: checked.interactive }
+  return { title: named, view, interactive: checked.interactive }
 }
 
 function checkNode(node, path, depth, ctx) {

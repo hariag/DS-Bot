@@ -20,7 +20,7 @@ import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, REPLY_KIND, SOURCE_KIND } from './cons
 import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
 import { RESUME_DELAY_MS } from './resume.js'
 import { clip, createClock, escapeRegExp, estimateTokens, splitRef, textOf } from './text.js'
-import { validateViewAnswer, viewSummary } from '../shared/views.js'
+import { checkShownView, validateViewAnswer, viewSummary } from '../shared/views.js'
 
 // An ask_user card as the user saw it. The user's reply is often just an option label,
 // which means nothing without the card. Arguments the tool would refuse (no question,
@@ -39,17 +39,21 @@ export function cardText(args) {
   return `[Question card] ${question}${detail ? ` (${detail})` : ''}\nOptions: ${options.join(' / ')}`
 }
 
-// A show_view card as the user saw it. A call the tool would refuse (no title,
-// or a view that is not a component object) showed no card, so it gives no text.
+// A show_view card as the user saw it. A call the tool would refuse (an oversized
+// or invalid view, no title, a display-only card asked to wait or an interactive
+// one told not to) showed no card, so it gives no text. checkShownView runs the
+// tool's own checks, normalization included, so a wrapped card keeps its summary.
 export function viewCardText(args) {
   let card = args
   if (typeof card === 'string') {
     try { card = JSON.parse(card) } catch { return '' }
   }
-  const title = typeof card?.title === 'string' ? card.title.trim() : ''
-  if (title === '' || card?.view === null || typeof card?.view !== 'object' || Array.isArray(card?.view)) return ''
-  const summary = viewSummary(card.view)
-  return summary === '' ? `[View card] ${title}` : `[View card] ${title}\n${summary}`
+  const shown = checkShownView(card?.title, card?.view)
+  if (shown.error !== undefined) return ''
+  if (!shown.interactive && card?.await_reply === true) return ''
+  if (shown.interactive && card?.await_reply === false) return ''
+  const summary = viewSummary(shown.view)
+  return summary === '' ? `[View card] ${shown.title}` : `[View card] ${shown.title}\n${summary}`
 }
 
 // What one event adds to a Bot's chat history: an answer of the Bot's (its text, or a
