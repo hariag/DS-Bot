@@ -3269,11 +3269,13 @@ function BotMark({ bot, look: given, size = 36, state = "idle", live = false, ga
   const maskId = (0, import_react2.useRef)("");
   if (maskId.current === "") maskId.current = `bt-mark-${nextMarkSerial()}`;
   const [poked, setPoked] = (0, import_react2.useState)(false);
+  const [broken, setBroken] = (0, import_react2.useState)("");
+  const image = look.image && look.image !== broken ? look.image : void 0;
   useGaze(ref, gaze);
   const common = {
     ref,
     className: poked ? "bt-mark bt-mark-poke" : "bt-mark",
-    "data-shape": look.image ? "image" : shapeId(look.shape),
+    "data-shape": image ? "image" : shapeId(look.shape),
     "data-state": STATES.includes(state) ? state : "idle",
     "data-live": live ? "" : void 0,
     "data-fidget": live ? FIDGETS[fnv1a(`${bot?.id ?? ""}:fidget`) % FIDGETS.length] : void 0,
@@ -3288,7 +3290,7 @@ function BotMark({ bot, look: given, size = 36, state = "idle", live = false, ga
       if (/^bt-poke/.test(event.animationName)) setPoked(false);
     } : void 0
   };
-  if (look.image) return (0, import_react2.createElement)("span", common, (0, import_react2.createElement)("img", { className: "bt-mark-img", src: look.image, alt: "", draggable: false }));
+  if (image) return (0, import_react2.createElement)("span", common, (0, import_react2.createElement)("img", { className: "bt-mark-img", src: image, alt: "", draggable: false, onError: () => setBroken(image) }));
   const box = shapeOf(look.shape).size;
   return (0, import_react2.createElement)("span", common, (0, import_react2.createElement)("svg", { viewBox: `0 0 ${box} ${box}`, dangerouslySetInnerHTML: { __html: characterMarkup(look.shape, look.color).replaceAll(MASK_ID, maskId.current) } }));
 }
