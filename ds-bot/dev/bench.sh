@@ -90,6 +90,10 @@ start() {
     (cd "$PLUGIN" && MOCK_PORT="$MOCK_PORT" MOCK_DELAY_MS="${MOCK_DELAY_MS:-300}" MOCK_LOG="$HOME_DIR/mock.jsonl" \
       exec setsid sh -c 'set -eu; echo $$ >"$1"; shift; exec "$@"' sh "$HOME_DIR/mock.pid" \
       node dev/mock-llm.mjs "$HOME_DIR") </dev/null >"$HOME_DIR/mock.out" 2>&1 &
+    # The mock writes its own pid just before it starts; wait for the file so a
+    # status or stop right after start does not miss a mock still coming up.
+    i=0
+    while [ ! -f "$HOME_DIR/mock.pid" ] && [ $i -lt 50 ]; do i=$((i + 1)); sleep 0.1; done
   fi
   if ! alive web; then
     log="$HOME_DIR/web.log"
