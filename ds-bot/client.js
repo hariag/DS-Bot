@@ -1968,6 +1968,7 @@ function runStatsOf(values) {
 // src/client/motion.js
 var import_react = require("react");
 var reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+var noHover = () => window.matchMedia?.("(hover: none)").matches === true;
 function springEasing(stiffness, damping) {
   const w0 = Math.sqrt(stiffness);
   const zeta = damping / (2 * w0);
@@ -3126,6 +3127,17 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 .bt-voice{display:none;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);animation:bt-icon-swap ${SPRING_POP.duration}ms ${SPRING_POP.easing}}
 .bt-voice:hover{opacity:.9}
 .bt-mic:active,.bt-voice:active{scale:.9}
+/* Touch devices never hover: tap-open toolbars (data-open on the message), always
+   visible icon buttons and 44px targets replace the hover affordances. */
+@media (hover:none){
+  .bt-tools{left:auto;right:4px;margin-left:0;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+  .bt-tools::after{display:none}
+  .bt-tool{width:44px;height:44px}
+  .bt-menu button,.bt-menu [role=menuitem],.bt-react-strip button{min-height:44px}
+  .bt-utools[data-open]{opacity:1;visibility:visible}
+  .bt-utools button{width:44px;height:44px}
+  [data-chat-flow-kind=user] [class*="_actions"] button{width:44px;height:44px}
+}
 [data-composer-card]:has(button[class*="_primary"]:disabled) .bt-voice{display:inline-grid}
 body[data-bt-room] .bt-voice{display:none!important}
 body[data-bt-room] [data-composer-card]:has(button[class*="_primary"]:disabled) .bt-mic:not([aria-pressed=true]){background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
@@ -3143,6 +3155,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 [data-chat-flow-kind=user] [class*="_userRow"]{flex-direction:row-reverse;align-items:center;justify-content:flex-start}
 [data-chat-flow-kind=user] [class*="_actions"]{display:flex!important;height:24px!important;gap:2px!important;opacity:0!important;visibility:hidden;transition:opacity .12s ease,visibility .12s!important;flex:none}
 [data-chat-flow-kind=user] [class*="_userRow"]:hover [class*="_actions"],[data-chat-flow-kind=user] [class*="_userRow"]:focus-within [class*="_actions"]{opacity:1!important;visibility:visible}
+@media (hover:none){[data-chat-flow-kind=user] [class*="_actions"]{opacity:1!important;visibility:visible}}
 [data-chat-flow-kind=user] [class*="_actions"] [class*="_timeStart"]{display:none}
 [data-chat-flow-kind=user] [class*="_actions"] button{width:24px;height:24px;border-radius:6px;color:var(--bt-ink-2)}
 [data-chat-flow-kind=user] [class*="_actions"] button:hover{background:var(--bt-hover);color:var(--bt-ink)}
@@ -4999,9 +5012,16 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
   const { shown, folded, control } = useFold(text, { limit: fold, whole, live });
   const key = msgKey ? `${msgKey}:${index}` : void 0;
   const body = (0, import_react9.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels2(), variant: "compact", fileMentions: mentions });
+  const row = (0, import_react9.useRef)(null);
+  const [toolsOpen, setToolsOpen] = (0, import_react9.useState)(false);
+  useDismiss(toolsOpen, () => setToolsOpen(false), [row]);
+  const tapTools = (event) => {
+    if (!noHover() || event.target instanceof Element && event.target.closest("a,button,input,textarea,select,pre,code,[role=button],[role=link]")) return;
+    setToolsOpen((value) => !value);
+  };
   return (0, import_react9.createElement)(
     "div",
-    { className: "bt-msg" },
+    { ref: row, className: "bt-msg", onClick: tapTools },
     (0, import_react9.createElement)(
       "div",
       { className: "bt-msg-line" },
@@ -5012,7 +5032,7 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
         control ? (0, import_react9.createElement)("div", { className: "bt-fold-body" }, body) : body,
         control
       ),
-      live ? null : (0, import_react9.createElement)(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions })
+      live ? null : (0, import_react9.createElement)(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions, open: toolsOpen })
     ),
     picked.length ? (0, import_react9.createElement)("div", { className: "bt-reacts" }, picked.map((emoji) => (0, import_react9.createElement)("button", {
       key: emoji,
@@ -5038,14 +5058,16 @@ function useDismiss(open, close, refs) {
       }
     };
     window.addEventListener("mousedown", onDown);
+    window.addEventListener("touchstart", onDown);
     window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("touchstart", onDown);
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 }
-function MessageTools({ text, name, sessionId, react, actions }) {
+function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
   const [panel, setPanel] = (0, import_react9.useState)(null);
   const [place, setPlace] = (0, import_react9.useState)(null);
   const [copied, setCopied] = (0, import_react9.useState)(false);
@@ -5081,7 +5103,7 @@ function MessageTools({ text, name, sessionId, react, actions }) {
   } }, (0, import_react9.createElement)(Icon), label);
   return (0, import_react9.createElement)(
     "div",
-    { ref: tools, className: "bt-tools", "data-open": panel !== null || void 0 },
+    { ref: tools, className: "bt-tools", "data-open": panel !== null || tapped || void 0 },
     react ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Add reaction"), title: t("Add reaction"), "aria-expanded": panel === "react", onClick: (event) => open("react", event) }, (0, import_react9.createElement)(SmileIcon)) : null,
     sessionId ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Reply"), title: t("Reply"), onClick: () => actions.quote(sessionId, text) }, (0, import_react9.createElement)(ReplyIcon)) : null,
     (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("More message actions"), title: t("More"), "aria-haspopup": "menu", "aria-expanded": panel === "more", onClick: (event) => open("more", event) }, copied ? (0, import_react9.createElement)(CheckIcon) : (0, import_react9.createElement)(DotsIcon)),
@@ -14183,8 +14205,8 @@ var BROWSER_CSS = `
 .bt-ptab-globe{display:inline-flex}
 .bt-ptab-globe svg{width:14px;height:14px}
 .bt-ptab-title{max-width:140px;overflow:hidden;text-overflow:ellipsis}
-.bt-ptab-x{flex:none;width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:var(--bt-ink-3);opacity:0;transition:opacity .12s ease,background-color .12s ease}
-.bt-ptab:hover .bt-ptab-x,.bt-ptab[aria-selected=true] .bt-ptab-x{opacity:1}
+.bt-ptab-x{flex:none;width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:var(--bt-ink-3);opacity:0;pointer-events:none;transition:opacity .12s ease,background-color .12s ease}
+.bt-ptab:hover .bt-ptab-x,.bt-ptab[aria-selected=true] .bt-ptab-x{opacity:1;pointer-events:auto}
 .bt-ptab-x:hover{background:var(--bt-active);color:var(--bt-ink)}
 .bt-ptab-new{position:relative;z-index:1;flex:none;width:28px;height:32px;border:0;border-radius:9px;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .bt-ptab-new:hover{color:var(--bt-ink)}
@@ -14234,8 +14256,8 @@ var BROWSER_CSS = `
 .bt-bcard-row svg.bt-bcard-fav{width:14px;height:14px}
 .bt-bcard-title{flex:1;min-width:0;font-size:12.5px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink)}
 .bt-bcard-host{flex:none;font-size:11px;line-height:15px;color:var(--bt-ink-3);max-width:38%;overflow:hidden;text-overflow:ellipsis}
-.bt-bcard-x{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:7px;background:color-mix(in srgb,var(--bt-main) 88%,transparent);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;opacity:0;transition:opacity .12s ease;backdrop-filter:blur(4px)}
-.bt-bcard:hover .bt-bcard-x{opacity:1}
+.bt-bcard-x{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:7px;background:color-mix(in srgb,var(--bt-main) 88%,transparent);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .12s ease;backdrop-filter:blur(4px)}
+.bt-bcard:hover .bt-bcard-x{opacity:1;pointer-events:auto}
 .bt-bcard-new{display:flex;align-items:center;justify-content:center;gap:6px;height:40px;border:.5px dashed var(--bt-line-2);border-radius:12px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12.5px;cursor:pointer}
 .bt-bcard-new:hover{color:var(--bt-ink);border-color:var(--bt-ink-3)}
 .bt-bcard-new svg{width:14px;height:14px}
@@ -14244,6 +14266,12 @@ var BROWSER_CSS = `
    and its close controls get a touch-sized target. */
 .bt-panel[data-overlay]{width:100vw}
 .bt-panel[data-overlay] .bt-ptab-close,.bt-panel[data-overlay] .bt-drawer-top .bt-round{width:44px;height:44px}
+/* Touch: the hidden-but-tappable tab and card close buttons stay visible at a
+   finger-sized target instead. */
+@media (hover:none){
+  .bt-ptab-x,.bt-bcard-x{opacity:1;pointer-events:auto;width:44px;height:44px}
+  .bt-ptab-close{width:44px;height:44px}
+}
 @media (prefers-reduced-motion:reduce){.bt-ptabs,.bt-panel-view,.bt-bcard,.bt-ptab-name{animation:none}}
 `;
 
@@ -15199,16 +15227,34 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
   const groupTime = roster.roomsById?.[sessionId] && Number.isFinite(data.time) ? messageClock(data.time) : void 0;
   const { shown, folded, control } = useFold(text, { markdown: false });
   const body = (0, import_react39.createElement)(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions });
+  const row = (0, import_react39.useRef)(null);
+  const [toolsOpen, setToolsOpen] = (0, import_react39.useState)(false);
+  (0, import_react39.useEffect)(() => {
+    if (!toolsOpen) return void 0;
+    const onDown = (event) => {
+      if (!row.current?.contains(event.target)) setToolsOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("touchstart", onDown);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("touchstart", onDown);
+    };
+  }, [toolsOpen]);
+  const tapTools = (event) => {
+    if (!noHover() || event.target instanceof Element && event.target.closest("a,button,input,textarea,select,pre,code,[role=button],[role=link]")) return;
+    setToolsOpen((value) => !value);
+  };
   return (0, import_react39.createElement)(
     "div",
-    { className: "bt-umsg", "data-steering": steering || void 0 },
+    { ref: row, className: "bt-umsg", "data-steering": steering || void 0 },
     (0, import_react39.createElement)(
       "div",
       { className: "bt-ustack" },
       attachments.length > 0 ? (0, import_react39.createElement)(Attachments, { attachments, renderMessageImages }) : null,
       text !== "" || rest.length > 0 ? (0, import_react39.createElement)(
         "div",
-        { className: "bt-ubody", title: clock3(data.time), "data-folded": folded || void 0 },
+        { className: "bt-ubody", title: clock3(data.time), "data-folded": folded || void 0, onClick: tapTools },
         control ? (0, import_react39.createElement)("div", { className: "bt-fold-body" }, body) : body,
         control,
         rest.map((block, index) => ui.JsonBlock ? (0, import_react39.createElement)(ui.JsonBlock, { key: index, label: t("Content"), payload: block }) : null)
@@ -15216,7 +15262,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
       referenceLabels.length > 0 ? (0, import_react39.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null,
       groupTime ? (0, import_react39.createElement)("div", { className: "bt-utime", title: clockLabel(data.time) }, groupTime) : null
     ),
-    text === "" ? null : (0, import_react39.createElement)("div", { className: "bt-utools" }, (0, import_react39.createElement)(CopyButton, { text }))
+    text === "" ? null : (0, import_react39.createElement)("div", { className: "bt-utools", "data-open": toolsOpen || void 0 }, (0, import_react39.createElement)(CopyButton, { text }))
   );
 }
 var USER_MESSAGE_CSS = `

@@ -13,6 +13,7 @@ import { call } from './api.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning, thinkingStep } from './turn-reasoning.js'
 import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
+import { noHover } from './motion.js'
 import { heldCardKey } from './sources.js'
 import { BtwCardView } from './btw.js'
 import { earlierPartCards, partIndexOf, withBtwRows } from './btw-model.js'
@@ -54,13 +55,22 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
   const { shown, folded, control } = useFold(text, { limit: fold, whole, live })
   const key = msgKey ? `${msgKey}:${index}` : undefined
   const body = h(MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
-  return h('div', { className: 'bt-msg' },
+  const row = useRef(null)
+  // Touch has no hover: a tap on the bubble opens its tools, a tap elsewhere
+  // closes them. Interactive targets keep their own meaning.
+  const [toolsOpen, setToolsOpen] = useState(false)
+  useDismiss(toolsOpen, () => setToolsOpen(false), [row])
+  const tapTools = (event) => {
+    if (!noHover() || event.target instanceof Element && event.target.closest('a,button,input,textarea,select,pre,code,[role=button],[role=link]')) return
+    setToolsOpen(value => !value)
+  }
+  return h('div', { ref: row, className: 'bt-msg', onClick: tapTools },
     h('div', { className: 'bt-msg-line' },
       lead,
       h('div', { className: 'bt-bubble', 'data-folded': folded || undefined },
         control ? h('div', { className: 'bt-fold-body' }, body) : body,
         control),
-      live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })),
+      live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions, open: toolsOpen })),
     picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
       key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, index, emoji),
     }, emoji))) : null)
@@ -78,13 +88,15 @@ function useDismiss(open, close, refs) {
     }
     const onKey = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close() } }
     window.addEventListener('mousedown', onDown)
+    window.addEventListener('touchstart', onDown)
     window.addEventListener('keydown', onKey, true)
-    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true) }
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('touchstart', onDown); window.removeEventListener('keydown', onKey, true) }
   }, [open])
 }
 
-// The hover toolbar beside a reply bubble: Add reaction, Reply, More.
-function MessageTools({ text, name, sessionId, react, actions }) {
+// The hover toolbar beside a reply bubble: Add reaction, Reply, More. `open` is
+// the touch fallback: a tap on the bubble toggles it (see Bubble).
+function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
   const [panel, setPanel] = useState(null)
   const [place, setPlace] = useState(null)
   const [copied, setCopied] = useState(false)
@@ -111,7 +123,7 @@ function MessageTools({ text, name, sessionId, react, actions }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
   const item = (label, Icon, run) => h('button', { key: label, type: 'button', role: 'menuitem', onClick: () => { close(); run() } }, h(Icon), label)
-  return h('div', { ref: tools, className: 'bt-tools', 'data-open': panel !== null || undefined },
+  return h('div', { ref: tools, className: 'bt-tools', 'data-open': panel !== null || tapped || undefined },
     react ? h('button', { type: 'button', className: 'bt-tool', 'aria-label': t('Add reaction'), title: t('Add reaction'), 'aria-expanded': panel === 'react', onClick: event => open('react', event) }, h(SmileIcon)) : null,
     sessionId ? h('button', { type: 'button', className: 'bt-tool', 'aria-label': t('Reply'), title: t('Reply'), onClick: () => actions.quote(sessionId, text) }, h(ReplyIcon)) : null,
     h('button', { type: 'button', className: 'bt-tool', 'aria-label': t('More message actions'), title: t('More'), 'aria-haspopup': 'menu', 'aria-expanded': panel === 'more', onClick: event => open('more', event) }, copied ? h(CheckIcon) : h(DotsIcon)),

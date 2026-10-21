@@ -968,6 +968,17 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 .bt-voice{display:none;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);animation:bt-icon-swap ${SPRING_POP.duration}ms ${SPRING_POP.easing}}
 .bt-voice:hover{opacity:.9}
 .bt-mic:active,.bt-voice:active{scale:.9}
+/* Touch devices never hover: tap-open toolbars (data-open on the message), always
+   visible icon buttons and 44px targets replace the hover affordances. */
+@media (hover:none){
+  .bt-tools{left:auto;right:4px;margin-left:0;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+  .bt-tools::after{display:none}
+  .bt-tool{width:44px;height:44px}
+  .bt-menu button,.bt-menu [role=menuitem],.bt-react-strip button{min-height:44px}
+  .bt-utools[data-open]{opacity:1;visibility:visible}
+  .bt-utools button{width:44px;height:44px}
+  [data-chat-flow-kind=user] [class*="_actions"] button{width:44px;height:44px}
+}
 [data-composer-card]:has(button[class*="_primary"]:disabled) .bt-voice{display:inline-grid}
 body[data-bt-room] .bt-voice{display:none!important}
 body[data-bt-room] [data-composer-card]:has(button[class*="_primary"]:disabled) .bt-mic:not([aria-pressed=true]){background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
@@ -985,6 +996,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 [data-chat-flow-kind=user] [class*="_userRow"]{flex-direction:row-reverse;align-items:center;justify-content:flex-start}
 [data-chat-flow-kind=user] [class*="_actions"]{display:flex!important;height:24px!important;gap:2px!important;opacity:0!important;visibility:hidden;transition:opacity .12s ease,visibility .12s!important;flex:none}
 [data-chat-flow-kind=user] [class*="_userRow"]:hover [class*="_actions"],[data-chat-flow-kind=user] [class*="_userRow"]:focus-within [class*="_actions"]{opacity:1!important;visibility:visible}
+@media (hover:none){[data-chat-flow-kind=user] [class*="_actions"]{opacity:1!important;visibility:visible}}
 [data-chat-flow-kind=user] [class*="_actions"] [class*="_timeStart"]{display:none}
 [data-chat-flow-kind=user] [class*="_actions"] button{width:24px;height:24px;border-radius:6px;color:var(--bt-ink-2)}
 [data-chat-flow-kind=user] [class*="_actions"] button:hover{background:var(--bt-hover);color:var(--bt-ink)}
