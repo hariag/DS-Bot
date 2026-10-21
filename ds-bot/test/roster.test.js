@@ -812,6 +812,24 @@ test('create_bot stores a photo, and update_bot changes and clears it', async (t
   assert.equal((await writer()).avatar.image, PNG_DATA_URL)
 })
 
+test('a photo through update_bot keeps the Bot\'s other avatar fields', async (t) => {
+  const { ctx, call, stop, sent } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const exec = { agent: { id: chief } }
+  assert.match(await ctx.registeredTools.get('create_bot').execute({ name: 'Writer', role: 'Write', instructions: 'Write' }, exec), /^Created Writer/)
+  const writer = async () => (await call('state', {})).value.bots.find(bot => bot.name === 'Writer')
+  const writerId = (await writer()).id
+  await until(() => sent.some(entry => entry.sessionId === writerId))
+  await call('update-bot', { id: writerId, avatar: { shape: 'fox' } })
+  const tool = args => ctx.registeredTools.get('update_bot').execute({ bot: 'Writer', ...args }, exec)
+  // Setting a photo keeps the character; clearing the photo keeps it too.
+  assert.equal(await tool({ avatar: PNG_DATA_URL }), 'Updated Writer.')
+  assert.deepEqual((await writer()).avatar, { shape: 'fox', image: PNG_DATA_URL })
+  assert.equal(await tool({ avatar: '' }), 'Updated Writer.')
+  assert.deepEqual((await writer()).avatar, { shape: 'fox' })
+})
+
 test('a photo that cannot be read changes nothing, and a non-Main Bot cannot set another Bot\'s', async (t) => {
   const { ctx, call, stop, sent } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
