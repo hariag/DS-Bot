@@ -159,11 +159,25 @@ async function chat(cdp) {
   // The mock model's greeting for a new team.
   await until(text('先让团队帮你做哪块'), 'the greeting')
   await dismissNotice()
-  await evaluate("[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1).focus()")
+  // Click the composer through the input pipeline. A bare focus() is not enough where no window
+  // manager gives the window focus (xvfb in CI): the text and the Enter would go nowhere.
+  const box = "[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1)"
+  const rect = await evaluate(`(${box})?.getBoundingClientRect().toJSON()`)
+  if (!rect) throw new Error('the composer is not there')
+  const [cx, cy] = [rect.x + rect.width / 2, rect.y + rect.height / 2]
+  await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: cx, y: cy, button: 'left', clickCount: 1 })
+  await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1 })
+  await until("(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'", 'the focused composer', 10_000)
   await cdp.call('Input.insertText', { text: 'packaged app check' })
+  await until(text('packaged app check'), 'the typed message', 10_000)
   for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
   // The mock model starts its reply with 收到： and the message.
-  await until(text('收到：packaged app check'), 'the reply')
+  try {
+    await until(text('收到：packaged app check'), 'the reply')
+  } catch (error) {
+    const state = await evaluate("JSON.stringify({ active: document.activeElement?.tagName ?? null, editable: document.activeElement?.isContentEditable ?? null, tail: document.body.innerText.slice(-300) })")
+    throw new Error(`${error.message}; page state: ${state}`)
+  }
   await sleep(1000)
   console.log(`check-packed: chat ${JSON.stringify(await evaluate('document.body.innerText.slice(-200)'))}`)
 }
