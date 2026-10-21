@@ -2,6 +2,7 @@ import { createElement as h, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import { BotMark, RoomAvatar } from './mark.js'
 import { Elapsed, Shimmer, PHRASES } from './cells.js'
+import { noteClientError } from './diagnostics.js'
 import { reducedMotion } from './motion.js'
 import { t } from './i18n.js'
 
@@ -14,6 +15,21 @@ const PHRASE_HOLD_MS = 800
 const drawPhrase = pool => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))])
 export { reducedMotion }
 
+// The shell's running slot can sit under wrappers it adds around the flow, so the
+// search is a descendant one; without the slot the row mounts at the flow's tail.
+// No flow at all is a mount failure, noted once per page — the observer keeps
+// retrying in case the transcript is only mid-mount.
+let mountMissed = false
+export function findHost() {
+  const node = document.querySelector('[data-chat-flow] [data-chat-running]')
+    ?? document.querySelector('[data-chat-flow]')
+  if (node === null && !mountMissed) {
+    mountMissed = true
+    noteClientError('activity row', new Error('[data-chat-flow] not found'))
+  }
+  return node
+}
+
 function useRunningHost(active) {
   const [host, setHost] = useState(null)
   useEffect(() => {
@@ -21,8 +37,10 @@ function useRunningHost(active) {
     let frame = 0
     const find = () => {
       frame = 0
-      const node = document.querySelector('[data-chat-flow] > [data-chat-running]')
-      setHost(prev => (prev === node ? prev : node))
+      setHost(prev => {
+        const node = findHost()
+        return prev === node ? prev : node
+      })
     }
     const observer = new MutationObserver(() => { if (!frame) frame = requestAnimationFrame(find) })
     observer.observe(document.querySelector('[data-conversation-scroll]') ?? document.body, { childList: true, subtree: true })

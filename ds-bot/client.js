@@ -5883,6 +5883,15 @@ var import_react10 = require("react");
 var import_react_dom2 = require("react-dom");
 var PHRASE_HOLD_MS = 800;
 var drawPhrase = (pool) => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))]);
+var mountMissed = false;
+function findHost() {
+  const node = document.querySelector("[data-chat-flow] [data-chat-running]") ?? document.querySelector("[data-chat-flow]");
+  if (node === null && !mountMissed) {
+    mountMissed = true;
+    noteClientError("activity row", new Error("[data-chat-flow] not found"));
+  }
+  return node;
+}
 function useRunningHost(active) {
   const [host, setHost] = (0, import_react10.useState)(null);
   (0, import_react10.useEffect)(() => {
@@ -5893,8 +5902,10 @@ function useRunningHost(active) {
     let frame = 0;
     const find = () => {
       frame = 0;
-      const node = document.querySelector("[data-chat-flow] > [data-chat-running]");
-      setHost((prev) => prev === node ? prev : node);
+      setHost((prev) => {
+        const node = findHost();
+        return prev === node ? prev : node;
+      });
     };
     const observer = new MutationObserver(() => {
       if (!frame) frame = requestAnimationFrame(find);
@@ -6082,6 +6093,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const groups = workKeys(useGroupWork(useWork, (rooms) => Object.entries(rooms).flatMap(([roomId, entries2]) => entries2.filter((entry) => entry.botId === id).map((entry) => ({ id: roomId, ...doingOf(entry) })))));
   const away = !running && groups.length > 0;
   const state = botState(running || away, doing, alert);
+  const runningLine = running && doing ? workLine(bot.name, doing, 0) : null;
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t("a group chat"), groups[0], groups.length - 1) : null;
   const waits = workKeys(useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null");
   const waitsFor = state === "waiting" ? waitingFor(roster, waits) : "";
@@ -6128,7 +6140,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       "span",
       { className: "bt-row-body" },
       (0, import_react11.createElement)("span", { className: "bt-row-name" }, (0, import_react11.createElement)("span", { className: "bt-row-title" }, bot.name), pinned ? (0, import_react11.createElement)(PinMark) : null),
-      awayLine ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, preview) : null
+      runningLine ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, runningLine) : awayLine ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
     wide && unread && !active ? (0, import_react11.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
   );
