@@ -831,6 +831,23 @@ test('a photo through update_bot keeps the Bot\'s other avatar fields', async (t
   assert.deepEqual((await writer()).avatar, { shape: 'fox' })
 })
 
+test('a photo in the team\'s data is refused, and one in the team workspace there is read', async (t) => {
+  const { ctx, call, stop, home } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  const exec = { agent: { id: chief } }
+  const tool = avatar => ctx.registeredTools.get('update_bot').execute({ avatar }, exec)
+  writeFileSync(join(home, 'photo.png'), PNG_BYTES)
+  assert.match(await tool(join(home, 'photo.png')), /is in DeepSeek Harness data, so it cannot be a Bot's photo/)
+  assert.equal((await call('state', {})).value.bots.find(bot => bot.id === chief).avatar?.image, undefined)
+  // The default team workspace lies in the team's data, and the Bots' own files are there.
+  const workspace = ctx.workspaceRegistry.get((await call('state', {})).value.workspaceId)?.path ?? join(home, 'workspace')
+  mkdirSync(workspace, { recursive: true })
+  writeFileSync(join(workspace, 'photo.png'), PNG_BYTES)
+  assert.match(await tool(join(workspace, 'photo.png')), /^Updated /)
+  assert.equal((await call('state', {})).value.bots.find(bot => bot.id === chief).avatar.image, PNG_DATA_URL)
+})
+
 test('a photo that cannot be read changes nothing, and a non-Main Bot cannot set another Bot\'s', async (t) => {
   const { ctx, call, stop, sent } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)

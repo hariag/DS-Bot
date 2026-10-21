@@ -67,6 +67,15 @@ export function install(rt) {
     return false
   }
 
+  // A file a Bot names to read into the team, such as a photo, may not come from DSH's or
+  // the team's data; the team workspace, which can lie in it, is the exception.
+  async function inData(path) {
+    const team = await realTeam()
+    if (team !== undefined && within(path, team)) return false
+    for (const root of dataRoots()) if (within(path, await real(root))) return true
+    return false
+  }
+
   // Saved as the real path, which is what a Session's cwd shows. Undefined means the
   // team workspace.
   async function cleanWorkDir(input) {
@@ -197,5 +206,5 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { teamFolder, defaultTeamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, workFolder, setTeamWorkspace, sessionsOfBot, approveFolder, folderEndpoint })
+  Object.assign(rt, { teamFolder, defaultTeamFolder, workDirOf, sessionFolder, isFolder, real, folderAt, cleanWorkDir, workFolder, inData, setTeamWorkspace, sessionsOfBot, approveFolder, folderEndpoint })
 }

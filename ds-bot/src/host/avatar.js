@@ -2,7 +2,7 @@
 // into the data URL a Bot keeps in avatar.image. There is no image library in the
 // host, so images are not resized; a small square image is asked for, and every kind
 // of input is capped at what the stored format holds.
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { MAX_AVATAR_IMAGE } from './constants.js'
@@ -44,7 +44,7 @@ const expandHome = (text) => {
   return text
 }
 
-async function readLocal(path, baseDir) {
+async function readLocal(path, baseDir, isData) {
   const full = resolve(baseDir ?? process.cwd(), expandHome(path))
   let info
   try {
@@ -54,6 +54,8 @@ async function readLocal(path, baseDir) {
     throw new Error(`Cannot read the image at ${full}: ${error?.code === 'EACCES' ? 'permission denied' : error.message}`)
   }
   if (!info.isFile()) throw new Error(`${full} is not an image file. Pass the path of an image file.`)
+  // Where a link leads decides, so a link cannot reach into DSH's data either.
+  if (await isData?.(await realpath(full))) throw new Error(`${full} is in DeepSeek Harness data, so it cannot be a Bot's photo. Pass an image from another folder.`)
   if (info.size > MAX_BYTES) throw new Error(tooLarge(info.size))
   let bytes
   try {
@@ -80,13 +82,14 @@ function readDataUrl(value) {
 }
 
 // Returns the data URL for avatar.image, or throws with a line the user can read.
-// `baseDir` is where a relative local path starts. Links are not fetched: the host
-// would reach addresses, such as local services, that dsh's own web fetch refuses.
-export async function readAvatar(input, { baseDir } = {}) {
+// `baseDir` is where a relative local path starts, and `isData` says whether a real path
+// lies in data a Bot may not read from. Links are not fetched: the host would reach
+// addresses, such as local services, that dsh's own web fetch refuses.
+export async function readAvatar(input, { baseDir, isData } = {}) {
   const value = typeof input === 'string' ? input.trim() : ''
   if (value === '') throw new Error(`Give an image path or a data URL. ${HINT}`)
   if (/^data:/i.test(value)) return readDataUrl(value)
   if (/^https?:\/\//i.test(value)) throw new Error('An http(s) link is not downloaded here. Save the image to a file and pass its path, or pass a data URL.')
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) throw new Error(`The avatar must be a local image path or a data URL. ${HINT}`)
-  return readLocal(value, baseDir)
+  return readLocal(value, baseDir, isData)
 }
