@@ -2966,6 +2966,26 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 :is(.bt-icon-btn,.bt-settings-close,.bt-nc-send,.bt-shape,.bt-swatch,.bt-color,.bt-x,.bt-q-x,.bt-palette-clear):active:not(:disabled){scale:.9}
 :is(.bt-soft,.bt-send,.bt-mini,.bt-tab,.bt-avedit-tab,.bt-pick,.bt-q-submit,.bt-q-btn):active:not(:disabled){scale:.96}
 @media (prefers-reduced-motion:reduce){.bt-thumb{transition:none}.bt-panel-view>[data-move],.bt-drawer-name-input,.bt-veil,.bt-pop-in,.bt-token,.bt-drop,.bt-newchat,.bt-option-hint,.bt-connector-form,.bt-settings-head>*{animation:none}}
+/* Phone-width viewports: the settings dialog takes the whole screen, its page
+   list becomes a horizontal strip across the top, and fixed-width pages wrap
+   or scroll instead of overflowing. These rules sit at the end of the sheet:
+   the base column widths below would otherwise win the cascade back. */
+@media (max-width:640px){
+  .bt-settings-layer{align-items:stretch;justify-content:stretch}
+  .bt-settings{--bt-set-w:100vw;--bt-set-h:100vh;width:100vw;height:100vh;height:100dvh;border-radius:0;border-width:0;flex-direction:column}
+  /* Right padding is not honored inside a scrolling flex row; a transparent
+     right border keeps the last tab clear of the close button. */
+  .bt-settings-nav{width:100%;flex:none;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;border:0;border-right:52px solid transparent;border-bottom:.5px solid var(--bt-line);scrollbar-width:thin;box-sizing:border-box}
+  .bt-settings-item{flex:none}
+  .bt-settings-shell{margin-top:0;margin-left:auto;flex:none}
+  .bt-settings-main{width:100%;flex:1;min-height:0;height:auto}
+  .bt-settings-usage[data-off]{left:0;width:100%}
+  .bt-settings-scroll{overflow-x:clip}
+  .bt-set-row{flex-direction:column;align-items:stretch;gap:8px}
+  .bt-set-row>.bt-set-copy{width:100%}
+  .bt-avedit{width:min(300px,calc(100vw - 32px))}
+  .bt-shape-row{grid-template-columns:repeat(4,1fr)}
+}
 `;
 var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
@@ -8757,6 +8777,13 @@ var SCHEDULE_CSS = `
 .bt-task-line-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-task-line-when{flex:none;font-size:12px;color:var(--bt-ink-3)}
 @media (prefers-reduced-motion:reduce){.bt-task-form{animation:none}}
+/* Phone-width viewports: the form's fixed minimums would overflow; let the
+   fields wrap and share the row. */
+@media (max-width:640px){
+  .bt-task-bot{min-width:0;width:100%}
+  .bt-task-time{min-width:0;flex:1 1 110px}
+  .bt-task-count{width:auto!important;flex:1 1 72px}
+}
 `;
 
 // src/client/capability-settings.js
@@ -11834,6 +11861,20 @@ button.bt-us-row:hover{background:var(--bt-hover)}
 @keyframes bt-us-pulse{50%{opacity:.25}}
 @keyframes bt-us-shine{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.bt-us *,.bt-us *::before{animation:none!important;transition:none!important}}
+/* Phone-width viewports: the page is full width but its fixed parts are not —
+   stats take two columns, the calendar and heat map shrink or scroll. */
+@media (max-width:640px){
+  .bt-us-stats{grid-template-columns:repeat(2,1fr)}
+  .bt-us-stat{padding:12px}
+  .bt-us-stat-value{font-size:19px;line-height:24px;white-space:normal;flex-wrap:wrap}
+  .bt-us-stat-main .bt-us-stat-value{font-size:26px;line-height:32px}
+  .bt-us-tabs{max-width:100%;overflow-x:auto}
+  .bt-us-month{width:min(252px,100%)}
+  .bt-us-weekdays,.bt-us-days{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .bt-us-pair{grid-template-columns:1fr}
+  .bt-us-heat{overflow-x:auto}
+  .bt-us-heat-months,.bt-us-heat-grid{grid-template-columns:repeat(${HEAT_WEEKS},minmax(8px,1fr))}
+}
 `;
 
 // src/client/connectors.js
@@ -13576,6 +13617,8 @@ var DETAILS_WIDTH = 320;
 var DETAILS_MAX = 520;
 var MIN_WIDTH = 360;
 var MIN_CHAT = 420;
+var PANEL_MIN = { details: DETAILS_WIDTH, browser: MIN_WIDTH };
+var overlayAt = (view, viewport) => viewport < MIN_CHAT + PANEL_MIN[view];
 var READ_FLASH_MS = 2400;
 var EMPTY_PAGE = { url: "", title: "", favicon: null, loading: false, canGoBack: false, canGoForward: false, error: null, excerpt: "" };
 var EMPTY_TABS2 = { ids: [], active: null };
@@ -13898,6 +13941,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
   const [resizing, setResizing] = (0, import_react37.useState)(false);
   const instant = dragging || resizing;
   const [reading, setReading] = (0, import_react37.useState)(false);
+  const overlay = overlayAt(view, viewport);
   const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport));
   (0, import_react37.useLayoutEffect)(() => {
     if (view === "browser" && width === null) setWidth(DEFAULT_WIDTH);
@@ -13915,9 +13959,9 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     const switched = settling && shownView.current !== view;
     shownView.current = view;
     if (switched) chatRoom.hold(true);
-    chatRoom.set(leaving ? null : panelWidth);
+    chatRoom.set(leaving || overlay ? null : panelWidth);
     if (switched) chatRoom.hold(false);
-  }, [view, panelWidth, leaving]);
+  }, [view, panelWidth, leaving, overlay]);
   (0, import_react37.useEffect)(() => () => {
     chatRoom.set(null);
     chatRoom.hold(false);
@@ -14034,7 +14078,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     });
   }, [view, pane.id]);
   const startResize = (event) => {
-    if (event.button !== 0 || leaving) return;
+    if (event.button !== 0 || leaving || overlay) return;
     event.preventDefault();
     const panel = root.current;
     const grip = event.currentTarget;
@@ -14089,12 +14133,13 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
       "data-settling": settling || void 0,
       "data-instant": instant || void 0,
       "data-dragging": dragging || void 0,
+      "data-overlay": overlay || void 0,
       style: { "--bt-panel-w": `${panelWidth}px` },
       onAnimationEnd: (event) => {
         if (event.target === event.currentTarget) setLanded(true);
       }
     },
-    leaving ? null : (0, import_react37.createElement)("div", { className: "bt-panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": t("Resize panel"), onPointerDown: startResize }),
+    leaving || overlay ? null : (0, import_react37.createElement)("div", { className: "bt-panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": t("Resize panel"), onPointerDown: startResize }),
     // Over the whole window while dragging: the cursor stays a resize cursor and the
     // pages underneath (the chat, the guest) see no pointer.
     dragging ? (0, import_react_dom8.createPortal)((0, import_react37.createElement)("div", { className: "bt-drag-shield", "aria-hidden": true }), document.body) : null,
@@ -14195,6 +14240,10 @@ var BROWSER_CSS = `
 .bt-bcard-new:hover{color:var(--bt-ink);border-color:var(--bt-ink-3)}
 .bt-bcard-new svg{width:14px;height:14px}
 .bt-browser-empty-mark{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
+/* A viewport too narrow to leave the conversation its room: the panel covers it,
+   and its close controls get a touch-sized target. */
+.bt-panel[data-overlay]{width:100vw}
+.bt-panel[data-overlay] .bt-ptab-close,.bt-panel[data-overlay] .bt-drawer-top .bt-round{width:44px;height:44px}
 @media (prefers-reduced-motion:reduce){.bt-ptabs,.bt-panel-view,.bt-bcard,.bt-ptab-name{animation:none}}
 `;
 

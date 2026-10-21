@@ -807,6 +807,26 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 :is(.bt-icon-btn,.bt-settings-close,.bt-nc-send,.bt-shape,.bt-swatch,.bt-color,.bt-x,.bt-q-x,.bt-palette-clear):active:not(:disabled){scale:.9}
 :is(.bt-soft,.bt-send,.bt-mini,.bt-tab,.bt-avedit-tab,.bt-pick,.bt-q-submit,.bt-q-btn):active:not(:disabled){scale:.96}
 @media (prefers-reduced-motion:reduce){.bt-thumb{transition:none}.bt-panel-view>[data-move],.bt-drawer-name-input,.bt-veil,.bt-pop-in,.bt-token,.bt-drop,.bt-newchat,.bt-option-hint,.bt-connector-form,.bt-settings-head>*{animation:none}}
+/* Phone-width viewports: the settings dialog takes the whole screen, its page
+   list becomes a horizontal strip across the top, and fixed-width pages wrap
+   or scroll instead of overflowing. These rules sit at the end of the sheet:
+   the base column widths below would otherwise win the cascade back. */
+@media (max-width:640px){
+  .bt-settings-layer{align-items:stretch;justify-content:stretch}
+  .bt-settings{--bt-set-w:100vw;--bt-set-h:100vh;width:100vw;height:100vh;height:100dvh;border-radius:0;border-width:0;flex-direction:column}
+  /* Right padding is not honored inside a scrolling flex row; a transparent
+     right border keeps the last tab clear of the close button. */
+  .bt-settings-nav{width:100%;flex:none;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;border:0;border-right:52px solid transparent;border-bottom:.5px solid var(--bt-line);scrollbar-width:thin;box-sizing:border-box}
+  .bt-settings-item{flex:none}
+  .bt-settings-shell{margin-top:0;margin-left:auto;flex:none}
+  .bt-settings-main{width:100%;flex:1;min-height:0;height:auto}
+  .bt-settings-usage[data-off]{left:0;width:100%}
+  .bt-settings-scroll{overflow-x:clip}
+  .bt-set-row{flex-direction:column;align-items:stretch;gap:8px}
+  .bt-set-row>.bt-set-copy{width:100%}
+  .bt-avedit{width:min(300px,calc(100vw - 32px))}
+  .bt-shape-row{grid-template-columns:repeat(4,1fr)}
+}
 `
 
 export const CONVERSATION_CSS = `
