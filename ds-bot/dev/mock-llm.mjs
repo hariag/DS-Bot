@@ -27,6 +27,8 @@
 //   报错 (fake rejected key, 401; also as the text of 转告, so the receiving Bot fails)
 //   卡片 K (K×1000 characters, then a question card) · 笔记模式 截断一次|缺节一次|总截断|总缺节|失败|正常
 //   记住[@话题] 事实 · 团队记住 事实 (remember) · 忘掉 事实 (forget) · 回忆 [词] (recall)
+//   视图选项 (options card, waits) · 视图表单 (form card, waits) · 视图展示 (display-only
+//   stack) · 大视图 (display-only, just under the byte limit)
 //   查能力 [词] (names the mcp__ tools and catalog skills that contain 词; also in a group)
 //   A message with a file (a long Bot message as a file, a file the user sent): the Bot
 //   reads the saved path, then says how many lines it read and how the file ends.
@@ -468,6 +470,31 @@ function decide(body) {
   }
   if (/^\s*阻塞提问/.test(userText) && tools.has('ask_user_question')) {
     return [tool('ask_user_question', { questions: [{ id: 'start', header: 'Choose', question: '先从哪块开始？', options: [{ label: '先定目标 (Recommended)', description: '先把要做成什么说清楚' }, { label: '整理日常事务' }] }] })]
+  }
+  // View cards: 视图选项 and 视图表单 wait for an answer; 视图展示 and 大视图 are
+  // display-only — the latter sits just under the view byte limit.
+  if (/^\s*视图选项/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', { title: 'Pick a lane', view: { type: 'options', id: 'lane', options: [{ label: 'Ship now' }, { label: 'One more pass' }] } })]
+  }
+  if (/^\s*视图表单/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', { title: 'A few details', view: { type: 'form', id: 'ask', submitLabel: 'Send', fields: [{ id: 'name', label: 'Name', placeholder: 'Ada' }, { id: 'note', label: 'Note' }] } })]
+  }
+  if (/^\s*视图展示/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', {
+      title: 'Status board', await_reply: false,
+      view: {
+        type: 'stack',
+        children: [
+          { type: 'text', text: '**Release readiness** — all checks are in.' },
+          { type: 'metric', label: 'Open issues', value: 3, tone: 'warn' },
+          { type: 'table', columns: [{ key: 'item', label: 'Item' }, { key: 'state', label: 'State' }], rows: [['Tests', 'green'], ['Docs', 'draft'], ['Changelog', 'done']] },
+          { type: 'progress', label: 'Reviewed', percent: 72 },
+        ],
+      },
+    })]
+  }
+  if (/^\s*大视图/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', { title: 'A long note', view: { type: 'text', text: 'x'.repeat(7800) }, await_reply: false })]
   }
   // Streams slowly, then checks the team: exercises the activity row stepping aside
   // for a streaming reply and coming back for the tool.
