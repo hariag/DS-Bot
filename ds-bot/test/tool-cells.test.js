@@ -136,6 +136,19 @@ test('a group reply shows its time, and how long its turn ran', () => {
   assert.deepEqual(tooks.map(node => node.props.title), ['Ran for 1m 8s', 'Ran for 2s'])
 })
 
+// A user text sent while a relay runs joins the round's replies with its time.
+test('a user message inside a group relay shows its time', () => {
+  const today = at(0, 14, 5)
+  const replies = [
+    { kind: 'user', text: 'hold on', time: today },
+    { botId: 'writer', text: 'Draft is up.', time: at(0, 14, 6), duration: 1000 },
+  ]
+  const out = show(call('group_relay', 'direct', { content: { replies } }), { sessionId: 'room' })
+  const times = findAll(out, node => node.props?.className === 'bt-utime')
+  assert.deepEqual(times.map(text), [clockOf(today)])
+  assert.deepEqual(times.map(node => node.props.title), [`Today ${clockOf(today)}`])
+})
+
 // The trigger of a post in a group chat carries the event's time, not the post's.
 test('a group post drawn from its trigger shows the time it came in', () => {
   const time = at(0, 16, 42)

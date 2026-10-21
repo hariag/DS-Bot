@@ -5020,7 +5020,8 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return (0, import_react8.createElement)("div", { key: `user-${index}`, className: "bt-urow" }, (0, import_react8.createElement)(
           "div",
           { className: "bt-ububble" },
-          (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: reply.text, labels: mdLabels(), variant: "compact" })
+          (0, import_react8.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: reply.text, labels: mdLabels(), variant: "compact" }),
+          Number.isFinite(time) ? (0, import_react8.createElement)("div", { className: "bt-utime", title: clockLabel(time) }, messageClock(time)) : null
         ));
       }
       if (reply.kind === "failed") {
