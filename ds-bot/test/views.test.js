@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { normalizeView, validateView, validateViewAnswer, VIEW_BYTE_LIMIT, viewBytes, viewSummary } from '../src/shared/views.js'
+import { checkShownView, normalizeView, validateView, validateViewAnswer, VIEW_BYTE_LIMIT, viewBytes, viewSummary } from '../src/shared/views.js'
 
 const text = (value = 'hello') => ({ type: 'text', text: value })
 const metric = (label = '进度', value = '70%') => ({ type: 'metric', label, value })
@@ -94,6 +94,23 @@ test('validateView enforces table, options, form, depth, node, and id limits', (
   assert.match(validateView(dup).error, /view\.children\[1\]\.id: duplicate id "same"/)
   const many = stack(...Array.from({ length: 17 }, () => text()))
   assert.match(validateView(many).error, /expected 1 to 16 children; got 17/)
+
+  // `__proto__` is no id, as a component or a field: the answer would write to a
+  // plain object's prototype instead of its fields.
+  assert.equal(validateView(options('__proto__')).error, 'view.id: "__proto__" cannot be an id')
+  assert.equal(validateView(confirm('__proto__')).error, 'view.id: "__proto__" cannot be an id')
+  assert.equal(validateView({ type: 'form', id: 'ask', fields: [{ id: '__proto__', label: 'Name' }] }).error, 'view.fields[0].id: "__proto__" cannot be an id')
+})
+
+test('checkShownView runs the call\'s own checks and names the card and its kind', () => {
+  assert.deepEqual(checkShownView('  Status  ', text()), { title: 'Status', interactive: false })
+  assert.deepEqual(checkShownView('Pick', options()), { title: 'Pick', interactive: true })
+  assert.equal(checkShownView(' ', text()).error, 'Give the view a title.')
+  assert.equal(checkShownView('Card', { type: 'nope' }).error, 'view.type: unknown component "nope"; allowed: stack, text, metric, table, options, confirm, form, progress')
+  assert.equal(checkShownView('Card', undefined).error, 'view: expected a component object')
+  const room = VIEW_BYTE_LIMIT - viewBytes('', text())
+  assert.equal(checkShownView('x'.repeat(room + 1), text()).error, `The view is ${VIEW_BYTE_LIMIT + 1} bytes; the limit is ${VIEW_BYTE_LIMIT}.`)
+  assert.equal(checkShownView('Card', { get type() { throw new Error('no') } }).error, 'The view is not JSON data.')
 })
 
 test('viewBytes counts the blueprint JSON plus the title in UTF-8', () => {

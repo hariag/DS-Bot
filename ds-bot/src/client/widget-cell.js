@@ -2,9 +2,10 @@ import { createElement as h, Fragment, useId, useRef, useState } from 'react'
 import { MarkdownText } from './dsh-primitives.js'
 import { CheckIcon, CloseIcon } from './icons.js'
 import { t } from './i18n.js'
-import { historyLoading } from './text.js'
 import { AnsweredCell, keyLetter, useOptionKeys } from './questions.js'
-import { normalizeView } from '../shared/views.js'
+import { useDockHold } from './card-hold.js'
+import { heldCardKey } from './sources.js'
+import { checkShownView, normalizeView } from '../shared/views.js'
 
 // -------------------------------------------------------------------------
 // View cards (show_view): a Bot draws a small declarative blueprint — text,
@@ -22,12 +23,6 @@ const fieldsOf = node => (Array.isArray(node?.fields) ? node.fields : [])
   .filter(field => field !== null && typeof field === 'object' && field.id !== undefined)
 const cellText = value => (value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))
 
-const INTERACTIVE = new Set(['options', 'confirm', 'form'])
-const hasInteractive = (node) => {
-  if (node === null || typeof node !== 'object') return false
-  if (INTERACTIVE.has(node.type)) return true
-  return (Array.isArray(node.children) ? node.children : []).some(hasInteractive)
-}
 const countType = (node, type) => {
   if (node === null || typeof node !== 'object') return 0
   const children = Array.isArray(node.children) ? node.children : []
@@ -206,6 +201,7 @@ function WidgetCard({ title, view, onSubmit, onDismiss, raised = false, settled 
 // pending question it hides on submit and comes back if the reply fails.
 export function PendingView({ sessionId, view, actions, inline }) {
   const [answered, setAnswered] = useState(null)
+  const hold = useDockHold(sessionId, 'view', view.id, actions, inline)
   if (answered === view.id) return null
   const onSubmit = (action, values) => {
     setAnswered(view.id)
@@ -215,14 +211,15 @@ export function PendingView({ sessionId, view, actions, inline }) {
     setAnswered(view.id)
     void actions.dismissView(sessionId)
   }
-  return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock' },
+  return h('div', { className: inline ? 'bt-q-inline' : 'bt-q-dock', onFocusCapture: hold, onPointerDownCapture: hold },
     h(WidgetCard, { key: view.id, title: view.title ?? '', view: view.view, onSubmit, onDismiss, raised: !inline }))
 }
 
 // The show_view call in the transcript.
-export function WidgetCell({ sessionId, callId, args, done, isError, roster, actions }) {
+export function WidgetCell({ sessionId, callId, args, done, isError, roster, actions, heldCards }) {
   const record = roster.views?.[sessionId]
   if (record !== undefined && record.callId === callId) {
+    if (heldCards?.[heldCardKey('view', record.id)] > 0) return null
     return h(PendingView, { sessionId, view: record, actions, inline: true })
   }
   // A refused call (bad blueprint) drew no card; don't render an empty one.
@@ -230,21 +227,24 @@ export function WidgetCell({ sessionId, callId, args, done, isError, roster, act
   // Display-only cards draw from the recorded call arguments, which keep the
   // provider's encoding: unwrap it the same way the host does before storing.
   const blueprint = normalizeView(args?.('view'))
-  // Answered, dismissed or replaced: a card that awaited a reply leaves no gap
-  // where it was (same as ask_user). A display-only view stays as content.
-  if (args?.('await_reply') === true || hasInteractive(blueprint) || blueprint === null || typeof blueprint !== 'object') {
+  const shown = checkShownView(args?.('title'), blueprint)
+  // A call the host refused — a blueprint it would not show, or a reply it cannot
+  // wait for — leaves no card; the model's retry then stays the only one. So does
+  // a settled interactive call: answered, dismissed or replaced, it leaves no gap
+  // where it was (same as ask_user).
+  if (shown.error !== undefined || shown.interactive || args?.('await_reply') === true) {
     return h('span', { className: 'bt-q-gone', hidden: true })
   }
-  return h('div', { className: 'bt-q-inline' }, h(WidgetCard, { title: args?.('title') ?? '', view: blueprint }))
+  return h('div', { className: 'bt-q-inline' }, h(WidgetCard, { title: shown.title, view: blueprint }))
 }
 
 // Views asked by a call the transcript does not draw wait above the composer,
 // mirroring the question dock.
-export function WidgetDock({ sessionId, useRoster, useCards, useSession, actions }) {
+export function WidgetDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
   const view = useRoster(value => value.views?.[sessionId])
   const drawn = useCards?.(state => state[sessionId]?.[view?.callId] > 0) === true
-  const loading = useSession?.(historyLoading) === true
-  if (view === undefined || (view.callId && (drawn || loading))) return null
+  const held = useHeldCards?.(state => state[sessionId]?.[heldCardKey('view', view?.id)] > 0) === true
+  if (view === undefined || (view.callId && drawn && !held)) return null
   return h(PendingView, { sessionId, view, actions, inline: false })
 }
 

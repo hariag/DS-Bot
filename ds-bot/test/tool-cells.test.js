@@ -34,7 +34,7 @@ const timers = new Set()
 const module = { exports: {} }
 runInNewContext(outputFiles[0].text, {
   module, exports: module.exports,
-  document: { hidden: false },
+  document: { hidden: false }, TextEncoder,
   setTimeout: (fn) => { const timer = { fn }; timers.add(timer); return timer },
   clearTimeout: timer => timers.delete(timer),
   require: (name) => {
@@ -519,4 +519,23 @@ test('a reaction on a group post stays on that post, also after it draws again',
   reactOf(draw(later))('❤️')
   reactOf(draw(first))('👍')
   assert.deepEqual([chips(draw(first)), chips(draw(sameTurn)), chips(draw(later))], [0, 0, 1])
+})
+
+test('a show_view call the host refused draws nothing; a display-only card draws with the trimmed title', () => {
+  const cell = (title, view, extra = {}) => show(call('show_view', 'view-call', { args: { title, view, ...extra } }), { roster: team({ views: {} }) })
+  const gone = (node) => {
+    assert.ok(find(node, each => each.props?.className === 'bt-q-gone') !== undefined, 'the call leaves the hidden mark')
+    assert.equal(text(node), '')
+  }
+  // Refusals the host returned as text reach the cell as a done call; the shared
+  // check hides them so the model's retry stays the only card.
+  gone(cell('  ', { type: 'text', text: 'hi' }))
+  gone(cell('Card', { type: 'nope' }))
+  gone(cell('x'.repeat(8192), { type: 'text', text: 'hi' }))
+  gone(cell('Pick', { type: 'options', id: 'o', options: [{ label: 'A' }] }))
+  gone(cell('Meter', { type: 'metric', label: 'Done', value: '3' }, { await_reply: true }))
+  const card = cell('  Status  ', { type: 'metric', label: 'Done', value: '3' })
+  const title = find(card, node => node.props?.className === 'bt-q-title')
+  assert.ok(title !== undefined)
+  assert.equal(text(title), 'Status')
 })

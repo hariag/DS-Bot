@@ -67,6 +67,19 @@ export function validateView(view) {
   return error === undefined ? { ok: true, interactive: ctx.interactive } : { ok: false, error }
 }
 
+// What show_view checks before it shows a view: the same answer on the host and
+// in the client. `view` is already normalized; the trimmed title comes back.
+export function checkShownView(title, view) {
+  let bytes
+  try { bytes = viewBytes(title, view) } catch { return { error: 'The view is not JSON data.' } }
+  if (bytes > VIEW_BYTE_LIMIT) return { error: `The view is ${bytes} bytes; the limit is ${VIEW_BYTE_LIMIT}.` }
+  const named = String(title ?? '').trim()
+  if (named === '') return { error: 'Give the view a title.' }
+  const checked = validateView(view)
+  if (!checked.ok) return { error: checked.error }
+  return { title: named, interactive: checked.interactive }
+}
+
 function checkNode(node, path, depth, ctx) {
   if (!isRecord(node)) return `${path}: expected a component object`
   if (depth > MAX_DEPTH) return `${path}: ${depth} levels exceeds the limit of ${MAX_DEPTH}`
@@ -185,6 +198,7 @@ function checkForm(node, path, ctx) {
       if (key !== 'id' && key !== 'label' && key !== 'placeholder') return `${at}.${key}: unknown property ${quoted(key)}; allowed: id, label, placeholder`
     }
     if (typeof field.id !== 'string' || field.id === '') return `${at}.id: expected a non-empty string`
+    if (field.id === '__proto__') return `${at}.id: "__proto__" cannot be an id`
     if (seen.has(field.id)) return `${at}.id: duplicate field id ${quoted(field.id)}`
     seen.add(field.id)
     if (typeof field.label !== 'string') return `${at}.label: expected a string`
@@ -201,6 +215,9 @@ function checkProgress(node, path) {
 
 function checkId(node, path, ctx) {
   if (typeof node.id !== 'string' || node.id === '') return `${path}.id: expected a non-empty string`
+  // A `__proto__` id would write through to a plain object's prototype where the
+  // answer is kept, losing it silently.
+  if (node.id === '__proto__') return `${path}.id: "__proto__" cannot be an id`
   if (ctx.ids.has(node.id)) return `${path}.id: duplicate id ${quoted(node.id)}`
   ctx.ids.add(node.id)
   return undefined

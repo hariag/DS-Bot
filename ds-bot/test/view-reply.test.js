@@ -95,6 +95,19 @@ test('show_view registers an interactive card, refuses a group and a display-onl
   assert.equal(waiting.concluded, false)
   assert.equal((await team()).views['writer-now'], undefined)
 
+  // An interactive card cannot be told not to wait: refused, nothing stored.
+  const skipped = await show('writer-now', { title: 'Pick', view: CHOICES, await_reply: false })
+  assert.equal(skipped.text, 'This view has controls to submit, so it waits for the user\'s answer; call show_view without await_reply: false.')
+  assert.equal(skipped.concluded, false)
+  assert.equal((await team()).views['writer-now'], undefined)
+
+  // `__proto__` is no id: the answer object would lose the value to its prototype.
+  const protoCall = await show('writer-now', { title: 'Pick', view: { ...CHOICES, id: '__proto__' } })
+  assert.equal(protoCall.text, 'view.id: "__proto__" cannot be an id')
+  const protoField = await show('writer-now', { title: 'Ask', view: { type: 'form', id: 'ask', fields: [{ id: '__proto__', label: 'Name' }] } })
+  assert.equal(protoField.text, 'view.fields[0].id: "__proto__" cannot be an id')
+  assert.equal((await team()).views['writer-now'], undefined)
+
   const shown = await show('writer-now', { title: 'Meter', view: METER })
   assert.equal(shown.text, 'The view is on screen.')
   assert.equal(shown.concluded, false)
