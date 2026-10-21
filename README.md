@@ -56,6 +56,10 @@ The [`docker/`](docker/) directory builds an image with DSH Web and DS Bot, for 
 
 I strongly recommend that you set up your other bots and group chats by just talking to a bot.
 
+### Web search
+
+DS Bot selects its `auto` search provider for the whole profile. If you disable `web-search-auto`, also select another registered search provider in that profile. See [Web search](ds-bot/README.md#web-search) and the [recovery steps](docs/known-issues.md#web-search-fails-everywhere-after-turning-off-web-search-auto).
+
 ## Features
 
 ### Bot

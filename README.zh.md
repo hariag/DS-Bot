@@ -56,6 +56,10 @@ npx @deepseek-ai/dsh@0.2.1-rc.2 web
 
 我强烈建议你直接通过和 bot 对话来配置其他 bot 和群聊。
 
+### 网页搜索
+
+DS Bot 会把 `auto` 搜索 provider 选为整个 profile 的后端。禁用 `web-search-auto` 时，也要为该 profile 选择另一个已注册的搜索 provider。详见[网页搜索说明](ds-bot/README.md#web-search)和[恢复步骤](docs/known-issues.zh.md#关掉-web-search-auto-后所有会话的网页搜索都失败)。
+
 ## 功能
 
 ### Bot
