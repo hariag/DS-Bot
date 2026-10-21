@@ -559,8 +559,6 @@ var ZH = {
   "{name} looked up its own chat for “{text}”": "{name} 在自己的对话里查找「{text}」",
   "{name} is typing…": "{name} 正在输入…",
   "{name} didn't answer in time": "{name} 没有及时回应",
-  "{names} not called: the per-member limit for this round is reached": "没叫到 {names}：这一轮每人的次数用完了",
-  "The group went quiet: @ mentions in late replies call nobody until you write here": "群进入安静模式：之后迟到回复里的 @ 不再叫人，你在群里说句话就恢复",
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
@@ -634,7 +632,6 @@ var ZH = {
   Canceled: "已取消",
   Done: "完成",
   "{bot} is using {name}": "{bot} 正在使用 {name}",
-  "{bot} could not ask for a key: this window can only view the team": "{bot} 没能要密钥：这个窗口只能查看团队",
   "a saved key": "一个已保存的密钥",
   "Chosen Bots": "指定的 Bot",
   "Who may use {name}": "谁可以用 {name}",
@@ -1498,7 +1495,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     secretSet: (payload) => after(call2("secret-set", payload)),
     secretAllow: (requestId) => after(call2("secret-allow", { requestId })),
     secretCancel: (requestId) => after(call2("secret-cancel", { requestId })),
-    secretUpdate: (name, { scope, purpose } = {}) => after(call2("secret-update", { name, scope, purpose })),
+    secretUpdate: (name, scope) => after(call2("secret-update", { name, scope })),
     secretDelete: (name) => after(call2("secret-delete", { name })),
     connectorConnect: (id, token) => after(call2("connector-connect", { id, token })),
     connectorDisconnect: (id) => after(call2("connector-disconnect", { id })),
@@ -1969,6 +1966,22 @@ function runStatsOf(values) {
 var import_react = require("react");
 var reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 var noHover = () => window.matchMedia?.("(hover: none)").matches === true;
+var viewBottom = () => window.visualViewport ? window.visualViewport.height + window.visualViewport.offsetTop : window.innerHeight;
+function useViewport() {
+  const [tick, setTick] = (0, import_react.useState)(0);
+  (0, import_react.useEffect)(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return void 0;
+    const bump = () => setTick((value) => value + 1);
+    viewport.addEventListener("resize", bump);
+    viewport.addEventListener("scroll", bump);
+    return () => {
+      viewport.removeEventListener("resize", bump);
+      viewport.removeEventListener("scroll", bump);
+    };
+  }, []);
+  return tick;
+}
 function springEasing(stiffness, damping) {
   const w0 = Math.sqrt(stiffness);
   const zeta = damping / (2 * w0);
@@ -2177,7 +2190,9 @@ function useLinger(value, ms) {
 // src/client/styles.js
 var SKIN_FOOT = ':is(div,footer):not([class*="_footArea"]):has(> div > [data-slot="sidebar.footer.action"] > .bt-connect-wrap)';
 var SHELL_CSS = `
-body{--bt-ink:#141414;--bt-danger:#e02135;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56)}
+body{--bt-ink:#141414;--bt-danger:#e02135;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56);-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
+/* iOS waits out a double-tap zoom on buttons; the plugin's own controls never zoom. */
+:is(.bt-tool,.bt-uaction,.bt-menu button,.bt-menu-item,.bt-icon-btn,.bt-round,.bt-pill,.bt-account,.bt-set-row,.bt-settings-item,.bt-react-strip button,.bt-palette-row,.bt-palette-clear,.bt-tab,.bt-ptab,.bt-ptab-x,.bt-bcard-x,.bt-plus,.bt-q-btn,.bt-q-x,.bt-x,.bt-nc-send,.bt-send,.bt-soft,.bt-mini,.bt-shape,.bt-swatch,.bt-color,.bt-newchat,.bt-task-day,.bt-task-remove,.bt-fb-btn){touch-action:manipulation}
 body[data-ds-dark-theme]{--bt-ink:#f2f2f2;--bt-ink-2:rgba(242,242,242,.6);--bt-ink-3:rgba(242,242,242,.36);--bt-bubble:#262626;--bt-sidebar:#1b1b1b;--bt-main:#141414;--bt-line:rgba(255,255,255,.08);--bt-line-2:rgba(255,255,255,.15);--bt-line-weak:rgba(255,255,255,.1);--bt-hover:rgba(160,160,160,.12);--bt-active:rgba(160,160,160,.2);--bt-card:#1f1f1f;--bt-user:#f2f2f2;--bt-user-ink:#141414;--bt-tag-bg:rgba(255,255,255,.09);--bt-tag-ink:rgba(242,242,242,.62)}
 ${Object.entries(INKS).map(([name, [light]]) => `body{--bt-ink-${name}:${light}}`).join("")}
 ${Object.entries(INKS).map(([name, [, dark]]) => `body[data-ds-dark-theme]{--bt-ink-${name}:${dark}}`).join("")}
@@ -2785,7 +2800,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-palette-clear{width:18px;height:18px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .bt-palette-clear:hover{color:var(--bt-ink)}
 .bt-palette-clear svg{width:12px;height:12px}
-.bt-palette-list{position:relative;height:402px;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
+.bt-palette-list{position:relative;height:402px;height:min(402px,54vh);height:min(402px,54dvh);overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
 .bt-palette-list>.bt-thumb,.bt-drop-list>.bt-thumb{left:0;right:0;border-radius:8px;background:var(--bt-active)}
 .bt-palette-list>.bt-thumb{left:8px;right:8px}
 :is(.bt-palette-list,.bt-drop-list)[data-glide] [aria-selected=true]{background:transparent}
@@ -2925,7 +2940,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 @media (hover:none){.bt-mem-remove{opacity:1}}
 .bt-mem-none{font-size:13px;line-height:18px;color:var(--bt-ink-3);padding:8px 4px}
 .bt-mem-foot{flex:none;padding:8px 20px 20px;display:flex;flex-direction:column;gap:10px}
-.bt-mem-reply{border-radius:16px;background:var(--bt-hover);padding:8px 8px 12px 16px;display:flex;flex-direction:column;gap:6px;max-height:36vh;overflow-y:auto;scrollbar-width:thin;transform-origin:50% 100%;animation:bt-pop-lift ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
+.bt-mem-reply{border-radius:16px;background:var(--bt-hover);padding:8px 8px 12px 16px;display:flex;flex-direction:column;gap:6px;max-height:36vh;max-height:36dvh;overflow-y:auto;scrollbar-width:thin;transform-origin:50% 100%;animation:bt-pop-lift ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
 .bt-mem-reply-head{display:flex;align-items:center;gap:8px;min-height:24px}
 .bt-mem-reply-asked{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-mem-reply .bt-icon-btn{width:24px;height:24px;flex:none}
@@ -2987,6 +3002,20 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
   .bt-avedit{width:min(300px,calc(100vw - 32px))}
   .bt-shape-row{grid-template-columns:repeat(4,1fr)}
 }
+/* Follow the visible viewport, not the layout one: dvh where the browser knows
+   it (the earlier vh value is the fallback), and safe-area padding where
+   full-screen layers and bottom regions meet the device's own bars. */
+.bt-settings{--bt-set-h:min(780px,calc(100dvh - 2*max(32px,var(--dsh-frame-overlay-top,32px))))}
+.bt-mem{height:min(760px,calc(100dvh - 2*max(32px,var(--dsh-frame-overlay-top,32px))))}
+.bt-settings-layer,.bt-mem-layer,.bt-palette-layer{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+.bt-panel{padding-bottom:env(safe-area-inset-bottom,0px)}
+.bt-settings-scroll{padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
+.bt-voice-bar{padding-bottom:calc(32px + env(safe-area-inset-bottom,0px))}
+.bt-exchange .bt-dialog-foot{padding-bottom:calc(28px + env(safe-area-inset-bottom,0px))}
+/* iOS zooms the whole page on focused inputs under 16px. */
+@media (max-width:640px) and (pointer:coarse){
+  .bt-input,.bt-bs-input,.bt-browser-address input,.bt-folder-input,.bt-secret-input,.bt-q-input,.bt-to input,.bt-palette-head input,.bt-mem-input{font-size:16px}
+}
 `;
 var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
@@ -3024,7 +3053,7 @@ var CONVERSATION_CSS = `
 [class*="_header"]:has(.bt-head){border-bottom-color:transparent!important;box-shadow:none!important}
 /* The transcript runs under a floating header pill. */
 header[class*="_header"]:has(.bt-head){position:absolute!important;top:0;left:0;right:0;z-index:8;display:flex!important;padding:10px 0 0!important;background:transparent!important;pointer-events:none;justify-content:center}
-header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inset:0 0 auto;height:60px;background:linear-gradient(to bottom,var(--bt-main),color-mix(in srgb,var(--bt-main) 0%,transparent));pointer-events:none;z-index:-1}
+header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inset:0 0 auto;height:calc(60px + env(safe-area-inset-top,0px));background:linear-gradient(to bottom,var(--bt-main),color-mix(in srgb,var(--bt-main) 0%,transparent));pointer-events:none;z-index:-1}
 header[class*="_header"]:has(.bt-head)>[class*="_headerLeading"]{position:absolute;left:12px;top:10px;pointer-events:auto}
 header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [class*="_body"]:has(> [class*="_scrollBody"]){--dsh-chat-content-width:min(960px,100%)}
@@ -3046,7 +3075,7 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [data-content-phase=hero] [class*="_composerHero"]>[class$="_root"],[data-content-phase=hero] [class*="_heroWorkspaceRow"]{display:none!important}
 [data-content-phase=hero] [class*="_composerHero"] [class*="_input"]{min-height:0!important}
 /* The right sides give back the scrollbar gutter so both edges sit 16px from the column. */
-[class*="_scroll"]:has(> [class*="_column"]){padding:60px 11px 16px 16px!important}
+[class*="_scroll"]:has(> [class*="_column"]){padding:calc(60px + env(safe-area-inset-top,0px)) calc(11px + env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) calc(16px + env(safe-area-inset-left,0px))!important}
 /* The shell's running status only hosts the activity row (.bt-typing). */
 [data-chat-running]{display:block!important;width:100%;min-height:0!important;margin:0!important;padding:0!important}
 [data-chat-running]>span:not([role=status]){display:none!important}
@@ -3531,7 +3560,6 @@ var PlugIcon = lineIcon(["M7 3v4M13 3v4", "M5 7h10v2.5a5 5 0 0 1-10 0z", "M10 14
 var CalendarIcon = lineIcon(["M5.5 5h9A1.5 1.5 0 0 1 16 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 14.5v-8A1.5 1.5 0 0 1 5.5 5z", "M4 8.75h12", "M7.25 3.5v3M12.75 3.5v3"]);
 var ConnectorIcon = lineIcon(["M7 10a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z", "M18 10a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z", "M7 10h6"]);
 var SwitchIcon = lineIcon(["M4 7h9.5M10.5 3.5L14 7l-3.5 3.5", "M16 13H6.5M9.5 9.5L6 13l3.5 3.5"]);
-var SignOutIcon = lineIcon(["M8.5 17H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5", "M10 10h6.5", "M13.5 7l3 3-3 3"]);
 var PaperclipIcon = lineIcon(["M15.5 9.5l-5.6 5.6a3.4 3.4 0 0 1-4.8-4.8l6.1-6.1a2.25 2.25 0 0 1 3.2 3.2l-6 6a1.1 1.1 0 0 1-1.6-1.6l5.5-5.5"]);
 var ClockIcon = lineIcon(["M10 3.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z", "M10 6.5V10l2.5 1.5"]);
 var GearIcon = lineIcon(["M10 7.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2z", "M7.85 4.4l.29-1.87a7.7 7.7 0 0 1 3.72 0l.29 1.87a6 6 0 0 1 1.63.94l1.76-.69a7.7 7.7 0 0 1 1.86 3.23l-1.47 1.18a6 6 0 0 1 0 1.88l1.47 1.18a7.7 7.7 0 0 1-1.86 3.23l-1.76-.69a6 6 0 0 1-1.63.94l-.29 1.87a7.7 7.7 0 0 1-3.72 0l-.29-1.87a6 6 0 0 1-1.63-.94l-1.76.69a7.7 7.7 0 0 1-1.86-3.23l1.47-1.18a6 6 0 0 1 0-1.88L2.6 7.88a7.7 7.7 0 0 1 1.86-3.23l1.76.69a6 6 0 0 1 1.63-.94z"]);
@@ -4639,9 +4667,6 @@ function SecretToolCell({ sessionId, callId, name, done, content, roster, action
   if (done && /already saved/.test(contentText(content))) {
     return (0, import_react7.createElement)("div", { className: "bt-event" }, (0, import_react7.createElement)("span", { className: "bt-secret-event" }, (0, import_react7.createElement)(KeyIcon), t("{bot} is using {name}", { bot: bot.name, name: name ?? t("a saved key") })));
   }
-  if (done && contentText(content).startsWith("No card can be shown now")) {
-    return (0, import_react7.createElement)("div", { className: "bt-event" }, (0, import_react7.createElement)("span", { className: "bt-secret-event" }, (0, import_react7.createElement)(KeyIcon), t("{bot} could not ask for a key: this window can only view the team", { bot: bot.name })));
-  }
   return null;
 }
 function SecretDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
@@ -4685,21 +4710,6 @@ function ScopeEditor({ secret, roster, onSave }) {
       "div",
       { className: "bt-secret-row-actions" },
       (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: same, onClick: () => onSave(mode === "all" ? "all" : picked) }, t("Save access"))
-    )
-  );
-}
-function PurposeEditor({ secret, onSave }) {
-  const [purpose, setPurpose] = (0, import_react7.useState)(secret.purpose ?? "");
-  const same = purpose.trim() === (secret.purpose ?? "");
-  return (0, import_react7.createElement)(
-    "div",
-    { className: "bt-secret-edit-block" },
-    (0, import_react7.createElement)("div", { className: "bt-secret-edit-label" }, t("What it is for")),
-    (0, import_react7.createElement)(
-      "div",
-      { className: "bt-secret-inline" },
-      (0, import_react7.createElement)("input", { className: "bt-input", "aria-label": t("What it is for"), placeholder: t("What it is for"), value: purpose, spellCheck: false, autoComplete: "off", onChange: (event) => setPurpose(event.target.value) }),
-      (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: same, onClick: () => onSave(purpose.trim()) }, t("Save"))
     )
   );
 }
@@ -4762,8 +4772,7 @@ function SecretRow({ secret, roster, actions, run, open, onToggle }) {
     open ? (0, import_react7.createElement)(
       "div",
       { className: "bt-secret-edit" },
-      (0, import_react7.createElement)(ScopeEditor, { key: JSON.stringify(secret.scope), secret, roster, onSave: (scope) => run(actions.secretUpdate(secret.name, { scope })) }),
-      (0, import_react7.createElement)(PurposeEditor, { key: secret.purpose ?? "", secret, onSave: (purpose) => run(actions.secretUpdate(secret.name, { purpose })) }),
+      (0, import_react7.createElement)(ScopeEditor, { key: JSON.stringify(secret.scope), secret, roster, onSave: (scope) => run(actions.secretUpdate(secret.name, scope)) }),
       (0, import_react7.createElement)(ValueEditor, { secret, onSave: (value) => run(actions.secretSet({ name: secret.name, value })) }),
       (0, import_react7.createElement)(
         "div",
@@ -4886,7 +4895,6 @@ var SECRET_CSS = `
 .bt-secret-bot[aria-pressed=true]{background:var(--bt-active);color:var(--bt-ink);border-color:var(--bt-line-2)}
 .bt-secret-bot svg{width:13px;height:13px}
 .bt-secret-inline{display:flex;gap:8px;align-items:center}
-.bt-secret-inline .bt-input{flex:1;height:34px}
 .bt-secret-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .bt-secret-row-actions .bt-set-hint{flex:1}
 .bt-secret-danger{color:var(--bt-danger);display:inline-flex;align-items:center;gap:4px}
@@ -5044,6 +5052,7 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
   );
 }
 var REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+var STRIP_HALF = (REACTIONS.length * 34 + 10) / 2 + 8;
 function useDismiss(open, close, refs) {
   (0, import_react9.useEffect)(() => {
     if (!open) return void 0;
@@ -5069,22 +5078,25 @@ function useDismiss(open, close, refs) {
 }
 function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
   const [panel, setPanel] = (0, import_react9.useState)(null);
-  const [place, setPlace] = (0, import_react9.useState)(null);
   const [copied, setCopied] = (0, import_react9.useState)(false);
   const tools = (0, import_react9.useRef)(null);
   const pop = (0, import_react9.useRef)(null);
+  const tick = useViewport();
   const close = () => setPanel(null);
   useDismiss(panel !== null, close, [tools, pop]);
   const open = (kind, event) => {
-    if (panel === kind) {
+    if (panel?.kind === kind) {
       close();
       return;
     }
-    const rect = event.currentTarget.getBoundingClientRect();
-    const below = rect.bottom + 220 < window.innerHeight;
-    setPlace(kind === "react" ? { left: rect.left + rect.width / 2, top: rect.top - 6, "--bt-origin": "bottom center" } : { left: Math.min(rect.left, window.innerWidth - 208), ...below ? { top: rect.bottom + 4 } : { bottom: window.innerHeight - rect.top + 4, "--bt-origin": "bottom left" } });
-    setPanel(kind);
+    setPanel({ kind, node: event.currentTarget });
   };
+  const place = (0, import_react9.useMemo)(() => {
+    if (!panel) return null;
+    const rect = panel.node.getBoundingClientRect();
+    const below = rect.bottom + 220 < viewBottom();
+    return panel.kind === "react" ? { left: Math.min(Math.max(rect.left + rect.width / 2, STRIP_HALF), window.innerWidth - STRIP_HALF), top: rect.top - 6, "--bt-origin": "bottom center" } : { left: Math.min(rect.left, window.innerWidth - 208), ...below ? { top: rect.bottom + 4 } : { bottom: viewBottom() - rect.top + 4, "--bt-origin": "bottom left" } };
+  }, [panel, tick]);
   const copy2 = () => {
     void navigator.clipboard?.writeText(text).then(() => {
       setCopied(true);
@@ -5104,10 +5116,10 @@ function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
   return (0, import_react9.createElement)(
     "div",
     { ref: tools, className: "bt-tools", "data-open": panel !== null || tapped || void 0 },
-    react ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Add reaction"), title: t("Add reaction"), "aria-expanded": panel === "react", onClick: (event) => open("react", event) }, (0, import_react9.createElement)(SmileIcon)) : null,
+    react ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Add reaction"), title: t("Add reaction"), "aria-expanded": panel?.kind === "react", onClick: (event) => open("react", event) }, (0, import_react9.createElement)(SmileIcon)) : null,
     sessionId ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Reply"), title: t("Reply"), onClick: () => actions.quote(sessionId, text) }, (0, import_react9.createElement)(ReplyIcon)) : null,
-    (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("More message actions"), title: t("More"), "aria-haspopup": "menu", "aria-expanded": panel === "more", onClick: (event) => open("more", event) }, copied ? (0, import_react9.createElement)(CheckIcon) : (0, import_react9.createElement)(DotsIcon)),
-    panel === "react" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
+    (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("More message actions"), title: t("More"), "aria-haspopup": "menu", "aria-expanded": panel?.kind === "more", onClick: (event) => open("more", event) }, copied ? (0, import_react9.createElement)(CheckIcon) : (0, import_react9.createElement)(DotsIcon)),
+    panel?.kind === "react" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
       "div",
       { ref: pop, className: "bt-react-strip", role: "menu", "aria-label": t("Reactions"), style: place },
       REACTIONS.map((emoji) => (0, import_react9.createElement)("button", { key: emoji, type: "button", role: "menuitem", "aria-label": emoji, onClick: () => {
@@ -5115,7 +5127,7 @@ function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
         react(emoji);
       } }, emoji))
     ), document.body) : null,
-    panel === "more" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
+    panel?.kind === "more" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
       "div",
       { ref: pop, className: "bt-menu", role: "menu", "aria-label": t("Message actions"), style: place },
       item(t("Copy"), CopyIcon, copy2),
@@ -5431,9 +5443,6 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
       return (0, import_react9.createElement)(EarlierUser, { key, row });
     case "answer":
       return (0, import_react9.createElement)(AnsweredReply, { key, node: { data: row } });
-    // A display-only view replays from the blueprint the host kept on the call.
-    case "view":
-      return (0, import_react9.createElement)(WidgetCell, { key, sessionId, callId: row.callId, args: { text: (name) => name === "title" ? row.title : void 0, value: (name) => name === "view" ? row.view : void 0 }, done: true, isError: false, roster, actions });
     case "bot":
       return (0, import_react9.createElement)(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : void 0, msgKey: useUi ? `${sessionId}:${row.time}` : void 0, useUi, fold: FOLD_HUGE });
     case "event": {
@@ -5759,12 +5768,6 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       if (reply.kind === "missed") {
         return (0, import_react9.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} didn't answer in time", { name: bot.name }));
       }
-      if (reply.kind === "dropped") {
-        return (0, import_react9.createElement)("div", { key: `dropped-${index}`, className: "bt-event" }, t("{names} not called: the per-member limit for this round is reached", { names: (reply.names ?? []).join(t(" and ")) }));
-      }
-      if (reply.kind === "quiet") {
-        return (0, import_react9.createElement)("div", { key: `quiet-${index}`, className: "bt-event" }, t("The group went quiet: @ mentions in late replies call nobody until you write here"));
-      }
       if (reply.kind === "resumed") {
         return (0, import_react9.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} was cut off by a restart and picked its work back up", { name: bot.name }));
       }
@@ -5930,16 +5933,6 @@ var import_react10 = require("react");
 var import_react_dom2 = require("react-dom");
 var PHRASE_HOLD_MS = 800;
 var drawPhrase = (pool) => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))]);
-var rowVisible = ({ running, streaming, tools, relaying, bot, room: room2 }) => running && (!streaming || tools.length > 0) && !relaying && (bot !== void 0 || room2 !== void 0);
-var mountMissed = false;
-function findHost() {
-  const node = document.querySelector("[data-chat-flow] [data-chat-running]") ?? document.querySelector("[data-chat-flow]");
-  if (node === null && !mountMissed) {
-    mountMissed = true;
-    noteClientError("activity row", new Error("[data-chat-flow] not found"));
-  }
-  return node;
-}
 function useRunningHost(active) {
   const [host, setHost] = (0, import_react10.useState)(null);
   (0, import_react10.useEffect)(() => {
@@ -5950,10 +5943,8 @@ function useRunningHost(active) {
     let frame = 0;
     const find = () => {
       frame = 0;
-      setHost((prev) => {
-        const node = findHost();
-        return prev === node ? prev : node;
-      });
+      const node = document.querySelector("[data-chat-flow] > [data-chat-running]");
+      setHost((prev) => prev === node ? prev : node);
     };
     const observer = new MutationObserver(() => {
       if (!frame) frame = requestAnimationFrame(find);
@@ -6029,7 +6020,7 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
   const streaming = entries2.some((entry) => entry.text);
   const tools = entries2.filter((entry) => !entry.text).sort((a, b) => a.at - b.at);
   const relaying = tools.some((entry) => entry.relay);
-  const visible = rowVisible({ running, streaming, tools, relaying, bot, room: room2 });
+  const visible = running && !streaming && !relaying && (bot !== void 0 || room2 !== void 0);
   const tool = tools.at(-1);
   const inputRef = (0, import_react10.useRef)(0);
   const inputAt = Math.max(inputRef.current, pendingInput);
@@ -6121,7 +6112,6 @@ var useGroupWork = (useWork, pick2) => useWork ? useWork((work) => JSON.stringif
 var workKeys = (text) => JSON.parse(text);
 var doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching });
 var workLine = (lead, doing, more) => (0, import_react11.createElement)(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ""}`);
-var doingLine = (doing) => (0, import_react11.createElement)(Shimmer, null, `${workPhrase(doing)}…`);
 var waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits?.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
   return names.length === 0 ? "" : t("Waiting for {names}", { names: names.join(t(" and ")) });
@@ -6142,7 +6132,6 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const groups = workKeys(useGroupWork(useWork, (rooms) => Object.entries(rooms).flatMap(([roomId, entries2]) => entries2.filter((entry) => entry.botId === id).map((entry) => ({ id: roomId, ...doingOf(entry) })))));
   const away = !running && groups.length > 0;
   const state = botState(running || away, doing, alert);
-  const runningLine = running && doing ? doingLine(doing) : null;
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t("a group chat"), groups[0], groups.length - 1) : null;
   const waits = workKeys(useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null");
   const waitsFor = state === "waiting" ? waitingFor(roster, waits) : "";
@@ -6189,7 +6178,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       "span",
       { className: "bt-row-body" },
       (0, import_react11.createElement)("span", { className: "bt-row-name" }, (0, import_react11.createElement)("span", { className: "bt-row-title" }, bot.name), pinned ? (0, import_react11.createElement)(PinMark) : null),
-      runningLine ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, runningLine) : awayLine ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, preview) : null
+      awayLine ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react11.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
     wide && unread && !active ? (0, import_react11.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
   );
@@ -6505,11 +6494,13 @@ function UpdateButton({ useUpdate, actions }) {
   const dshRow = showsDshRow(dsh, update?.app);
   if (!update?.available && !dshRow && phase === "idle" && dshPhase === "idle") return null;
   const cloudPhase = phase === "installing" || dshPhase === "installing" ? "installing" : phase !== "idle" ? phase : dshPhase;
-  const toggle = () => {
+  const tick = useViewport();
+  (0, import_react11.useLayoutEffect)(() => {
+    if (!open) return;
     const rect = button.current?.getBoundingClientRect();
     if (rect) setBox({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)), top: rect.bottom + 6 });
-    setOpen((value) => !value);
-  };
+  }, [open, tick]);
+  const toggle = () => setOpen((value) => !value);
   const start = () => {
     setError("");
     void actions.installUpdate().catch((failure) => setError(hostText(failure?.message ?? String(failure))));
@@ -6657,9 +6648,6 @@ function pressSettingsShortcut() {
     metaKey: held.has("meta")
   }));
 }
-var NO_SUBSCRIBE = () => () => {
-};
-var NO_SNAPSHOT = () => null;
 function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboarding, actions }) {
   const [open, setOpen] = (0, import_react11.useState)(false);
   (0, import_react11.useLayoutEffect)(() => {
@@ -6706,53 +6694,13 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
-  const signIn = actions.signInEntry?.() ?? null;
-  const ops = (0, import_react11.useMemo)(() => signIn?.inject?.() ?? {}, [signIn]);
-  const accountSource = ops.hooks?.account;
-  const account = (0, import_react11.useSyncExternalStore)(accountSource?.subscribe ?? NO_SUBSCRIBE, accountSource ? () => accountSource.getSnapshot() : NO_SNAPSHOT);
-  const signedIn = signIn !== null && typeof ops.signOut === "function" && account?.view?.status === "credential-stored";
-  const accountT = actions.accountT?.() ?? ((key) => key);
-  const [confirm, setConfirm] = (0, import_react11.useState)(null);
-  const [busy, setBusy] = (0, import_react11.useState)(false);
-  const [signOutError, setSignOutError] = (0, import_react11.useState)("");
-  const askSignOut = async () => {
-    setSignOutError("");
-    let state = "none";
-    try {
-      if (await ops.hasRunningAccountTasks?.()) state = "running";
-    } catch {
-      state = "unknown";
-    }
-    setConfirm(state);
-  };
-  const cancelSignOut = () => {
-    setConfirm(null);
-    setSignOutError("");
-  };
-  const runSignOut = async () => {
-    setBusy(true);
-    setSignOutError("");
-    try {
-      await ops.signOut();
-      setConfirm(null);
-      setOpen(false);
-    } catch (error) {
-      setSignOutError(String(error?.message ?? error));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const toggle = () => {
+  const tick = useViewport();
+  (0, import_react11.useLayoutEffect)(() => {
+    if (!open) return;
     const rect = button.current?.getBoundingClientRect();
-    if (rect) setBox({ left: rect.left, bottom: window.innerHeight - rect.top + 5 });
-    setOpen((value) => !value);
-  };
-  (0, import_react11.useEffect)(() => {
-    if (open) return;
-    setConfirm(null);
-    setSignOutError("");
-    setBusy(false);
-  }, [open]);
+    if (rect) setBox({ left: rect.left, bottom: viewBottom() - rect.top + 5 });
+  }, [open, tick]);
+  const toggle = () => setOpen((value) => !value);
   const groups = [
     [
       [t("Usage"), GaugeIcon, () => actions.openSettings("usage")],
@@ -6764,7 +6712,6 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
       [t("Switch to classic Agent mode"), SwitchIcon, () => actions.setSurface("agent")]
     ]
   ];
-  if (signedIn) groups.push([[accountT("signOut"), SignOutIcon, askSignOut, void 0, true]]);
   return (0, import_react11.createElement)(
     import_react11.Fragment,
     null,
@@ -6776,29 +6723,16 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
     open && box ? (0, import_react_dom3.createPortal)((0, import_react11.createElement)(
       "div",
       { className: "bt-menu bt-menu-up bt-account-menu", role: "menu", "aria-label": t("Account"), style: box },
-      confirm !== null ? (0, import_react11.createElement)(
-        "div",
-        { className: "bt-confirm", role: "alertdialog", "aria-label": accountT("signOut") },
-        (0, import_react11.createElement)("p", { className: "bt-confirm-text" }, accountT(confirm === "running" ? "signOutRunningDescription" : confirm === "unknown" ? "signOutUnknownDescription" : "signOutDescription")),
-        signOutError !== "" ? (0, import_react11.createElement)("p", { className: "bt-confirm-error", role: "alert" }, signOutError) : null,
-        (0, import_react11.createElement)(
-          "div",
-          { className: "bt-confirm-row" },
-          (0, import_react11.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: cancelSignOut }, t("Cancel")),
-          (0, import_react11.createElement)("button", { type: "button", className: "bt-confirm-go", disabled: busy, onClick: () => {
-            void runSignOut();
-          } }, accountT("signOut"))
-        )
-      ) : groups.map((group, index) => (0, import_react11.createElement)(
+      groups.map((group, index) => (0, import_react11.createElement)(
         import_react11.Fragment,
         { key: index },
         index > 0 ? (0, import_react11.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
-        group.map(([label, Icon, run, hint, stay]) => (0, import_react11.createElement)("button", {
+        group.map(([label, Icon, run, hint]) => (0, import_react11.createElement)("button", {
           key: label,
           type: "button",
           role: "menuitem",
           onClick: () => {
-            if (stay !== true) setOpen(false);
+            setOpen(false);
             void Promise.resolve(run()).catch((error) => actions.reportError(error, "menu"));
           }
         }, (0, import_react11.createElement)(Icon), (0, import_react11.createElement)("span", { className: "bt-menu-label" }, label), hint ? (0, import_react11.createElement)("span", { className: "bt-menu-hint" }, hint) : null))
@@ -6862,14 +6796,6 @@ function BrandName() {
   return (0, import_react11.createElement)("span", { style: { fontWeight: 600, fontSize: 14 } }, "DS Bot");
 }
 var SIDEBAR_CSS = `
-.bt-confirm{width:260px;max-width:72vw;padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px}
-.bt-confirm-text{margin:0;font-size:13px;line-height:19px;color:var(--bt-ink-2)}
-.bt-confirm-error{margin:0;font-size:12px;line-height:17px;color:var(--bt-danger);overflow-wrap:anywhere}
-.bt-confirm-row{display:flex;justify-content:flex-end;gap:8px}
-.bt-menu .bt-confirm button{width:auto;min-height:0}
-.bt-confirm-go{height:28px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent);color:var(--bt-accent-ink);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease}
-.bt-confirm-go:hover:not(:disabled){opacity:.9}
-.bt-confirm-go:disabled{opacity:.6;cursor:default}
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
 .bt-side-top .bt-brand:hover{background:none}
 .bt-brand .bt-mark{flex:none}
@@ -7064,7 +6990,7 @@ function useTranscriptView() {
         divider,
         center: Math.round(box.left + box.width / 2),
         top: Math.round(headerBottom + 8),
-        bottom: Math.round(window.innerHeight - box.bottom + composer + 8)
+        bottom: Math.round(viewBottom() - box.bottom + composer + 8)
       };
       setView((prev) => prev && Object.keys(next).every((key) => prev[key] === next[key]) ? prev : next);
     };
@@ -7073,12 +6999,16 @@ function useTranscriptView() {
     };
     document.addEventListener("scroll", schedule, true);
     window.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
     schedule();
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
       document.removeEventListener("scroll", schedule, true);
       window.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
     };
   }, []);
   return view;
@@ -7276,6 +7206,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
   const [shown, leaving] = useLinger(open, 120);
   const button = (0, import_react13.useRef)(null);
   const menu = (0, import_react13.useRef)(null);
+  const tick = useViewport();
   (0, import_react13.useEffect)(() => {
     if (!open) return void 0;
     const onDown = (event) => {
@@ -7302,8 +7233,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
       setOpen(null);
       return;
     }
-    const rect = button.current.getBoundingClientRect();
-    setOpen({ left: rect.left, bottom: window.innerHeight - rect.top + 8, files: Boolean(fileInput()) });
+    setOpen({ files: Boolean(fileInput()) });
   };
   const attach = () => {
     setOpen(null);
@@ -7318,6 +7248,11 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
     actions.referenceChat(sessionId, inputActions?.captureInsertion?.());
   };
   const canReference = typeof inputActions?.captureInsertion === "function" && actions.canReferenceChat();
+  const place = (0, import_react13.useMemo)(() => {
+    if (!shown || !button.current) return null;
+    const rect = button.current.getBoundingClientRect();
+    return { left: rect.left, bottom: viewBottom() - rect.top + 8 };
+  }, [shown, open, tick]);
   return (0, import_react13.createElement)(
     import_react13.Fragment,
     null,
@@ -7339,7 +7274,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
         className: "bt-menu bt-menu-up bt-plus-menu",
         role: "menu",
         "aria-label": t("Add"),
-        style: { left: shown.left, bottom: shown.bottom },
+        style: place ?? {},
         "data-leaving": leaving || void 0
       },
       shown.files ? (0, import_react13.createElement)("button", { type: "button", role: "menuitem", onClick: attach }, (0, import_react13.createElement)(PaperclipIcon), (0, import_react13.createElement)("span", { className: "bt-menu-label" }, t("Add files"))) : null,
@@ -8050,11 +7985,16 @@ function ModelRows({ roster, current, onPick }) {
 }
 var Caret = () => (0, import_react16.createElement)("svg", { className: "bt-model-caret", width: 12, height: 12, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react16.createElement)("path", { d: "M5.5 8l4.5 4.5L14.5 8" }));
 function useAnchoredMenu() {
+  const [anchor, setAnchor] = (0, import_react16.useState)(null);
   const [place, setPlace] = (0, import_react16.useState)(null);
   const [shownPlace, leaving] = useLinger(place, MENU_EXIT_MS);
   const button = (0, import_react16.useRef)(null);
   const menu = (0, import_react16.useRef)(null);
-  const close = () => setPlace(null);
+  const tick = useViewport();
+  const close = () => {
+    setAnchor(null);
+    setPlace(null);
+  };
   (0, import_react16.useEffect)(() => {
     if (place === null) return void 0;
     const onDown = (event) => {
@@ -8080,13 +8020,15 @@ function useAnchoredMenu() {
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [place]);
-  const open = () => {
+  const open = () => setAnchor({});
+  (0, import_react16.useLayoutEffect)(() => {
+    if (anchor === null || !button.current) return;
     const rect = button.current.getBoundingClientRect();
     const width = Math.max(240, rect.width);
     const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-    const below = window.innerHeight - rect.bottom;
-    setPlace(below >= 260 || below >= rect.top ? { left, width, top: rect.bottom + 4, maxHeight: below - 16, "--bt-origin": "top right" } : { left, width, bottom: window.innerHeight - rect.top + 4, maxHeight: rect.top - 16, "--bt-origin": "bottom right" });
-  };
+    const below = viewBottom() - rect.bottom;
+    setPlace(below >= 260 || below >= rect.top ? { left, width, top: rect.bottom + 4, maxHeight: below - 16, "--bt-origin": "top right" } : { left, width, bottom: viewBottom() - rect.top + 4, maxHeight: rect.top - 16, "--bt-origin": "bottom right" });
+  }, [anchor, tick]);
   return { isOpen: place !== null, shownPlace, leaving, button, menu, open, close };
 }
 function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffort }) {
@@ -8294,7 +8236,7 @@ var MODEL_CSS = `
 .bt-model-tick svg{animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} 60ms backwards}
 .bt-model-none{padding:8px;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
 .bt-model-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:0 0 10px;box-sizing:border-box;animation:bt-model-in ${SPRING_POP.duration}ms ${SPRING_POP.easing} backwards}
-.bt-model-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:30px;max-width:min(560px,calc(100% - 30px));max-height:min(240px,36vh);overflow-y:auto;scrollbar-width:thin}
+.bt-model-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:30px;max-width:min(560px,calc(100% - 30px));max-height:min(240px,36vh);max-height:min(240px,36dvh);overflow-y:auto;scrollbar-width:thin}
 .bt-model-choice-group{display:flex;flex-direction:column;gap:6px;width:100%;min-width:0}
 .bt-model-choice-provider{padding-top:4px;font-size:12px;line-height:16px;font-weight:500;color:var(--bt-ink-2);overflow-wrap:anywhere}
 .bt-model-choice-chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -12173,6 +12115,7 @@ var FEEDBACK_CSS = `
 .bt-fb-code{flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
 .bt-event-error{color:var(--bt-danger,#e02135)}
 .bt-toast{position:fixed;left:50%;bottom:28px;z-index:1000;display:flex;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));padding:8px 8px 8px 14px;border-radius:12px;background:var(--bt-card,#fff);color:var(--bt-ink,#141414);border:1px solid var(--bt-line-2,rgba(0,0,0,.15));box-shadow:0 8px 28px rgba(0,0,0,.14);font-size:13px;line-height:18px;transform:translateX(-50%);animation:bt-toast-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
+.bt-toast{bottom:calc(28px + env(safe-area-inset-bottom,0px))}
 .bt-toast[data-leaving]{opacity:0;transform:translate(-50%,6px) scale(.98);filter:blur(3px);transition:opacity .18s ease-in,transform .18s ease-in,filter .18s ease-in}
 .bt-toast-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
 .bt-toast-text::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--bt-danger,#e02135);margin:0 8px 1px 0}
@@ -12949,11 +12892,12 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
   }, []);
   const ref = (0, import_react34.useRef)(null);
   const [place, setPlace] = (0, import_react34.useState)({ left: menu.x, top: menu.y });
+  const tick = useViewport();
   (0, import_react34.useLayoutEffect)(() => {
     const box = ref.current?.getBoundingClientRect();
     if (!box) return;
-    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, window.innerHeight - box.height - 8)) });
-  }, [menu.x, menu.y]);
+    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, viewBottom() - box.height - 8)) });
+  }, [menu.x, menu.y, tick]);
   if (menu.kind === "agent" || menu.kind === "agent-session") return (0, import_react34.createElement)(AgentMenu, { menu, roster, actions, leaving });
   const bot = roster.byId[menu.id];
   const room2 = roster.roomsById[menu.id];
@@ -13008,11 +12952,12 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
 function AgentMenu({ menu, roster, actions, leaving }) {
   const ref = (0, import_react34.useRef)(null);
   const [place, setPlace] = (0, import_react34.useState)({ left: menu.x, top: menu.y });
+  const tick = useViewport();
   (0, import_react34.useLayoutEffect)(() => {
     const box = ref.current?.getBoundingClientRect();
     if (!box) return;
-    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, window.innerHeight - box.height - 8)) });
-  }, [menu.x, menu.y]);
+    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, viewBottom() - box.height - 8)) });
+  }, [menu.x, menu.y, tick]);
   const agent = roster.agentsById[menu.kind === "agent" ? menu.id : menu.agentId];
   if (agent === void 0) return null;
   const groups = menu.kind === "agent" ? [
