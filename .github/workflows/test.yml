@@ -253,11 +253,12 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Check the packaged app
         run: xvfb-run -a node scripts/check-packed.mjs
-      # apt-get, not dpkg: it also installs the deb's dependencies.
+      # apt-get, not dpkg: it also installs the deb's dependencies. The ./ prefix makes apt-get
+      # read a file; without it the path is taken for a package name.
       - name: Install the deb and check
         run: |
           version="$(node -p "require('./package.json').version")"
-          sudo apt-get install -y "dist-pack/DeepSeek-Bot-$version-linux-amd64.deb"
+          sudo apt-get install -y "./dist-pack/DeepSeek-Bot-$version-linux-amd64.deb"
           test -f /usr/share/applications/deepseek-bot.desktop
           xvfb-run -a node scripts/check-packed.mjs "/opt/DeepSeek Bot/deepseek-bot"
       # A deb cannot update itself: it points at the release page, as on macOS.
