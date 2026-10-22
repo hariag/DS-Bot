@@ -207,6 +207,18 @@ test('in the Desktop profile read_browser is the last tool and reads through the
   assert.equal((await call('state', {})).value.browser, true)
 })
 
+test('the desktop app has read_browser too; DSH Web does not', (t) => {
+  process.env.DS_BOT_APP = '1'
+  t.after(() => { delete process.env.DS_BOT_APP })
+  const app = start(TEAM, { services: { profileContext: { name: 'ds-bot' } } })
+  t.after(app.stop)
+  assert.ok(app.ctx.calls.includes('tool read_browser'))
+  delete process.env.DS_BOT_APP
+  const web = start(TEAM, { services: { profileContext: { name: 'web' } } })
+  t.after(web.stop)
+  assert.ok(!web.ctx.calls.includes('tool read_browser'))
+})
+
 test('config.browser turns Bot browsers off even in the Desktop profile', (t) => {
   const { ctx, stop } = start(TEAM, { config: { browser: false }, services: { profileContext: { name: 'desktop' } } })
   t.after(stop)

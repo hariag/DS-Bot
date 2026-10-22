@@ -234,7 +234,7 @@ const ZH = {
   Rename: '重命名',
   'Add instructions in Bot settings': '在 Bot 设置里添加说明',
   'No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.': '还没有定时任务。要添加，在对话里告诉 Bot 做什么、什么时候做。',
-  'The browser is in the DSH Desktop app.': '浏览器在 DSH 桌面版应用里。',
+  'The browser is in DSH Desktop and the DeepSeek Bot app.': '浏览器在 DSH 桌面版和 DeepSeek Bot 应用里。',
   'New tab': '新标签页',
   'Close tab': '关闭标签页',
   'Open {title}': '打开 {title}',

@@ -2,7 +2,7 @@
 
 - 日期：2026-10-08 定 Bot 浏览器，2026-10-09 定读网页和密钥卡，之后补了连接器
 - 相关：#114（链接在 Bot 浏览器里打开）、#128（关掉 auto 搜索后的恢复）、#184（opencode 路由的 `web_search`）
-- 代码：`ds-bot/src/host/browser.js`、`src/client/bot-browsers.js`、`src/client/read-page.js`、`ds-bot/web-search.js`、`src/host/secrets.js`、`src/host/connectors.js`
+- 代码：`ds-bot/src/host/browser.js`、`src/client/bot-browsers.js`、`app/src/bot-browser.mjs`、`src/client/read-page.js`、`ds-bot/web-search.js`、`src/host/secrets.js`、`src/host/connectors.js`
 
 ## 为什么
 
@@ -15,9 +15,11 @@ Bot 要替用户在网上做事，就会碰到两类东西：网页，以及登�
 
 ## 已定的行为
 
-### Bot 浏览器（只在 DSH Desktop 里有）
+### Bot 浏览器（DSH Desktop 和桌面应用里有）
 
 - 每个 Bot 有自己的浏览器面板，可以开多个标签页。每个标签页是一个 Electron webview，放在这个 Bot 自己的存储分区里（`bot:<id>`）。同一个 Bot 的标签页共用登录状态，不同 Bot 之间的 cookie 和登录状态不互通。
+- DSH Desktop 只把分区放在内存里，退出就没了。桌面应用把分区存在应用自己的目录里（不在数据位置里），退出再打开还是登录状态；删掉 Bot 时一起清掉。
+- 桌面应用自己提供浏览器桥，接口和 DSH Desktop 的一样。主进程只让它发过租约的 webview 挂上，并固定 webview 的设置：开沙箱、不给 Node、拒绝权限请求和下载、不许打开应用自己的本机端口；页面要开新窗口时改成同一个 Bot 的新标签。
 - 页面由用户操作。Bot 的 `read_browser` 只读当前标签页：标题、地址，以及可见内容转成的 Markdown。链接和控件在文中标成 `[#n]`，并列出目标。长页面分段读，用 `from` 接着读。
 - 能读进 Web Components（open shadow DOM）和同源 iframe。读不了跨域 iframe（只给出它们的名字）、canvas 上画的字和隐藏的内容。
 - `read_browser` **不能点击、输入、滚动或打开页面**。工具说明里要求 Bot 把页面内容当作数据，不当作指令。
@@ -61,7 +63,7 @@ Bot 要替用户在网上做事，就会碰到两类东西：网页，以及登�
 
 ## 已知限制
 
-- Bot 浏览器只在 DSH Desktop 里有，DSH Web 没有。
+- Bot 浏览器只在 DSH Desktop 和桌面应用里有，DSH Web 没有。
 - 历史消息里的链接还不能直接在 Bot 浏览器里打开（#114）。
 - 关掉 `auto` 搜索以后，`web_search` 可能报错，恢复方法见 #128。
 - 用 opencode 路由时，原生搜索缺少 `x-opencode-session`（#184）。
@@ -73,4 +75,4 @@ Bot 要替用户在网上做事，就会碰到两类东西：网页，以及登�
 - 2026-10-08：每个 Bot 一个浏览器，由用户操作，Bot 只读。
 - 2026-10-09：`read_browser` 读成 Markdown 并标注链接和控件；密钥卡和替换规则。
 - 之后：加了多标签页、最多 6 个活着的页面、GitHub 连接器。
-- 2026-10-21：操作浏览器改由可选插件来做，见 [浏览器插件](2026-10-21-browser-plugins.md)。不配插件时，这一篇的只读行为不变。
+- 2026-10-23：桌面应用里也有 Bot 浏览器，登录保存在应用自己的目录里，#449。

@@ -39,7 +39,7 @@ export function requestAllowed(value, origin) {
 }
 
 const keyOf = (key) => {
-  if (typeof key !== 'string' || key.length === 0 || key.length > KEY_MAX) throw new Error('DS Bot: a browser storage key is required')
+  if (typeof key !== 'string' || key.length === 0 || key.length > KEY_MAX) throw new Error('DeepSeek Bot: a browser storage key is required')
   return key
 }
 
@@ -47,7 +47,6 @@ export class BotBrowserGuests {
   /** @type {Map<string, {owner: any, partition: string, attached: boolean, guest?: any}>} */
   #leases = new Map()
   #configured = new Set()
-  #downloadHandlers = new Map()
 
   /**
    * @param {{ session: any, origin: () => string | undefined, devTools: boolean }} options - Electron's
@@ -61,34 +60,22 @@ export class BotBrowserGuests {
 
   /** One guest in the key's partition: an opaque lease and the partition approved for it. */
   acquire(owner, key) {
-    const { partition } = this.storageFor(key)
+    const partition = partitionOf(keyOf(key))
+    if (!this.#configured.has(partition)) {
+      this.#configure(this.session.fromPartition(partition))
+      this.#configured.add(partition)
+    }
     const lease = randomUUID()
     this.#leases.set(lease, { owner, partition, attached: false })
     return { lease, partition }
   }
 
-  /** Return the configured storage used by both the legacy guest and main-owned views. */
-  storageFor(key) {
-    const partition = partitionOf(keyOf(key))
-    if (!this.#configured.has(partition)) {
-      this.#configure(this.session.fromPartition(partition), partition)
-      this.#configured.add(partition)
-    }
-    return { partition, storage: this.session.fromPartition(partition) }
-  }
-
-  setDownloadHandler(key, handler) {
-    const { storage, partition } = this.storageFor(key)
-    this.#downloadHandlers.set(partition, handler)
-    return storage
-  }
-
   /** Close a lease's guest; its partition's storage stays. */
   async release(owner, id) {
-    if (typeof id !== 'string') throw new Error('DS Bot: invalid browser lease')
+    if (typeof id !== 'string') throw new Error('DeepSeek Bot: invalid browser lease')
     const lease = this.#leases.get(id)
     if (lease === undefined) return
-    if (lease.owner !== owner) throw new Error('DS Bot: the browser lease belongs to another window')
+    if (lease.owner !== owner) throw new Error('DeepSeek Bot: the browser lease belongs to another window')
     this.#leases.delete(id)
     const guest = lease.guest
     if (guest !== undefined && !guest.isDestroyed()) {
@@ -106,7 +93,6 @@ export class BotBrowserGuests {
     const storage = this.session.fromPartition(partition)
     await storage.clearStorageData()
     await storage.clearCache()
-    this.#downloadHandlers.delete(partition)
   }
 
   /** Install the attachment checks before the window's page can create a webview. */
@@ -177,16 +163,12 @@ export class BotBrowserGuests {
     owner.once('destroyed', releaseAll)
   }
 
-  #configure(storage, partition) {
+  #configure(storage) {
     storage.setPermissionRequestHandler((_contents, _permission, callback) => { callback(false) })
     storage.setPermissionCheckHandler(() => false)
     storage.setDevicePermissionHandler(() => false)
     storage.setDisplayMediaRequestHandler((_request, callback) => { callback({}) })
-    storage.on('will-download', (event, item, source) => {
-      const handler = this.#downloadHandlers.get(partition)
-      if (handler) handler(event, item, source)
-      else event.preventDefault()
-    })
+    storage.on('will-download', (event) => { event.preventDefault() })
     storage.webRequest.onBeforeRequest((details, callback) => { callback({ cancel: !requestAllowed(details.url, this.origin()) }) })
   }
 }

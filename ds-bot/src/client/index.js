@@ -224,9 +224,9 @@ export function apply(ctx) {
     }, 'ds-bot: app update status')
   }
 
-  // Bot browsers need the Desktop shell's webview bridge, and the host serves
-  // read_browser only in the Desktop profile (`browser` in the state).
-  const bridge = window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser ?? null : null
+  // Bot browsers need a webview bridge: DSH Desktop's, or the desktop app's of the
+  // same shape. The host serves read_browser only in those two (`browser` in the state).
+  const bridge = (window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser : globalThis.dsBotApp?.browser) ?? null
   const browsers = bridge ? createBotBrowsers({ bridge, createSource }) : null
   if (browsers) {
     ctx.effect(() => {

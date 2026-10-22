@@ -267,7 +267,7 @@ var ZH = {
   Rename: "重命名",
   "Add instructions in Bot settings": "在 Bot 设置里添加说明",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "还没有定时任务。要添加，在对话里告诉 Bot 做什么、什么时候做。",
-  "The browser is in the DSH Desktop app.": "浏览器在 DSH 桌面版应用里。",
+  "The browser is in DSH Desktop and the DeepSeek Bot app.": "浏览器在 DSH 桌面版和 DeepSeek Bot 应用里。",
   "New tab": "新标签页",
   "Close tab": "关闭标签页",
   "Open {title}": "打开 {title}",
@@ -13548,7 +13548,7 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
     actions.browserEnsure?.(bot.id);
   }, [bot.id]);
   if (roster.browser !== true || !actions.browserShow) {
-    return (0, import_react36.createElement)("div", { className: "bt-muted" }, t("The browser is in the DSH Desktop app."));
+    return (0, import_react36.createElement)("div", { className: "bt-muted" }, t("The browser is in DSH Desktop and the DeepSeek Bot app."));
   }
   if (state.ids.length === 0) {
     return (0, import_react36.createElement)(
@@ -14961,6 +14961,7 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
   const pages = createSource2({});
   const store = sharedMap(STORE_KEY, storage);
   let saved = store.read();
+  const seen = /* @__PURE__ */ new Set();
   let layer;
   let shown = null;
   let rect = null;
@@ -15239,6 +15240,8 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
       return rest;
     });
     save(botId, void 0);
+    seen.delete(botId);
+    await bridge.forget?.(`bot:${botId}`)?.catch((error) => console.warn("[ds-bot] browser forget", error));
   }
   return {
     tabs,
@@ -15298,8 +15301,9 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     /** Forget every Bot outside `botIds`, as when Bots were deleted from another window. */
     retain(botIds) {
       const keep = new Set(botIds);
-      const known = /* @__PURE__ */ new Set([...Object.keys(tabs.getSnapshot()), ...Object.keys(saved), ...owner.values()]);
+      const known = /* @__PURE__ */ new Set([...Object.keys(tabs.getSnapshot()), ...Object.keys(saved), ...owner.values(), ...seen]);
       for (const entry of views.values()) known.add(entry.botId);
+      for (const botId of keep) seen.add(botId);
       return Promise.all([...known].filter((botId) => !keep.has(botId)).map(forget));
     },
     dispose() {
@@ -15750,7 +15754,7 @@ function apply(ctx) {
       };
     }, "ds-bot: app update status");
   }
-  const bridge = window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser ?? null : null;
+  const bridge = (window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser : globalThis.dsBotApp?.browser) ?? null;
   const browsers = bridge ? createBotBrowsers({ bridge, createSource }) : null;
   if (browsers) {
     ctx.effect(() => {

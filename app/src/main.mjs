@@ -1,7 +1,7 @@
 // Electron main process: one window for the Bot team, served by the app's own DSH Host.
 // The window loads the Host's loopback address as DSH Web does: DSH's sign-in sends the page's
 // origin as the address the browser comes back to, and accepts only a loopback one.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { release } from 'node:os'
@@ -10,6 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
+import { BotBrowserGuests } from './bot-browser.mjs'
 import { canonicalExecPath } from './canonical-path.mjs'
 import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
 import { hostPort } from './host-port.mjs'
@@ -23,6 +24,7 @@ import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './wi
 const IPC = {
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
+  browserAcquire: 'ds-bot:browser-acquire', browserRelease: 'ds-bot:browser-release', browserForget: 'ds-bot:browser-forget',
 }
 const MOVE_PROBLEMS = { drive: 'moveDrive', nested: 'moveNested', workspace: 'moveWorkspace', program: 'inProgram', notEmpty: 'moveNotEmpty' }
 const UPDATE_CHECK_WAIT_MS = 15_000
@@ -51,6 +53,7 @@ let places
 let choosing
 let copying
 const copyAbort = new AbortController()
+const browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
 
 // A packaged app started through an 8.3 short path or a junction restarts once on the
 // canonical path: the lock below and every path the Host sees then agree with the long
@@ -140,6 +143,19 @@ async function start() {
   ipcMain.handle(IPC.moveData, (event, workspace) => {
     assertWindow(event)
     return fixed ? false : moveData(typeof workspace === 'string' && isAbsolute(workspace) ? workspace : places.workspace)
+  })
+  // ds-bot's Bot browsers: one webview per lease, in the storage of the Bot's key.
+  ipcMain.handle(IPC.browserAcquire, (event, key) => {
+    assertWindow(event)
+    return browserGuests.acquire(event.sender, key)
+  })
+  ipcMain.handle(IPC.browserRelease, (event, lease) => {
+    assertWindow(event)
+    return browserGuests.release(event.sender, lease)
+  })
+  ipcMain.handle(IPC.browserForget, (event, key) => {
+    assertWindow(event)
+    return browserGuests.forget(event.sender, key)
   })
   // The plugin keeps the team workspace; the app remembers it for its own checks.
   ipcMain.on(IPC.teamWorkspace, (event, path) => {
@@ -371,13 +387,14 @@ function createWindow() {
       ...(mica ? { backgroundMaterial: 'mica' } : {}),
     } : {}),
     webPreferences: {
-      preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true,
+      preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true, webviewTag: true,
       additionalArguments: [`--ds-bot-origin=${origin}`, ...(win32 ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(mica ? ['--ds-bot-mica'] : [])] : [])],
     },
   })
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
   mainWindow.on('page-title-updated', (event) => { event.preventDefault() })
   mainWindow.on('closed', () => { mainWindow = undefined })
+  browserGuests.bind(mainWindow)
   const contents = mainWindow.webContents
   if (win32) {
     // Fullscreen hides the caption buttons, and the page drops its band meanwhile. A reload
@@ -393,7 +410,7 @@ function createWindow() {
   }
   contents.setWindowOpenHandler(({ url }) => {
     // DSH's sign-in opens a blank window during the click and sends it to the sign-in page later.
-    if (url === 'about:blank') return { action: 'allow', overrideBrowserWindowOptions: { show: false, webPreferences: { sandbox: true } } }
+    if (url === 'about:blank') return { action: 'allow', overrideBrowserWindowOptions: { show: false, webPreferences: { sandbox: true, webviewTag: false } } }
     openOutside(url)
     return { action: 'deny' }
   })

@@ -66,14 +66,14 @@ function RunStats({ bot, part, running, actions }) {
       h('span', { title: entry.title }, entry.text))))
 }
 
-// The Bot's browser inside the details page: its tabs as small window cards on
-// Desktop, a pointer there on web.
+// The Bot's browser inside the details page: its tabs as small window cards in the
+// desktop apps, a pointer there on web.
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
   const state = useBrowserTabs(map => map[bot.id] ?? EMPTY_TABS)
   const pages = useBrowserPages(map => map)
   useEffect(() => { actions.browserEnsure?.(bot.id) }, [bot.id])
   if (roster.browser !== true || !actions.browserShow) {
-    return h('div', { className: 'bt-muted' }, t('The browser is in the DSH Desktop app.'))
+    return h('div', { className: 'bt-muted' }, t('The browser is in DSH Desktop and the DeepSeek Bot app.'))
   }
   if (state.ids.length === 0) {
     return h('div', { className: 'bt-browser-empty-mark' },
