@@ -1,11 +1,11 @@
-// Drive two real browser stacks with the configured benchmark model:
+// Drive two real browser stacks with DeepSeek V4.1 Flash:
 // Microsoft @playwright/mcp, and the published npm package dsh-plugin-browser-use.
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { completeBench, benchConfig } from './deepseek.js'
+import { completeDeepseek } from '../../ds-bot/src/host/browser/deepseek.js'
 
 const ORIGIN = process.env.FIXTURE_ORIGIN
-const CHROME = process.env.CHROME_PATH
+const CHROME = '/home/ubuntu/.cache/ms-playwright/chromium-1193/chrome-linux/chrome'
 const which = (process.env.UPSTREAM_TOOLS ?? 'mcp,dsh').split(',')
 
 const TASKS = [
@@ -31,7 +31,7 @@ async function runLoop({ tools, call, goal, maxSteps = 8 }) {
   ]
   const trace = []
   for (let step = 0; step < maxSteps; step += 1) {
-    const response = await completeBench({ messages, tools })
+    const response = await completeDeepseek({ messages, tools })
     const message = response.choices?.[0]?.message ?? {}
     const calls = message.tool_calls ?? []
     messages.push({
@@ -257,8 +257,7 @@ async function runDsh() {
 
 const { writeFile } = await import('node:fs/promises')
 const outPath = new URL('./out/upstream-tools.json', import.meta.url)
-const { model, baseUrl } = benchConfig()
-const out = { model: model ?? '', endpoint: baseUrl ?? '' }
+const out = { model: 'deepseek-v4.1-flash', endpoint: 'https://amr-link.open-design.ai/v1' }
 const save = () => writeFile(outPath, JSON.stringify(out, null, 2))
 if (which.includes('mcp')) {
   try { out.playwrightMcp = await runMcp() } catch (error) { out.playwrightMcpError = String(error).slice(0, 500) }

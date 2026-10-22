@@ -86,6 +86,11 @@ export function startFixture() {
       res.end(page('Who', req.headers.cookie || '(no cookie)'))
       return
     }
+    if (url.pathname === '/posted') {
+      res.setHeader('content-type', 'text/plain; charset=utf-8')
+      res.end(posted.join('\n'))
+      return
+    }
     if (url.pathname === '/login' && req.method === 'POST') {
       const chunks = []
       for await (const chunk of req) chunks.push(chunk)
