@@ -647,6 +647,34 @@ test('a user message mid-round restarts the relay count for the calls after it',
   assert.equal(state.relays, 1)
 })
 
+// A group the user has not written in since the limit came in carries no count at
+// all: a Bot's own post must count from zero, not from NaN, and still park.
+test('a round a Bot opens counts relays from nothing, and parks past the limit', async (t) => {
+  const { call, emit, relay, answer, stop, sent, rt, ctx, home } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  await call('update-room', { id: room.id, mode: 'admin', relayLimit: 1 })
+  const state = rt.state.rooms[room.id]
+  const chief = rt.state.mainBotIds[0]
+  assert.equal(state.relays, undefined, 'no user message ever: there is no count yet')
+
+  sent.length = 0
+  const posted = await ctx.registeredTools.get('post_to_group').execute({ group: 'R1', message: '@Writer ping' }, { agent: { id: rt.chatOf(chief) } })
+  assert.match(posted, /^Posted in "R1"/)
+  const post = sent.find(entry => entry.sessionId === room.id && entry.message.source.role === 'post')
+  assert.ok(post, 'the Bot\'s post reached the group Session')
+  await emit(room.id, { type: 'user/message', data: { source: post.message.source, content: post.message.content } })
+  const running = relay(room.id, 'relay')
+  const first = await turnFor(sent)
+  await answer(first.sessionId, first.message.source.exchangeId, '@Chief back', 1)
+  await running
+  // The first call ran as relay 1; the call it made is over the limit and parked.
+  assert.equal(state.relays, 1)
+  assert.deepEqual(state.paused.map(entry => entry.name), ['Chief'])
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).rooms[room.id]
+  assert.equal(saved.relays, 1, 'a whole number is saved, not NaN')
+})
+
 test('the relay limit is the user\'s to set, not a member\'s', async (t) => {
   const { call, stop, rt } = start()
   t.after(stop)

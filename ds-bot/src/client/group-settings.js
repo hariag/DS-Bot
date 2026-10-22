@@ -39,7 +39,7 @@ function RelayLimitRow({ room, update }) {
   }
   return h(Row, { label: t('Pause Bot relays after'), hint: t('Counted since your last message in this group.') },
     h('input', {
-      className: 'bt-bs-input', type: 'number', min: 1, max: 200,
+      className: 'bt-bs-input bt-bs-num', type: 'number', min: 1, max: 200,
       placeholder: String(room.relayLimitDefault ?? ''), value: draft,
       'aria-label': t('Pause Bot relays after'),
       onChange: event => setDraft(event.target.value),

@@ -858,9 +858,10 @@ export const CONVERSATION_CSS = `
 .bt-think-text[data-fade=both]{mask-image:linear-gradient(to bottom,transparent,#000 18px,#000 calc(100% - 18px),transparent)}
 .bt-event{display:flex;justify-content:center;align-items:center;gap:2px;min-height:24px;margin:2px 0;font-size:12px;line-height:16px;color:var(--bt-ink-2);flex-wrap:wrap}
 .bt-event>span{padding:0 2px}
-.bt-event button{border:0;background:none;color:inherit;font:inherit;display:inline-flex;align-items:center;gap:4px;cursor:pointer;height:24px;padding:4px 6px 4px 4px;border-radius:999px;box-sizing:border-box;transition:background-color .12s ease}
-.bt-event button:hover{background:var(--bt-hover)}
-.bt-event button:active{background:var(--bt-active)}
+.bt-event button:not(.bt-soft){border:0;background:none;color:inherit;font:inherit;display:inline-flex;align-items:center;gap:4px;cursor:pointer;height:24px;padding:4px 6px 4px 4px;border-radius:999px;box-sizing:border-box;transition:background-color .12s ease}
+.bt-event button:not(.bt-soft):hover{background:var(--bt-hover)}
+.bt-event button:not(.bt-soft):active{background:var(--bt-active)}
+.bt-event .bt-soft{margin-left:6px}
 .bt-event button.bt-event-whole{min-width:0;max-width:100%;padding:4px 6px 4px 8px}
 .bt-event-whole>*{flex:none}
 .bt-event-whole>span:first-child{margin-right:2px}

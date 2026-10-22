@@ -2982,9 +2982,10 @@ var CONVERSATION_CSS = `
 .bt-think-text[data-fade=both]{mask-image:linear-gradient(to bottom,transparent,#000 18px,#000 calc(100% - 18px),transparent)}
 .bt-event{display:flex;justify-content:center;align-items:center;gap:2px;min-height:24px;margin:2px 0;font-size:12px;line-height:16px;color:var(--bt-ink-2);flex-wrap:wrap}
 .bt-event>span{padding:0 2px}
-.bt-event button{border:0;background:none;color:inherit;font:inherit;display:inline-flex;align-items:center;gap:4px;cursor:pointer;height:24px;padding:4px 6px 4px 4px;border-radius:999px;box-sizing:border-box;transition:background-color .12s ease}
-.bt-event button:hover{background:var(--bt-hover)}
-.bt-event button:active{background:var(--bt-active)}
+.bt-event button:not(.bt-soft){border:0;background:none;color:inherit;font:inherit;display:inline-flex;align-items:center;gap:4px;cursor:pointer;height:24px;padding:4px 6px 4px 4px;border-radius:999px;box-sizing:border-box;transition:background-color .12s ease}
+.bt-event button:not(.bt-soft):hover{background:var(--bt-hover)}
+.bt-event button:not(.bt-soft):active{background:var(--bt-active)}
+.bt-event .bt-soft{margin-left:6px}
 .bt-event button.bt-event-whole{min-width:0;max-width:100%;padding:4px 6px 4px 8px}
 .bt-event-whole>*{flex:none}
 .bt-event-whole>span:first-child{margin-right:2px}
@@ -9638,6 +9639,7 @@ label.bt-bs-row{cursor:text}
 .bt-bs-input:hover{background:var(--bt-hover)}
 .bt-bs-input:focus{background:var(--bt-main);border-color:var(--bt-line-2);text-align:left}
 .bt-bs-input::placeholder{color:var(--bt-ink-3)}
+.bt-bs-input.bt-bs-num{flex:0 0 72px;min-width:0}
 .bt-bs-stack{flex-direction:column;align-items:stretch;gap:8px}
 .bt-bs-area{flex:none;width:auto;min-height:112px;height:auto;margin:0 -6px -4px;padding:8px;line-height:19px;text-align:left;resize:vertical;background:var(--bt-hover)}
 .bt-bs-area:hover{background:var(--bt-active)}
@@ -10509,7 +10511,7 @@ function RelayLimitRow({ room: room2, update }) {
     Row,
     { label: t("Pause Bot relays after"), hint: t("Counted since your last message in this group.") },
     (0, import_react27.createElement)("input", {
-      className: "bt-bs-input",
+      className: "bt-bs-input bt-bs-num",
       type: "number",
       min: 1,
       max: 200,

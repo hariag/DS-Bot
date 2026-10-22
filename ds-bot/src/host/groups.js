@@ -478,7 +478,7 @@ export function install(rt) {
           if (!(round.parked ??= []).includes(slot.name)) round.parked.push(slot.name)
           continue
         }
-        room.relays += 1
+        room.relays = (room.relays ?? 0) + 1
       }
       slot.status = 'speaking'
       round.speaking = member.id
