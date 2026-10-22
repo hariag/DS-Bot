@@ -308,8 +308,16 @@ test('letter keys answer a card only while it is the sole open card with keys', 
   const firstView = mount(firstCard.type, firstCard.props)
   const secondView = mount(secondCard.type, secondCard.props)
   firstView.render()
+  // A lone card advertises its keys: both options and the own-answer row.
+  assert.equal(all(firstView.render(), node => node.props.className === 'bt-key').length, 3)
   secondView.render()
   assert.equal(keys.size, 2)
+  // With two cards open neither shows letters for keys it will not answer.
+  assert.equal(all(firstView.render(), node => node.props.className === 'bt-key').length, 0)
+  const both = secondView.render()
+  assert.equal(all(both, node => node.props.className === 'bt-key').length, 0)
+  assert.ok(options(both).every(option => option.props['aria-keyshortcuts'] === undefined))
+  assert.equal(field(both).props['aria-keyshortcuts'], undefined)
   const key = () => ({ key: 'a', target: null, preventDefault() { this.defaultPrevented = true } })
   const shared = key()
   for (const listener of [...keys]) listener(shared)
@@ -318,6 +326,11 @@ test('letter keys answer a card only while it is the sole open card with keys', 
   assert.equal(answers.length, 0)
   firstView.unmount()
   assert.equal(keys.size, 1)
+  // Alone again, the surviving card brings its letters back.
+  const alone = secondView.render()
+  assert.equal(all(alone, node => node.props.className === 'bt-key').length, 3)
+  assert.ok(options(alone).every(option => option.props['aria-keyshortcuts'] !== undefined))
+  assert.equal(field(alone).props['aria-keyshortcuts'], 'c')
   for (const listener of [...keys]) listener(key())
   await tick()
   assert.deepEqual(answers, [['chief', 'second', { selected: ['Short'], custom: '' }]])

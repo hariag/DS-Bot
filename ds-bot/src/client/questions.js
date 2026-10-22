@@ -77,12 +77,12 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
     onInteract?.()
     onAnswer({ selected: multi ? picked : [], ...(custom ? { custom } : {}) })
   }
-  useOptionKeys(busy ? 0 : options.length, index => choose(options[index].label), ownRef)
+  const hints = useOptionKeys(busy ? 0 : options.length, index => choose(options[index].label), ownRef)
   const ownLetter = options.length > 0 ? keyLetter(options.length) : undefined
   const field = ownAnswer ? h('textarea', {
     ref: ownRef, rows: 1, value: own, readOnly: busy, autoComplete: 'off', spellCheck: false, className: 'bt-q-input',
     'aria-label': t('Your own answer'), placeholder: t('Type your own answer'),
-    'aria-keyshortcuts': ownLetter?.toLowerCase(),
+    'aria-keyshortcuts': hints ? ownLetter?.toLowerCase() : undefined,
     onChange: (event) => { if (!busy) { onInteract?.(); setOwn(event.target.value) } },
     onKeyDown: (event) => {
       if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
@@ -95,10 +95,10 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
     return h('button', {
       key: option.label, type: 'button', className: 'bt-q-opt', disabled: busy,
       'aria-pressed': multi ? selected : undefined,
-      'aria-keyshortcuts': keyLetter(optionIndex).toLowerCase(),
+      'aria-keyshortcuts': hints ? keyLetter(optionIndex).toLowerCase() : undefined,
       onClick: () => choose(option.label),
     },
-    h('span', { className: 'bt-key', 'aria-hidden': true }, keyLetter(optionIndex)),
+    hints ? h('span', { className: 'bt-key', 'aria-hidden': true }, keyLetter(optionIndex)) : null,
     h('span', { className: 'bt-q-body' },
       h('span', { className: 'bt-q-label' }, option.label),
       option.description ? h('span', { className: 'bt-q-desc' }, option.description) : null),
@@ -107,7 +107,7 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
   // Raised cards keep the custom answer as one more keyed row; bubbles put it below the list.
   if (raised && field) {
     rows.push(h('label', { key: 'own', className: 'bt-q-opt bt-q-ownrow', 'data-filled': custom !== '' ? '' : undefined },
-      ownLetter ? h('span', { className: 'bt-key', 'aria-hidden': true }, ownLetter) : null,
+      hints && ownLetter ? h('span', { className: 'bt-key', 'aria-hidden': true }, ownLetter) : null,
       h('span', { className: 'bt-q-body' }, field)))
   }
   let foot = null

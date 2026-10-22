@@ -3700,7 +3700,7 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
     onInteract?.();
     onAnswer({ selected: multi ? picked : [], ...custom ? { custom } : {} });
   };
-  useOptionKeys(busy ? 0 : options.length, (index) => choose(options[index].label), ownRef);
+  const hints = useOptionKeys(busy ? 0 : options.length, (index) => choose(options[index].label), ownRef);
   const ownLetter = options.length > 0 ? keyLetter(options.length) : void 0;
   const field = ownAnswer ? (0, import_react5.createElement)("textarea", {
     ref: ownRef,
@@ -3712,7 +3712,7 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
     className: "bt-q-input",
     "aria-label": t("Your own answer"),
     placeholder: t("Type your own answer"),
-    "aria-keyshortcuts": ownLetter?.toLowerCase(),
+    "aria-keyshortcuts": hints ? ownLetter?.toLowerCase() : void 0,
     onChange: (event) => {
       if (!busy) {
         onInteract?.();
@@ -3735,10 +3735,10 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
         className: "bt-q-opt",
         disabled: busy,
         "aria-pressed": multi ? selected : void 0,
-        "aria-keyshortcuts": keyLetter(optionIndex).toLowerCase(),
+        "aria-keyshortcuts": hints ? keyLetter(optionIndex).toLowerCase() : void 0,
         onClick: () => choose(option.label)
       },
-      (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(optionIndex)),
+      hints ? (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, keyLetter(optionIndex)) : null,
       (0, import_react5.createElement)(
         "span",
         { className: "bt-q-body" },
@@ -3752,7 +3752,7 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
     rows.push((0, import_react5.createElement)(
       "label",
       { key: "own", className: "bt-q-opt bt-q-ownrow", "data-filled": custom !== "" ? "" : void 0 },
-      ownLetter ? (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, ownLetter) : null,
+      hints && ownLetter ? (0, import_react5.createElement)("span", { className: "bt-key", "aria-hidden": true }, ownLetter) : null,
       (0, import_react5.createElement)("span", { className: "bt-q-body" }, field)
     ));
   }
