@@ -416,7 +416,11 @@ var ZH = {
   "Unread marks, badges, and the brand mark.": "未读标记、徽标和品牌标志。",
   "Theme accent": "主题强调色",
   "Custom accent": "自定义强调色",
+  "Message layout": "消息布局",
+  Bubble: "气泡",
+  Flat: "平铺",
   "Bubble width": "气泡宽度",
+  "Text width": "正文宽度",
   "Bots · {count}": "Bot · {count}",
   "First in the sidebar. Pick another Bot to hand it the role; {name} then stops being a Main Bot.": "排在侧栏最上面。选另一个 Bot 就会把主 Bot 交给它，{name} 随之不再是主 Bot。",
   "Choose a Bot…": "选择一个 Bot…",
@@ -1693,7 +1697,9 @@ function registerTheme(id, theme) {
 var allThemes = () => ({ ...THEMES, ...customThemes });
 var MESSAGE_WIDTH = { min: 50, max: 100, step: 5 };
 var percent = (value, initial) => Number.isInteger(value) && value >= MESSAGE_WIDTH.min && value <= MESSAGE_WIDTH.max ? value : initial;
+var layoutOf = (prefs) => prefs?.layout === "flat" ? "flat" : "bubble";
 var widthOf = (prefs) => percent(prefs?.width, 80);
+var flatWidthOf = (prefs) => percent(prefs?.flatWidth, 100);
 
 // src/shared/mentions.js
 var ALL_WORDS = ["all", "everyone", "所有人", "全体"];
@@ -2360,8 +2366,8 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-pill[data-memory=updated]:is(:hover,:focus-visible,[aria-expanded=true]) .bt-pill-go{width:0;margin-left:-8px;opacity:0;filter:blur(6px);transform:translateX(-6px)}
 @media (prefers-reduced-motion:reduce){.bt-pill,.bt-pill-go,.bt-pill-go svg{transition:none!important}.bt-pill-go{filter:none}.bt-pill:active{transform:none}}
 
-/* The bubble width setting: the share of the column a chat bubble may take. */
-body{--bt-msg-w:.8}
+/* The width settings: the share of the column a bubble may take, and the flat text. */
+body{--bt-msg-w:.8;--bt-flat-w:1}
 .bt-astack{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin:0}
 .bt-bubble{max-width:min(calc(var(--bt-msg-w) * 100%),calc(100% - 82px));background:var(--bt-bubble);color:var(--bt-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);box-sizing:border-box;overflow-wrap:anywhere}
 .bt-msg:not(:first-child)>.bt-msg-line>.bt-bubble{border-start-start-radius:6px}
@@ -2380,6 +2386,8 @@ button.bt-lead{border:0;background:none;padding:0;cursor:pointer}
 /* Rows without the avatar start where the bubble beside it starts: 22px avatar + 8px gap. */
 .bt-astack[data-lead]>.bt-msg:not(:last-child)>.bt-msg-line,.bt-astack[data-lead] .bt-reacts{margin-left:30px}
 .bt-group-name{font-size:12px;line-height:16px;font-weight:500;margin-left:42px}
+.bt-group-name:has(>.bt-lead){display:flex;align-items:center;margin:0 0 2px;font-size:13px;line-height:22px;font-weight:600;color:var(--bt-ink)}
+.bt-group-name>.bt-lead{margin:0 8px 0 0}
 .bt-group-time,.bt-group-took{margin-left:6px;font-size:11px;line-height:16px;font-weight:400;color:var(--bt-ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
 .bt-x{border:0;background:none;color:var(--bt-ink-2);cursor:pointer;width:24px;height:24px;border-radius:6px;font-size:16px;line-height:24px;padding:0;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
@@ -2767,6 +2775,13 @@ ${SKIN_FOOT}>div:has(> [data-slot="sidebar.settings"]){order:-1!important;flex:n
 .bt-tools{position:absolute;top:50%;left:100%;margin-left:6px;transform:translateY(-50%);display:flex;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
 .bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:128px;z-index:-1}
 .bt-msg:hover>.bt-msg-line>.bt-tools,.bt-msg:focus-within>.bt-msg-line>.bt-tools,.bt-tools[data-open]{opacity:1;visibility:visible}
+/* The flat layout: a Bot's text has no bubble and takes its own share of the column
+   (the whole of it unless set). The toolbar floats over the message's top right. */
+body[data-bt-layout=flat] .bt-astack{align-items:stretch;gap:10px}
+body[data-bt-layout=flat] .bt-msg,body[data-bt-layout=flat] .bt-astack[data-lead]>.bt-msg{align-items:stretch;max-width:calc(var(--bt-flat-w) * 100%)}
+body[data-bt-layout=flat] .bt-bubble{background:none;padding:0;border-radius:0}
+body[data-bt-layout=flat] .bt-tools{top:-14px;right:0;left:auto;margin-left:0;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+body[data-bt-layout=flat] .bt-tools::after{display:none}
 .bt-tool{width:24px;height:24px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .bt-tool:hover,.bt-tool[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-tool:active{background:var(--bt-active)}
@@ -2880,7 +2895,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-add:hover,.bt-addlist .bt-option:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-addlist{display:flex;flex-direction:column;margin-top:4px;padding:4px;border:1px solid var(--bt-line);border-radius:10px;background:var(--bt-card);animation:bt-rise .16s ease-out}
 .bt-seg{position:relative;display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--bt-hover)}
-.bt-motion-seg{width:216px}
+.bt-motion-seg,.bt-look-seg{width:216px}
 /* A range input: the track fills with the accent up to the thumb (--bt-fill). */
 .bt-range{display:flex;align-items:center;gap:10px;width:216px}
 .bt-range input{flex:1;min-width:0;height:20px;margin:0;background:none;-webkit-appearance:none;appearance:none;cursor:pointer}
@@ -3043,6 +3058,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 `;
 var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:calc(var(--bt-msg-w) * 100%)}
+body[data-bt-layout=flat] .bt-think{max-width:calc(var(--bt-flat-w) * 100%)}
 .bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
 .bt-think summary::-webkit-details-marker{display:none}
 .bt-think-time{font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -4955,6 +4971,11 @@ function turnReasoning(steps, current) {
   if (members.findLast((step) => stepReasoning(step) !== "")?.step !== current.step) return "";
   return members.map(stepReasoning).filter(Boolean).join("\n\n");
 }
+function opensReply(steps, current) {
+  const members = steps.length ? steps : [current];
+  const reasoner = members.findLast((step) => stepReasoning(step) !== "");
+  return members.find((step) => texts(step).length > 0 || step === reasoner)?.step === current.step;
+}
 var thinkingStep = (steps) => steps.find(thinkingLive);
 var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
 var texts = (step) => step.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
@@ -5275,6 +5296,8 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
   if (texts2.length === 0 && !reasoning && relays.length === 0) return null;
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
+  const speaker = layoutOf(roster.prefs) === "flat" ? roster.byId[sessionId] : void 0;
+  const head = speaker !== void 0 && opensReply(steps, data) && (reasoning !== "" || texts2.length > 0 && !(groupPart === "response" && turnReasoning(steps, data) !== ""));
   return (0, import_react9.createElement)(
     import_react9.Fragment,
     null,
@@ -5291,6 +5314,7 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
         whole: true
       });
     }),
+    head ? (0, import_react9.createElement)(SpeakerHead, { bot: speaker, time: data.time }) : null,
     reasoning ? (0, import_react9.createElement)(ThinkingRow, {
       text: reasoning,
       live: thinking !== void 0,
@@ -5329,25 +5353,36 @@ function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
   });
   return (0, import_react9.createElement)("div", { className: "bt-event" }, parts);
 }
+function SpeakerHead({ bot, time }) {
+  return (0, import_react9.createElement)(
+    "div",
+    { className: "bt-group-name" },
+    (0, import_react9.createElement)("span", { className: "bt-lead" }, (0, import_react9.createElement)(BotMark, { bot, size: 22 })),
+    bot.name,
+    Number.isFinite(time) ? (0, import_react9.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null
+  );
+}
 function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration }) {
   const lead = (0, import_react9.createElement)(
     "button",
     { type: "button", className: "bt-lead", "aria-label": t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) },
     (0, import_react9.createElement)(BotMark, { bot, size: 22 })
   );
+  const flat = layoutOf(roster.prefs) === "flat";
   const took = Number.isFinite(duration) ? elapsedLabel(duration) : void 0;
   return (0, import_react9.createElement)(
     "div",
     { className: "bt-group-msg" },
     (0, import_react9.createElement)(
       "span",
-      { className: "bt-group-name", style: { color: inkText(colorOf(bot)) } },
+      { className: "bt-group-name", style: flat ? void 0 : { color: inkText(colorOf(bot)) } },
+      flat ? lead : null,
       bot.name,
       room2?.admin === bot.id ? (0, import_react9.createElement)("span", { className: "bt-group-role" }, t("Admin")) : null,
       Number.isFinite(time) ? (0, import_react9.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null,
       took ? (0, import_react9.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
-    (0, import_react9.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead, whole })
+    (0, import_react9.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead: flat ? null : lead, whole })
   );
 }
 function stackReplies(replies) {
@@ -5489,8 +5524,11 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
       return (0, import_react9.createElement)(EarlierUser, { key, row });
     case "answer":
       return (0, import_react9.createElement)(AnsweredReply, { key, node: { data: row } });
-    case "bot":
-      return (0, import_react9.createElement)(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : void 0, msgKey: useUi ? `${sessionId}:${row.time}` : void 0, useUi, fold: FOLD_HUGE });
+    case "bot": {
+      const bubbles = (0, import_react9.createElement)(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : void 0, msgKey: useUi ? `${sessionId}:${row.time}` : void 0, useUi, fold: FOLD_HUGE });
+      const speaker = layoutOf(roster.prefs) === "flat" ? roster.byId[selfId] : void 0;
+      return speaker ? (0, import_react9.createElement)(import_react9.Fragment, { key }, (0, import_react9.createElement)(SpeakerHead, { bot: speaker, time: row.time }), bubbles) : bubbles;
+    }
     case "event": {
       if (row.role === "report") return (0, import_react9.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
       const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
@@ -10350,6 +10388,7 @@ function ExchangeDialog({ pair, roster, actions }) {
   }, [pair[0], pair[1]]);
   const left = roster.byId[pair[0]];
   const right = roster.byId[pair[1]];
+  const flat = layoutOf(roster.prefs) === "flat";
   let lastDay = 0;
   const paneLeft = usePaneLeft();
   return (0, import_react24.createElement)(
@@ -10378,6 +10417,7 @@ function ExchangeDialog({ pair, roster, actions }) {
           const showDay = entry.time - lastDay > 30 * 60 * 1e3;
           lastDay = entry.time;
           const whole = entry.length === void 0 ? void 0 : { length: entry.length, load: () => actions.exchangeText(entry.id) };
+          const lead = (0, import_react24.createElement)("span", { className: "bt-lead" }, (0, import_react24.createElement)(BotMark, { bot, size: 22 }));
           return (0, import_react24.createElement)(
             import_react24.Fragment,
             { key: entry.id },
@@ -10385,8 +10425,8 @@ function ExchangeDialog({ pair, roster, actions }) {
             (0, import_react24.createElement)(
               "div",
               { className: "bt-group-msg" },
-              (0, import_react24.createElement)("span", { className: "bt-group-name", style: { color: inkText(colorOf(bot)) } }, bot.name),
-              (0, import_react24.createElement)(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole, lead: (0, import_react24.createElement)("span", { className: "bt-lead" }, (0, import_react24.createElement)(BotMark, { bot, size: 22 })) })
+              (0, import_react24.createElement)("span", { className: "bt-group-name", style: flat ? void 0 : { color: inkText(colorOf(bot)) } }, flat ? lead : null, bot.name),
+              (0, import_react24.createElement)(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole, lead: flat ? null : lead })
             )
           );
         })
@@ -12741,6 +12781,17 @@ function SetRow({ label, hint, children }) {
     children ? (0, import_react33.createElement)("div", { className: "bt-set-control" }, children) : null
   );
 }
+var LAYOUTS = [["bubble", "Bubble"], ["flat", "Flat"]];
+function Choice({ label, value, options, pick: pick2 }) {
+  return (0, import_react33.createElement)(Segmented, { label, value, className: "bt-look-seg" }, options.map(([id, text]) => (0, import_react33.createElement)("button", {
+    key: id,
+    type: "button",
+    "aria-pressed": value === id,
+    onClick: () => {
+      if (value !== id) pick2(id);
+    }
+  }, t(text))));
+}
 function WidthSlider({ label, value, save }) {
   const [width, setWidth] = (0, import_react33.useState)(value);
   const pending = (0, import_react33.useRef)(null);
@@ -12822,6 +12873,9 @@ function GeneralPage({ roster, actions, run }) {
           )
         )
       ),
+      (0, import_react33.createElement)(SetRow, { label: t("Message layout") }, (0, import_react33.createElement)(Choice, { label: t("Message layout"), value: layoutOf(prefs), options: LAYOUTS, pick: (id) => run(actions.setPrefs({ layout: id })) })),
+      // The flat layout's text has a width of its own; the bubble width stays for the user's messages.
+      layoutOf(prefs) === "flat" ? (0, import_react33.createElement)(SetRow, { label: t("Text width") }, (0, import_react33.createElement)(WidthSlider, { label: t("Text width"), value: flatWidthOf(prefs), save: (flatWidth) => run(actions.setPrefs({ flatWidth })) })) : null,
       (0, import_react33.createElement)(SetRow, { label: t("Bubble width") }, (0, import_react33.createElement)(WidthSlider, { label: t("Bubble width"), value: widthOf(prefs), save: (width) => run(actions.setPrefs({ width })) }))
     ),
     actions.setSurface ? (0, import_react33.createElement)(
@@ -15760,10 +15814,14 @@ function apply(ctx) {
       const id = themes[prefs.theme] ? prefs.theme : "deepseek";
       const accent = isHex(prefs.accent) ? prefs.accent : void 0;
       const motion = prefs.motion === "quiet" || prefs.motion === "lively" ? prefs.motion : "normal";
+      const layout = layoutOf(prefs);
       const width = widthOf(prefs);
+      const flatWidth = flatWidthOf(prefs);
       document.body.dataset.btMotion = motion;
+      document.body.dataset.btLayout = layout;
       document.body.style.setProperty("--bt-msg-w", String(width / 100));
-      const next = `${id}|${accent ?? ""}|${motion}|${width}|${registry.getSnapshot()}`;
+      document.body.style.setProperty("--bt-flat-w", String(flatWidth / 100));
+      const next = `${id}|${accent ?? ""}|${motion}|${layout}|${width}|${flatWidth}|${registry.getSnapshot()}`;
       if (next === key) return;
       key = next;
       style.textContent = themeCss(themes[id], accent);
@@ -15772,7 +15830,7 @@ function apply(ctx) {
       if (typeof release === "function") release();
       if (snapshot.ready) {
         try {
-          localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, width: prefs.width }));
+          localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, layout: prefs.layout, width: prefs.width, flatWidth: prefs.flatWidth }));
         } catch {
         }
       }
@@ -15787,7 +15845,9 @@ function apply(ctx) {
         if (typeof releaseTokens === "function") releaseTokens();
       } finally {
         delete document.body.dataset.btMotion;
+        delete document.body.dataset.btLayout;
         document.body.style.removeProperty("--bt-msg-w");
+        document.body.style.removeProperty("--bt-flat-w");
         style.remove();
       }
     };

@@ -7,6 +7,14 @@ export function turnReasoning(steps, current) {
   return members.map(stepReasoning).filter(Boolean).join('\n\n')
 }
 
+// Whether `current` opens the Turn's reply in the chat: the first step with reply text,
+// or the one that shows the Turn's reasoning, whichever comes first.
+export function opensReply(steps, current) {
+  const members = steps.length ? steps : [current]
+  const reasoner = members.findLast(step => stepReasoning(step) !== '')
+  return members.find(step => texts(step).length > 0 || step === reasoner)?.step === current.step
+}
+
 // A step still streaming reasoning with no reply text yet is thinking: the row
 // counts its clock from `step.time`, the time its first visible chunk arrived.
 export const thinkingStep = steps => steps.find(thinkingLive)
