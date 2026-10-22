@@ -177,6 +177,15 @@ export function install(rt) {
       delete room.botRounds
       migrated = true
     }
+    // LEGACY: the late-round limit went with the round caps; a group counts relays to
+    // its pause now.
+    for (const room of Object.values(state.rooms)) {
+      if (room.lateRounds === undefined && room.quietNoticed === undefined && room.quietShown === undefined) continue
+      delete room.lateRounds
+      delete room.quietNoticed
+      delete room.quietShown
+      migrated = true
+    }
     // Groups from before group settings existed reply in turn, led by a Main Bot member.
     for (const room of Object.values(state.rooms)) {
       if (room.admin !== undefined && ROOM_MODES.includes(room.mode)) continue

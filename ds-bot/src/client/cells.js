@@ -787,11 +787,10 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       if (reply.kind === 'missed') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("{name} didn't answer in time", { name: bot.name }))
       }
-      if (reply.kind === 'dropped') {
-        return h('div', { key: `dropped-${index}`, className: 'bt-event' }, t('{names} not called: the per-member limit for this round is reached', { names: (reply.names ?? []).join(t(' and ')) }))
-      }
-      if (reply.kind === 'quiet') {
-        return h('div', { key: `quiet-${index}`, className: 'bt-event' }, t('The group went quiet: @ mentions in late replies call nobody until you write here'))
+      if (reply.kind === 'paused') {
+        return h('div', { key: `paused-${index}`, className: 'bt-event' },
+          h('span', null, t('Paused after {count} Bot relays. Waiting: {names}', { count: reply.count, names: (reply.names ?? []).join(t(' and ')) })),
+          room?.paused?.length > 0 ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => actions.continueRoom(sessionId) }, t('Continue')) : null)
       }
       if (reply.kind === 'resumed') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t('{name} was cut off by a restart and picked its work back up', { name: bot.name }))

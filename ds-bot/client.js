@@ -247,6 +247,8 @@ var ZH = {
   "Who answers": "谁来回答",
   "Choose an admin first": "先选一个管理员",
   "@mentions always pick who answers.": "@提及总是指定由谁回答。",
+  "Pause Bot relays after": "Bot 接力几次后暂停",
+  "Counted since your last message in this group.": "从你在群里的上一条消息算起。",
   Notice: "群公告",
   "Shared instructions every member reads before speaking…": "每位成员发言前都会读到的共同说明…",
   "Group notice": "群公告",
@@ -559,6 +561,8 @@ var ZH = {
   "{name} looked up its own chat for “{text}”": "{name} 在自己的对话里查找「{text}」",
   "{name} is typing…": "{name} 正在输入…",
   "{name} didn't answer in time": "{name} 没有及时回应",
+  "Paused after {count} Bot relays. Waiting: {names}": "Bot 之间已接力 {count} 次，先停下了。还在等：{names}",
+  "Continue": "继续",
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
@@ -1484,6 +1488,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     setPrefs: (prefs) => after(call2("set-prefs", prefs)),
     setMain: (id, main = true, options = {}) => after(call2("set-main", { id, main, ...options })),
     updateRoom: (id, patch) => after(call2("update-room", { id, ...patch })),
+    continueRoom: (roomId) => after(call2("room-continue", { roomId })),
     send: (sessionId, text) => after(call2("send", { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call2("answer-question", { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
@@ -1965,23 +1970,6 @@ function runStatsOf(values) {
 // src/client/motion.js
 var import_react = require("react");
 var reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-var noHover = () => window.matchMedia?.("(hover: none)").matches === true;
-var viewBottom = () => window.visualViewport ? window.visualViewport.height + window.visualViewport.offsetTop : window.innerHeight;
-function useViewport() {
-  const [tick, setTick] = (0, import_react.useState)(0);
-  (0, import_react.useEffect)(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return void 0;
-    const bump = () => setTick((value) => value + 1);
-    viewport.addEventListener("resize", bump);
-    viewport.addEventListener("scroll", bump);
-    return () => {
-      viewport.removeEventListener("resize", bump);
-      viewport.removeEventListener("scroll", bump);
-    };
-  }, []);
-  return tick;
-}
 function springEasing(stiffness, damping) {
   const w0 = Math.sqrt(stiffness);
   const zeta = damping / (2 * w0);
@@ -2190,9 +2178,7 @@ function useLinger(value, ms) {
 // src/client/styles.js
 var SKIN_FOOT = ':is(div,footer):not([class*="_footArea"]):has(> div > [data-slot="sidebar.footer.action"] > .bt-connect-wrap)';
 var SHELL_CSS = `
-body{--bt-ink:#141414;--bt-danger:#e02135;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56);-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
-/* iOS waits out a double-tap zoom on buttons; the plugin's own controls never zoom. */
-:is(.bt-tool,.bt-uaction,.bt-menu button,.bt-menu-item,.bt-icon-btn,.bt-round,.bt-pill,.bt-account,.bt-set-row,.bt-settings-item,.bt-react-strip button,.bt-palette-row,.bt-palette-clear,.bt-tab,.bt-ptab,.bt-ptab-x,.bt-bcard-x,.bt-plus,.bt-q-btn,.bt-q-x,.bt-x,.bt-nc-send,.bt-send,.bt-soft,.bt-mini,.bt-shape,.bt-swatch,.bt-color,.bt-newchat,.bt-task-day,.bt-task-remove,.bt-fb-btn){touch-action:manipulation}
+body{--bt-ink:#141414;--bt-danger:#e02135;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56)}
 body[data-ds-dark-theme]{--bt-ink:#f2f2f2;--bt-ink-2:rgba(242,242,242,.6);--bt-ink-3:rgba(242,242,242,.36);--bt-bubble:#262626;--bt-sidebar:#1b1b1b;--bt-main:#141414;--bt-line:rgba(255,255,255,.08);--bt-line-2:rgba(255,255,255,.15);--bt-line-weak:rgba(255,255,255,.1);--bt-hover:rgba(160,160,160,.12);--bt-active:rgba(160,160,160,.2);--bt-card:#1f1f1f;--bt-user:#f2f2f2;--bt-user-ink:#141414;--bt-tag-bg:rgba(255,255,255,.09);--bt-tag-ink:rgba(242,242,242,.62)}
 ${Object.entries(INKS).map(([name, [light]]) => `body{--bt-ink-${name}:${light}}`).join("")}
 ${Object.entries(INKS).map(([name, [, dark]]) => `body[data-ds-dark-theme]{--bt-ink-${name}:${dark}}`).join("")}
@@ -2800,7 +2786,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-palette-clear{width:18px;height:18px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .bt-palette-clear:hover{color:var(--bt-ink)}
 .bt-palette-clear svg{width:12px;height:12px}
-.bt-palette-list{position:relative;height:402px;height:min(402px,54vh);height:min(402px,54dvh);overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
+.bt-palette-list{position:relative;height:402px;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
 .bt-palette-list>.bt-thumb,.bt-drop-list>.bt-thumb{left:0;right:0;border-radius:8px;background:var(--bt-active)}
 .bt-palette-list>.bt-thumb{left:8px;right:8px}
 :is(.bt-palette-list,.bt-drop-list)[data-glide] [aria-selected=true]{background:transparent}
@@ -2940,7 +2926,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 @media (hover:none){.bt-mem-remove{opacity:1}}
 .bt-mem-none{font-size:13px;line-height:18px;color:var(--bt-ink-3);padding:8px 4px}
 .bt-mem-foot{flex:none;padding:8px 20px 20px;display:flex;flex-direction:column;gap:10px}
-.bt-mem-reply{border-radius:16px;background:var(--bt-hover);padding:8px 8px 12px 16px;display:flex;flex-direction:column;gap:6px;max-height:36vh;max-height:36dvh;overflow-y:auto;scrollbar-width:thin;transform-origin:50% 100%;animation:bt-pop-lift ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
+.bt-mem-reply{border-radius:16px;background:var(--bt-hover);padding:8px 8px 12px 16px;display:flex;flex-direction:column;gap:6px;max-height:36vh;overflow-y:auto;scrollbar-width:thin;transform-origin:50% 100%;animation:bt-pop-lift ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
 .bt-mem-reply-head{display:flex;align-items:center;gap:8px;min-height:24px}
 .bt-mem-reply-asked{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-mem-reply .bt-icon-btn{width:24px;height:24px;flex:none}
@@ -2982,40 +2968,6 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 :is(.bt-icon-btn,.bt-settings-close,.bt-nc-send,.bt-shape,.bt-swatch,.bt-color,.bt-x,.bt-q-x,.bt-palette-clear):active:not(:disabled){scale:.9}
 :is(.bt-soft,.bt-send,.bt-mini,.bt-tab,.bt-avedit-tab,.bt-pick,.bt-q-submit,.bt-q-btn):active:not(:disabled){scale:.96}
 @media (prefers-reduced-motion:reduce){.bt-thumb{transition:none}.bt-panel-view>[data-move],.bt-drawer-name-input,.bt-veil,.bt-pop-in,.bt-token,.bt-drop,.bt-newchat,.bt-option-hint,.bt-connector-form,.bt-settings-head>*{animation:none}}
-/* Phone-width viewports: the settings dialog takes the whole screen, its page
-   list becomes a horizontal strip across the top, and fixed-width pages wrap
-   or scroll instead of overflowing. These rules sit at the end of the sheet:
-   the base column widths below would otherwise win the cascade back. */
-@media (max-width:640px){
-  .bt-settings-layer{align-items:stretch;justify-content:stretch}
-  .bt-settings{--bt-set-w:100vw;--bt-set-h:100vh;width:100vw;height:100vh;height:100dvh;border-radius:0;border-width:0;flex-direction:column}
-  /* Right padding is not honored inside a scrolling flex row; a transparent
-     right border keeps the last tab clear of the close button. */
-  .bt-settings-nav{width:100%;flex:none;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;border:0;border-right:52px solid transparent;border-bottom:.5px solid var(--bt-line);scrollbar-width:thin;box-sizing:border-box}
-  .bt-settings-item{flex:none}
-  .bt-settings-shell{margin-top:0;margin-left:auto;flex:none}
-  .bt-settings-main{width:100%;flex:1;min-height:0;height:auto}
-  .bt-settings-usage[data-off]{left:0;width:100%}
-  .bt-settings-scroll{overflow-x:clip}
-  .bt-set-row{flex-direction:column;align-items:stretch;gap:8px}
-  .bt-set-row>.bt-set-copy{width:100%}
-  .bt-avedit{width:min(300px,calc(100vw - 32px))}
-  .bt-shape-row{grid-template-columns:repeat(4,1fr)}
-}
-/* Follow the visible viewport, not the layout one: dvh where the browser knows
-   it (the earlier vh value is the fallback), and safe-area padding where
-   full-screen layers and bottom regions meet the device's own bars. */
-.bt-settings{--bt-set-h:min(780px,calc(100dvh - 2*max(32px,var(--dsh-frame-overlay-top,32px))))}
-.bt-mem{height:min(760px,calc(100dvh - 2*max(32px,var(--dsh-frame-overlay-top,32px))))}
-.bt-settings-layer,.bt-mem-layer,.bt-palette-layer{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
-.bt-panel{padding-bottom:env(safe-area-inset-bottom,0px)}
-.bt-settings-scroll{padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
-.bt-voice-bar{padding-bottom:calc(32px + env(safe-area-inset-bottom,0px))}
-.bt-exchange .bt-dialog-foot{padding-bottom:calc(28px + env(safe-area-inset-bottom,0px))}
-/* iOS zooms the whole page on focused inputs under 16px. */
-@media (max-width:640px) and (pointer:coarse){
-  .bt-input,.bt-bs-input,.bt-browser-address input,.bt-folder-input,.bt-secret-input,.bt-q-input,.bt-to input,.bt-palette-head input,.bt-mem-input{font-size:16px}
-}
 `;
 var CONVERSATION_CSS = `
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
@@ -3053,7 +3005,7 @@ var CONVERSATION_CSS = `
 [class*="_header"]:has(.bt-head){border-bottom-color:transparent!important;box-shadow:none!important}
 /* The transcript runs under a floating header pill. */
 header[class*="_header"]:has(.bt-head){position:absolute!important;top:0;left:0;right:0;z-index:8;display:flex!important;padding:10px 0 0!important;background:transparent!important;pointer-events:none;justify-content:center}
-header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inset:0 0 auto;height:calc(60px + env(safe-area-inset-top,0px));background:linear-gradient(to bottom,var(--bt-main),color-mix(in srgb,var(--bt-main) 0%,transparent));pointer-events:none;z-index:-1}
+header[class*="_header"]:has(.bt-head)::before{content:"";position:absolute;inset:0 0 auto;height:60px;background:linear-gradient(to bottom,var(--bt-main),color-mix(in srgb,var(--bt-main) 0%,transparent));pointer-events:none;z-index:-1}
 header[class*="_header"]:has(.bt-head)>[class*="_headerLeading"]{position:absolute;left:12px;top:10px;pointer-events:auto}
 header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [class*="_body"]:has(> [class*="_scrollBody"]){--dsh-chat-content-width:min(960px,100%)}
@@ -3075,7 +3027,7 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 [data-content-phase=hero] [class*="_composerHero"]>[class$="_root"],[data-content-phase=hero] [class*="_heroWorkspaceRow"]{display:none!important}
 [data-content-phase=hero] [class*="_composerHero"] [class*="_input"]{min-height:0!important}
 /* The right sides give back the scrollbar gutter so both edges sit 16px from the column. */
-[class*="_scroll"]:has(> [class*="_column"]){padding:calc(60px + env(safe-area-inset-top,0px)) calc(11px + env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) calc(16px + env(safe-area-inset-left,0px))!important}
+[class*="_scroll"]:has(> [class*="_column"]){padding:60px 11px 16px 16px!important}
 /* The shell's running status only hosts the activity row (.bt-typing). */
 [data-chat-running]{display:block!important;width:100%;min-height:0!important;margin:0!important;padding:0!important}
 [data-chat-running]>span:not([role=status]){display:none!important}
@@ -3156,17 +3108,6 @@ header[class*="_header"] .bt-head{flex:1 1 auto;width:100%}
 .bt-voice{display:none;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);animation:bt-icon-swap ${SPRING_POP.duration}ms ${SPRING_POP.easing}}
 .bt-voice:hover{opacity:.9}
 .bt-mic:active,.bt-voice:active{scale:.9}
-/* Touch devices never hover: tap-open toolbars (data-open on the message), always
-   visible icon buttons and 44px targets replace the hover affordances. */
-@media (hover:none){
-  .bt-tools{left:auto;right:4px;margin-left:0;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
-  .bt-tools::after{display:none}
-  .bt-tool{width:44px;height:44px}
-  .bt-menu button,.bt-menu [role=menuitem],.bt-react-strip button{min-height:44px}
-  .bt-utools[data-open]{opacity:1;visibility:visible}
-  .bt-utools button{width:44px;height:44px}
-  [data-chat-flow-kind=user] [class*="_actions"] button{width:44px;height:44px}
-}
 [data-composer-card]:has(button[class*="_primary"]:disabled) .bt-voice{display:inline-grid}
 body[data-bt-room] .bt-voice{display:none!important}
 body[data-bt-room] [data-composer-card]:has(button[class*="_primary"]:disabled) .bt-mic:not([aria-pressed=true]){background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
@@ -3184,7 +3125,6 @@ div:has(> nav [class*="_marks"]){display:none!important}
 [data-chat-flow-kind=user] [class*="_userRow"]{flex-direction:row-reverse;align-items:center;justify-content:flex-start}
 [data-chat-flow-kind=user] [class*="_actions"]{display:flex!important;height:24px!important;gap:2px!important;opacity:0!important;visibility:hidden;transition:opacity .12s ease,visibility .12s!important;flex:none}
 [data-chat-flow-kind=user] [class*="_userRow"]:hover [class*="_actions"],[data-chat-flow-kind=user] [class*="_userRow"]:focus-within [class*="_actions"]{opacity:1!important;visibility:visible}
-@media (hover:none){[data-chat-flow-kind=user] [class*="_actions"]{opacity:1!important;visibility:visible}}
 [data-chat-flow-kind=user] [class*="_actions"] [class*="_timeStart"]{display:none}
 [data-chat-flow-kind=user] [class*="_actions"] button{width:24px;height:24px;border-radius:6px;color:var(--bt-ink-2)}
 [data-chat-flow-kind=user] [class*="_actions"] button:hover{background:var(--bt-hover);color:var(--bt-ink)}
@@ -5020,16 +4960,9 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
   const { shown, folded, control } = useFold(text, { limit: fold, whole, live });
   const key = msgKey ? `${msgKey}:${index}` : void 0;
   const body = (0, import_react9.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels2(), variant: "compact", fileMentions: mentions });
-  const row = (0, import_react9.useRef)(null);
-  const [toolsOpen, setToolsOpen] = (0, import_react9.useState)(false);
-  useDismiss(toolsOpen, () => setToolsOpen(false), [row]);
-  const tapTools = (event) => {
-    if (!noHover() || event.target instanceof Element && event.target.closest("a,button,input,textarea,select,pre,code,[role=button],[role=link]")) return;
-    setToolsOpen((value) => !value);
-  };
   return (0, import_react9.createElement)(
     "div",
-    { ref: row, className: "bt-msg", onClick: tapTools },
+    { className: "bt-msg" },
     (0, import_react9.createElement)(
       "div",
       { className: "bt-msg-line" },
@@ -5040,7 +4973,7 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
         control ? (0, import_react9.createElement)("div", { className: "bt-fold-body" }, body) : body,
         control
       ),
-      live ? null : (0, import_react9.createElement)(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions, open: toolsOpen })
+      live ? null : (0, import_react9.createElement)(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions })
     ),
     picked.length ? (0, import_react9.createElement)("div", { className: "bt-reacts" }, picked.map((emoji) => (0, import_react9.createElement)("button", {
       key: emoji,
@@ -5052,7 +4985,6 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
   );
 }
 var REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
-var STRIP_HALF = (REACTIONS.length * 34 + 10) / 2 + 8;
 function useDismiss(open, close, refs) {
   (0, import_react9.useEffect)(() => {
     if (!open) return void 0;
@@ -5067,36 +4999,31 @@ function useDismiss(open, close, refs) {
       }
     };
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("touchstart", onDown);
     window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("touchstart", onDown);
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 }
-function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
+function MessageTools({ text, name, sessionId, react, actions }) {
   const [panel, setPanel] = (0, import_react9.useState)(null);
+  const [place, setPlace] = (0, import_react9.useState)(null);
   const [copied, setCopied] = (0, import_react9.useState)(false);
   const tools = (0, import_react9.useRef)(null);
   const pop = (0, import_react9.useRef)(null);
-  const tick = useViewport();
   const close = () => setPanel(null);
   useDismiss(panel !== null, close, [tools, pop]);
   const open = (kind, event) => {
-    if (panel?.kind === kind) {
+    if (panel === kind) {
       close();
       return;
     }
-    setPanel({ kind, node: event.currentTarget });
+    const rect = event.currentTarget.getBoundingClientRect();
+    const below = rect.bottom + 220 < window.innerHeight;
+    setPlace(kind === "react" ? { left: rect.left + rect.width / 2, top: rect.top - 6, "--bt-origin": "bottom center" } : { left: Math.min(rect.left, window.innerWidth - 208), ...below ? { top: rect.bottom + 4 } : { bottom: window.innerHeight - rect.top + 4, "--bt-origin": "bottom left" } });
+    setPanel(kind);
   };
-  const place = (0, import_react9.useMemo)(() => {
-    if (!panel) return null;
-    const rect = panel.node.getBoundingClientRect();
-    const below = rect.bottom + 220 < viewBottom();
-    return panel.kind === "react" ? { left: Math.min(Math.max(rect.left + rect.width / 2, STRIP_HALF), window.innerWidth - STRIP_HALF), top: rect.top - 6, "--bt-origin": "bottom center" } : { left: Math.min(rect.left, window.innerWidth - 208), ...below ? { top: rect.bottom + 4 } : { bottom: viewBottom() - rect.top + 4, "--bt-origin": "bottom left" } };
-  }, [panel, tick]);
   const copy2 = () => {
     void navigator.clipboard?.writeText(text).then(() => {
       setCopied(true);
@@ -5115,11 +5042,11 @@ function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
   } }, (0, import_react9.createElement)(Icon), label);
   return (0, import_react9.createElement)(
     "div",
-    { ref: tools, className: "bt-tools", "data-open": panel !== null || tapped || void 0 },
-    react ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Add reaction"), title: t("Add reaction"), "aria-expanded": panel?.kind === "react", onClick: (event) => open("react", event) }, (0, import_react9.createElement)(SmileIcon)) : null,
+    { ref: tools, className: "bt-tools", "data-open": panel !== null || void 0 },
+    react ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Add reaction"), title: t("Add reaction"), "aria-expanded": panel === "react", onClick: (event) => open("react", event) }, (0, import_react9.createElement)(SmileIcon)) : null,
     sessionId ? (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("Reply"), title: t("Reply"), onClick: () => actions.quote(sessionId, text) }, (0, import_react9.createElement)(ReplyIcon)) : null,
-    (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("More message actions"), title: t("More"), "aria-haspopup": "menu", "aria-expanded": panel?.kind === "more", onClick: (event) => open("more", event) }, copied ? (0, import_react9.createElement)(CheckIcon) : (0, import_react9.createElement)(DotsIcon)),
-    panel?.kind === "react" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
+    (0, import_react9.createElement)("button", { type: "button", className: "bt-tool", "aria-label": t("More message actions"), title: t("More"), "aria-haspopup": "menu", "aria-expanded": panel === "more", onClick: (event) => open("more", event) }, copied ? (0, import_react9.createElement)(CheckIcon) : (0, import_react9.createElement)(DotsIcon)),
+    panel === "react" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
       "div",
       { ref: pop, className: "bt-react-strip", role: "menu", "aria-label": t("Reactions"), style: place },
       REACTIONS.map((emoji) => (0, import_react9.createElement)("button", { key: emoji, type: "button", role: "menuitem", "aria-label": emoji, onClick: () => {
@@ -5127,7 +5054,7 @@ function MessageTools({ text, name, sessionId, react, actions, open: tapped }) {
         react(emoji);
       } }, emoji))
     ), document.body) : null,
-    panel?.kind === "more" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
+    panel === "more" ? (0, import_react_dom.createPortal)((0, import_react9.createElement)(
       "div",
       { ref: pop, className: "bt-menu", role: "menu", "aria-label": t("Message actions"), style: place },
       item(t("Copy"), CopyIcon, copy2),
@@ -5767,6 +5694,14 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === "missed") {
         return (0, import_react9.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} didn't answer in time", { name: bot.name }));
+      }
+      if (reply.kind === "paused") {
+        return (0, import_react9.createElement)(
+          "div",
+          { key: `paused-${index}`, className: "bt-event" },
+          (0, import_react9.createElement)("span", null, t("Paused after {count} Bot relays. Waiting: {names}", { count: reply.count, names: (reply.names ?? []).join(t(" and ")) })),
+          room2?.paused?.length > 0 ? (0, import_react9.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => actions.continueRoom(sessionId) }, t("Continue")) : null
+        );
       }
       if (reply.kind === "resumed") {
         return (0, import_react9.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} was cut off by a restart and picked its work back up", { name: bot.name }));
@@ -6494,13 +6429,11 @@ function UpdateButton({ useUpdate, actions }) {
   const dshRow = showsDshRow(dsh, update?.app);
   if (!update?.available && !dshRow && phase === "idle" && dshPhase === "idle") return null;
   const cloudPhase = phase === "installing" || dshPhase === "installing" ? "installing" : phase !== "idle" ? phase : dshPhase;
-  const tick = useViewport();
-  (0, import_react11.useLayoutEffect)(() => {
-    if (!open) return;
+  const toggle = () => {
     const rect = button.current?.getBoundingClientRect();
     if (rect) setBox({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)), top: rect.bottom + 6 });
-  }, [open, tick]);
-  const toggle = () => setOpen((value) => !value);
+    setOpen((value) => !value);
+  };
   const start = () => {
     setError("");
     void actions.installUpdate().catch((failure) => setError(hostText(failure?.message ?? String(failure))));
@@ -6694,13 +6627,11 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
-  const tick = useViewport();
-  (0, import_react11.useLayoutEffect)(() => {
-    if (!open) return;
+  const toggle = () => {
     const rect = button.current?.getBoundingClientRect();
-    if (rect) setBox({ left: rect.left, bottom: viewBottom() - rect.top + 5 });
-  }, [open, tick]);
-  const toggle = () => setOpen((value) => !value);
+    if (rect) setBox({ left: rect.left, bottom: window.innerHeight - rect.top + 5 });
+    setOpen((value) => !value);
+  };
   const groups = [
     [
       [t("Usage"), GaugeIcon, () => actions.openSettings("usage")],
@@ -6990,7 +6921,7 @@ function useTranscriptView() {
         divider,
         center: Math.round(box.left + box.width / 2),
         top: Math.round(headerBottom + 8),
-        bottom: Math.round(viewBottom() - box.bottom + composer + 8)
+        bottom: Math.round(window.innerHeight - box.bottom + composer + 8)
       };
       setView((prev) => prev && Object.keys(next).every((key) => prev[key] === next[key]) ? prev : next);
     };
@@ -6999,16 +6930,12 @@ function useTranscriptView() {
     };
     document.addEventListener("scroll", schedule, true);
     window.addEventListener("resize", schedule);
-    window.visualViewport?.addEventListener("resize", schedule);
-    window.visualViewport?.addEventListener("scroll", schedule);
     schedule();
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
       document.removeEventListener("scroll", schedule, true);
       window.removeEventListener("resize", schedule);
-      window.visualViewport?.removeEventListener("resize", schedule);
-      window.visualViewport?.removeEventListener("scroll", schedule);
     };
   }, []);
   return view;
@@ -7206,7 +7133,6 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
   const [shown, leaving] = useLinger(open, 120);
   const button = (0, import_react13.useRef)(null);
   const menu = (0, import_react13.useRef)(null);
-  const tick = useViewport();
   (0, import_react13.useEffect)(() => {
     if (!open) return void 0;
     const onDown = (event) => {
@@ -7233,7 +7159,8 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
       setOpen(null);
       return;
     }
-    setOpen({ files: Boolean(fileInput()) });
+    const rect = button.current.getBoundingClientRect();
+    setOpen({ left: rect.left, bottom: window.innerHeight - rect.top + 8, files: Boolean(fileInput()) });
   };
   const attach = () => {
     setOpen(null);
@@ -7248,11 +7175,6 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
     actions.referenceChat(sessionId, inputActions?.captureInsertion?.());
   };
   const canReference = typeof inputActions?.captureInsertion === "function" && actions.canReferenceChat();
-  const place = (0, import_react13.useMemo)(() => {
-    if (!shown || !button.current) return null;
-    const rect = button.current.getBoundingClientRect();
-    return { left: rect.left, bottom: viewBottom() - rect.top + 8 };
-  }, [shown, open, tick]);
   return (0, import_react13.createElement)(
     import_react13.Fragment,
     null,
@@ -7274,7 +7196,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
         className: "bt-menu bt-menu-up bt-plus-menu",
         role: "menu",
         "aria-label": t("Add"),
-        style: place ?? {},
+        style: { left: shown.left, bottom: shown.bottom },
         "data-leaving": leaving || void 0
       },
       shown.files ? (0, import_react13.createElement)("button", { type: "button", role: "menuitem", onClick: attach }, (0, import_react13.createElement)(PaperclipIcon), (0, import_react13.createElement)("span", { className: "bt-menu-label" }, t("Add files"))) : null,
@@ -7985,16 +7907,11 @@ function ModelRows({ roster, current, onPick }) {
 }
 var Caret = () => (0, import_react16.createElement)("svg", { className: "bt-model-caret", width: 12, height: 12, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react16.createElement)("path", { d: "M5.5 8l4.5 4.5L14.5 8" }));
 function useAnchoredMenu() {
-  const [anchor, setAnchor] = (0, import_react16.useState)(null);
   const [place, setPlace] = (0, import_react16.useState)(null);
   const [shownPlace, leaving] = useLinger(place, MENU_EXIT_MS);
   const button = (0, import_react16.useRef)(null);
   const menu = (0, import_react16.useRef)(null);
-  const tick = useViewport();
-  const close = () => {
-    setAnchor(null);
-    setPlace(null);
-  };
+  const close = () => setPlace(null);
   (0, import_react16.useEffect)(() => {
     if (place === null) return void 0;
     const onDown = (event) => {
@@ -8020,15 +7937,13 @@ function useAnchoredMenu() {
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [place]);
-  const open = () => setAnchor({});
-  (0, import_react16.useLayoutEffect)(() => {
-    if (anchor === null || !button.current) return;
+  const open = () => {
     const rect = button.current.getBoundingClientRect();
     const width = Math.max(240, rect.width);
     const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-    const below = viewBottom() - rect.bottom;
-    setPlace(below >= 260 || below >= rect.top ? { left, width, top: rect.bottom + 4, maxHeight: below - 16, "--bt-origin": "top right" } : { left, width, bottom: viewBottom() - rect.top + 4, maxHeight: rect.top - 16, "--bt-origin": "bottom right" });
-  }, [anchor, tick]);
+    const below = window.innerHeight - rect.bottom;
+    setPlace(below >= 260 || below >= rect.top ? { left, width, top: rect.bottom + 4, maxHeight: below - 16, "--bt-origin": "top right" } : { left, width, bottom: window.innerHeight - rect.top + 4, maxHeight: rect.top - 16, "--bt-origin": "bottom right" });
+  };
   return { isOpen: place !== null, shownPlace, leaving, button, menu, open, close };
 }
 function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffort }) {
@@ -8236,7 +8151,7 @@ var MODEL_CSS = `
 .bt-model-tick svg{animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} 60ms backwards}
 .bt-model-none{padding:8px;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
 .bt-model-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:0 0 10px;box-sizing:border-box;animation:bt-model-in ${SPRING_POP.duration}ms ${SPRING_POP.easing} backwards}
-.bt-model-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:30px;max-width:min(560px,calc(100% - 30px));max-height:min(240px,36vh);max-height:min(240px,36dvh);overflow-y:auto;scrollbar-width:thin}
+.bt-model-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:30px;max-width:min(560px,calc(100% - 30px));max-height:min(240px,36vh);overflow-y:auto;scrollbar-width:thin}
 .bt-model-choice-group{display:flex;flex-direction:column;gap:6px;width:100%;min-width:0}
 .bt-model-choice-provider{padding-top:4px;font-size:12px;line-height:16px;font-weight:500;color:var(--bt-ink-2);overflow-wrap:anywhere}
 .bt-model-choice-chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -8741,13 +8656,6 @@ var SCHEDULE_CSS = `
 .bt-task-line-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-task-line-when{flex:none;font-size:12px;color:var(--bt-ink-3)}
 @media (prefers-reduced-motion:reduce){.bt-task-form{animation:none}}
-/* Phone-width viewports: the form's fixed minimums would overflow; let the
-   fields wrap and share the row. */
-@media (max-width:640px){
-  .bt-task-bot{min-width:0;width:100%}
-  .bt-task-time{min-width:0;flex:1 1 110px}
-  .bt-task-count{width:auto!important;flex:1 1 72px}
-}
 `;
 
 // src/client/capability-settings.js
@@ -10581,6 +10489,44 @@ function roomSubtitle(room2, roster) {
   const admin = roster.byId[room2.admin];
   return [t("{count} members", { count: room2.members.length }), admin ? t("Admin {name}", { name: admin.name }) : t("No admin")].join(" · ");
 }
+function RelayLimitRow({ room: room2, update }) {
+  const [draft, setDraft] = (0, import_react27.useState)(room2.relayLimit ?? "");
+  (0, import_react27.useEffect)(() => setDraft(room2.relayLimit ?? ""), [room2.relayLimit]);
+  const save = () => {
+    const text = String(draft).trim();
+    if (text === "") {
+      if (room2.relayLimit !== void 0) update({ relayLimit: null });
+      return;
+    }
+    const limit = Number(text);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200 || limit === room2.relayLimit) {
+      setDraft(room2.relayLimit ?? "");
+      return;
+    }
+    update({ relayLimit: limit });
+  };
+  return (0, import_react27.createElement)(
+    Row,
+    { label: t("Pause Bot relays after"), hint: t("Counted since your last message in this group.") },
+    (0, import_react27.createElement)("input", {
+      className: "bt-bs-input",
+      type: "number",
+      min: 1,
+      max: 200,
+      placeholder: String(room2.relayLimitDefault ?? ""),
+      value: draft,
+      "aria-label": t("Pause Bot relays after"),
+      onChange: (event) => setDraft(event.target.value),
+      onBlur: save,
+      onKeyDown: (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }
+    })
+  );
+}
 function GroupPermission({ room: room2, catalog, update }) {
   if (!catalog?.options?.length) return null;
   const shared2 = room2.permission !== void 0;
@@ -10672,7 +10618,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run, onDeleted }) {
           }
         }, t(label)))),
         (0, import_react27.createElement)("span", { key: mode, className: "bt-set-hint bt-veil" }, `${t(modeHint)} ${t("@mentions always pick who answers.")}`)
-      )
+      ),
+      (0, import_react27.createElement)(RelayLimitRow, { room: room2, update })
     ),
     (0, import_react27.createElement)(
       Card,
@@ -11825,20 +11772,6 @@ button.bt-us-row:hover{background:var(--bt-hover)}
 @keyframes bt-us-pulse{50%{opacity:.25}}
 @keyframes bt-us-shine{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.bt-us *,.bt-us *::before{animation:none!important;transition:none!important}}
-/* Phone-width viewports: the page is full width but its fixed parts are not —
-   stats take two columns, the calendar and heat map shrink or scroll. */
-@media (max-width:640px){
-  .bt-us-stats{grid-template-columns:repeat(2,1fr)}
-  .bt-us-stat{padding:12px}
-  .bt-us-stat-value{font-size:19px;line-height:24px;white-space:normal;flex-wrap:wrap}
-  .bt-us-stat-main .bt-us-stat-value{font-size:26px;line-height:32px}
-  .bt-us-tabs{max-width:100%;overflow-x:auto}
-  .bt-us-month{width:min(252px,100%)}
-  .bt-us-weekdays,.bt-us-days{grid-template-columns:repeat(7,minmax(0,1fr))}
-  .bt-us-pair{grid-template-columns:1fr}
-  .bt-us-heat{overflow-x:auto}
-  .bt-us-heat-months,.bt-us-heat-grid{grid-template-columns:repeat(${HEAT_WEEKS},minmax(8px,1fr))}
-}
 `;
 
 // src/client/connectors.js
@@ -12115,7 +12048,6 @@ var FEEDBACK_CSS = `
 .bt-fb-code{flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
 .bt-event-error{color:var(--bt-danger,#e02135)}
 .bt-toast{position:fixed;left:50%;bottom:28px;z-index:1000;display:flex;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));padding:8px 8px 8px 14px;border-radius:12px;background:var(--bt-card,#fff);color:var(--bt-ink,#141414);border:1px solid var(--bt-line-2,rgba(0,0,0,.15));box-shadow:0 8px 28px rgba(0,0,0,.14);font-size:13px;line-height:18px;transform:translateX(-50%);animation:bt-toast-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
-.bt-toast{bottom:calc(28px + env(safe-area-inset-bottom,0px))}
 .bt-toast[data-leaving]{opacity:0;transform:translate(-50%,6px) scale(.98);filter:blur(3px);transition:opacity .18s ease-in,transform .18s ease-in,filter .18s ease-in}
 .bt-toast-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
 .bt-toast-text::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--bt-danger,#e02135);margin:0 8px 1px 0}
@@ -12892,12 +12824,11 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
   }, []);
   const ref = (0, import_react34.useRef)(null);
   const [place, setPlace] = (0, import_react34.useState)({ left: menu.x, top: menu.y });
-  const tick = useViewport();
   (0, import_react34.useLayoutEffect)(() => {
     const box = ref.current?.getBoundingClientRect();
     if (!box) return;
-    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, viewBottom() - box.height - 8)) });
-  }, [menu.x, menu.y, tick]);
+    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, window.innerHeight - box.height - 8)) });
+  }, [menu.x, menu.y]);
   if (menu.kind === "agent" || menu.kind === "agent-session") return (0, import_react34.createElement)(AgentMenu, { menu, roster, actions, leaving });
   const bot = roster.byId[menu.id];
   const room2 = roster.roomsById[menu.id];
@@ -12952,12 +12883,11 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
 function AgentMenu({ menu, roster, actions, leaving }) {
   const ref = (0, import_react34.useRef)(null);
   const [place, setPlace] = (0, import_react34.useState)({ left: menu.x, top: menu.y });
-  const tick = useViewport();
   (0, import_react34.useLayoutEffect)(() => {
     const box = ref.current?.getBoundingClientRect();
     if (!box) return;
-    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, viewBottom() - box.height - 8)) });
-  }, [menu.x, menu.y, tick]);
+    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, window.innerHeight - box.height - 8)) });
+  }, [menu.x, menu.y]);
   const agent = roster.agentsById[menu.kind === "agent" ? menu.id : menu.agentId];
   if (agent === void 0) return null;
   const groups = menu.kind === "agent" ? [
@@ -13584,8 +13514,6 @@ var DETAILS_WIDTH = 320;
 var DETAILS_MAX = 520;
 var MIN_WIDTH = 360;
 var MIN_CHAT = 420;
-var PANEL_MIN = { details: DETAILS_WIDTH, browser: MIN_WIDTH };
-var overlayAt = (view, viewport) => viewport < MIN_CHAT + PANEL_MIN[view];
 var READ_FLASH_MS = 2400;
 var EMPTY_PAGE = { url: "", title: "", favicon: null, loading: false, canGoBack: false, canGoForward: false, error: null, excerpt: "" };
 var EMPTY_TABS2 = { ids: [], active: null };
@@ -13908,7 +13836,6 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
   const [resizing, setResizing] = (0, import_react37.useState)(false);
   const instant = dragging || resizing;
   const [reading, setReading] = (0, import_react37.useState)(false);
-  const overlay = overlayAt(view, viewport);
   const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport));
   (0, import_react37.useLayoutEffect)(() => {
     if (view === "browser" && width === null) setWidth(DEFAULT_WIDTH);
@@ -13926,9 +13853,9 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     const switched = settling && shownView.current !== view;
     shownView.current = view;
     if (switched) chatRoom.hold(true);
-    chatRoom.set(leaving || overlay ? null : panelWidth);
+    chatRoom.set(leaving ? null : panelWidth);
     if (switched) chatRoom.hold(false);
-  }, [view, panelWidth, leaving, overlay]);
+  }, [view, panelWidth, leaving]);
   (0, import_react37.useEffect)(() => () => {
     chatRoom.set(null);
     chatRoom.hold(false);
@@ -14045,7 +13972,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     });
   }, [view, pane.id]);
   const startResize = (event) => {
-    if (event.button !== 0 || leaving || overlay) return;
+    if (event.button !== 0 || leaving) return;
     event.preventDefault();
     const panel = root.current;
     const grip = event.currentTarget;
@@ -14100,13 +14027,12 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
       "data-settling": settling || void 0,
       "data-instant": instant || void 0,
       "data-dragging": dragging || void 0,
-      "data-overlay": overlay || void 0,
       style: { "--bt-panel-w": `${panelWidth}px` },
       onAnimationEnd: (event) => {
         if (event.target === event.currentTarget) setLanded(true);
       }
     },
-    leaving || overlay ? null : (0, import_react37.createElement)("div", { className: "bt-panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": t("Resize panel"), onPointerDown: startResize }),
+    leaving ? null : (0, import_react37.createElement)("div", { className: "bt-panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": t("Resize panel"), onPointerDown: startResize }),
     // Over the whole window while dragging: the cursor stays a resize cursor and the
     // pages underneath (the chat, the guest) see no pointer.
     dragging ? (0, import_react_dom8.createPortal)((0, import_react37.createElement)("div", { className: "bt-drag-shield", "aria-hidden": true }), document.body) : null,
@@ -14150,8 +14076,8 @@ var BROWSER_CSS = `
 .bt-ptab-globe{display:inline-flex}
 .bt-ptab-globe svg{width:14px;height:14px}
 .bt-ptab-title{max-width:140px;overflow:hidden;text-overflow:ellipsis}
-.bt-ptab-x{flex:none;width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:var(--bt-ink-3);opacity:0;pointer-events:none;transition:opacity .12s ease,background-color .12s ease}
-.bt-ptab:hover .bt-ptab-x,.bt-ptab[aria-selected=true] .bt-ptab-x{opacity:1;pointer-events:auto}
+.bt-ptab-x{flex:none;width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:var(--bt-ink-3);opacity:0;transition:opacity .12s ease,background-color .12s ease}
+.bt-ptab:hover .bt-ptab-x,.bt-ptab[aria-selected=true] .bt-ptab-x{opacity:1}
 .bt-ptab-x:hover{background:var(--bt-active);color:var(--bt-ink)}
 .bt-ptab-new{position:relative;z-index:1;flex:none;width:28px;height:32px;border:0;border-radius:9px;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .bt-ptab-new:hover{color:var(--bt-ink)}
@@ -14201,22 +14127,12 @@ var BROWSER_CSS = `
 .bt-bcard-row svg.bt-bcard-fav{width:14px;height:14px}
 .bt-bcard-title{flex:1;min-width:0;font-size:12.5px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink)}
 .bt-bcard-host{flex:none;font-size:11px;line-height:15px;color:var(--bt-ink-3);max-width:38%;overflow:hidden;text-overflow:ellipsis}
-.bt-bcard-x{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:7px;background:color-mix(in srgb,var(--bt-main) 88%,transparent);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .12s ease;backdrop-filter:blur(4px)}
-.bt-bcard:hover .bt-bcard-x{opacity:1;pointer-events:auto}
+.bt-bcard-x{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:7px;background:color-mix(in srgb,var(--bt-main) 88%,transparent);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;opacity:0;transition:opacity .12s ease;backdrop-filter:blur(4px)}
+.bt-bcard:hover .bt-bcard-x{opacity:1}
 .bt-bcard-new{display:flex;align-items:center;justify-content:center;gap:6px;height:40px;border:.5px dashed var(--bt-line-2);border-radius:12px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12.5px;cursor:pointer}
 .bt-bcard-new:hover{color:var(--bt-ink);border-color:var(--bt-ink-3)}
 .bt-bcard-new svg{width:14px;height:14px}
 .bt-browser-empty-mark{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
-/* A viewport too narrow to leave the conversation its room: the panel covers it,
-   and its close controls get a touch-sized target. */
-.bt-panel[data-overlay]{width:100vw}
-.bt-panel[data-overlay] .bt-ptab-close,.bt-panel[data-overlay] .bt-drawer-top .bt-round{width:44px;height:44px}
-/* Touch: the hidden-but-tappable tab and card close buttons stay visible at a
-   finger-sized target instead. */
-@media (hover:none){
-  .bt-ptab-x,.bt-bcard-x{opacity:1;pointer-events:auto;width:44px;height:44px}
-  .bt-ptab-close{width:44px;height:44px}
-}
 @media (prefers-reduced-motion:reduce){.bt-ptabs,.bt-panel-view,.bt-bcard,.bt-ptab-name{animation:none}}
 `;
 
@@ -15172,34 +15088,16 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
   const groupTime = roster.roomsById?.[sessionId] && Number.isFinite(data.time) ? messageClock(data.time) : void 0;
   const { shown, folded, control } = useFold(text, { markdown: false });
   const body = (0, import_react39.createElement)(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions });
-  const row = (0, import_react39.useRef)(null);
-  const [toolsOpen, setToolsOpen] = (0, import_react39.useState)(false);
-  (0, import_react39.useEffect)(() => {
-    if (!toolsOpen) return void 0;
-    const onDown = (event) => {
-      if (!row.current?.contains(event.target)) setToolsOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("touchstart", onDown);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("touchstart", onDown);
-    };
-  }, [toolsOpen]);
-  const tapTools = (event) => {
-    if (!noHover() || event.target instanceof Element && event.target.closest("a,button,input,textarea,select,pre,code,[role=button],[role=link]")) return;
-    setToolsOpen((value) => !value);
-  };
   return (0, import_react39.createElement)(
     "div",
-    { ref: row, className: "bt-umsg", "data-steering": steering || void 0 },
+    { className: "bt-umsg", "data-steering": steering || void 0 },
     (0, import_react39.createElement)(
       "div",
       { className: "bt-ustack" },
       attachments.length > 0 ? (0, import_react39.createElement)(Attachments, { attachments, renderMessageImages }) : null,
       text !== "" || rest.length > 0 ? (0, import_react39.createElement)(
         "div",
-        { className: "bt-ubody", title: clock3(data.time), "data-folded": folded || void 0, onClick: tapTools },
+        { className: "bt-ubody", title: clock3(data.time), "data-folded": folded || void 0 },
         control ? (0, import_react39.createElement)("div", { className: "bt-fold-body" }, body) : body,
         control,
         rest.map((block, index) => ui.JsonBlock ? (0, import_react39.createElement)(ui.JsonBlock, { key: index, label: t("Content"), payload: block }) : null)
@@ -15207,7 +15105,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
       referenceLabels.length > 0 ? (0, import_react39.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null,
       groupTime ? (0, import_react39.createElement)("div", { className: "bt-utime", title: clockLabel(data.time) }, groupTime) : null
     ),
-    text === "" ? null : (0, import_react39.createElement)("div", { className: "bt-utools", "data-open": toolsOpen || void 0 }, (0, import_react39.createElement)(CopyButton, { text }))
+    text === "" ? null : (0, import_react39.createElement)("div", { className: "bt-utools" }, (0, import_react39.createElement)(CopyButton, { text }))
   );
 }
 var USER_MESSAGE_CSS = `

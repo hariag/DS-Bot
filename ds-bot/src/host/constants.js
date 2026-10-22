@@ -69,9 +69,6 @@ export const TEAM_TOOLS = [
   'list_capabilities', 'save_capability', 'delete_capability',
   'attach_capability', 'detach_capability',
 ]
-// Answers a group gives to what members post after the round moved on (their finished
-// work, mostly), before the user speaks there again.
-export const ROOM_LATE_ROUNDS = 10
 // A member still at work this long after its first tool call lets the round go on; it
 // posts its reply when the work is done.
 export const ROOM_WORK_GRACE_MS = 15_000
