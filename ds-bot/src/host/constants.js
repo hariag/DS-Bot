@@ -91,7 +91,5 @@ export const BTW_TEXT_MAX = 2000
 export const BTW_CUT = ' [truncated]'
 // Aside calls in flight for one Bot. Each one reads the whole conversation.
 export const BTW_IN_FLIGHT = 2
-// Output budget for an aside. The answer is meant to be short; thinking shares it.
-export const BTW_MAX_TOKENS = 2000
-// Shown when an aside stops because it used that whole budget. The partial answer stays.
+// Shown when an aside stops at the route's own output limit. The partial answer stays.
 export const BTW_LIMIT = 'Answer cut off at the output limit.'

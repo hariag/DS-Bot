@@ -2,7 +2,7 @@
 // Nothing is written into the Session, and no tool call is ever dispatched.
 import { randomUUID } from 'node:crypto'
 import { BlockAssembler } from '@deepseek-ai/dsh-llm'
-import { BTW_CARDS_MAX, BTW_CUT, BTW_IN_FLIGHT, BTW_LIMIT, BTW_MAX_TOKENS, BTW_TEXT_MAX } from './constants.js'
+import { BTW_CARDS_MAX, BTW_CUT, BTW_IN_FLIGHT, BTW_LIMIT, BTW_TEXT_MAX } from './constants.js'
 import { headOf } from './text.js'
 
 // The mock model recognizes an aside by this first line.
@@ -266,8 +266,9 @@ export function install(rt) {
     }
   }
 
-  // The same route as the conversation, including temperature and stop. The
-  // aside sets its own output budget. The messages array is tagged for usage.
+  // The same route as the conversation, including temperature, stop, and the output
+  // budget: thinking shares it, so an aside must not set a small one of its own. The
+  // messages array is tagged for usage.
   async function callModel(snapshot, question, retry, signal) {
     const messages = rt.tagUsage([
       ...snapshot.messages,
@@ -280,7 +281,6 @@ export function install(rt) {
       messages,
       toolHistory: snapshot.toolHistory,
       ...(tools ? { tools: [...tools] } : {}),
-      maxTokens: BTW_MAX_TOKENS,
       sessionId: snapshot.sessionId,
       signal,
     })) assembler.push(chunk)

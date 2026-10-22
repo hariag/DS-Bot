@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { BTW_MARKER, normalizeBtwCards, trimToolBoundary } from '../src/host/btw.js'
-import { BTW_CARDS_MAX, BTW_CUT, BTW_MAX_TOKENS, BTW_TEXT_MAX } from '../src/host/constants.js'
+import { BTW_CARDS_MAX, BTW_CUT, BTW_TEXT_MAX } from '../src/host/constants.js'
 import { headOf } from '../src/host/text.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -246,8 +246,7 @@ test('an aside uses the session route, drops the pending tool call, and writes n
   assert.equal(request.provider, 'deepseek')
   assert.equal(request.model, 'aside-model')
   assert.equal(request.reasoningEffort, 'high')
-  assert.equal(request.maxTokens, BTW_MAX_TOKENS)
-  assert.notEqual(request.maxTokens, header.config.maxTokens)
+  assert.equal(request.maxTokens, header.config.maxTokens)
   assert.equal(request.temperature, 0.2)
   assert.deepEqual(request.stop, ['END'])
   assert.equal(request.sessionId, 's-now')
