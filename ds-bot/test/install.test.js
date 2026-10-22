@@ -152,6 +152,12 @@ test('the client channel answers from the saved state', async (t) => {
   assert.equal((await call('set-prefs', { motion: 'lively' })).value.motion, 'lively')
   assert.equal('motion' in (await call('set-prefs', { motion: 'normal' })).value, false)
   assert.deepEqual((await call('set-prefs', { motion: 'wild' })).error, { code: 'bot/invalid', message: 'Motion must be quiet, normal or lively', details: {} })
+  // So is the bubble width, a whole percent from 50 to 100.
+  assert.equal((await call('set-prefs', { width: 95 })).value.width, 95)
+  assert.equal('width' in (await call('set-prefs', { width: 80 })).value, false)
+  for (const width of [120, 49, 72.5, '90']) {
+    assert.deepEqual((await call('set-prefs', { width })).error, { code: 'bot/invalid', message: 'Width must be a whole percent from 50 to 100', details: {} }, String(width))
+  }
   // A refusal from the team code keeps its message for the user.
   assert.deepEqual((await call('delete-bot', { id: 'nobody' })).error, { code: 'bot/refused', message: 'Unknown Bot', details: {} })
   // Off the Desktop profile there are no Bot browsers.

@@ -354,6 +354,7 @@ const ZH = {
   'Unread marks, badges, and the brand mark.': '未读标记、徽标和品牌标志。',
   'Theme accent': '主题强调色',
   'Custom accent': '自定义强调色',
+  'Bubble width': '气泡宽度',
   'Bots · {count}': 'Bot · {count}',
   'First in the sidebar. Pick another Bot to hand it the role; {name} then stops being a Main Bot.': '排在侧栏最上面。选另一个 Bot 就会把主 Bot 交给它，{name} 随之不再是主 Bot。',
   'Choose a Bot…': '选择一个 Bot…',

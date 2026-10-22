@@ -116,3 +116,9 @@ export function registerTheme(id, theme) {
   }
 }
 export const allThemes = () => ({ ...THEMES, ...customThemes })
+
+// The bubble width: the percent of the column a chat bubble may take. A value the plugin
+// does not know reads as the default.
+export const MESSAGE_WIDTH = { min: 50, max: 100, step: 5 }
+const percent = (value, initial) => (Number.isInteger(value) && value >= MESSAGE_WIDTH.min && value <= MESSAGE_WIDTH.max ? value : initial)
+export const widthOf = prefs => percent(prefs?.width, 80)

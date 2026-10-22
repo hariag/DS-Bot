@@ -3,7 +3,7 @@ import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { teamActions } from './team-actions.js'
-import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
+import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes, widthOf } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
@@ -291,8 +291,10 @@ export function apply(ctx) {
       const id = themes[prefs.theme] ? prefs.theme : 'deepseek'
       const accent = isHex(prefs.accent) ? prefs.accent : undefined
       const motion = prefs.motion === 'quiet' || prefs.motion === 'lively' ? prefs.motion : 'normal'
+      const width = widthOf(prefs)
       document.body.dataset.btMotion = motion
-      const next = `${id}|${accent ?? ''}|${motion}|${registry.getSnapshot()}`
+      document.body.style.setProperty('--bt-msg-w', String(width / 100))
+      const next = `${id}|${accent ?? ''}|${motion}|${width}|${registry.getSnapshot()}`
       if (next === key) return
       key = next
       style.textContent = themeCss(themes[id], accent)
@@ -300,7 +302,7 @@ export function apply(ctx) {
       releaseTokens = ctx.theme.overrideTokens('ds-bot', shellTokens(themes[id]))
       if (typeof release === 'function') release()
       if (snapshot.ready) {
-        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion })) } catch { /* storage unavailable */ }
+        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, width: prefs.width })) } catch { /* storage unavailable */ }
       }
     }
     render()
@@ -313,6 +315,7 @@ export function apply(ctx) {
         if (typeof releaseTokens === 'function') releaseTokens()
       } finally {
         delete document.body.dataset.btMotion
+        document.body.style.removeProperty('--bt-msg-w')
         style.remove()
       }
     }

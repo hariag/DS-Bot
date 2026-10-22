@@ -1,7 +1,7 @@
 import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
 import { ACCENT_INKS, INKS } from './inks.js'
 import { isMainOf } from './sources.js'
-import { allThemes } from './themes.js'
+import { MESSAGE_WIDTH, allThemes, widthOf } from './themes.js'
 import { CloseIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, ConnectorIcon, InfoIcon, PlugIcon, PlusIcon, SlidersIcon, SETTINGS_ICONS } from './icons.js'
 import { AdminStar, BotAvatar, RoomAvatar } from './mark.js'
 import { useEscape } from './overlay-hooks.js'
@@ -37,6 +37,33 @@ function SetRow({ label, hint, children }) {
     children ? h('div', { className: 'bt-set-control' }, children) : null)
 }
 
+// A width in percent of the column. A drag saves once it rests, as the custom accent
+// does; a change still waiting when the dialog closes is saved, not dropped.
+function WidthSlider({ label, value, save }) {
+  const [width, setWidth] = useState(value)
+  const pending = useRef(null)
+  const timer = useRef(0)
+  const saveRef = useRef(save)
+  saveRef.current = save
+  useEffect(() => { if (pending.current === null) setWidth(value) }, [value])
+  const flush = () => {
+    const next = pending.current
+    pending.current = null
+    if (next !== null) saveRef.current(next)
+  }
+  useEffect(() => () => { clearTimeout(timer.current); flush() }, [])
+  const pick = (next) => {
+    setWidth(next)
+    pending.current = next
+    clearTimeout(timer.current)
+    timer.current = setTimeout(flush, 350)
+  }
+  const { min, max, step } = MESSAGE_WIDTH
+  return h('div', { className: 'bt-range', style: { '--bt-fill': `${((width - min) / (max - min)) * 100}%` } },
+    h('input', { type: 'range', min, max, step, value: width, 'aria-label': label, 'aria-valuetext': `${width}%`, onChange: event => pick(Number(event.target.value)) }),
+    h('output', null, `${width}%`))
+}
+
 function GeneralPage({ roster, actions, run }) {
   const prefs = roster.prefs ?? {}
   const themes = allThemes()
@@ -62,7 +89,8 @@ function GeneralPage({ roster, actions, run }) {
             style: { background: INKS[ink][0] }, onClick: () => run(actions.setPrefs({ accent: INKS[ink][0] })),
           })),
           h('label', { className: 'bt-swatch bt-swatch-custom', title: t('Custom accent'), 'data-on': Boolean(prefs.accent) && !ACCENT_INKS.some(ink => INKS[ink][0] === prefs.accent) },
-            h('input', { type: 'color', value: custom, 'aria-label': t('Custom accent'), onChange: event => pickCustom(event.target.value) }))))),
+            h('input', { type: 'color', value: custom, 'aria-label': t('Custom accent'), onChange: event => pickCustom(event.target.value) })))),
+      h(SetRow, { label: t('Bubble width') }, h(WidthSlider, { label: t('Bubble width'), value: widthOf(prefs), save: width => run(actions.setPrefs({ width })) }))),
     actions.setSurface ? h(SetSection, { key: 'mode', title: t('Mode') },
       h(SetRow, { label: t('Classic Agent mode') },
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => actions.setSurface('agent') }, t('Switch')))) : null,

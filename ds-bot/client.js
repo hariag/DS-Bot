@@ -416,6 +416,7 @@ var ZH = {
   "Unread marks, badges, and the brand mark.": "未读标记、徽标和品牌标志。",
   "Theme accent": "主题强调色",
   "Custom accent": "自定义强调色",
+  "Bubble width": "气泡宽度",
   "Bots · {count}": "Bot · {count}",
   "First in the sidebar. Pick another Bot to hand it the role; {name} then stops being a Main Bot.": "排在侧栏最上面。选另一个 Bot 就会把主 Bot 交给它，{name} 随之不再是主 Bot。",
   "Choose a Bot…": "选择一个 Bot…",
@@ -1690,6 +1691,9 @@ function registerTheme(id, theme) {
   };
 }
 var allThemes = () => ({ ...THEMES, ...customThemes });
+var MESSAGE_WIDTH = { min: 50, max: 100, step: 5 };
+var percent = (value, initial) => Number.isInteger(value) && value >= MESSAGE_WIDTH.min && value <= MESSAGE_WIDTH.max ? value : initial;
+var widthOf = (prefs) => percent(prefs?.width, 80);
 
 // src/shared/mentions.js
 var ALL_WORDS = ["all", "everyone", "所有人", "全体"];
@@ -2356,8 +2360,10 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-pill[data-memory=updated]:is(:hover,:focus-visible,[aria-expanded=true]) .bt-pill-go{width:0;margin-left:-8px;opacity:0;filter:blur(6px);transform:translateX(-6px)}
 @media (prefers-reduced-motion:reduce){.bt-pill,.bt-pill-go,.bt-pill-go svg{transition:none!important}.bt-pill-go{filter:none}.bt-pill:active{transform:none}}
 
+/* The bubble width setting: the share of the column a chat bubble may take. */
+body{--bt-msg-w:.8}
 .bt-astack{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin:0}
-.bt-bubble{max-width:min(80%,560px,calc(100% - 82px));background:var(--bt-bubble);color:var(--bt-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);box-sizing:border-box;overflow-wrap:anywhere}
+.bt-bubble{max-width:min(calc(var(--bt-msg-w) * 100%),calc(100% - 82px));background:var(--bt-bubble);color:var(--bt-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);box-sizing:border-box;overflow-wrap:anywhere}
 .bt-msg:not(:first-child)>.bt-msg-line>.bt-bubble{border-start-start-radius:6px}
 .bt-msg:not(:last-child)>.bt-msg-line>.bt-bubble{border-end-start-radius:6px}
 .bt-bubble [class*="_markdown"]>*+*{margin-top:10px}
@@ -2749,13 +2755,15 @@ ${SKIN_FOOT}>div:has(> [data-slot="sidebar.settings"]){order:-1!important;flex:n
 @keyframes bt-fade{from{opacity:0}to{opacity:1}}
 @keyframes bt-blur-in{from{opacity:0;filter:blur(2px)}to{opacity:1;filter:blur(0)}}
 @media (prefers-reduced-motion:reduce){.bt-voice-pane,.bt-voice-caption,.bt-voice-ring{animation:none!important}}
-.bt-msg{display:flex;flex-direction:column;align-items:flex-start;max-width:min(80%,560px,calc(100% - 82px))}
+/* A bubble takes the set share of the column, as the user's does; 82px stays free for
+   the hover toolbar beside it: a 6px margin and three 24px tools 2px apart. */
+.bt-msg{display:flex;flex-direction:column;align-items:flex-start;max-width:min(calc(var(--bt-msg-w) * 100%),calc(100% - 82px))}
 /* The bubble's row: reactions hang below it, so the hover toolbar (and a group
    sender's avatar) line up with the bubble alone. */
 .bt-msg-line{position:relative;display:flex;align-items:flex-end;gap:8px;max-width:100%}
 .bt-msg-line>.bt-bubble{max-width:none;min-width:0}
-/* The same bubble width as beside an avatar column: 80% of (100% - 30px), plus the 30px. */
-.bt-astack[data-lead]>.bt-msg{max-width:min(calc(80% + 6px),590px,calc(100% - 52px))}
+/* The same bubble width as beside an avatar column: the share of (100% - 30px), plus the 30px. */
+.bt-astack[data-lead]>.bt-msg{max-width:min(calc(var(--bt-msg-w) * (100% - 30px) + 30px),calc(100% - 52px))}
 .bt-tools{position:absolute;top:50%;left:100%;margin-left:6px;transform:translateY(-50%);display:flex;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
 .bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:128px;z-index:-1}
 .bt-msg:hover>.bt-msg-line>.bt-tools,.bt-msg:focus-within>.bt-msg-line>.bt-tools,.bt-tools[data-open]{opacity:1;visibility:visible}
@@ -2873,6 +2881,16 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-addlist{display:flex;flex-direction:column;margin-top:4px;padding:4px;border:1px solid var(--bt-line);border-radius:10px;background:var(--bt-card);animation:bt-rise .16s ease-out}
 .bt-seg{position:relative;display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--bt-hover)}
 .bt-motion-seg{width:216px}
+/* A range input: the track fills with the accent up to the thumb (--bt-fill). */
+.bt-range{display:flex;align-items:center;gap:10px;width:216px}
+.bt-range input{flex:1;min-width:0;height:20px;margin:0;background:none;-webkit-appearance:none;appearance:none;cursor:pointer}
+.bt-range input::-webkit-slider-runnable-track{height:4px;border-radius:999px;background:linear-gradient(to right,var(--bt-accent) var(--bt-fill),var(--bt-active) var(--bt-fill))}
+.bt-range input::-moz-range-track{height:4px;border-radius:999px;background:linear-gradient(to right,var(--bt-accent) var(--bt-fill),var(--bt-active) var(--bt-fill))}
+.bt-range input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;border:0;border-radius:50%;corner-shape:round;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 1px 3px rgba(0,0,0,.08);transition:${spring(SPRING_TAP, "scale")}}
+.bt-range input::-moz-range-thumb{width:16px;height:16px;border:0;border-radius:50%;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 1px 3px rgba(0,0,0,.08)}
+.bt-range input:active::-webkit-slider-thumb{scale:1.15}
+.bt-range input:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px;border-radius:999px}
+.bt-range output{flex:none;width:38px;text-align:right;font-size:13px;color:var(--bt-ink-2);font-variant-numeric:tabular-nums}
 .bt-seg button{position:relative;z-index:1;flex:1;height:30px;border:0;border-radius:8px;background:none;font:inherit;font-size:13px;color:var(--bt-ink-2);cursor:pointer;transition:background-color .15s ease,color .15s ease,box-shadow .15s ease,${spring(SPRING_TAP, "scale")}}
 .bt-seg button[aria-pressed=true]{background:var(--bt-card);color:var(--bt-ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .bt-seg button:disabled{opacity:.4;cursor:default}
@@ -3024,7 +3042,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 }
 `;
 var CONVERSATION_CSS = `
-.bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:min(560px,78%)}
+.bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:calc(var(--bt-msg-w) * 100%)}
 .bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
 .bt-think summary::-webkit-details-marker{display:none}
 .bt-think-time{font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -3231,7 +3249,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-earlier-top{display:flex;justify-content:center;align-items:center;height:34px;flex:none}
 .bt-earlier-top .bt-soft{height:28px;font-size:12px;padding:0 12px}
 .bt-urow{display:flex;justify-content:flex-end}
-.bt-ububble{max-width:min(560px,78%);background:var(--bt-user);color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:14px;line-height:20px;box-sizing:border-box;overflow-wrap:anywhere}
+.bt-ububble{max-width:calc(var(--bt-msg-w) * 100%);background:var(--bt-user);color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:14px;line-height:20px;box-sizing:border-box;overflow-wrap:anywhere}
 .bt-ububble [class*="_markdown"],.bt-ububble a{color:inherit!important}
 .bt-ububble p{margin:0;line-height:22px}
 .bt-uimages{display:block;font-size:12px;opacity:.7}
@@ -4312,19 +4330,19 @@ function WidgetTable({ node }) {
   );
 }
 function WidgetProgress({ node }) {
-  const percent2 = Math.max(0, Math.min(100, Number(node.percent) || 0));
+  const percent3 = Math.max(0, Math.min(100, Number(node.percent) || 0));
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-widget-progress" },
-    (0, import_react6.createElement)("span", { className: "bt-widget-progress-label" }, (0, import_react6.createElement)("span", null, node.label), (0, import_react6.createElement)("span", null, `${Math.round(percent2)}%`)),
+    (0, import_react6.createElement)("span", { className: "bt-widget-progress-label" }, (0, import_react6.createElement)("span", null, node.label), (0, import_react6.createElement)("span", null, `${Math.round(percent3)}%`)),
     (0, import_react6.createElement)("div", {
       className: "bt-widget-progress-track",
       role: "progressbar",
-      "aria-valuenow": percent2,
+      "aria-valuenow": percent3,
       "aria-valuemin": 0,
       "aria-valuemax": 100,
       "aria-label": node.label ?? t("Progress")
-    }, (0, import_react6.createElement)("div", { className: "bt-widget-progress-fill", style: { width: `${percent2}%` } }))
+    }, (0, import_react6.createElement)("div", { className: "bt-widget-progress-fill", style: { width: `${percent3}%` } }))
   );
 }
 function WidgetNode({ node, ctx }) {
@@ -11123,7 +11141,7 @@ function compact(count) {
   }
   return String(Math.round(count));
 }
-function percent(part, whole) {
+function percent2(part, whole) {
   if (!(whole > 0) || !(part > 0)) return "0";
   const value = part / whole * 100;
   return value < 1 ? "<1" : String(Math.round(value));
@@ -11145,7 +11163,7 @@ var soften = (paint, strength = 1) => {
   return paint.startsWith("linear-gradient(") ? paint.replace(/#[0-9a-f]{6}/gi, mix) : mix(paint);
 };
 var full = (count) => new Intl.NumberFormat(dateLocale()).format(Math.round(count));
-var hitRate = (sum) => percent(sum.cacheRead, sum.input + sum.cacheRead);
+var hitRate = (sum) => percent2(sum.cacheRead, sum.input + sum.cacheRead);
 var dates = (options) => new Intl.DateTimeFormat(dateLocale(), { timeZone: "UTC", ...options });
 var hourText = (ms) => `${String(new Date(ms).getUTCHours()).padStart(2, "0")}:00`;
 var yearOf = (ms) => new Date(ms).getUTCFullYear();
@@ -11388,7 +11406,7 @@ function Row2({ kind, glyph, name, sub, sum, whole, fill: fill2, index, onClick 
       ),
       (0, import_react28.createElement)("span", { className: "bt-us-track" }, (0, import_react28.createElement)("span", { style: { width: `${width}%`, background: fill2 } }))
     ),
-    (0, import_react28.createElement)("span", { className: "bt-us-row-num" }, (0, import_react28.createElement)("b", null, compact(sum.total)), (0, import_react28.createElement)("small", null, `${percent(sum.total, whole)}%`))
+    (0, import_react28.createElement)("span", { className: "bt-us-row-num" }, (0, import_react28.createElement)("b", null, compact(sum.total)), (0, import_react28.createElement)("small", null, `${percent2(sum.total, whole)}%`))
   );
 }
 function ListCard({ title, count, index, children }) {
@@ -11425,7 +11443,7 @@ function Profile({ face, share, range }) {
       { className: "bt-us-profile-copy" },
       (0, import_react28.createElement)("h3", null, face.name),
       face.sub ? (0, import_react28.createElement)("span", { className: "bt-us-profile-sub" }, face.sub) : null,
-      (0, import_react28.createElement)("span", { className: "bt-us-profile-share" }, range.from ? t("{share}% of all usage from {span}", { share: percent(share, 1), span: spanText(range.from, range.to) }) : t("{share}% of all usage in the last {range}", { share: percent(share, 1), range: rangeLabel(range.id) }))
+      (0, import_react28.createElement)("span", { className: "bt-us-profile-share" }, range.from ? t("{share}% of all usage from {span}", { share: percent2(share, 1), span: spanText(range.from, range.to) }) : t("{share}% of all usage in the last {range}", { share: percent2(share, 1), range: rangeLabel(range.id) }))
     )
   );
 }
@@ -12723,6 +12741,38 @@ function SetRow({ label, hint, children }) {
     children ? (0, import_react33.createElement)("div", { className: "bt-set-control" }, children) : null
   );
 }
+function WidthSlider({ label, value, save }) {
+  const [width, setWidth] = (0, import_react33.useState)(value);
+  const pending = (0, import_react33.useRef)(null);
+  const timer = (0, import_react33.useRef)(0);
+  const saveRef = (0, import_react33.useRef)(save);
+  saveRef.current = save;
+  (0, import_react33.useEffect)(() => {
+    if (pending.current === null) setWidth(value);
+  }, [value]);
+  const flush = () => {
+    const next = pending.current;
+    pending.current = null;
+    if (next !== null) saveRef.current(next);
+  };
+  (0, import_react33.useEffect)(() => () => {
+    clearTimeout(timer.current);
+    flush();
+  }, []);
+  const pick2 = (next) => {
+    setWidth(next);
+    pending.current = next;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(flush, 350);
+  };
+  const { min, max, step } = MESSAGE_WIDTH;
+  return (0, import_react33.createElement)(
+    "div",
+    { className: "bt-range", style: { "--bt-fill": `${(width - min) / (max - min) * 100}%` } },
+    (0, import_react33.createElement)("input", { type: "range", min, max, step, value: width, "aria-label": label, "aria-valuetext": `${width}%`, onChange: (event) => pick2(Number(event.target.value)) }),
+    (0, import_react33.createElement)("output", null, `${width}%`)
+  );
+}
 function GeneralPage({ roster, actions, run }) {
   const prefs = roster.prefs ?? {};
   const themes = allThemes();
@@ -12771,7 +12821,8 @@ function GeneralPage({ roster, actions, run }) {
             (0, import_react33.createElement)("input", { type: "color", value: custom, "aria-label": t("Custom accent"), onChange: (event) => pickCustom(event.target.value) })
           )
         )
-      )
+      ),
+      (0, import_react33.createElement)(SetRow, { label: t("Bubble width") }, (0, import_react33.createElement)(WidthSlider, { label: t("Bubble width"), value: widthOf(prefs), save: (width) => run(actions.setPrefs({ width })) }))
     ),
     actions.setSurface ? (0, import_react33.createElement)(
       SetSection,
@@ -15374,7 +15425,7 @@ function UserMessageCell({ node, sessionId, useRoster, actions, renderMessageIma
 }
 var USER_MESSAGE_CSS = `
 .bt-umsg{display:flex;flex-direction:row-reverse;align-items:center;justify-content:flex-start;gap:4px}
-.bt-ustack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702),82%);display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.bt-ustack{min-width:0;max-width:calc(var(--bt-msg-w) * 100%);display:flex;flex-direction:column;align-items:flex-end;gap:8px}
 .bt-ubody{max-width:100%;box-sizing:border-box;background:var(--bt-user);color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 8px);white-space:pre-wrap;word-break:break-word}
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}
@@ -15709,8 +15760,10 @@ function apply(ctx) {
       const id = themes[prefs.theme] ? prefs.theme : "deepseek";
       const accent = isHex(prefs.accent) ? prefs.accent : void 0;
       const motion = prefs.motion === "quiet" || prefs.motion === "lively" ? prefs.motion : "normal";
+      const width = widthOf(prefs);
       document.body.dataset.btMotion = motion;
-      const next = `${id}|${accent ?? ""}|${motion}|${registry.getSnapshot()}`;
+      document.body.style.setProperty("--bt-msg-w", String(width / 100));
+      const next = `${id}|${accent ?? ""}|${motion}|${width}|${registry.getSnapshot()}`;
       if (next === key) return;
       key = next;
       style.textContent = themeCss(themes[id], accent);
@@ -15719,7 +15772,7 @@ function apply(ctx) {
       if (typeof release === "function") release();
       if (snapshot.ready) {
         try {
-          localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion }));
+          localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, width: prefs.width }));
         } catch {
         }
       }
@@ -15734,6 +15787,7 @@ function apply(ctx) {
         if (typeof releaseTokens === "function") releaseTokens();
       } finally {
         delete document.body.dataset.btMotion;
+        document.body.style.removeProperty("--bt-msg-w");
         style.remove();
       }
     };
