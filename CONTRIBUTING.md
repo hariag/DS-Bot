@@ -18,7 +18,7 @@ Collaborators of this repository push branches here and open pull requests into 
 
 ## How we work
 
-Anyone on the team can do any kind of work: triage, bug fixes, features, the interface, docs. Only some decisions belong to the maintainer: the direction of the product, changes to a design that is already decided, these rules, releases and the architecture. Issues and pull requests that need such a decision carry the `maintainer` label; wait for the maintainer's answer before you start on them. What DS Bot is meant to be is in [docs/vision.md](docs/vision.md); the decided designs are in [docs/plans/](docs/plans/) (in Chinese). When you are not sure whether something is a bug or works as designed, read them first, then ask in the issue.
+Anyone on the team can do any kind of work: triage, bug fixes, features, the interface, docs. Only some decisions belong to the maintainer: the direction of the product, changes to a design that is already decided, these rules, releases and the architecture. Issues and pull requests that need such a decision carry the `maintainer` label; wait for the maintainer's answer before you start on them. What DS Bot is meant to be is in [docs/vision.md](docs/vision.md); the decided designs are in [docs/plans/](docs/plans/) and the UI standard is in [docs/design/ui-standard.md](docs/design/ui-standard.md) (in Chinese). When you are not sure whether something is a bug or works as designed, read them first, then ask in the issue.
 
 ### Branches
 
