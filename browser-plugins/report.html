@@ -1,34 +1,37 @@
 <!doctype html>
 <html lang="zh">
 <meta charset="utf-8">
-<title>DS Bot 实测</title>
+<title>DS Bot 长任务</title>
 <style>
-  body { margin: 0; font: 16px/1.5 Palatino, "Songti SC", serif; background: #f6f1e7; color: #1c1915; }
-  header { padding: 32px 6vw; background: #231c14; color: #f6f1e7; }
-  h1 { margin: 0 0 8px; font-size: 32px; }
-  main { padding: 20px 6vw 48px; }
-  table { width: 100%; border-collapse: collapse; background: white; }
-  th, td { border-bottom: 1px solid #ddd4c4; padding: 8px; text-align: left; vertical-align: top; }
-  th { background: #efe7d8; }
-  .ok { color: #1f7a4d; font-weight: 700; }
-  .bad { color: #9d341f; font-weight: 700; }
+  body { margin:0; font:16px/1.5 Palatino,"Songti SC",serif; background:#f6f1e7; color:#1c1915; }
+  header { padding:32px 5vw; background:#231c14; color:#f6f1e7; }
+  h1 { margin:0 0 8px; font-size:32px; }
+  main { padding:18px 5vw 48px; }
+  table { width:100%; border-collapse:collapse; background:white; font-size:14px; }
+  th,td { border-bottom:1px solid #ddd4c4; padding:8px; text-align:right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+  th { background:#efe7d8; }
+  .note { background:white; padding:12px 14px; margin-top:14px; }
 </style>
 <body>
 <header>
-  <h1>这次是 DS Bot 里的 Chief 在做</h1>
-  <p>模型是 OpenDesign 上的 deepseek-v4.1-flash。同一个 Bot 连续做 7 道更刁的题。浏览器工具挂在它所在的 profile 上，换了两套现成工具各跑一遍。</p>
+  <h1>长任务：时间、步数、token</h1>
+  <p>DS Bot 里的 Chief 在做。模型是 OpenDesign 上的 deepseek-v4.1-flash。三题都做对了。差别在耗时和 token，不在过不过。</p>
 </header>
 <main>
 <table>
-<tr><th>题目</th><th>Playwright MCP</th><th>dsh-plugin-browser-use</th></tr>
-<tr><td>搜索 lamp 时第一条是 90 元的灯罩。要的是 Cedar lamp 本身的价格。</td><td class="ok">过，1280 元</td><td class="ok">过，1280 元</td></tr>
-<tr><td>第一页广告把 88421 写成 Cancelled。账本在第 3 页。</td><td class="ok">过，Packed</td><td class="ok">过，Packed</td></tr>
-<tr><td>仓库代号在 Shadow DOM，码头代号要点 Load dock 才出现在 iframe，画布代号只在图上。</td><td class="bad">仓库和码头对了，回答里没有 CANVAS-73</td><td class="ok">三个都对：WH-441、DK-19、CANVAS-73</td></tr>
-<tr><td>自定义下拉选 Taiwan，勾上组件里的 Agree，提交拿令牌。</td><td class="ok">过，TOKEN-5521</td><td class="ok">过，TOKEN-5521</td></tr>
-<tr><td>价格先是省略号，2 秒后才变成数字。</td><td class="ok">过，4408</td><td class="ok">过，4408</td></tr>
-<tr><td>有个「继续以访客」会显示 Free。要的是登录后的套餐，不能乱填密码。</td><td class="ok">过，HANDOFF</td><td class="ok">过，HANDOFF</td></tr>
-<tr><td>books.toscrape.com 的 Travel 分类里，The Great Railway Bazaar 的价格，不是第一本。</td><td class="ok">过，£30.54</td><td class="ok">过，£30.54</td></tr>
+<tr><th>任务</th><th>工具</th><th>时间</th><th>步数</th><th>模型耗时</th><th>浏览器耗时</th><th>输出 token</th><th>新输入 token</th><th>缓存读 token</th></tr>
+<tr><td rowspan="2">12 页账本。只加 due，得到 4159 和 39，并交回收据</td><td>Playwright MCP</td><td>36 秒</td><td>9</td><td>18.9 秒</td><td>2.2 秒</td><td>1597</td><td>3941</td><td>372224</td></tr>
+<tr><td>dsh-plugin-browser-use</td><td>40 秒</td><td>13</td><td>24.2 秒</td><td>0.5 秒</td><td>1680</td><td>2742</td><td>450688</td></tr>
+<tr><td rowspan="2">Sequential Art 四页 75 本书，总价 £2592.92</td><td>Playwright MCP</td><td>28 秒</td><td>4</td><td>10.4 秒</td><td>2.5 秒</td><td>1126</td><td>4282</td><td>179456</td></tr>
+<tr><td>dsh-plugin-browser-use</td><td>24 秒</td><td>4</td><td>9.7 秒</td><td>0.8 秒</td><td>961</td><td>1265</td><td>146688</td></tr>
+<tr><td rowspan="2">20 站各一个数，加总 848。墙上的 999 是错的</td><td>Playwright MCP</td><td>28 秒</td><td>5</td><td>11.7 秒</td><td>1.9 秒</td><td>1237</td><td>1778</td><td>247808</td></tr>
+<tr><td>dsh-plugin-browser-use</td><td>24 秒</td><td>5</td><td>9.7 秒</td><td>0.3 秒</td><td>629</td><td>967</td><td>192256</td></tr>
 </table>
-<p>这两套在这 7 题上只分开了一处：画布上的代号。其余陷阱两边都识破了。</p>
+<div class="note">
+<p>步数是这一题里模型被调用的次数。时间是从发出题目到 Chief 答完。token 是这一题相对上一题的增量。</p>
+<p>缓存读 token 很大，因为这是同一个 Chief 接着前面的对话做，前面的上下文被重新读进来。新输入 token 才是这一题新写进上下文的部分。</p>
+<p>账本上 Playwright MCP 少 4 步，但浏览器调用更慢。书单和 20 站上，dsh-plugin-browser-use 的新输入和输出都更少，步数一样。</p>
+</div>
 </main>
 </html>
