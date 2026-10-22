@@ -20,6 +20,6 @@ node bench/run.mjs
 node bench/render-report.mjs
 ```
 
-模型用环境变量 `DEEPSEEK_API_KEY`，模型 id 是 `deepseek-v4.1-flash`。密钥不要写进仓库。
+模型走 OpenDesign `https://amr-link.open-design.ai/v1`，模型 id 是 `deepseek-v4.1-flash`。密钥用环境变量 `OPENDESIGN_API_KEY`。不要写进仓库。
 
 设计说明在 `docs/plans/2026-10-21-browser-plugins.md`。

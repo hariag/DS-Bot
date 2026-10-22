@@ -42,3 +42,4 @@ Bot 是长期身份。登录应该跟着 Bot 走，而不是跟着某一段对�
 ## 变更
 
 - 2026-10-21：维护者定下全团队一个后端、每 Bot 一份 profile、cookie 不同步。三个插件和实测在同一分支，默认关闭。
+- 2026-10-22：实测模型是 OpenDesign 上的 `deepseek-v4.1-flash`（`https://amr-link.open-design.ai/v1`），密钥用 `OPENDESIGN_API_KEY`。

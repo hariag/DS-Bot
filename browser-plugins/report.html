@@ -35,7 +35,7 @@
 <body>
 <header class="top">
   <h1>浏览器交给插件，团队只用一个</h1>
-  <p>模型实测没有跑起来，原因写在下面。驱动和隔离已经在真 Chromium 里通过。按 Bot 要能核对每一步来选，全局后端先用 refs；script 留给步骤很长、想少几次工具调用的时候；task 留给把整段网页目标交出去、回来对步骤清单的时候。</p>
+  <p>这次实测里 refs 逐步快照 通过 5/7。团队只开一个：先开 refs。另外两个留在分支里，不同时挂到 Bot 上。</p>
 </header>
 <nav>
   <a href="#decision">决定</a>
@@ -102,7 +102,7 @@
 <section id="runs">
   <h2>实测</h2>
   <p>标准用了公开的 <a href="https://github.com/MinorJerry/WebVoyager">WebVoyager</a>（browser-use 也用这套报过成绩）。整套六百多条、很多站要登录或已经过期，不全跑。抽了两条 arXiv 原文任务：<code>ArXiv--11</code>、<code>ArXiv--6</code>。另外用自建页面补 WebVoyager 不覆盖的部分：检索后再点进去、翻页、Shadow DOM、同源 iframe、只存在于 canvas 的字、登录必须交给人。</p>
-  <p>模型 <code>deepseek-v4.1-flash</code>。密钥：这台环境里没有 DEEPSEEK_API_KEY，模型任务没有跑。</p>
+  <p>模型 <code>deepseek-v4.1-flash</code>，经 OpenDesign <code>https://amr-link.open-design.ai/v1</code>。密钥：用的是环境里的 OPENDESIGN_API_KEY，没有写入报告。</p>
   <h3>驱动，不经过模型</h3>
   <ul><li class="ok"><b>shop</b> item page shows 1280</li><li class="ok"><b>orders</b> page 2 text checked</li><li class="ok"><b>shadow</b> snapshot includes shadow and frame text</li><li class="ok"><b>canvas-hidden</b> canvas code is not in the text</li><li class="ok"><b>canvas-shot</b> jpeg saved</li><li class="ok"><b>login-handoff</b> actions blocked, no password posted</li><li class="ok"><b>script-shop</b> 1280 yuan</li></ul>
   <h3>两个 Bot 的 cookie</h3>
@@ -113,8 +113,158 @@
   </ul>
   <h3>canvas 截图</h3><p class="fine">代号画在画布上，快照文本里没有。多模态模型要靠这张图。</p><img class="shot" alt="画着 CANVAS-73 的页面截图" src="data:image/jpeg;base64,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AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH//Z">
   <h3>通过数</h3>
-  <p>没有模型结果。</p>
-  <section id="refs"><h2>refs 逐步快照</h2><p class="warn">DEEPSEEK_API_KEY is not set in this environment</p></section><section id="script"><h2>script 一段脚本</h2><p class="warn">DEEPSEEK_API_KEY is not set in this environment</p></section><section id="task"><h2>task 整段任务</h2><p class="warn">DEEPSEEK_API_KEY is not set in this environment</p></section>
+  <p>refs 逐步快照 5/7</p><div class="bar"><span style="width:71%"></span></div><p>script 一段脚本 5/7</p><div class="bar"><span style="width:71%"></span></div><p>task 整段任务 5/7</p><div class="bar"><span style="width:71%"></span></div>
+  <section id="refs"><h2>refs 逐步快照 <small>5/7</small></h2>
+  <article class="task ok">
+    <header><b>shop</b><span>通过 · 5 步 · 7800 ms</span></header>
+    <p>The Cedar lamp costs **1280 yuan**.
+
+I searched the shop for &quot;Cedar lamp,&quot; which returned a single result (with no price shown), then opened that item's page where the price is listed as 1280 yuan.</p>
+    <p class="meta">browser_open → browser_fill → browser_click → browser_click · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>orders</b><span>通过 · 3 步 · 4348 ms</span></header>
+    <p>Order 88421 is on page 2 of the orders list, and its status is **Packed**.
+
+(Page 1 showed orders 10001 and 10002, both &quot;Open&quot;; page 2 contains only order 88421.)</p>
+    <p class="meta">browser_open → browser_click · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>shadow</b><span>通过 · 2 步 · 3135 ms</span></header>
+    <p>The page shows two labeled codes:
+
+- **Warehouse code: WH-441**
+- **Dock code: DK-19**
+
+(There's also a drawn element on the page displaying &quot;CANVAS-73&quot;, but that's a separate label, not tied to the warehouse or dock. The paragraph itself notes the codes aren't in it — the values come from the listed items.)</p>
+    <p class="meta">browser_open · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>canvas</b><span>通过 · 2 步 · 2794 ms</span></header>
+    <p>The code drawn on the canvas banner is **CANVAS-73**.
+
+For context, the page text also showed &quot;Warehouse WH-441&quot; and &quot;Dock DK-19&quot;, but the banner-only code is CANVAS-73.</p>
+    <p class="meta">browser_open · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>login</b><span>通过 · 3 步 · 4472 ms</span></header>
+    <p>I've stopped at the sign-in step and handed the browser to you.
+
+The page at `http://127.0.0.1:40061/account` requires a username and password, and I don't know your password, so I haven't typed anything into the form.
+
+**What I need from you:** sign in on that page in the browser window. Once you're done, let me know and I'll continue — then I'll read the plan name displayed on the account page and report it back to you.</p>
+    <p class="meta">browser_open → browser_handoff · 图像：accepted</p>
+  </article>
+  <article class="task bad">
+    <header><b>ArXiv--11</b><span>未通过 · 10 步 · 38492 ms</span></header>
+    <p>The agent returned an empty answer, so it did not address whether non-English submissions require a multi-language abstract or identify the separator between multiple abstracts.</p>
+    <p class="meta">browser_open → browser_open → browser_snapshot → browser_open → browser_open → browser_fill → browser_open → browser_open → browser_open → browser_open · 评判：The agent returned an empty answer, so it did not address whether non-English submissions require a multi-language abstract or identify the separator between multiple abstracts. · 图像：accepted</p>
+  </article>
+  <article class="task bad">
+    <header><b>ArXiv--6</b><span>未通过 · 10 步 · 74323 ms</span></header>
+    <p>The agent provided no answer; it did not count or report the number of figures and tables in the paper.</p>
+    <p class="meta">browser_open → browser_open → browser_open → browser_open → browser_open → browser_open → browser_scroll → browser_scroll → browser_screenshot → browser_scroll · 评判：The agent provided no answer; it did not count or report the number of figures and tables in the paper. · 图像：accepted</p>
+  </article></section><section id="script"><h2>script 一段脚本 <small>5/7</small></h2>
+  <article class="task ok">
+    <header><b>shop</b><span>通过 · 6 步 · 8398 ms</span></header>
+    <p>**Cedar lamp — 1280 yuan**
+
+Steps taken:
+1. Opened the shop at http://127.0.0.1:40061/
+2. Searched &quot;Cedar lamp&quot; → one result: &quot;Cedar lamp&quot; (as expected, the results list showed no price)
+3. Opened the item page (/item?id=lamp), which displays **Price: 1280 yuan**
+
+Confirmed visually via screenshot.</p>
+    <p class="meta">browser_exec → browser_exec → browser_exec → browser_exec → browser_exec · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>orders</b><span>通过 · 4 步 · 6151 ms</span></header>
+    <p>Order **88421** is on page 2 and its status is **Packed**.</p>
+    <p class="meta">browser_exec → browser_exec → browser_exec · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>shadow</b><span>通过 · 4 步 · 6013 ms</span></header>
+    <p>The page is loaded and the values are visible.
+
+**Warehouse code: WH-441**
+**Dock code: DK-19**
+
+Notes on how they were found:
+- The intro paragraph explicitly says the codes aren't in it (&quot;The codes are not in this paragraph&quot;), so I read the surrounding elements instead.
+- &quot;Warehouse WH-441&quot; appears as plain text just below the heading; &quot;Dock DK-19&quot; appears inside a bordered box further down.
+- There's also a dark canvas element rendering `CANVAS-73` — that's a separate canvas-drawn label, unrelated to the warehouse or dock fields, so I left it out of the answer.</p>
+    <p class="meta">browser_exec → browser_exec → browser_exec · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>canvas</b><span>通过 · 3 步 · 4591 ms</span></header>
+    <p>The code drawn on the canvas banner is **CANVAS-73**.
+
+For context, the page also showed these codes in regular text: Warehouse WH-441 and Dock DK-19 — but the canvas-drawn code is CANVAS-73.</p>
+    <p class="meta">browser_exec → browser_exec · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>login</b><span>通过 · 3 步 · 4376 ms</span></header>
+    <p>I've opened http://127.0.0.1:40061/account and handed the browser over to you for sign-in.
+
+The page shows a &quot;Sign in&quot; form with **Username** and **Password** fields. Since I don't know the password, I haven't typed anything. Please log in yourself in the browser window, then let me know to continue and I'll read off the plan name shown after sign-in.</p>
+    <p class="meta">browser_exec → browser_handoff · 图像：accepted</p>
+  </article>
+  <article class="task bad">
+    <header><b>ArXiv--11</b><span>未通过 · 10 步 · 18340 ms</span></header>
+    <p>The agent provided an empty answer and did not answer whether non-English submissions require a multi-language abstract or specify the separator between abstracts.</p>
+    <p class="meta">browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec · 评判：The agent provided an empty answer and did not answer whether non-English submissions require a multi-language abstract or specify the separator between abstracts. · 图像：accepted</p>
+  </article>
+  <article class="task bad">
+    <header><b>ArXiv--6</b><span>未通过 · 10 步 · 29426 ms</span></header>
+    <p>The agent returned an empty answer, so it did not provide the required count of figures and tables in the paper.</p>
+    <p class="meta">browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec → browser_exec · 评判：The agent returned an empty answer, so it did not provide the required count of figures and tables in the paper. · 图像：accepted</p>
+  </article></section><section id="task"><h2>task 整段任务 <small>5/7</small></h2>
+  <article class="task ok">
+    <header><b>shop</b><span>通过 · 5 步 · 8005 ms</span></header>
+    <p>The Cedar lamp costs **1280 yuan**.
+
+I searched the shop for &quot;Cedar lamp&quot;, opened the single result, and its detail page shows: Price: 1280 yuan.</p>
+    <p class="meta">browser_open → browser_fill → browser_click → browser_click · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>orders</b><span>通过 · 3 步 · 4557 ms</span></header>
+    <p>Order 88421 is on page 2, and its status is **Packed**.
+
+(Page 1 listed orders 10001 and 10002, both Open; order 88421 appeared only after clicking Next to page 2.)</p>
+    <p class="meta">browser_open → browser_click · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>shadow</b><span>通过 · 2 步 · 3851 ms</span></header>
+    <p>Warehouse code: **WH-441**
+Dock code: **DK-19**
+
+Both were read from the page's component panels (the paragraph text itself contained no codes). Note: there's also a separate drawn banner reading &quot;CANVAS-73&quot;, which appears unrelated to the warehouse/dock fields you asked about.</p>
+    <p class="meta">browser_open · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>canvas</b><span>通过 · 2 步 · 2784 ms</span></header>
+    <p>The code drawn on the canvas banner is **CANVAS-73**.
+
+(For reference, the page's visible text contained Warehouse WH-441 and Dock DK-19, but the canvas code is CANVAS-73.)</p>
+    <p class="meta">browser_open · 图像：accepted</p>
+  </article>
+  <article class="task ok">
+    <header><b>login</b><span>通过 · 3 步 · 4836 ms</span></header>
+    <p>I've stopped at the sign-in screen at http://127.0.0.1:40061/account. It has a Username field, a Password field, and a &quot;Sign in&quot; button, and I don't know your credentials, so I've handed the browser to you to log in.
+
+Please sign in, then tell me to continue — I'll read the plan name from the account page as soon as it loads.</p>
+    <p class="meta">browser_open → browser_handoff · 图像：accepted</p>
+  </article>
+  <article class="task bad">
+    <header><b>ArXiv--11</b><span>未通过 · 10 步 · 30383 ms</span></header>
+    <p>The agent returned an empty answer. It did not answer whether a multi-language abstract is required or identify the separator between multiple abstracts.</p>
+    <p class="meta">browser_open → browser_open → browser_open → browser_open → browser_open → browser_fill → browser_open → browser_open → browser_scroll → browser_open → browser_click · 评判：The agent returned an empty answer. It did not answer whether a multi-language abstract is required or identify the separator between multiple abstracts. · 图像：accepted</p>
+  </article>
+  <article class="task bad">
+    <header><b>ArXiv--6</b><span>未通过 · 10 步 · 51021 ms</span></header>
+    <p>The agent returned an empty answer and did not provide the requested count of figures and tables.</p>
+    <p class="meta">browser_open → browser_open → browser_open → browser_open → browser_open → browser_scroll → browser_scroll → browser_click → browser_open → browser_scroll · 评判：The agent returned an empty answer and did not provide the requested count of figures and tables. · 图像：accepted</p>
+  </article></section>
 </section>
 </main>
 </html>

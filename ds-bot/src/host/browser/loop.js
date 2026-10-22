@@ -57,6 +57,9 @@ export async function runToolLoop({ tools, complete, goal, system, maxSteps = 8 
       role: 'assistant',
       content: message.content ?? '',
       ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+      ...(message.reasoning_content !== undefined ? { reasoning_content: message.reasoning_content } : {}),
+      ...(message.reasoning !== undefined ? { reasoning: message.reasoning } : {}),
+      ...(message.reasoning_details !== undefined ? { reasoning_details: message.reasoning_details } : {}),
     })
     if (toolCalls.length === 0) {
       return { answer: String(message.content ?? '').trim(), trace, steps: step + 1, vision, stopped: 'answer' }

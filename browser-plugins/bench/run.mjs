@@ -175,6 +175,13 @@ async function isolate(playwrightUrl) {
   }
 }
 
+const onlyTasks = (process.env.BENCH_TASKS ?? '').split(',').map(item => item.trim()).filter(Boolean)
+const onlyPlugins = (process.env.BENCH_PLUGINS ?? '').split(',').map(item => item.trim()).filter(Boolean)
+const selectedTasks = onlyTasks.length ? tasks.filter(task => onlyTasks.includes(task.id)) : tasks
+const selectedPlugins = onlyPlugins.length
+  ? Object.fromEntries(Object.entries(plugins).filter(([name]) => onlyPlugins.includes(name)))
+  : plugins
+
 const fixture = await startFixture()
 const profileRoot = join(tmpdir(), `bot-browser-bench-${Date.now()}`)
 const driverSession = await openBotBrowser({ botId: 'driver', profileRoot, headless: true, playwrightUrl })
@@ -184,6 +191,7 @@ await driverSession.close()
 const key = deepseekKey()
 const results = {
   model: MODEL,
+  endpoint: 'https://amr-link.open-design.ai/v1',
   key: key ? 'present' : 'missing',
   driver,
   isolation: await isolate(playwrightUrl),
@@ -191,11 +199,11 @@ const results = {
 }
 
 if (!key) {
-  for (const name of Object.keys(plugins)) results.plugins[name] = { skipped: 'DEEPSEEK_API_KEY is not set in this environment' }
+  for (const name of Object.keys(selectedPlugins)) results.plugins[name] = { skipped: 'OPENDESIGN_API_KEY is not set in this environment' }
 } else {
-  for (const [name, plugin] of Object.entries(plugins)) {
+  for (const [name, plugin] of Object.entries(selectedPlugins)) {
     const rows = []
-    for (const task of tasks) {
+    for (const task of selectedTasks) {
       fixture.posted.length = 0
       const session = await openBotBrowser({ botId: `${name}-${task.id}`.replace(/[^a-z0-9-]/gi, '-'), profileRoot, headless: true, playwrightUrl })
       console.log(`run ${name} ${task.id}`)

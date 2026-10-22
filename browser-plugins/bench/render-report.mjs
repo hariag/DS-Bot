@@ -161,7 +161,7 @@ const html = `<!doctype html>
 <section id="runs">
   <h2>实测</h2>
   <p>标准用了公开的 <a href="https://github.com/MinorJerry/WebVoyager">WebVoyager</a>（browser-use 也用这套报过成绩）。整套六百多条、很多站要登录或已经过期，不全跑。抽了两条 arXiv 原文任务：<code>ArXiv--11</code>、<code>ArXiv--6</code>。另外用自建页面补 WebVoyager 不覆盖的部分：检索后再点进去、翻页、Shadow DOM、同源 iframe、只存在于 canvas 的字、登录必须交给人。</p>
-  <p>模型 <code>${esc(results.model)}</code>。密钥：${results.key === 'present' ? '环境里有，没有写入报告。' : '这台环境里没有 DEEPSEEK_API_KEY，模型任务没有跑。'}</p>
+  <p>模型 <code>${esc(results.model || 'deepseek-v4.1-flash')}</code>，经 OpenDesign <code>https://amr-link.open-design.ai/v1</code>。密钥：${results.key === 'present' ? '用的是环境里的 OPENDESIGN_API_KEY，没有写入报告。' : '这台环境里没有 OPENDESIGN_API_KEY，模型任务没有跑。'}</p>
   <h3>驱动，不经过模型</h3>
   <ul>${driverRows || '<li>还没有驱动结果</li>'}</ul>
   <h3>两个 Bot 的 cookie</h3>
