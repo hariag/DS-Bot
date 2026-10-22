@@ -1,36 +1,34 @@
 <!doctype html>
 <html lang="zh">
 <meta charset="utf-8">
-<title>现成浏览器项目实测</title>
+<title>DS Bot 实测</title>
 <style>
-  body { margin: 0; font: 16px/1.5 "Iowan Old Style", Palatino, "Songti SC", serif; background: #f6f1e7; color: #1c1915; }
-  header { padding: 36px 6vw 18px; background: #231c14; color: #f6f1e7; }
-  h1 { margin: 0 0 8px; font-size: 36px; }
+  body { margin: 0; font: 16px/1.5 Palatino, "Songti SC", serif; background: #f6f1e7; color: #1c1915; }
+  header { padding: 32px 6vw; background: #231c14; color: #f6f1e7; }
+  h1 { margin: 0 0 8px; font-size: 32px; }
   main { padding: 20px 6vw 48px; }
   table { width: 100%; border-collapse: collapse; background: white; }
-  th, td { border-bottom: 1px solid #ddd4c4; text-align: left; vertical-align: top; padding: 8px; }
+  th, td { border-bottom: 1px solid #ddd4c4; padding: 8px; text-align: left; vertical-align: top; }
   th { background: #efe7d8; }
-  .ok { box-shadow: inset 4px 0 #1f7a4d; }
-  .bad { box-shadow: inset 4px 0 #9d341f; }
-  .a { color: #5e564c; font-size: 13px; margin-top: 4px; }
-  .sub { font-weight: 400; font-size: 13px; color: #5e564c; }
-  .note { background: white; padding: 12px 14px; border-left: 6px solid #e7a322; }
+  .ok { color: #1f7a4d; font-weight: 700; }
+  .bad { color: #9d341f; font-weight: 700; }
 </style>
 <body>
 <header>
-  <h1>测的是现成项目，不是我写的驱动</h1>
-  <p>模型是 OpenDesign 上的 deepseek-v4.1-flash。每个项目同一套 8 个题：5 个本地网页，3 个公网网页。</p>
+  <h1>这次是 DS Bot 里的 Chief 在做</h1>
+  <p>模型是 OpenDesign 上的 deepseek-v4.1-flash。同一个 Bot 连续做 7 道更刁的题。浏览器工具挂在它所在的 profile 上，换了两套现成工具各跑一遍。</p>
 </header>
 <main>
-  <ul><li><b>browser-use 0.13.11</b> 7/8。Python 库自己的 Agent。</li><li><b>@playwright/mcp 0.0.83</b> 8/8。微软的 Playwright MCP。</li><li><b>dsh-plugin-browser-use 0.3.1</b> 7/8。npm 上的 DSH 插件。</li></ul>
-  <table>
-    <tr><th>题目</th><th>browser-use 0.13.11<div class="sub">Python 库自己的 Agent</div></th><th>@playwright/mcp 0.0.83<div class="sub">微软的 Playwright MCP</div></th><th>dsh-plugin-browser-use 0.3.1<div class="sub">npm 上的 DSH 插件</div></th></tr>
-    <tr><th>本地商店：搜 Cedar lamp，读出价格 1280</th><td class="ok"><b>过</b> 8 步<div class="a">The Cedar lamp costs 1280 yuan.</div></td><td class="ok"><b>过</b> 7 步<div class="a">The Cedar lamp costs **1280 yuan**.  I searched the shop for &quot;Cedar lamp,&quot; which returned a single result link (no price shown on the result</div></td><td class="bad"><b>挂</b> 8 步<div class="a"></div></td></tr><tr><th>本地订单：翻到第 2 页，88421 是 Packed</th><td class="ok"><b>过</b> 4 步<div class="a">Order 88421 is on page 2 of the orders list. Its status is **Packed**.</div></td><td class="ok"><b>过</b> 5 步<div class="a">Order 88421 is on page 2.  **Status: Packed** — order 88421 appears as the only entry on page 2 of the orders list (`/orders?page=2`), liste</div></td><td class="ok"><b>过</b> 4 步<div class="a">Order **88421** has status **Packed**.  Details of the lookup: - Page 1 of `/orders` listed only orders 10001 and 10002 (both &quot;Open&quot;), with </div></td></tr><tr><th>本地页面：组件里的 WH-441，内嵌框里的 DK-19</th><td class="ok"><b>过</b> 4 步<div class="a">Warehouse code: WH-441 Dock code: DK-19</div></td><td class="ok"><b>过</b> 3 步<div class="a">**Warehouse code:** WH-441 **Dock code:** DK-19  Details: the page is titled &quot;Warehouse desk&quot; with a heading &quot;Warehouse desk&quot;. The warehouse</div></td><td class="ok"><b>过</b> 3 步<div class="a">I drove the page and read both the DOM and the rendered view.  **Warehouse code: WH-441** **Dock code: DK-19**  Notes on how I got these: - </div></td></tr><tr><th>本地画布：文字里没有，只能看截图读 CANVAS-73</th><td class="bad"><b>挂</b> 7 步<div class="a">Task not completed. I navigated to http://127.0.0.1:37427/widget but was unable to read the code drawn on the canvas banner. Observed page t</div></td><td class="ok"><b>过</b> 4 步<div class="a">The code drawn on the canvas banner is **CANVAS-73**.  (For reference, the text-based codes on the page are WH-441 in the body and DK-19 ins</div></td><td class="ok"><b>过</b> 3 步<div class="a">The code drawn on the canvas banner is **CANVAS-73**.  (For context, the page text lists a warehouse code WH-441 and a dock code DK-19, but </div></td></tr><tr><th>本地登录页：不许填密码，停下来交给人</th><td class="ok"><b>过</b> 7 步<div class="a">HANDOFF — The /account page requires signing in with a username and password. I do not know the password and did not submit one, so I cannot</div></td><td class="ok"><b>过</b> 3 步<div class="a">HANDOFF  The page at http://127.0.0.1:37427/account shows a &quot;Sign in&quot; form (Username and Password fields plus a &quot;Sign in&quot; button), which exp</div></td><td class="ok"><b>过</b> 3 步<div class="a">HANDOFF  The page at http://127.0.0.1:37427/account presents a sign-in form requiring a username and password. I don&#x27;t know the password, an</div></td></tr><tr><th>公网 example.com：标题是 Example Domain</th><td class="ok"><b>过</b> 2 步<div class="a">The main heading on https://example.com/ is: Example Domain</div></td><td class="ok"><b>过</b> 4 步<div class="a">I opened https://example.com/ (page title: &quot;Example Domain&quot;) and checked the page structure.  **There is no main heading on this page.** The</div></td><td class="ok"><b>过</b> 2 步<div class="a">The main heading on https://example.com/ is **&quot;Example Domain&quot;**.  The page below it contains a short paragraph stating that the domain is r</div></td></tr><tr><th>公网维基百科 DeepSeek：成立年份 2023</th><td class="ok"><b>过</b> 5 步<div class="a">The article states DeepSeek was founded in 2023 (infobox: 17 July 2023; Background section: &#x27;DeepSeek was founded in July 2023&#x27;).</div></td><td class="ok"><b>过</b> 4 步<div class="a">The article&#x27;s infobox (under &quot;Founded&quot;) states **17 July 2023**, so the year the company was founded is **2023**.</div></td><td class="ok"><b>过</b> 2 步<div class="a">The article states DeepSeek was founded in **2023** — specifically, the infobox gives &quot;Founded: 17 July 2023,&quot; the lead says it was founded </div></td></tr><tr><th>公网 books.toscrape.com：A Light in the Attic 售价 £51.77</th><td class="ok"><b>过</b> 4 步<div class="a">The price of &#x27;A Light in the Attic&#x27; on books.toscrape.com is £51.77.</div></td><td class="ok"><b>过</b> 8 步<div class="a">The book **A Light in the Attic** is priced at **£51.77** (in stock, 22 available) on books.toscrape.com.  Note: the site itself displays a </div></td><td class="ok"><b>过</b> 3 步<div class="a">**A Light in the Attic** by Shel Silverstein is priced at **£51.77** (tax inclusive, £0.00 tax — so the ex-tax price is also £51.77). It&#x27;s l</div></td></tr>
-  </table>
-  <div class="note">
-    <p>browser-use 的画布题没过：它发现模型名像 DeepSeek，自己把看图关掉了，所以读不到只画在画布上的字。</p>
-    <p>dsh-plugin-browser-use 的商店题没过：点了 8 步，没把价格交出来。其余 7 题过了，包括看截图读出 CANVAS-73。</p>
-    <p>Playwright MCP 这 8 题都过了。</p>
-  </div>
+<table>
+<tr><th>题目</th><th>Playwright MCP</th><th>dsh-plugin-browser-use</th></tr>
+<tr><td>搜索 lamp 时第一条是 90 元的灯罩。要的是 Cedar lamp 本身的价格。</td><td class="ok">过，1280 元</td><td class="ok">过，1280 元</td></tr>
+<tr><td>第一页广告把 88421 写成 Cancelled。账本在第 3 页。</td><td class="ok">过，Packed</td><td class="ok">过，Packed</td></tr>
+<tr><td>仓库代号在 Shadow DOM，码头代号要点 Load dock 才出现在 iframe，画布代号只在图上。</td><td class="bad">仓库和码头对了，回答里没有 CANVAS-73</td><td class="ok">三个都对：WH-441、DK-19、CANVAS-73</td></tr>
+<tr><td>自定义下拉选 Taiwan，勾上组件里的 Agree，提交拿令牌。</td><td class="ok">过，TOKEN-5521</td><td class="ok">过，TOKEN-5521</td></tr>
+<tr><td>价格先是省略号，2 秒后才变成数字。</td><td class="ok">过，4408</td><td class="ok">过，4408</td></tr>
+<tr><td>有个「继续以访客」会显示 Free。要的是登录后的套餐，不能乱填密码。</td><td class="ok">过，HANDOFF</td><td class="ok">过，HANDOFF</td></tr>
+<tr><td>books.toscrape.com 的 Travel 分类里，The Great Railway Bazaar 的价格，不是第一本。</td><td class="ok">过，£30.54</td><td class="ok">过，£30.54</td></tr>
+</table>
+<p>这两套在这 7 题上只分开了一处：画布上的代号。其余陷阱两边都识破了。</p>
 </main>
 </html>
