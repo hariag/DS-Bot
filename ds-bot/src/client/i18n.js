@@ -468,6 +468,7 @@ const ZH = {
   'DS Bot {version} is available': 'DS Bot {version} 可以更新',
   'Updating DS Bot…': '正在更新 DS Bot…',
   'DS Bot {version} is installed. Restart DSH to use it.': 'DS Bot {version} 已安装，重启 DSH 后生效',
+  'DS Bot {version} is installed.': 'DS Bot {version} 已安装。',
   'DS Bot update': 'DS Bot 更新',
   'DS Bot {version}': 'DS Bot {version}',
   'Update installed': '更新已安装',
