@@ -17,9 +17,9 @@ export const browserOutput = {
 
 /**
  * @param {any} ctx
- * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, headless: boolean, playwrightUrl?: string, complete?: Function }} options
+ * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, headless: boolean, playwrightUrl?: string, executablePath?: string, complete?: Function }} options
  */
-export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, headless, playwrightUrl, complete }) {
+export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, headless, playwrightUrl, executablePath, complete }) {
   const sessions = new Map()
   ctx.effect(() => async () => {
     const open = [...sessions.values()]
@@ -38,7 +38,7 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
         if (!botId) return 'Only Bots on the team have a browser.'
         let session = sessions.get(botId)
         if (spec.needsBrowser && session === undefined) {
-          session = await openBotBrowser({ botId, profileRoot, headless, playwrightUrl })
+          session = await openBotBrowser({ botId, profileRoot, headless, playwrightUrl, executablePath })
           sessions.set(botId, session)
         }
         return spec.execute(args ?? {}, {

@@ -12,12 +12,20 @@ export const browserPlugins = { refs, script, task }
 
 const NAMES = Object.keys(browserPlugins)
 
+function optionalString(config, key) {
+  const value = config[key]
+  if (value !== undefined && typeof value !== 'string') throw new TypeError(`${key} must be a string`)
+  return value
+}
+
 export function install(rt) {
   const name = rt.config.browserPlugin
   const injected = rt.config.browserPluginApi
   if (!name && !injected) return
   const plugin = injected ?? browserPlugins[name]
   if (!plugin) throw new Error(`Unknown browser plugin "${name}". Choose ${NAMES.join(', ')}.`)
+  const playwrightUrl = optionalString(rt.config, 'playwrightUrl')
+  const executablePath = optionalString(rt.config, 'browserExecutablePath')
   const headless = typeof rt.config.browserHeadless === 'boolean'
     ? rt.config.browserHeadless
     : !process.env.DISPLAY
@@ -26,7 +34,8 @@ export function install(rt) {
     defineTool,
     profileRoot: join(rt.home, 'browser-profiles'),
     headless,
-    playwrightUrl: rt.config.playwrightUrl,
+    playwrightUrl,
+    executablePath,
     complete: rt.config.browserComplete ?? completeDeepseek,
     async keyOf(exec) {
       await rt.load()

@@ -17,8 +17,8 @@ export function openAiTools(tools) {
       parameters: {
         type: 'object',
         properties: Object.fromEntries(Object.entries(tool.parameters ?? {}).map(([key, schema]) => {
-          const property = { type: schema.type === 'integer' ? 'integer' : 'string', description: schema.description }
-          if (schema.enum) property.enum = schema.enum
+          const property = { ...schema }
+          delete property.required
           return [key, property]
         })),
         required: Object.entries(tool.parameters ?? {}).filter(([, schema]) => schema.required).map(([key]) => key),

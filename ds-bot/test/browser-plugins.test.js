@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
+import { toolDefs as refsTools } from '../src/host/browser/refs.js'
 import { fakeContext } from './fake-ctx.js'
 
 const TEAM = {
@@ -76,6 +77,38 @@ test('an unknown browser plugin is refused', () => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-browser-plugin-'))
   try {
     assert.throws(() => apply(fakeContext(), { home, browserPlugin: 'devtools' }), /Choose refs, script, task/)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('refs exposes the ARIA snapshot tool contract', () => {
+  assert.deepEqual(refsTools.map(tool => tool.name), [
+    'browser_open',
+    'browser_snapshot',
+    'browser_click',
+    'browser_type',
+    'browser_select',
+    'browser_press',
+    'browser_tabs',
+    'browser_back',
+    'browser_screenshot',
+    'browser_handoff',
+    'browser_resume',
+  ])
+  assert.equal(refsTools.some(tool => tool.name === 'browser_scroll'), false)
+  assert.equal(refsTools.find(tool => tool.name === 'browser_type').parameters.submit.required, undefined)
+  assert.equal(refsTools.find(tool => tool.name === 'browser_tabs').parameters.index.required, undefined)
+  assert.equal(refsTools.find(tool => tool.name === 'browser_handoff').parameters.note.required, undefined)
+})
+
+test('browserExecutablePath must be a string when configured', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-browser-plugin-'))
+  try {
+    assert.throws(
+      () => apply(fakeContext(), { home, browserPlugin: 'refs', browserExecutablePath: 42 }),
+      /browserExecutablePath must be a string/,
+    )
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

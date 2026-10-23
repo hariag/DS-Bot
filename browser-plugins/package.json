@@ -8,6 +8,6 @@
     "report": "node bench/render-report.mjs"
   },
   "dependencies": {
-    "playwright": "1.55.1"
+    "playwright": "1.61.1"
   }
 }
