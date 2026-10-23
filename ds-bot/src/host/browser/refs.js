@@ -8,6 +8,7 @@ export const systemPrompt = [
   'Every action returns a fresh snapshot. Refs can change when the page changes. Use browser_tabs to list, select, or close tabs.',
   'Use browser_screenshot for content that is only drawn, such as a canvas.',
   'When the page wants a login, a payment, or a captcha, call browser_handoff and stop. Do not invent a password, a code, or a card number.',
+  "Submitting, buying, or deleting may need the user's approval; the tool asks for you. If a result is unknown, check the page with browser_snapshot and never repeat the action blindly.",
   'When the task is done, answer in plain text and do not call a tool.',
 ].join('\n')
 

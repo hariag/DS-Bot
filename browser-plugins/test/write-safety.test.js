@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -13,9 +13,6 @@ const playwrightUrl = new URL('../node_modules/playwright/index.mjs', import.met
 
 function pageHtml() {
   return `
-      <form method="post" action="/unlabeled">
-        <input type="submit">
-      </form>
       <form method="post" action="/submit">
         <input name="message" aria-label="Post message">
         <button type="submit">Publish</button>
@@ -25,12 +22,7 @@ function pageHtml() {
         <button type="submit">Filter</button>
       </form>
       <a href="/link">Read link</a>
-      <button type="button" onclick="fetch('/delete', {method:'POST'}).then(() => document.querySelector('#status').textContent = 'Deleted')">Delete</button>
-      <button type="button" onclick="document.querySelector('#status').textContent = 'Paid'">Pay now</button>
-      <input autocomplete="cc-number" aria-label="Card number" oninput="document.querySelector('#card-status').textContent = this.value">
-      <p id="card-status">empty</p>
-      <input type="file" aria-label="Upload file" onchange="document.querySelector('#status').textContent = this.files[0]?.name ?? ''">
-      <a href="/download">Download report</a>
+      <button type="button" onclick="document.querySelector('#status').textContent = 'Deleted'">Delete</button>
       <form method="post" action="/hang">
         <button type="submit">Publish delayed</button>
       </form>
@@ -39,7 +31,7 @@ function pageHtml() {
 }
 
 async function fixtureServer() {
-  const counters = { submit: 0, filter: 0, hang: 0, unlabeled: 0, upload: 0, delete: 0, deleteA: 0, deleteB: 0 }
+  const counters = { submit: 0, filter: 0, hang: 0 }
   const sockets = new Set()
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? '/', `http://${request.headers.host}`).pathname
@@ -53,53 +45,11 @@ async function fixtureServer() {
       counters.submit += 1
       request.resume()
       request.on('end', () => html('Submitted', '<p>Saved</p>'))
-    } else if (path === '/unlabeled' && request.method === 'POST') {
-      counters.unlabeled += 1
-      request.resume()
-      request.on('end', () => html('Submitted', '<p>Submitted</p>'))
-    } else if (path === '/upload' && request.method === 'POST') {
-      counters.upload += 1
-      request.resume()
-      request.on('end', () => html('Uploaded', '<p>Uploaded</p>'))
-    } else if (path === '/delete' && request.method === 'POST') {
-      counters.delete += 1
-      const item = new URL(request.url ?? '/', `http://${request.headers.host}`).searchParams.get('item')
-      if (item === 'A') counters.deleteA += 1
-      if (item === 'B') counters.deleteB += 1
-      request.resume()
-      request.on('end', () => { response.writeHead(204); response.end() })
-    } else if (path === '/delete-items') {
-      html('Delete items', `
-        <div><p>Item A</p><button type="button" onclick="fetch('/delete?item=A', {method:'POST'})">Delete</button></div>
-        <div><p>Item B</p><button type="button" onclick="fetch('/delete?item=B', {method:'POST'})">Delete</button></div>
-      `)
     } else if (path === '/filter') {
       counters.filter += 1
       html('Filtered', '<p>Filtered</p>')
     } else if (path === '/link') {
       html('Link target', '<p>Link opened</p>')
-    } else if (path === '/download') {
-      response.writeHead(200, {
-        'content-type': 'text/plain',
-        'content-disposition': 'attachment; filename="report.txt"',
-      })
-      response.end('download contents')
-    } else if (path === '/download-concurrent') {
-      const value = new URL(request.url ?? '/', `http://${request.headers.host}`).searchParams.get('value') ?? ''
-      response.writeHead(200, {
-        'content-type': 'text/plain',
-        'content-disposition': 'attachment; filename="report.txt"',
-        'content-length': Buffer.byteLength(value),
-      })
-      setTimeout(() => response.end(value), 25)
-    } else if (path === '/download-fail') {
-      response.writeHead(200, {
-        'content-type': 'text/plain',
-        'content-disposition': 'attachment; filename="unfinished.txt"',
-        'content-length': '1000',
-      })
-      response.write('partial')
-      setTimeout(() => request.socket.destroy(), 25)
     } else if (path === '/hang' && request.method === 'POST') {
       counters.hang += 1
       request.resume()
@@ -132,16 +82,11 @@ async function fixtureServer() {
   }
 }
 
-function findRefs(snapshot, label) {
-  return snapshot.split('\n')
-    .filter(value => value.match(/"([^"]*)"/)?.[1] === label && /\[ref=e\d+\]/.test(value))
-    .map(line => line.match(/\[ref=(e\d+)\]/)?.[1])
-}
-
 function findRef(snapshot, label) {
-  const ref = findRefs(snapshot, label)[0]
-  assert.ok(ref, `no snapshot ref for ${label}`)
-  return ref
+  const line = snapshot.split('\n').find(value => value.match(/"([^"]*)"/)?.[1] === label && /\[ref=e\d+\]/.test(value))
+  const match = line?.match(/\[ref=(e\d+)\]/)
+  assert.ok(match, `no snapshot ref for ${label}`)
+  return match[1]
 }
 
 async function waitFor(check) {
@@ -152,11 +97,10 @@ async function waitFor(check) {
   }
 }
 
-async function setup(t, actionTimeout = 500, options = {}) {
+async function setup(t, actionTimeout = 500) {
   const fixture = await fixtureServer()
   let profileRoot
   let session
-  const extra = typeof options === 'function' ? {} : options
   t.after(async () => {
     await session?.close().catch(() => {})
     try {
@@ -169,69 +113,18 @@ async function setup(t, actionTimeout = 500, options = {}) {
   session = await openBotBrowser({
     botId: `test-${process.pid}-${Date.now()}`,
     profileRoot,
-    downloadDir: join(profileRoot, 'downloads'),
     playwrightUrl,
     actionTimeout,
-    ...extra,
-    uploadRoots: typeof options === 'function' ? async () => options(profileRoot) : extra.uploadRoots,
   })
   return { fixture, profileRoot, session }
 }
 
-async function mountedDownloadAndUpload(t, rootsFor) {
-  const fixture = await fixtureServer()
-  const profileRoot = await mkdtemp(join(tmpdir(), 'browser-mounted-download-'))
-  const { roots, ...destinations } = rootsFor(profileRoot)
-  await Promise.all(roots.map(root => mkdir(root, { recursive: true })))
-  let cleanup
-  let tool
-  t.after(async () => {
-    await cleanup?.()
-    await fixture.close()
-    await rm(profileRoot, { recursive: true, force: true })
-  })
-  mountBrowserPlugin({
-    effect(create) { cleanup = create() },
-    tools: { register(value) { tool = value } },
-  }, {
-    toolDefs: [{
-      name: 'browser_open',
-      needsBrowser: true,
-      async execute(args, { session }) {
-        const downloaded = await session.open(args.downloadUrl)
-        const snapshot = await session.open(args.pageUrl)
-        const uploaded = await session.upload(findRef(snapshot, 'Upload file'), [args.path])
-        return `${downloaded}\n${uploaded}`
-      },
-    }],
-    defineTool: value => value,
-    keyOf: async () => 'bot',
-    profileRoot,
-    downloadRoot: join(profileRoot, 'legacy-downloads'),
-    downloadRoots: async () => roots,
-    uploadRoots: async () => roots,
-    headless: true,
-    playwrightUrl,
-  })
-  const result = await tool.execute({
-    downloadUrl: new URL('download', fixture.url).href,
-    pageUrl: fixture.url,
-    path: join(roots[0], 'report.txt'),
-  }, { agent: { id: 'bot' } })
-  return { ...destinations, result }
-}
-
-test('unlabeled POST submits, GET forms, and links are not gated', async (t) => {
+test('GET forms and links are not gated; risky buttons are gated', async (t) => {
   const { fixture, session } = await setup(t)
   const actions = []
   const gate = action => { actions.push(action) }
 
   let snapshot = await session.open(fixture.url)
-  await gateScope.run(gate, () => session.click(findRef(snapshot, 'Submit')))
-  await waitFor(() => fixture.counters.unlabeled === 1)
-  assert.equal(actions.length, 0)
-
-  snapshot = await session.open(fixture.url)
   await gateScope.run(gate, () => session.click(findRef(snapshot, 'Filter')))
   await waitFor(() => fixture.counters.filter === 1)
   assert.equal(actions.length, 0)
@@ -239,103 +132,12 @@ test('unlabeled POST submits, GET forms, and links are not gated', async (t) => 
   snapshot = await session.open(fixture.url)
   await gateScope.run(gate, () => session.click(findRef(snapshot, 'Read link')))
   assert.equal(actions.length, 0)
-})
-
-test('delete requires a checked second click even when confirm is passed first', async (t) => {
-  const { fixture, session } = await setup(t)
-  const actions = []
-  const gate = action => { actions.push(action) }
-  let snapshot = await session.open(fixture.url)
-  let ref = findRef(snapshot, 'Delete')
-
-  let result = await gateScope.run(gate, () => session.click(ref))
-  assert.match(result, /This would delete "Delete".*Nothing was deleted yet/)
-  assert.equal(actions.length, 0)
-  assert.equal(fixture.counters.delete, 0)
-  assert.doesNotMatch(result, /Deleted/)
 
   snapshot = await session.open(fixture.url)
-  ref = findRef(snapshot, 'Delete')
-  result = await gateScope.run(gate, () => session.click(ref, { confirm: true }))
-  assert.match(result, /This would delete "Delete".*Nothing was deleted yet/)
-  assert.equal(actions.length, 0)
-  assert.equal(fixture.counters.delete, 0)
-  assert.doesNotMatch(result, /Deleted/)
-
-  ref = findRef(result, 'Delete')
-  result = await gateScope.run(gate, () => session.click(ref, { confirm: true }))
+  await gateScope.run(gate, () => session.click(findRef(snapshot, 'Delete')))
   assert.equal(actions.length, 1)
   assert.equal(actions[0].kind, 'delete')
   assert.equal(actions[0].label, 'Delete')
-  assert.match(result, /Deleted/)
-  await waitFor(() => fixture.counters.delete === 1)
-})
-
-test('delete confirmation is bound to the clicked element', async (t) => {
-  const { fixture, session } = await setup(t)
-  const actions = []
-  const gate = action => { actions.push(action) }
-  let snapshot = await session.open(new URL('delete-items', fixture.url).href)
-  let refs = findRefs(snapshot, 'Delete')
-  assert.equal(refs.length, 2)
-
-  let result = await gateScope.run(gate, () => session.click(refs[0]))
-  assert.match(result, /This would delete "Delete".*Nothing was deleted yet/)
-  assert.equal(fixture.counters.deleteA, 0)
-  assert.equal(fixture.counters.deleteB, 0)
-
-  refs = findRefs(result, 'Delete')
-  result = await gateScope.run(gate, () => session.click(refs[1], { confirm: true }))
-  assert.match(result, /This would delete "Delete".*Nothing was deleted yet/)
-  assert.equal(fixture.counters.deleteA, 0)
-  assert.equal(fixture.counters.deleteB, 0)
-  assert.equal(actions.length, 0)
-
-  refs = findRefs(result, 'Delete')
-  result = await gateScope.run(gate, () => session.click(refs[1], { confirm: true }))
-  await waitFor(() => fixture.counters.deleteB === 1)
-  assert.equal(fixture.counters.deleteA, 0)
-  assert.equal(fixture.counters.deleteB, 1)
-  assert.equal(actions.length, 1)
-  assert.equal(actions[0].kind, 'delete')
-})
-
-test('payment buttons are refused and card details are never typed', async (t) => {
-  const { fixture, session } = await setup(t)
-  const snapshot = await session.open(fixture.url)
-  await assert.rejects(
-    session.click(findRef(snapshot, 'Pay now')),
-    /This looks like a payment \("Pay now" on 127\.0\.0\.1\).*call browser_handoff with reason "payment".*Nothing was done\./,
-  )
-  await assert.rejects(
-    session.type(findRef(snapshot, 'Card number'), '4111111111111111'),
-    /Payment details are entered by the user.*Nothing was typed\./,
-  )
-  const after = await session.snapshotText()
-  assert.match(after, /empty/)
-  assert.doesNotMatch(after, /4111111111111111/)
-  assert.doesNotMatch(after, /Paid/)
-})
-
-test('Bot handoff can resume, while user takeover blocks browser actions', async t => {
-  let hold = null
-  const { fixture, session } = await setup(t, 500, {
-    getHold: () => hold,
-    onHold: value => { hold = value },
-  })
-  const snapshot = await session.open(fixture.url)
-  assert.match(session.handoff('login', 'Sign in'), /Waiting for the user/)
-  assert.equal(hold.by, 'bot')
-  await assert.rejects(session.click(findRef(snapshot, 'Read link')), /browser is waiting for the user/)
-  assert.equal(session.resume(), 'The browser is yours again.')
-  assert.equal(hold, null)
-
-  hold = { by: 'user', reason: 'takeover', note: '' }
-  assert.throws(() => session.resume(), /Only the user can give it back/)
-  await assert.rejects(session.snapshotText(), /The user has taken over this browser/)
-  await assert.rejects(session.open(fixture.url), /The user has taken over this browser/)
-  hold = null
-  assert.match(await session.open(fixture.url), /Write safety/)
 })
 
 test('POST submit clicks are gated before the server receives them', async (t) => {
@@ -351,7 +153,7 @@ test('POST submit clicks are gated before the server receives them', async (t) =
   await gateScope.run(gate, () => session.click(findRef(snapshot, 'Publish')))
   await waitFor(() => fixture.counters.submit === 1)
   assert.equal(actions.length, 1)
-  assert.equal(actions[0].kind, 'post')
+  assert.equal(actions[0].kind, 'submit')
 
   allowed = false
   snapshot = await session.open(fixture.url)
@@ -377,7 +179,7 @@ test('type with submit gates POST forms but not GET forms', async (t) => {
   await gateScope.run(gate, () => session.type(findRef(snapshot, 'Post message'), 'hello', true))
   await waitFor(() => fixture.counters.submit === 1)
   assert.equal(actions.length, 1)
-  assert.equal(actions[0].kind, 'post')
+  assert.equal(actions[0].kind, 'submit')
 
   snapshot = await session.open(fixture.url)
   await session.type(findRef(snapshot, 'Post message'), 'hello')
@@ -469,7 +271,7 @@ test('browser_task driver tools inherit the outer authorization gate', async (t)
     headless: true,
     playwrightUrl,
     actionTimeout: 500,
-    completeFor: () => complete,
+    complete,
     authorize: async (_exec, _botId, action) => { gateActions.push(action) },
   })
   const tool = registered.get('browser_task')
@@ -480,181 +282,6 @@ test('browser_task driver tools inherit the outer authorization gate', async (t)
 
   assert.match(result.text, /Published/)
   assert.equal(gateActions.length, 1)
-  assert.equal(gateActions[0].kind, 'post')
+  assert.equal(gateActions[0].kind, 'submit')
   await waitFor(() => fixture.counters.submit === 1)
-})
-
-test('uploads are confined to allowed roots and gated before setting files', async (t) => {
-  const { fixture, profileRoot, session } = await setup(t, 500, root => [join(root, 'allowed')])
-  const allowedRoot = join(profileRoot, 'allowed')
-  await mkdir(allowedRoot)
-  const file = join(allowedRoot, 'notes.txt')
-  const outside = join(profileRoot, 'outside.txt')
-  await writeFile(file, 'hello')
-  await writeFile(outside, 'private')
-  const linked = join(allowedRoot, 'outside-link.txt')
-  await symlink(outside, linked)
-  const actions = []
-  let reject = true
-  const gate = action => {
-    actions.push(action)
-    if (reject) throw new Error('approval denied')
-  }
-  const snapshot = await session.open(fixture.url)
-  const ref = findRef(snapshot, 'Upload file')
-
-  await assert.rejects(
-    gateScope.run(gate, () => session.upload(ref, [outside])),
-    /Uploads must come from .*outside\.txt is outside them\. Nothing was uploaded\./,
-  )
-  await assert.rejects(
-    gateScope.run(gate, () => session.upload(ref, [linked])),
-    /Uploads must come from .*outside-link\.txt is outside them\. Nothing was uploaded\./,
-  )
-  assert.equal(actions.length, 0)
-
-  await assert.rejects(gateScope.run(gate, () => session.upload(ref, [file])), /approval denied/)
-  assert.equal(actions.length, 1)
-  assert.equal(actions[0].kind, 'upload')
-  assert.equal(actions[0].label, 'notes.txt')
-  reject = false
-  const result = await gateScope.run(gate, () => session.upload(ref, [file]))
-  assert.match(result, /notes\.txt/)
-  assert.equal(actions.length, 2)
-  assert.equal(fixture.counters.upload, 0)
-})
-
-test('standalone uploads without configured roots are refused', async (t) => {
-  const { fixture, profileRoot, session } = await setup(t)
-  const file = join(profileRoot, 'notes.txt')
-  await writeFile(file, 'hello')
-  const snapshot = await session.open(fixture.url)
-  await assert.rejects(
-    session.upload(findRef(snapshot, 'Upload file'), [file]),
-    /Uploads must come from an allowed folder.*Nothing was uploaded\./,
-  )
-  assert.doesNotMatch(await session.snapshotText(), /notes\.txt/)
-})
-
-test('uploads skip a missing legacy folder when the working folder exists', async t => {
-  const { fixture, profileRoot, session } = await setup(t, 500, profileRoot => [
-    join(profileRoot, 'working'),
-    join(profileRoot, 'browser-downloads', 'bot'),
-  ])
-  const working = join(profileRoot, 'working')
-  const file = join(working, 'notes.txt')
-  await mkdir(working, { recursive: true })
-  await writeFile(file, 'from working')
-  const snapshot = await session.open(fixture.url)
-  const result = await gateScope.run(() => {}, () => session.upload(findRef(snapshot, 'Upload file'), [file]))
-  assert.match(result, /notes\.txt/u)
-  assert.match(await session.snapshotText(), /notes\.txt/u)
-})
-
-test('mounted downloads and uploads use the Bot working directory', async t => {
-  const { result, working } = await mountedDownloadAndUpload(t, profileRoot => ({
-    roots: [join(profileRoot, 'working'), join(profileRoot, 'team')],
-    working: join(profileRoot, 'working'),
-  }))
-  assert.match(result, /Downloaded "report\.txt" to /u)
-  assert.ok(result.includes(join(working, 'report.txt')))
-  assert.match(result, /report\.txt/u)
-  assert.equal(await readFile(join(working, 'report.txt'), 'utf8'), 'download contents')
-})
-
-test('mounted downloads and uploads fall back to the team folder', async t => {
-  const { result, team } = await mountedDownloadAndUpload(t, profileRoot => ({
-    roots: [join(profileRoot, 'team')],
-    team: join(profileRoot, 'team'),
-  }))
-  assert.match(result, /Downloaded "report\.txt" to /u)
-  assert.ok(result.includes(join(team, 'report.txt')))
-  assert.match(result, /report\.txt/u)
-  assert.equal(await readFile(join(team, 'report.txt'), 'utf8'), 'download contents')
-})
-
-test('opening a direct attachment URL saves the download instead of throwing', async (t) => {
-  const { fixture, profileRoot, session } = await setup(t)
-  const actions = []
-  const result = await gateScope.run(action => { actions.push(action) }, () => session.open(new URL('download', fixture.url).href))
-  assert.match(result, /Downloaded "report\.txt" to .*report\.txt\./)
-  assert.equal(actions.length, 1)
-  assert.equal(actions[0].kind, 'download')
-  assert.equal(actions[0].host, '127.0.0.1')
-  assert.equal(await readFile(join(profileRoot, 'downloads', 'report.txt'), 'utf8'), 'download contents')
-})
-
-test('downloads are gated, saved without overwriting, or cancelled on refusal', async (t) => {
-  const { fixture, profileRoot, session } = await setup(t)
-  const downloadDir = join(profileRoot, 'downloads')
-  const actions = []
-  let reject = true
-  const gate = action => {
-    actions.push(action)
-    if (reject) throw new Error('The user did not approve this download. Nothing was done.')
-  }
-  let snapshot = await session.open(fixture.url)
-  let result = await gateScope.run(gate, () => session.click(findRef(snapshot, 'Download report')))
-  assert.match(result, /The user did not approve this download/)
-  assert.equal(actions.at(-1).kind, 'download')
-  assert.deepEqual(await readdir(downloadDir).catch(() => []), [])
-
-  reject = false
-  snapshot = result
-  result = await gateScope.run(gate, () => session.click(findRef(snapshot, 'Download report')))
-  assert.match(result, new RegExp(`Downloaded "report\\.txt" to ${downloadDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]report\\.txt\\.`))
-  assert.equal(actions.at(-1).kind, 'download')
-  assert.equal(await readFile(join(downloadDir, 'report.txt'), 'utf8'), 'download contents')
-  assert.equal(fixture.counters.upload, 0)
-})
-
-test('concurrent downloads reserve unique names and preserve both files', async t => {
-  const fixture = await fixtureServer()
-  const profileRoot = await mkdtemp(join(tmpdir(), 'browser-concurrent-downloads-'))
-  const downloadDir = join(profileRoot, 'shared')
-  await mkdir(downloadDir, { recursive: true })
-  const sessions = []
-  t.after(async () => {
-    await Promise.all(sessions.map(session => session.close().catch(() => {})))
-    await fixture.close()
-    await rm(profileRoot, { recursive: true, force: true })
-  })
-  for (const botId of ['download-one', 'download-two']) {
-    sessions.push(await openBotBrowser({
-      botId,
-      profileRoot,
-      downloadDir,
-      playwrightUrl,
-    }))
-  }
-  const urls = ['first', 'second'].map(value => {
-    const url = new URL('download-concurrent', fixture.url)
-    url.searchParams.set('value', value)
-    return url.href
-  })
-  const results = await Promise.all(sessions.map((session, index) => session.open(urls[index])))
-  assert.ok(results.every(result => /Downloaded "report\.txt" to /u.test(result)))
-  const filenames = (await readdir(downloadDir)).sort()
-  assert.deepEqual(filenames, ['report (2).txt', 'report.txt'])
-  const contents = await Promise.all(filenames.map(filename => readFile(join(downloadDir, filename), 'utf8')))
-  assert.deepEqual(contents.sort(), ['first', 'second'])
-})
-
-test('downloads resolve a function-valued directory for every save and remove failed placeholders', async t => {
-  let destination
-  const { fixture, profileRoot, session } = await setup(t, 500, { downloadDir: async () => destination })
-  const first = join(profileRoot, 'first-downloads')
-  const second = join(profileRoot, 'second-downloads')
-  destination = first
-  const firstResult = await session.open(new URL('download', fixture.url).href)
-  destination = second
-  const secondResult = await session.open(new URL('download', fixture.url).href)
-  assert.ok(firstResult.includes(join(first, 'report.txt')))
-  assert.ok(secondResult.includes(join(second, 'report.txt')))
-  assert.equal(await readFile(join(first, 'report.txt'), 'utf8'), 'download contents')
-  assert.equal(await readFile(join(second, 'report.txt'), 'utf8'), 'download contents')
-
-  const failed = await session.open(new URL('download-fail', fixture.url).href)
-  assert.match(failed, /Download "unfinished\.txt" failed/u)
-  assert.deepEqual(await readdir(second), ['report.txt'])
 })

@@ -33,6 +33,14 @@ export function install(rt) {
     await setPreset(sessionId, name)
   }
 
+  function permissionOf(botId, sessionId) {
+    const bot = rt.botOf(botId)
+    if (bot === undefined) return undefined
+    return roomOfSession(sessionId)?.permission
+      ?? bot.permission
+      ?? permissionCatalog()?.defaultPreset
+  }
+
   function checkPreset(name, whose) {
     const service = presets()
     if (service === undefined) throw new Error('Permissions are not available in this DeepSeek Harness')
@@ -76,5 +84,5 @@ export function install(rt) {
     return true
   }
 
-  Object.assign(rt, { permissionCatalog, applyPermission, setPermission, cleanRoomPermission, setRoomPermission })
+  Object.assign(rt, { permissionCatalog, permissionOf, applyPermission, setPermission, cleanRoomPermission, setRoomPermission })
 }

@@ -2,6 +2,7 @@
 // the Bot; a standalone package can pass the Session id instead.
 import { join } from 'node:path'
 import { openBotBrowser } from './session.js'
+import { gateScope } from './gate.js'
 
 export const browserOutput = {
   schema: { type: 'string' },
@@ -17,9 +18,9 @@ export const browserOutput = {
 
 /**
  * @param {any} ctx
- * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, headless: boolean, playwrightUrl?: string, executablePath?: string, complete?: Function }} options
+ * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, headless: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, authorize?: (exec: any, botId: string, action: any) => Promise<void>, complete?: Function }} options
  */
-export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, headless, playwrightUrl, executablePath, complete }) {
+export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, headless, playwrightUrl, executablePath, actionTimeout, authorize, complete }) {
   const sessions = new Map()
   ctx.effect(() => async () => {
     const open = [...sessions.values()]
@@ -38,15 +39,16 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
         if (!botId) return 'Only Bots on the team have a browser.'
         let session = sessions.get(botId)
         if (spec.needsBrowser && session === undefined) {
-          session = await openBotBrowser({ botId, profileRoot, headless, playwrightUrl, executablePath })
+          session = await openBotBrowser({ botId, profileRoot, headless, playwrightUrl, executablePath, actionTimeout })
           sessions.set(botId, session)
         }
-        return spec.execute(args ?? {}, {
+        const gate = authorize ? action => authorize(exec, botId, action) : undefined
+        return gateScope.run(gate, () => spec.execute(args ?? {}, {
           botId,
           profileDir: join(profileRoot, botId),
           session,
           complete,
-        })
+        }))
       },
     }))
   }

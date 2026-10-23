@@ -5,6 +5,33 @@ import { MAX_AVATAR_IMAGE, ROOM_MAX_MEMBERS, ROOM_MODES, ROOM_NAME_MAX, ROOM_NOT
 import { currentColor, isColor, unquote } from './text.js'
 import { nameProblem } from '../shared/mentions.js'
 
+const BROWSER_GRANT_KINDS = new Set(['submit', 'purchase', 'delete', '*'])
+const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/
+
+function cleanBrowserGrants(input) {
+  if (input === null) return null
+  if (!Array.isArray(input) || input.length > 50) throw new Error('Browser grants must be an array of at most 50 entries')
+  const grants = []
+  const seen = new Set()
+  for (const entry of input) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('Each browser grant must have a site and kinds')
+    }
+    const site = typeof entry.site === 'string' ? entry.site.trim().toLowerCase() : ''
+    if (site !== '*' && !HOSTNAME.test(site)) throw new Error('Browser grant site must be * or a hostname')
+    if (!Array.isArray(entry.kinds) || entry.kinds.length === 0
+      || entry.kinds.some(kind => typeof kind !== 'string' || !BROWSER_GRANT_KINDS.has(kind))) {
+      throw new Error('Browser grant kinds must be a non-empty subset of submit, purchase, delete, *')
+    }
+    const kinds = [...new Set(entry.kinds)].sort()
+    const key = `${site}\0${kinds.join('\0')}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    grants.push({ site, kinds })
+  }
+  return grants
+}
+
 export function install(rt) {
   const { ctx, defaults, state } = rt
 
@@ -182,9 +209,13 @@ export function install(rt) {
     })
   }
 
-  async function updateBot(id, patch) {
+  async function updateBot(id, patch, actorId) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
+    if (patch.browserGrants !== undefined && actorId !== undefined) {
+      throw new Error(`Only the user can set what ${bot.name} may do in the browser`)
+    }
+    const browserGrants = patch.browserGrants === undefined ? undefined : cleanBrowserGrants(patch.browserGrants)
     // Checked first, so a folder, model or level that does not pass leaves the rest
     // unchanged too.
     const moving = patch.workDir !== undefined
@@ -238,6 +269,10 @@ export function install(rt) {
       modelChanged = true
     }
     if (patch.permission !== undefined) await rt.setPermission(bot, patch.permission)
+    if (browserGrants !== undefined) {
+      if (browserGrants === null) delete bot.browserGrants
+      else bot.browserGrants = browserGrants
+    }
     const moved = moving && workDir !== bot.workDir
     if (moving) {
       if (workDir === undefined) delete bot.workDir

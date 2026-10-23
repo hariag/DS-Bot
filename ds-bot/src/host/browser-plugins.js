@@ -18,6 +18,64 @@ function optionalString(config, key) {
   return value
 }
 
+function grantAllows(bot, action) {
+  return (Array.isArray(bot.browserGrants) ? bot.browserGrants : []).some(grant => {
+    if (!grant || typeof grant.site !== 'string' || !Array.isArray(grant.kinds)) return false
+    const site = grant.site.toLowerCase()
+    const host = action.host.toLowerCase()
+    const siteMatches = site === '*' || host === site || host.endsWith(`.${site}`)
+    return siteMatches && (grant.kinds.includes('*') || grant.kinds.includes(action.kind))
+  })
+}
+
+async function authorizeBrowserAction(rt, exec, botId, action) {
+  await rt.load()
+  const bot = rt.botOf(botId)
+  if (bot === undefined) throw new Error('Unknown Bot')
+  const sessionId = exec.agent?.session?.header?.id ?? exec.agent?.id
+  const permission = rt.permissionOf(botId, sessionId)
+  if (permission === 'read-only') {
+    throw new Error(`This Bot has read-only permissions, so it cannot ${action.label} on ${action.host}. Nothing was done.`)
+  }
+  if (permission === 'danger-full-access' || grantAllows(bot, action)) return
+
+  const approval = rt.ctx.get?.('approval')
+  const agent = exec.agent
+  if (approval === undefined || agent?.session === undefined) {
+    throw new Error(`This action needs the user's approval, and there is no way to ask here, so nothing was done.`)
+  }
+  const verbs = {
+    submit: { en: 'submit', zh: '提交' },
+    purchase: { en: 'make a purchase', zh: '购买' },
+    delete: { en: 'delete something', zh: '删除内容' },
+  }
+  const verb = verbs[action.kind]
+  const reason = `Let ${bot.name} ${verb.en} on ${action.host}: "${action.label}"?`
+  const displayReason = {
+    en: reason,
+    zh: `允许${bot.name}在 ${action.host} 上${verb.zh}“${action.label}”吗？`,
+  }
+  let outcome
+  try {
+    outcome = await approval.request({
+      agent,
+      toolName: exec.name,
+      ...(exec.callId !== undefined ? { callId: exec.callId } : {}),
+      reason,
+      displayReason,
+      ...(exec.signal ? { signal: exec.signal } : {}),
+    })
+  } catch {
+    throw new Error('The approval service was unavailable. Nothing was done.')
+  }
+  if (outcome === 'allowed-once') return
+  if (outcome === 'rejected') {
+    throw new Error(`The user did not approve ${action.label} on ${action.host}. Do not try this action again unless the user asks. Nothing was done.`)
+  }
+  if (outcome === 'cancelled') throw new Error('The approval was cancelled. Nothing was done.')
+  throw new Error('The approval could not be obtained. Nothing was done.')
+}
+
 export function install(rt) {
   const name = rt.config.browserPlugin
   const injected = rt.config.browserPluginApi
@@ -36,6 +94,7 @@ export function install(rt) {
     headless,
     playwrightUrl,
     executablePath,
+    authorize: (exec, botId, action) => authorizeBrowserAction(rt, exec, botId, action),
     complete: rt.config.browserComplete ?? completeDeepseek,
     async keyOf(exec) {
       await rt.load()
