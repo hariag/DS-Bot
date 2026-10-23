@@ -23,6 +23,20 @@ npm installs `ds-bot` from `../ds-bot` as a copy of its package files (`install-
 
 On macOS, Electron's default `userData` directory for `productName` "DeepSeek Bot" is `~/Library/Application Support/DeepSeek Bot`.
 
+## Run from source (Windows)
+
+From the repository root, run in PowerShell (Node.js 22.19 or later and npm required):
+
+```powershell
+.\start.ps1
+```
+
+The launcher builds the plugin, installs dependencies when they change, refreshes the app's copy of the plugin when its source changes, and starts the desktop app. The first run downloads dependencies and Electron; later runs reuse them. Configure real model providers in the app's Settings.
+
+Data persists across starts under the gitignored `.ds-bot-local/` in the repository: `data/` holds profiles, model settings, credentials, Bots and chats; `workspace` holds the Bots' files; `shell/` holds window and browser storage. The launcher does not clear these folders or import another team's data. Back up this directory before removing the checkout. Close the app before updating dependencies or launching changed source.
+
+Use `.\start.ps1 -DataRoot <folder>` for a different data root (relative paths are resolved against the repository root). The launcher always uses `data/`, `workspace` and `shell/` inside that root. It does not use the installed app's data or the user's `~/.dsh`. `-PrepareOnly` installs and builds without opening a window. If script execution is blocked, use `pwsh -NoProfile -ExecutionPolicy Bypass -File .\start.ps1`; this applies only to that process.
+
 ## First start and import
 
 At its first start the app asks, in system dialogs, for the data location (`~/.ds-bot` by default) and the team workspace (`~/DeepSeek Bot`), and keeps the answer in `locations.json` in its own data. Neither folder may be inside the other or inside the user's DSH data.

@@ -27,6 +27,10 @@ The desktop app brings its own DSH, so you don't need to install DSH first. Down
 
 At the first start the app asks where to keep its data and the Bots' files, and offers to copy a Bot team from your DSH (it only reads your DSH). Set up a model in its settings. The Windows app and the Linux AppImage update themselves; the macOS app and the Linux deb tell you when a new version is ready to download.
 
+**Desktop app from source (Windows)**
+
+With Node.js 22.19 or later and npm installed, run `.\start.ps1` in PowerShell from this checkout. It prepares and launches the current source, keeping your Bots, chats and model settings in `.ds-bot-local/` between runs. See [source startup](app/README.md#run-from-source-windows).
+
 **As a plugin in DSH**
 
 First install DSH and set up at least one model in it. DS Bot uses the models from DSH.
