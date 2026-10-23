@@ -124,8 +124,8 @@ test('the selected plugin is the same for every Bot, and profiles stay apart', a
   const writer = await tool.execute({}, { agent: { id: 'b2' } })
   const chief = await tool.execute({}, { agent: { id: 'm1' } })
   assert.deepEqual(seen, ['b2', 'm1'])
-  assert.match(writer, /browser-profiles\/b2$/)
-  assert.match(chief, /browser-profiles\/m1$/)
+  assert.ok(writer.endsWith(join('browser-profiles', 'b2')))
+  assert.ok(chief.endsWith(join('browser-profiles', 'm1')))
   assert.equal(await tool.execute({}, { agent: { id: 'stranger' } }), 'Only Bots on the team have a browser.')
 })
 
