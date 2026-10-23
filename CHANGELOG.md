@@ -4,7 +4,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-23
+## [0.2.1] - 2026-10-23
 
 ### Added
 
@@ -12,6 +12,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - **Side questions with `/btw`**: in a Bot's own chat, type `/btw <question>` to ask while it works. The Bot answers from the conversation so far, without stopping its task or running any tool, and the answer stays out of its history. The question and the answer stay as a card in the chat, which you can cancel while it is being answered. ([#407](https://github.com/Fei2411/DeepSeek-Bot/issues/407), [#413](https://github.com/Fei2411/DeepSeek-Bot/pull/413))
 - **Message layout** in Settings → General → Appearance: a Bubble width slider (50–100%), and a flat layout that shows a Bot's words without a bubble, under its avatar, name and time, with a Text width of its own. ([#380](https://github.com/Fei2411/DeepSeek-Bot/issues/380), [#446](https://github.com/Fei2411/DeepSeek-Bot/issues/446), [#447](https://github.com/Fei2411/DeepSeek-Bot/pull/447), [#448](https://github.com/Fei2411/DeepSeek-Bot/pull/448))
 - The desktop app has the Bot browser too. Each Bot's sign-ins stay after you quit. ([#449](https://github.com/Fei2411/DeepSeek-Bot/issues/449), [#451](https://github.com/Fei2411/DeepSeek-Bot/pull/451))
+- In the desktop app you can import cookies into a Bot's browser from a file or from an installed Chrome, Edge or Firefox profile. ([#458](https://github.com/Fei2411/DeepSeek-Bot/issues/458), [#461](https://github.com/Fei2411/DeepSeek-Bot/pull/461))
 - Bot mode's account menu has a Sign out item for the DeepSeek account. ([#398](https://github.com/Fei2411/DeepSeek-Bot/issues/398), [#425](https://github.com/Fei2411/DeepSeek-Bot/pull/425))
 - A saved key's purpose can be edited or cleared in Settings → Secrets. ([#387](https://github.com/Fei2411/DeepSeek-Bot/issues/387), [#435](https://github.com/Fei2411/DeepSeek-Bot/pull/435))
 
@@ -288,8 +289,8 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.2.0...v0.3.0
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.5...v0.1.6
