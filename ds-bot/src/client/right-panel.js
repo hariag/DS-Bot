@@ -35,8 +35,7 @@ export function columnOpened(drawerOpen, moved) {
 // whose store is not minted yet opens in a passive effect, and a fullscreen
 // panel reports only after its slide, so the attribute flip can land several
 // batches later. The switch is therefore a timed window, not the next DOM
-// batch — `settle(done)` calls `done` once the switch settled (two frames, with
-// a timer for the slide and for hidden tabs whose frames do not run). A newer
+// batch — `settle(done)` calls `done` once the switch settled. A newer
 // `moved()` restarts the window; a stale settle is ignored.
 export function createSwitchWindow(settle) {
   let token = null

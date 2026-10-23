@@ -17012,13 +17012,7 @@ function apply(ctx) {
     const sidebar = ctx.get("sidebarRight");
     if (!sidebar) return void 0;
     let open = rightColumnOpen(document);
-    const switchWindow = createSwitchWindow((done) => {
-      const timer = setTimeout(done, 400);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        clearTimeout(timer);
-        done();
-      }));
-    });
+    const switchWindow = createSwitchWindow((done) => setTimeout(done, 400));
     const collapseColumn = () => {
       try {
         if (sidebar.isExpanded()) sidebar.toggleExpanded();

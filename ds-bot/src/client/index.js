@@ -651,12 +651,8 @@ export function apply(ctx) {
     const sidebar = ctx.get('sidebarRight')
     if (!sidebar) return undefined
     let open = rightColumnOpen(document)
-    // Two frames settle the switch's DOM; the fullscreen slide is slower, so a
-    // ~400 ms timer covers it and still ends the window where frames stall.
-    const switchWindow = createSwitchWindow((done) => {
-      const timer = setTimeout(done, 400)
-      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); done() }))
-    })
+    // Long enough for a fullscreen panel's slide, which reports only once it ends.
+    const switchWindow = createSwitchWindow(done => setTimeout(done, 400))
     const collapseColumn = () => {
       try {
         if (sidebar.isExpanded()) sidebar.toggleExpanded()
