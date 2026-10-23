@@ -299,6 +299,7 @@ var ZH = {
   "Import failed": "导入失败",
   "That file is too large to be a cookie export.": "这个文件太大了，不像是 cookie 导出文件。",
   "That file could not be read.": "这个文件读不了。",
+  "This browser encrypts its cookies so only it can read them. Export them to a file first, then import that file.": "这个浏览器把 cookie 加密了，只有它自己能读。先把 cookie 导出成文件，再导入那个文件。",
   "{count}": "{count} 个",
   // Bot settings
   "Choose a PNG, JPEG, WebP, or GIF image": "请选择 PNG、JPEG、WebP 或 GIF 图片",
@@ -16470,6 +16471,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
 function importError(error) {
   if (error === "too-large") return t("That file is too large to be a cookie export.");
   if (error === "unreadable") return t("That file could not be read.");
+  if (error === "app-bound") return t("This browser encrypts its cookies so only it can read them. Export them to a file first, then import that file.");
   return String(error);
 }
 function ImportMenu({ sources, busy, onFile, onSource, onClose }) {

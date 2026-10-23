@@ -358,6 +358,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
 function importError(error) {
   if (error === 'too-large') return t('That file is too large to be a cookie export.')
   if (error === 'unreadable') return t('That file could not be read.')
+  if (error === 'app-bound') return t('This browser encrypts its cookies so only it can read them. Export them to a file first, then import that file.')
   return String(error)
 }
 

@@ -190,7 +190,13 @@ async function start() {
     assertWindow(event)
     const source = (await listSources()).find((item) => item.id === sourceId)
     if (!source) throw new Error('DeepSeek Bot: an unknown browser profile')
-    const outcome = await importFromBrowser(source, { close: close === true })
+    let outcome
+    try {
+      outcome = await importFromBrowser(source, { close: close === true })
+    } catch (error) {
+      if (error?.code === 'app-bound') return { error: 'app-bound' }
+      throw error
+    }
     if (outcome.running) return { running: true, label: source.label, kind: source.kind }
     const result = {
       format: 'live', entries: outcome.result.cookies.length + outcome.result.skipped.length,
