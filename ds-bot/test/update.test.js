@@ -313,6 +313,7 @@ test('a failed removal fails the update without a second install', async () => {
   const view = await rt.updateCheck()
   assert.equal(view.phase, 'failed')
   assert.equal(view.error, 'bundle-in-use')
+  assert.equal(existsSync(join(home, 'update.json')), false)
   rmSync(home, { recursive: true, force: true, maxRetries: 5 })
 })
 

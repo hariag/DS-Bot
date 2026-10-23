@@ -248,6 +248,8 @@ export function install(rt) {
         }))
       } catch { /* a note that cannot be written just is not there */ }
     }
+    // A refused removal leaves this version running, with nothing for a later start to report.
+    const unmark = () => { if (markerPath !== null) try { unlinkSync(markerPath) } catch { /* already gone */ } }
     void Promise.resolve(service.installBundle(chosen.spec, options))
       .then(async (result) => {
         if (result?.error?.code !== 'already-installed') return result
@@ -255,8 +257,11 @@ export function install(rt) {
         // depends on: remove the bundle (which unloads this host) and install it again.
         if (typeof service.removeBundle !== 'function') return { error: { code: 'not-removable' } }
         mark()
-        const removed = await service.removeBundle(PKG.name)
-        if (removed?.error) return { error: removed.error }
+        const removed = await Promise.resolve(service.removeBundle(PKG.name)).catch((error) => { unmark(); throw error })
+        if (removed?.error) {
+          unmark()
+          return { error: removed.error }
+        }
         try {
           const again = await service.installBundle(chosen.spec, options)
           if (again?.error) mark(again.error.diagnostic ?? again.error.code ?? 'install failed')
