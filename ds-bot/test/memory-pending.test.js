@@ -41,6 +41,11 @@ function start({ home = mkdtempSync(join(tmpdir(), 'ds-bot-memory-')) } = {}) {
   return { ctx, home, tool, read, journal, stop }
 }
 
+// These storage tests also run with the structured tool-error UI change (#482).
+const failureText = promise => promise.catch(error => {
+  assert.match(error.code ?? '', /^memory\//)
+  return error.message
+})
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
 async function until(check) {
@@ -64,7 +69,7 @@ test('a change that cannot be published stays pending, and is finished before th
   t.after(() => stop())
   // The change log cannot be written: the entry is published, but its row is not.
   mkdirSync(join(home, 'memory', 'journal.jsonl'), { recursive: true })
-  const said = await tool('remember', { text: 'Trip to Kyoto', topic: 'travel' }, 'b2')
+  const said = await failureText(tool('remember', { text: 'Trip to Kyoto', topic: 'travel' }, 'b2'))
   assert.doesNotMatch(said, /^Saved to your memory/)
   assert.match(read('bots', 'b2', 'travel.md'), /Trip to Kyoto/)
   assert.ok(existsSync(pendingFile(home)), 'the change is pending')
@@ -88,7 +93,7 @@ test('a change that cannot be accepted leaves the memory as it was', async (t) =
   // The record of the change cannot be written: the change is not accepted, so
   // nothing changed.
   mkdirSync(pendingFile(home), { recursive: true })
-  const said = await tool('remember', { text: 'Second fact' }, 'b2')
+  const said = await failureText(tool('remember', { text: 'Second fact' }, 'b2'))
   assert.doesNotMatch(said, /Second fact/)
   assert.equal(read('bots', 'b2', 'MEMORY.md'), before)
   assert.doesNotMatch(read('journal.jsonl'), /Second fact/)
@@ -170,7 +175,7 @@ test('a record of a change that cannot be read stops the memory', async (t) => {
   const before = read('bots', 'b2', 'MEMORY.md')
   writeFileSync(pendingFile(home), '{ this is not a record')
   assert.match(await tool('recall', {}, 'b2'), /pending\.json is not readable/)
-  assert.doesNotMatch(await tool('remember', { text: 'Second fact' }, 'b2'), /Second fact/)
+  assert.doesNotMatch(await failureText(tool('remember', { text: 'Second fact' }, 'b2')), /Second fact/)
   assert.equal(read('bots', 'b2', 'MEMORY.md'), before)
 })
 
@@ -256,7 +261,7 @@ test('a change that would not fit in the record is refused, and the memory still
   t.after(() => stop())
   // The change would leave a record that cannot be read back, so it is refused
   // before it is accepted: the memory is as it was, and still reads.
-  const said = await tool('remember', { text: 'Coffee', replace: 'Teas and a long story about the tea' }, 'b2')
+  const said = await failureText(tool('remember', { text: 'Coffee', replace: 'Teas and a long story about the tea' }, 'b2'))
   assert.match(said, /too large to record/)
   assert.equal(read('bots', 'b2', 'MEMORY.md'), huge)
   assert.ok(!existsSync(pendingFile(home)), 'the change was not accepted')
