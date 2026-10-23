@@ -14,6 +14,7 @@ import { BotBrowserGuests, partitionOf } from './bot-browser.mjs'
 import { importFromBrowser, listSources } from './browser-sources.mjs'
 import { applyCookies, CookieImports } from './cookie-import.mjs'
 import { parseCookieFile } from './cookie-parse.mjs'
+import { downloadSaver } from './downloads.mjs'
 import { canonicalExecPath } from './canonical-path.mjs'
 import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
 import { hostPort } from './host-port.mjs'
@@ -448,6 +449,7 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = undefined })
   browserGuests.bind(mainWindow)
   const contents = mainWindow.webContents
+  contents.session.on('will-download', downloadSaver({ window: mainWindow, dialog, downloads: app.getPath('downloads') }))
   if (win32) {
     // Fullscreen hides the caption buttons, and the page drops its band meanwhile. A reload
     // registers the page's listener again, so the state goes out after every load too.
