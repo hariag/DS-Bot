@@ -3,14 +3,17 @@
 // origin as the address the browser comes back to, and accepts only a loopback one.
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { release } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
-import { BotBrowserGuests } from './bot-browser.mjs'
+import { BotBrowserGuests, partitionOf } from './bot-browser.mjs'
+import { importFromBrowser, listSources } from './browser-sources.mjs'
+import { applyCookies, CookieImports } from './cookie-import.mjs'
+import { parseCookieFile } from './cookie-parse.mjs'
 import { canonicalExecPath } from './canonical-path.mjs'
 import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
 import { hostPort } from './host-port.mjs'
@@ -25,7 +28,12 @@ const IPC = {
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
   browserAcquire: 'ds-bot:browser-acquire', browserRelease: 'ds-bot:browser-release', browserForget: 'ds-bot:browser-forget',
+  browserImportSources: 'ds-bot:browser-import-sources', browserImportPick: 'ds-bot:browser-import-pick',
+  browserImportLive: 'ds-bot:browser-import-live', browserImportApply: 'ds-bot:browser-import-apply',
+  browserImportCancel: 'ds-bot:browser-import-cancel',
 }
+// A cookie export larger than this is not a cookie export.
+const IMPORT_FILE_MAX = 32 * 1024 * 1024
 const MOVE_PROBLEMS = { drive: 'moveDrive', nested: 'moveNested', workspace: 'moveWorkspace', program: 'inProgram', notEmpty: 'moveNotEmpty' }
 const UPDATE_CHECK_WAIT_MS = 15_000
 const UPDATE_DOWNLOAD_WAIT_MS = 15 * 60_000
@@ -54,6 +62,7 @@ let choosing
 let copying
 const copyAbort = new AbortController()
 const browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
+const cookieImports = new CookieImports()
 
 // A packaged app started through an 8.3 short path or a junction restarts once on the
 // canonical path: the lock below and every path the Host sees then agree with the long
@@ -156,6 +165,49 @@ async function start() {
   ipcMain.handle(IPC.browserForget, (event, key) => {
     assertWindow(event)
     return browserGuests.forget(event.sender, key)
+  })
+  // Cookie imports: a file or an installed browser's profile is parsed or harvested into a
+  // pending set first; only apply (the user's confirm) writes into the Bot's partition.
+  ipcMain.handle(IPC.browserImportSources, (event) => {
+    assertWindow(event)
+    return listSources()
+  })
+  ipcMain.handle(IPC.browserImportPick, async (event) => {
+    assertWindow(event)
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'Cookie files', extensions: ['txt', 'json', 'cookies'] }, { name: 'All files', extensions: ['*'] }],
+    })
+    if (picked.canceled || !picked.filePaths[0]) return { canceled: true }
+    const buffer = await readFile(picked.filePaths[0])
+    if (buffer.length > IMPORT_FILE_MAX) return { error: 'too-large' }
+    const parsed = parseCookieFile(buffer)
+    if (!parsed.ok) return { error: parsed.error ?? 'unreadable', format: parsed.format }
+    return cookieImports.store(parsed, { kind: 'file', label: basename(picked.filePaths[0]) })
+  })
+  ipcMain.handle(IPC.browserImportLive, async (event, sourceId, close) => {
+    assertWindow(event)
+    const source = (await listSources()).find((item) => item.id === sourceId)
+    if (!source) throw new Error('DeepSeek Bot: an unknown browser profile')
+    const outcome = await importFromBrowser(source, { close: close === true })
+    if (outcome.running) return { running: true, label: source.label, kind: source.kind }
+    const result = {
+      format: 'live', entries: outcome.result.cookies.length + outcome.result.skipped.length,
+      cookies: outcome.result.cookies, skipped: outcome.result.skipped, warnings: [], info: {},
+    }
+    return { ...cookieImports.store(result, { kind: source.kind, label: source.label }), restarted: outcome.restarted }
+  })
+  ipcMain.handle(IPC.browserImportApply, async (event, key, id) => {
+    assertWindow(event)
+    if (typeof key !== 'string' || !key.startsWith('bot:')) throw new Error('DeepSeek Bot: a Bot storage key is required')
+    const pending = cookieImports.take(typeof id === 'string' ? id : '')
+    if (!pending) throw new Error('DeepSeek Bot: this import is no longer pending')
+    const storage = session.fromPartition(partitionOf(key))
+    return applyCookies(storage, pending.cookies)
+  })
+  ipcMain.handle(IPC.browserImportCancel, (event, id) => {
+    assertWindow(event)
+    if (typeof id === 'string') cookieImports.drop(id)
   })
   // The plugin keeps the team workspace; the app remembers it for its own checks.
   ipcMain.on(IPC.teamWorkspace, (event, path) => {

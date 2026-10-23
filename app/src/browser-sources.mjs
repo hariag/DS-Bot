@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { copyFile, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { homedir, platform, tmpdir } from 'node:os'
-import { basename, dirname, join, win32 } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 // Kinds we can harvest: Chromium-family through their own exe, Firefox through its plain db.
 const KIND_ORDER = ['chrome', 'edge', 'brave', 'chromium', 'firefox']
@@ -375,42 +375,13 @@ const withTimeout = (p, ms, label) => Promise.race([p, sleepMs(ms).then(() => { 
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
- * Rows a Chromium clone can never have its browser decrypt: app-bound (v20) values only
- * decrypt in the profile's real user-data dir — launched on a copy, the browser gets a
- * temporary key error and drops them silently. Names and domains stay plain text; only
- * the value is locked. → { locked: skipped entries, readable } or null when unreadable.
- */
-export function appBoundRows(dbPath) {
-  let db
-  try { db = new DatabaseSync(dbPath, { readOnly: true }) } catch { return null }
-  try {
-    const rows = db.prepare('SELECT name, host_key AS domain, hex(substr(encrypted_value, 1, 3)) AS prefix FROM cookies').all()
-    const locked = []
-    let readable = 0
-    rows.forEach((row, index) => {
-      if (row.prefix === '763230') {
-        locked.push({ where: `entry ${index + 1}`, name: row.name, domain: row.domain, code: 'app-bound', reason: 'locked by app-bound encryption — only the browser itself can read it' })
-      } else readable += 1
-    })
-    return { locked, readable }
-  } finally { db.close() }
-}
-
-/**
  * Cookies from one source profile. → { cookies, skipped } in the parser's normalized shape.
- * Throws {code:'locked'} when the source holds its store open (Windows), and
- * {code:'app-bound'} when every row is app-bound encrypted — there is nothing to harvest.
+ * Throws {code:'locked'} when the source holds its store open (Windows).
  */
 export async function harvestCookies(source, workDir) {
   await cloneCookieStore(source, workDir)
   if (source.engine === 'firefox') return harvestFirefox(workDir)
-  const census = appBoundRows(join(workDir, basename(source.profilePath), 'Network', 'Cookies'))
-  if (census && census.readable === 0 && census.locked.length > 0) {
-    const error = new Error(`${census.locked.length} cookies locked by app-bound encryption`)
-    error.code = 'app-bound'
-    throw error
-  }
-  return { cookies: await harvestChromium(source, workDir), skipped: census?.locked ?? [] }
+  return { cookies: await harvestChromium(source, workDir), skipped: [] }
 }
 
 /**
@@ -472,9 +443,7 @@ export function locksProfile(process, source) {
   const dir = userDataDirOf(process.commandLine)
   if (dir === null) return true // standard invocation binds the standard root
   const norm = (p) => p.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
-  // Browser command lines are compared as Windows paths (the only platform that closes a
-  // source); win32 splits on both separators, so the check reads the same on every host.
-  return norm(dir) === norm(win32.dirname(source.profilePath))
+  return norm(dir) === norm(dirname(source.profilePath))
 }
 
 /** Ask a running source browser to quit (graceful; its session comes back on relaunch). */

@@ -531,6 +531,15 @@ export function apply(ctx) {
       browserNavigate: (tabId, input) => browsers.navigate(tabId, input),
       browserCommand: (tabId, name) => browsers.command(tabId, name),
       browserFocus: (tabId) => browsers.focus(tabId),
+      // Cookie imports, only where the bridge offers them (the desktop app): a file or an
+      // installed browser's profile is previewed, then applied into the Bot's storage key.
+      browserImport: typeof bridge.importSources === 'function' ? {
+        sources: () => bridge.importSources(),
+        pick: () => bridge.importPick(),
+        live: (source, close) => bridge.importLive(source, close),
+        apply: (botId, pending) => bridge.importApply(`bot:${botId}`, pending),
+        cancel: (pending) => bridge.importCancel(pending),
+      } : null,
     })
   }
   // Whether AccountLauncher holds the shell's settings seat; FooterAccount steps aside if so.

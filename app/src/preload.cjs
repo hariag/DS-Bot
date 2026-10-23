@@ -43,6 +43,12 @@ function browserBridge() {
     acquire: key => ipcRenderer.invoke('ds-bot:browser-acquire', String(key)),
     release: lease => ipcRenderer.invoke('ds-bot:browser-release', String(lease)),
     forget: key => ipcRenderer.invoke('ds-bot:browser-forget', String(key)),
+    // Cookie imports, only in the app: sources and a two-step pick/harvest → preview → apply.
+    importSources: () => ipcRenderer.invoke('ds-bot:browser-import-sources'),
+    importPick: () => ipcRenderer.invoke('ds-bot:browser-import-pick'),
+    importLive: (source, close) => ipcRenderer.invoke('ds-bot:browser-import-live', String(source), close === true),
+    importApply: (key, pending) => ipcRenderer.invoke('ds-bot:browser-import-apply', String(key), String(pending)),
+    importCancel: (pending) => ipcRenderer.invoke('ds-bot:browser-import-cancel', String(pending)),
     onOpenRequested(lease, listener) {
       const id = String(lease)
       let set = listeners.get(id)
