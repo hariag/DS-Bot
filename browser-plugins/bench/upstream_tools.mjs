@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { completeDeepseek } from '../../ds-bot/src/host/browser/deepseek.js'
 
 const ORIGIN = process.env.FIXTURE_ORIGIN
-const CHROME = '/home/ubuntu/.cache/ms-playwright/chromium-1193/chrome-linux/chrome'
+const CHROME = process.env.CHROME_PATH
 const which = (process.env.UPSTREAM_TOOLS ?? 'mcp,dsh').split(',')
 
 const TASKS = [

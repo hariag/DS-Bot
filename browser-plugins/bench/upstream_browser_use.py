@@ -8,7 +8,7 @@ import urllib.request
 from browser_use import Agent, ChatOpenAI
 from browser_use.browser.profile import BrowserProfile
 
-CHROME = '/home/ubuntu/.cache/ms-playwright/chromium-1193/chrome-linux/chrome'
+CHROME = os.environ['CHROME_PATH']
 OUT = os.environ['UPSTREAM_OUT']
 ORIGIN = os.environ['FIXTURE_ORIGIN']
 
