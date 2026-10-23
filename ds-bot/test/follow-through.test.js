@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { setTimeout as realDelay } from 'node:timers/promises'
 import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
@@ -87,9 +88,10 @@ const stateOf = home => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'
 // The team file is written in the background, and Windows may hold it busy for a
 // moment: the retry waits on the clock, which the tests mock.
 const settleState = async (t, home, check) => {
-  for (let at = 0; at < 100 && !check(); at += 1) {
+  const deadline = performance.now() + 3000
+  while (!check() && performance.now() < deadline) {
     t.mock.timers.tick(100)
-    await new Promise(resolve => setImmediate(resolve))
+    await realDelay(10)
   }
   assert.ok(check(), 'condition not reached')
 }
