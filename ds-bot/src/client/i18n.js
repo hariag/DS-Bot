@@ -591,6 +591,7 @@ const ZH = {
   'Dismiss view': '关闭视图',
   Sources: '来源',
   Chart: '图表',
+  'Chart {n}': '图表 {n}',
   Series: '系列',
   'Chart options': '图表选项',
   'View as table': '以表格查看',
