@@ -162,40 +162,53 @@ async function chat(cdp) {
   // Click the composer through the input pipeline. A bare focus() is not enough where no window
   // manager gives the window focus (xvfb in CI): the text and the Enter would go nowhere.
   const box = "[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1)"
-  // A greeting that just arrived can leave the composer's own center covered by its
-  // container, so the click lands on the container and never focuses the field. Wait
-  // until a probe of the current center names the field itself before clicking.
-  await until(`(() => {
+  const focusCheck = "(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'"
+  // A greeting that just arrived leaves the composer settling: the container can still
+  // cover the field's center, and the field drops contenteditable while it rebinds —
+  // either way the click lands but never focuses. The probe and the click are separate
+  // round trips, so keep probing and click only where the field itself is on top until
+  // the field holds focus.
+  const probe = `(() => {
     const el = ${box}
-    if (el === undefined) return false
+    if (el === undefined) return null
     const rect = el.getBoundingClientRect()
-    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-    return hit === el || (hit !== null && el.contains(hit))
-  })()`, 'the clickable composer', 30_000)
-  const rect = await evaluate(`(${box})?.getBoundingClientRect().toJSON()`)
-  if (!rect) throw new Error('the composer is not there')
-  const [cx, cy] = [rect.x + rect.width / 2, rect.y + rect.height / 2]
-  await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: cx, y: cy, button: 'left', clickCount: 1 })
-  await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1 })
-  try {
-    await until("(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'", 'the focused composer', 10_000)
-  } catch (error) {
+    for (const part of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+      const point = { x: rect.x + rect.width * part, y: rect.y + rect.height / 2 }
+      const hit = document.elementFromPoint(point.x, point.y)
+      if (hit === el || (hit !== null && el.contains(hit))) return { x: point.x, y: point.y }
+    }
+    return null
+  })()`
+  let shot = null
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline && !(await evaluate(`Boolean(${focusCheck})`))) {
+    const point = await evaluate(probe)
+    if (point !== null && point !== undefined) {
+      shot = point
+      await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      await sleep(300)
+    } else await sleep(250)
+  }
+  if (!(await evaluate(`Boolean(${focusCheck})`))) {
     // A click that never focuses the composer usually lands on an overlay instead; say
     // what was under the cursor and how small the window really was (xvfb starts at 640x480).
     const state = await evaluate(`(() => {
-      const point = ${JSON.stringify({ x: cx, y: cy })}
-      const hit = document.elementFromPoint(point.x, point.y)
+      const el = ${box}
+      const rect = el === undefined ? null : el.getBoundingClientRect().toJSON()
+      const point = rect === null ? null : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      const hit = point === null ? null : document.elementFromPoint(point.x, point.y)
       const cover = hit?.closest?.('[role=dialog],[aria-modal=true],[data-slot]')
       const brief = node => (node === null || node === undefined ? null : { tag: node.tagName ?? null, class: String(node.getAttribute?.('class') ?? '').slice(0, 160) })
       return JSON.stringify({
         inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight], screen: [screen.width, screen.height], dpr: devicePixelRatio, focused: document.hasFocus(),
-        click: point, box: ${JSON.stringify(rect)},
+        click: ${JSON.stringify(shot)}, probe: point, box: rect,
         hit: brief(hit),
         cover: cover === null || cover === undefined ? null : { tag: cover.tagName, slot: cover.getAttribute('data-slot'), role: cover.getAttribute('role'), modal: cover.getAttribute('aria-modal') },
         active: brief(document.activeElement),
       })
     })()`)
-    throw new Error(`${error.message}; page state: ${state}`)
+    throw new Error(`timed out waiting for the focused composer; page state: ${state}`)
   }
   await cdp.call('Input.insertText', { text: 'packaged app check' })
   await until(text('packaged app check'), 'the typed message', 10_000)
