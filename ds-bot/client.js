@@ -586,6 +586,7 @@ var ZH = {
   "Taking care of it": "处理中",
   "Making headway": "有进展了",
   "Moving to a fresh conversation": "整理记忆，换到新对话",
+  "Switching working folder": "正在切换工作文件夹",
   "Searching online": "上网搜索",
   "Reading a page": "阅读网页",
   "Running shell commands": "运行命令",
@@ -7855,8 +7856,8 @@ function toolActivity(name, arg, findBot, self) {
   }
 }
 function workPhrase(doing) {
-  const { tool, said, note, target, switching } = typeof doing === "string" ? { tool: doing } : doing ?? {};
-  if (switching) return t("Moving to a fresh conversation");
+  const { tool, said, note, target, switching, folder } = typeof doing === "string" ? { tool: doing } : doing ?? {};
+  if (switching) return folder === true ? t("Switching working folder") : t("Moving to a fresh conversation");
   const own = (said || note)?.replace(/[\s.。…]+$/u, "");
   if (own) return own;
   if (!tool) return t("Thinking about it");
@@ -8206,16 +8207,20 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
   const pendingInput = useSession((snapshot) => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter((sub) => sub.placement !== "queued").map((sub) => sub.time)));
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
+  const moveAt = useWork?.((work) => {
+    const entry = bot === void 0 ? void 0 : work.bots?.[bot.id];
+    return entry?.switching === true && entry.folder === true && entry.roomId === void 0 ? entry.since : 0;
+  }) ?? 0;
   const entries2 = (0, import_react13.useMemo)(() => Object.values(JSON.parse(liveKey)), [liveKey]);
   const streaming = entries2.some((entry) => entry.text);
   const tools = entries2.filter((entry) => !entry.text).sort((a, b) => a.at - b.at);
   const relaying = tools.some((entry) => entry.relay);
-  const visible = rowVisible({ running, streaming, tools, relaying, bot, room: room2 });
+  const visible = moveAt !== 0 || rowVisible({ running, streaming, tools, relaying, bot, room: room2 });
   const tool = tools.at(-1);
   const inputRef = (0, import_react13.useRef)(0);
   const inputAt = Math.max(inputRef.current, pendingInput);
   inputRef.current = inputAt;
-  const want = !visible ? null : inputAt > (tool?.at ?? 0) ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: "thinking" } : tool ? { key: tool.label ? `tool:${tool.label}` : "working", label: tool.label, pool: PHRASES.working, state: tool.state ?? "working" } : { key: "thinking", pool: PHRASES.thinking, state: "thinking" };
+  const want = !visible ? null : moveAt !== 0 ? { key: "move", label: t("Switching working folder"), state: "thinking" } : inputAt > (tool?.at ?? 0) ? { key: `input:${inputAt}`, pool: PHRASES.thinking, state: "thinking" } : tool ? { key: tool.label ? `tool:${tool.label}` : "working", label: tool.label, pool: PHRASES.working, state: tool.state ?? "working" } : { key: "thinking", pool: PHRASES.thinking, state: "thinking" };
   const [shown, setShown] = (0, import_react13.useState)(null);
   const wantKey = want?.key ?? null;
   const markState = (0, import_react13.useRef)("thinking");
@@ -8263,7 +8268,7 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
     if (!running) actions.clearLive(sessionId);
   }, [running, sessionId]);
   useRowEntrances(() => leaving.current || Date.now() - endedAt.current < 300);
-  const host = useRunningHost(running);
+  const host = useRunningHost(running || moveAt !== 0);
   if (!host || phase === null || !shown) return null;
   return (0, import_react_dom2.createPortal)((0, import_react13.createElement)(
     "div",
@@ -8273,7 +8278,7 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
       "span",
       { className: "bt-typing-text" },
       (0, import_react13.createElement)("span", { key: `${shown.key}:${shown.at}`, className: "bt-typing-label" }, (0, import_react13.createElement)(Shimmer, null, `${shown.text}…`)),
-      (0, import_react13.createElement)(Elapsed, { at: Math.max(turnAt ?? runAt.current, inputAt), className: "bt-typing-time" })
+      (0, import_react13.createElement)(Elapsed, { at: moveAt !== 0 ? moveAt : Math.max(turnAt ?? runAt.current, inputAt), className: "bt-typing-time" })
     )
   ), host);
 }

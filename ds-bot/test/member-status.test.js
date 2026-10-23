@@ -121,18 +121,13 @@ test('a Bot\'s own chat shows the groups it is at work in, unless its own chat r
   assert.equal(dock('b', away), null)
 })
 
-test('a row says what a member does in its call\'s own words, and that it moves to a fresh conversation', () => {
-  const work = {
-    bots: {},
-    rooms: { r1: [
-      { botId: 'a', since: 1, tool: 'pwsh', note: 'Download Ghidra 12.1.4 and check its hash.' },
-      { botId: 'b', since: 1, tool: 'read', target: 'dump.py' },
-      { botId: 'c', since: 1, switching: true },
-      { botId: 'd', since: 1, tool: 'pwsh', said: '解压 Ghidra，顺便写脚本。', note: 'Expand-Archive' },
-    ] },
-    approvals: [],
-  }
-  assert.deepEqual(rowLabels(dock('r1', work)), ['Anvil · Download Ghidra 12.1.4 and check its hash…', 'Flint · Opening a file · dump.py…', 'Prism · Moving to a fresh conversation…', 'Quill · 解压 Ghidra，顺便写脚本…'])
+test('the capsule says what a member does in its call\'s own words, and that it moves to a fresh conversation', () => {
+  const label = doing => dock('r1', { bots: {}, rooms: { r1: [{ botId: 'a', since: 1, ...doing }] }, approvals: [] }).label
+  assert.equal(label({ tool: 'pwsh', note: 'Download Ghidra 12.1.4 and check its hash.' }), 'Anvil · Download Ghidra 12.1.4 and check its hash…')
+  assert.equal(label({ tool: 'read', target: 'dump.py' }), 'Anvil · Opening a file · dump.py…')
+  assert.equal(label({ switching: true }), 'Anvil · Moving to a fresh conversation…')
+  assert.equal(label({ switching: true, folder: true }), 'Anvil · Switching working folder…')
+  assert.equal(label({ tool: 'pwsh', said: '解压 Ghidra，顺便写脚本。', note: 'Expand-Archive' }), 'Anvil · 解压 Ghidra，顺便写脚本…')
 })
 
 test('a member\'s line runs a clock from its turn\'s start or its approval\'s', () => {
