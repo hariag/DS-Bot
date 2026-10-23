@@ -519,7 +519,7 @@ export const WIDGET_CSS = `
 .bt-q-raised .bt-view-head{padding:14px 16px 4px 20px}
 .bt-q-raised .bt-view-body{padding:0 16px 14px 20px}
 .bt-q-raised .bt-view-body .bt-q-list{padding:0;margin:0 -8px}
-.bt-q-inline .bt-view{margin:0;width:100%;max-width:min(calc(var(--bt-msg-w,.8) * 100%),calc(100% - 82px));order:0}
+.bt-q-inline .bt-view{margin:0;width:100%;max-width:min(100%,max(calc(var(--bt-msg-w,.8) * 100%),560px));order:0}
 body[data-bt-layout=flat] .bt-q-inline .bt-view{max-width:calc(var(--bt-flat-w,1) * 100%)}
 .bt-q-inline:has(>.bt-view-bare){margin:8px 0 12px}
 @media (prefers-reduced-motion:reduce){.bt-widget-progress-fill,.bt-view-radio-dot{transition:none}.bt-view-bare{animation:none}}
