@@ -1,7 +1,8 @@
 // Request identities: a request a Bot names itself is sent once, however often it repeats it.
 //
-// A request whose answer was lost could be sent again and the work done twice. A caller
-// that names its request (`request_id`) can avoid a second delivery: the name belongs to the
+// message_bot merges what the recipient has not read yet, but a request that was read and
+// whose answer was lost could be sent again, and the work would be done twice. A caller
+// that names its request (`request_id`) gets that guarantee: the name belongs to the
 // caller and to the conversation the request was made from, what the request stands for
 // is remembered with a fingerprint of what was asked, and the receipt of the first call
 // is given back instead of a second delivery. The receipt is written before the message
@@ -30,18 +31,15 @@ export function install(rt) {
   // The name of a request in the caller's own space: its Bot, the conversation the request
   // was made from, and the name the caller gave it. The Bot, not its Session: a Bot that
   // moves to a fresh part of its conversation keeps its name.
-  const keyOf = (caller, context, name) => `${caller}\u0000${context}\u0000${name}`
-  const identity = ({ caller, context, name, payload, previousPayload }) => ({
-    key: keyOf(caller, context, name),
+  const identity = ({ caller, context, name, payload }) => ({
+    key: `${caller}\u0000${context}\u0000${name}`,
     print: print(payload),
-    previousPrint: previousPayload === undefined ? undefined : print(previousPayload),
   })
 
   // What a request that was admitted before means for the caller now: its receipt, a
   // conflict, or an outcome that is not known. Undefined when it was never admitted.
   const verdict = (request, record) => {
-    const previousDefault = record.identityVersion === undefined && request.previousPrint !== undefined && record.fingerprint === request.previousPrint
-    if (record.fingerprint !== request.print && !previousDefault) return { status: 'conflict' }
+    if (record.fingerprint !== request.print) return { status: 'conflict' }
     if (record.outcome === 'delivered') {
       // The receipt is gone, but the name stays taken: it is not used again by accident.
       return record.receipt === undefined ? { status: 'expired' } : { status: 'replay', receipt: record.receipt }
@@ -90,13 +88,11 @@ export function install(rt) {
     }
     // A receipt that cannot be saved cannot stop a second delivery later.
     if (rt.readOnly() !== undefined) return { status: 'readonly' }
-    const fresh = { identityVersion: 2, fingerprint: request.print, outcome: 'pending', at: Date.now(), run }
-    if (request.privateHandoff !== undefined) fresh.privateHandoff = request.privateHandoff
+    const fresh = { fingerprint: request.print, outcome: 'pending', at: Date.now(), run }
     receipts()[request.key] = fresh
     const promise = (async () => {
       try {
-        // Ordinary saves may be skipped when this host closes or loses the lock.
-        await rt.save({ required: true })
+        await rt.save()
       } catch (error) {
         delete receipts()[request.key]
         rt.warn('ds-bot: the receipt of the request was not saved: %s', error)
@@ -104,21 +100,6 @@ export function install(rt) {
       }
       try {
         const receipt = await work()
-        if (request.unsent === true) {
-          // The work decided before anything went out: it is not a delivered
-          // receipt, so the request is free to be admitted again. The removal has
-          // to be saved before that is true: a leftover pending record stays.
-          delete receipts()[request.key]
-          try {
-            await rt.save({ required: true })
-          } catch (error) {
-            fresh.outcome = 'uncertain'
-            fresh.at = Date.now()
-            receipts()[request.key] = fresh
-            rt.warn('ds-bot: the removal of the request receipt was not saved: %s', error)
-          }
-          return receipt
-        }
         fresh.outcome = 'delivered'
         fresh.receipt = receipt
         fresh.at = Date.now()
@@ -140,6 +121,5 @@ export function install(rt) {
     }
   }
 
-  const privateRequest = (caller, name) => rt.own(state.requests, keyOf(caller, 'chat', name))
-  Object.assign(rt, { requestIdentity: identity, knownRequest: known, admitRequest: admit, privateRequest })
+  Object.assign(rt, { requestIdentity: identity, knownRequest: known, admitRequest: admit })
 }
