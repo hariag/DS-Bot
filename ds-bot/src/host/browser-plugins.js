@@ -89,11 +89,18 @@ export function install(rt) {
   const headless = typeof rt.config.browserHeadless === 'boolean'
     ? rt.config.browserHeadless
     : !process.env.DISPLAY
+  const downloadRoot = join(rt.home, 'browser-downloads')
   mountBrowserPlugin(rt.ctx, {
     toolDefs: plugin.tools ?? plugin.toolDefs,
     defineTool,
     profileRoot: join(rt.home, 'browser-profiles'),
-    downloadRoot: join(rt.home, 'browser-downloads'),
+    downloadRoot,
+    async uploadRoots(botId) {
+      await rt.load()
+      const requested = rt.workDirOf({ botId })
+      const working = requested !== undefined && await rt.isFolder(requested) ? requested : rt.teamFolder()
+      return [working, join(downloadRoot, botId)].filter(Boolean)
+    },
     headless,
     playwrightUrl,
     executablePath,
