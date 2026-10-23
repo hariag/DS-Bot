@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
-import { BTW_MARKER, normalizeBtwCards, trimToolBoundary } from '../src/host/btw.js'
-import { BTW_CARDS_MAX, BTW_CUT, BTW_TEXT_MAX } from '../src/host/constants.js'
-import { headOf } from '../src/host/text.js'
+import { BTW_MARKER, trimToolBoundary } from '../src/host/btw.js'
 import { fakeContext } from './fake-ctx.js'
 
 const user = text => ({ role: 'user', content: [{ type: 'text', text }] })
@@ -113,10 +111,16 @@ function deferred() {
 
 // `gate` holds each model call open so a test can see the card while it is still
 // answering. `scripts` are the chunk lists for successive calls; anything further
-// gets a short stop.
-async function setup({ state = team(), scripts = [], gate = false, messages, seq = 4, events, foreignLock = false } = {}) {
+// gets a short stop. `btw` seeds card files: { botId: { partId: [cards] } }.
+async function setup({ state = team(), scripts = [], gate = false, messages, seq = 4, events, foreignLock = false, btw = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'dsb-btw-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(state))
+  for (const [botId, parts] of Object.entries(btw)) {
+    for (const [partId, list] of Object.entries(parts)) {
+      mkdirSync(join(home, 'btw', botId), { recursive: true })
+      writeFileSync(join(home, 'btw', botId, `${partId}.json`), JSON.stringify(list))
+    }
+  }
   if (foreignLock) writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: process.ppid, host: hostname(), token: 'other' }))
   const header = {
     config: { provider: 'deepseek', model: 'aside-model', reasoningEffort: 'high', maxTokens: 8000, temperature: 0.2, stop: ['END'] },
@@ -183,14 +187,15 @@ async function setup({ state = team(), scripts = [], gate = false, messages, seq
   }
   const stopRuntime = async () => {
     for (const hold of gates) hold.resolve()
-    for (const card of Object.values(rt.state.btwCards ?? {}).flat()) await rt.btwJoin(card.id)
+    for (const card of Object.values(rt.btwView?.() ?? {}).flat()) await rt.btwJoin(card.id)
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { home, ctx, rt, session, sessions, header, toolHistory, requests, resolved, gates, call: callEndpoint, notices: () => notices, stop: stopRuntime }
 }
 
-const cardsOf = rt => rt.state.btwCards?.b1 ?? []
+const cardsOf = rt => rt.btwView?.().b1 ?? []
+const cardsFile = (home, botId = 'b1', partId = 's-now') => JSON.parse(readFileSync(join(home, 'btw', botId, `${partId}.json`), 'utf8'))
 const totals = (view) => {
   const sums = {}
   for (const [, owner, , kind, input, cacheRead, cacheWrite, output] of view.rows) {
@@ -316,7 +321,7 @@ test('a Bot id or an earlier private part asks the current part', async (t) => {
   assert.equal(cardsOf(env.rt)[0].atSeq, null)
 })
 
-test('group chats, an empty question, a missing route, and a third aside are refused', async (t) => {
+test('group chats, an empty question, and a missing route are refused, while further asides start', async (t) => {
   const env = await setup({ gate: true })
   t.after(() => env.stop())
   const { session } = env
@@ -344,12 +349,13 @@ test('group chats, an empty question, a missing route, and a third aside are ref
   assert.equal(cardsOf(env.rt).length, 0)
   const first = await env.call('btw', { sessionId: 'b1', text: 'one' })
   const second = await env.call('btw', { sessionId: 's-now', text: 'two' })
+  const third = await env.call('btw', { sessionId: 's-now', text: 'three' })
   assert.equal(first.ok, true)
   assert.equal(second.ok, true)
-  await refuse({ sessionId: 's-now', text: 'three' }, 'Two aside questions are already running for this Bot. Ask again when one finishes.')
-  assert.equal(env.requests.length, 2)
-  assert.equal(session.derived, 3)
-  assert.equal(cardsOf(env.rt).length, 2)
+  assert.equal(third.ok, true)
+  assert.equal(env.requests.length, 3)
+  assert.equal(session.derived, 4)
+  assert.equal(cardsOf(env.rt).length, 3)
   assert.equal(session.writes, 0)
 })
 
@@ -417,48 +423,48 @@ test('cancel aborts the call, and the freed slot can be used again', async (t) =
   assert.equal(cardsOf(env.rt).find(item => item.id === next.value.id).status, 'answering')
 })
 
-test('questions and answers are stored truncated, newest first, at most 20, and the view carries them', async (t) => {
-  const question = `${'q'.repeat(BTW_TEXT_MAX)}END-OF-QUESTION`
-  const answer = `${'a'.repeat(BTW_TEXT_MAX)}END-OF-ANSWER`
+test('questions and answers are kept whole, newest first, unbounded, in the part file', async (t) => {
+  const question = `${'q'.repeat(2000)}END-OF-QUESTION`
+  const answer = `${'a'.repeat(2000)}END-OF-ANSWER`
   const env = await setup({ scripts: [stop(answer)] })
   t.after(() => env.stop())
-  const truncated = await env.call('btw', { sessionId: 's-now', text: question })
-  await env.rt.btwJoin(truncated.value.id)
+  const long = await env.call('btw', { sessionId: 's-now', text: question })
+  await env.rt.btwJoin(long.value.id)
   const card = cardsOf(env.rt)[0]
-  assert.equal(card.id, truncated.value.id)
-  assert.equal(card.question, `${headOf(question, BTW_TEXT_MAX)}${BTW_CUT}`)
-  assert.equal(card.question.includes('END-OF-QUESTION'), false)
-  assert.equal(card.answer, `${headOf(answer, BTW_TEXT_MAX)}${BTW_CUT}`)
-  assert.equal(card.answer.includes('END-OF-ANSWER'), false)
+  assert.equal(card.id, long.value.id)
+  assert.equal(card.question, question)
+  assert.equal(card.answer, answer)
   assert.equal(card.status, 'done')
   assert.equal(promptOf(env.requests[0]).endsWith(question), true)
-  for (let index = 0; index < BTW_CARDS_MAX; index += 1) {
+  for (let index = 0; index < 25; index += 1) {
     const response = await env.call('btw', { sessionId: 's-now', text: `item ${String(index).padStart(2, '0')}` })
     await env.rt.btwJoin(response.value.id)
   }
   const cards = cardsOf(env.rt)
-  assert.equal(cards.length, BTW_CARDS_MAX)
-  assert.equal(cards[0].question, `item ${String(BTW_CARDS_MAX - 1).padStart(2, '0')}`)
-  assert.equal(cards.some(item => item.id === truncated.value.id), false)
+  assert.equal(cards.length, 26)
+  assert.equal(cards[0].question, 'item 24')
+  assert.equal(cards.at(-1).id, long.value.id)
+  const file = cardsFile(env.home)
+  assert.equal(file.length, 26)
+  assert.equal(file[0].id, cards[0].id)
   const saved = JSON.parse(readFileSync(join(env.home, 'state.json'), 'utf8'))
-  assert.equal(saved.btwCards.b1.length, BTW_CARDS_MAX)
-  assert.equal(saved.btwCards.b1[0].id, cards[0].id)
+  assert.equal('btwCards' in saved, false)
   const view = await env.call('state', {})
   assert.equal(view.ok, true, view.error?.message)
+  assert.equal(view.value.btwCards.b1.length, 26)
   assert.equal(view.value.btwCards.b1[0].id, cards[0].id)
-  assert.equal(view.value.btwCards.b1.length, BTW_CARDS_MAX)
 })
 
 test('a restart marks an aside that was still answering as failed', async (t) => {
   const env = await setup({
-    state: team({
-      btwCards: {
-        b1: [
+    btw: {
+      b1: {
+        's-now': [
           { id: 'live', botId: 'b1', partId: 's-now', atSeq: 2, question: 'Still going?', answer: '', status: 'answering', createdAt: 10 },
           { id: 'old', botId: 'b1', partId: 's-now', atSeq: 1, question: 'Earlier?', answer: 'Yes.', status: 'done', createdAt: 9, finishedAt: 11 },
         ],
       },
-    }),
+    },
   })
   t.after(() => env.stop())
   const [live, old] = cardsOf(env.rt)
@@ -469,10 +475,13 @@ test('a restart marks an aside that was still answering as failed', async (t) =>
   assert.equal(old.status, 'done')
   assert.equal(old.answer, 'Yes.')
   assert.equal(old.finishedAt, 11)
+  const file = cardsFile(env.home)
+  assert.equal(file[0].status, 'failed')
+  assert.equal(file[0].error, 'DS Bot restarted before this answer finished.')
+  assert.equal(file[1].status, 'done')
   const saved = JSON.parse(readFileSync(join(env.home, 'state.json'), 'utf8'))
-  assert.equal(saved.btwCards.b1[0].status, 'failed')
-  assert.equal(saved.btwCards.b1[1].status, 'done')
-  assert.equal(saved.revision, 4)
+  assert.equal('btwCards' in saved, false)
+  assert.equal(saved.revision, 3)
 })
 
 test('an empty answer and a provider abort fail the card', async (t) => {
@@ -495,43 +504,17 @@ test('an empty answer and a provider abort fail the card', async (t) => {
   assert.equal(aborted.session.writes, 0)
 })
 
-test('a reader keeps a live aside, and only the owner records a restart', () => {
-  const answering = { id: 'live', botId: 'b1', status: 'answering', question: 'Still going?', answer: '', createdAt: 1 }
-  const done = { id: 'old', botId: 'b1', status: 'done', question: 'Earlier?', answer: 'Yes.', createdAt: 2, finishedAt: 3 }
-  const cards = { b1: [answering, done] }
-  const reader = normalizeBtwCards(cards, { recover: false })
-  assert.equal(reader.changed, false)
-  assert.equal(reader.cards, cards)
-  assert.equal(answering.status, 'answering')
-  const owner = normalizeBtwCards(cards, { recover: true, now: 50 })
-  assert.equal(owner.changed, true)
-  assert.equal(owner.cards.b1[0].status, 'failed')
-  assert.equal(owner.cards.b1[0].error, 'DS Bot restarted before this answer finished.')
-  assert.equal(owner.cards.b1[0].finishedAt, 50)
-  assert.equal(owner.cards.b1[1], done)
-  assert.equal(answering.status, 'answering')
-  const crowded = {
-    b1: [
-      ...Array.from({ length: BTW_CARDS_MAX }, (_, index) => ({ id: `d${index}`, status: 'done' })),
-      { id: 'run', status: 'answering' },
-    ],
-  }
-  const kept = normalizeBtwCards(crowded, { recover: false })
-  assert.equal(kept.cards.b1.some(card => card.id === 'run' && card.status === 'answering'), true)
-  assert.equal(kept.cards.b1.filter(card => card.status === 'done').length, BTW_CARDS_MAX - 1)
-})
-
 test('a second host does not fail an aside the writer is still answering', async (t) => {
   const env = await setup({
     foreignLock: true,
-    state: team({
-      btwCards: {
-        b1: [
+    btw: {
+      b1: {
+        's-now': [
           { id: 'live', botId: 'b1', partId: 's-now', atSeq: 2, question: 'Still going?', answer: '', status: 'answering', createdAt: 10 },
           { id: 'old', botId: 'b1', partId: 's-now', atSeq: 1, question: 'Earlier?', answer: 'Yes.', status: 'done', createdAt: 9, finishedAt: 11 },
         ],
       },
-    }),
+    },
   })
   t.after(() => env.stop())
   assert.equal(typeof env.rt.readOnly(), 'string')
@@ -541,9 +524,11 @@ test('a second host does not fail an aside the writer is still answering', async
   assert.equal(live.finishedAt, undefined)
   assert.equal(old.status, 'done')
   assert.equal(old.answer, 'Yes.')
+  const file = cardsFile(env.home)
+  assert.equal(file[0].status, 'answering')
+  assert.equal(file[1].status, 'done')
   const saved = JSON.parse(readFileSync(join(env.home, 'state.json'), 'utf8'))
-  assert.equal(saved.btwCards.b1[0].status, 'answering')
-  assert.equal(saved.btwCards.b1[1].status, 'done')
+  assert.equal('btwCards' in saved, false)
   assert.equal(saved.revision, 3)
   assert.equal(env.rt.state.revision, 3)
   assert.equal(env.notices(), 0)
@@ -562,19 +547,19 @@ test('deleting a Bot aborts its aside and clears the card', async (t) => {
   }))
   const response = await env.call('btw', { sessionId: 'b2', text: 'hold this' })
   assert.equal(response.ok, true, response.error?.message)
-  const card = env.rt.state.btwCards.b2[0]
+  const card = env.rt.btwView().b2[0]
   const signal = env.requests[0].signal
   assert.equal(card.status, 'answering')
   await env.rt.deleteBot('b2')
   assert.equal(signal.aborted, true)
   assert.equal(env.rt.botOf('b2'), undefined)
-  assert.equal(env.rt.state.btwCards?.b2, undefined)
+  assert.equal(env.rt.btwView().b2, undefined)
   await env.rt.btwJoin(card.id)
   assert.notEqual(card.status, 'done')
-  assert.equal(env.rt.state.btwCards?.b2, undefined)
+  assert.equal(existsSync(join(env.home, 'btw', 'b2')), false)
   const saved = JSON.parse(readFileSync(join(env.home, 'state.json'), 'utf8'))
   assert.equal(saved.bots.b2, undefined)
-  assert.equal(saved.btwCards?.b2, undefined)
+  assert.equal('btwCards' in saved, false)
   assert.equal(saved.bots.b1.id, 'b1')
 })
 
@@ -591,19 +576,21 @@ test('unloading the plugin aborts an aside that is still answering', async (t) =
   await env.rt.btwJoin(card.id)
   assert.equal(card.status, 'answering')
   assert.equal(env.rt.state.revision, revision)
+  const file = cardsFile(env.home)
+  assert.equal(file[0].id, card.id)
+  assert.equal(file[0].status, 'answering')
   const saved = JSON.parse(readFileSync(join(env.home, 'state.json'), 'utf8'))
-  assert.equal(saved.btwCards.b1[0].id, card.id)
-  assert.equal(saved.btwCards.b1[0].status, 'answering')
+  assert.equal('btwCards' in saved, false)
   assert.equal(saved.revision, revision)
 })
 
-test('a running aside stays cancellable after newer cards fill the cap', async (t) => {
+test('a running aside stays cancellable after newer cards arrive', async (t) => {
   const env = await setup({ gate: true })
   t.after(() => env.stop())
   const held = await env.call('btw', { sessionId: 's-now', text: 'hold this' })
   assert.equal(held.ok, true, held.error?.message)
   const heldId = held.value.id
-  for (let index = 0; index < BTW_CARDS_MAX; index += 1) {
+  for (let index = 0; index < 25; index += 1) {
     const response = await env.call('btw', { sessionId: 's-now', text: `short ${index}` })
     assert.equal(response.ok, true, response.error?.message)
     const gate = env.gates.at(-1)
@@ -612,7 +599,7 @@ test('a running aside stays cancellable after newer cards fill the cap', async (
     await env.rt.btwJoin(response.value.id)
   }
   const cards = cardsOf(env.rt)
-  assert.equal(cards.length, BTW_CARDS_MAX)
+  assert.equal(cards.length, 26)
   assert.equal(cards.at(-1).id, heldId)
   assert.equal(cards.at(-1).status, 'answering')
   assert.equal(env.requests[0].signal.aborted, false)
@@ -698,4 +685,46 @@ test('a log-only tail anchors the aside to the turn, not the tail', async (t) =>
   assert.equal(cardsOf(mid.rt)[0].atSeq, 4)
   assert.equal(cardsOf(mid.rt)[0].anchorSeq, 1)
   assert.equal(cardsOf(mid.rt)[0].turn, 3)
+})
+
+test('the team view carries only the current part\'s cards', async (t) => {
+  const env = await setup({
+    btw: {
+      b1: {
+        's-old': [{ id: 'gone', botId: 'b1', partId: 's-old', atSeq: 1, question: 'From the old part?', answer: 'Old.', status: 'done', createdAt: 5, finishedAt: 6 }],
+      },
+    },
+  })
+  t.after(() => env.stop())
+  const response = await env.call('btw', { sessionId: 's-now', text: 'in the new part' })
+  await env.rt.btwJoin(response.value.id)
+  const cards = cardsOf(env.rt)
+  assert.equal(cards.length, 1)
+  assert.equal(cards[0].partId, 's-now')
+  const view = await env.call('state', {})
+  assert.equal(view.ok, true, view.error?.message)
+  assert.equal(view.value.btwCards.b1.length, 1)
+  assert.equal(view.value.btwCards.b1[0].partId, 's-now')
+  assert.equal(view.value.btwCards.b1.some(card => card.id === 'gone'), false)
+})
+
+test('an earlier part page carries that part\'s cards, read from its file', async (t) => {
+  const old = [
+    { id: 'there', botId: 'b1', partId: 's-old', atSeq: 1, question: 'From the old part?', answer: 'Old.', status: 'done', createdAt: 5, finishedAt: 6 },
+    { id: 'left', botId: 'b1', partId: 's-old', atSeq: 2, question: 'Never done?', answer: '', status: 'answering', createdAt: 7 },
+  ]
+  const env = await setup({ btw: { b1: { 's-old': old } } })
+  t.after(() => env.stop())
+  env.sessions.set('s-old', makeSession('s-old', { messages: [user('Old work')], header: env.header, seq: 2, toolHistory: [] }))
+  const view = await env.call('state', {})
+  assert.equal(view.value.btwCards.b1, undefined)
+  const page = await env.call('earlier', { sessionId: 's-now' })
+  assert.equal(page.ok, true, page.error?.message)
+  assert.equal(page.value.btw.length, 2)
+  assert.equal(page.value.btw[0].id, 'there')
+  // The owning host's lazy read still records the restart this file kept.
+  assert.equal(page.value.btw[1].status, 'failed')
+  assert.equal(page.value.btw[1].error, 'DS Bot restarted before this answer finished.')
+  const file = cardsFile(env.home, 'b1', 's-old')
+  assert.equal(file[1].status, 'failed')
 })

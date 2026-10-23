@@ -16,8 +16,6 @@ import { t } from './i18n.js'
 
 export const BTW_SOURCE = 'ds-bot-btw'
 export const BTW_TOKEN = '/btw '
-// The host appends this to a card's question or answer, and only when it cut the text.
-const HOST_CUT = ' [truncated]'
 
 const GROUP_REFUSAL = "btw is only available in a Bot's private chat."
 const ATTACHMENT_REFUSAL = '/btw does not take attachments.'
@@ -251,13 +249,6 @@ export function partIndexOf(bot, sessionId, cursor) {
   return partChain(bot).indexOf(sessionId) - 1
 }
 
-// Cards of one earlier part. The part on screen uses the dock and the turn tail.
-export function earlierPartCards(cards, bot, sessionId, partIndex) {
-  const partId = partChain(bot)[partIndex]
-  if (typeof partId !== 'string' || partId === '' || partId === sessionId) return []
-  return (Array.isArray(cards) ? cards : []).filter(card => card?.partId === partId)
-}
-
 function rowTurn(item) {
   return typeof item?.turn === 'number' && Number.isInteger(item.turn) ? item.turn : undefined
 }
@@ -402,18 +393,4 @@ export function withBtwRows(items, cards) {
   }
   for (const card of aside) out.push(btwRow(card))
   return out
-}
-
-export function presentText(text, truncated) {
-  const raw = typeof text === 'string' ? text : ''
-  let body = raw
-  let cut = false
-  if (raw.endsWith(HOST_CUT)) {
-    body = raw.slice(0, -HOST_CUT.length)
-    cut = true
-  } else if (raw.endsWith('已截断')) {
-    body = raw.slice(0, -'已截断'.length).trimEnd()
-    cut = true
-  }
-  return { text: body, marked: truncated === true || cut }
 }

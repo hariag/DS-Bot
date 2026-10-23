@@ -53,8 +53,9 @@ export function install(rt) {
     exchangeTurns: state.exchangeTurns,
     questions: state.questions,
     views: state.views ?? {},
-    // Aside answers, per Bot, newest first. Not part of the model-visible history.
-    btwCards: state.btwCards ?? {},
+    // Aside answers of each Bot's current part, newest first. Not part of the
+    // model-visible history; earlier parts send their cards on their own pages.
+    btwCards: rt.btwView?.() ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.

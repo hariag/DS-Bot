@@ -1282,7 +1282,10 @@ export function install(rt) {
     const at = parts.findIndex(part => part.sessionId === sessionId)
     const index = Number.isInteger(cursor?.part) ? cursor.part : at - 1
     if (at <= 0 || index < 0 || index >= at) return { items: [], cursor: null, startedAt: parts[at]?.startedAt ?? null }
-    return { ...(await partPage(parts, index, cursor)), startedAt: parts[at].startedAt }
+    // Aside cards belong to the part that was current when they were asked, so
+    // they ride along with that part's history instead of the team view.
+    const btw = (await rt.btwPartCards?.(botId, parts[index].sessionId)) ?? []
+    return { ...(await partPage(parts, index, cursor)), btw, startedAt: parts[at].startedAt }
   }
 
   // A Bot's whole own chat, newest page first: the current part, then the earlier

@@ -6,7 +6,7 @@ import { hostText, t } from './i18n.js'
 import { messageClock } from './text.js'
 import {
   BTW_SOURCE, BTW_TOKEN, btwQueryMatches, btwSurface, dockCards, matchBtwClaim, matchBtwEnter,
-  matchBtwSpace, presentText, sessionCards, submitBtw, tailCards,
+  matchBtwSpace, sessionCards, submitBtw, tailCards,
 } from './btw-model.js'
 
 const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied') }, footnotes: t('Footnotes') })
@@ -29,9 +29,8 @@ export function BtwCardView({ card, compact = false, actions }) {
     if (card?.status && card.status !== 'answering') setOpen(true)
   }, [card?.status])
   if (!card) return null
-  const question = presentText(card.question, card.truncated === true || card.questionTruncated === true)
-  const answer = presentText(card.answer, card.truncated === true || card.answerTruncated === true)
-  const truncated = question.marked || answer.marked
+  const question = typeof card.question === 'string' ? card.question : ''
+  const answer = typeof card.answer === 'string' ? card.answer : ''
   const when = stampOf(card)
   const answering = card.status === 'answering'
   const cancel = (event) => {
@@ -54,7 +53,7 @@ export function BtwCardView({ card, compact = false, actions }) {
       onClick: () => setOpen(value => !value),
     },
     h('span', { className: 'bt-btw-chevron', 'aria-hidden': true }),
-    h('span', { className: 'bt-btw-q' }, question.text)),
+    h('span', { className: 'bt-btw-q' }, question)),
     when !== undefined ? h('time', { className: 'bt-btw-time', dateTime: new Date(when).toISOString() }, messageClock(when)) : null,
     answering ? h('span', { className: 'bt-shimmer' }, t('Answering…')) : null,
     card.status === 'cancelled' ? h('span', { className: 'bt-btw-status' }, t('Cancelled')) : null,
@@ -65,8 +64,7 @@ export function BtwCardView({ card, compact = false, actions }) {
   h('p', { className: 'bt-btw-note' }, t('Answered from progress so far; nothing was run')),
   open ? h('div', { className: 'bt-btw-body' },
     card.status === 'failed' ? h('p', { className: 'bt-btw-fail' }, failureText(card)) : null,
-    answer.text !== '' ? h('div', { className: 'bt-btw-answer' }, h(MarkdownText, { text: answer.text, labels: mdLabels(), variant: 'compact' })) : null,
-    truncated ? h('p', { className: 'bt-btw-mark' }, t('Truncated')) : null) : null)
+    answer !== '' ? h('div', { className: 'bt-btw-answer' }, h(MarkdownText, { text: answer, labels: mdLabels(), variant: 'compact' })) : null) : null)
 }
 
 function useTurnFacts(sessionId, actions) {

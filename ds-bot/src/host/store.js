@@ -4,7 +4,6 @@
 import { mkdirSync, statSync } from 'node:fs'
 import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { normalizeBtwCards } from './btw.js'
 import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, TEXT_KEPT } from './constants.js'
 import { replaceFile } from './files.js'
 import { homeLock } from './home-lock.js'
@@ -20,7 +19,7 @@ export function install(rt) {
   const { ctx, home, statePath } = rt
 
   /** @type {{version:1, workspaceId?:string, mainBotIds:string[], bots:Record<string,any>, rooms:Record<string,any>, agents:Record<string,any>, capabilities:{items:Record<string,any>}, exchanges:any[], exchangeTurns:Record<string,number[]>, revision:number}} */
-  const state = { version: 1, mainBotIds: [], bots: {}, rooms: {}, agents: {}, capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, questions: {}, views: {}, btwCards: {}, prefs: {}, switching: {}, revision: 0 }
+  const state = { version: 1, mainBotIds: [], bots: {}, rooms: {}, agents: {}, capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, questions: {}, views: {}, prefs: {}, switching: {}, revision: 0 }
   let loaded = null
   let writing = Promise.resolve()
   const { warn } = rt
@@ -162,15 +161,13 @@ export function install(rt) {
     }
     if (state.works === null || typeof state.works !== 'object' || Array.isArray(state.works)) state.works = {}
     if (state.views === null || typeof state.views !== 'object' || Array.isArray(state.views)) state.views = {}
-    // A live aside belongs to the host that owns the team. A reader keeps its
-    // status; only the owner, and only while taking the team, records that a
-    // previous process left it unfinished.
-    const writer = holder === undefined && stuck === undefined
-    const btw = normalizeBtwCards(state.btwCards, { recover: writer })
-    if (btw.changed) {
-      state.btwCards = btw.cards
+    // LEGACY: aside cards lived in this file only before the feature shipped;
+    // they are kept under btw/ per part now. A saved copy is dropped, not moved.
+    if ('btwCards' in state) {
+      delete state.btwCards
       migrated = true
     }
+    const writer = holder === undefined && stuck === undefined
     // LEGACY: Bots no longer count the rounds they start in a group.
     for (const room of Object.values(state.rooms)) {
       if (!('botRounds' in room)) continue

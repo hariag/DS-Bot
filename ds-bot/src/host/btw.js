@@ -1,9 +1,14 @@
 // Aside questions (btw): one model call on a snapshot of a Bot's private chat.
 // Nothing is written into the Session, and no tool call is ever dispatched.
+// Cards live in a file per Bot and part (<home>/btw/<botId>/<partId>.json), not
+// in state.json, so a save never rewrites them; only the host that owns the
+// team writes them.
 import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { BlockAssembler } from '@deepseek-ai/dsh-llm'
-import { BTW_CARDS_MAX, BTW_CUT, BTW_IN_FLIGHT, BTW_LIMIT, BTW_TEXT_MAX } from './constants.js'
-import { headOf } from './text.js'
+import { BTW_LIMIT } from './constants.js'
+import { replaceFile } from './files.js'
 
 // The mock model recognizes an aside by this first line.
 export const BTW_MARKER = 'ds-bot/btw'
@@ -85,8 +90,6 @@ function anchorState(session, projections) {
   return projections.stateOf(session, ANCHOR_KEY)
 }
 
-const keptText = text => (text.length <= BTW_TEXT_MAX ? text : `${headOf(text, BTW_TEXT_MAX)}${BTW_CUT}`)
-
 const callIds = (message) => {
   if (message?.role !== 'assistant' || !Array.isArray(message.content)) return []
   const ids = []
@@ -158,67 +161,6 @@ function snapshotOf(session, projections) {
 
 const promptFor = (question, retry) => [BTW_PROMPT, ...(retry ? [BTW_RETRY] : []), question].join('\n\n')
 
-// Newest first. A card that is still answering is never dropped: the cap gives
-// way, but only for as long as that call is running.
-function retainCards(list) {
-  if (list.length <= BTW_CARDS_MAX) return list
-  let answering = 0
-  for (const card of list) if (card?.status === 'answering') answering += 1
-  if (answering === 0) return list.slice(0, BTW_CARDS_MAX)
-  const finishedRoom = Math.max(BTW_CARDS_MAX, answering) - answering
-  const kept = []
-  let finished = 0
-  for (const card of list) {
-    if (card?.status === 'answering') {
-      kept.push(card)
-      continue
-    }
-    if (finished < finishedRoom) {
-      kept.push(card)
-      finished += 1
-    }
-  }
-  return kept
-}
-
-// `recover` is only for the host that owns the team. A reader keeps a live
-// 'answering' card as it is. A bad value becomes an empty map so a later save
-// still loads.
-export function normalizeBtwCards(cards, options = {}) {
-  const recover = options?.recover === true
-  const now = typeof options?.now === 'number' ? options.now : Date.now()
-  if (cards === undefined) return { cards: {}, changed: false }
-  if (cards === null || typeof cards !== 'object' || Array.isArray(cards)) return { cards: {}, changed: true }
-  let changed = false
-  const next = {}
-  for (const [botId, list] of Object.entries(cards)) {
-    if (!Array.isArray(list)) {
-      changed = true
-      continue
-    }
-    const kept = []
-    let touched = false
-    for (const card of list) {
-      if (card === null || typeof card !== 'object' || Array.isArray(card)) {
-        touched = true
-        continue
-      }
-      if (recover && card.status === 'answering') {
-        touched = true
-        kept.push({ ...card, status: 'failed', error: card.error ?? RESTART_ERROR, finishedAt: card.finishedAt ?? now })
-      } else {
-        kept.push(card)
-      }
-    }
-    const capped = retainCards(kept)
-    const stored = !touched && capped.length === list.length && capped.every((card, index) => card === list[index]) ? list : capped
-    if (stored !== list) changed = true
-    if (stored.length > 0) next[botId] = stored
-  }
-  if (Object.keys(next).length !== Object.keys(cards).length) changed = true
-  return { cards: changed ? next : cards, changed }
-}
-
 export function install(rt) {
   const { ctx, state } = rt
   registerAnchor(ctx)
@@ -230,7 +172,6 @@ export function install(rt) {
   let disposing = false
   const dropped = new Set()
 
-  const inflight = botId => byBot.get(botId)?.size ?? 0
   const track = (id, botId, controller) => {
     flights.set(id, { botId, controller })
     const ids = byBot.get(botId) ?? new Set()
@@ -245,8 +186,139 @@ export function install(rt) {
     ids?.delete(id)
     if (ids?.size === 0) byBot.delete(flight.botId)
   }
-  const listOf = botId => (Array.isArray(rt.own(state.btwCards, botId)) ? state.btwCards[botId] : [])
-  const findCard = (botId, id) => listOf(botId).find(card => card?.id === id)
+
+  // Cards by Bot and part. A part's list is read from
+  // <home>/btw/<botId>/<partId>.json on first need and kept here; writes are
+  // whole-file replaces, queued so a finish and a cancel never interleave. A
+  // runtime without a home (a bare channel install) keeps cards in memory only.
+  const cardsDir = typeof rt.home === 'string' ? join(rt.home, 'btw') : undefined
+  const partFile = (botId, partId) => join(cardsDir, botId, `${partId}.json`)
+  const partKey = (botId, partId) => `${botId}/${partId}`
+  const writes = () => rt.readOnly?.() === undefined
+  /** @type {Map<string, Map<string, object[]>>} */
+  const cards = new Map()
+  const reading = new Map()
+  let writing = Promise.resolve()
+
+  const listOf = (botId, partId) => cards.get(botId)?.get(partId) ?? []
+  const findCard = (botId, id) => {
+    for (const list of cards.get(botId)?.values() ?? []) {
+      const found = list.find(card => card?.id === id)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+
+  const writePart = (botId, partId) => {
+    const run = writing.then(async () => {
+      if (cardsDir === undefined || !writes() || dropped.has(botId) || rt.botOf(botId) === undefined) return
+      const path = partFile(botId, partId)
+      await mkdir(dirname(path), { recursive: true })
+      const temp = `${path}.${process.pid}.tmp`
+      try {
+        await writeFile(temp, JSON.stringify(cards.get(botId)?.get(partId) ?? [], null, 2), 'utf8')
+        await replaceFile(temp, path)
+      } catch (error) {
+        await unlink(temp).catch(() => {})
+        throw error
+      }
+    })
+    writing = run.catch(() => {})
+    return run
+  }
+
+  // A card event rewrites its part's file; the state save afterwards only bumps
+  // the revision, so a window polls fresh cards.
+  const persist = async (card) => {
+    await writePart(card.botId, card.partId).catch(error => rt.warn('ds-bot: btw cards of %s not saved: %s', card.botId, error))
+    await rt.save()
+  }
+
+  // A part's list, reading its file once. The owning host records the restart a
+  // previous process left behind: an 'answering' card that is not one of this
+  // process's flights failed with it, and the file is written again. A reading
+  // host keeps the cards as they were saved.
+  async function readPart(botId, partId) {
+    const byBot = cards.get(botId) ?? new Map()
+    cards.set(botId, byBot)
+    const held = byBot.get(partId)
+    if (held !== undefined) return held
+    const key = partKey(botId, partId)
+    const pending = reading.get(key)
+    if (pending !== undefined) return pending
+    const job = (async () => {
+      let list = []
+      if (cardsDir === undefined) {
+        byBot.set(partId, list)
+        return list
+      }
+      try {
+        const parsed = JSON.parse(await readFile(partFile(botId, partId), 'utf8'))
+        if (Array.isArray(parsed)) list = parsed.filter(card => card !== null && typeof card === 'object' && !Array.isArray(card))
+      } catch (error) {
+        if (error?.code !== 'ENOENT') rt.warn('ds-bot: unreadable btw cards %s: %s', partFile(botId, partId), error?.code ?? error)
+      }
+      if (writes()) {
+        const now = Date.now()
+        let touched = false
+        list = list.map((card) => {
+          if (card.status !== 'answering' || flights.has(card.id)) return card
+          touched = true
+          return { ...card, status: 'failed', error: card.error ?? RESTART_ERROR, finishedAt: card.finishedAt ?? now }
+        })
+        byBot.set(partId, list)
+        if (touched) await writePart(botId, partId).catch(error => rt.warn('ds-bot: btw cards of %s not saved: %s', botId, error))
+      } else {
+        byBot.set(partId, list)
+      }
+      return byBot.get(partId)
+    })()
+    reading.set(key, job)
+    try {
+      return await job
+    } finally {
+      reading.delete(key)
+    }
+  }
+
+  // Only each Bot's current part is read up front. An earlier part's file is
+  // read when that part's history is asked for (parts.js's earlier page).
+  const originalLoad = rt.load?.bind(rt)
+  if (typeof originalLoad === 'function') {
+    let ready
+    rt.load = () => (ready ??= (async () => {
+      await originalLoad()
+      for (const botId of Object.keys(state.bots)) await readPart(botId, rt.chatOf(botId))
+    })())
+  }
+
+  const originalRefresh = rt.refresh?.bind(rt)
+  if (typeof originalRefresh === 'function') {
+    rt.refresh = async () => {
+      const wasWriting = writes()
+      await originalRefresh()
+      // Taking over a team the other host closed makes this one the writer:
+      // re-read the loaded parts so a leftover 'answering' is recorded now.
+      if (wasWriting || !writes()) return
+      for (const [botId, byBot] of cards) {
+        const parts = Array.from(byBot.keys())
+        byBot.clear()
+        for (const partId of parts) await readPart(botId, partId)
+      }
+    }
+  }
+
+  // The team view carries each Bot's current part only; earlier parts come with
+  // their history pages.
+  const btwView = () => {
+    const view = {}
+    for (const botId of Object.keys(state.bots)) {
+      const list = listOf(botId, rt.chatOf(botId))
+      if (list.length > 0) view[botId] = list
+    }
+    return view
+  }
+
   const abandoned = botId => disposing || dropped.has(botId) || rt.botOf(botId) === undefined
   const stopError = (botId) => new Error(disposing && !dropped.has(botId) && rt.botOf(botId) !== undefined ? 'DS Bot is stopping.' : 'Unknown Bot')
 
@@ -318,31 +390,31 @@ export function install(rt) {
         if (result.failed !== undefined) {
           // Cancel already left this card, and the check above returned. A provider
           // that stops on its own still fails the card, so it does not stay 'answering'.
-          if (settle(card, { status: 'failed', error: result.failed, answer: '' })) await rt.save()
+          if (settle(card, { status: 'failed', error: result.failed, answer: '' })) await persist(card)
           return
         }
         if (result.cutOff) {
-          const answer = result.text ? keptText(result.text) : ''
-          if (settle(card, { status: 'failed', error: BTW_LIMIT, answer, finish: 'max-tokens' })) await rt.save()
+          const answer = result.text ?? ''
+          if (settle(card, { status: 'failed', error: BTW_LIMIT, answer, finish: 'max-tokens' })) await persist(card)
           return
         }
         if (result.toolCalls) {
           if (attempt === 0) continue
-          if (settle(card, { status: 'failed', error: TOOL_ERROR, answer: '' })) await rt.save()
+          if (settle(card, { status: 'failed', error: TOOL_ERROR, answer: '' })) await persist(card)
           return
         }
         if (result.text === '') {
-          if (settle(card, { status: 'failed', error: EMPTY_ERROR, answer: '' })) await rt.save()
+          if (settle(card, { status: 'failed', error: EMPTY_ERROR, answer: '' })) await persist(card)
           return
         }
-        if (settle(card, { status: 'done', answer: keptText(result.text) })) await rt.save()
+        if (settle(card, { status: 'done', answer: result.text })) await persist(card)
         return
       }
     } catch (error) {
       if (signal.aborted || card.status !== 'answering' || !alive(card)) return
       const message = error?.message ?? String(error)
       rt.warn('ds-bot: btw for %s failed: %s', card.botId, message)
-      if (settle(card, { status: 'failed', error: message, answer: '' })) await rt.save()
+      if (settle(card, { status: 'failed', error: message, answer: '' })) await persist(card)
     }
   }
 
@@ -363,7 +435,6 @@ export function install(rt) {
     const question = typeof text === 'string' ? text : ''
     if (question.trim() === '') throw Object.assign(new Error('Write a question after /btw.'), { code: 'bot/invalid' })
     const { sessionId, botId } = locate(raw)
-    if (inflight(botId) >= BTW_IN_FLIGHT) throw new Error('Two aside questions are already running for this Bot. Ask again when one finishes.')
     const id = randomUUID()
     const controller = new AbortController()
     track(id, botId, controller)
@@ -381,14 +452,14 @@ export function install(rt) {
         atSeq: snapshot.atSeq,
         anchorSeq: snapshot.anchorSeq,
         turn: snapshot.turn,
-        question: keptText(question),
+        question,
         answer: '',
         status: 'answering',
         createdAt: Date.now(),
       }
-      state.btwCards ??= {}
-      state.btwCards[botId] = retainCards([card, ...listOf(botId)])
-      await rt.save()
+      await readPart(botId, sessionId)
+      cards.get(botId).set(sessionId, [card, ...listOf(botId, sessionId)])
+      await persist(card)
       // Unload keeps the saved card for the next owner. Deletion already removed it.
       if (abandoned(botId) || findCard(botId, id) !== card) {
         if (disposing && !dropped.has(botId) && findCard(botId, id) === card) return { id }
@@ -400,11 +471,10 @@ export function install(rt) {
       started = true
       return { id }
     } catch (error) {
-      const list = listOf(botId)
+      const list = listOf(botId, sessionId)
       if (list.some(card => card.id === id)) {
-        const rest = list.filter(card => card.id !== id)
-        if (rest.length === 0) delete state.btwCards[botId]
-        else state.btwCards[botId] = rest
+        cards.get(botId)?.set(sessionId, list.filter(card => card.id !== id))
+        await writePart(botId, sessionId).catch(() => {})
       }
       throw error
     } finally {
@@ -420,7 +490,7 @@ export function install(rt) {
     card.status = 'cancelled'
     card.finishedAt = Date.now()
     flights.get(id)?.controller.abort()
-    await rt.save()
+    await persist(card)
     return { answering: true }
   }
 
@@ -429,16 +499,19 @@ export function install(rt) {
     disposing = true
     for (const flight of flights.values()) flight.controller.abort()
     await drain()
+    await writing
   }
 
   // Clears the Bot's cards before the roster save, and waits out calls that
   // would otherwise finish into the deleted team.
   async function dropBot(botId) {
     dropped.add(botId)
-    if (state.btwCards != null) delete state.btwCards[botId]
+    cards.delete(botId)
+    for (const key of reading.keys()) if (key.startsWith(`${botId}/`)) reading.delete(key)
     const ids = [...(byBot.get(botId) ?? [])]
     for (const id of ids) flights.get(id)?.controller.abort()
     await drain(ids)
+    if (cardsDir !== undefined && writes()) await rm(join(cardsDir, botId), { recursive: true, force: true }).catch(error => rt.warn('ds-bot: btw cards of %s not removed: %s', botId, error))
   }
 
   // Channel can be installed without the roster (the thinking route test). The
@@ -453,5 +526,5 @@ export function install(rt) {
 
   const btwJoin = id => flights.get(id)?.done ?? Promise.resolve()
 
-  Object.assign(rt, { askBtw, cancelBtw, btwJoin, btwDispose })
+  Object.assign(rt, { askBtw, cancelBtw, btwJoin, btwDispose, btwView, btwPartCards: readPart })
 }
