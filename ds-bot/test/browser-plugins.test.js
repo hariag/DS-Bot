@@ -393,10 +393,22 @@ test('browser grants are user-only, normalized, deduplicated, expiring, and clea
       /Browser grant kinds must be a non-empty subset/,
     )
   }
-  await assert.rejects(
-    rt.updateBot('b2', { browserGrants: [{ site: '*', kinds: ['post'], until: Date.now() - 1 }] }),
-    /future epoch-millisecond timestamp/,
-  )
+  for (const until of ['later', Number.NaN, Infinity]) {
+    await assert.rejects(
+      rt.updateBot('b2', { browserGrants: [{ site: '*', kinds: ['post'], until }] }),
+      /future epoch-millisecond timestamp/,
+    )
+  }
+  const expiredGrant = { site: '*', kinds: ['post'], until: Date.now() - 1 }
+  const expired = await call('update-bot', { id: 'b2', browserGrants: [expiredGrant] })
+  assert.equal(expired.ok, true)
+  assert.deepEqual(expired.value.browserGrants, [])
+  const freshGrant = { site: 'fresh.example', kinds: ['delete'], until: Date.now() + 60_000 }
+  const mixed = await call('update-bot', { id: 'b2', browserGrants: [expiredGrant, freshGrant] })
+  assert.equal(mixed.ok, true)
+  assert.deepEqual(mixed.value.browserGrants, [
+    { site: 'fresh.example', kinds: ['delete'], until: freshGrant.until },
+  ])
   await assert.rejects(
     rt.updateBot('b2', { browserGrants: Array.from({ length: 51 }, () => ({ site: '*', kinds: ['*'] })) }),
     /array of at most 50 entries/,

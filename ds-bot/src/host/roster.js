@@ -17,15 +17,18 @@ function cleanBrowserGrants(input) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new Error('Each browser grant must have a site and kinds')
     }
+    const until = entry.until
+    if (until !== undefined) {
+      if (typeof until !== 'number' || !Number.isFinite(until)) {
+        throw new Error('Browser grant until must be a future epoch-millisecond timestamp')
+      }
+      if (until <= Date.now()) continue
+    }
     const site = typeof entry.site === 'string' ? entry.site.trim().toLowerCase() : ''
     if (site !== '*' && !HOSTNAME.test(site)) throw new Error('Browser grant site must be * or a hostname')
     if (!Array.isArray(entry.kinds) || entry.kinds.length === 0
       || entry.kinds.some(kind => typeof kind !== 'string' || !BROWSER_GRANT_KINDS.has(kind))) {
       throw new Error('Browser grant kinds must be a non-empty subset of post, upload, download, delete, *')
-    }
-    const until = entry.until
-    if (until !== undefined && (typeof until !== 'number' || !Number.isFinite(until) || until <= Date.now())) {
-      throw new Error('Browser grant until must be a future epoch-millisecond timestamp')
     }
     const kinds = [...new Set(entry.kinds)].sort()
     const key = `${site}\0${kinds.join('\0')}\0${until ?? ''}`

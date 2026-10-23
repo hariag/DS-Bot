@@ -515,7 +515,7 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-browser-action-choice{display:inline-flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap}
 .bt-browser-duration-choice{border:1px solid var(--bt-line);border-radius:8px;padding:5px 8px;background:var(--bt-card);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
 .bt-browser-duration-choice[aria-pressed=true]{background:var(--bt-hover);color:var(--bt-ink)}
-.bt-browser-form-row>.bt-set-control{flex:1;min-width:0}
+.bt-browser-form>.bt-set-row>.bt-set-control{flex:1;min-width:0}
 .bt-browser-form>.bt-set-row+.bt-set-row{border-top:.5px solid var(--bt-line)}
 .bt-browser-site{max-width:320px}
 .bt-browser-form-foot{display:flex;justify-content:flex-end;padding:10px 12px;border-top:.5px solid var(--bt-line)}

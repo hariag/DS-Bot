@@ -2777,7 +2777,7 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-browser-action-choice{display:inline-flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap}
 .bt-browser-duration-choice{border:1px solid var(--bt-line);border-radius:8px;padding:5px 8px;background:var(--bt-card);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
 .bt-browser-duration-choice[aria-pressed=true]{background:var(--bt-hover);color:var(--bt-ink)}
-.bt-browser-form-row>.bt-set-control{flex:1;min-width:0}
+.bt-browser-form>.bt-set-row>.bt-set-control{flex:1;min-width:0}
 .bt-browser-form>.bt-set-row+.bt-set-row{border-top:.5px solid var(--bt-line)}
 .bt-browser-site{max-width:320px}
 .bt-browser-form-foot{display:flex;justify-content:flex-end;padding:10px 12px;border-top:.5px solid var(--bt-line)}
@@ -14236,6 +14236,7 @@ function ConnectorsPage({ roster, actions }) {
 var import_react33 = require("react");
 var ACTIONS = [["post", "Post"], ["upload", "Upload"], ["download", "Download"], ["delete", "Delete"]];
 var DURATIONS = [["hour", "1 hour"], ["today", "Today"], ["week", "7 days"], ["permanent", "Permanent"]];
+var expired = (grant) => Number.isFinite(grant.until) && grant.until <= Date.now();
 function siteValue(value) {
   return value.trim().toLowerCase().replace(/^[a-z][a-z\d+.-]*:\/\//, "").split(/[/?#]/, 1)[0].replace(/:\d+$/, "") || "*";
 }
@@ -14264,10 +14265,10 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
     bot,
     grant,
     index,
-    expired: Number.isFinite(grant.until) && grant.until <= Date.now()
+    expired: expired(grant)
   })));
   const remove = (bot, index) => {
-    const next = (bot.browserGrants ?? []).filter((_grant, position) => position !== index);
+    const next = (bot.browserGrants ?? []).filter((grant, position) => position !== index && !expired(grant));
     void run2(actions.updateBot(bot.id, { browserGrants: next.length ? next : null }));
   };
   const add = (event) => {
@@ -14284,7 +14285,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
     const grant = { site: siteValue(site), kinds: [...kinds], ...until !== void 0 ? { until } : {} };
     setBusy(true);
     void run2(actions.updateBot(selectedBot.id, {
-      browserGrants: [...selectedBot.browserGrants ?? [], grant]
+      browserGrants: [...(selectedBot.browserGrants ?? []).filter((grant2) => !expired(grant2)), grant]
     })).finally(() => setBusy(false));
   };
   const toggleKind = (kind, checked) => {
@@ -14301,11 +14302,11 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
     (0, import_react33.createElement)(
       Section,
       { title: t("Allowed actions") },
-      grants.length === 0 ? (0, import_react33.createElement)(Row3, { label: t("Nothing allowed yet.") }) : grants.map(({ bot, grant, index, expired }) => (0, import_react33.createElement)(
+      grants.length === 0 ? (0, import_react33.createElement)(Row3, { label: t("Nothing allowed yet.") }) : grants.map(({ bot, grant, index, expired: expired2 }) => (0, import_react33.createElement)(
         "div",
         {
           key: `${bot.id}:${index}`,
-          className: `bt-browser-grant${expired ? " bt-browser-grant-expired" : ""}`
+          className: `bt-browser-grant${expired2 ? " bt-browser-grant-expired" : ""}`
         },
         (0, import_react33.createElement)(
           "div",
@@ -14336,7 +14337,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
         { className: "bt-browser-form", onSubmit: add },
         (0, import_react33.createElement)(
           Row3,
-          { className: "bt-browser-form-row", label: t("Bot") },
+          { label: t("Bot") },
           (0, import_react33.createElement)(
             "select",
             { className: "bt-select", value: botId, onChange: (event) => setBotId(event.target.value), disabled: bots.length === 0 },
@@ -14345,7 +14346,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
         ),
         (0, import_react33.createElement)(
           Row3,
-          { className: "bt-browser-form-row", label: t("Site") },
+          { label: t("Site") },
           (0, import_react33.createElement)("input", {
             className: "bt-select bt-browser-site",
             type: "text",
@@ -14356,7 +14357,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
         ),
         (0, import_react33.createElement)(
           Row3,
-          { className: "bt-browser-form-row", label: t("Actions") },
+          { label: t("Actions") },
           (0, import_react33.createElement)(
             "div",
             { className: "bt-browser-action-list" },
@@ -14374,7 +14375,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
         ),
         (0, import_react33.createElement)(
           Row3,
-          { className: "bt-browser-form-row", label: t("Duration") },
+          { label: t("Duration") },
           (0, import_react33.createElement)(
             "div",
             { className: "bt-browser-duration", role: "group", "aria-label": t("Duration") },

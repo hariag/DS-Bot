@@ -4,6 +4,7 @@ import { dateLocale, t } from './i18n.js'
 
 const ACTIONS = [['post', 'Post'], ['upload', 'Upload'], ['download', 'Download'], ['delete', 'Delete']]
 const DURATIONS = [['hour', '1 hour'], ['today', 'Today'], ['week', '7 days'], ['permanent', 'Permanent']]
+const expired = grant => Number.isFinite(grant.until) && grant.until <= Date.now()
 
 function siteValue(value) {
   return value.trim().toLowerCase()
@@ -38,10 +39,10 @@ export function BrowserPage({ roster, actions, run, Section, Row }) {
   }, [bots, botId])
 
   const grants = bots.flatMap(bot => (bot.browserGrants ?? []).map((grant, index) => ({
-    bot, grant, index, expired: Number.isFinite(grant.until) && grant.until <= Date.now(),
+    bot, grant, index, expired: expired(grant),
   })))
   const remove = (bot, index) => {
-    const next = (bot.browserGrants ?? []).filter((_grant, position) => position !== index)
+    const next = (bot.browserGrants ?? []).filter((grant, position) => position !== index && !expired(grant))
     void run(actions.updateBot(bot.id, { browserGrants: next.length ? next : null }))
   }
   const add = event => {
@@ -58,7 +59,7 @@ export function BrowserPage({ roster, actions, run, Section, Row }) {
     const grant = { site: siteValue(site), kinds: [...kinds], ...(until !== undefined ? { until } : {}) }
     setBusy(true)
     void run(actions.updateBot(selectedBot.id, {
-      browserGrants: [...(selectedBot.browserGrants ?? []), grant],
+      browserGrants: [...(selectedBot.browserGrants ?? []).filter(grant => !expired(grant)), grant],
     })).finally(() => setBusy(false))
   }
   const toggleKind = (kind, checked) => {
@@ -90,10 +91,10 @@ export function BrowserPage({ roster, actions, run, Section, Row }) {
         }, t('Remove grant'))))),
     h(Section, { title: t('Allow an action') },
       h('form', { className: 'bt-browser-form', onSubmit: add },
-        h(Row, { className: 'bt-browser-form-row', label: t('Bot') },
+        h(Row, { label: t('Bot') },
           h('select', { className: 'bt-select', value: botId, onChange: event => setBotId(event.target.value), disabled: bots.length === 0 },
             bots.map(bot => h('option', { key: bot.id, value: bot.id }, bot.name)))),
-        h(Row, { className: 'bt-browser-form-row', label: t('Site') },
+        h(Row, { label: t('Site') },
           h('input', {
             className: 'bt-select bt-browser-site',
             type: 'text',
@@ -101,7 +102,7 @@ export function BrowserPage({ roster, actions, run, Section, Row }) {
             placeholder: t('example.com — leave empty for all sites'),
             onChange: event => setSite(event.target.value),
           })),
-        h(Row, { className: 'bt-browser-form-row', label: t('Actions') },
+        h(Row, { label: t('Actions') },
           h('div', { className: 'bt-browser-action-list' },
             ACTIONS.map(([kind, label]) => h('label', { key: kind, className: 'bt-browser-action-choice' },
               h('input', {
@@ -110,7 +111,7 @@ export function BrowserPage({ roster, actions, run, Section, Row }) {
                 onChange: event => toggleKind(kind, event.target.checked),
               }),
               t(label))))),
-        h(Row, { className: 'bt-browser-form-row', label: t('Duration') },
+        h(Row, { label: t('Duration') },
           h('div', { className: 'bt-browser-duration', role: 'group', 'aria-label': t('Duration') },
             DURATIONS.map(([key, label]) => h('button', {
               key,
