@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { copyFile, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { homedir, platform, tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, win32 } from 'node:path'
 
 // Kinds we can harvest: Chromium-family through their own exe, Firefox through its plain db.
 const KIND_ORDER = ['chrome', 'edge', 'brave', 'chromium', 'firefox']
@@ -443,7 +443,9 @@ export function locksProfile(process, source) {
   const dir = userDataDirOf(process.commandLine)
   if (dir === null) return true // standard invocation binds the standard root
   const norm = (p) => p.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
-  return norm(dir) === norm(dirname(source.profilePath))
+  // Browser command lines are compared as Windows paths (the only platform that closes a
+  // source); win32 splits on both separators, so the check reads the same on every host.
+  return norm(dir) === norm(win32.dirname(source.profilePath))
 }
 
 /** Ask a running source browser to quit (graceful; its session comes back on relaunch). */
