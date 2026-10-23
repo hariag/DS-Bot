@@ -8,7 +8,7 @@ export const systemPrompt = [
   'Every action returns a fresh snapshot. Refs can change when the page changes. Use browser_tabs to list, select, or close tabs.',
   'Use browser_screenshot for content that is only drawn, such as a canvas.',
   'When the page wants a login, a payment, or a captcha, call browser_handoff and stop. Do not invent a password, a code, or a card number.',
-  "Submitting, buying, or deleting may need the user's approval; the tool asks for you. If a result is unknown, check the page with browser_snapshot and never repeat the action blindly.",
+  "Posting, uploading, downloading, or deleting may need approval; deleting needs a second confirmed click after you check the snapshot. Payments, logins, and captchas are for the user via browser_handoff. If a result is unknown, check with browser_snapshot and never repeat the action blindly.",
   'When the task is done, answer in plain text and do not call a tool.',
 ].join('\n')
 
@@ -36,10 +36,22 @@ export const toolDefs = [
   {
     name: 'browser_click',
     needsBrowser: true,
-    description: 'Click an element by its ARIA ref.',
-    parameters: { ref: REF },
+    description: 'Click an element by its ARIA ref. Set true only on the second click of a delete, after you checked the snapshot.',
+    parameters: { ref: REF, confirm: { type: 'boolean', description: 'Set true only on the second click of a delete, after you checked the snapshot.' } },
     async execute(args, ctx) {
-      return ctx.session.click(args.ref)
+      return ctx.session.click(args.ref, { confirm: args.confirm === true })
+    },
+  },
+  {
+    name: 'browser_upload',
+    needsBrowser: true,
+    description: 'Upload 1–10 existing local files through a file input.',
+    parameters: {
+      ref: REF,
+      paths: { type: 'array', items: { type: 'string' }, required: true, description: 'Absolute paths of 1–10 files to upload' },
+    },
+    async execute(args, ctx) {
+      return ctx.session.upload(args.ref, args.paths)
     },
   },
   {

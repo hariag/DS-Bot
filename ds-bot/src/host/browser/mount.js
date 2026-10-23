@@ -18,9 +18,9 @@ export const browserOutput = {
 
 /**
  * @param {any} ctx
- * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, headless: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, authorize?: (exec: any, botId: string, action: any) => Promise<void>, complete?: Function }} options
+ * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, downloadRoot?: string, headless: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, authorize?: (exec: any, botId: string, action: any) => Promise<void>, complete?: Function }} options
  */
-export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, headless, playwrightUrl, executablePath, actionTimeout, authorize, complete }) {
+export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, downloadRoot, headless, playwrightUrl, executablePath, actionTimeout, authorize, complete }) {
   const sessions = new Map()
   ctx.effect(() => async () => {
     const open = [...sessions.values()]
@@ -39,7 +39,15 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
         if (!botId) return 'Only Bots on the team have a browser.'
         let session = sessions.get(botId)
         if (spec.needsBrowser && session === undefined) {
-          session = await openBotBrowser({ botId, profileRoot, headless, playwrightUrl, executablePath, actionTimeout })
+          session = await openBotBrowser({
+            botId,
+            profileRoot,
+            downloadDir: join(downloadRoot ?? join(profileRoot, 'browser-downloads'), botId),
+            headless,
+            playwrightUrl,
+            executablePath,
+            actionTimeout,
+          })
           sessions.set(botId, session)
         }
         const gate = authorize ? action => authorize(exec, botId, action) : undefined

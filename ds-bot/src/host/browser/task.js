@@ -32,7 +32,7 @@ export async function runTask({ session, goal, complete = completeDeepseek, maxS
 
 export const id = 'task'
 export const label = 'Whole task'
-export const systemPrompt = 'Call browser_task once with the user\'s web goal. The tool runs the browser and returns the answer plus the steps it took. Submitting, buying, or deleting may need the user’s approval. If an action result is unknown, check the page with browser_snapshot and never repeat it blindly. Do not browse with any other tool.'
+export const systemPrompt = 'Call browser_task once with the user\'s web goal. The tool runs the browser and returns the answer plus the steps it took. Posting, uploading, downloading, and deleting may need approval; deletes require a second confirmed click after checking the snapshot. Payments, logins, and captchas go to the user via browser_handoff. If an action result is unknown, check with browser_snapshot and never repeat it blindly. Do not browse with any other tool.'
 
 export const toolDefs = [
   {

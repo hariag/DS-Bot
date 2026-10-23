@@ -50,8 +50,8 @@ function start(config, { services = {}, team = TEAM } = {}) {
 }
 
 const WRITE_ACTION = {
-  kind: 'submit',
-  label: 'Save changes',
+  kind: 'post',
+  label: 'Publish update',
   origin: 'https://shop.example.com',
   host: 'shop.example.com',
 }
@@ -143,6 +143,7 @@ test('refs exposes the ARIA snapshot tool contract', () => {
     'browser_open',
     'browser_snapshot',
     'browser_click',
+    'browser_upload',
     'browser_type',
     'browser_select',
     'browser_press',
@@ -156,7 +157,7 @@ test('refs exposes the ARIA snapshot tool contract', () => {
   assert.equal(refsTools.find(tool => tool.name === 'browser_type').parameters.submit.required, undefined)
   assert.equal(refsTools.find(tool => tool.name === 'browser_tabs').parameters.index.required, undefined)
   assert.equal(refsTools.find(tool => tool.name === 'browser_handoff').parameters.note.required, undefined)
-  assert.ok(refsPrompt.includes("Submitting, buying, or deleting may need the user's approval; the tool asks for you. If a result is unknown, check the page with browser_snapshot and never repeat the action blindly."))
+  assert.ok(refsPrompt.includes('Posting, uploading, downloading, or deleting may need approval;'))
 })
 
 test('browserExecutablePath must be a string when configured', () => {
@@ -175,7 +176,7 @@ test('a matching browser grant allows the write without asking', async (t) => {
   const approval = fakeApproval('rejected')
   const writer = browserWriter()
   const team = structuredClone(TEAM)
-  team.bots.b2.browserGrants = [{ site: 'example.com', kinds: ['submit'] }]
+  team.bots.b2.browserGrants = [{ site: 'example.com', kinds: ['post'] }]
   const { ctx, stop } = start({
     browserPlugin: 'refs',
     browserPluginApi: writer.plugin,
@@ -202,10 +203,10 @@ test('approval is one-shot and each write requests it again', async (t) => {
   assert.equal(writer.runs(), 2)
   assert.equal(approval.requests.length, 2)
   assert.match(approval.requests[0].reason, /shop\.example\.com/)
-  assert.match(approval.requests[0].reason, /Save changes/)
+  assert.match(approval.requests[0].reason, /Publish update/)
   assert.equal(approval.requests[0].toolName, 'browser_write')
   assert.equal(approval.requests[0].callId, 'call-1')
-  assert.match(approval.requests[0].displayReason.en, /^Let Writer submit/)
+  assert.match(approval.requests[0].displayReason.en, /^Let Writer post/)
   assert.match(approval.requests[0].displayReason.zh, /Writer/)
 })
 
@@ -224,9 +225,9 @@ test('a rejected approval prevents the write', async (t) => {
 
 test('browser grants match exact hosts, subdomains, and wildcard sites and kinds', async (t) => {
   const cases = [
-    { site: 'example.com', host: 'shop.example.com', kinds: ['submit'], allowed: true },
-    { site: 'example.com', host: 'badexample.com', kinds: ['submit'], allowed: false },
-    { site: '*', host: 'unrelated.test', kinds: ['submit'], allowed: true },
+    { site: 'example.com', host: 'shop.example.com', kinds: ['post'], allowed: true },
+    { site: 'example.com', host: 'badexample.com', kinds: ['post'], allowed: false },
+    { site: '*', host: 'unrelated.test', kinds: ['post'], allowed: true },
     { site: 'example.com', host: 'example.com', kinds: ['*'], allowed: true },
   ]
   for (const entry of cases) {
@@ -253,45 +254,19 @@ test('browser grants match exact hosts, subdomains, and wildcard sites and kinds
   }
 })
 
-test('read-only blocks writes and full access allows them without approval', async (t) => {
-  for (const [preset, allowed] of [['read-only', false], ['danger-full-access', true]]) {
-    const approval = fakeApproval('rejected')
-    const writer = browserWriter()
-    const team = structuredClone(TEAM)
-    team.bots.b2.permission = preset
-    const { ctx, stop } = start({
-      browserPlugin: 'refs',
-      browserPluginApi: writer.plugin,
-    }, { services: { approval, permissionPresets: permissionService('workspace-write') }, team })
-    t.after(stop)
-    const tool = ctx.registeredTools.get('browser_write')
-    if (allowed) assert.equal(await tool.execute({}, browserExec()), 'written')
-    else await assert.rejects(tool.execute({}, browserExec()), /read-only permissions.*Nothing was done\./)
-    assert.equal(writer.runs(), allowed ? 1 : 0)
-    assert.equal(approval.requests.length, 0)
-  }
-})
-
-test('group-session permission overrides the Bot permission', async (t) => {
+test('read-only permissions use the ordinary approval path', async (t) => {
   const approval = fakeApproval('allowed-once')
   const writer = browserWriter()
   const team = structuredClone(TEAM)
-  team.bots.b2.permission = 'danger-full-access'
-  team.rooms.r1 = { id: 'r1', name: 'Room', members: ['b2'], permission: 'read-only' }
-  const { ctx, rt, stop } = start({
+  team.bots.b2.permission = 'read-only'
+  const { ctx, stop } = start({
     browserPlugin: 'refs',
     browserPluginApi: writer.plugin,
   }, { services: { approval, permissionPresets: permissionService('workspace-write') }, team })
   t.after(stop)
-  await rt.load()
-  rt.groupOwners.set('group-session', { botId: 'b2', roomId: 'r1' })
-
-  await assert.rejects(
-    ctx.registeredTools.get('browser_write').execute({}, browserExec('b2', 'group-session')),
-    /read-only permissions.*Nothing was done\./,
-  )
-  assert.equal(writer.runs(), 0)
-  assert.equal(approval.requests.length, 0)
+  assert.equal(await ctx.registeredTools.get('browser_write').execute({}, browserExec()), 'written')
+  assert.equal(writer.runs(), 1)
+  assert.equal(approval.requests.length, 1)
 })
 
 test('missing approval service is reported without running the write', async (t) => {
@@ -336,7 +311,7 @@ test('approval cancellation, service failure, and missing Sessions are explicit'
   }
 })
 
-test('approval verbs distinguish purchases and deletes', async (t) => {
+test('approval verbs cover every gated action', async (t) => {
   const approval = fakeApproval('allowed-once')
   const writer = browserWriter()
   const { ctx, stop } = start({
@@ -346,7 +321,9 @@ test('approval verbs distinguish purchases and deletes', async (t) => {
   t.after(stop)
   const tool = ctx.registeredTools.get('browser_write')
   for (const [kind, label, verb] of [
-    ['purchase', 'Buy now', 'make a purchase'],
+    ['post', 'Publish update', 'post'],
+    ['upload', 'upload files', 'upload files'],
+    ['download', 'download file', 'download a file'],
     ['delete', 'Delete item', 'delete something'],
   ]) {
     writer.setAction({ ...WRITE_ACTION, kind, label })
@@ -355,7 +332,46 @@ test('approval verbs distinguish purchases and deletes', async (t) => {
   }
 })
 
-test('browser grants are user-only, normalized, deduplicated, and clearable through api/bot', async (t) => {
+test('payment is refused even with a wildcard grant or full-access preset', async (t) => {
+  for (const setup of [
+    team => { team.bots.b2.browserGrants = [{ site: '*', kinds: ['*'] }] },
+    team => { team.bots.b2.permission = 'danger-full-access' },
+  ]) {
+    const approval = fakeApproval('allowed-once')
+    const writer = browserWriter()
+    const team = structuredClone(TEAM)
+    setup(team)
+    writer.setAction({ ...WRITE_ACTION, kind: 'payment', label: 'Pay now' })
+    const { ctx, stop } = start({
+      browserPlugin: 'refs',
+      browserPluginApi: writer.plugin,
+    }, { services: { approval, permissionPresets: permissionService('workspace-write') }, team })
+    t.after(stop)
+    await assert.rejects(
+      ctx.registeredTools.get('browser_write').execute({}, browserExec()),
+      /call browser_handoff with reason "payment".*Nothing was done\./,
+    )
+    assert.equal(writer.runs(), 0)
+    assert.equal(approval.requests.length, 0)
+  }
+})
+
+test('expired grants do not authorize a write', async (t) => {
+  const approval = fakeApproval('allowed-once')
+  const writer = browserWriter()
+  const team = structuredClone(TEAM)
+  team.bots.b2.browserGrants = [{ site: 'example.com', kinds: ['post'], until: Date.now() - 1 }]
+  const { ctx, stop } = start({
+    browserPlugin: 'refs',
+    browserPluginApi: writer.plugin,
+  }, { services: { approval, permissionPresets: permissionService('workspace-write') }, team })
+  t.after(stop)
+  assert.equal(await ctx.registeredTools.get('browser_write').execute({}, browserExec()), 'written')
+  assert.equal(writer.runs(), 1)
+  assert.equal(approval.requests.length, 1)
+})
+
+test('browser grants are user-only, normalized, deduplicated, expiring, and clearable through api/bot', async (t) => {
   const { rt, call, stop } = start({})
   t.after(stop)
   await rt.load()
@@ -364,12 +380,22 @@ test('browser grants are user-only, normalized, deduplicated, and clearable thro
     { message: 'Only the user can set what Writer may do in the browser' },
   )
   await assert.rejects(
-    rt.updateBot('b2', { browserGrants: [{ site: 'https://example.com/path', kinds: ['submit'] }] }),
+    rt.updateBot('b2', { browserGrants: [{ site: 'https://example.com/path', kinds: ['post'] }] }),
     /Browser grant site must be \* or a hostname/,
   )
   await assert.rejects(
-    rt.updateBot('b2', { browserGrants: [{ site: 'example.com', kinds: ['submit', 'unsafe'] }] }),
+    rt.updateBot('b2', { browserGrants: [{ site: 'example.com', kinds: ['post', 'unsafe'] }] }),
     /Browser grant kinds must be a non-empty subset/,
+  )
+  for (const legacy of ['submit', 'purchase']) {
+    await assert.rejects(
+      rt.updateBot('b2', { browserGrants: [{ site: 'example.com', kinds: [legacy] }] }),
+      /Browser grant kinds must be a non-empty subset/,
+    )
+  }
+  await assert.rejects(
+    rt.updateBot('b2', { browserGrants: [{ site: '*', kinds: ['post'], until: Date.now() - 1 }] }),
+    /future epoch-millisecond timestamp/,
   )
   await assert.rejects(
     rt.updateBot('b2', { browserGrants: Array.from({ length: 51 }, () => ({ site: '*', kinds: ['*'] })) }),
@@ -377,10 +403,16 @@ test('browser grants are user-only, normalized, deduplicated, and clearable thro
   )
   const saved = await call('update-bot', {
     id: 'b2',
-    browserGrants: [{ site: ' Example.COM ', kinds: ['submit', 'purchase', 'submit'] }],
+    browserGrants: [
+      { site: ' Example.COM ', kinds: ['post', 'upload', 'download', 'delete', 'post'] },
+      { site: 'example.com', kinds: ['post', 'upload', 'download', 'delete'], until: Date.now() + 60_000 },
+    ],
   })
   assert.equal(saved.ok, true)
-  assert.deepEqual(saved.value.browserGrants, [{ site: 'example.com', kinds: ['purchase', 'submit'] }])
+  assert.deepEqual(saved.value.browserGrants, [
+    { site: 'example.com', kinds: ['delete', 'download', 'post', 'upload'] },
+    { site: 'example.com', kinds: ['delete', 'download', 'post', 'upload'], until: saved.value.browserGrants[1].until },
+  ])
   const cleared = await call('update-bot', { id: 'b2', browserGrants: null })
   assert.equal(cleared.ok, true)
   assert.equal(Object.hasOwn(cleared.value, 'browserGrants'), false)

@@ -11,6 +11,7 @@ import * as task from './browser/task.js'
 export const browserPlugins = { refs, script, task }
 
 const NAMES = Object.keys(browserPlugins)
+const GRANT_KINDS = new Set(['post', 'upload', 'download', 'delete'])
 
 function optionalString(config, key) {
   const value = config[key]
@@ -21,10 +22,12 @@ function optionalString(config, key) {
 function grantAllows(bot, action) {
   return (Array.isArray(bot.browserGrants) ? bot.browserGrants : []).some(grant => {
     if (!grant || typeof grant.site !== 'string' || !Array.isArray(grant.kinds)) return false
+    if (grant.until !== undefined
+      && (typeof grant.until !== 'number' || !Number.isFinite(grant.until) || grant.until <= Date.now())) return false
     const site = grant.site.toLowerCase()
     const host = action.host.toLowerCase()
     const siteMatches = site === '*' || host === site || host.endsWith(`.${site}`)
-    return siteMatches && (grant.kinds.includes('*') || grant.kinds.includes(action.kind))
+    return GRANT_KINDS.has(action.kind) && siteMatches && (grant.kinds.includes('*') || grant.kinds.includes(action.kind))
   })
 }
 
@@ -32,12 +35,10 @@ async function authorizeBrowserAction(rt, exec, botId, action) {
   await rt.load()
   const bot = rt.botOf(botId)
   if (bot === undefined) throw new Error('Unknown Bot')
-  const sessionId = exec.agent?.session?.header?.id ?? exec.agent?.id
-  const permission = rt.permissionOf(botId, sessionId)
-  if (permission === 'read-only') {
-    throw new Error(`This Bot has read-only permissions, so it cannot ${action.label} on ${action.host}. Nothing was done.`)
+  if (action.kind === 'payment') {
+    throw new Error(`This looks like a payment ("${action.label}" on ${action.host}). The user makes payments themselves: call browser_handoff with reason "payment" and stop. Nothing was done.`)
   }
-  if (permission === 'danger-full-access' || grantAllows(bot, action)) return
+  if (!GRANT_KINDS.has(action.kind) || grantAllows(bot, action)) return
 
   const approval = rt.ctx.get?.('approval')
   const agent = exec.agent
@@ -45,8 +46,9 @@ async function authorizeBrowserAction(rt, exec, botId, action) {
     throw new Error(`This action needs the user's approval, and there is no way to ask here, so nothing was done.`)
   }
   const verbs = {
-    submit: { en: 'submit', zh: '提交' },
-    purchase: { en: 'make a purchase', zh: '购买' },
+    post: { en: 'post', zh: '发布内容' },
+    upload: { en: 'upload files', zh: '上传文件' },
+    download: { en: 'download a file', zh: '下载文件' },
     delete: { en: 'delete something', zh: '删除内容' },
   }
   const verb = verbs[action.kind]
@@ -91,6 +93,7 @@ export function install(rt) {
     toolDefs: plugin.tools ?? plugin.toolDefs,
     defineTool,
     profileRoot: join(rt.home, 'browser-profiles'),
+    downloadRoot: join(rt.home, 'browser-downloads'),
     headless,
     playwrightUrl,
     executablePath,

@@ -5,7 +5,7 @@ import { MAX_AVATAR_IMAGE, ROOM_MAX_MEMBERS, ROOM_MODES, ROOM_NAME_MAX, ROOM_NOT
 import { currentColor, isColor, unquote } from './text.js'
 import { nameProblem } from '../shared/mentions.js'
 
-const BROWSER_GRANT_KINDS = new Set(['submit', 'purchase', 'delete', '*'])
+const BROWSER_GRANT_KINDS = new Set(['post', 'upload', 'download', 'delete', '*'])
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/
 
 function cleanBrowserGrants(input) {
@@ -21,13 +21,17 @@ function cleanBrowserGrants(input) {
     if (site !== '*' && !HOSTNAME.test(site)) throw new Error('Browser grant site must be * or a hostname')
     if (!Array.isArray(entry.kinds) || entry.kinds.length === 0
       || entry.kinds.some(kind => typeof kind !== 'string' || !BROWSER_GRANT_KINDS.has(kind))) {
-      throw new Error('Browser grant kinds must be a non-empty subset of submit, purchase, delete, *')
+      throw new Error('Browser grant kinds must be a non-empty subset of post, upload, download, delete, *')
+    }
+    const until = entry.until
+    if (until !== undefined && (typeof until !== 'number' || !Number.isFinite(until) || until <= Date.now())) {
+      throw new Error('Browser grant until must be a future epoch-millisecond timestamp')
     }
     const kinds = [...new Set(entry.kinds)].sort()
-    const key = `${site}\0${kinds.join('\0')}`
+    const key = `${site}\0${kinds.join('\0')}\0${until ?? ''}`
     if (seen.has(key)) continue
     seen.add(key)
-    grants.push({ site, kinds })
+    grants.push({ site, kinds, ...(until !== undefined ? { until } : {}) })
   }
   return grants
 }
