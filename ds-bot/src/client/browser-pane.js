@@ -125,13 +125,18 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
   const ind = useRef(null)
   const spot = useRef(null)
   const under = useRef(null)
+  const watcher = useRef(null)
   // The capsule sits under the active tab; its two edges move on different springs.
   useLayoutEffect(() => {
     const box = wrap.current
     const capsule = ind.current
     if (!box || !capsule) return undefined
     const node = view === 'details' ? box.querySelector('.bt-ptab-bot') : box.querySelector(`[data-tab="${active}"]`)
-    under.current = node
+    if (under.current !== node) {
+      if (under.current) watcher.current?.unobserve(under.current)
+      under.current = node
+      if (node) watcher.current?.observe(node)
+    }
     if (!node) { capsule.style.opacity = '0'; spot.current = null; return undefined }
     // The Bot tab is pinned at the strip's start; showing it scrolls the pages back
     // so the capsule and the pinned tab line up.
@@ -151,6 +156,7 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
     return () => { lead.cancel(); trail.cancel() }
   })
   // A drag resizes the strip without a render; the capsule's right edge keeps to its tab.
+  // The tab itself is watched too — its width can still change after the measure.
   useEffect(() => {
     const box = wrap.current
     if (!box) return undefined
@@ -162,8 +168,10 @@ function PanelStrip({ bot, subject, view, ids, active, reading, onView, actions,
       capsule.style.left = `${spot.current.left}px`
       capsule.style.right = `${spot.current.right}px`
     })
+    watcher.current = observer
     observer.observe(box)
-    return () => observer.disconnect()
+    if (under.current) observer.observe(under.current)
+    return () => { watcher.current = null; observer.disconnect() }
   }, [])
   return h('div', { className: 'bt-ptabs', role: 'tablist', 'aria-label': t('Panel tabs') },
     h('div', { className: 'bt-ptabs-in', ref: wrap },
@@ -669,7 +677,7 @@ export const BROWSER_CSS = `
 .bt-ptab-bot{padding:0 7px}
 .bt-ptab-bot .bt-mark{flex:none}
 .bt-ptab-name{max-width:96px;overflow:hidden;text-overflow:ellipsis;font-weight:500;animation:bt-ptab-label .18s ease}
-@keyframes bt-ptab-label{from{opacity:0;filter:blur(4px);max-width:0}}
+@keyframes bt-ptab-label{from{opacity:0;filter:blur(4px)}}
 .bt-ptab-fav{width:14px;height:14px;flex:none;border-radius:3px;object-fit:cover;color:var(--bt-ink-3)}
 .bt-ptab-globe{display:inline-flex}
 .bt-ptab-globe svg{width:14px;height:14px}
