@@ -14171,7 +14171,8 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
         "aria-expanded": flow === "menu",
         disabled: busy,
         onClick: () => {
-          flow === "menu" ? setFlowTracked(null) : openImport();
+          if (flow === "menu") setFlowTracked(null);
+          else openImport();
         }
       }, (0, import_react37.createElement)(ImportIcon)) : null,
       page.loading ? (0, import_react37.createElement)("span", { className: "bt-browser-progress", "aria-hidden": true }) : null

@@ -325,7 +325,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
       imports ? h('button', {
         type: 'button', className: 'bt-icon-btn bt-import-btn', 'aria-label': t('Import cookies'), title: t('Import cookies'),
         'aria-expanded': flow === 'menu', disabled: busy,
-        onClick: () => { flow === 'menu' ? setFlowTracked(null) : openImport() },
+        onClick: () => { if (flow === 'menu') setFlowTracked(null); else openImport() },
       }, h(ImportIcon)) : null,
       page.loading ? h('span', { className: 'bt-browser-progress', 'aria-hidden': true }) : null),
     h('div', { ref: frame, className: 'bt-browser-frame', 'data-guest': showGuest || undefined },
