@@ -8,10 +8,11 @@ export function turnReasoning(steps, current) {
 }
 
 // Whether `current` opens the Turn's reply in the chat: the first step with reply text,
-// or the one that shows the Turn's reasoning, whichever comes first.
-export function opensReply(steps, current) {
+// or — while the reasoning shows — the one that shows the Turn's reasoning, whichever
+// comes first.
+export function opensReply(steps, current, withReasoning = true) {
   const members = steps.length ? steps : [current]
-  const reasoner = members.findLast(step => stepReasoning(step) !== '')
+  const reasoner = withReasoning ? members.findLast(step => stepReasoning(step) !== '') : undefined
   return members.find(step => texts(step).length > 0 || step === reasoner)?.step === current.step
 }
 

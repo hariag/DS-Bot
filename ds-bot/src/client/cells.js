@@ -17,7 +17,7 @@ import { noHover, useViewport, viewBottom } from './motion.js'
 import { heldCardKey } from './sources.js'
 import { BtwCardView } from './btw.js'
 import { partIndexOf, withBtwRows } from './btw-model.js'
-import { layoutOf } from './themes.js'
+import { layoutOf, thinkingShown } from './themes.js'
 
 export { clockLabel }
 
@@ -226,14 +226,14 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
   const members = steps.length ? steps : [data]
-  const reasoning = groupPart === 'response' ? '' : turnReasoning(steps, data)
+  const shown = thinkingShown(roster.prefs)
+  const reasoning = groupPart === 'response' || !shown ? '' : turnReasoning(steps, data)
   // A live step of the same Turn keeps the row ticking even when it sits on an
   // earlier step's cell.
-  const thinking = groupPart === 'response' ? undefined : thinkingStep(members)
+  const thinking = groupPart === 'response' || !shown ? undefined : thinkingStep(members)
   const ms = useThinkingMs({ sessionId, turn: data.turn, settledSteps: members.filter(step => step.status !== 'running').length, skip: hidden || reasoning === '' })
-  // A streaming reply — or a live reasoning row — stands in for the activity row.
+  // A streaming reply stands in for the activity row.
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null)
-  useLiveNote(actions, sessionId, `think:${node.key ?? data.seq}`, !hidden && thinking !== undefined && reasoning !== '' ? { text: true } : null)
   if (hidden) return null
   // A relay spliced mid-turn is a 'context' node, hidden from the chat flow on
   // DSH 0.2; the step that answers it shows the event line where it was read,
@@ -244,8 +244,8 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   // The flat layout heads a reply with who speaks, once per Turn: in the step that opens
   // it, in that step's reasoning part when the reasoning shows there.
   const speaker = layoutOf(roster.prefs) === 'flat' ? roster.byId[sessionId] : undefined
-  const head = speaker !== undefined && opensReply(steps, data)
-    && (reasoning !== '' || (texts.length > 0 && !(groupPart === 'response' && turnReasoning(steps, data) !== '')))
+  const head = speaker !== undefined && opensReply(steps, data, shown)
+    && (reasoning !== '' || (texts.length > 0 && !(groupPart === 'response' && shown && turnReasoning(steps, data) !== '')))
   return h(Fragment, null,
     relays.map(relay => {
       const source = relay.source

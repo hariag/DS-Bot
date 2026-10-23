@@ -120,6 +120,12 @@ export function install(rt) {
       else if (Number.isInteger(body.flatWidth) && body.flatWidth >= 50 && body.flatWidth <= 100) state.prefs.flatWidth = body.flatWidth
       else throw invalid('Flat text width must be a whole percent from 50 to 100')
     }
+    if (body.thinking !== undefined) {
+      // A value this version does not know is ignored, not refused: the toggle
+      // may grow more states later.
+      if (body.thinking === true) state.prefs.thinking = true
+      else if (body.thinking === false || body.thinking === null) delete state.prefs.thinking
+    }
     return rt.save()
   }
 

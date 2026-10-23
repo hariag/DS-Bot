@@ -164,6 +164,14 @@ test('the client channel answers from the saved state', async (t) => {
   assert.equal((await call('set-prefs', { flatWidth: 70 })).value.flatWidth, 70)
   assert.equal('flatWidth' in (await call('set-prefs', { flatWidth: 100 })).value, false)
   assert.deepEqual((await call('set-prefs', { flatWidth: 40 })).error, { code: 'bot/invalid', message: 'Flat text width must be a whole percent from 50 to 100', details: {} })
+  // The thinking switch stores only true; false, null and unknown values leave nothing.
+  assert.equal('thinking' in (await call('set-prefs', { thinking: 'yes' })).value, false)
+  assert.equal('thinking' in (await call('set-prefs', { thinking: 1 })).value, false)
+  assert.equal((await call('set-prefs', { thinking: true })).value.thinking, true)
+  assert.equal((await call('set-prefs', { thinking: 'yes' })).value.thinking, true)
+  assert.equal('thinking' in (await call('set-prefs', { thinking: false })).value, false)
+  await call('set-prefs', { thinking: true })
+  assert.equal('thinking' in (await call('set-prefs', { thinking: null })).value, false)
   // A refusal from the team code keeps its message for the user.
   assert.deepEqual((await call('delete-bot', { id: 'nobody' })).error, { code: 'bot/refused', message: 'Unknown Bot', details: {} })
   // Off the Desktop profile there are no Bot browsers.
