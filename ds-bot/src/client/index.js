@@ -32,7 +32,7 @@ import { noteLeft, setUnread, sharedMap, toggleReaction } from './shared-map.js'
 import { freePriority, groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
 import { installLocale, language, t } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
-import { RIGHTBAR_ATTRIBUTES, columnOpened, drawerOpened, rightColumnOpen } from './right-panel.js'
+import { RIGHTBAR_ATTRIBUTES, columnOpened, createSwitchWindow, drawerOpened, rightColumnOpen } from './right-panel.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
@@ -643,15 +643,20 @@ export function apply(ctx) {
   // The drawer and DSH's right column never share the window: whichever the
   // user asked for last wins. The column's state is read off the frame's
   // attributes through a MutationObserver. `mounted` moves before the DOM of a
-  // Session switch does, so a switch is only marked; the next DOM batch settles
-  // it — a batch that touches the column is the switch revealing that Session's
-  // own column (the drawer wins and folds it back), while any other batch
-  // clears the mark, so a later opening is the user's own (the column wins).
+  // Session switch does, so a switch opens a timed window (createSwitchWindow):
+  // an attribute batch inside it is the switch revealing that Session's own
+  // column — the drawer wins and folds it back — while one outside it is the
+  // user's own opening and takes the space.
   ctx.effect(() => {
     const sidebar = ctx.get('sidebarRight')
     if (!sidebar) return undefined
     let open = rightColumnOpen(document)
-    let moved = false
+    // Two frames settle the switch's DOM; the fullscreen slide is slower, so a
+    // ~400 ms timer covers it and still ends the window where frames stall.
+    const switchWindow = createSwitchWindow((done) => {
+      const timer = setTimeout(done, 400)
+      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); done() }))
+    })
     const collapseColumn = () => {
       try {
         if (sidebar.isExpanded()) sidebar.toggleExpanded()
@@ -659,21 +664,18 @@ export function apply(ctx) {
         actions.reportError(error, 'right-sidebar')
       }
     }
-    const observer = new MutationObserver((records) => {
-      if (!records.some(record => record.type === 'attributes')) { moved = false; return }
-      const inSwitch = moved
-      moved = false
+    const observer = new MutationObserver(() => {
       const next = rightColumnOpen(document)
       const opening = next && !open
       open = next
-      const verdict = opening ? columnOpened(ui.getSnapshot().details !== null, inSwitch) : null
+      const verdict = opening ? columnOpened(ui.getSnapshot().details !== null, switchWindow.pending) : null
       if (verdict === 'close-drawer') actions.closePanel()
       else if (verdict === 'collapse-column') collapseColumn()
     })
     observer.observe(document.documentElement, {
-      subtree: true, childList: true, attributes: true, attributeFilter: RIGHTBAR_ATTRIBUTES,
+      subtree: true, attributes: true, attributeFilter: RIGHTBAR_ATTRIBUTES,
     })
-    const offMounted = sidebar.mounted.subscribe(() => { moved = true })
+    const offMounted = sidebar.mounted.subscribe(() => switchWindow.moved())
     let drawer = ui.getSnapshot().details !== null
     const offUi = ui.subscribe(() => {
       const next = ui.getSnapshot().details !== null

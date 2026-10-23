@@ -223,9 +223,9 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
     bot && roster.browser === true && actions.openBrowser
       ? h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Open browser'), title: t("Open this Bot's browser"), onClick: () => actions.openBrowser(sessionId) }, h(GlobeIcon))
       : null,
-    bot || room ? (actions.canOpenTerminal?.()
+    (bot || room) && actions.canOpenTerminal?.()
       ? h('button', { type: 'button', className: 'bt-round', 'data-info-row': 'terminal', 'aria-label': t('New terminal'), title: t('New terminal'), onClick: () => actions.newTerminal() }, h(TerminalIcon))
-      : null) : null,
+      : null,
     bot || room ? h('button', { type: 'button', className: 'bt-round', 'aria-label': copied ? t('Copied conversation') : t('Share conversation'), title: copied ? t('Copied') : t('Copy conversation as Markdown'), onClick: share }, copied ? h('span', { key: 'copied', className: 'bt-pop-in' }, '✓') : h(ShareIcon)) : null,
     hasStrip ? null : h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Close details'), onClick: close }, h(CloseIcon)))
   if (!bot && !room) {

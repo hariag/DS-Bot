@@ -14309,7 +14309,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
     { className: "bt-drawer-top", "data-move": side },
     bot || room2 ? (0, import_react37.createElement)("button", { type: "button", className: "bt-round", "aria-label": bot ? t("Edit Bot") : t("Group settings"), title: bot ? t("Edit Bot") : t("Group settings"), "data-info-row": "settings", onClick: () => setView("settings") }, (0, import_react37.createElement)(GearIcon)) : null,
     bot && roster.browser === true && actions.openBrowser ? (0, import_react37.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Open browser"), title: t("Open this Bot's browser"), onClick: () => actions.openBrowser(sessionId) }, (0, import_react37.createElement)(GlobeIcon)) : null,
-    bot || room2 ? actions.canOpenTerminal?.() ? (0, import_react37.createElement)("button", { type: "button", className: "bt-round", "data-info-row": "terminal", "aria-label": t("New terminal"), title: t("New terminal"), onClick: () => actions.newTerminal() }, (0, import_react37.createElement)(TerminalIcon)) : null : null,
+    (bot || room2) && actions.canOpenTerminal?.() ? (0, import_react37.createElement)("button", { type: "button", className: "bt-round", "data-info-row": "terminal", "aria-label": t("New terminal"), title: t("New terminal"), onClick: () => actions.newTerminal() }, (0, import_react37.createElement)(TerminalIcon)) : null,
     bot || room2 ? (0, import_react37.createElement)("button", { type: "button", className: "bt-round", "aria-label": copied ? t("Copied conversation") : t("Share conversation"), title: copied ? t("Copied") : t("Copy conversation as Markdown"), onClick: share }, copied ? (0, import_react37.createElement)("span", { key: "copied", className: "bt-pop-in" }, "✓") : (0, import_react37.createElement)(ShareIcon)) : null,
     hasStrip ? null : (0, import_react37.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Close details"), onClick: close }, (0, import_react37.createElement)(CloseIcon))
   );
@@ -16188,6 +16188,20 @@ function columnOpened(drawerOpen, moved) {
   if (!drawerOpen) return null;
   return moved ? "collapse-column" : "close-drawer";
 }
+function createSwitchWindow(settle) {
+  let token = null;
+  return {
+    moved() {
+      const self = token = {};
+      settle(() => {
+        if (token === self) token = null;
+      });
+    },
+    get pending() {
+      return token !== null;
+    }
+  };
+}
 
 // src/client/user-message.js
 var import_react40 = require("react");
@@ -16998,7 +17012,13 @@ function apply(ctx) {
     const sidebar = ctx.get("sidebarRight");
     if (!sidebar) return void 0;
     let open = rightColumnOpen(document);
-    let moved = false;
+    const switchWindow = createSwitchWindow((done) => {
+      const timer = setTimeout(done, 400);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        clearTimeout(timer);
+        done();
+      }));
+    });
     const collapseColumn = () => {
       try {
         if (sidebar.isExpanded()) sidebar.toggleExpanded();
@@ -17006,29 +17026,20 @@ function apply(ctx) {
         actions.reportError(error, "right-sidebar");
       }
     };
-    const observer = new MutationObserver((records) => {
-      if (!records.some((record) => record.type === "attributes")) {
-        moved = false;
-        return;
-      }
-      const inSwitch = moved;
-      moved = false;
+    const observer = new MutationObserver(() => {
       const next = rightColumnOpen(document);
       const opening = next && !open;
       open = next;
-      const verdict = opening ? columnOpened(ui2.getSnapshot().details !== null, inSwitch) : null;
+      const verdict = opening ? columnOpened(ui2.getSnapshot().details !== null, switchWindow.pending) : null;
       if (verdict === "close-drawer") actions.closePanel();
       else if (verdict === "collapse-column") collapseColumn();
     });
     observer.observe(document.documentElement, {
       subtree: true,
-      childList: true,
       attributes: true,
       attributeFilter: RIGHTBAR_ATTRIBUTES
     });
-    const offMounted = sidebar.mounted.subscribe(() => {
-      moved = true;
-    });
+    const offMounted = sidebar.mounted.subscribe(() => switchWindow.moved());
     let drawer = ui2.getSnapshot().details !== null;
     const offUi = ui2.subscribe(() => {
       const next = ui2.getSnapshot().details !== null;

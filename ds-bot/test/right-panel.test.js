@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
-import { columnOpened, drawerOpened, rightColumnOpen } from '../src/client/right-panel.js'
+import { columnOpened, createSwitchWindow, drawerOpened, rightColumnOpen } from '../src/client/right-panel.js'
 
 // jsdom comes from the harness that test/harness-resolve.mjs found, like the dsh packages.
 const PLUGIN = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -41,6 +41,33 @@ test('a column a Session switch revealed yields to the open drawer', () => {
 test('with no drawer open the column opens on its own', () => {
   assert.equal(columnOpened(false, false), null)
   assert.equal(columnOpened(false, true), null)
+})
+
+// The switch window holds "the Session moved" until `settle` calls back: inside
+// it a column opening is the switch revealing that Session's own column, past
+// it the user's own. A newer move restarts it and a stale settle is ignored.
+test('the switch window steers the verdict while it is open', () => {
+  const ends = []
+  const window = createSwitchWindow(done => ends.push(done))
+  assert.equal(window.pending, false)
+  window.moved()
+  assert.equal(window.pending, true)
+  assert.equal(columnOpened(true, window.pending), 'collapse-column')
+  ends[0]()
+  assert.equal(window.pending, false)
+  assert.equal(columnOpened(true, window.pending), 'close-drawer')
+})
+
+test('a newer Session switch restarts the window and the old settle is stale', () => {
+  const ends = []
+  const window = createSwitchWindow(done => ends.push(done))
+  window.moved()
+  window.moved()
+  ends[0]()
+  assert.equal(window.pending, true)
+  assert.equal(columnOpened(true, window.pending), 'collapse-column')
+  ends[1]()
+  assert.equal(window.pending, false)
 })
 
 // The drawer's top row, bundled once and run with a minimal React stand-in; the
