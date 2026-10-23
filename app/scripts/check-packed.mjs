@@ -167,7 +167,26 @@ async function chat(cdp) {
   const [cx, cy] = [rect.x + rect.width / 2, rect.y + rect.height / 2]
   await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: cx, y: cy, button: 'left', clickCount: 1 })
   await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1 })
-  await until("(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'", 'the focused composer', 10_000)
+  try {
+    await until("(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'", 'the focused composer', 10_000)
+  } catch (error) {
+    // A click that never focuses the composer usually lands on an overlay instead; say
+    // what was under the cursor and how small the window really was (xvfb starts at 640x480).
+    const state = await evaluate(`(() => {
+      const point = ${JSON.stringify({ x: cx, y: cy })}
+      const hit = document.elementFromPoint(point.x, point.y)
+      const cover = hit?.closest?.('[role=dialog],[aria-modal=true],[data-slot]')
+      const brief = node => (node === null || node === undefined ? null : { tag: node.tagName ?? null, class: String(node.getAttribute?.('class') ?? '').slice(0, 160) })
+      return JSON.stringify({
+        inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight], screen: [screen.width, screen.height], dpr: devicePixelRatio, focused: document.hasFocus(),
+        click: point, box: ${JSON.stringify(rect)},
+        hit: brief(hit),
+        cover: cover === null || cover === undefined ? null : { tag: cover.tagName, slot: cover.getAttribute('data-slot'), role: cover.getAttribute('role'), modal: cover.getAttribute('aria-modal') },
+        active: brief(document.activeElement),
+      })
+    })()`)
+    throw new Error(`${error.message}; page state: ${state}`)
+  }
   await cdp.call('Input.insertText', { text: 'packaged app check' })
   await until(text('packaged app check'), 'the typed message', 10_000)
   for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
