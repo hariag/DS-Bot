@@ -162,6 +162,16 @@ async function chat(cdp) {
   // Click the composer through the input pipeline. A bare focus() is not enough where no window
   // manager gives the window focus (xvfb in CI): the text and the Enter would go nowhere.
   const box = "[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1)"
+  // A greeting that just arrived can leave the composer's own center covered by its
+  // container, so the click lands on the container and never focuses the field. Wait
+  // until a probe of the current center names the field itself before clicking.
+  await until(`(() => {
+    const el = ${box}
+    if (el === undefined) return false
+    const rect = el.getBoundingClientRect()
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    return hit === el || (hit !== null && el.contains(hit))
+  })()`, 'the clickable composer', 30_000)
   const rect = await evaluate(`(${box})?.getBoundingClientRect().toJSON()`)
   if (!rect) throw new Error('the composer is not there')
   const [cx, cy] = [rect.x + rect.width / 2, rect.y + rect.height / 2]
