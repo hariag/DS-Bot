@@ -13,7 +13,7 @@ const { outputFiles } = await build({
       "export { QuestionDock } from './src/client/questions.js'",
       "export { SecretDock } from './src/client/secret-card.js'",
       "export { countCards } from './src/client/sources.js'",
-      "export { ViewMenuList } from './src/client/widget-cell.js'",
+      "export { ViewMenuList, WidgetView } from './src/client/widget-cell.js'",
     ].join('\n'),
     resolveDir: fileURLToPath(new URL('..', import.meta.url)),
   },
@@ -46,7 +46,7 @@ runInNewContext(outputFiles[0].text, {
     throw new Error(`Unexpected platform module ${name}`)
   },
 })
-const { ToolCell, TriggerCell, callTree, stackReplies, QuestionDock, SecretDock, countCards, ViewMenuList } = module.exports
+const { ToolCell, TriggerCell, callTree, stackReplies, QuestionDock, SecretDock, countCards, ViewMenuList, WidgetView } = module.exports
 
 // Runs the effects collected since the last render; returns the cleanups.
 const mount = () => {
@@ -641,6 +641,26 @@ test('a view works its formulas out, draws a chart, and keeps html in a sandboxe
     'View as chart', 'Copy data', 'Download image',
     'View as table', 'Copy data', 'Download image',
   ], 'each chart keeps its three actions and its table state')
+  // A table switch must not re-register the chart: the groups keep mount order,
+  // so the toggled chart stays first and its item reads back as the table (#476).
+  const ordered = []
+  expand(WidgetView({
+    view: {
+      type: 'stack',
+      children: [
+        { type: 'chart', kind: 'bar', categories: ['A'], series: [{ values: [1] }], caption: 'One' },
+        { type: 'chart', kind: 'bar', categories: ['A'], series: [{ values: [2] }], caption: 'Two' },
+        { type: 'chart', kind: 'bar', categories: ['A'], series: [{ values: [3] }] },
+      ],
+    },
+    registerChart: (key, handle) => { ordered.push(handle); return () => { ordered.splice(ordered.indexOf(handle), 1) } },
+  }))
+  mount()
+  assert.equal(ordered.length, 3)
+  ordered[0].toggleTable()
+  const orderedMenu = expand(ViewMenuList({ charts: ordered, pick: run => run }))
+  assert.deepEqual(findAll(orderedMenu, item => item.props?.className === 'bt-view-menu-label').map(text), ['One', 'Two', 'Chart 3'], 'the toggled chart keeps its group position')
+  assert.deepEqual(menuItems(orderedMenu).slice(0, 3), ['View as chart', 'Copy data', 'Download image'], 'the first group shows the table state')
 
   const frame = find(cell({ type: 'html', html: '<b>hi</b>', summary: 'A greeting' }), item => item.type === 'iframe')
   assert.equal(frame.props.sandbox, 'allow-scripts')

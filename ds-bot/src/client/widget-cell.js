@@ -299,7 +299,7 @@ function WidgetNode({ node, ctx }) {
     }
     case 'metric': return h(WidgetMetric, { node, lookup })
     case 'table': return h(WidgetTable, { node, lookup })
-    case 'chart': return h(WidgetChart, { node, lookup, registerChart: ctx.registerChart })
+    case 'chart': return h(WidgetChart, { node, lookup, registerChart: ctx.registerChart, refreshCharts: ctx.refreshCharts })
     case 'progress': return h(WidgetProgress, { node, lookup })
     case 'callout': return h(WidgetCallout, { node, lookup })
     case 'sources': return h(WidgetSources, { node })
@@ -320,7 +320,7 @@ function WidgetNode({ node, ctx }) {
 // them as they were sent. Every answer carries the inputs' values. Letter keys
 // answer a lone options block from the keyboard; with more than one in a card the
 // same letter would hit both.
-export function WidgetView({ view, onSubmit, settled = false, answer = null, busy = false, registerChart }) {
+export function WidgetView({ view, onSubmit, settled = false, answer = null, busy = false, registerChart, refreshCharts }) {
   const inputs = viewInputs(view)
   const [values, setValues] = useState(() => Object.fromEntries(inputs.map(node => [node.id, inputDefault(node)])))
   const sent = answer?.values?.inputs
@@ -329,7 +329,7 @@ export function WidgetView({ view, onSubmit, settled = false, answer = null, bus
   const ctx = {
     onSubmit: submit, settled, answer, busy, keys: !settled && countType(view, 'options') === 1,
     lookup: viewScope(view, current), values: current, locked: settled || busy,
-    setInput: (id, value) => setValues(before => ({ ...before, [id]: value })), registerChart,
+    setInput: (id, value) => setValues(before => ({ ...before, [id]: value })), registerChart, refreshCharts,
   }
   return h(WidgetNode, { node: view, ctx })
 }
@@ -340,15 +340,19 @@ export function WidgetView({ view, onSubmit, settled = false, answer = null, bus
 function useChartHandles() {
   const [, bump] = useState(0)
   const charts = useRef(new Map())
-  const register = useRef(null)
-  if (register.current === null) {
-    register.current = (key, handle) => {
-      charts.current.set(key, handle)
-      bump(value => value + 1)
-      return () => { charts.current.delete(key); bump(value => value + 1) }
+  const fns = useRef(null)
+  if (fns.current === null) {
+    const refresh = () => bump(value => value + 1)
+    fns.current = {
+      registerChart: (key, handle) => {
+        charts.current.set(key, handle)
+        refresh()
+        return () => { charts.current.delete(key); refresh() }
+      },
+      refreshCharts: refresh,
     }
   }
-  return { charts: [...charts.current.values()], registerChart: register.current }
+  return { charts: [...charts.current.values()], ...fns.current }
 }
 
 // The dropdown's items: one flat list for a lone chart, one labelled group per
@@ -386,7 +390,7 @@ function ViewMenu({ charts }) {
 // view that still waits for its answer has a dismiss button.
 function WidgetCard({ title, view, onSubmit, onDismiss, busy = false, raised = false, settled = false, answer = null }) {
   const titleId = useId()
-  const { charts, registerChart } = useChartHandles()
+  const { charts, registerChart, refreshCharts } = useChartHandles()
   const framed = raised || hasControls(view)
   const className = ['bt-view', framed ? 'bt-q' : 'bt-view-bare', settled ? 'bt-q-settled' : '', raised ? 'bt-q-raised' : ''].filter(Boolean).join(' ')
   const head = title || onDismiss || countType(view, 'chart') > 0
@@ -399,7 +403,7 @@ function WidgetCard({ title, view, onSubmit, onDismiss, busy = false, raised = f
     className, role: 'group', 'aria-labelledby': title ? titleId : undefined, 'aria-label': title ? undefined : t('View'), 'aria-busy': busy || undefined,
   },
   head,
-  h('div', { className: 'bt-view-body' }, h(WidgetView, { view, onSubmit, settled, answer, busy, registerChart })))
+  h('div', { className: 'bt-view-body' }, h(WidgetView, { view, onSubmit, settled, answer, busy, registerChart, refreshCharts })))
 }
 
 // A view waiting for its answer, inline at its call or raised in the dock. Like a

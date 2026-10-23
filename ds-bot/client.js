@@ -5150,7 +5150,7 @@ function ChartTable({ data }) {
     )
   );
 }
-function WidgetChart({ node, lookup, registerChart }) {
+function WidgetChart({ node, lookup, registerChart, refreshCharts }) {
   const data = chartData(node, lookup);
   const { kind, categories, series, unit } = data;
   const box = (0, import_react6.useRef)(null);
@@ -5162,6 +5162,8 @@ function WidgetChart({ node, lookup, registerChart }) {
   const [copied, setCopied] = (0, import_react6.useState)(false);
   const labelId = (0, import_react6.useId)();
   const menuKey = (0, import_react6.useId)();
+  const table = (0, import_react6.useRef)(asTable);
+  table.current = asTable;
   const shown = series.map((_, index) => !hidden.includes(index));
   const toggle = (index) => {
     if (hidden.includes(index)) setHidden(hidden.filter((item) => item !== index));
@@ -5191,17 +5193,27 @@ function WidgetChart({ node, lookup, registerChart }) {
       setTimeout(() => setCopied(false), 1200);
     });
   };
+  const toggleTable = () => {
+    table.current = !table.current;
+    setAsTable(table.current);
+  };
+  const menuLabel = typeof node.caption === "string" && node.caption !== "" ? node.caption : null;
   const action = (0, import_react6.useRef)(null);
-  action.current = { copy: copy2, save: () => {
+  action.current = { label: menuLabel, copy: copy2, save: () => {
     if (svg.current) saveImage(svg.current, "chart.png");
-  } };
+  }, toggleTable };
   (0, import_react6.useEffect)(() => registerChart?.(menuKey, {
-    label: typeof node.caption === "string" && node.caption !== "" ? node.caption : null,
-    asTable,
-    toggleTable: () => setAsTable((value) => !value),
+    get label() {
+      return action.current.label;
+    },
+    get asTable() {
+      return table.current;
+    },
+    toggleTable: () => action.current.toggleTable(),
     copy: () => action.current.copy(),
     save: () => action.current.save()
-  }), [registerChart, menuKey, label, asTable]);
+  }), [registerChart, menuKey]);
+  (0, import_react6.useEffect)(() => refreshCharts?.(), [refreshCharts, asTable, menuLabel]);
   const legend = isDonut ? (0, import_react6.createElement)("div", { className: "bt-chart-legend bt-chart-legend-list" }, categories.map((name, at) => (0, import_react6.createElement)(
     "div",
     {
@@ -5769,7 +5781,7 @@ function WidgetNode({ node, ctx }) {
     case "table":
       return (0, import_react8.createElement)(WidgetTable, { node, lookup });
     case "chart":
-      return (0, import_react8.createElement)(WidgetChart, { node, lookup, registerChart: ctx.registerChart });
+      return (0, import_react8.createElement)(WidgetChart, { node, lookup, registerChart: ctx.registerChart, refreshCharts: ctx.refreshCharts });
     case "progress":
       return (0, import_react8.createElement)(WidgetProgress, { node, lookup });
     case "callout":
@@ -5798,7 +5810,7 @@ function WidgetNode({ node, ctx }) {
       return null;
   }
 }
-function WidgetView({ view, onSubmit, settled = false, answer = null, busy = false, registerChart }) {
+function WidgetView({ view, onSubmit, settled = false, answer = null, busy = false, registerChart, refreshCharts }) {
   const inputs = viewInputs(view);
   const [values, setValues] = (0, import_react8.useState)(() => Object.fromEntries(inputs.map((node) => [node.id, inputDefault(node)])));
   const sent = answer?.values?.inputs;
@@ -5814,25 +5826,30 @@ function WidgetView({ view, onSubmit, settled = false, answer = null, busy = fal
     values: current,
     locked: settled || busy,
     setInput: (id, value) => setValues((before) => ({ ...before, [id]: value })),
-    registerChart
+    registerChart,
+    refreshCharts
   };
   return (0, import_react8.createElement)(WidgetNode, { node: view, ctx });
 }
 function useChartHandles() {
   const [, bump] = (0, import_react8.useState)(0);
   const charts = (0, import_react8.useRef)(/* @__PURE__ */ new Map());
-  const register = (0, import_react8.useRef)(null);
-  if (register.current === null) {
-    register.current = (key, handle) => {
-      charts.current.set(key, handle);
-      bump((value) => value + 1);
-      return () => {
-        charts.current.delete(key);
-        bump((value) => value + 1);
-      };
+  const fns = (0, import_react8.useRef)(null);
+  if (fns.current === null) {
+    const refresh = () => bump((value) => value + 1);
+    fns.current = {
+      registerChart: (key, handle) => {
+        charts.current.set(key, handle);
+        refresh();
+        return () => {
+          charts.current.delete(key);
+          refresh();
+        };
+      },
+      refreshCharts: refresh
     };
   }
-  return { charts: [...charts.current.values()], registerChart: register.current };
+  return { charts: [...charts.current.values()], ...fns.current };
 }
 function ViewMenuList({ charts, pick: pick2 }) {
   return (0, import_react8.createElement)(
@@ -5884,7 +5901,7 @@ function ViewMenu({ charts }) {
 }
 function WidgetCard({ title, view, onSubmit, onDismiss, busy = false, raised = false, settled = false, answer = null }) {
   const titleId = (0, import_react8.useId)();
-  const { charts, registerChart } = useChartHandles();
+  const { charts, registerChart, refreshCharts } = useChartHandles();
   const framed = raised || hasControls(view);
   const className = ["bt-view", framed ? "bt-q" : "bt-view-bare", settled ? "bt-q-settled" : "", raised ? "bt-q-raised" : ""].filter(Boolean).join(" ");
   const head = title || onDismiss || countType(view, "chart") > 0 ? (0, import_react8.createElement)(
@@ -5904,7 +5921,7 @@ function WidgetCard({ title, view, onSubmit, onDismiss, busy = false, raised = f
       "aria-busy": busy || void 0
     },
     head,
-    (0, import_react8.createElement)("div", { className: "bt-view-body" }, (0, import_react8.createElement)(WidgetView, { view, onSubmit, settled, answer, busy, registerChart }))
+    (0, import_react8.createElement)("div", { className: "bt-view-body" }, (0, import_react8.createElement)(WidgetView, { view, onSubmit, settled, answer, busy, registerChart, refreshCharts }))
   );
 }
 function PendingView({ sessionId, view, actions, inline }) {

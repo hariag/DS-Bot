@@ -283,7 +283,7 @@ function ChartTable({ data }) {
         series.map((item, index) => h('td', { key: index, className: 'bt-num' }, withUnit(item.values[at], series.length === 1 && !item.name ? '' : unit))))))))
 }
 
-export function WidgetChart({ node, lookup, registerChart }) {
+export function WidgetChart({ node, lookup, registerChart, refreshCharts }) {
   const data = chartData(node, lookup)
   const { kind, categories, series, unit } = data
   const box = useRef(null)
@@ -295,6 +295,8 @@ export function WidgetChart({ node, lookup, registerChart }) {
   const [copied, setCopied] = useState(false)
   const labelId = useId()
   const menuKey = useId()
+  const table = useRef(asTable)
+  table.current = asTable
   const shown = series.map((_, index) => !hidden.includes(index))
   const toggle = (index) => {
     if (hidden.includes(index)) setHidden(hidden.filter(item => item !== index))
@@ -320,17 +322,23 @@ export function WidgetChart({ node, lookup, registerChart }) {
   const copy = () => {
     void navigator.clipboard?.writeText(chartCsv(data)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200) })
   }
+  const toggleTable = () => { table.current = !table.current; setAsTable(table.current) }
+  const menuLabel = typeof node.caption === 'string' && node.caption !== '' ? node.caption : null
   const action = useRef(null)
-  action.current = { copy, save: () => { if (svg.current) saveImage(svg.current, 'chart.png') } }
-  // The card's ⋯ menu shows the chart's actions; a new handle on every table
-  // switch keeps its first item's wording current.
+  action.current = { label: menuLabel, copy, save: () => { if (svg.current) saveImage(svg.current, 'chart.png') }, toggleTable }
+  // The card's ⋯ menu shows the chart's actions. Register once on mount — a
+  // re-register would move the chart to the end of the card's group order —
+  // and let the getters hand the menu the current name and table state.
   useEffect(() => registerChart?.(menuKey, {
-    label: typeof node.caption === 'string' && node.caption !== '' ? node.caption : null,
-    asTable,
-    toggleTable: () => setAsTable(value => !value),
+    get label() { return action.current.label },
+    get asTable() { return table.current },
+    toggleTable: () => action.current.toggleTable(),
     copy: () => action.current.copy(),
     save: () => action.current.save(),
-  }), [registerChart, menuKey, label, asTable])
+  }), [registerChart, menuKey])
+  // A table switch or a new caption asks the card for a fresh menu, without
+  // touching the registration order.
+  useEffect(() => refreshCharts?.(), [refreshCharts, asTable, menuLabel])
   const legend = isDonut
     ? h('div', { className: 'bt-chart-legend bt-chart-legend-list' }, categories.map((name, at) => h('div', {
       key: at, className: 'bt-chart-key', 'data-dim': active !== null && active !== at ? '' : undefined,
