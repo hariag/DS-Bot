@@ -163,11 +163,10 @@ async function chat(cdp) {
   // manager gives the window focus (xvfb in CI): the text and the Enter would go nowhere.
   const box = "[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1)"
   const focusCheck = "(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'"
-  // A greeting that just arrived leaves the composer settling: the container can still
-  // cover the field's center, and the field drops contenteditable while it rebinds —
-  // either way the click lands but never focuses. The probe and the click are separate
-  // round trips, so keep probing and click only where the field itself is on top until
-  // the field holds focus.
+  // A greeting that just arrived leaves the composer rebinding: for a moment the field is
+  // not editable, so a click lands on it but does not focus it. The probe and the click are
+  // separate round trips, so keep probing and click only where the field itself is on top
+  // until the field holds focus.
   const probe = `(() => {
     const el = ${box}
     if (el === undefined) return null
@@ -191,8 +190,7 @@ async function chat(cdp) {
     } else await sleep(250)
   }
   if (!(await evaluate(`Boolean(${focusCheck})`))) {
-    // A click that never focuses the composer usually lands on an overlay instead; say
-    // what was under the cursor and how small the window really was (xvfb starts at 640x480).
+    // Say what was under the cursor, what held the focus and how large the window was.
     const state = await evaluate(`(() => {
       const el = ${box}
       const rect = el === undefined ? null : el.getBoundingClientRect().toJSON()
