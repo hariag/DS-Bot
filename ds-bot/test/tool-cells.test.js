@@ -564,15 +564,18 @@ test('a show_view call the host refused draws nothing; a display-only card draws
   }
   // Refusals the host returned as text reach the cell as a done call; the shared
   // check hides them so the model's retry stays the only card.
-  gone(cell('  ', { type: 'text', text: 'hi' }))
   gone(cell('Card', { type: 'nope' }))
   gone(cell('x'.repeat(8192), { type: 'text', text: 'hi' }))
   gone(cell('Pick', { type: 'options', id: 'o', options: [{ label: 'A' }] }))
   gone(cell('Meter', { type: 'metric', label: 'Done', value: '3' }, { await_reply: true }))
   const card = cell('  Status  ', { type: 'metric', label: 'Done', value: '3' })
-  const title = find(card, node => node.props?.className === 'bt-q-title')
+  const title = find(card, node => node.props?.className === 'bt-view-title')
   assert.ok(title !== undefined)
   assert.equal(text(title), 'Status')
+  // A view needs no title: it then draws without a heading.
+  const bare = cell('  ', { type: 'text', text: 'hi' })
+  assert.equal(find(bare, node => node.props?.className === 'bt-view-title'), undefined)
+  assert.ok(find(bare, node => typeof node.props?.className === 'string' && node.props.className.includes('bt-view-bare')) !== undefined)
 })
 
 test('a display-only call still draws when the args come through the value accessor', () => {
@@ -585,7 +588,39 @@ test('a display-only call still draws when the args come through the value acces
     call: { name: 'show_view', argsRaw: JSON.stringify(data) }, content: text$('The view is on screen.'), subCalls: [],
   }
   const node = show(callNode, { roster: team({ views: {} }) })
-  const title = find(node, item => item.props?.className === 'bt-q-title')
+  const title = find(node, item => item.props?.className === 'bt-view-title')
   assert.ok(title !== undefined, 'the card draws')
   assert.equal(text(title), 'Status')
+})
+
+test('a view works its formulas out, draws a chart, and keeps html in a sandboxed frame', () => {
+  const cell = view => show(call('show_view', 'view-call', { args: { view } }), { roster: team({ views: {} }) })
+  const classed = (node, name) => find(node, item => typeof item.props?.className === 'string' && item.props.className.split(' ').includes(name))
+  const calculator = {
+    type: 'stack', let: { cost: 'req * 2' },
+    children: [
+      { type: 'slider', id: 'req', label: 'Requests', min: 0, max: 100, value: 30 },
+      { type: 'metric', label: 'Cost', value: { '=': "'¥' + cost" }, tone: { '=': "cost > 50 ? 'bad' : 'good'" } },
+    ],
+  }
+  const live = cell(calculator)
+  assert.equal(text(classed(live, 'bt-widget-metric-value')), '¥60')
+  assert.equal(classed(live, 'bt-widget-metric').props['data-tone'], 'bad')
+  assert.ok(classed(live, 'bt-q') !== undefined, 'a view with inputs wears a light frame')
+  assert.equal(find(live, item => item.type === 'input' && item.props.type === 'range').props.value, 30)
+
+  const chart = cell({ type: 'chart', kind: 'bar', categories: ['A', 'B'], series: [{ values: [3, 5] }], unit: 'ms' })
+  assert.ok(classed(chart, 'bt-view-bare') !== undefined, 'a view that only shows has no frame')
+  assert.ok(find(chart, item => item.type === 'svg') !== undefined)
+  assert.equal(find(chart, item => item.type === 'figure').props['data-kind'], 'bar')
+  assert.ok(classed(chart, 'bt-chart-more') !== undefined, 'the chart has its menu button')
+  for (const kind of ['hbar', 'line', 'area', 'donut']) {
+    assert.ok(find(cell({ type: 'chart', kind, categories: ['A', 'B'], series: [{ values: [3, 5] }] }), item => item.type === 'svg') !== undefined, kind)
+  }
+
+  const frame = find(cell({ type: 'html', html: '<b>hi</b>', summary: 'A greeting' }), item => item.type === 'iframe')
+  assert.equal(frame.props.sandbox, 'allow-scripts')
+  assert.match(frame.props.srcDoc, /Content-Security-Policy" content="default-src 'none'/)
+  assert.ok(frame.props.srcDoc.indexOf('Content-Security-Policy') < frame.props.srcDoc.indexOf('<b>hi</b>'), 'the policy comes before the markup')
+  assert.equal(frame.props.title, 'A greeting')
 })

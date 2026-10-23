@@ -589,6 +589,15 @@ const ZH = {
   Confirm: '确认',
   Progress: '进度',
   'Dismiss view': '关闭视图',
+  Sources: '来源',
+  Chart: '图表',
+  Series: '系列',
+  'Chart options': '图表选项',
+  'View as table': '以表格查看',
+  'View as chart': '以图表查看',
+  'Copy data': '复制数据',
+  'Download image': '下载图片',
+  'This view tried to open a page and was stopped.': '这个视图想打开一个网页，已被拦下。',
 
   // Secrets
   'All Bots': '所有 Bot',
