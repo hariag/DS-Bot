@@ -14,7 +14,7 @@
 
 取舍：
 
-- **传输与 Remote 方法。** 本地 / LAN / SSH 仍走 `POST api/bot` 和 `GET api/bot/feed`，使用 DSH 会话 cookie 鉴权，和桌面应用的窗口一样。当客户端只能经由转发 DSH Typert Gateway Remote 方法的链路到达主机时，插件额外以源码模式注册两个 Gateway Remote 方法复用同一通道与事件流（纯 JS 插件不带 Typert 生成器）：`dsBot/call { endpoint, payload }` 返回与 `POST api/bot` 相同的 `{ ok, value | error }`（和手机配对链路一样，拒绝仅限电脑本机执行的 `phone-*` 配对管理与 `folder-pick` 原生弹窗，`bot/refused`），`dsBot/feed {}` 以流的形式推送 `{ event, data }`（首条为 `hello`）。代价：若中继自身带有接口允许列表（如 `ds-harness-remote`），需同时放行 `dsBot/call` 与 `dsBot/feed`，见「已知限制」。
+- **传输不变。** 仍是 `POST api/bot` 和 `GET api/bot/feed`，DSH 的会话 cookie 鉴权，和桌面应用的窗口一样。不另开 Typert 接口：插件注册 Typert 接口要类型描述，现有的接口已经够用。代价：只走 Typert 白名单的远程中继（ds-harness-remote）到不了这两个路由，见「已知限制」。
 - **显示用的条目，不是原始事件。** 群聊和 Bot 私聊都给「谁、说了什么、什么时候」的条目，客户端不需要懂 DSH 的会话事件和 DS Bot 的内部来源标记。
 - **提醒放内存。** 提醒只是「回来时补上」的索引，不是记录本身；真正的内容还在会话和 `state.json` 里。所以不落盘，重启后从头计数（`boot` 变了），客户端重新读一遍团队即可。
 
@@ -22,10 +22,9 @@
 
 ### 版本和握手
 
-- `hello`：`{ client?: { name, version, platform }, api?: [1] }` → `{ api, apiMin, apiMax, plugin: { name, version }, capabilities, boot, seq, revision, readOnly, memory, feed, rpc? }`。
+- `hello`：`{ client?: { name, version, platform }, api?: [1] }` → `{ api, apiMin, apiMax, plugin: { name, version }, capabilities, boot, seq, revision, readOnly, memory, feed }`。
   - `api` 是双方都会的最高版本；客户端不传时是服务端当前版本；没有交集时是 `null`，客户端提示更新。
-  - `capabilities` 列出服务端会的东西（`room-chat`、`notices`、`avatar`、`memory-edit`、`usage-summary`，挂载 Gateway Remote 时含 `rpc` 等）。
-  - 当宿主挂载 DSH Typert Gateway 且 `dsBot/call`、`dsBot/feed` 就绪时，带 `rpc: { call: 'dsBot/call', feed: 'dsBot/feed' }`；未挂载时不返回 `rpc` 与 `rpc` 能力。
+  - `capabilities` 列出服务端会的东西（`room-chat`、`notices`、`avatar`、`memory-edit`、`usage-summary` 等）。
   - `boot` 每次 DSH 启动都换；`seq` 是最新一条提醒的序号。
 - 版本规则：
   - 只加东西（新接口、新字段、新的条目或提醒种类、新的 feed 事件）不升 `api`，写进 `capabilities`。客户端跳过不认识的字段、种类和事件。
@@ -35,26 +34,18 @@
 ### 团队和头像
 
 - `state` 照旧。加 `avatars: 'ref'` 时，每张照片换成 `avatar.imageRef`（照片内容的 SHA-256 前 16 位），其他不变。
-- 手机经 link 的 `bot` 调用（`{ endpoint, payload }`）可以再带一个 `state` 字段，内容就是发给 `state` 接口的请求体：写入成功且团队版本变了时，回包里多一个 `state`，等于当场问一遍 `state` 的回答。读取、版本没变的写入、失败的写入都不带。
 - `avatar`：`{ botId }` → `{ botId, ref, image }`，没有照片时 `ref` 和 `image` 都是 `null`。客户端按 `ref` 缓存，`ref` 变了再取。
 - 角色形象（`avatar.shape`）和默认颜色照旧由客户端按 Bot id 算（`characters.js` 的 `defaultColor`）。
 
 ### 私聊
 
-- `chat`、`send`、feed 的 `message` 和 `stream` 照旧（见 `feed.js`）。`chat` 的用户消息同样带 `images` / `imageRefs`。
-- `image`：`{ sessionId, attachmentId }` → `{ mime, data }`，`data` 是图片字节的 base64。`sessionId` 只认团队的会话（Bot 自己的私聊段、群的会话、换段留下的旧段），其它回 `bot/not-found`；附件不在会话里也是 `bot/not-found`。需要 `images` 能力。加 `preview: true` 时，长边超过 512 像素、文件超过 100 KB 的 JPEG 和 PNG 换成长边 512 的 JPEG 预览，回 `{ mime: 'image/jpeg', data, preview: true }`；其它照旧回原图。聊天里用预览，点开再取原图。需要 `image-preview` 能力。
-
-### Bot 浏览器
-
-- `state.browserHolds`：每个 Bot 的浏览器现在被谁拿着（`holdSnapshot()` 的形状）：Bot 请用户接手（带 `callId`、`reason`、`note`），或用户接管。
-- `browser-frame`：`{ botId }` → `{ mime, data, url, title }`，Bot 浏览器当前页的截图（JPEG，base64）。这台机器不开 Bot 浏览器回 `bot/browser-off`，这个 Bot 没有打开的浏览器回 `bot/not-found`。
-- 接管、交还、停下照旧用 `browser-takeover`、`browser-give-back`、`browser-stop`。
+- `chat`、`send`、feed 的 `message` 和 `stream` 照旧（见 `feed.js`）。
 
 ### 群聊
 
 - `room-chat`：`{ roomId, cursor? }` → `{ roomId, items, cursor, running, speaking }`，从新到旧分页，每页最多 60 条消息，页内从旧到新。
 - 条目：
-  - `{ id, kind: 'user', text, images?, imageRefs?, time }`：用户的消息，包括一轮进行中插进来的。`images` 是图片张数，`imageRefs` 是每张的 `{ attachmentId, mime?, name? }`，用 `image` 取内容。
+  - `{ id, kind: 'user', text, images?, time }`：用户的消息，包括一轮进行中插进来的。
   - `{ id, kind: 'bot', botId, name, color?, text, time, duration?, whole?, live? }`：成员的发言，或 Bot 从群外发进来的帖子。`whole: { length, file }` 表示帖子太长、转成了文件，用 `file-text` 读全文。
   - `{ id, kind: 'event', event, botId?, name?, text?, code?, time }`：一轮里的事件，`event` 是 `working`、`approval`、`done`、`stopped`、`failed`、`missed`、`lookup`、`resumed`、`cut`，或定时任务的 `schedule`。
 - 一轮进行中时，最新一页在这轮的位置放上目前为止的发言（`live: true`），`running` 为真，`speaking` 是正在说话的成员。这轮结束后，同一条发言的 `id` 不变（`<callId>:<序号>`），客户端可以直接替换。
@@ -77,7 +68,6 @@
 - `hello` 多带 `api`、`boot`、`seq`，重连后客户端先用 `notices` 补上。
 - 新事件 `notice`：一条提醒，内容同上。
 - 新事件 `room`：`{ roomId }`，群里有了新的一行、一轮开始或结束，150 毫秒内的合并成一条。客户端重新读这个群的第一页。
-- `dsBot/feed` 流每次订阅先送一条 `hello`，随后转发所有实时事件；插件卸载重载或单条订阅积压满 512 条未消费事件时当即结束订阅（不排空旧积压），由客户端重连后用 `hello` 与 `notices` 补齐。
 
 ### 记忆
 
@@ -100,22 +90,8 @@
 
 ## 已知限制
 
-- 若远程中继（如 `ds-harness-remote`）维护自身的 Remote 接口允许列表，需该中继允许列表包含 `dsBot/call` 与 `dsBot/feed` 后才能通过中继使用；SSH 隧道、局域网直连和本机不受此限制。
+- 远程中继（ds-harness-remote）只转发它白名单里的 Typert 接口，`api/bot` 不在里面，所以通过中继连上的 DSH 用不了这套接口；SSH 隧道、局域网直连和本机都可以。
 - 旧群（PTC 预设下建的）一轮跑在 `run_code` 里，`room-chat` 认不出这种轮次的发言。
 - 提醒不落盘：DSH 重启前没送到的提醒就丢了，客户端只能重读团队。
 
 ## 变更
-
-
-## File download chunks
-
-`file-download` accepts an `offset` in bytes. It returns at most 512 KiB of file
-content as base64, with `nextOffset`, `done`, `size`, and `version`. Subsequent
-requests repeat the returned version so a changed presented file cannot be spliced
-into an earlier download. Presented-file coordinates require their exact Session
-part; a Bot id never searches matching sequence numbers in other parts.
-
-New clients request one chunk at a time. Android and iOS write each chunk through an
-Expo file handle before requesting the next; the browser collects Blob parts. There
-is no total-file limit for chunk clients. Older clients that omit `offset` retain
-the existing whole-file response and its 16 MiB compatibility limit.
