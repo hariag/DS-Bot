@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  dockCards, matchBtwEnter, tailCards, withBtwRows,
+  dockCards, tailCards, withBtwRows,
 } from '../src/client/btw-model.js'
+import { matchSideEnter } from '../src/client/side-model.js'
 import { createSource } from '../src/client/sources.js'
 
 // DSH sends the line on when matchEnter returns undefined. A claim or a throw
@@ -12,7 +13,7 @@ function sessionFor(id) {
 }
 
 async function enter(roster, session, line, envelope = { attachments: 0 }, signal) {
-  const outcome = await matchBtwEnter(roster, session.id, line, envelope, signal)
+  const outcome = await matchSideEnter(roster, session.id, line, envelope, signal)
   if (outcome === undefined) session.prompt(line)
   return outcome
 }
@@ -26,26 +27,26 @@ async function refused(roster, session, line, envelope) {
   assert.deepEqual(session.sent, [])
 }
 
-test('a group, an attachment, and an empty /btw claim-and-refuse', async () => {
+test('a group, an attachment, and an empty /side claim-and-refuse', async () => {
   const group = sessionFor('g')
-  await assert.rejects(enter(groupRoster, group, '/btw what happened'), /private chat/)
-  await assert.rejects(enter(groupRoster, group, '/btw', { attachments: 2 }), /private chat/)
+  await assert.rejects(enter(groupRoster, group, '/side what happened'), /private chat/)
+  await assert.rejects(enter(groupRoster, group, '/side', { attachments: 2 }), /private chat/)
   assert.deepEqual(group.sent, [])
 
   const bot = sessionFor('s')
-  await assert.rejects(enter(botRoster, bot, '/btw what happened', { attachments: 1 }), /attachments/)
-  await assert.rejects(enter(botRoster, bot, '/btw'), /Write a question/)
-  await assert.rejects(enter(botRoster, bot, '/btw   '), /Write a question/)
+  await assert.rejects(enter(botRoster, bot, '/side what happened', { attachments: 1 }), /attachments/)
+  await assert.rejects(enter(botRoster, bot, '/side'), /Write a question/)
+  await assert.rejects(enter(botRoster, bot, '/side   '), /Write a question/)
   assert.deepEqual(bot.sent, [])
-  assert.deepEqual(await enter(botRoster, bot, '/btw what happened'), { claim: true })
+  assert.deepEqual(await enter(botRoster, bot, '/side what happened'), { claim: true })
   assert.deepEqual(bot.sent, [])
 })
 
-test('a /btw typed before the roster is ready never reaches session.prompt', async () => {
+test('a /side typed before the roster is ready never reaches session.prompt', async () => {
   const roster = createSource({ ready: false, byId: {}, roomsById: {} })
   const session = sessionFor('s')
   let settled = false
-  const pending = enter(roster, session, '/btw what happened').then((value) => {
+  const pending = enter(roster, session, '/side what happened').then((value) => {
     settled = true
     return value
   })
@@ -60,7 +61,7 @@ test('a /btw typed before the roster is ready never reaches session.prompt', asy
 test('a delayed roster that is a group still refuses, and abort does not send', async () => {
   const roster = createSource({ ready: false, byId: {}, roomsById: {} })
   const session = sessionFor('g')
-  const pending = enter(roster, session, '/btw')
+  const pending = enter(roster, session, '/side')
   await Promise.resolve()
   assert.deepEqual(session.sent, [])
   roster.set(groupRoster)
@@ -70,24 +71,25 @@ test('a delayed roster that is a group still refuses, and abort does not send', 
   const waiting = createSource({ ready: false, byId: {}, roomsById: {} })
   const bot = sessionFor('s')
   const controller = new AbortController()
-  const aborted = enter(waiting, bot, '/btw what happened', { attachments: 0 }, controller.signal)
+  const aborted = enter(waiting, bot, '/side what happened', { attachments: 0 }, controller.signal)
   controller.abort(new Error('stopped'))
   await assert.rejects(aborted, /stopped/)
   assert.deepEqual(bot.sent, [])
 })
 
 test('a roster snapshot that is not ready refuses instead of sending', async () => {
-  await refused({ ready: false, byId: {}, roomsById: {} }, sessionFor('s'), '/btw what happened')
+  await refused({ ready: false, byId: {}, roomsById: {} }, sessionFor('s'), '/side what happened')
 })
 
-test('a positively identified non-Bot session lets /btw through, and a non-command does not wait', async () => {
+test('a positively identified non-Bot session lets /side through, and a non-command does not wait', async () => {
   const session = sessionFor('plain')
-  assert.equal(await enter(otherRoster, session, '/btw what happened'), undefined)
-  assert.deepEqual(session.sent, ['/btw what happened'])
+  assert.equal(await enter(otherRoster, session, '/side what happened'), undefined)
+  assert.deepEqual(session.sent, ['/side what happened'])
 
   const roster = createSource({ ready: false, byId: {}, roomsById: {} })
-  assert.equal(await matchBtwEnter(roster, 's', '/btwquestion', { attachments: 0 }), undefined)
-  assert.equal(await matchBtwEnter(roster, 's', 'hello', { attachments: 0 }), undefined)
+  assert.equal(await matchSideEnter(roster, 's', '/sidequestion', { attachments: 0 }), undefined)
+  assert.equal(await matchSideEnter(roster, 's', '/btw question', { attachments: 0 }), undefined)
+  assert.equal(await matchSideEnter(roster, 's', 'hello', { attachments: 0 }), undefined)
 })
 
 const closed = { turn: 1, start: { seq: 10 }, end: { seq: 20 }, status: 'closed' }
