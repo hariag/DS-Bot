@@ -1,12 +1,14 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from 'node:path'
 import { WebSocketServer } from 'ws'
 import { allowedNavigation, requestAllowed } from './bot-browser.mjs'
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+const PLAYWRIGHT_ARTIFACT_PREFIX = 'playwright-artifacts-'
 const rectOf = rect => ({
   x: Math.max(0, Math.round(rect?.left ?? 0)),
   y: Math.max(0, Math.round(rect?.top ?? 0)),
@@ -15,6 +17,16 @@ const rectOf = rect => ({
 })
 const BOT_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 export const isBotId = value => typeof value === 'string' && BOT_ID.test(value)
+
+function containsPath(root, target) {
+  const relative = relativePath(resolve(root), resolve(target))
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${sep}`) && !isAbsolute(relative))
+}
+
+function isDirectChild(root, target) {
+  const relative = relativePath(resolve(root), resolve(target))
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${sep}`) && !relative.includes(sep) && !isAbsolute(relative)
+}
 
 export class BotViews {
   #window
@@ -30,6 +42,7 @@ export class BotViews {
   #address
   #onChange
   #downloadPaths = new Map()
+  #downloadRoots = new Map()
   #statePath
   #saved = {}
   #active = new Map()
@@ -189,6 +202,33 @@ export class BotViews {
     }
   }
 
+  #allowedDownloadPath(botId, requested) {
+    if (typeof requested !== 'string' || !isAbsolute(requested)) return undefined
+    const target = resolve(requested)
+    const roots = (this.#downloadRoots.get(botId) ?? []).filter(root => containsPath(root, target))
+    const temporaryRoot = resolve(tmpdir())
+    let temporaryRealRoot
+    try {
+      temporaryRealRoot = realpathSync(temporaryRoot)
+    } catch {}
+    const isArtifact = temporaryRealRoot !== undefined && [temporaryRoot, temporaryRealRoot].some(root =>
+      isDirectChild(root, target) && basename(target).startsWith(PLAYWRIGHT_ARTIFACT_PREFIX))
+    if (roots.length === 0 && !isArtifact) return undefined
+    try {
+      mkdirSync(target, { recursive: true })
+      const realTarget = realpathSync(target)
+      const inRoot = roots.some(root => {
+        try { return containsPath(realpathSync(root), realTarget) } catch { return false }
+      })
+      const inArtifacts = isArtifact && temporaryRealRoot !== undefined
+        && isDirectChild(temporaryRealRoot, realTarget)
+        && basename(realTarget).startsWith(PLAYWRIGHT_ARTIFACT_PREFIX)
+      return inRoot || inArtifacts ? target : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   place(tabId, rect, visible = rect !== null) {
     const entry = this.#views.get(tabId)
     if (!entry) return false
@@ -241,13 +281,22 @@ export class BotViews {
     for (const entry of [...this.#views.values()]) if (entry.botId === botId) await this.close(botId, entry.tabId)
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     this.#downloadPaths.delete(botId)
+    this.#downloadRoots.delete(botId)
     this.#held.delete(botId)
     delete this.#saved[botId]
     this.#persist()
   }
 
-  async endpoint(botId) {
+  async endpoint(botId, { downloadRoots } = {}) {
     if (this.#held.has(botId)) throw new Error('The user has taken over this browser.')
+    if (downloadRoots !== undefined) {
+      if (!Array.isArray(downloadRoots) || downloadRoots.length > 4 || !Array.from(downloadRoots).every(root => typeof root === 'string' && isAbsolute(root))) {
+        throw new Error('Invalid browser download roots.')
+      }
+      this.#downloadRoots.set(botId, [...new Set(downloadRoots.map(root => resolve(root)))])
+      this.#downloadPaths.delete(botId)
+      for (const entry of this.#views.values()) if (entry.botId === botId) entry.downloadPath = undefined
+    }
     if (!this.#address) await new Promise(resolve => this.#server.once('listening', resolve))
     if (this.sync(botId).length === 0) {
       const saved = this.#saved[botId]
@@ -436,8 +485,9 @@ export class BotViews {
         try {
         if (method === 'Browser.getVersion') { reply({ protocolVersion: '1.3', product: `Chrome/${process.versions.chrome}`, userAgent: `Electron/${process.versions.electron} Chrome/${process.versions.chrome}`, jsVersion: process.versions.v8 }); return }
         if (method === 'Browser.setDownloadBehavior') {
-          this.#downloadPaths.set(botId, params.downloadPath)
-          for (const entry of targets()) entry.downloadPath = params.downloadPath
+          const downloadPath = params.behavior === 'allow' ? this.#allowedDownloadPath(botId, params.downloadPath) : undefined
+          this.#downloadPaths.set(botId, downloadPath)
+          for (const entry of targets()) entry.downloadPath = downloadPath
           reply({}); return
         }
         if (method === 'Browser.cancelDownload') {

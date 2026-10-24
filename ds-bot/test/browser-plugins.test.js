@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply, createRuntime } from '../index.js'
 import { gateScope } from '../src/host/browser/gate.js'
+import { appBrowserEndpoint } from '../src/host/browser-plugins.js'
+import { mountBrowserPlugin } from '../src/host/browser/mount.js'
 import { systemPrompt as refsPrompt, toolDefs as refsTools } from '../src/host/browser/refs.js'
 import { fakeApproval, fakeContext } from './fake-ctx.js'
 
@@ -89,6 +91,64 @@ function browserExec(botId = 'b2', sessionId = botId) {
     agent: { id: botId, session: { header: { id: sessionId } } },
   }
 }
+
+test('app browser endpoint carries download roots for the Bot resolved from the exec', async () => {
+  const originalSend = process.send
+  const roots = ['/workspace/b2', '/workspace']
+  let request
+  const tools = new Map()
+  let cleanup
+  process.send = (message, callback) => {
+    request = message
+    callback?.()
+    queueMicrotask(() => process.emit('message', {
+      type: 'ds-bot:browser-endpoint-response',
+      id: message.id,
+      url: 'ws://127.0.0.1:1234/devtools/browser/token',
+    }))
+    return true
+  }
+  try {
+    mountBrowserPlugin({
+      effect(create) { cleanup = create() },
+      tools: { register(tool) { tools.set(tool.name, tool) } },
+    }, {
+      toolDefs: [{ name: 'browser_open', needsBrowser: true, execute: () => 'opened' }],
+      defineTool: value => value,
+      keyOf: async exec => exec.agent.id,
+      profileRoot: '/profiles',
+      downloadRoot: '/legacy-downloads',
+      downloadRoots: async botId => {
+        assert.equal(botId, 'b2')
+        return roots
+      },
+      uploadRoots: async botId => {
+        assert.equal(botId, 'b2')
+        return roots
+      },
+      headless: true,
+      connect: appBrowserEndpoint,
+      openSession: async options => {
+        assert.equal(options.botId, 'b2')
+        assert.equal(options.downloadDir, roots[0])
+        assert.deepEqual(await options.uploadRoots(), roots)
+        await options.connect(options.botId)
+        return { close: async () => {} }
+      },
+    })
+    const result = await tools.get('browser_open').execute({ botId: 'other' }, { agent: { id: 'b2' } })
+    assert.deepEqual(request, {
+      type: 'ds-bot:browser-endpoint',
+      id: request.id,
+      botId: 'b2',
+      downloadRoots: roots,
+    })
+    assert.equal(result, 'opened')
+  } finally {
+    await cleanup?.()
+    process.send = originalSend
+  }
+})
 
 test('no browser plugin is mounted unless one is selected for the team', (t) => {
   const { ctx, stop } = start({})

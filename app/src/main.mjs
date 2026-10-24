@@ -159,7 +159,12 @@ async function start() {
     host = newHost()
     host.onMessage(message => {
       if (message?.type !== 'ds-bot:browser-endpoint' || typeof message.id !== 'string' || !isBotId(message.botId)) return
-      void botViews.endpoint(message.botId).then(url => {
+      const downloadRoots = message.downloadRoots
+      if (!Array.isArray(downloadRoots) || downloadRoots.length > 4 || !Array.from(downloadRoots).every(root => typeof root === 'string' && isAbsolute(root))) {
+        host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' })
+        return
+      }
+      void botViews.endpoint(message.botId, { downloadRoots }).then(url => {
         host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, url })
       }).catch(() => host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' }))
     })

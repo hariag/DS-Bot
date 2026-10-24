@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -58,6 +58,15 @@ test('Bot endpoint identifiers follow DSH session.create IDs', () => {
   assert.equal(isBotId('session-7e90ddf9-38a7-4c6c-b37a-1c445f771234'), true)
   assert.equal(isBotId('7e90ddf9-38a7-4c6c-b37a-1c445f771234'), false)
   assert.equal(isBotId('session-1'), false)
+})
+
+test('Bot endpoints accept only up to four absolute download roots', async t => {
+  const { manager } = fixture()
+  t.after(() => manager.dispose())
+  await assert.rejects(() => manager.endpoint('a', { downloadRoots: ['relative'] }), /Invalid browser download roots/u)
+  await assert.rejects(() => manager.endpoint('a', { downloadRoots: new Array(1) }), /Invalid browser download roots/u)
+  await assert.rejects(() => manager.endpoint('a', { downloadRoots: ['/a', '/b', '/c', '/d', '/e'] }), /Invalid browser download roots/u)
+  assert.match(await manager.endpoint('a', { downloadRoots: ['/a', '/b', '/c', '/d'] }), /^ws:\/\//u)
 })
 
 function openSocket(url, options) {
@@ -152,10 +161,11 @@ test('CDP relay rejects invalid paths and Origin headers', async t => {
 test('CDP download behavior saves to the Bot path and emits download events', async t => {
   const { manager, handlers, views } = fixture()
   t.after(() => manager.dispose())
-  const downloadPath = mkdtempSync(join(tmpdir(), 'bot-views-download-'))
-  t.after(() => rmSync(downloadPath, { recursive: true, force: true }))
+  const rootPath = mkdtempSync(join(tmpdir(), 'bot-views-download-root-'))
+  const downloadPath = join(rootPath, 'downloads')
+  t.after(() => rmSync(rootPath, { recursive: true, force: true }))
   const entry = manager.create('a')
-  const socket = await openSocket(await manager.endpoint('a'))
+  const socket = await openSocket(await manager.endpoint('a', { downloadRoots: [rootPath] }))
   t.after(() => socket.close())
   const discovered = await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
   assert.ok(discovered.result.sessionId)
@@ -191,10 +201,50 @@ test('CDP download behavior saves to the Bot path and emits download events', as
   assert.equal(sessionId.length > 0, true)
 })
 
+test('download roots are isolated per Bot', async t => {
+  const { manager, handlers, views } = fixture()
+  t.after(() => manager.dispose())
+  const rootA = mkdtempSync(join(tmpdir(), 'bot-views-download-a-'))
+  const rootB = mkdtempSync(join(tmpdir(), 'bot-views-download-b-'))
+  t.after(() => {
+    rmSync(rootA, { recursive: true, force: true })
+    rmSync(rootB, { recursive: true, force: true })
+  })
+  const entryA = manager.create('a')
+  const entryB = manager.create('b')
+  const [endpointA, endpointB] = await Promise.all([
+    manager.endpoint('a', { downloadRoots: [rootA] }),
+    manager.endpoint('b', { downloadRoots: [rootB] }),
+  ])
+  const socketA = await openSocket(endpointA)
+  const socketB = await openSocket(endpointB)
+  t.after(() => { socketA.close(); socketB.close() })
+  await request(socketA, 1, 'Target.attachToTarget', { targetId: entryA.tabId, flatten: true })
+  await request(socketB, 2, 'Target.attachToTarget', { targetId: entryB.tabId, flatten: true })
+  await request(socketA, 3, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: rootA })
+  await request(socketB, 4, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: rootA })
+  let savedByA
+  const accepted = Object.assign(new EventEmitter(), {
+    setSavePath(path) { savedByA = path },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+  })
+  handlers.get('bot:a')({ preventDefault() { throw new Error('Bot A download was refused') } }, accepted, views[0].webContents)
+  assert.match(savedByA, new RegExp(`^${rootA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
+  let preventedForB = false
+  const refused = Object.assign(new EventEmitter(), {
+    setSavePath() { throw new Error('Bot B must not use Bot A download root') },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+  })
+  handlers.get('bot:b')({ preventDefault() { preventedForB = true } }, refused, views[1].webContents)
+  assert.equal(preventedForB, true)
+})
+
 test('cancelling a relay download removes its save path', async t => {
   const { manager, handlers, views } = fixture()
   t.after(() => manager.dispose())
-  const downloadPath = mkdtempSync(join(tmpdir(), 'bot-views-cancel-'))
+  const downloadPath = mkdtempSync(join(tmpdir(), 'playwright-artifacts-bot-views-cancel-'))
   t.after(() => rmSync(downloadPath, { recursive: true, force: true }))
   const entry = manager.create('a')
   const socket = await openSocket(await manager.endpoint('a'))
@@ -221,6 +271,76 @@ test('cancelling a relay download removes its save path', async t => {
   await request(socket, 3, 'Browser.cancelDownload', { guid })
   for (let tries = 0; tries < 100 && existsSync(savePath); tries++) await new Promise(resolve => setTimeout(resolve, 10))
   assert.equal(existsSync(savePath), false)
+})
+
+test('CDP rejects outside, traversal, and symlink download paths and cancels downloads', async t => {
+  const { manager, handlers, views } = fixture()
+  t.after(() => manager.dispose())
+  const rootPath = mkdtempSync(join(tmpdir(), 'bot-views-download-root-'))
+  const outsidePath = mkdtempSync(join(tmpdir(), 'bot-views-download-outside-'))
+  symlinkSync(outsidePath, join(rootPath, 'outside-link'))
+  t.after(() => {
+    rmSync(rootPath, { recursive: true, force: true })
+    rmSync(outsidePath, { recursive: true, force: true })
+  })
+  const entry = manager.create('a')
+  const socket = await openSocket(await manager.endpoint('a', { downloadRoots: [rootPath] }))
+  t.after(() => socket.close())
+  await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
+  const refusedPaths = [
+    '/etc/x',
+    join(rootPath, '..', 'bot-views-download-escape'),
+    join(rootPath, 'outside-link'),
+  ]
+  let id = 2
+  for (const downloadPath of refusedPaths) {
+    await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: rootPath })
+    const response = await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
+    assert.deepEqual(response.result, {})
+    let prevented = false
+    let savePath
+    const item = Object.assign(new EventEmitter(), {
+      setSavePath(path) { savePath = path },
+      getURL() { return 'https://example.com/file' },
+      getFilename() { return 'report.pdf' },
+    })
+    handlers.get('bot:a')({ preventDefault() { prevented = true } }, item, views[0].webContents)
+    assert.equal(prevented, true)
+    assert.equal(savePath, undefined)
+  }
+  await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: rootPath })
+  await request(socket, id, 'Browser.setDownloadBehavior', { behavior: 'deny', downloadPath: rootPath })
+  let denied = false
+  const item = Object.assign(new EventEmitter(), {
+    setSavePath() { throw new Error('denied downloads must not get a save path') },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+  })
+  handlers.get('bot:a')({ preventDefault() { denied = true } }, item, views[0].webContents)
+  assert.equal(denied, true)
+})
+
+test('CDP accepts a direct Playwright artifacts directory under os.tmpdir()', async t => {
+  const { manager, handlers, views } = fixture()
+  t.after(() => manager.dispose())
+  const downloadPath = mkdtempSync(join(tmpdir(), 'playwright-artifacts-bot-views-'))
+  t.after(() => rmSync(downloadPath, { recursive: true, force: true }))
+  const entry = manager.create('a')
+  const socket = await openSocket(await manager.endpoint('a'))
+  t.after(() => socket.close())
+  await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
+  const response = await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
+  assert.deepEqual(response.result, {})
+  let savePath
+  const item = Object.assign(new EventEmitter(), {
+    setSavePath(path) { savePath = path },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+  })
+  let prevented = false
+  handlers.get('bot:a')({ preventDefault() { prevented = true } }, item, views[0].webContents)
+  assert.equal(prevented, false)
+  assert.match(savePath, new RegExp(`^${downloadPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
 })
 
 test('user hold closes relay sockets, rejects endpoints, and allows a new endpoint after give-back', async t => {
