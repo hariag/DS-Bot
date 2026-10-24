@@ -46,7 +46,28 @@ export class BotViews {
     if (statePath !== undefined) {
       try {
         const stored = JSON.parse(readFileSync(statePath, 'utf8'))
-        if (stored && typeof stored === 'object' && stored.bots && typeof stored.bots === 'object') this.#saved = stored.bots
+        if (stored && typeof stored === 'object' && stored.bots && typeof stored.bots === 'object') {
+          const bots = {}
+          let changed = false
+          for (const [botId, saved] of Object.entries(stored.bots)) {
+            if (!saved || !Array.isArray(saved.tabs)) { changed = true; continue }
+            const tabs = saved.tabs.flatMap(tab => {
+              if (!tab || typeof tab.tabId !== 'string' || tab.tabId.length === 0) { changed = true; return [] }
+              const url = typeof tab.url === 'string' ? tab.url : 'about:blank'
+              const safeUrl = allowedNavigation(url, this.#origin()) ? url : 'about:blank'
+              const title = safeUrl === url && typeof tab.title === 'string' ? tab.title : ''
+              if (safeUrl !== url || title !== tab.title) changed = true
+              return [{ tabId: tab.tabId, url: safeUrl, title }]
+            })
+            const active = tabs.some(tab => tab.tabId === saved.active) ? saved.active : tabs[0]?.tabId ?? null
+            if (tabs.length !== saved.tabs.length || active !== saved.active) changed = true
+            if (tabs.length === 0) { changed = true; continue }
+            bots[botId] = { tabs, active }
+          }
+          if (Object.keys(bots).length !== Object.keys(stored.bots).length) changed = true
+          this.#saved = bots
+          if (changed) this.#persist()
+        }
       } catch {}
     }
     this.#server = createServer((_request, response) => { response.writeHead(404).end() })
@@ -102,8 +123,8 @@ export class BotViews {
     })
     contents.on('did-start-loading', () => this.#publish(entry))
     contents.on('did-stop-loading', () => this.#publish(entry))
-    contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-      if (isMainFrame && !isInPlace) {
+    contents.on('did-start-navigation', event => {
+      if (event.isMainFrame && !event.isSameDocument) {
         entry.error = null
         this.#publish(entry)
       }
@@ -231,7 +252,8 @@ export class BotViews {
     if (this.sync(botId).length === 0) {
       const saved = this.#saved[botId]
       const restored = saved?.tabs?.find(tab => tab.tabId === saved.active) ?? saved?.tabs?.[0]
-      this.create(botId, { url: restored?.url ?? 'about:blank', ...(restored?.tabId ? { tabId: restored.tabId } : {}), createdByBot: true })
+      const url = restored && allowedNavigation(restored.url, this.#origin()) ? restored.url : 'about:blank'
+      this.create(botId, { url, ...(restored?.tabId ? { tabId: restored.tabId } : {}), createdByBot: true })
     }
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     const token = randomBytes(32).toString('hex')
@@ -307,9 +329,15 @@ export class BotViews {
     const previous = this.#saved[botId]
     if (!previous) return
     const tabs = previous.tabs.filter(tab => tab.tabId !== tabId)
-    const active = this.#active.get(botId) === tabId ? tabs.at(-1)?.tabId ?? null : previous.active
-    if (tabs.length === 0) delete this.#saved[botId]
-    else this.#saved[botId] = { tabs, active }
+    const wasActive = this.#active.get(botId) === tabId
+    const active = wasActive ? tabs.at(-1)?.tabId ?? null : previous.active
+    if (tabs.length === 0) {
+      delete this.#saved[botId]
+      this.#active.delete(botId)
+    } else {
+      if (wasActive) this.#active.set(botId, active)
+      this.#saved[botId] = { tabs, active }
+    }
     this.#persist()
   }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -268,6 +268,49 @@ test('saved active tabs restore their tab id and URL', async t => {
   t.after(() => socket.close())
 })
 
+test('closing the active saved tab preserves the replacement after another page updates', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'bot-views-active-state-'))
+  const statePath = join(directory, 'bot-views.json')
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const first = fixture({ statePath })
+  first.manager.create('a', { tabId: 'A', url: 'http://127.0.0.1:43118/a' })
+  first.manager.create('a', { tabId: 'B', url: 'http://127.0.0.1:43118/b' })
+  first.manager.create('a', { tabId: 'C', url: 'http://127.0.0.1:43118/c' })
+  first.manager.place('B', { left: 0, top: 0, width: 400, height: 300 }, true)
+  await first.manager.close('a', 'B')
+  first.views[0].webContents.url = 'http://127.0.0.1:43118/a-updated'
+  first.views[0].webContents.emit('did-navigate')
+  first.manager.dispose()
+
+  const second = fixture({ statePath })
+  t.after(() => second.manager.dispose())
+  await second.manager.endpoint('a')
+  assert.deepEqual(second.manager.sync('a').map(({ tabId, url }) => ({ tabId, url })), [
+    { tabId: 'C', url: 'http://127.0.0.1:43118/c' },
+  ])
+})
+
+test('saved file and app-origin URLs restore as blank with their tab ids', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'bot-views-unsafe-state-'))
+  const statePath = join(directory, 'bot-views.json')
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  writeFileSync(statePath, JSON.stringify({ version: 1, bots: {
+    file: { tabs: [{ tabId: 'file-tab', url: 'file:///etc/passwd', title: 'passwd' }], active: 'file-tab' },
+    app: { tabs: [{ tabId: 'app-tab', url: 'http://127.0.0.1:43117/settings', title: 'Settings' }], active: 'app-tab' },
+  } }))
+  const { manager } = fixture({ statePath })
+  t.after(() => manager.dispose())
+  const stored = JSON.parse(readFileSync(statePath, 'utf8'))
+  assert.deepEqual(stored.bots.file.tabs, [{ tabId: 'file-tab', url: 'about:blank', title: '' }])
+  assert.deepEqual(stored.bots.app.tabs, [{ tabId: 'app-tab', url: 'about:blank', title: '' }])
+  for (const [botId, tabId] of [['file', 'file-tab'], ['app', 'app-tab']]) {
+    await manager.endpoint(botId)
+    assert.deepEqual(manager.sync(botId).map(({ tabId: actualId, url }) => ({ tabId: actualId, url })), [
+      { tabId, url: 'about:blank' },
+    ])
+  }
+})
+
 test('load errors remain published until a real main-frame navigation starts', async t => {
   const { manager, views, changes } = fixture()
   t.after(() => manager.dispose())
@@ -276,7 +319,7 @@ test('load errors remain published until a real main-frame navigation starts', a
   contents.emit('did-fail-load', {}, -105, 'offline', contents.getURL(), true)
   contents.emit('did-stop-loading')
   assert.equal(changes.at(-1).error, 'offline')
-  contents.emit('did-start-navigation', {}, 'http://127.0.0.1:43118/form', false, true)
+  contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
   assert.equal(changes.at(-1).error, null)
   assert.ok(entry)
 })
