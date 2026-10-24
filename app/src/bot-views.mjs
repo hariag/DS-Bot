@@ -1,32 +1,17 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from 'node:path'
+import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import { allowedNavigation, requestAllowed } from './bot-browser.mjs'
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
-const PLAYWRIGHT_ARTIFACT_PREFIX = 'playwright-artifacts-'
 const rectOf = rect => ({
   x: Math.max(0, Math.round(rect?.left ?? 0)),
   y: Math.max(0, Math.round(rect?.top ?? 0)),
   width: Math.max(1, Math.round(rect?.width ?? 800)),
   height: Math.max(1, Math.round(rect?.height ?? 600)),
 })
-const BOT_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
-export const isBotId = value => typeof value === 'string' && BOT_ID.test(value)
-
-function containsPath(root, target) {
-  const relative = relativePath(resolve(root), resolve(target))
-  return relative === '' || (relative !== '..' && !relative.startsWith(`..${sep}`) && !isAbsolute(relative))
-}
-
-function isDirectChild(root, target) {
-  const relative = relativePath(resolve(root), resolve(target))
-  return relative !== '' && relative !== '..' && !relative.startsWith(`..${sep}`) && !relative.includes(sep) && !isAbsolute(relative)
-}
 
 export class BotViews {
   #window
@@ -42,50 +27,14 @@ export class BotViews {
   #address
   #onChange
   #downloadPaths = new Map()
-  #downloadRoots = new Map()
-  #statePath
-  #saved = {}
-  #active = new Map()
-  #held = new Set()
-  #covered = false
-  // The tabs whose view waits for a window to belong to.
-  #waiting = new Set()
 
-  constructor({ window, WebContentsView, guests, origin, devTools = false, onChange = () => {}, statePath }) {
+  constructor({ window, WebContentsView, guests, origin, devTools = false, onChange = () => {} }) {
     this.#window = window
     this.#WebContentsView = WebContentsView
     this.#guests = guests
     this.#origin = origin
     this.#devTools = devTools
     this.#onChange = onChange
-    this.#statePath = statePath
-    if (statePath !== undefined) {
-      try {
-        const stored = JSON.parse(readFileSync(statePath, 'utf8'))
-        if (stored && typeof stored === 'object' && stored.bots && typeof stored.bots === 'object') {
-          const bots = {}
-          let changed = false
-          for (const [botId, saved] of Object.entries(stored.bots)) {
-            if (!saved || !Array.isArray(saved.tabs)) { changed = true; continue }
-            const tabs = saved.tabs.flatMap(tab => {
-              if (!tab || typeof tab.tabId !== 'string' || tab.tabId.length === 0) { changed = true; return [] }
-              const url = typeof tab.url === 'string' ? tab.url : 'about:blank'
-              const safeUrl = allowedNavigation(url, this.#origin()) ? url : 'about:blank'
-              const title = safeUrl === url && typeof tab.title === 'string' ? tab.title : ''
-              if (safeUrl !== url || title !== tab.title) changed = true
-              return [{ tabId: tab.tabId, url: safeUrl, title }]
-            })
-            const active = tabs.some(tab => tab.tabId === saved.active) ? saved.active : tabs[0]?.tabId ?? null
-            if (tabs.length !== saved.tabs.length || active !== saved.active) changed = true
-            if (tabs.length === 0) { changed = true; continue }
-            bots[botId] = { tabs, active }
-          }
-          if (Object.keys(bots).length !== Object.keys(stored.bots).length) changed = true
-          this.#saved = bots
-          if (changed) this.#persist()
-        }
-      } catch {}
-    }
     this.#server = createServer((_request, response) => { response.writeHead(404).end() })
     this.#wss = new WebSocketServer({ noServer: true })
     this.#server.on('upgrade', (request, socket, head) => {
@@ -119,12 +68,9 @@ export class BotViews {
         webviewTag: false, plugins: false, navigateOnDragDrop: false, disableDialogs: true, devTools: this.#devTools,
       },
     })
-    const entry = { tabId, botId, view, createdByBot, openerId, sessions: new Map(), sessionMaps: new Map(), downloads: new Map(), downloadPath: this.#downloadPaths.get(botId), mainFrameId: undefined }
+    const entry = { tabId, botId, view, createdByBot, openerId, sessions: new Map(), sessionMaps: new Map(), downloadPath: this.#downloadPaths.get(botId), mainFrameId: undefined }
     this.#views.set(tabId, entry)
-    const owner = this.#window()
-    if (owner !== undefined && owner !== null) owner.contentView.addChildView(view)
-    // Without a window the view waits for the next one.
-    else this.#waiting.add(tabId)
+    this.#window()?.contentView.addChildView(view)
     view.setBounds(rectOf(null))
     view.setVisible(false)
     const contents = view.webContents
@@ -142,20 +88,11 @@ export class BotViews {
     })
     contents.on('did-start-loading', () => this.#publish(entry))
     contents.on('did-stop-loading', () => this.#publish(entry))
-    contents.on('did-start-navigation', event => {
-      if (event.isMainFrame && !event.isSameDocument) {
-        entry.error = null
-        this.#publish(entry)
-      }
-    })
     contents.on('will-navigate', (event, target) => { if (!allowedNavigation(target, this.#origin())) event.preventDefault() })
     contents.on('will-redirect', (event, target) => { if (!allowedNavigation(target, this.#origin())) event.preventDefault() })
-    contents.on('will-frame-navigate', event => {
-      if (event.isMainFrame && !allowedNavigation(event.url, this.#origin())) event.preventDefault()
-    })
-    contents.setWindowOpenHandler(({ url: target, postBody }) => {
-      if (postBody === undefined && allowedNavigation(target, this.#origin())) {
-        const popup = this.create(botId, { url: target, createdByBot: entry.sessions.size > 0, openerId: tabId })
+    contents.setWindowOpenHandler(({ url: target }) => {
+      if (entry.sessions.size > 0 && allowedNavigation(target, this.#origin())) {
+        const popup = this.create(botId, { url: target, createdByBot: true, openerId: tabId })
         this.#publish(popup)
       }
       return { action: 'deny' }
@@ -168,14 +105,8 @@ export class BotViews {
       this.#download(target, event, item)
     })
     this.#installDebugger(entry)
-    this.#active.set(botId, tabId)
-    this.#remember(entry)
-    this.#persist()
     this.#onChange({ type: 'created', ...this.#state(entry) })
-    const loading = contents.loadURL(url)
-    this.#remember(entry)
-    this.#persist()
-    void loading.catch(() => {})
+    if (url !== 'about:blank') void contents.loadURL(url).catch(() => {})
     return entry
   }
 
@@ -184,70 +115,21 @@ export class BotViews {
       event.preventDefault()
       return
     }
-    const downloadPath = this.#allowedDownloadPath(entry.botId, entry.downloadPath)
-    if (downloadPath === undefined) {
-      event.preventDefault()
-      return
-    }
     try {
+      mkdirSync(entry.downloadPath, { recursive: true })
       const guid = randomUUID()
-      const savePath = join(downloadPath, guid)
-      item.setSavePath(savePath)
-      entry.downloads.set(guid, { item, savePath })
+      item.setSavePath(join(entry.downloadPath, guid))
       this.#broadcast(entry.botId, { method: 'Browser.downloadWillBegin', params: {
         frameId: entry.tabId, guid, url: item.getURL(), suggestedFilename: item.getFilename(),
       } })
       const progress = state => this.#broadcast(entry.botId, { method: 'Browser.downloadProgress', params: {
         guid, receivedBytes: item.getReceivedBytes(), totalBytes: Math.max(0, item.getTotalBytes()),
-        state: state === 'completed' ? 'completed' : state === 'interrupted' || state === 'cancelled' ? 'canceled' : 'inProgress',
+        state: state === 'completed' ? 'completed' : state === 'interrupted' ? 'canceled' : 'inProgress',
       } })
       item.on('updated', (_event, state) => progress(state))
-      item.once('done', (_event, state) => {
-        progress(state)
-        entry.downloads.delete(guid)
-        if (state !== 'completed') void rm(savePath, { force: true }).catch(() => {})
-      })
+      item.once('done', (_event, state) => progress(state))
     } catch {
       event.preventDefault()
-    }
-  }
-
-  #allowedDownloadPath(botId, requested) {
-    if (typeof requested !== 'string' || !isAbsolute(requested)) return undefined
-    const target = resolve(requested)
-    const roots = this.#downloadRoots.get(botId) ?? []
-    const allowedByRoot = roots.some(root => {
-      if (containsPath(root, target)) return true
-      try {
-        return containsPath(realpathSync(root), target)
-      } catch {
-        return false
-      }
-    })
-    const temporaryRoot = resolve(tmpdir())
-    let temporaryRealRoot
-    try {
-      temporaryRealRoot = realpathSync(temporaryRoot)
-    } catch {}
-    const isArtifact = temporaryRealRoot !== undefined && [temporaryRoot, temporaryRealRoot].some(root =>
-      isDirectChild(root, target) && basename(target).startsWith(PLAYWRIGHT_ARTIFACT_PREFIX))
-    if (!allowedByRoot && !isArtifact) return undefined
-    try {
-      mkdirSync(target, { recursive: true })
-      const realTarget = realpathSync(target)
-      const inRoot = roots.some(root => {
-        try {
-          return containsPath(realpathSync(root), realTarget)
-        } catch {
-          return false
-        }
-      })
-      const inArtifacts = isArtifact && temporaryRealRoot !== undefined
-        && isDirectChild(temporaryRealRoot, realTarget)
-        && basename(realTarget).startsWith(PLAYWRIGHT_ARTIFACT_PREFIX)
-      return inRoot || inArtifacts ? realTarget : undefined
-    } catch {
-      return undefined
     }
   }
 
@@ -255,13 +137,7 @@ export class BotViews {
     const entry = this.#views.get(tabId)
     if (!entry) return false
     if (rect !== null) entry.view.setBounds(rectOf(rect))
-    entry.shown = visible === true
-    entry.view.setVisible(entry.shown && !this.#covered)
-    if (visible === true) {
-      this.#active.set(entry.botId, tabId)
-      this.#remember(entry)
-      this.#persist()
-    }
+    entry.view.setVisible(visible === true)
     return true
   }
 
@@ -269,11 +145,7 @@ export class BotViews {
     const entry = this.#owned(botId, payload.tabId)
     const contents = entry.view.webContents
     switch (action) {
-      case 'navigate': {
-        const url = String(payload.url)
-        if (!allowedNavigation(url, this.#origin())) throw new Error('This address is not allowed')
-        return contents.loadURL(url)
-      }
+      case 'navigate': return contents.loadURL(String(payload.url))
       case 'command':
         if (payload.command === 'back' && contents.canGoBack()) contents.goBack()
         else if (payload.command === 'forward' && contents.canGoForward()) contents.goForward()
@@ -296,9 +168,6 @@ export class BotViews {
       }
     }
     this.#views.delete(tabId)
-    this.#dropSaved(botId, tabId)
-    // The view leaves the window too: only closing its contents would keep the child view.
-    this.#window()?.contentView.removeChildView(entry.view)
     entry.view.webContents.close()
     entry.sessions.clear()
     entry.sessionMaps.clear()
@@ -310,107 +179,26 @@ export class BotViews {
     for (const entry of [...this.#views.values()]) if (entry.botId === botId) await this.close(botId, entry.tabId)
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     this.#downloadPaths.delete(botId)
-    this.#downloadRoots.delete(botId)
-    this.#held.delete(botId)
-    delete this.#saved[botId]
-    this.#persist()
   }
 
-  async endpoint(botId, { downloadRoots } = {}) {
-    if (this.#held.has(botId)) throw new Error('The user has taken over this browser.')
-    if (downloadRoots !== undefined) {
-      if (!Array.isArray(downloadRoots) || downloadRoots.length > 4 || !Array.from(downloadRoots).every(root => typeof root === 'string' && isAbsolute(root))) {
-        throw new Error('Invalid browser download roots.')
-      }
-      this.#downloadRoots.set(botId, [...new Set(downloadRoots.map(root => resolve(root)))])
-      this.#downloadPaths.delete(botId)
-      for (const entry of this.#views.values()) if (entry.botId === botId) entry.downloadPath = undefined
-    }
+  async endpoint(botId) {
     if (!this.#address) await new Promise(resolve => this.#server.once('listening', resolve))
-    if (this.sync(botId).length === 0) {
-      const saved = this.#saved[botId]
-      const restored = saved?.tabs?.find(tab => tab.tabId === saved.active) ?? saved?.tabs?.[0]
-      const url = restored && allowedNavigation(restored.url, this.#origin()) ? restored.url : 'about:blank'
-      this.create(botId, { url, ...(restored?.tabId ? { tabId: restored.tabId } : {}), createdByBot: true })
-    }
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     const token = randomBytes(32).toString('hex')
     this.#tokens.set(token, botId)
     return `ws://127.0.0.1:${this.#address.port}/devtools/browser/${token}`
   }
 
-  /**
-   * The app's card is up in the window (main.mjs askInWindow). The views are drawn above the
-   * page, so they stay hidden until it goes, or they would cover the card.
-   * @param {boolean} covered
-   */
-  cover(covered) {
-    this.#covered = covered
-    for (const entry of this.#views.values()) {
-      if (!entry.view.webContents.isDestroyed()) entry.view.setVisible(entry.shown === true && !covered)
-    }
-  }
-
   sync(botId) {
     return [...this.#views.values()].filter(entry => entry.botId === botId).map(entry => this.#state(entry))
   }
 
-  /**
-   * The window that owned the views is gone. The views that went with it are dropped; the
-   * ones that are still alive wait for the window that comes next.
-   */
-  release() {
-    for (const [tabId, entry] of [...this.#views]) {
-      if (!entry.view.webContents.isDestroyed()) { this.#waiting.add(tabId); continue }
-      this.#views.delete(tabId)
-      this.#waiting.delete(tabId)
-      if (this.#active.get(entry.botId) === tabId) this.#active.delete(entry.botId)
-    }
-  }
-
-  /** The views that waited for a window join it, so that the tabs go on. */
-  attach(window) {
-    if (window === undefined || window === null) return
-    for (const [tabId, entry] of [...this.#views]) {
-      if (!this.#waiting.has(tabId)) continue
-      if (entry.view.webContents.isDestroyed()) {
-        this.#views.delete(tabId)
-        this.#waiting.delete(tabId)
-        if (this.#active.get(entry.botId) === tabId) this.#active.delete(entry.botId)
-        continue
-      }
-      window.contentView.addChildView(entry.view)
-      this.#waiting.delete(tabId)
-    }
-  }
-
   dispose() {
-    this.#persist()
     for (const entry of this.#views.values()) entry.view.webContents.close()
     this.#views.clear()
-    this.#waiting.clear()
     this.#tokens.clear()
     this.#wss.close()
     this.#server.close()
-  }
-
-  async hold(botId, held) {
-    if (!held) {
-      this.#held.delete(botId)
-      return true
-    }
-    this.#held.add(botId)
-    for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
-    const clients = [...(this.#clients.get(botId) ?? [])]
-    for (const client of clients) {
-      for (const route of client.sessions.values()) {
-        if (!route.nativeId) continue
-        await route.entry.view.webContents.debugger.sendCommand('Target.detachFromTarget', { sessionId: route.nativeId }).catch(() => {})
-      }
-      client.socket.close()
-      client.socket.terminate()
-    }
-    return true
   }
 
   #owned(botId, tabId) {
@@ -432,44 +220,8 @@ export class BotViews {
 
   #publish(entry) {
     if (!entry.view.webContents.isDestroyed()) {
-      this.#remember(entry)
-      this.#persist()
+      if (!entry.view.webContents.isLoading()) entry.error = null
       this.#onChange({ type: 'changed', ...this.#state(entry) })
-    }
-  }
-
-  #remember(entry) {
-    const previous = this.#saved[entry.botId] ?? { tabs: [], active: null }
-    const tabs = previous.tabs.filter(tab => tab.tabId !== entry.tabId)
-    tabs.push({ tabId: entry.tabId, url: entry.view.webContents.getURL(), title: entry.view.webContents.getTitle() })
-    this.#saved[entry.botId] = { tabs, active: this.#active.get(entry.botId) ?? previous.active ?? entry.tabId }
-  }
-
-  #dropSaved(botId, tabId) {
-    const previous = this.#saved[botId]
-    if (!previous) return
-    const tabs = previous.tabs.filter(tab => tab.tabId !== tabId)
-    const wasActive = this.#active.get(botId) === tabId
-    const active = wasActive ? tabs.at(-1)?.tabId ?? null : previous.active
-    if (tabs.length === 0) {
-      delete this.#saved[botId]
-      this.#active.delete(botId)
-    } else {
-      if (wasActive) this.#active.set(botId, active)
-      this.#saved[botId] = { tabs, active }
-    }
-    this.#persist()
-  }
-
-  #persist() {
-    if (this.#statePath === undefined) return
-    const temporary = `${this.#statePath}.${process.pid}.${randomUUID()}.tmp`
-    try {
-      mkdirSync(dirname(this.#statePath), { recursive: true })
-      writeFileSync(temporary, JSON.stringify({ version: 1, bots: this.#saved }))
-      renameSync(temporary, this.#statePath)
-    } catch {
-      try { unlinkSync(temporary) } catch {}
     }
   }
 
@@ -523,7 +275,7 @@ export class BotViews {
 
   #connect(socket, botId) {
     const sessions = new Map()
-    const clientState = { socket, botId, autoAttach: false, discover: false, attach: undefined, sessions }
+    const clientState = { socket, botId, autoAttach: false, discover: false, attach: undefined }
     const clients = this.#clients.get(botId) ?? new Set()
     clients.add(clientState)
     this.#clients.set(botId, clients)
@@ -556,15 +308,8 @@ export class BotViews {
         try {
         if (method === 'Browser.getVersion') { reply({ protocolVersion: '1.3', product: `Chrome/${process.versions.chrome}`, userAgent: `Electron/${process.versions.electron} Chrome/${process.versions.chrome}`, jsVersion: process.versions.v8 }); return }
         if (method === 'Browser.setDownloadBehavior') {
-          const allowsDownloads = params.behavior === 'allow' || params.behavior === 'allowAndName'
-          const downloadPath = allowsDownloads ? this.#allowedDownloadPath(botId, params.downloadPath) : undefined
-          this.#downloadPaths.set(botId, downloadPath)
-          for (const entry of targets()) entry.downloadPath = downloadPath
-          reply({}); return
-        }
-        if (method === 'Browser.cancelDownload') {
-          const download = targets().flatMap(entry => [...entry.downloads.entries()]).find(([guid]) => guid === params.guid)?.[1]
-          if (download) await download.item.cancel()
+          this.#downloadPaths.set(botId, params.downloadPath)
+          for (const entry of targets()) entry.downloadPath = params.downloadPath
           reply({}); return
         }
         if (method === 'Target.getBrowserContexts') { reply({ browserContextIds: [`bot:${botId}`] }); return }

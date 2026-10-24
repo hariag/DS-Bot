@@ -1,7 +1,7 @@
 // Electron main process: one window for the Bot team, served by the app's own DSH Host.
 // The window loads the Host's loopback address as DSH Web does: DSH's sign-in sends the page's
 // origin as the address the browser comes back to, and accepts only a loopback one.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from 'electron'
+import { app, BrowserWindow, WebContentsView, dialog, ipcMain, Menu, nativeTheme, session, shell } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { release } from 'node:os'
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
 import { BotBrowserGuests, partitionOf } from './bot-browser.mjs'
+import { BotViews } from './bot-views.mjs'
 import { importFromBrowser, listSources } from './browser-sources.mjs'
 import { applyCookies, CookieImports } from './cookie-import.mjs'
 import { parseCookieFile } from './cookie-parse.mjs'
@@ -29,6 +30,11 @@ const IPC = {
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
   browserAcquire: 'ds-bot:browser-acquire', browserRelease: 'ds-bot:browser-release', browserForget: 'ds-bot:browser-forget',
+  browserViewChanged: 'ds-bot:browser-view-changed', browserViewCreate: 'ds-bot:browser-view-create',
+  browserViewSync: 'ds-bot:browser-view-sync', browserViewPlace: 'ds-bot:browser-view-place',
+  browserViewNavigate: 'ds-bot:browser-view-navigate', browserViewCommand: 'ds-bot:browser-view-command',
+  browserViewFocus: 'ds-bot:browser-view-focus', browserViewRead: 'ds-bot:browser-view-read',
+  browserViewClose: 'ds-bot:browser-view-close',
   browserImportSources: 'ds-bot:browser-import-sources', browserImportPick: 'ds-bot:browser-import-pick',
   browserImportLive: 'ds-bot:browser-import-live', browserImportApply: 'ds-bot:browser-import-apply',
   browserImportCancel: 'ds-bot:browser-import-cancel',
@@ -66,7 +72,12 @@ let choosing
 let copying
 const copyAbort = new AbortController()
 const browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
+const botViews = new BotViews({
+  window: () => mainWindow, WebContentsView, guests: browserGuests, origin: () => origin, devTools: !app.isPackaged,
+  onChange: state => mainWindow?.webContents.send(IPC.browserViewChanged, state),
+})
 const cookieImports = new CookieImports()
+app.once('will-quit', () => botViews.dispose())
 
 // A packaged app started through an 8.3 short path or a junction restarts once on the
 // canonical path: the lock below and every path the Host sees then agree with the long
@@ -145,6 +156,12 @@ async function start() {
     updates = startUpdates()
     updates?.subscribe((state) => { mainWindow?.webContents.send(IPC.appUpdateChanged, state) })
     host = newHost()
+    host.onMessage(message => {
+      if (message?.type !== 'ds-bot:browser-endpoint' || typeof message.id !== 'string' || typeof message.botId !== 'string') return
+      void botViews.endpoint(message.botId).then(url => {
+        host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, url })
+      }).catch(() => host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' }))
+    })
     return host.start()
   })()
   ready.catch(fail)
@@ -169,8 +186,23 @@ async function start() {
   })
   ipcMain.handle(IPC.browserForget, (event, key) => {
     assertWindow(event)
-    return browserGuests.forget(event.sender, key)
+    const botId = typeof key === 'string' && key.startsWith('bot:') ? key.slice(4) : ''
+    return Promise.resolve(botId === '' ? undefined : botViews.forget(botId)).then(() => browserGuests.forget(event.sender, key))
   })
+  ipcMain.handle(IPC.browserViewCreate, (event, botId, tabId, url) => {
+    assertWindow(event)
+    return botViews.create(String(botId), { tabId: String(tabId), ...(typeof url === 'string' && url !== '' ? { url } : {}) }).tabId
+  })
+  ipcMain.handle(IPC.browserViewSync, (event, botId) => {
+    assertWindow(event)
+    return botViews.sync(String(botId))
+  })
+  ipcMain.handle(IPC.browserViewPlace, (event, tabId, rect, visible) => { assertWindow(event); return botViews.place(String(tabId), rect, visible === true) })
+  ipcMain.handle(IPC.browserViewNavigate, (event, botId, tabId, url) => { assertWindow(event); return botViews.operate(String(botId), 'navigate', { tabId: String(tabId), url }) })
+  ipcMain.handle(IPC.browserViewCommand, (event, botId, tabId, command) => { assertWindow(event); return botViews.operate(String(botId), 'command', { tabId: String(tabId), command }) })
+  ipcMain.handle(IPC.browserViewFocus, (event, botId, tabId) => { assertWindow(event); return botViews.operate(String(botId), 'focus', { tabId: String(tabId) }) })
+  ipcMain.handle(IPC.browserViewRead, (event, botId, tabId, script) => { assertWindow(event); return botViews.operate(String(botId), 'read', { tabId: String(tabId), script }) })
+  ipcMain.handle(IPC.browserViewClose, (event, botId, tabId) => { assertWindow(event); return botViews.operate(String(botId), 'close', { tabId: String(tabId) }) })
   // Cookie imports: a file or an installed browser's profile is parsed or harvested into a
   // pending set first; only apply (the user's confirm) writes into the Bot's partition.
   ipcMain.handle(IPC.browserImportSources, (event) => {
