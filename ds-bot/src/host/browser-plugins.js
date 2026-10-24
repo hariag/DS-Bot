@@ -129,6 +129,7 @@ export function install(rt) {
     connect: process.env.DS_BOT_APP === '1' && typeof process.send === 'function' ? appBrowserEndpoint : undefined,
     getHold: botId => rt.browserChannel?.holdOf(botId) ?? null,
     onHold: (botId, hold) => rt.browserChannel?.setHold(botId, hold),
+    subscribeHolds: listener => rt.browserChannel?.subscribeHolds?.(listener),
     authorize: (exec, botId, action) => authorizeBrowserAction(rt, exec, botId, action),
     complete: rt.config.browserComplete ?? completeDeepseek,
     async keyOf(exec) {

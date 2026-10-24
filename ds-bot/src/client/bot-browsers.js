@@ -143,7 +143,7 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
       return
     }
     if (!owner.has(tabId)) owner.set(tabId, botId)
-    if (change.type === 'created' && change.createdByBot) {
+    if (change.type === 'created') {
       ensureTabs(botId)
       tabs.set(snapshot => {
         const own = snapshot[botId] ?? { ids: [], active: null }

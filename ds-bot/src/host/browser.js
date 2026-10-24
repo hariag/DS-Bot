@@ -27,6 +27,7 @@ export function createBrowserChannel({ now = Date.now, waitMs = WAIT_MS, staleMs
   /** @type {Map<string, {client:any, resolve:(value:any) => void, timer:any}>} */
   const pending = new Map()
   const holds = new Map()
+  const holdListeners = new Set()
   let nextId = 0
   let holdVersion = 0
 
@@ -134,6 +135,9 @@ export function createBrowserChannel({ now = Date.now, waitMs = WAIT_MS, staleMs
     else holds.set(botId, { by: hold.by, reason: hold.reason, note: hold.note })
     holdVersion += 1
     for (const client of clients.values()) client.wake?.()
+    for (const listener of holdListeners) {
+      try { listener(botId, holds.get(botId) ?? null) } catch {}
+    }
     return holds.get(botId) ?? null
   }
 
@@ -147,7 +151,11 @@ export function createBrowserChannel({ now = Date.now, waitMs = WAIT_MS, staleMs
     holds.clear()
   }
 
-  return { wait, result, read, openPages, setHold, holdOf, holdSnapshot, dispose }
+  const subscribeHolds = listener => {
+    holdListeners.add(listener)
+    return () => holdListeners.delete(listener)
+  }
+  return { wait, result, read, openPages, setHold, holdOf, holdSnapshot, subscribeHolds, dispose }
 }
 
 const clean = (value, max) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)

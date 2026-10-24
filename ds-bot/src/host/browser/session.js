@@ -195,6 +195,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
   }
 
   async function tabs() {
+    ready()
     await pendingPageReady
     const active = activePage()
     return Promise.all(openPages().map(async (target, index) => ({
@@ -305,6 +306,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       await authorizeWrite(action, gate)
     } catch (error) {
       await download.cancel().catch(() => {})
+      await download.delete().catch(() => {})
       const message = String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160)
       return message || `Download "${filename}" was refused. Nothing was saved.`
     }
@@ -316,6 +318,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       return `Downloaded "${filename}" to ${path}.`
     } catch (error) {
       await download.cancel().catch(() => {})
+      await download.delete().catch(() => {})
       const message = String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160)
       return `Download "${filename}" failed: ${message || 'unknown error'}.`
     }
@@ -453,6 +456,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
   }
 
   async function shot() {
+    ready()
     const target = activePage()
     if (!target) throw new Error('The browser has no open tabs.')
     const image = await target.screenshot({ type: 'jpeg', quality: 32 })
@@ -610,6 +614,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
     },
     shot,
     handoff(reason, note) {
+      ready()
       const kind = REASONS.has(reason) ? reason : 'other'
       hold = { reason: kind, note: String(note ?? '').slice(0, 300) }
       onHold?.({ by: 'bot', reason: kind, note: hold.note })

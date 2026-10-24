@@ -17959,7 +17959,7 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
       return;
     }
     if (!owner.has(tabId)) owner.set(tabId, botId);
-    if (change.type === "created" && change.createdByBot) {
+    if (change.type === "created") {
       ensureTabs(botId);
       tabs.set((snapshot) => {
         const own = snapshot[botId] ?? { ids: [], active: null };
@@ -19164,9 +19164,21 @@ function apply(ctx) {
       browserNavigate: (tabId, input) => browsers.navigate(tabId, input),
       browserCommand: (tabId, name) => browsers.command(tabId, name),
       browserFocus: (tabId) => browsers.focus(tabId),
-      browserTakeover: bridge.views ? (botId) => call("browser-takeover", { botId }) : void 0,
-      browserStop: bridge.views ? (botId) => call("browser-stop", { botId }) : void 0,
-      browserGiveBack: bridge.views ? (botId) => call("browser-give-back", { botId }) : void 0,
+      browserTakeover: bridge.views ? async (botId) => {
+        const result = await call("browser-takeover", { botId });
+        await bridge.views.hold(botId, true);
+        return result;
+      } : void 0,
+      browserStop: bridge.views ? async (botId) => {
+        const result = await call("browser-stop", { botId });
+        await bridge.views.hold(botId, true);
+        return result;
+      } : void 0,
+      browserGiveBack: bridge.views ? async (botId) => {
+        const result = await call("browser-give-back", { botId });
+        await bridge.views.hold(botId, false);
+        return result;
+      } : void 0,
       // Cookie imports, only where the bridge offers them (the desktop app): a file or an
       // installed browser's profile is previewed, then applied into the Bot's storage key.
       browserImport: typeof bridge.importSources === "function" ? {
