@@ -5,7 +5,19 @@ import { openBotBrowser } from './session.js'
 import { gateScope } from './gate.js'
 
 export const browserOutput = {
-  schema: { type: 'string' },
+  schema: {
+    oneOf: [
+      { type: 'string' },
+      {
+        type: 'object',
+        properties: {
+          text: { type: 'string', required: true },
+          image: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    ],
+  },
   render(_args, value) {
     if (value && typeof value === 'object') {
       const blocks = [{ type: 'text', text: String(value.text ?? '') }]
@@ -18,9 +30,9 @@ export const browserOutput = {
 
 /**
  * @param {any} ctx
- * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, downloadRoot?: string, headless: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, authorize?: (exec: any, botId: string, action: any) => Promise<void>, complete?: Function }} options
+ * @param {{ toolDefs: any[], defineTool: Function, keyOf: (exec: any) => Promise<string|undefined>, profileRoot: string, downloadRoot?: string, headless: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, authorize?: (exec: any, botId: string, action: any) => Promise<void>, complete?: Function, openSession?: typeof openBotBrowser }} options
  */
-export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, downloadRoot, headless, playwrightUrl, executablePath, actionTimeout, authorize, complete, connect, getHold, onHold }) {
+export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRoot, downloadRoot, headless, playwrightUrl, executablePath, actionTimeout, authorize, complete, connect, getHold, onHold, openSession = openBotBrowser }) {
   const sessions = new Map()
   ctx.effect(() => async () => {
     const open = [...sessions.values()]
@@ -39,7 +51,7 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
         if (!botId) return 'Only Bots on the team have a browser.'
         let session = sessions.get(botId)
         if (spec.needsBrowser && session === undefined) {
-          session = await openBotBrowser({
+          session = await openSession({
             botId,
             profileRoot,
             downloadDir: join(downloadRoot ?? join(profileRoot, 'browser-downloads'), botId),
