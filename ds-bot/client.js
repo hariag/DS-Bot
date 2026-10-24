@@ -888,6 +888,11 @@ var ZH = {
   "Checked {time}": "检查于 {time}",
   "Could not check for updates.": "没能检查更新。",
   "Update checks are off.": "已关闭更新检查。",
+  "Checking for updates…": "正在检查更新…",
+  "Downloading {version}…": "正在下载 {version}…",
+  "{version} is ready; it installs when you restart": "{version} 已下载好，重启后安装",
+  "Restart to update": "重启更新",
+  "{version} is available": "{version} 已发布",
   "Installed from a local folder; update it there.": "从本地文件夹安装，请在那里更新。",
   "Updates are not offered for this install.": "这种安装方式不提供更新。",
   "Updates come with the DeepSeek Bot app.": "随 DeepSeek Bot 应用一起更新。",
@@ -14413,6 +14418,26 @@ function botHint(update) {
   const checked = t("Checked {time}", { time: whenText(update.checkedAt) });
   return `${update.latest ? t("Up to date") : t("Could not check for updates.")} · ${checked}`;
 }
+function ownAppRow(ownApp) {
+  if (ownApp === null || typeof ownApp !== "object") return null;
+  const version = typeof ownApp.version === "string" ? ownApp.version : "";
+  switch (ownApp.phase) {
+    case "checking":
+      return { hint: t("Checking for updates…"), button: null };
+    case "current":
+      return { hint: t("Up to date"), button: "check" };
+    case "downloading":
+      return { hint: t("Downloading {version}…", { version }), button: null };
+    case "downloaded":
+      return { hint: t("{version} is ready; it installs when you restart", { version }), button: "restart" };
+    case "available":
+      return { hint: t("{version} is available", { version }), button: "open" };
+    case "failed":
+      return { hint: t("Could not check for updates."), button: "check" };
+    default:
+      return null;
+  }
+}
 function dshHint(dsh, shown) {
   if (dsh.phase === "installing") return t("Updating DSH…");
   if (dsh.phase === "installed") return t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified });
@@ -14458,7 +14483,9 @@ function AboutPage({ useUpdate, actions, run: run2, Section, Row: Row3 }) {
   const markState = checking ? "searching" : phase === "installing" || dshPhase === "installing" ? "working" : cheer ? "done" : "idle";
   const dshNew = showsDshRow(dsh, update.app);
   const dshShown = dshNew && dsh.available;
-  const botControl = phase === "installed" || phase === "updated" || update.source === "app" ? null : update.available || phase === "installing" ? (0, import_react34.createElement)(
+  const ownRow = update.source === "app" ? ownAppRow(update.ownApp) : null;
+  const ownControl = ownRow?.button === "restart" ? (0, import_react34.createElement)("button", { type: "button", className: "bt-fb-primary", onClick: () => run2(actions.installOwnApp()) }, t("Restart to update")) : ownRow?.button === "check" ? (0, import_react34.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run2(actions.checkOwnApp()) }, t("Check for updates")) : ownRow?.button === "open" ? (0, import_react34.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => run2(actions.openOwnApp()) }, t("Download")) : null;
+  const botControl = ownRow !== null ? ownControl : phase === "installed" || phase === "updated" || update.source === "app" ? null : update.available || phase === "installing" ? (0, import_react34.createElement)(
     "button",
     { type: "button", className: "bt-fb-primary", disabled: phase === "installing", onClick: () => run2(actions.installUpdate()) },
     phase === "installing" ? t("Updating…") : phase === "failed" ? t("Try again") : t("Update")
@@ -14498,7 +14525,7 @@ function AboutPage({ useUpdate, actions, run: run2, Section, Row: Row3 }) {
     (0, import_react34.createElement)(
       Section,
       { key: "updates", title: t("Updates") },
-      (0, import_react34.createElement)(Row3, { label: "DS Bot", hint: botHint(update) }, botControl, update.available && update.notesUrl ? (0, import_react34.createElement)("a", linkProps(update.notesUrl), t("What's new")) : null),
+      (0, import_react34.createElement)(Row3, { label: "DS Bot", hint: ownRow?.hint ?? botHint(update) }, botControl, update.available && update.notesUrl ? (0, import_react34.createElement)("a", linkProps(update.notesUrl), t("What's new")) : null),
       dsh?.current ? (0, import_react34.createElement)(Row3, { label: "DeepSeek Harness", hint: dshHint(dsh, dshShown) }, dshControl) : null
     ),
     (0, import_react34.createElement)(
@@ -18069,7 +18096,7 @@ function apply(ctx) {
       if (stopped) return;
       const value = await call("update-check", { fresh: false }).catch(() => null);
       if (stopped) return;
-      if (value) update.set((previous) => ({ ...value, app: previous.app }));
+      if (value) update.set((previous) => ({ ...value, app: previous.app, ownApp: previous.ownApp }));
       timer = setTimeout(loop, value?.phase === "installing" || value?.dsh?.phase === "installing" ? 2e3 : 60 * 6e4);
     };
     wakeUpdate = loop;
@@ -18096,6 +18123,22 @@ function apply(ctx) {
         unsubscribe?.();
       };
     }, "ds-bot: app update status");
+  }
+  const ownAppUpdates = globalThis.dsBotApp?.updates ?? null;
+  if (ownAppUpdates?.state && ownAppUpdates.subscribe) {
+    ctx.effect(() => {
+      let stopped = false;
+      const take = (ownApp) => {
+        if (!stopped && ownApp) update.set((previous) => ({ ...previous, ownApp }));
+      };
+      void ownAppUpdates.state().then(take, () => {
+      });
+      const unsubscribe = ownAppUpdates.subscribe(take);
+      return () => {
+        stopped = true;
+        unsubscribe?.();
+      };
+    }, "ds-bot: own app update state");
   }
   const bridge = (window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser : globalThis.dsBotApp?.browser) ?? null;
   const browsers = bridge ? createBotBrowsers({ bridge, createSource }) : null;
@@ -18446,8 +18489,17 @@ function apply(ctx) {
   };
   actions.checkUpdate = async () => {
     const value = await call("update-check", { fresh: true });
-    update.set((previous) => ({ ...value, app: previous.app }));
+    update.set((previous) => ({ ...value, app: previous.app, ownApp: previous.ownApp }));
     wakeUpdate();
+  };
+  actions.checkOwnApp = async () => {
+    await ownAppUpdates?.check?.();
+  };
+  actions.installOwnApp = async () => {
+    await ownAppUpdates?.install?.();
+  };
+  actions.openOwnApp = async () => {
+    await ownAppUpdates?.open?.();
   };
   const browserPages = browsers?.pages ?? createSource({});
   const browserTabs = browsers?.tabs ?? createSource({});

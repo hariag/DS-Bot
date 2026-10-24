@@ -205,7 +205,7 @@ export function apply(ctx) {
       if (stopped) return
       const value = await call('update-check', { fresh: false }).catch(() => null)
       if (stopped) return
-      if (value) update.set(previous => ({ ...value, app: previous.app }))
+      if (value) update.set(previous => ({ ...value, app: previous.app, ownApp: previous.ownApp }))
       timer = setTimeout(loop, value?.phase === 'installing' || value?.dsh?.phase === 'installing' ? 2000 : 60 * 60_000)
     }
     wakeUpdate = loop
@@ -224,6 +224,19 @@ export function apply(ctx) {
       const unsubscribe = appUpdates.subscribe(take)
       return () => { stopped = true; unsubscribe?.() }
     }, 'ds-bot: app update status')
+  }
+
+  // The DeepSeek Bot app's own updater; its state goes beside the host's answer as ownApp,
+  // which the About row turns into the app's update state and buttons.
+  const ownAppUpdates = globalThis.dsBotApp?.updates ?? null
+  if (ownAppUpdates?.state && ownAppUpdates.subscribe) {
+    ctx.effect(() => {
+      let stopped = false
+      const take = (ownApp) => { if (!stopped && ownApp) update.set(previous => ({ ...previous, ownApp })) }
+      void ownAppUpdates.state().then(take, () => {})
+      const unsubscribe = ownAppUpdates.subscribe(take)
+      return () => { stopped = true; unsubscribe?.() }
+    }, 'ds-bot: own app update state')
   }
 
   // Bot browsers need a webview bridge: DSH Desktop's, or the desktop app's of the
@@ -572,9 +585,14 @@ export function apply(ctx) {
   }
   actions.checkUpdate = async () => {
     const value = await call('update-check', { fresh: true })
-    update.set(previous => ({ ...value, app: previous.app }))
+    update.set(previous => ({ ...value, app: previous.app, ownApp: previous.ownApp }))
     wakeUpdate()
   }
+  // The app's own updater answers through its bridge; the state it pushes back re-renders
+  // the About row.
+  actions.checkOwnApp = async () => { await ownAppUpdates?.check?.() }
+  actions.installOwnApp = async () => { await ownAppUpdates?.install?.() }
+  actions.openOwnApp = async () => { await ownAppUpdates?.open?.() }
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
   const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } })

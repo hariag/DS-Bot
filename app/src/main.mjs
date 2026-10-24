@@ -32,6 +32,9 @@ const IPC = {
   browserImportSources: 'ds-bot:browser-import-sources', browserImportPick: 'ds-bot:browser-import-pick',
   browserImportLive: 'ds-bot:browser-import-live', browserImportApply: 'ds-bot:browser-import-apply',
   browserImportCancel: 'ds-bot:browser-import-cancel',
+  appUpdateState: 'ds-bot:app-update-state', appUpdateCheck: 'ds-bot:app-update-check',
+  appUpdateInstall: 'ds-bot:app-update-install', appUpdateOpen: 'ds-bot:app-update-open',
+  appUpdateChanged: 'ds-bot:app-update-changed',
 }
 // A cookie export larger than this is not a cookie export.
 const IMPORT_FILE_MAX = 32 * 1024 * 1024
@@ -140,6 +143,7 @@ async function start() {
     // Not during the import, which a restart would cut short; before the Host, so that an
     // update can still come when this version's Host does not start.
     updates = startUpdates()
+    updates?.subscribe((state) => { mainWindow?.webContents.send(IPC.appUpdateChanged, state) })
     host = newHost()
     return host.start()
   })()
@@ -215,6 +219,27 @@ async function start() {
   ipcMain.handle(IPC.browserImportCancel, (event, id) => {
     assertWindow(event)
     if (typeof id === 'string') cookieImports.drop(id)
+  })
+  // The app's own update state, for the About row. `updates` exists once the ready block
+  // created it; before that (and in runs without an updater) the state is null.
+  ipcMain.handle(IPC.appUpdateState, (event) => {
+    assertWindow(event)
+    return updates?.state() ?? null
+  })
+  ipcMain.handle(IPC.appUpdateCheck, (event) => {
+    assertWindow(event)
+    updates?.check()
+  })
+  ipcMain.handle(IPC.appUpdateInstall, async (event) => {
+    assertWindow(event)
+    if (updates?.state().phase === 'downloaded') await updates.install()
+  })
+  ipcMain.handle(IPC.appUpdateOpen, (event) => {
+    assertWindow(event)
+    const state = updates?.state()
+    if (state?.phase === 'available' && typeof state.page === 'string' && state.page.startsWith('https://')) {
+      void shell.openExternal(state.page)
+    }
   })
   // The plugin keeps the team workspace; the app remembers it for its own checks.
   ipcMain.on(IPC.teamWorkspace, (event, path) => {
