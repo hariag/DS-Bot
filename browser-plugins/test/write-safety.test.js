@@ -229,6 +229,7 @@ test('Bot handoff can resume, but user takeover blocks browser actions until giv
 
   hold = { by: 'user', reason: 'takeover', note: '' }
   assert.throws(() => session.resume(), /Only the user can give it back/)
+  await assert.rejects(session.snapshotText(), /The user has taken over this browser/)
   await assert.rejects(session.open(fixture.url), /The user has taken over this browser/)
   hold = null
   assert.match(await session.open(fixture.url), /Write safety/)

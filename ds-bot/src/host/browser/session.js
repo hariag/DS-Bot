@@ -206,6 +206,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
   }
 
   async function snapshotText({ observe = true } = {}) {
+    ready()
     await pendingPageReady
     const target = activePage()
     if (!target) throw new Error('The browser has no open tabs.')

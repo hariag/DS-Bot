@@ -106,7 +106,7 @@ export class BotViews {
     })
     this.#installDebugger(entry)
     this.#onChange({ type: 'created', ...this.#state(entry) })
-    if (url !== 'about:blank') void contents.loadURL(url).catch(() => {})
+    void contents.loadURL(url).catch(() => {})
     return entry
   }
 
@@ -183,6 +183,7 @@ export class BotViews {
 
   async endpoint(botId) {
     if (!this.#address) await new Promise(resolve => this.#server.once('listening', resolve))
+    if (this.sync(botId).length === 0) this.create(botId, { url: 'about:blank', createdByBot: true })
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     const token = randomBytes(32).toString('hex')
     this.#tokens.set(token, botId)

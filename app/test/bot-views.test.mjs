@@ -15,6 +15,7 @@ function fixture() {
     constructor() {
       super()
       this.url = 'about:blank'
+      this.loadedUrls = []
       this.debugger = Object.assign(new EventEmitter(), {
         attach() {},
         async sendCommand(method) {
@@ -29,7 +30,7 @@ function fixture() {
     canGoBack() { return false }
     canGoForward() { return false }
     isDestroyed() { return false }
-    async loadURL(url) { this.url = url }
+    async loadURL(url) { this.url = url; this.loadedUrls.push(url) }
     async executeJavaScript(script) { return script }
     setWindowOpenHandler(handler) { this.windowOpenHandler = handler }
     close() {}
@@ -82,6 +83,21 @@ function request(socket, id, method, params = {}, sessionId) {
     socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
   })
 }
+
+test('CDP endpoint creates and loads an initial view for a Bot with no tabs', async t => {
+  const { manager, views } = fixture()
+  t.after(() => manager.dispose())
+  const endpoint = await manager.endpoint('a')
+  assert.deepEqual(views[0].webContents.loadedUrls, ['about:blank'])
+  const socket = await openSocket(endpoint)
+  t.after(() => socket.close())
+
+  const targets = await request(socket, 1, 'Target.getTargets')
+  assert.equal(targets.result.targetInfos.length, 1)
+  assert.equal(targets.result.targetInfos[0].url, 'about:blank')
+  const info = await request(socket, 2, 'Target.getTargetInfo')
+  assert.equal(info.result.targetInfo.targetId, targets.result.targetInfos[0].targetId)
+})
 
 test('CDP relay limits targets and created tabs to the token Bot', async t => {
   const { manager, views } = fixture()
