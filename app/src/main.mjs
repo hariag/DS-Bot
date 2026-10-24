@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
 import electronUpdater from 'electron-updater'
 import { BotBrowserGuests, partitionOf } from './bot-browser.mjs'
-import { BotViews } from './bot-views.mjs'
+import { BotViews, isBotId } from './bot-views.mjs'
 import { importFromBrowser, listSources } from './browser-sources.mjs'
 import { applyCookies, CookieImports } from './cookie-import.mjs'
 import { parseCookieFile } from './cookie-parse.mjs'
@@ -34,7 +34,7 @@ const IPC = {
   browserViewSync: 'ds-bot:browser-view-sync', browserViewPlace: 'ds-bot:browser-view-place',
   browserViewNavigate: 'ds-bot:browser-view-navigate', browserViewCommand: 'ds-bot:browser-view-command',
   browserViewFocus: 'ds-bot:browser-view-focus', browserViewRead: 'ds-bot:browser-view-read',
-  browserViewClose: 'ds-bot:browser-view-close',
+  browserViewClose: 'ds-bot:browser-view-close', browserViewHold: 'ds-bot:browser-view-hold',
   browserImportSources: 'ds-bot:browser-import-sources', browserImportPick: 'ds-bot:browser-import-pick',
   browserImportLive: 'ds-bot:browser-import-live', browserImportApply: 'ds-bot:browser-import-apply',
   browserImportCancel: 'ds-bot:browser-import-cancel',
@@ -74,6 +74,7 @@ const copyAbort = new AbortController()
 const browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
 const botViews = new BotViews({
   window: () => mainWindow, WebContentsView, guests: browserGuests, origin: () => origin, devTools: !app.isPackaged,
+  statePath: join(app.getPath('userData'), 'bot-views.json'),
   onChange: state => mainWindow?.webContents.send(IPC.browserViewChanged, state),
 })
 const cookieImports = new CookieImports()
@@ -157,7 +158,7 @@ async function start() {
     updates?.subscribe((state) => { mainWindow?.webContents.send(IPC.appUpdateChanged, state) })
     host = newHost()
     host.onMessage(message => {
-      if (message?.type !== 'ds-bot:browser-endpoint' || typeof message.id !== 'string' || typeof message.botId !== 'string') return
+      if (message?.type !== 'ds-bot:browser-endpoint' || typeof message.id !== 'string' || !isBotId(message.botId)) return
       void botViews.endpoint(message.botId).then(url => {
         host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, url })
       }).catch(() => host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' }))
@@ -203,6 +204,7 @@ async function start() {
   ipcMain.handle(IPC.browserViewFocus, (event, botId, tabId) => { assertWindow(event); return botViews.operate(String(botId), 'focus', { tabId: String(tabId) }) })
   ipcMain.handle(IPC.browserViewRead, (event, botId, tabId, script) => { assertWindow(event); return botViews.operate(String(botId), 'read', { tabId: String(tabId), script }) })
   ipcMain.handle(IPC.browserViewClose, (event, botId, tabId) => { assertWindow(event); return botViews.operate(String(botId), 'close', { tabId: String(tabId) }) })
+  ipcMain.handle(IPC.browserViewHold, (event, botId, held) => { assertWindow(event); return botViews.hold(String(botId), held === true) })
   // Cookie imports: a file or an installed browser's profile is parsed or harvested into a
   // pending set first; only apply (the user's confirm) writes into the Bot's partition.
   ipcMain.handle(IPC.browserImportSources, (event) => {

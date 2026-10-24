@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import { allowedNavigation, requestAllowed } from './bot-browser.mjs'
 
@@ -12,6 +13,8 @@ const rectOf = rect => ({
   width: Math.max(1, Math.round(rect?.width ?? 800)),
   height: Math.max(1, Math.round(rect?.height ?? 600)),
 })
+const BOT_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+export const isBotId = value => typeof value === 'string' && BOT_ID.test(value)
 
 export class BotViews {
   #window
@@ -27,14 +30,25 @@ export class BotViews {
   #address
   #onChange
   #downloadPaths = new Map()
+  #statePath
+  #saved = {}
+  #active = new Map()
+  #held = new Set()
 
-  constructor({ window, WebContentsView, guests, origin, devTools = false, onChange = () => {} }) {
+  constructor({ window, WebContentsView, guests, origin, devTools = false, onChange = () => {}, statePath }) {
     this.#window = window
     this.#WebContentsView = WebContentsView
     this.#guests = guests
     this.#origin = origin
     this.#devTools = devTools
     this.#onChange = onChange
+    this.#statePath = statePath
+    if (statePath !== undefined) {
+      try {
+        const stored = JSON.parse(readFileSync(statePath, 'utf8'))
+        if (stored && typeof stored === 'object' && stored.bots && typeof stored.bots === 'object') this.#saved = stored.bots
+      } catch {}
+    }
     this.#server = createServer((_request, response) => { response.writeHead(404).end() })
     this.#wss = new WebSocketServer({ noServer: true })
     this.#server.on('upgrade', (request, socket, head) => {
@@ -68,7 +82,7 @@ export class BotViews {
         webviewTag: false, plugins: false, navigateOnDragDrop: false, disableDialogs: true, devTools: this.#devTools,
       },
     })
-    const entry = { tabId, botId, view, createdByBot, openerId, sessions: new Map(), sessionMaps: new Map(), downloadPath: this.#downloadPaths.get(botId), mainFrameId: undefined }
+    const entry = { tabId, botId, view, createdByBot, openerId, sessions: new Map(), sessionMaps: new Map(), downloads: new Map(), downloadPath: this.#downloadPaths.get(botId), mainFrameId: undefined }
     this.#views.set(tabId, entry)
     this.#window()?.contentView.addChildView(view)
     view.setBounds(rectOf(null))
@@ -88,11 +102,20 @@ export class BotViews {
     })
     contents.on('did-start-loading', () => this.#publish(entry))
     contents.on('did-stop-loading', () => this.#publish(entry))
+    contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) {
+        entry.error = null
+        this.#publish(entry)
+      }
+    })
     contents.on('will-navigate', (event, target) => { if (!allowedNavigation(target, this.#origin())) event.preventDefault() })
     contents.on('will-redirect', (event, target) => { if (!allowedNavigation(target, this.#origin())) event.preventDefault() })
-    contents.setWindowOpenHandler(({ url: target }) => {
-      if (entry.sessions.size > 0 && allowedNavigation(target, this.#origin())) {
-        const popup = this.create(botId, { url: target, createdByBot: true, openerId: tabId })
+    contents.on('will-frame-navigate', event => {
+      if (event.isMainFrame && !allowedNavigation(event.url, this.#origin())) event.preventDefault()
+    })
+    contents.setWindowOpenHandler(({ url: target, postBody }) => {
+      if (postBody === undefined && allowedNavigation(target, this.#origin())) {
+        const popup = this.create(botId, { url: target, createdByBot: entry.sessions.size > 0, openerId: tabId })
         this.#publish(popup)
       }
       return { action: 'deny' }
@@ -105,8 +128,14 @@ export class BotViews {
       this.#download(target, event, item)
     })
     this.#installDebugger(entry)
+    this.#active.set(botId, tabId)
+    this.#remember(entry)
+    this.#persist()
     this.#onChange({ type: 'created', ...this.#state(entry) })
-    void contents.loadURL(url).catch(() => {})
+    const loading = contents.loadURL(url)
+    this.#remember(entry)
+    this.#persist()
+    void loading.catch(() => {})
     return entry
   }
 
@@ -118,16 +147,22 @@ export class BotViews {
     try {
       mkdirSync(entry.downloadPath, { recursive: true })
       const guid = randomUUID()
-      item.setSavePath(join(entry.downloadPath, guid))
+      const savePath = join(entry.downloadPath, guid)
+      item.setSavePath(savePath)
+      entry.downloads.set(guid, { item, savePath })
       this.#broadcast(entry.botId, { method: 'Browser.downloadWillBegin', params: {
         frameId: entry.tabId, guid, url: item.getURL(), suggestedFilename: item.getFilename(),
       } })
       const progress = state => this.#broadcast(entry.botId, { method: 'Browser.downloadProgress', params: {
         guid, receivedBytes: item.getReceivedBytes(), totalBytes: Math.max(0, item.getTotalBytes()),
-        state: state === 'completed' ? 'completed' : state === 'interrupted' ? 'canceled' : 'inProgress',
+        state: state === 'completed' ? 'completed' : state === 'interrupted' || state === 'cancelled' ? 'canceled' : 'inProgress',
       } })
       item.on('updated', (_event, state) => progress(state))
-      item.once('done', (_event, state) => progress(state))
+      item.once('done', (_event, state) => {
+        progress(state)
+        entry.downloads.delete(guid)
+        if (state !== 'completed') void rm(savePath, { force: true }).catch(() => {})
+      })
     } catch {
       event.preventDefault()
     }
@@ -138,6 +173,11 @@ export class BotViews {
     if (!entry) return false
     if (rect !== null) entry.view.setBounds(rectOf(rect))
     entry.view.setVisible(visible === true)
+    if (visible === true) {
+      this.#active.set(entry.botId, tabId)
+      this.#remember(entry)
+      this.#persist()
+    }
     return true
   }
 
@@ -168,6 +208,7 @@ export class BotViews {
       }
     }
     this.#views.delete(tabId)
+    this.#dropSaved(botId, tabId)
     entry.view.webContents.close()
     entry.sessions.clear()
     entry.sessionMaps.clear()
@@ -179,11 +220,19 @@ export class BotViews {
     for (const entry of [...this.#views.values()]) if (entry.botId === botId) await this.close(botId, entry.tabId)
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     this.#downloadPaths.delete(botId)
+    this.#held.delete(botId)
+    delete this.#saved[botId]
+    this.#persist()
   }
 
   async endpoint(botId) {
+    if (this.#held.has(botId)) throw new Error('The user has taken over this browser.')
     if (!this.#address) await new Promise(resolve => this.#server.once('listening', resolve))
-    if (this.sync(botId).length === 0) this.create(botId, { url: 'about:blank', createdByBot: true })
+    if (this.sync(botId).length === 0) {
+      const saved = this.#saved[botId]
+      const restored = saved?.tabs?.find(tab => tab.tabId === saved.active) ?? saved?.tabs?.[0]
+      this.create(botId, { url: restored?.url ?? 'about:blank', ...(restored?.tabId ? { tabId: restored.tabId } : {}), createdByBot: true })
+    }
     for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
     const token = randomBytes(32).toString('hex')
     this.#tokens.set(token, botId)
@@ -195,11 +244,31 @@ export class BotViews {
   }
 
   dispose() {
+    this.#persist()
     for (const entry of this.#views.values()) entry.view.webContents.close()
     this.#views.clear()
     this.#tokens.clear()
     this.#wss.close()
     this.#server.close()
+  }
+
+  async hold(botId, held) {
+    if (!held) {
+      this.#held.delete(botId)
+      return true
+    }
+    this.#held.add(botId)
+    for (const [token, id] of this.#tokens) if (id === botId) this.#tokens.delete(token)
+    const clients = [...(this.#clients.get(botId) ?? [])]
+    for (const client of clients) {
+      for (const route of client.sessions.values()) {
+        if (!route.nativeId) continue
+        await route.entry.view.webContents.debugger.sendCommand('Target.detachFromTarget', { sessionId: route.nativeId }).catch(() => {})
+      }
+      client.socket.close()
+      client.socket.terminate()
+    }
+    return true
   }
 
   #owned(botId, tabId) {
@@ -221,8 +290,38 @@ export class BotViews {
 
   #publish(entry) {
     if (!entry.view.webContents.isDestroyed()) {
-      if (!entry.view.webContents.isLoading()) entry.error = null
+      this.#remember(entry)
+      this.#persist()
       this.#onChange({ type: 'changed', ...this.#state(entry) })
+    }
+  }
+
+  #remember(entry) {
+    const previous = this.#saved[entry.botId] ?? { tabs: [], active: null }
+    const tabs = previous.tabs.filter(tab => tab.tabId !== entry.tabId)
+    tabs.push({ tabId: entry.tabId, url: entry.view.webContents.getURL(), title: entry.view.webContents.getTitle() })
+    this.#saved[entry.botId] = { tabs, active: this.#active.get(entry.botId) ?? previous.active ?? entry.tabId }
+  }
+
+  #dropSaved(botId, tabId) {
+    const previous = this.#saved[botId]
+    if (!previous) return
+    const tabs = previous.tabs.filter(tab => tab.tabId !== tabId)
+    const active = this.#active.get(botId) === tabId ? tabs.at(-1)?.tabId ?? null : previous.active
+    if (tabs.length === 0) delete this.#saved[botId]
+    else this.#saved[botId] = { tabs, active }
+    this.#persist()
+  }
+
+  #persist() {
+    if (this.#statePath === undefined) return
+    const temporary = `${this.#statePath}.${process.pid}.${randomUUID()}.tmp`
+    try {
+      mkdirSync(dirname(this.#statePath), { recursive: true })
+      writeFileSync(temporary, JSON.stringify({ version: 1, bots: this.#saved }))
+      renameSync(temporary, this.#statePath)
+    } catch {
+      try { unlinkSync(temporary) } catch {}
     }
   }
 
@@ -276,7 +375,7 @@ export class BotViews {
 
   #connect(socket, botId) {
     const sessions = new Map()
-    const clientState = { socket, botId, autoAttach: false, discover: false, attach: undefined }
+    const clientState = { socket, botId, autoAttach: false, discover: false, attach: undefined, sessions }
     const clients = this.#clients.get(botId) ?? new Set()
     clients.add(clientState)
     this.#clients.set(botId, clients)
@@ -311,6 +410,11 @@ export class BotViews {
         if (method === 'Browser.setDownloadBehavior') {
           this.#downloadPaths.set(botId, params.downloadPath)
           for (const entry of targets()) entry.downloadPath = params.downloadPath
+          reply({}); return
+        }
+        if (method === 'Browser.cancelDownload') {
+          const download = targets().flatMap(entry => [...entry.downloads.entries()]).find(([guid]) => guid === params.guid)?.[1]
+          if (download) await download.item.cancel()
           reply({}); return
         }
         if (method === 'Target.getBrowserContexts') { reply({ browserContextIds: [`bot:${botId}`] }); return }

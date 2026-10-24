@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { WebSocket } from 'ws'
-import { BotViews } from '../src/bot-views.mjs'
+import { BotViews, isBotId } from '../src/bot-views.mjs'
 
-function fixture() {
+function fixture({ statePath } = {}) {
   const changes = []
   const handlers = new Map()
   const views = []
@@ -50,9 +50,15 @@ function fixture() {
     setDownloadHandler(key, handler) { handlers.set(key, handler) },
   }
   const window = { contentView: { addChildView() {} } }
-  const manager = new BotViews({ window: () => window, WebContentsView, guests, origin: () => 'http://127.0.0.1:43117' , onChange: change => changes.push(change) })
+  const manager = new BotViews({ window: () => window, WebContentsView, guests, origin: () => 'http://127.0.0.1:43117', statePath, onChange: change => changes.push(change) })
   return { manager, handlers, views, changes }
 }
+
+test('Bot endpoint identifiers follow DSH session.create IDs', () => {
+  assert.equal(isBotId('session-7e90ddf9-38a7-4c6c-b37a-1c445f771234'), true)
+  assert.equal(isBotId('7e90ddf9-38a7-4c6c-b37a-1c445f771234'), false)
+  assert.equal(isBotId('session-1'), false)
+})
 
 function openSocket(url, options) {
   return new Promise((resolve, reject) => {
@@ -183,4 +189,94 @@ test('CDP download behavior saves to the Bot path and emits download events', as
   assert.equal(events[0].params.suggestedFilename, 'report.pdf')
   assert.equal(events.some(message => message.method === 'Browser.downloadProgress' && message.params.state === 'completed'), true)
   assert.equal(sessionId.length > 0, true)
+})
+
+test('cancelling a relay download removes its save path', async t => {
+  const { manager, handlers, views } = fixture()
+  t.after(() => manager.dispose())
+  const downloadPath = mkdtempSync(join(tmpdir(), 'bot-views-cancel-'))
+  t.after(() => rmSync(downloadPath, { recursive: true, force: true }))
+  const entry = manager.create('a')
+  const socket = await openSocket(await manager.endpoint('a'))
+  t.after(() => socket.close())
+  await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
+  await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
+  const events = []
+  socket.on('message', raw => {
+    const message = JSON.parse(raw.toString())
+    if (message.method?.startsWith('Browser.download')) events.push(message)
+  })
+  let savePath
+  const item = Object.assign(new EventEmitter(), {
+    setSavePath(path) { savePath = path; writeFileSync(path, 'partial') },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+    getReceivedBytes() { return 1 },
+    getTotalBytes() { return 2 },
+    async cancel() { this.emit('done', {}, 'cancelled') },
+  })
+  handlers.get('bot:a')({ preventDefault() {} }, item, views[0].webContents)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const guid = events.find(message => message.method === 'Browser.downloadWillBegin').params.guid
+  await request(socket, 3, 'Browser.cancelDownload', { guid })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(existsSync(savePath), false)
+})
+
+test('user hold closes relay sockets, rejects endpoints, and allows a new endpoint after give-back', async t => {
+  const { manager } = fixture()
+  t.after(() => manager.dispose())
+  const endpoint = await manager.endpoint('a')
+  const socket = await openSocket(endpoint)
+  const closedPromise = closed(socket)
+  await manager.hold('a', true)
+  await closedPromise
+  await assert.rejects(() => manager.endpoint('a'), /The user has taken over this browser/u)
+  await manager.hold('a', false)
+  const resumed = await manager.endpoint('a')
+  const resumedSocket = await openSocket(resumed)
+  t.after(() => resumedSocket.close())
+  assert.equal((await request(resumedSocket, 3, 'Target.getTargets')).result.targetInfos.length, 1)
+})
+
+test('navigation guard rejects the app origin and popup tabs work before relay attachment', async t => {
+  const { manager, views } = fixture()
+  t.after(() => manager.dispose())
+  const entry = manager.create('a')
+  let prevented = false
+  entry.view.webContents.emit('will-frame-navigate', { url: 'http://127.0.0.1:43117/settings', isMainFrame: true, preventDefault() { prevented = true } })
+  assert.equal(prevented, true)
+  const popup = entry.view.webContents.windowOpenHandler({ url: 'http://127.0.0.1:43118/popup', postBody: undefined })
+  assert.deepEqual(popup, { action: 'deny' })
+  assert.equal(views.length, 2)
+  assert.equal(manager.sync('a')[1].url, 'http://127.0.0.1:43118/popup')
+})
+
+test('saved active tabs restore their tab id and URL', async t => {
+  const statePath = join(mkdtempSync(join(tmpdir(), 'bot-views-state-')), 'bot-views.json')
+  t.after(() => rmSync(statePath, { force: true }))
+  const first = fixture({ statePath })
+  const entry = first.manager.create('a', { tabId: 'saved-tab', url: 'http://127.0.0.1:43118/form' })
+  assert.equal(first.manager.create('a', { tabId: 'saved-tab' }), entry)
+  first.manager.dispose()
+  const second = fixture({ statePath })
+  t.after(() => second.manager.dispose())
+  const endpoint = await second.manager.endpoint('a')
+  assert.equal(second.manager.sync('a')[0].tabId, entry.tabId)
+  assert.equal(second.manager.sync('a')[0].url, 'http://127.0.0.1:43118/form')
+  const socket = await openSocket(endpoint)
+  t.after(() => socket.close())
+})
+
+test('load errors remain published until a real main-frame navigation starts', async t => {
+  const { manager, views, changes } = fixture()
+  t.after(() => manager.dispose())
+  const entry = manager.create('a')
+  const contents = views[0].webContents
+  contents.emit('did-fail-load', {}, -105, 'offline', contents.getURL(), true)
+  contents.emit('did-stop-loading')
+  assert.equal(changes.at(-1).error, 'offline')
+  contents.emit('did-start-navigation', {}, 'http://127.0.0.1:43118/form', false, true)
+  assert.equal(changes.at(-1).error, null)
+  assert.ok(entry)
 })
