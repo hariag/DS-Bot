@@ -485,7 +485,8 @@ export class BotViews {
         try {
         if (method === 'Browser.getVersion') { reply({ protocolVersion: '1.3', product: `Chrome/${process.versions.chrome}`, userAgent: `Electron/${process.versions.electron} Chrome/${process.versions.chrome}`, jsVersion: process.versions.v8 }); return }
         if (method === 'Browser.setDownloadBehavior') {
-          const downloadPath = params.behavior === 'allow' ? this.#allowedDownloadPath(botId, params.downloadPath) : undefined
+          const allowsDownloads = params.behavior === 'allow' || params.behavior === 'allowAndName'
+          const downloadPath = allowsDownloads ? this.#allowedDownloadPath(botId, params.downloadPath) : undefined
           this.#downloadPaths.set(botId, downloadPath)
           for (const entry of targets()) entry.downloadPath = downloadPath
           reply({}); return

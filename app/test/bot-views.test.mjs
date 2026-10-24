@@ -170,7 +170,7 @@ test('CDP download behavior saves to the Bot path and emits download events', as
   const discovered = await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
   assert.ok(discovered.result.sessionId)
   const sessionId = discovered.result.sessionId
-  await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
+  await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath })
   const events = []
   let resolveEvents
   const eventsReady = new Promise(resolve => { resolveEvents = resolve })
@@ -250,7 +250,7 @@ test('cancelling a relay download removes its save path', async t => {
   const socket = await openSocket(await manager.endpoint('a'))
   t.after(() => socket.close())
   await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
-  await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
+  await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath })
   const events = []
   socket.on('message', raw => {
     const message = JSON.parse(raw.toString())
@@ -294,7 +294,7 @@ test('CDP rejects outside, traversal, and symlink download paths and cancels dow
   ]
   let id = 2
   for (const downloadPath of refusedPaths) {
-    await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: rootPath })
+    await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: rootPath })
     const response = await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
     assert.deepEqual(response.result, {})
     let prevented = false
@@ -308,7 +308,7 @@ test('CDP rejects outside, traversal, and symlink download paths and cancels dow
     assert.equal(prevented, true)
     assert.equal(savePath, undefined)
   }
-  await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: rootPath })
+  await request(socket, id++, 'Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: rootPath })
   await request(socket, id, 'Browser.setDownloadBehavior', { behavior: 'deny', downloadPath: rootPath })
   let denied = false
   const item = Object.assign(new EventEmitter(), {
@@ -329,7 +329,7 @@ test('CDP accepts a direct Playwright artifacts directory under os.tmpdir()', as
   const socket = await openSocket(await manager.endpoint('a'))
   t.after(() => socket.close())
   await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
-  const response = await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allow', downloadPath })
+  const response = await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath })
   assert.deepEqual(response.result, {})
   let savePath
   const item = Object.assign(new EventEmitter(), {
