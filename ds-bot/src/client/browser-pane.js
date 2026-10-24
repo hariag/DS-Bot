@@ -155,14 +155,15 @@ export function PanelMenu({ items, className, 'aria-label': label }) {
 }
 
 // The menu builders in side-model.js give keys; each maps to an icon, a label
-// and the action it runs.
+// and the action it runs. A rejected action surfaces through reportError.
 export function menuItemFor(key, actions, subject) {
+  const report = run => () => { void Promise.resolve(run()).catch(error => actions.reportError(error, 'panel-menu')) }
   switch (key) {
-    case 'browser': return { key, icon: GlobeIcon, label: t('Browser'), onPick: () => actions.openBrowser(subject) }
-    case 'new-tab': return { key, icon: PlusTabIcon, label: t('New browser tab'), onPick: () => actions.browserNewTab(subject) }
-    case 'side': return { key, icon: SideIcon, label: t('Side chat'), onPick: () => actions.newSideChat(subject) }
-    case 'terminal': return { key, icon: TerminalIcon, label: t('Terminal'), onPick: () => actions.newTerminal() }
-    case 'files': return { key, icon: FolderIcon, label: t('Files'), onPick: () => actions.openFiles() }
+    case 'browser': return { key, icon: GlobeIcon, label: t('Browser'), onPick: report(() => actions.openBrowser(subject)) }
+    case 'new-tab': return { key, icon: PlusTabIcon, label: t('New browser tab'), onPick: report(() => actions.browserNewTab(subject)) }
+    case 'side': return { key, icon: SideIcon, label: t('Side chat'), onPick: report(() => actions.newSideChat(subject)) }
+    case 'terminal': return { key, icon: TerminalIcon, label: t('Terminal'), onPick: report(() => actions.newTerminal()) }
+    case 'files': return { key, icon: FolderIcon, label: t('Files'), onPick: report(() => actions.openFiles()) }
     default: return { sep: true }
   }
 }

@@ -265,3 +265,59 @@ test('a card whose turn is not loaded stays in the trailing block', () => {
     'user:progress', 'bot:working', 'user:next', 'bot:ok', 'user:later', 'bot:more', 'btw:gone',
   ])
 })
+
+// BtwDock, bundled and rendered with a minimal React stand-in: the dock is the
+// composer slot for cards whose turn is still open or matches nothing closed.
+// Old cards are read-only, so the dock shows no Cancel.
+import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
+import { build } from 'esbuild'
+
+const btwBundle = await build({
+  entryPoints: [fileURLToPath(new URL('../src/client/btw.js', import.meta.url))],
+  bundle: true, format: 'cjs', platform: 'node', write: false,
+  external: ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives'],
+})
+const btwModule = { exports: {} }
+runInNewContext(btwBundle.outputFiles[0].text, {
+  module: btwModule, exports: btwModule.exports, URL, URLSearchParams, setTimeout, clearTimeout,
+  window: { addEventListener() {}, removeEventListener() {}, innerWidth: 1280 },
+  require: (name) => {
+    const platform = {
+      react: {
+        createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
+        useState: init => [typeof init === 'function' ? init() : init, () => {}],
+        useEffect: () => {}, useRef: () => ({ current: null }),
+        useLayoutEffect: () => {}, useMemo: make => make(), useCallback: fn => fn,
+        useSyncExternalStore: (_subscribe, get) => get(), Fragment: 'fragment',
+      },
+      'react-dom': { createPortal: node => node },
+      '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null },
+    }
+    if (!(name in platform)) throw new Error(`no platform module ${name}`)
+    return platform[name]
+  },
+})
+const { BtwDock } = btwModule.exports
+
+const findIn = (node, match, out = []) => {
+  if (Array.isArray(node)) node.forEach(child => findIn(child, match, out))
+  else if (node !== null && typeof node === 'object') {
+    if (match(node)) out.push(node)
+    for (const child of node.children ?? []) findIn(child, match, out)
+  }
+  return out
+}
+
+test('an open-turn card renders in the dock without a Cancel button', () => {
+  const card = { id: 'c1', partId: 's', status: 'done', question: 'q?', answer: 'a.', atSeq: null, createdAt: 1, finishedAt: 2 }
+  const roster = { ready: true, btwCards: { bot: [card] }, byId: { s: { id: 'bot', sessionId: 's' } }, roomsById: {} }
+  const actions = { turnFacts: () => ({ turns: new Map(), openTurn: { seq: 1 } }), watchTurns: () => () => {} }
+  const tree = BtwDock({ sessionId: 's', useRoster: select => select(roster), actions })
+  assert.equal(findIn(tree, node => node.props?.className === 'bt-btw-dock').length, 1)
+  // The card component sits in the tree as a vnode; render it to see the card.
+  const [cardNode] = findIn(tree, node => typeof node.type === 'function' && node.props?.card?.id === 'c1')
+  const view = cardNode.type(cardNode.props)
+  assert.equal(view.props.className, 'bt-btw bt-btw-compact')
+  assert.equal(findIn(view, node => node.props?.className === 'bt-btw-cancel').length, 0)
+})

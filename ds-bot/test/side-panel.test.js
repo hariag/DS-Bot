@@ -85,3 +85,81 @@ test('the `···` button opens the menu with an item per entry', () => {
 test('an empty list renders no button', () => {
   assert.equal(PanelMenu({ items: [], className: 'bt-round', 'aria-label': 'More' }), null)
 })
+
+test('a rejecting menu action reports through reportError', async () => {
+  const calls = []
+  const actions = {
+    newSideChat: () => Promise.reject(new Error('no model yet')),
+    reportError: (error, area) => calls.push([area, error.message]),
+  }
+  menuItemFor('side', actions, 's').onPick()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.deepEqual(calls, [['panel-menu', 'no model yet']])
+})
+
+// side-chat.js, bundled the same way; useState returns queued pairs so a test
+// controls draft/fail and records what the setters get.
+const sideBundle = await build({
+  entryPoints: [fileURLToPath(new URL('../src/client/side-chat.js', import.meta.url))],
+  bundle: true, format: 'cjs', platform: 'node', write: false,
+  external: ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives'],
+})
+const sideExports = (states) => {
+  const sideModule = { exports: {} }
+  let hook = 0
+  runInNewContext(sideBundle.outputFiles[0].text, {
+    module: sideModule, exports: sideModule.exports, URL, URLSearchParams, setTimeout, clearTimeout,
+    window: { addEventListener() {}, removeEventListener() {}, innerWidth: 1280 },
+    require: (name) => {
+      const platform = {
+        react: {
+          createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
+          useState: init => states[hook++] ?? [init, () => {}],
+          useEffect: () => {}, useRef: () => ({ current: null }),
+          useLayoutEffect: () => {}, useMemo: make => make(), useCallback: fn => fn,
+          useSyncExternalStore: (_subscribe, get) => get(), Fragment: 'fragment',
+        },
+        'react-dom': { createPortal: node => node },
+        '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null },
+      }
+      if (!(name in platform)) throw new Error(`no platform module ${name}`)
+      return platform[name]
+    },
+  })
+  return sideModule.exports
+}
+
+const chat = { id: 'c1', entries: [{ id: 'e1', status: 'done', question: 'q?', answer: 'a.', createdAt: 1, finishedAt: 2 }] }
+
+test('a refused question puts the text back and shows the error', async () => {
+  const calls = { draft: [], fail: [] }
+  const actions = { askSide: () => Promise.reject(new Error('refused by host')) }
+  const { SideChatView } = sideExports([
+    ['question?', (...args) => calls.draft.push(args)],
+    [null, (...args) => calls.fail.push(args)],
+  ])
+  const tree = SideChatView({ subject: 's', chat, actions })
+  const [input] = find(tree, node => node.props?.className === 'bt-side-input')
+  input.props.onKeyDown({ key: 'Enter', preventDefault() {}, nativeEvent: {} })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.deepEqual(calls.draft[0], [''])
+  const restore = calls.draft.at(-1)[0]
+  assert.equal(restore(''), 'question?')
+  assert.equal(restore('newer'), 'newer')
+  assert.deepEqual(calls.fail, [[null], ['refused by host']])
+})
+
+test('a stored failure renders under the input and typing clears it', () => {
+  const calls = { draft: [], fail: [] }
+  const { SideChatView } = sideExports([
+    ['', (...args) => calls.draft.push(args)],
+    ['the error', (...args) => calls.fail.push(args)],
+  ])
+  const tree = SideChatView({ subject: 's', chat, actions: {} })
+  const [failLine] = find(tree, node => node.props?.className === 'bt-side-fail')
+  assert.equal(failLine.children[0], 'the error')
+  const [input] = find(tree, node => node.props?.className === 'bt-side-input')
+  input.props.onChange({ target: { value: 'next' } })
+  assert.deepEqual(calls.draft, [['next']])
+  assert.deepEqual(calls.fail, [[null]])
+})

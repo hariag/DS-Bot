@@ -6934,6 +6934,13 @@ function useTurnFacts(sessionId, actions) {
   }, [sessionId, actions]);
   return facts;
 }
+function BtwDock({ sessionId, useRoster, actions }) {
+  const roster = useRoster((value) => value);
+  const facts = useTurnFacts(sessionId, actions);
+  const cards = dockCards(sessionCards(roster, sessionId), facts);
+  if (cards.length === 0) return null;
+  return (0, import_react11.createElement)("div", { className: "bt-btw-dock" }, cards.map((card) => (0, import_react11.createElement)(BtwCardView, { key: card.id, card, compact: true })));
+}
 function BtwTurnTail({ turn, sessionId, useRoster, actions }) {
   const roster = useRoster((value) => value);
   const facts = useTurnFacts(sessionId, actions);
@@ -9641,6 +9648,7 @@ function SideEntry({ chatId, entry, actions }) {
 function SideChatView({ subject, chat, actions }) {
   const scroll = (0, import_react17.useRef)(null);
   const [draft, setDraft] = (0, import_react17.useState)("");
+  const [fail2, setFail] = (0, import_react17.useState)(null);
   const entries2 = Array.isArray(chat?.entries) ? chat.entries : [];
   const busy = entries2.some((entry) => entry?.status === "answering");
   const last = entries2.at(-1);
@@ -9653,7 +9661,10 @@ function SideChatView({ subject, chat, actions }) {
     const text = draft.trim();
     if (text === "" || busy || typeof actions?.askSide !== "function") return;
     setDraft("");
-    Promise.resolve(actions.askSide(subject, chat.id, text)).catch(() => {
+    setFail(null);
+    Promise.resolve(actions.askSide(subject, chat.id, text)).catch((error) => {
+      setDraft((value) => value === "" ? text : value);
+      setFail(hostText(error?.message ?? ""));
     });
   };
   return (0, import_react17.createElement)(
@@ -9675,13 +9686,17 @@ function SideChatView({ subject, chat, actions }) {
         disabled: busy,
         placeholder: t("Ask about the work so far"),
         "aria-label": t("Ask about the work so far"),
-        onChange: (event) => setDraft(event.target.value),
+        onChange: (event) => {
+          setDraft(event.target.value);
+          if (fail2 !== null) setFail(null);
+        },
         onKeyDown: (event) => {
           if (event.key !== "Enter" || event.shiftKey || event.nativeEvent?.isComposing) return;
           event.preventDefault();
           ask();
         }
-      })
+      }),
+      fail2 !== null ? (0, import_react17.createElement)("p", { className: "bt-side-fail" }, fail2) : null
     )
   );
 }
@@ -16198,17 +16213,20 @@ function PanelMenu({ items, className, "aria-label": label }) {
   );
 }
 function menuItemFor(key, actions, subject) {
+  const report = (run2) => () => {
+    void Promise.resolve(run2()).catch((error) => actions.reportError(error, "panel-menu"));
+  };
   switch (key) {
     case "browser":
-      return { key, icon: GlobeIcon, label: t("Browser"), onPick: () => actions.openBrowser(subject) };
+      return { key, icon: GlobeIcon, label: t("Browser"), onPick: report(() => actions.openBrowser(subject)) };
     case "new-tab":
-      return { key, icon: PlusTabIcon, label: t("New browser tab"), onPick: () => actions.browserNewTab(subject) };
+      return { key, icon: PlusTabIcon, label: t("New browser tab"), onPick: report(() => actions.browserNewTab(subject)) };
     case "side":
-      return { key, icon: SideIcon, label: t("Side chat"), onPick: () => actions.newSideChat(subject) };
+      return { key, icon: SideIcon, label: t("Side chat"), onPick: report(() => actions.newSideChat(subject)) };
     case "terminal":
-      return { key, icon: TerminalIcon, label: t("Terminal"), onPick: () => actions.newTerminal() };
+      return { key, icon: TerminalIcon, label: t("Terminal"), onPick: report(() => actions.newTerminal()) };
     case "files":
-      return { key, icon: FolderIcon, label: t("Files"), onPick: () => actions.openFiles() };
+      return { key, icon: FolderIcon, label: t("Files"), onPick: report(() => actions.openFiles()) };
     default:
       return { sep: true };
   }
@@ -18896,7 +18914,8 @@ function apply(ctx) {
     () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
     () => installCompiledStyles(WIDGET_CSS, "widgets"),
     () => installCompiledStyles(SIDE_CSS, "side"),
-    browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
+    // Strip and panel styles also serve the side-chat tabs, which need no bridge.
+    () => installCompiledStyles(BROWSER_CSS, "browser"),
     () => installTheme(),
     () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
     () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
@@ -18941,6 +18960,7 @@ function apply(ctx) {
     () => shadow("conversation.input.model", { priority: BOT_PRIORITY }, Nothing),
     () => shadow("conversation.composer.dock", { id: "activity", order: 0, priority: BOT_PRIORITY }, Nothing),
     () => shadow("conversation.composer.dock", { id: "usage", order: 1, priority: BOT_PRIORITY }, Nothing),
+    () => shadow("conversation.composer.dock", { id: "btw", order: 2, priority: BOT_PRIORITY, inject: face }, BtwDock),
     () => shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
     () => shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
     () => shadow("conversation.composer", {

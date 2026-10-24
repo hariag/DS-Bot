@@ -4,7 +4,7 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { call } from './api.js'
 import { MarkdownText } from './dsh-primitives.js'
-import { t } from './i18n.js'
+import { hostText, t } from './i18n.js'
 import { failureText, mdLabels } from './btw.js'
 import {
   SIDE_SOURCE, SIDE_TOKEN, matchSideClaim, matchSideEnter, matchSideSpace, sideQueryMatches, sideSurface, submitSide,
@@ -37,6 +37,7 @@ function SideEntry({ chatId, entry, actions }) {
 export function SideChatView({ subject, chat, actions }) {
   const scroll = useRef(null)
   const [draft, setDraft] = useState('')
+  const [fail, setFail] = useState(null)
   const entries = Array.isArray(chat?.entries) ? chat.entries : []
   const busy = entries.some(entry => entry?.status === 'answering')
   const last = entries.at(-1)
@@ -49,7 +50,12 @@ export function SideChatView({ subject, chat, actions }) {
     const text = draft.trim()
     if (text === '' || busy || typeof actions?.askSide !== 'function') return
     setDraft('')
-    Promise.resolve(actions.askSide(subject, chat.id, text)).catch(() => {})
+    setFail(null)
+    Promise.resolve(actions.askSide(subject, chat.id, text)).catch((error) => {
+      // A refused question keeps what was typed unless a new draft replaced it.
+      setDraft(value => (value === '' ? text : value))
+      setFail(hostText(error?.message ?? ''))
+    })
   }
   return h('div', { className: 'bt-side' },
     h('p', { className: 'bt-side-note' }, t('Answered from progress so far; nothing was run')),
@@ -60,13 +66,14 @@ export function SideChatView({ subject, chat, actions }) {
         className: 'bt-side-input', rows: 1, value: draft, disabled: busy,
         placeholder: t('Ask about the work so far'),
         'aria-label': t('Ask about the work so far'),
-        onChange: event => setDraft(event.target.value),
+        onChange: (event) => { setDraft(event.target.value); if (fail !== null) setFail(null) },
         onKeyDown: (event) => {
           if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent?.isComposing) return
           event.preventDefault()
           ask()
         },
-      })))
+      }),
+      fail !== null ? h('p', { className: 'bt-side-fail' }, fail) : null))
 }
 
 export function sideSource({ roster, actions }) {

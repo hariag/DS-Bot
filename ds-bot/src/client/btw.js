@@ -3,7 +3,7 @@ import { createElement as h, useEffect, useState } from 'react'
 import { MarkdownText } from './dsh-primitives.js'
 import { hostText, t } from './i18n.js'
 import { messageClock } from './text.js'
-import { sessionCards, tailCards } from './btw-model.js'
+import { dockCards, sessionCards, tailCards } from './btw-model.js'
 
 export const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied') }, footnotes: t('Footnotes') })
 
@@ -65,6 +65,16 @@ function useTurnFacts(sessionId, actions) {
     return () => { live = false; off() }
   }, [sessionId, actions])
   return facts
+}
+
+// Cards whose turn is still open, or that no closed turn owns, sit in the
+// composer dock. Read-only like the rest: no new cards can arrive.
+export function BtwDock({ sessionId, useRoster, actions }) {
+  const roster = useRoster(value => value)
+  const facts = useTurnFacts(sessionId, actions)
+  const cards = dockCards(sessionCards(roster, sessionId), facts)
+  if (cards.length === 0) return null
+  return h('div', { className: 'bt-btw-dock' }, cards.map(card => h(BtwCardView, { key: card.id, card, compact: true })))
 }
 
 export function BtwTurnTail({ turn, sessionId, useRoster, actions }) {
