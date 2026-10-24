@@ -99,6 +99,36 @@ test('no browser plugin is mounted unless one is selected for the team', (t) => 
   assert.equal(ctx.registeredTools.has('browser_task'), false)
 })
 
+test('user browser controls are not exposed as Bot tools', (t) => {
+  const { ctx, stop } = start({ browser: true, browserPlugin: 'refs' })
+  t.after(stop)
+  for (const name of ['browser-takeover', 'browser-give-back', 'browser-stop']) {
+    assert.equal(ctx.registeredTools.has(name), false)
+  }
+})
+
+test('browser-stop cancels the Bot chat, stops its room work, and sets a user hold', async (t) => {
+  const { rt, call, stop } = start({ browser: true })
+  t.after(stop)
+  await rt.load()
+
+  rt.state.rooms.room1 = { id: 'room1', members: ['b2'], sessions: { b2: 'room-session' } }
+  rt.state.rooms.room2 = { id: 'room2', members: ['m1'], sessions: { m1: 'other-session' } }
+  rt.live.set('b2', { turn: {} })
+  rt.live.set('room-session', { turn: {} })
+  const cancelled = []
+  const stoppedRooms = []
+  rt.resolveAgent = async sessionId => ({ cancel: reason => cancelled.push({ sessionId, reason }) })
+  rt.stopMemberWork = async (roomId, botId) => { stoppedRooms.push({ roomId, botId }) }
+
+  assert.equal((await call('browser-stop', { botId: 'b2' })).value, true)
+  assert.deepEqual(cancelled, [{ sessionId: 'b2', reason: { kind: 'user' } }])
+  assert.deepEqual(stoppedRooms, [{ roomId: 'room1', botId: 'b2' }])
+  assert.deepEqual(rt.browserChannel.holdOf('b2'), {
+    by: 'user', reason: 'stopped', note: 'The user is controlling this browser.',
+  })
+})
+
 test('the selected plugin is the same for every Bot, and profiles stay apart', async (t) => {
   const seen = []
   const { ctx, stop } = start({

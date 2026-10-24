@@ -1,9 +1,8 @@
 // One Chromium profile per Bot. A Bot's own chat and every group Session it speaks in
 // share this directory, so a new conversation part keeps the login. Another Bot never
 // opens it: profiles are not copied across the team.
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { basename, extname, isAbsolute, join, relative as relativePath } from 'node:path'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { basename, extname, isAbsolute, join } from 'node:path'
 import { gateScope } from './gate.js'
 
 const ACTION_TIMEOUT = 5_000
@@ -86,29 +85,37 @@ async function loadChromium(playwrightUrl) {
 }
 
 /**
- * @param {{ botId: string, profileRoot: string, headless?: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, uploadRoots?: () => Promise<string[]> }} options
+ * @param {{ botId: string, profileRoot: string, headless?: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number }} options
  */
-export async function openBotBrowser({ botId, profileRoot, downloadDir, headless = true, playwrightUrl, executablePath, actionTimeout = ACTION_TIMEOUT, uploadRoots }) {
+export async function openBotBrowser({ botId, profileRoot, downloadDir, headless = true, playwrightUrl, executablePath, actionTimeout = ACTION_TIMEOUT, connect, getHold, onHold }) {
   const userDataDir = join(profileRoot, botId)
-  await mkdir(userDataDir, { recursive: true })
   const chromium = await loadChromium(playwrightUrl)
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    headless,
-    viewport: { width: 1280, height: 900 },
-    acceptDownloads: true,
-    ...(executablePath ? { executablePath } : {}),
-    args: ['--disable-dev-shm-usage'],
-  })
+  const browser = connect
+    ? await chromium.connectOverCDP(await connect(botId))
+    : undefined
+  if (!connect) await mkdir(userDataDir, { recursive: true })
+  const context = browser
+    ? browser.contexts()[0]
+    : await chromium.launchPersistentContext(userDataDir, {
+      headless,
+      viewport: { width: 1280, height: 900 },
+      acceptDownloads: true,
+      ...(executablePath ? { executablePath } : {}),
+      args: ['--disable-dev-shm-usage'],
+    })
+  if (!context) throw new Error('The app browser relay has no browser context.')
   const page = context.pages()[0] ?? await context.newPage()
   const cookieFile = join(userDataDir, 'cookies.json')
-  try {
-    const saved = JSON.parse(await readFile(cookieFile, 'utf8'))
-    if (Array.isArray(saved) && saved.length > 0) await context.addCookies(saved)
-  } catch { /* no cookies yet */ }
-  return createSession({ context, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, uploadRoots })
+  if (!browser) {
+    try {
+      const saved = JSON.parse(await readFile(cookieFile, 'utf8'))
+      if (Array.isArray(saved) && saved.length > 0) await context.addCookies(saved)
+    } catch { /* no cookies yet */ }
+  }
+  return createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold })
 }
 
-function createSession({ context, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, uploadRoots }) {
+function createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold }) {
   const pages = new Set()
   const unknownByOrigin = new Map()
   const unknownPageOrigins = new WeakMap()
@@ -119,9 +126,11 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
   let lastImage = ''
   let activeDownloads = null
   let pendingDelete = null
-  let pendingDeleteLocator = null
 
   const ready = () => {
+    const externalHold = getHold?.()
+    if (externalHold?.by === 'user') throw new Error('The user has taken over this browser. Wait for them to give it back.')
+    if (hold && getHold && externalHold == null) hold = null
     if (hold) throw new Error(`The browser is waiting for the user (${hold.reason}). Ask them to ${hold.note || 'take over'}, then call browser_resume.`)
   }
 
@@ -139,10 +148,8 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
       target.on('dialog', dialog => { dialog.dismiss().catch(() => {}) })
       target.on('crash', () => crashedPages.add(target))
       target.on('download', download => {
-        if (activeDownloads) {
-          activeDownloads.items.push({ download, page: target })
-          activeDownloads.notify?.()
-        } else download.cancel().catch(() => {})
+        if (activeDownloads) activeDownloads.items.push({ download, page: target })
+        else download.cancel().catch(() => {})
       })
       target.on('close', () => {
         pages.delete(target)
@@ -258,26 +265,11 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
   }
 
   async function authorizeWrite(action, gate = gateScope.getStore()) {
-    if (action.kind !== 'delete') await clearPendingDelete()
+    if (action.kind !== 'delete') pendingDelete = null
     const previous = unknownByOrigin.get(action.origin)
     if (previous && !previous.observed) throw pendingWriteError(previous)
     if (previous) unknownByOrigin.delete(action.origin)
     await gate?.(action)
-  }
-
-  async function clearPendingDelete() {
-    const pending = pendingDelete
-    const locator = pendingDeleteLocator
-    pendingDelete = null
-    pendingDeleteLocator = null
-    if (pending && locator) {
-      await locator.evaluate((el, nonce) => {
-        if (el.getAttribute('data-dsbot-delete-check') === nonce) el.removeAttribute('data-dsbot-delete-check')
-      }, pending.nonce).catch(error => {
-        // Navigation may have replaced the target since the confirmation snapshot.
-        return error
-      })
-    }
   }
 
   function paymentError(action) {
@@ -307,8 +299,7 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
     const filename = download.suggestedFilename()
     let action
     try {
-      const pageUrl = new URL(page.url())
-      const url = pageUrl.origin === 'null' ? new URL(download.url()) : pageUrl
+      const url = new URL(page.url())
       action = { kind: 'download', label: filename.slice(0, 80), origin: url.origin, host: url.hostname }
       await authorizeWrite(action, gate)
     } catch (error) {
@@ -339,28 +330,14 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
 
   async function captureAction(perform) {
     const parent = activeDownloads
-    const batch = parent ?? { gate: gateScope.getStore(), items: [], notify: undefined }
+    const batch = parent ?? { gate: gateScope.getStore(), items: [] }
     if (!parent) activeDownloads = batch
     let result
     let failure
     try {
-      try {
-        result = await perform()
-      } catch (error) {
-        failure = error
-      }
-      if (!parent && failure && batch.items.length === 0
-        && String(failure?.message ?? failure).includes('Download is starting')) {
-        await new Promise(resolve => {
-          const finish = () => {
-            clearTimeout(timer)
-            batch.notify = undefined
-            resolve()
-          }
-          const timer = setTimeout(finish, Math.max(actionTimeout, ACTION_TIMEOUT))
-          batch.notify = finish
-        })
-      }
+      result = await perform()
+    } catch (error) {
+      failure = error
     } finally {
       if (!parent) activeDownloads = null
     }
@@ -370,10 +347,6 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
     }
     const messages = []
     for (const item of batch.items) messages.push(await finishDownload(item, batch.gate))
-    if (failure && batch.items.length > 0) {
-      const snapshot = await snapshotText().catch(() => '')
-      return snapshot ? `${snapshot}\n\n${messages.join('\n')}` : messages.join('\n')
-    }
     if (failure) throw failure
     return appendDownloadResults(result, messages)
   }
@@ -495,18 +468,18 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
     url: () => activePage()?.url() ?? '',
     async open(url) {
       ready()
-      await clearPendingDelete()
+      pendingDelete = null
       const target = activePage()
       return finishAction(() => target.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 30_000 }), target)
     },
     tabs,
     async selectTab(index) {
       ready()
+      pendingDelete = null
       const open = openPages()
       if (!Number.isInteger(index) || index < 0 || index >= open.length) {
         throw new Error(`No tab at index ${index}.`)
       }
-      await clearPendingDelete()
       current = open[index]
       await settle()
       return snapshotText()
@@ -518,7 +491,6 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
         throw new Error(`No tab at index ${index}.`)
       }
       if (open.length === 1) throw new Error('Cannot close the last browser tab.')
-      await clearPendingDelete()
       await open[index].close()
       await settle()
       return snapshotText()
@@ -551,21 +523,16 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
         throw error
       }
       if (action?.kind === 'payment') {
-        await clearPendingDelete()
+        pendingDelete = null
         throw paymentError(action)
       }
       if (action?.kind === 'delete') {
         const pending = pendingDelete
-        const elementNonce = await locator.getAttribute('data-dsbot-delete-check')
-        if (!(confirm && pending?.url === target.url() && pending.label === action.label && elementNonce === pending.nonce)) {
-          await clearPendingDelete()
-          const nonce = randomUUID()
-          await locator.evaluate((el, value) => el.setAttribute('data-dsbot-delete-check', value), nonce)
-          pendingDelete = { url: target.url(), label: action.label, nonce }
-          pendingDeleteLocator = locator
+        if (!(confirm && pending?.url === target.url() && pending.label === action.label)) {
+          pendingDelete = { url: target.url(), label: action.label }
           return `This would delete "${action.label}" on ${action.host}. Nothing was deleted yet. Check in this snapshot that it is the right item, then call browser_click again on it with confirm: true.\n\n${await snapshotText()}`
         }
-        await clearPendingDelete()
+        pendingDelete = null
       }
       if (action) return performWrite(action, target, () => locator.click({ timeout: actionTimeout }))
       return finishAction(() => locator.click({ timeout: actionTimeout }))
@@ -615,32 +582,16 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
       if (!Array.isArray(paths) || paths.length === 0 || paths.length > 10) {
         throw new Error('Upload requires between 1 and 10 file paths.')
       }
-      const roots = await uploadRoots?.() ?? []
-      if (roots.length === 0) {
-        throw new Error(`Uploads must come from an allowed folder. ${paths[0]} is outside them. Nothing was uploaded.`)
-      }
-      if (downloadDir) await mkdir(downloadDir, { recursive: true })
-      const realRoots = await Promise.all(roots.map(root => realpath(root)))
       const files = []
-      const labels = []
       for (const path of paths) {
         if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('Each upload path must be absolute.')
         const info = await stat(path)
         if (!info.isFile()) throw new Error(`Upload path is not a regular file: ${path}`)
-        const realFile = await realpath(path)
-        const root = realRoots.find(candidate => {
-          const relative = relativePath(candidate, realFile)
-          return !relative.startsWith('..') && !isAbsolute(relative)
-        })
-        if (!root) {
-          throw new Error(`Uploads must come from ${realRoots.join(', ')}. ${path} is outside them. Nothing was uploaded.`)
-        }
-        files.push(realFile)
-        labels.push(relativePath(root, realFile))
+        files.push(path)
       }
       const { target, locator } = await refLocator(ref)
       const url = new URL(target.url())
-      const label = labels.join(', ').slice(0, 80) || 'uploaded files'
+      const label = files.map(path => basename(path)).join(', ').slice(0, 80) || 'uploaded files'
       await authorizeWrite({ kind: 'upload', label, origin: url.origin, host: url.hostname })
       return finishAction(() => locator.setInputFiles(files, { timeout: actionTimeout }), target)
     },
@@ -652,7 +603,7 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
     },
     async back() {
       ready()
-      await clearPendingDelete()
+      pendingDelete = null
       const target = activePage()
       return finishAction(() => target.goBack({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {}), target)
     },
@@ -660,10 +611,13 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
     handoff(reason, note) {
       const kind = REASONS.has(reason) ? reason : 'other'
       hold = { reason: kind, note: String(note ?? '').slice(0, 300) }
+      onHold?.({ by: 'bot', reason: kind, note: hold.note })
       return `Waiting for the user (${kind}). ${hold.note || 'Ask them to take over.'} Call browser_resume when they have finished.`
     },
     resume() {
+      if (getHold?.()?.by === 'user') throw new Error('The user has taken over this browser. Only the user can give it back.')
       hold = null
+      onHold?.(null)
       return 'The browser is yours again.'
     },
     async runScript(source) {
@@ -703,6 +657,7 @@ function createSession({ context, page, botId, userDataDir, cookieFile, download
       return finalAnswer === undefined ? 'Script finished without done().' : String(finalAnswer)
     },
     async close() {
+      if (browser) { await browser.close().catch(() => {}); return }
       const cookies = await context.cookies().catch(() => [])
       const kept = cookies.map(cookie => cookie.expires > 0 ? cookie : { ...cookie, expires: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 })
       await writeFile(cookieFile, JSON.stringify(kept)).catch(() => {})

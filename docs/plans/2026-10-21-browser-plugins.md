@@ -1,7 +1,7 @@
 # 浏览器插件：全团队一个后端，每个 Bot 一份 profile
 
 - 日期：2026-10-21
-- 相关：改 [浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md) 里「Bot 不操作浏览器」。维护者确认：那条是等这次做的。
+- 相关：[浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md)
 - 代码：`ds-bot/src/host/browser-plugins.js`、`ds-bot/src/host/browser/`、`browser-plugins/`
 
 ## 为什么
@@ -28,7 +28,7 @@ Bot 是长期身份。登录应该跟着 Bot 走，而不是跟着某一段对�
   - `script`：一次提交一段 JavaScript，帮手已经在作用域里。这是 Hermes `browser_exec` 和 ego heredoc 的形状。
   - `task`：一个目标进去，插件自己用 `refs` 的工具跑完，交回答案和步骤。
 - 截图作为图片块交给模型。后面的模型按多模态来用，不把 Flash 当成纯文本。
-- 桌面里那个用户自己看的面板还在，它不是这三个插件驱动的 Chromium。两边的 cookie 不自动对齐。
+- 在桌面应用中，Playwright 插件连接到主进程拥有的浏览器页；Bot 和用户看到同一组标签页。DSH Desktop 仍使用独立的 Chromium profile。Bot 的 profile 和下载目录按 Bot 隔离。
 
 ## 不做什么
 
@@ -39,7 +39,7 @@ Bot 是长期身份。登录应该跟着 Bot 走，而不是跟着某一段对�
 
 ## 已知限制
 
-- 插件驱动的是 Playwright 的 Chromium profile，不是桌面面板里的 Electron webview。用户暂时不能在面板里看着 Bot 点。
+- DSH Desktop 的浏览器面板仍由用户操作；桌面应用中的面板页由 Bot 和用户共同使用，接管状态由用户控制。
 - 单独把 `browser-plugins/*` 装进一个没有 DS Bot 的 DSH profile 时，profile 按 Session id 分开，换段会像官方 browser-use 一样丢掉登录。跟 Bot 走的那份目录只有 DS Bot 挂载时才有。
 - `task` 在插件内部再调一次模型，步骤在工具结果里，不在 Bot 自己的逐步工具调用里。
 - 这次实测用的是自建多步页面，加上 WebVoyager 里两条 arXiv 任务，不是整套 600 多条。
@@ -49,3 +49,4 @@ Bot 是长期身份。登录应该跟着 Bot 走，而不是跟着某一段对�
 - 2026-10-21：维护者定下全团队一个后端、每 Bot 一份 profile、cookie 不同步。三个插件和实测在同一分支，默认关闭。
 - 2026-10-22：实测模型是 OpenDesign 上的 `deepseek-v4.1-flash`（`https://amr-link.open-design.ai/v1`），密钥用 `OPENDESIGN_API_KEY`。
 - 2026-10-23：维护者定下权限规则：默认放行；发帖、上传、下载、删除按预授权或审批；删除强制多核对一轮；付款一律交给用户；预授权可设时限，在设置的浏览器页管理。
+- 2026-10-24：桌面应用中的 Bot 操作浏览器面板里的页面；用户可接管、停止 Bot 或交还控制权。Bot 交接可由 Bot 恢复；用户接管只能由用户交还。
