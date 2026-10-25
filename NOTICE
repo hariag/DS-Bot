@@ -60,6 +60,23 @@ MIT License, Copyright (c) 2026 DeepSeek
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
 
+Microsoft Playwright (https://github.com/microsoft/playwright) and
+Playwright MCP (https://github.com/microsoft/playwright-mcp)
+Apache License, Version 2.0, Copyright (c) Microsoft Corporation
+
+  - ds-bot/src/host/browser/ follows the browser tools of Playwright MCP:
+    the ARIA page snapshot with [ref=eN] element refs, a fresh snapshot
+    returned by every action, and the per-action tool set (open, snapshot,
+    click, upload, type, select, press, tabs, back, screenshot). The
+    session drives the browser through the Playwright API itself
+    (ariaSnapshot({ mode: 'ai' }) and the aria-ref locators those refs
+    resolve to). The playwright package is not bundled: the plugin loads
+    it at run time from the install it is pointed at (playwrightUrl),
+    the same way it uses the host's @deepseek-ai/* packages.
+
+  The license is the same Apache License, Version 2.0 that covers this
+  repository; see LICENSE for the text.
+
 No other third-party code is copied into this repository. At run time the
 plugin uses the @deepseek-ai/* packages of the DeepSeek Harness install it
 runs in; they are not bundled. esbuild is a build tool only. The desktop app
