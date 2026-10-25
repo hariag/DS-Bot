@@ -19,7 +19,7 @@ const TRAY_PNG_SIZE = 24
 // macOS draws a template image itself, in the colour of the menu bar: a black mark with the
 // shape of the whale.
 const TRAY_TEMPLATE_SIZES = [16, 32]
-const DEEPSEEK_INK = '#4D6BFE'
+const WHALE_INK = '#4D6BFE'
 
 // The whale's body spans x 4..95.9 and y 20.9..79 of its 100 box.
 const WHALE = { cx: 49.95, cy: 49.95, width: 91.9 }
@@ -47,7 +47,7 @@ function iconSvg(plate, size = 1024) {
   const x = size / 2 - WHALE.cx * scale - whaleWidth * 0.015
   const y = size / 2 - WHALE.cy * scale - whaleWidth * 0.018
   const path = tile(size, inset)
-  const whale = characterMarkup('whale', 'deepseek').replaceAll(MASK_ID, 'eyes').replaceAll('var(--bt-ink-deepseek)', DEEPSEEK_INK)
+  const whale = characterMarkup('whale', 'deepseek').replaceAll(MASK_ID, 'eyes').replaceAll('var(--bt-ink-deepseek)', WHALE_INK)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
 <defs>
 <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#eef1f7"/></linearGradient>
@@ -119,8 +119,8 @@ if (process.versions.electron) {
   const jobs = [
     { svg: iconSvg(0.805), size: 1024 },
     ...ICO_SIZES.map(size => ({ svg: iconSvg(0.92, size), size })),
-    ...TRAY_ICO_SIZES.map(size => ({ svg: traySvg(size, DEEPSEEK_INK), size })),
-    { svg: traySvg(TRAY_PNG_SIZE, DEEPSEEK_INK), size: TRAY_PNG_SIZE },
+    ...TRAY_ICO_SIZES.map(size => ({ svg: traySvg(size, WHALE_INK), size })),
+    { svg: traySvg(TRAY_PNG_SIZE, WHALE_INK), size: TRAY_PNG_SIZE },
     ...TRAY_TEMPLATE_SIZES.map(size => ({ svg: traySvg(size, '#000000'), size })),
   ]
   // Not awaited at the top: Electron is ready only after the main module has run.
