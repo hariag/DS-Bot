@@ -7,9 +7,10 @@ const header = {
   tools: [{ name: 'session-private-tool', description: 'not for browser_task', parameters: {} }],
 }
 
-function fixture(chunks, { attachments, inputModalities } = {}) {
+function fixture(chunks, { attachments, inputModalities, textOnlyModels } = {}) {
   const requests = []
   const tags = []
+  let modelInfoCalls = 0
   const ctx = {
     get: name => name === 'attachments' ? attachments : undefined,
     llm: {
@@ -18,6 +19,7 @@ function fixture(chunks, { attachments, inputModalities } = {}) {
         yield* chunks
       },
       async resolveModelInfo() {
+        modelInfoCalls += 1
         return { inputModalities }
       },
     },
@@ -27,12 +29,13 @@ function fixture(chunks, { attachments, inputModalities } = {}) {
     requestHeader: () => header,
   }
   const rt = {
+    config: { textOnlyModels },
     tagUsage(messages, options) {
       tags.push(options)
       return messages
     },
   }
-  return { ctx, exec: { agent: { session }, signal: new AbortController().signal }, rt, requests, tags }
+  return { ctx, exec: { agent: { session }, signal: new AbortController().signal }, rt, requests, tags, modelInfoCalls: () => modelInfoCalls }
 }
 
 const stop = { type: 'finish', reason: { kind: 'stop' } }
@@ -50,6 +53,7 @@ test('session completion converts DSH text to an OpenAI chat response', async ()
 
   assert.equal(result.choices[0].message.content, 'The page title is Example.')
   assert.deepEqual(setup.tags, [{ sessionId: 'session-browser-task', kind: 'browser-task' }])
+  assert.equal(setup.modelInfoCalls(), 0)
 })
 
 test('session completion preserves DSH tool-call identity, name, and JSON arguments', async () => {
@@ -118,7 +122,55 @@ test('follow-up assistant tool call and tool result are converted to DSH message
   assert.deepEqual(setup.tags, [{ sessionId: 'session-browser-task', kind: 'browser-task' }])
 })
 
-test('browser screenshots become DSH image blocks when the attachment store is available', async () => {
+test('text-only model metadata omits screenshots before saving attachments', async () => {
+  let saveCalls = 0
+  const attachments = { async saveImages() { saveCalls += 1; return [] } }
+  const setup = fixture([stop], { attachments, inputModalities: ['text'] })
+  const result = await sessionComplete(setup.ctx, setup.exec, setup.rt)({
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Screenshot.' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/4AA=' } },
+      ],
+    }],
+    tools: [],
+  })
+
+  assert.deepEqual(setup.requests[0].messages[0].content, [
+    { type: 'text', text: 'Screenshot.' },
+    { type: 'text', text: '[Browser screenshot omitted.]' },
+  ])
+  assert.equal(setup.requests[0].messages[0].content.some(part => part.type === 'image'), false)
+  assert.equal(saveCalls, 0)
+  assert.equal(result.vision, 'rejected')
+  assert.equal(setup.modelInfoCalls(), 1)
+})
+
+test('configured text-only models omit screenshots without attachment saves', async () => {
+  let saveCalls = 0
+  const attachments = { async saveImages() { saveCalls += 1; return [] } }
+  const setup = fixture([stop], {
+    attachments,
+    inputModalities: ['text', 'image'],
+    textOnlyModels: ['mock-provider/session-model'],
+  })
+  const result = await sessionComplete(setup.ctx, setup.exec, setup.rt)({
+    messages: [{
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/4AA=' } }],
+    }],
+    tools: [],
+  })
+
+  assert.equal(setup.requests[0].messages[0].content.some(part => part.type === 'image'), false)
+  assert.equal(setup.requests[0].messages[0].content[0].text, '[Browser screenshot omitted.]')
+  assert.equal(saveCalls, 0)
+  assert.equal(result.vision, 'rejected')
+  assert.equal(setup.modelInfoCalls(), 0)
+})
+
+test('browser screenshots become DSH image blocks when the route supports images', async () => {
   const saved = []
   const attachments = {
     async saveImages(inputs) {
@@ -133,7 +185,7 @@ test('browser screenshots become DSH image blocks when the attachment store is a
     },
   }
   const setup = fixture([stop], { attachments, inputModalities: ['text', 'image'] })
-  await sessionComplete(setup.ctx, setup.exec)({
+  const result = await sessionComplete(setup.ctx, setup.exec, setup.rt)({
     messages: [{
       role: 'user',
       content: [
@@ -156,6 +208,7 @@ test('browser screenshots become DSH image blocks when the attachment store is a
       height: 1,
     },
   })
+  assert.equal(result.vision, 'accepted')
 })
 
 test('missing Bot session model fails with a clear error', async () => {

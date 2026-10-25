@@ -45,7 +45,7 @@ function attachmentsOf(ctx) {
   }
 }
 
-async function userContent(content, attachments) {
+async function userContent(content, attachments, readsImages) {
   const parts = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }]
   const blocks = []
   const pending = []
@@ -58,6 +58,11 @@ async function userContent(content, attachments) {
     }
     if (part?.type === 'image_url') {
       sawImage = true
+      if (!readsImages) {
+        blocks.push({ type: 'text', text: OMITTED_IMAGE })
+        rejectedImage = true
+        continue
+      }
       const input = imageInput(part)
       if (!input || typeof attachments?.saveImages !== 'function') {
         blocks.push({ type: 'text', text: OMITTED_IMAGE })
@@ -108,7 +113,7 @@ function assistantContent(message, config) {
   })
 }
 
-async function dshMessages(messages, attachments, config) {
+async function dshMessages(messages, attachments, config, readsImages) {
   const output = []
   let sawImage = false
   let rejectedImage = false
@@ -116,7 +121,7 @@ async function dshMessages(messages, attachments, config) {
     if (message.role === 'system') {
       output.push(createSystemMessage(textParts(message.content).join('\n')))
     } else if (message.role === 'user') {
-      const content = await userContent(message.content, attachments)
+      const content = await userContent(message.content, attachments, readsImages)
       output.push(createUserMessage({ content: content.blocks, source: { kind: 'user' } }))
       sawImage ||= content.sawImage
       rejectedImage ||= content.rejectedImage
@@ -158,7 +163,11 @@ async function routeReadsImages(ctx, config, rt) {
 export function sessionComplete(ctx, exec, rt) {
   return async ({ messages, tools }) => {
     const { header, sessionId } = routeOf(exec)
-    const converted = await dshMessages(messages, attachmentsOf(ctx), header.config)
+    const hasImages = (messages ?? []).some(message => (
+      Array.isArray(message.content) && message.content.some(part => part?.type === 'image_url')
+    ))
+    const readsImages = hasImages ? await routeReadsImages(ctx, header.config, rt) : true
+    const converted = await dshMessages(messages, attachmentsOf(ctx), header.config, readsImages)
     const requestMessages = typeof rt?.tagUsage === 'function'
       ? rt.tagUsage(converted.messages, { sessionId, kind: 'browser-task' })
       : converted.messages
@@ -186,7 +195,7 @@ export function sessionComplete(ctx, exec, rt) {
     if (reasoning) message.reasoning_content = reasoning
     if (toolCalls.length > 0) message.tool_calls = toolCalls
     const vision = converted.sawImage
-      ? converted.rejectedImage || !await routeReadsImages(ctx, header.config, rt) ? 'rejected' : 'accepted'
+      ? converted.rejectedImage || !readsImages ? 'rejected' : 'accepted'
       : undefined
     return {
       choices: [{ message, finish_reason: toolCalls.length > 0 ? 'tool_calls' : finish.kind === 'max-tokens' ? 'length' : 'stop' }],
