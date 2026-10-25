@@ -4,6 +4,26 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-25
+
+### Added
+
+- Bots can drive a browser: one Playwright profile per Bot, with sign-ins kept between runs. Posting, uploading, downloading and deleting need your approval first, and payments always go back to you. In the desktop app the Bot's browser shows as a panel you can take over, stop, or give back at any time. ([#417](https://github.com/Fei2411/DeepSeek-Bot/pull/417), [#528](https://github.com/Fei2411/DeepSeek-Bot/pull/528))
+- `/btw` is now Side chat: type `/side` or pick Side chat from the Bot panel's ··· menu and ask follow-ups in the side panel. The panel menu also opens a terminal or the file tree. ([#489](https://github.com/Fei2411/DeepSeek-Bot/issues/489), [#522](https://github.com/Fei2411/DeepSeek-Bot/pull/522))
+- The desktop app's About page shows whether DS Bot is up to date, downloading or ready to restart, with a Check for updates button. ([#499](https://github.com/Fei2411/DeepSeek-Bot/issues/499), [#519](https://github.com/Fei2411/DeepSeek-Bot/pull/519))
+
+### Fixed
+
+- Complete results from delegated Bot work stay available after a restart, including nested handoffs. ([#479](https://github.com/Fei2411/DeepSeek-Bot/issues/479), [#487](https://github.com/Fei2411/DeepSeek-Bot/pull/487))
+- A delegated reply missed while the plugin restarts is delivered or explained, instead of leaving the wait hanging. ([#483](https://github.com/Fei2411/DeepSeek-Bot/issues/483), [#497](https://github.com/Fei2411/DeepSeek-Bot/pull/497))
+- Bots can safely retry a named `message_bot` request without sending the same work twice. ([#480](https://github.com/Fei2411/DeepSeek-Bot/issues/480), [#488](https://github.com/Fei2411/DeepSeek-Bot/pull/488))
+- An interrupted memory save is recovered together with its topic links and change history. ([#481](https://github.com/Fei2411/DeepSeek-Bot/issues/481), [#492](https://github.com/Fei2411/DeepSeek-Bot/pull/492))
+- A failed `remember` or `forget` shows a notice in the chat with a route to memory management. ([#482](https://github.com/Fei2411/DeepSeek-Bot/issues/482), [#495](https://github.com/Fei2411/DeepSeek-Bot/pull/495))
+- In DSH Desktop, Update installs the new version of an already-installed DS Bot instead of failing with "already-installed". ([#423](https://github.com/Fei2411/DeepSeek-Bot/issues/423), [#505](https://github.com/Fei2411/DeepSeek-Bot/pull/505))
+- Cookie imports from Chrome or Edge explain that the browser locks its cookies and suggest a cookie file, instead of silently importing nothing. ([#490](https://github.com/Fei2411/DeepSeek-Bot/issues/490), [#503](https://github.com/Fei2411/DeepSeek-Bot/pull/503))
+- Switching a Bot's working folder shows a short "Switching working folder" status line while the conversation moves to a fresh part. ([#486](https://github.com/Fei2411/DeepSeek-Bot/issues/486), [#493](https://github.com/Fei2411/DeepSeek-Bot/pull/493))
+- The release attaches the Linux packages again; a missing attached file now fails the release instead of shipping without it. ([#496](https://github.com/Fei2411/DeepSeek-Bot/pull/496))
+
 ## [0.2.1] - 2026-10-23
 
 ### Added
