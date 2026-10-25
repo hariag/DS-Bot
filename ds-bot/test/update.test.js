@@ -6,7 +6,7 @@ import { afterEach, test } from 'node:test'
 import { cleanVersion, install, newer, sourceOf } from '../src/host/update.js'
 
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-const flush = async () => { for (let index = 0; index < 8; index += 1) await Promise.resolve() }
+const flush = async () => { for (let index = 0; index < 14; index += 1) await Promise.resolve() }
 const realFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = realFetch })
 

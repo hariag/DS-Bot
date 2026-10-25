@@ -262,7 +262,11 @@ export class BotViews {
     const entry = this.#owned(botId, payload.tabId)
     const contents = entry.view.webContents
     switch (action) {
-      case 'navigate': return contents.loadURL(String(payload.url))
+      case 'navigate': {
+        const url = String(payload.url)
+        if (!allowedNavigation(url, this.#origin())) throw new Error('This address is not allowed')
+        return contents.loadURL(url)
+      }
       case 'command':
         if (payload.command === 'back' && contents.canGoBack()) contents.goBack()
         else if (payload.command === 'forward' && contents.canGoForward()) contents.goForward()
@@ -286,6 +290,8 @@ export class BotViews {
     }
     this.#views.delete(tabId)
     this.#dropSaved(botId, tabId)
+    // The view leaves the window too: only closing its contents would keep the child view.
+    this.#window()?.contentView.removeChildView(entry.view)
     entry.view.webContents.close()
     entry.sessions.clear()
     entry.sessionMaps.clear()

@@ -226,7 +226,9 @@ export function install(rt) {
         const joinable = earlier !== undefined && (toUser || rt.sameWork(earlier.message.source.exchangeId, work))
         const before = joinable ? bodyOf(earlier.message) : undefined
         let long = await rt.attachLong(before ? `${before.text}\n\n${text}` : text, `Message from ${sender.name}.txt`)
-        if (long === undefined) return tooLong(text)
+        // Nothing went out, so a named request must not take this as a delivered
+        // receipt: admitRequest drops the pending record instead, and a retry can send.
+        if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
         const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
         if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
         const working = rt.live.get(chat)?.turn !== undefined

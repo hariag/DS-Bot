@@ -49,7 +49,7 @@ function fixture({ statePath } = {}) {
     storageFor(key) { return { partition: `persist:${key}` } },
     setDownloadHandler(key, handler) { handlers.set(key, handler) },
   }
-  const window = { contentView: { addChildView() {} } }
+  const window = { contentView: { addChildView() {}, removeChildView() {} } }
   const manager = new BotViews({ window: () => window, WebContentsView, guests, origin: () => 'http://127.0.0.1:43117', statePath, onChange: change => changes.push(change) })
   return { manager, handlers, views, changes }
 }
