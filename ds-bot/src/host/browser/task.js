@@ -1,6 +1,5 @@
 // One goal in, one answer out. The plugin runs the ref tools itself and returns
 // the step list, so a Bot can hand off a whole web task and still check what happened.
-import { completeDeepseek } from './deepseek.js'
 import { runToolLoop } from './loop.js'
 import { systemPrompt as refsPrompt, toolDefs as refTools } from './refs.js'
 
@@ -11,7 +10,8 @@ const driverTools = (session) => refTools.map(tool => ({
     execute: (args) => tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir }),
   }))
 
-export async function runTask({ session, goal, complete = completeDeepseek, maxSteps = 8 }) {
+export async function runTask({ session, goal, complete, maxSteps = 8 }) {
+  if (typeof complete !== 'function') throw new Error('browser_task needs a Bot session model')
   const result = await runToolLoop({
     tools: driverTools(session),
     complete,

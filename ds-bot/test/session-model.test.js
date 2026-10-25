@@ -7,10 +7,9 @@ const header = {
   tools: [{ name: 'session-private-tool', description: 'not for browser_task', parameters: {} }],
 }
 
-function fixture(chunks, { attachments, inputModalities, textOnlyModels } = {}) {
+function fixture(chunks, { attachments, inputModalities } = {}) {
   const requests = []
   const tags = []
-  let modelInfoCalls = 0
   const ctx = {
     get: name => name === 'attachments' ? attachments : undefined,
     llm: {
@@ -19,7 +18,6 @@ function fixture(chunks, { attachments, inputModalities, textOnlyModels } = {}) 
         yield* chunks
       },
       async resolveModelInfo() {
-        modelInfoCalls += 1
         return { inputModalities }
       },
     },
@@ -29,13 +27,12 @@ function fixture(chunks, { attachments, inputModalities, textOnlyModels } = {}) 
     requestHeader: () => header,
   }
   const rt = {
-    config: { textOnlyModels },
     tagUsage(messages, options) {
       tags.push(options)
       return messages
     },
   }
-  return { ctx, exec: { agent: { session }, signal: new AbortController().signal }, rt, requests, tags, modelInfoCalls: () => modelInfoCalls }
+  return { ctx, exec: { agent: { session }, signal: new AbortController().signal }, rt, requests, tags }
 }
 
 const stop = { type: 'finish', reason: { kind: 'stop' } }
@@ -53,7 +50,6 @@ test('session completion converts DSH text to an OpenAI chat response', async ()
 
   assert.equal(result.choices[0].message.content, 'The page title is Example.')
   assert.deepEqual(setup.tags, [{ sessionId: 'session-browser-task', kind: 'browser-task' }])
-  assert.equal(setup.modelInfoCalls(), 0)
 })
 
 test('session completion preserves DSH tool-call identity, name, and JSON arguments', async () => {
@@ -122,55 +118,7 @@ test('follow-up assistant tool call and tool result are converted to DSH message
   assert.deepEqual(setup.tags, [{ sessionId: 'session-browser-task', kind: 'browser-task' }])
 })
 
-test('text-only model metadata omits screenshots before saving attachments', async () => {
-  let saveCalls = 0
-  const attachments = { async saveImages() { saveCalls += 1; return [] } }
-  const setup = fixture([stop], { attachments, inputModalities: ['text'] })
-  const result = await sessionComplete(setup.ctx, setup.exec, setup.rt)({
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: 'Screenshot.' },
-        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/4AA=' } },
-      ],
-    }],
-    tools: [],
-  })
-
-  assert.deepEqual(setup.requests[0].messages[0].content, [
-    { type: 'text', text: 'Screenshot.' },
-    { type: 'text', text: '[Browser screenshot omitted.]' },
-  ])
-  assert.equal(setup.requests[0].messages[0].content.some(part => part.type === 'image'), false)
-  assert.equal(saveCalls, 0)
-  assert.equal(result.vision, 'rejected')
-  assert.equal(setup.modelInfoCalls(), 1)
-})
-
-test('configured text-only models omit screenshots without attachment saves', async () => {
-  let saveCalls = 0
-  const attachments = { async saveImages() { saveCalls += 1; return [] } }
-  const setup = fixture([stop], {
-    attachments,
-    inputModalities: ['text', 'image'],
-    textOnlyModels: ['mock-provider/session-model'],
-  })
-  const result = await sessionComplete(setup.ctx, setup.exec, setup.rt)({
-    messages: [{
-      role: 'user',
-      content: [{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/4AA=' } }],
-    }],
-    tools: [],
-  })
-
-  assert.equal(setup.requests[0].messages[0].content.some(part => part.type === 'image'), false)
-  assert.equal(setup.requests[0].messages[0].content[0].text, '[Browser screenshot omitted.]')
-  assert.equal(saveCalls, 0)
-  assert.equal(result.vision, 'rejected')
-  assert.equal(setup.modelInfoCalls(), 0)
-})
-
-test('browser screenshots become DSH image blocks when the route supports images', async () => {
+test('browser screenshots become DSH image blocks when the attachment store is available', async () => {
   const saved = []
   const attachments = {
     async saveImages(inputs) {
@@ -185,7 +133,7 @@ test('browser screenshots become DSH image blocks when the route supports images
     },
   }
   const setup = fixture([stop], { attachments, inputModalities: ['text', 'image'] })
-  const result = await sessionComplete(setup.ctx, setup.exec, setup.rt)({
+  await sessionComplete(setup.ctx, setup.exec)({
     messages: [{
       role: 'user',
       content: [
@@ -208,7 +156,6 @@ test('browser screenshots become DSH image blocks when the route supports images
       height: 1,
     },
   })
-  assert.equal(result.vision, 'accepted')
 })
 
 test('missing Bot session model fails with a clear error', async () => {
@@ -219,45 +166,3 @@ test('missing Bot session model fails with a clear error', async () => {
     { message: 'browser_task needs a Bot session model' },
   )
 })
-
-test('session completion retries TRANSPORT failures and cancels during retry backoff on abort', async () => {
-  let attempts = 0
-  const ctx = {
-    get: () => undefined,
-    llm: {
-      providerRetryPolicy: () => ({ mode: 'normal', maxRetries: 3, retryableCodes: ['TRANSPORT'], initialDelayMs: 1, maxDelayMs: 5, jitterRatio: 0 }),
-      async *stream() {
-        attempts += 1
-        if (attempts < 3) {
-          yield { type: 'finish', reason: { kind: 'error', failure: { code: 'TRANSPORT', message: 'DeepSeek Messages transport failed' } } }
-          return
-        }
-        yield { type: 'text-delta', index: 0, text: 'Recovered.' }
-        yield stop
-      },
-    },
-  }
-  const exec = { agent: { session: { id: 's-browser', requestHeader: () => header } }, signal: new AbortController().signal }
-  const result = await sessionComplete(ctx, exec)({ messages: [{ role: 'user', content: 'Open.' }], tools: [] })
-  assert.equal(attempts, 3)
-  assert.equal(result.choices[0].message.content, 'Recovered.')
-
-  const abort = new AbortController()
-  let abortedAttempts = 0
-  const slowCtx = {
-    get: () => undefined,
-    llm: {
-      providerRetryPolicy: () => ({ mode: 'normal', maxRetries: 3, retryableCodes: ['TRANSPORT'], initialDelayMs: 5_000, maxDelayMs: 5_000, jitterRatio: 0 }),
-      async *stream() {
-        abortedAttempts += 1
-        setTimeout(() => abort.abort(), 10)
-        yield { type: 'finish', reason: { kind: 'error', failure: { code: 'TRANSPORT', message: 'DeepSeek Messages transport failed' } } }
-      },
-    },
-  }
-  await assert.rejects(
-    sessionComplete(slowCtx, { agent: { session: { id: 's-browser', requestHeader: () => header } }, signal: abort.signal })({ messages: [{ role: 'user', content: 'Open.' }], tools: [] }),
-  )
-  assert.equal(abortedAttempts, 1)
-})
-

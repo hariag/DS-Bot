@@ -70,9 +70,9 @@ async def one(llm, task_id, prompt, check):
 
 async def main():
     llm = ChatOpenAI(
-        model='deepseek-v4.1-flash',
-        base_url='https://amr-link.open-design.ai/v1',
-        api_key=os.environ['OPENDESIGN_API_KEY'],
+        model=os.environ['BENCH_MODEL'],
+        base_url=os.environ['BENCH_BASE_URL'],
+        api_key=os.environ['BENCH_API_KEY'],
         dont_force_structured_output=True,
         timeout=90,
     )

@@ -3,8 +3,8 @@
 import { isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { completeDeepseek } from './browser/deepseek.js'
 import { mountBrowserPlugin } from './browser/mount.js'
+import { sessionComplete } from './browser/session-model.js'
 import * as refs from './browser/refs.js'
 import * as script from './browser/script.js'
 import * as task from './browser/task.js'
@@ -34,6 +34,10 @@ export function appBrowserEndpoint(botId, downloadRoots) {
 
 const NAMES = Object.keys(browserPlugins)
 const GRANT_KINDS = new Set(['post', 'upload', 'download', 'delete'])
+
+export function defaultBrowserHeadless(platform, env = process.env) {
+  return platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY
+}
 
 function optionalString(config, key) {
   const value = config[key]
@@ -110,7 +114,7 @@ export function install(rt) {
   const executablePath = optionalString(rt.config, 'browserExecutablePath')
   const headless = typeof rt.config.browserHeadless === 'boolean'
     ? rt.config.browserHeadless
-    : !process.env.DISPLAY
+    : defaultBrowserHeadless(process.platform)
   const downloadRoot = join(rt.home, 'browser-downloads')
   async function downloadRoots(botId) {
     await rt.load()
@@ -137,7 +141,9 @@ export function install(rt) {
     onHold: (botId, hold) => rt.browserChannel?.setHold(botId, hold),
     subscribeHolds: listener => rt.browserChannel?.subscribeHolds?.(listener),
     authorize: (exec, botId, action) => authorizeBrowserAction(rt, exec, botId, action),
-    complete: rt.config.browserComplete ?? completeDeepseek,
+    completeFor: rt.config.browserComplete
+      ? () => rt.config.browserComplete
+      : exec => sessionComplete(rt.ctx, exec, rt),
     async keyOf(exec) {
       await rt.load()
       const id = rt.selfOf(exec.agent?.session?.header?.id ?? exec.agent?.id)

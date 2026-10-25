@@ -1,11 +1,10 @@
 import {
+  BlockAssembler,
   createAssistantMessage,
   createSystemMessage,
   createToolResultMessage,
   createUserMessage,
 } from '@deepseek-ai/dsh-llm'
-import { serviceOf } from '../services.js'
-import { assembleLlmStream } from '../models.js'
 
 const NO_SESSION_MODEL = 'browser_task needs a Bot session model'
 const OMITTED_IMAGE = '[Browser screenshot omitted.]'
@@ -46,7 +45,7 @@ function attachmentsOf(ctx) {
   }
 }
 
-async function userContent(content, attachments, readsImages) {
+async function userContent(content, attachments) {
   const parts = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }]
   const blocks = []
   const pending = []
@@ -59,11 +58,6 @@ async function userContent(content, attachments, readsImages) {
     }
     if (part?.type === 'image_url') {
       sawImage = true
-      if (!readsImages) {
-        blocks.push({ type: 'text', text: OMITTED_IMAGE })
-        rejectedImage = true
-        continue
-      }
       const input = imageInput(part)
       if (!input || typeof attachments?.saveImages !== 'function') {
         blocks.push({ type: 'text', text: OMITTED_IMAGE })
@@ -114,7 +108,7 @@ function assistantContent(message, config) {
   })
 }
 
-async function dshMessages(messages, attachments, config, readsImages) {
+async function dshMessages(messages, attachments, config) {
   const output = []
   let sawImage = false
   let rejectedImage = false
@@ -122,7 +116,7 @@ async function dshMessages(messages, attachments, config, readsImages) {
     if (message.role === 'system') {
       output.push(createSystemMessage(textParts(message.content).join('\n')))
     } else if (message.role === 'user') {
-      const content = await userContent(message.content, attachments, readsImages)
+      const content = await userContent(message.content, attachments)
       output.push(createUserMessage({ content: content.blocks, source: { kind: 'user' } }))
       sawImage ||= content.sawImage
       rejectedImage ||= content.rejectedImage
@@ -152,10 +146,9 @@ function driverTools(tools) {
 
 async function routeReadsImages(ctx, config, rt) {
   if (rt?.config?.textOnlyModels?.includes?.(`${config.provider}/${config.model}`)) return false
-  const llm = serviceOf(ctx, 'llm')
-  if (typeof llm?.resolveModelInfo !== 'function') return true
+  if (typeof ctx.llm?.resolveModelInfo !== 'function') return true
   try {
-    const info = await llm.resolveModelInfo(config.provider, config.model)
+    const info = await ctx.llm.resolveModelInfo(config.provider, config.model)
     return info.inputModalities === undefined || info.inputModalities.includes('image')
   } catch {
     return true
@@ -165,22 +158,18 @@ async function routeReadsImages(ctx, config, rt) {
 export function sessionComplete(ctx, exec, rt) {
   return async ({ messages, tools }) => {
     const { header, sessionId } = routeOf(exec)
-    const hasImages = (messages ?? []).some(message => (
-      Array.isArray(message.content) && message.content.some(part => part?.type === 'image_url')
-    ))
-    const readsImages = hasImages ? await routeReadsImages(ctx, header.config, rt) : true
-    const converted = await dshMessages(messages, attachmentsOf(ctx), header.config, readsImages)
+    const converted = await dshMessages(messages, attachmentsOf(ctx), header.config)
     const requestMessages = typeof rt?.tagUsage === 'function'
       ? rt.tagUsage(converted.messages, { sessionId, kind: 'browser-task' })
       : converted.messages
-    const callOptions = {
+    const assembler = new BlockAssembler()
+    for await (const chunk of ctx.llm.stream({
       ...header.config,
       messages: requestMessages,
       tools: driverTools(tools),
       sessionId,
       signal: exec.signal,
-    }
-    const assembler = await (rt?.assembleLlm ? rt.assembleLlm(callOptions) : assembleLlmStream(ctx, callOptions, { backoff: rt?.config?.llmRetryBackoff }))
+    })) assembler.push(chunk)
     const finish = assembler.finish
     if (finish.kind === 'error' || finish.kind === 'aborted') {
       throw new Error(finish.failure?.message ?? finish.kind)
@@ -197,7 +186,7 @@ export function sessionComplete(ctx, exec, rt) {
     if (reasoning) message.reasoning_content = reasoning
     if (toolCalls.length > 0) message.tool_calls = toolCalls
     const vision = converted.sawImage
-      ? converted.rejectedImage || !readsImages ? 'rejected' : 'accepted'
+      ? converted.rejectedImage || !await routeReadsImages(ctx, header.config, rt) ? 'rejected' : 'accepted'
       : undefined
     return {
       choices: [{ message, finish_reason: toolCalls.length > 0 ? 'tool_calls' : finish.kind === 'max-tokens' ? 'length' : 'stop' }],

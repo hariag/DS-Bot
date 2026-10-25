@@ -469,7 +469,7 @@ test('browser_task driver tools inherit the outer authorization gate', async (t)
     headless: true,
     playwrightUrl,
     actionTimeout: 500,
-    complete,
+    completeFor: () => complete,
     authorize: async (_exec, _botId, action) => { gateActions.push(action) },
   })
   const tool = registered.get('browser_task')
