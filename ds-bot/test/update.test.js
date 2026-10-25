@@ -336,6 +336,26 @@ test('a failed reinstall writes its reason into the note', async () => {
   rmSync(home, { recursive: true, force: true, maxRetries: 5 })
 })
 
+test('a reinstall refused by an application state also puts the old version back', async () => {
+  const home = newHome()
+  const { rt, installs } = start({
+    source: `${PKG.name}@^${PKG.version}`,
+    config: { updateRegistry: 'https://registry.example' },
+    answers: { [`https://registry.example/${PKG.name}/latest`]: { version: '9.0.0' } },
+    result: count => (count === 1 ? { error: { code: 'already-installed' } } : count === 2 ? { application: 'failed' } : { application: 'applied', version: PKG.version }),
+    home,
+  })
+  await rt.updateCheck()
+  rt.updateStart()
+  await flush()
+  assert.equal(installs.length, 3)
+  assert.equal(installs[2][0], `${PKG.name}@${PKG.version}`)
+  const note = noteIn(home)
+  assert.equal(note.error, `install failed; ${PKG.name}@${PKG.version} was reinstalled`)
+  assert.equal((await rt.updateCheck()).phase, 'failed')
+  rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+})
+
 test('the note for the version now running shows the update once and is consumed', async () => {
   const home = newHome()
   writeFileSync(join(home, 'update.json'), JSON.stringify({ from: '0.2.0', to: PKG.version, spec: `${PKG.name}@${PKG.version}`, startedAt: new Date().toISOString() }))

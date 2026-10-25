@@ -279,7 +279,10 @@ export function install(rt) {
         }
         try {
           const again = await service.installBundle(chosen.spec, options)
-          if (again?.error) mark(await restore(again.error.diagnostic ?? again.error.code ?? 'install failed'))
+          // A failure also arrives as an application state with no error; the
+          // result check below rejects every one of those, so restore sees the
+          // same failures it does.
+          if (again?.error || !['applied', 'restart-required'].includes(again?.application)) mark(await restore(again?.error?.diagnostic ?? again?.error?.code ?? `install ${again?.application ?? 'failed'}`))
           return again
         } catch (error) {
           mark(await restore(error?.message ?? String(error)))
