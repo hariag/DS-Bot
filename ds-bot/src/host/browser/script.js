@@ -27,7 +27,7 @@ export const toolDefs = [
     },
     async execute(args, ctx) {
       const text = await ctx.session.runScript(args.script)
-      const image = ctx.session.lastImage
+      const image = typeof ctx.session.takeLastImage === 'function' ? ctx.session.takeLastImage() : ctx.session.lastImage
       return image ? { text, image } : { text }
     },
   },
