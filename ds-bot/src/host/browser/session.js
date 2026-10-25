@@ -1,8 +1,9 @@
 // One Chromium profile per Bot. A Bot's own chat and every group Session it speaks in
 // share this directory, so a new conversation part keeps the login. Another Bot never
 // opens it: profiles are not copied across the team.
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, extname, isAbsolute, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { mkdir, open, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, extname, isAbsolute, join, relative as relativePath } from 'node:path'
 import { gateScope } from './gate.js'
 
 const ACTION_TIMEOUT = 5_000
@@ -85,9 +86,10 @@ async function loadChromium(playwrightUrl) {
 }
 
 /**
- * @param {{ botId: string, profileRoot: string, headless?: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number }} options
+ * @param {{ botId: string, profileRoot: string, headless?: boolean, playwrightUrl?: string, executablePath?: string, actionTimeout?: number, downloadDir?: string | (() => Promise<string | undefined>), uploadRoots?: () => Promise<string[]>, connect?: (botId: string) => Promise<string>, getHold?: () => any, onHold?: (hold: any) => void }} options
  */
-export async function openBotBrowser({ botId, profileRoot, downloadDir, headless = true, playwrightUrl, executablePath, actionTimeout = ACTION_TIMEOUT, connect, getHold, onHold }) {
+export async function openBotBrowser({ botId, profileRoot, downloadDir, headless = true, playwrightUrl, executablePath, actionTimeout = ACTION_TIMEOUT, connect, getHold, onHold, uploadRoots }) {
+  const getDownloadDir = typeof downloadDir === 'function' ? downloadDir : async () => downloadDir
   const userDataDir = join(profileRoot, botId)
   const chromium = await loadChromium(playwrightUrl)
   const browser = connect
@@ -112,10 +114,10 @@ export async function openBotBrowser({ botId, profileRoot, downloadDir, headless
       if (Array.isArray(saved) && saved.length > 0) await context.addCookies(saved)
     } catch { /* no cookies yet */ }
   }
-  return createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold })
+  return createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir: getDownloadDir, actionTimeout, getHold, onHold, uploadRoots })
 }
 
-function createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold }) {
+function createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold, uploadRoots }) {
   const pages = new Set()
   const unknownByOrigin = new Map()
   const unknownPageOrigins = new WeakMap()
@@ -126,6 +128,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
   let lastImage = ''
   let activeDownloads = null
   let pendingDelete = null
+  let pendingDeleteLocator = null
 
   const ready = () => {
     const externalHold = getHold?.()
@@ -148,8 +151,10 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       target.on('dialog', dialog => { dialog.dismiss().catch(() => {}) })
       target.on('crash', () => crashedPages.add(target))
       target.on('download', download => {
-        if (activeDownloads) activeDownloads.items.push({ download, page: target })
-        else download.cancel().catch(() => {})
+        if (activeDownloads) {
+          activeDownloads.items.push({ download, page: target })
+          activeDownloads.notify?.()
+        } else download.cancel().catch(() => {})
       })
       target.on('close', () => {
         pages.delete(target)
@@ -267,18 +272,33 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
   }
 
   async function authorizeWrite(action, gate = gateScope.getStore()) {
-    if (action.kind !== 'delete') pendingDelete = null
+    if (action.kind !== 'delete') await clearPendingDelete()
     const previous = unknownByOrigin.get(action.origin)
     if (previous && !previous.observed) throw pendingWriteError(previous)
     if (previous) unknownByOrigin.delete(action.origin)
     await gate?.(action)
   }
 
+  async function clearPendingDelete() {
+    const pending = pendingDelete
+    const locator = pendingDeleteLocator
+    pendingDelete = null
+    pendingDeleteLocator = null
+    if (pending && locator) {
+      await locator.evaluate((el, nonce) => {
+        if (el.getAttribute('data-dsbot-delete-check') === nonce) el.removeAttribute('data-dsbot-delete-check')
+      }, pending.nonce).catch(error => {
+        // Navigation may have replaced the target since the confirmation snapshot.
+        return error
+      })
+    }
+  }
+
   function paymentError(action) {
     return new Error(`This looks like a payment ("${action.label}" on ${action.host}). The user makes payments themselves: call browser_handoff with reason "payment" and stop. Nothing was done.`)
   }
 
-  async function reserveDownloadPath(filename) {
+  async function reserveDownloadPath(filename, directory) {
     const name = Array.from(basename(filename), character => {
       const code = character.charCodeAt(0)
       return code < 32 || '<>:"/\\|?*'.includes(character) ? '_' : character
@@ -287,11 +307,18 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
     const extension = extname(safeName)
     const stem = extension ? safeName.slice(0, -extension.length) : safeName
     for (let index = 1; ; index += 1) {
-      const candidate = join(downloadDir, index === 1 ? safeName : `${stem} (${index})${extension}`)
+      const candidate = join(directory, index === 1 ? safeName : `${stem} (${index})${extension}`)
       try {
-        await stat(candidate)
+        const handle = await open(candidate, 'wx')
+        try {
+          await handle.close()
+        } catch (error) {
+          await unlink(candidate).catch(() => {})
+          throw error
+        }
+        return candidate
       } catch (error) {
-        if (error.code === 'ENOENT') return candidate
+        if (error.code === 'EEXIST') continue
         throw error
       }
     }
@@ -301,7 +328,8 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
     const filename = download.suggestedFilename()
     let action
     try {
-      const url = new URL(page.url())
+      const pageUrl = new URL(page.url())
+      const url = pageUrl.origin === 'null' ? new URL(download.url()) : pageUrl
       action = { kind: 'download', label: filename.slice(0, 80), origin: url.origin, host: url.hostname }
       await authorizeWrite(action, gate)
     } catch (error) {
@@ -310,13 +338,16 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       const message = String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160)
       return message || `Download "${filename}" was refused. Nothing was saved.`
     }
+    let path
     try {
-      if (!downloadDir) throw new Error('No download directory is configured.')
-      await mkdir(downloadDir, { recursive: true })
-      const path = await reserveDownloadPath(filename)
+      const directory = await downloadDir()
+      if (!directory) throw new Error('No download directory is configured.')
+      await mkdir(directory, { recursive: true })
+      path = await reserveDownloadPath(filename, directory)
       await download.saveAs(path)
       return `Downloaded "${filename}" to ${path}.`
     } catch (error) {
+      if (path) await unlink(path).catch(() => {})
       await download.cancel().catch(() => {})
       await download.delete().catch(() => {})
       const message = String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160)
@@ -334,14 +365,28 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
 
   async function captureAction(perform) {
     const parent = activeDownloads
-    const batch = parent ?? { gate: gateScope.getStore(), items: [] }
+    const batch = parent ?? { gate: gateScope.getStore(), items: [], notify: undefined }
     if (!parent) activeDownloads = batch
     let result
     let failure
     try {
-      result = await perform()
-    } catch (error) {
-      failure = error
+      try {
+        result = await perform()
+      } catch (error) {
+        failure = error
+      }
+      if (!parent && failure && batch.items.length === 0
+        && String(failure?.message ?? failure).includes('Download is starting')) {
+        await new Promise(resolve => {
+          const finish = () => {
+            clearTimeout(timer)
+            batch.notify = undefined
+            resolve()
+          }
+          const timer = setTimeout(finish, Math.max(actionTimeout, ACTION_TIMEOUT))
+          batch.notify = finish
+        })
+      }
     } finally {
       if (!parent) activeDownloads = null
     }
@@ -351,6 +396,10 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
     }
     const messages = []
     for (const item of batch.items) messages.push(await finishDownload(item, batch.gate))
+    if (failure && batch.items.length > 0) {
+      const snapshot = await snapshotText().catch(() => '')
+      return snapshot ? `${snapshot}\n\n${messages.join('\n')}` : messages.join('\n')
+    }
     if (failure) throw failure
     return appendDownloadResults(result, messages)
   }
@@ -473,18 +522,18 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
     url: () => activePage()?.url() ?? '',
     async open(url) {
       ready()
-      pendingDelete = null
+      await clearPendingDelete()
       const target = activePage()
       return finishAction(() => target.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 30_000 }), target)
     },
     tabs,
     async selectTab(index) {
       ready()
-      pendingDelete = null
       const open = openPages()
       if (!Number.isInteger(index) || index < 0 || index >= open.length) {
         throw new Error(`No tab at index ${index}.`)
       }
+      await clearPendingDelete()
       current = open[index]
       await settle()
       return snapshotText()
@@ -496,6 +545,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
         throw new Error(`No tab at index ${index}.`)
       }
       if (open.length === 1) throw new Error('Cannot close the last browser tab.')
+      await clearPendingDelete()
       await open[index].close()
       await settle()
       return snapshotText()
@@ -528,16 +578,21 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
         throw error
       }
       if (action?.kind === 'payment') {
-        pendingDelete = null
+        await clearPendingDelete()
         throw paymentError(action)
       }
       if (action?.kind === 'delete') {
         const pending = pendingDelete
-        if (!(confirm && pending?.url === target.url() && pending.label === action.label)) {
-          pendingDelete = { url: target.url(), label: action.label }
+        const elementNonce = await locator.getAttribute('data-dsbot-delete-check')
+        if (!(confirm && pending?.url === target.url() && pending.label === action.label && elementNonce === pending.nonce)) {
+          await clearPendingDelete()
+          const nonce = randomUUID()
+          await locator.evaluate((el, value) => el.setAttribute('data-dsbot-delete-check', value), nonce)
+          pendingDelete = { url: target.url(), label: action.label, nonce }
+          pendingDeleteLocator = locator
           return `This would delete "${action.label}" on ${action.host}. Nothing was deleted yet. Check in this snapshot that it is the right item, then call browser_click again on it with confirm: true.\n\n${await snapshotText()}`
         }
-        pendingDelete = null
+        await clearPendingDelete()
       }
       if (action) return performWrite(action, target, () => locator.click({ timeout: actionTimeout }))
       return finishAction(() => locator.click({ timeout: actionTimeout }))
@@ -587,16 +642,43 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       if (!Array.isArray(paths) || paths.length === 0 || paths.length > 10) {
         throw new Error('Upload requires between 1 and 10 file paths.')
       }
+      const roots = await uploadRoots?.() ?? []
+      if (roots.length === 0) {
+        throw new Error(`Uploads must come from an allowed folder. ${paths[0]} is outside them. Nothing was uploaded.`)
+      }
+      const directory = await downloadDir()
+      if (directory) await mkdir(directory, { recursive: true })
+      const realRoots = (await Promise.all(roots.map(async root => {
+        try {
+          return await realpath(root)
+        } catch (error) {
+          if (error.code === 'ENOENT') return undefined
+          throw error
+        }
+      }))).filter(root => root !== undefined)
+      if (realRoots.length === 0) {
+        throw new Error(`Uploads must come from an allowed folder. ${paths[0]} is outside them. Nothing was uploaded.`)
+      }
       const files = []
+      const labels = []
       for (const path of paths) {
         if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('Each upload path must be absolute.')
         const info = await stat(path)
         if (!info.isFile()) throw new Error(`Upload path is not a regular file: ${path}`)
-        files.push(path)
+        const realFile = await realpath(path)
+        const root = realRoots.find(candidate => {
+          const relative = relativePath(candidate, realFile)
+          return !relative.startsWith('..') && !isAbsolute(relative)
+        })
+        if (!root) {
+          throw new Error(`Uploads must come from ${realRoots.join(', ')}. ${path} is outside them. Nothing was uploaded.`)
+        }
+        files.push(realFile)
+        labels.push(relativePath(root, realFile))
       }
       const { target, locator } = await refLocator(ref)
       const url = new URL(target.url())
-      const label = files.map(path => basename(path)).join(', ').slice(0, 80) || 'uploaded files'
+      const label = labels.join(', ').slice(0, 80) || 'uploaded files'
       await authorizeWrite({ kind: 'upload', label, origin: url.origin, host: url.hostname })
       return finishAction(() => locator.setInputFiles(files, { timeout: actionTimeout }), target)
     },
@@ -608,7 +690,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
     },
     async back() {
       ready()
-      pendingDelete = null
+      await clearPendingDelete()
       const target = activePage()
       return finishAction(() => target.goBack({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {}), target)
     },

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -195,7 +195,7 @@ test('CDP download behavior saves to the Bot path and emits download events', as
   item.emit('done', {}, 'completed')
   await Promise.race([eventsReady, new Promise((_, reject) => setTimeout(() => reject(new Error('download events were not relayed')), 1000))])
   assert.equal(saved.length, 1)
-  assert.match(saved[0], new RegExp(`^${downloadPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
+  assert.match(saved[0], new RegExp(`^${realpathSync(downloadPath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
   assert.equal(events[0].params.suggestedFilename, 'report.pdf')
   assert.equal(events.some(message => message.method === 'Browser.downloadProgress' && message.params.state === 'completed'), true)
   assert.equal(sessionId.length > 0, true)
@@ -230,7 +230,7 @@ test('download roots are isolated per Bot', async t => {
     getFilename() { return 'report.pdf' },
   })
   handlers.get('bot:a')({ preventDefault() { throw new Error('Bot A download was refused') } }, accepted, views[0].webContents)
-  assert.match(savedByA, new RegExp(`^${rootA.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
+  assert.match(savedByA, new RegExp(`^${realpathSync(rootA).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
   let preventedForB = false
   const refused = Object.assign(new EventEmitter(), {
     setSavePath() { throw new Error('Bot B must not use Bot A download root') },
@@ -340,7 +340,38 @@ test('CDP accepts a direct Playwright artifacts directory under os.tmpdir()', as
   let prevented = false
   handlers.get('bot:a')({ preventDefault() { prevented = true } }, item, views[0].webContents)
   assert.equal(prevented, false)
-  assert.match(savePath, new RegExp(`^${downloadPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
+  assert.match(savePath, new RegExp(`^${realpathSync(downloadPath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`, 'u'))
+})
+
+test('a relay download is cancelled if its accepted directory is swapped for an outside symlink', async t => {
+  const { manager, handlers, views } = fixture()
+  t.after(() => manager.dispose())
+  const rootPath = mkdtempSync(join(tmpdir(), 'bot-views-download-symlink-swap-'))
+  const downloadPath = join(rootPath, 'downloads')
+  const outsidePath = mkdtempSync(join(tmpdir(), 'bot-views-download-outside-'))
+  t.after(() => rmSync(outsidePath, { recursive: true, force: true }))
+  t.after(() => rmSync(rootPath, { recursive: true, force: true }))
+  const entry = manager.create('a')
+  const socket = await openSocket(await manager.endpoint('a', { downloadRoots: [rootPath] }))
+  t.after(() => socket.close())
+  await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
+  const accepted = await request(socket, 2, 'Browser.setDownloadBehavior', {
+    behavior: 'allowAndName',
+    downloadPath,
+  })
+  assert.deepEqual(accepted.result, {})
+
+  rmSync(downloadPath, { recursive: true, force: true })
+  symlinkSync(outsidePath, downloadPath)
+  let prevented = false
+  const item = Object.assign(new EventEmitter(), {
+    setSavePath(path) { writeFileSync(path, 'outside') },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+  })
+  handlers.get('bot:a')({ preventDefault() { prevented = true } }, item, views[0].webContents)
+  assert.equal(prevented, true)
+  assert.deepEqual(readdirSync(outsidePath), [])
 })
 
 test('user hold closes relay sockets, rejects endpoints, and allows a new endpoint after give-back', async t => {

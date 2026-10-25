@@ -130,7 +130,7 @@ test('app browser endpoint carries download roots for the Bot resolved from the 
       connect: appBrowserEndpoint,
       openSession: async options => {
         assert.equal(options.botId, 'b2')
-        assert.equal(options.downloadDir, roots[0])
+        assert.equal(await options.downloadDir(), roots[0])
         assert.deepEqual(await options.uploadRoots(), roots)
         await options.connect(options.botId)
         return { close: async () => {} }

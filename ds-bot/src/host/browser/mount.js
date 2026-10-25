@@ -64,7 +64,9 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
           session = await openSession({
             botId,
             profileRoot,
-            downloadDir: roots === undefined ? join(downloadRoot ?? join(profileRoot, 'browser-downloads'), botId) : roots[0],
+            downloadDir: roots === undefined
+              ? join(downloadRoot ?? join(profileRoot, 'browser-downloads'), botId)
+              : async () => (await downloadRoots(botId))[0],
             headless,
             playwrightUrl,
             executablePath,
