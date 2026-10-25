@@ -65,7 +65,7 @@ const interrupted = (home, { id = 'change-1', op = 'add', scope = 'bot:b2', step
 }
 
 test('a change that cannot be published stays pending, and is finished before the next read', async (t) => {
-  const { home, tool, read, journal, stop } = start()
+  const { ctx, home, tool, read, journal, stop } = start()
   t.after(() => stop())
   // The change log cannot be written: the entry is published, but its row is not.
   mkdirSync(join(home, 'memory', 'journal.jsonl'), { recursive: true })
@@ -74,12 +74,16 @@ test('a change that cannot be published stays pending, and is finished before th
   assert.match(read('bots', 'b2', 'travel.md'), /Trip to Kyoto/)
   assert.ok(existsSync(pendingFile(home)), 'the change is pending')
   await warned(home, 'is pending')
+  const prompt = () => ctx.sections.get('bot-memory').text({ agent: { id: 'b2' } })
+  assert.match(prompt(), /memory.*unavailable/i)
+  assert.doesNotMatch(prompt(), /\[\[travel\]\]/)
   // The change log is there again: the next read finishes the change.
   rmSync(join(home, 'memory', 'journal.jsonl'), { recursive: true, force: true })
   assert.match(await tool('recall', { query: 'Kyoto' }, 'b2'), /Trip to Kyoto/)
   assert.ok(!existsSync(pendingFile(home)), 'the change is finished')
   assert.deepEqual(journal().map(row => [row.op, row.scope, row.file]), [['add', 'bot:b2', 'travel.md']])
   assert.match(read('bots', 'b2', 'MEMORY.md'), /- \[\[travel\]\]/)
+  assert.match(prompt(), /\[\[travel\]\]/)
   // Reading again does not write a second row.
   await tool('recall', {}, 'b2')
   assert.equal(journal().length, 1)
@@ -169,7 +173,7 @@ test('a change that was already finished does not get a second row', async (t) =
 })
 
 test('a record of a change that cannot be read stops the memory', async (t) => {
-  const { home, tool, read, stop } = start()
+  const { ctx, home, tool, read, stop } = start()
   t.after(() => stop())
   await tool('remember', { text: 'First fact' }, 'b2')
   const before = read('bots', 'b2', 'MEMORY.md')
@@ -177,6 +181,33 @@ test('a record of a change that cannot be read stops the memory', async (t) => {
   assert.match(await tool('recall', {}, 'b2'), /pending\.json is not readable/)
   assert.doesNotMatch(await failureText(tool('remember', { text: 'Second fact' }, 'b2')), /Second fact/)
   assert.equal(read('bots', 'b2', 'MEMORY.md'), before)
+  const prompt = () => ctx.sections.get('bot-memory').text({ agent: { id: 'b2' } })
+  assert.doesNotMatch(prompt(), /First fact/)
+  assert.match(prompt(), /memory.*unavailable/i)
+  assert.equal(existsSync(join(home, 'memory', 'snapshots', 'b2.md')), false)
+  rmSync(pendingFile(home))
+  assert.match(prompt(), /First fact/)
+})
+
+test('a prompt keeps its committed snapshot while an unfinished change is recovered', async (t) => {
+  const first = start()
+  const { ctx, home, tool, stop } = first
+  let active = first
+  t.after(() => active.stop())
+  await tool('remember', { text: 'Committed fact' }, 'b2')
+  const prompt = id => ctx.sections.get('bot-memory').text({ agent: { id } })
+  const committed = prompt('b2')
+  rmSync(join(home, 'memory', 'journal.jsonl'))
+  mkdirSync(join(home, 'memory', 'journal.jsonl'))
+  await failureText(tool('remember', { text: 'Pending fact' }, 'b2'))
+  assert.ok(existsSync(pendingFile(home)))
+  assert.equal(prompt('b2'), committed)
+  // A snapshot read from disk after a restart is equally safe.
+  await stop({ keep: true })
+  const next = start({ home })
+  active = next
+  await next.tool('list_bots', {}, 'b2')
+  assert.equal(next.ctx.sections.get('bot-memory').text({ agent: { id: 'b2' } }), committed)
 })
 
 test('an interrupted change that replaces an entry is finished with the line it had before', async (t) => {

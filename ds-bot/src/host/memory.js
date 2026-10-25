@@ -982,16 +982,22 @@ export function install(rt) {
     const pending = pendingChange()
     const path = snapshotPath(sessionId)
     const snap = existsSync(path) ? sectionRead(path) : { text: '' }
+    if (pending.pending === true || pending.failed === true) {
+      if (pending.pending === true) void recover().catch(error => rt.warn('ds-bot: memory recovery failed: %s', error?.message ?? error))
+      // Only a previously committed snapshot is safe while files may be half-written.
+      if (snap.text !== '' && holds(snap.text)) return snap.text
+      return ['# Your memory', memoryRules(reviewOn), ...marks, '', 'Memory is unavailable until its pending change has been recovered. Use recall after recovery.'].join('\n')
+    }
     let text = snap.text
     // A render that could not read everything is used but not kept: it is written
     // down neither as the snapshot nor as the frozen copy, so the next render tries
     // the files again.
-    let failed = snap.failed !== undefined || pending.failed === true
+    let failed = snap.failed !== undefined
     if (text === '' || !holds(text)) {
       const section = memorySection(bot, roomId)
       text = section.text
       failed = failed || section.failed
-      if (!failed && rt.readOnly() === undefined && pending.pending !== true) {
+      if (!failed && rt.readOnly() === undefined) {
         try {
           mkdirSync(dirname(path), { recursive: true })
           writeFileSync(`${path}.tmp`, text, 'utf8')
@@ -1001,8 +1007,7 @@ export function install(rt) {
         }
       }
     }
-    if (!failed && pending.pending !== true) frozen.set(sessionId, text)
-    if (pending.pending === true) void recover().catch(error => rt.warn('ds-bot: memory recovery failed: %s', error?.message ?? error))
+    if (!failed) frozen.set(sessionId, text)
     return text
   }
   // The Session's next render freezes the memory as it is then.
