@@ -417,6 +417,11 @@ export function install(rt) {
           }, AbortSignal.timeout(30_000))
           return ok(true)
         }
+        case 'btw-delete': {
+          if (typeof body.sessionId !== 'string' || body.sessionId === '' || typeof body.cardId !== 'string' || body.cardId === '') return fail('Nothing to delete', 'bot/invalid')
+          await rt.load()
+          return ok(await rt.btwDelete({ sessionId: body.sessionId, cardId: body.cardId }))
+        }
         // Side chats in the Bot's panel: each question is an aside on a fresh
         // snapshot of this Bot's private chat; the earlier finished pairs of
         // that chat ride along. Nothing is written into the Session.

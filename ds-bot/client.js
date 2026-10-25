@@ -843,12 +843,12 @@ var ZH = {
   "Deleted group chat": "已删除的群聊",
   "Group chat": "群聊",
   "Own chat": "单聊",
-  "Side question": "旁路问答",
   "Side chat": "侧边对话",
   "New browser tab": "新建浏览器页",
   Terminal: "终端",
   Files: "文件树",
   "Close side chat": "关闭侧边对话",
+  "Delete side chat": "删除侧边对话",
   "Ask without interrupting": "不打断当前工作，顺便问一句",
   "Ask about the work so far": "问问目前做到哪了",
   "Answering…": "正在回答…",
@@ -1617,6 +1617,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call2("view-reply", { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: (sessionId) => after(call2("dismiss-view", { sessionId: partFor(sessionId) })),
+    deleteBtw: (sessionId, cardId) => after(call2("btw-delete", { sessionId, cardId })),
     answerApproval: (id, choice) => after(call2("approval-answer", { id, choice })),
     stopMemberWork: (roomId, botId) => after(call2("stop-member-work", { roomId, botId })),
     // Values go out in these requests and never come back in a response.
@@ -3423,6 +3424,7 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-btw-time,.bt-btw-status{flex:none;color:var(--bt-ink-3);font-size:11px;line-height:14px;font-variant-numeric:tabular-nums}
 .bt-btw-cancel{margin-left:auto}
 .bt-btw-cancel:disabled{opacity:.55;cursor:default}
+.bt-btw-delete{flex:none;margin:-4px}
 .bt-btw-note{margin:4px 0 0;color:var(--bt-ink-3);font-size:12px;line-height:16px}
 .bt-btw-body{margin-top:6px}
 .bt-btw-answer{font-size:14px;line-height:20px}
@@ -6917,8 +6919,9 @@ function stampOf(card) {
   const time = Number.isFinite(card.finishedAt) ? card.finishedAt : card.createdAt;
   return Number.isFinite(time) ? time : void 0;
 }
-function BtwCardView({ card, compact: compact2 = false }) {
+function BtwCardView({ card, compact: compact2 = false, sessionId, actions, onDeleted }) {
   const [open, setOpen] = (0, import_react11.useState)(card?.status !== "answering");
+  const [deleting, setDeleting] = (0, import_react11.useState)(false);
   (0, import_react11.useEffect)(() => {
     if (card?.status && card.status !== "answering") setOpen(true);
   }, [card?.status]);
@@ -6927,6 +6930,18 @@ function BtwCardView({ card, compact: compact2 = false }) {
   const answer = typeof card.answer === "string" ? card.answer : "";
   const when3 = stampOf(card);
   const answering = card.status === "answering";
+  const remove = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const result = await actions.deleteBtw(card.partId ?? sessionId, card.id);
+      if (result?.deleted) onDeleted?.(card.id);
+      else setDeleting(false);
+    } catch (error) {
+      actions.reportError(error, "btw-delete");
+      setDeleting(false);
+    }
+  };
   return (0, import_react11.createElement)(
     "div",
     {
@@ -6934,7 +6949,7 @@ function BtwCardView({ card, compact: compact2 = false }) {
       "data-open": open || void 0,
       "data-status": card.status,
       role: "region",
-      "aria-label": t("Side question")
+      "aria-label": t("Side chat")
     },
     (0, import_react11.createElement)(
       "div",
@@ -6952,7 +6967,17 @@ function BtwCardView({ card, compact: compact2 = false }) {
       ),
       when3 !== void 0 ? (0, import_react11.createElement)("time", { className: "bt-btw-time", dateTime: new Date(when3).toISOString() }, messageClock(when3)) : null,
       answering ? (0, import_react11.createElement)("span", { className: "bt-shimmer" }, t("Answering…")) : null,
-      card.status === "cancelled" ? (0, import_react11.createElement)("span", { className: "bt-btw-status" }, t("Cancelled")) : null
+      card.status === "cancelled" ? (0, import_react11.createElement)("span", { className: "bt-btw-status" }, t("Cancelled")) : null,
+      (0, import_react11.createElement)("button", {
+        type: "button",
+        className: "bt-icon-btn bt-btw-delete",
+        disabled: deleting,
+        "aria-label": t("Delete side chat"),
+        title: t("Delete side chat"),
+        onClick: () => {
+          void remove();
+        }
+      }, (0, import_react11.createElement)(CloseIcon))
     ),
     (0, import_react11.createElement)("p", { className: "bt-btw-note" }, t("Answered from progress so far; nothing was run")),
     open ? (0, import_react11.createElement)(
@@ -6986,14 +7011,14 @@ function BtwDock({ sessionId, useRoster, actions }) {
   const facts = useTurnFacts(sessionId, actions);
   const cards = dockCards(sessionCards(roster, sessionId), facts);
   if (cards.length === 0) return null;
-  return (0, import_react11.createElement)("div", { className: "bt-btw-dock" }, cards.map((card) => (0, import_react11.createElement)(BtwCardView, { key: card.id, card, compact: true })));
+  return (0, import_react11.createElement)("div", { className: "bt-btw-dock" }, cards.map((card) => (0, import_react11.createElement)(BtwCardView, { key: card.id, card, compact: true, sessionId, actions })));
 }
 function BtwTurnTail({ turn, sessionId, useRoster, actions }) {
   const roster = useRoster((value) => value);
   const facts = useTurnFacts(sessionId, actions);
   const cards = tailCards(sessionCards(roster, sessionId), turn, facts?.turns);
   if (cards.length === 0) return null;
-  return (0, import_react11.createElement)("div", { className: "bt-btw-stack" }, cards.map((card) => (0, import_react11.createElement)(BtwCardView, { key: card.id, card })));
+  return (0, import_react11.createElement)("div", { className: "bt-btw-stack" }, cards.map((card) => (0, import_react11.createElement)(BtwCardView, { key: card.id, card, sessionId, actions })));
 }
 
 // src/client/cells.js
@@ -7445,6 +7470,10 @@ function EarlierParts({ sessionId, roster, actions }) {
     observer.observe(node);
     return () => observer.disconnect();
   }, [view.cursor, view.loading, view.failed]);
+  const removeBtw = (cardId) => setView((current) => ({
+    ...current,
+    pages: current.pages.map((page) => ({ ...page, btw: page.btw.filter((card) => card?.id !== cardId) }))
+  }));
   const items = [];
   for (const page of view.pages) items.push(...withBtwRows(page.items, page.btw));
   return (0, import_react12.createElement)(
@@ -7455,11 +7484,11 @@ function EarlierParts({ sessionId, roster, actions }) {
       { ref: top, className: "bt-earlier-top" },
       view.loading ? (0, import_react12.createElement)(Shimmer, null, t("Loading earlier messages…")) : view.failed ? (0, import_react12.createElement)("button", { type: "button", className: "bt-soft", onClick: () => load(view.cursor) }, t("Couldn’t load earlier messages · Retry")) : view.cursor ? (0, import_react12.createElement)("button", { type: "button", className: "bt-soft", onClick: () => load(view.cursor) }, t("Load earlier")) : null
     ),
-    (0, import_react12.createElement)(ChatRows, { items, sessionId, roster, actions }),
+    (0, import_react12.createElement)(ChatRows, { items, sessionId, roster, actions, onBtwDelete: removeBtw }),
     (0, import_react12.createElement)(PartLine, { time: view.startedAt })
   );
 }
-function ChatRows({ items, sessionId, roster, actions, useUi, clock: clock4 = false }) {
+function ChatRows({ items, sessionId, roster, actions, useUi, clock: clock4 = false, onBtwDelete }) {
   const selfId = roster.byId[sessionId]?.id;
   const rows2 = [];
   for (const item of items) {
@@ -7472,7 +7501,7 @@ function ChatRows({ items, sessionId, roster, actions, useUi, clock: clock4 = fa
   let before;
   return rows2.flatMap((row, index) => {
     const key = rows2.length - index;
-    const shown = chatRow(row, key, { sessionId, selfId, roster, actions, useUi });
+    const shown = chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDelete });
     if (row.kind === "divider") {
       before = void 0;
       return [shown];
@@ -7482,7 +7511,7 @@ function ChatRows({ items, sessionId, roster, actions, useUi, clock: clock4 = fa
     return pause ? [(0, import_react12.createElement)("div", { key: `${key}:clock`, className: "bt-time-sep", role: "separator" }, clockLabel(row.time)), shown] : [shown];
   });
 }
-function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
+function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDelete }) {
   switch (row.kind) {
     case "divider":
       return (0, import_react12.createElement)(PartLine, { key, time: row.time });
@@ -7499,7 +7528,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi }) {
       return speaker ? (0, import_react12.createElement)(import_react12.Fragment, { key }, (0, import_react12.createElement)(SpeakerHead, { bot: speaker, time: row.time }), bubbles) : bubbles;
     }
     case "btw":
-      return (0, import_react12.createElement)(BtwCardView, { key, card: row.card, actions });
+      return (0, import_react12.createElement)(BtwCardView, { key, card: row.card, sessionId, actions, onDeleted: onBtwDelete });
     case "event": {
       if (row.role === "report") return (0, import_react12.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
       const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
