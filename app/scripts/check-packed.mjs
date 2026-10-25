@@ -5,7 +5,7 @@
 // Usage: node scripts/check-packed.mjs [app executable] [screenshot.png]
 // The executable defaults to the one that `npm run pack` or `npm run dist` writes into dist-pack/.
 import { spawn, spawnSync } from 'node:child_process'
-import { connect } from 'node:net'
+import { connect, createServer } from 'node:net'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -32,6 +32,10 @@ if (!existsSync(executable)) {
 
 const work = realpathSync.native(mkdtempSync(join(realpathSync.native(tmpdir()), 'ds-bot-packed-')))
 mkdirSync(join(work, 'home'))
+mkdirSync(join(work, 'shell'))
+// CDP cannot answer the native first-close dialog. The notice has its own tests; this check
+// exercises hiding and reopening a window after the user has acknowledged it.
+writeFileSync(join(work, 'shell', 'tray-close-acknowledged'), '')
 const children = []
 
 function stopChildren() {
@@ -79,11 +83,23 @@ function startMock() {
   })
 }
 
-async function appPage(port, deadline) {
+// Let the OS avoid occupied and reserved ports instead of guessing a fixed range.
+async function freePort() {
+  const server = createServer()
+  await new Promise((done, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', done)
+  })
+  const { port } = server.address()
+  await new Promise((done, reject) => { server.close(error => error ? reject(error) : done()) })
+  return port
+}
+
+async function appPage(port, deadline, main = false) {
   while (Date.now() < deadline) {
     try {
       const targets = await (await fetch(`http://127.0.0.1:${String(port)}/json/list`)).json()
-      const page = targets.find(target => target.type === 'page' && /^http:\/\/127\.0\.0\.1:\d+\//u.test(target.url))
+      const page = targets.find(target => main ? target.type === 'node' : target.type === 'page' && /^http:\/\/127\.0\.0\.1:\d+\//u.test(target.url))
       if (page) return page
     } catch {
       // The debugging port is not listening yet.
@@ -145,7 +161,7 @@ function devtools(url, problems) {
     pending.set(id, { resolve: settle(done), reject: settle(reject) })
     socket.send(JSON.stringify({ id, method, params }))
   })
-  return { opened, call }
+  return { opened, call, close: () => { socket.close() } }
 }
 
 // mica.css styles DSH's own page, which can change with a DSH upgrade; every rule must still
@@ -251,18 +267,30 @@ let failed = false
 const problems = []
 try {
   const modelUrl = await startMock()
-  const port = 9300 + Math.floor(Math.random() * 600)
+  const port = await freePort()
+  const mainPort = await freePort()
   // A terminal inside an Electron-based editor may set ELECTRON_RUN_AS_NODE, which turns the app into plain Node.
   const { ELECTRON_RUN_AS_NODE: _runAsNode, ...env } = process.env
   Object.assign(env, {
     DS_BOT_HOME: join(work, 'home'), DS_BOT_SHELL_DATA: join(work, 'shell'),
     DEEPSEEK_BASE_URL: modelUrl, DEEPSEEK_API_KEY: 'mock-key',
   })
-  const app = spawn(outsideCheckout(resolve(executable)), [`--remote-debugging-port=${String(port)}`], { stdio: 'inherit', env })
+  const runnable = outsideCheckout(resolve(executable))
+  const app = spawn(runnable, [`--remote-debugging-port=${String(port)}`, `--inspect=127.0.0.1:${String(mainPort)}`], { stdio: 'inherit', env })
   children.push(app)
   const exited = new Promise((done) => { app.once('exit', (code, signal) => { done({ code, signal }) }) })
   const cdp = devtools((await appPage(port, Date.now() + 120_000)).webSocketDebuggerUrl, problems)
   await cdp.opened
+  const main = devtools((await appPage(mainPort, Date.now() + 30_000, true)).webSocketDebuggerUrl, problems)
+  await main.opened
+  const windowState = async expression => {
+    const answer = await main.call('Runtime.evaluate', {
+      expression: `(() => { const { BrowserWindow } = process.getBuiltinModule('module').createRequire(process.execPath)('electron'); const win = BrowserWindow.getAllWindows()[0]; return ${expression} })()`,
+      returnByValue: true, awaitPromise: true,
+    })
+    if (answer.exceptionDetails) throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text)
+    return answer.result?.value
+  }
   const chatError = await chat(cdp).then(() => undefined, error => error)
   if (shotFile) {
     const { data } = await cdp.call('Page.captureScreenshot', { format: 'png' })
@@ -270,32 +298,34 @@ try {
     console.log(`check-packed: saved ${resolve(shotFile)}`)
   }
   if (chatError) throw chatError
-  // Closed the way a user closes it: the window hides and the app goes on.
-  void cdp.call('Runtime.evaluate', { expression: 'window.close()' }).catch(() => undefined)
+  // Close the native window: a renderer-initiated close can stop page CDP evaluations even
+  // when Electron prevents the close. Read visibility from the main process as well.
+  await windowState('win.close()')
   await sleep(4000)
   if (app.exitCode !== null) throw new Error('the app ended with its window')
-  const hidden = await cdp.call('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })
-  if (hidden.result?.value !== 'hidden') throw new Error('the window is not hidden')
+  if (await windowState('win !== undefined && !win.isDestroyed() && !win.isVisible()') !== true) throw new Error('the window is not hidden')
   await hostAlive()
   console.log('check-packed: the window is hidden and the Host goes on')
   // Starting the app again brings the window back; the second copy ends at once, because the
   // first one holds the lock.
-  const second = spawn(outsideCheckout(resolve(executable)), [`--remote-debugging-port=${String(port + 1)}`], { stdio: 'ignore', env })
+  const second = spawn(runnable, [`--remote-debugging-port=${String(await freePort())}`], { stdio: 'ignore', env })
   children.push(second)
   const secondExit = await Promise.race([new Promise((done) => { second.once('exit', (code) => { done(code) }) }), sleep(30_000).then(() => undefined)])
   if (secondExit === undefined) throw new Error('the second copy of the app did not end')
   if (app.exitCode !== null) throw new Error('the app ended when it was started again')
-  const shown = await cdp.call('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })
-  if (shown.result?.value !== 'visible') throw new Error('the window did not come back')
+  if (await windowState('win !== undefined && !win.isDestroyed() && win.isVisible()') !== true) throw new Error('the window did not come back')
   console.log('check-packed: the window came back when the app was started again')
   // The tray's Quit is the way out; the check cannot click the tray, so it asks the browser
   // target to close, which ends the app gracefully.
+  // Stopping the Host closes its event stream; that expected shutdown is not a page failure.
+  if (problems.length > 0) throw new Error(`page problems:\n  ${problems.join('\n  ')}`)
+  cdp.close()
+  main.close()
   await browserClose(port)
   const outcome = await Promise.race([exited, sleep(40_000).then(() => undefined)])
   if (outcome === undefined) throw new Error('the app did not exit after the quit')
   console.log(`check-packed: app exited (code ${String(outcome.code)}, signal ${String(outcome.signal)})`)
   if (outcome.code !== 0) throw new Error(`the app exited with code ${String(outcome.code)}`)
-  if (problems.length > 0) throw new Error(`page problems:\n  ${problems.join('\n  ')}`)
   console.log('check-packed: passed')
 } catch (error) {
   failed = true

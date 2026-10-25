@@ -10,6 +10,9 @@ import { installHooks } from './helpers/register.mjs'
 
 await installHooks()
 
+// Exercise the Windows installer on every runner; macOS and Linux debs open a release page.
+Object.defineProperty(process, 'platform', { value: 'win32' })
+
 before(async () => { await startApp() })
 
 test('the update waits for the window and is installed when the window comes back', async () => {
