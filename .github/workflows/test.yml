@@ -310,7 +310,7 @@ jobs:
       - run: docker build -f docker/Dockerfile -t ds-bot:test .
       - run: node docker/test.mjs ds-bot:test
       - name: Publish the tested image
-        if: github.event_name == 'push' && github.repository == 'Fei2411/DeepSeek-Bot'
+        if: github.event_name == 'push' && github.repository == 'Fei2411/DS-Bot'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_ACTOR: ${{ github.actor }}

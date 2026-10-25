@@ -55,7 +55,7 @@ test('the six app update states set the DS Bot row\'s hint and button', () => {
     [{ phase: 'downloading', version: '0.2.2' }, 'Downloading 0.2.2…', []],
     [{ phase: 'downloaded', version: '0.2.2' }, '0.2.2 is ready; it installs when you restart',
       [{ text: 'Restart to update', className: 'bt-fb-primary', action: 'installOwnApp' }]],
-    [{ phase: 'available', version: '0.2.2', page: 'https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.2.2' }, '0.2.2 is available',
+    [{ phase: 'available', version: '0.2.2', page: 'https://github.com/Fei2411/DS-Bot/releases/tag/v0.2.2' }, '0.2.2 is available',
       [{ text: 'Download', className: 'bt-soft bt-soft-sm', action: 'openOwnApp' }]],
     [{ phase: 'failed' }, 'Could not check for updates.', [{ text: 'Check for updates', className: 'bt-soft bt-soft-sm', action: 'checkOwnApp' }]],
   ]

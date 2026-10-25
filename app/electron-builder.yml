@@ -62,4 +62,4 @@ linux:
 publish:
   provider: github
   owner: Fei2411
-  repo: DeepSeek-Bot
+  repo: DS-Bot
