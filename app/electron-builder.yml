@@ -11,6 +11,8 @@ files:
 # The Host runs pnpm as a separate Node process to install plugins, so it must be a plain file.
 asarUnpack:
   - node_modules/pnpm/**
+  # Automatic unpacking misses versioned Linux libraries such as libvips-cpp.so.8.18.7.
+  - node_modules/@img/sharp*/**
 # node-pty, sharp and koffi ship prebuilt binaries for each platform. A rebuild would compile
 # node-pty from source and needs a C++ toolchain.
 npmRebuild: false
