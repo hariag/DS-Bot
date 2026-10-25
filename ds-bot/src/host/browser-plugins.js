@@ -94,7 +94,9 @@ export function install(rt) {
     ? rt.config.browserHeadless
     : defaultBrowserHeadless(process.platform)
   const downloadRoot = join(rt.home, 'browser-downloads')
-  const mounted = mountBrowserPlugin(rt.ctx, {
+  const mounted = {}
+  mountBrowserPlugin(rt.ctx, {
+    api: mounted,
     toolDefs: plugin.tools ?? plugin.toolDefs,
     defineTool,
     profileRoot: join(rt.home, 'browser-profiles'),
