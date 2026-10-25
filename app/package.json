@@ -16,6 +16,7 @@
     "pack": "electron-builder --dir --publish never",
     "dist": "electron-builder --publish never",
     "check-packed": "node scripts/check-packed.mjs",
+    "check-lifecycle": "node scripts/check-lifecycle.mjs",
     "shot": "node scripts/shot.mjs",
     "icon": "node scripts/icon.mjs",
     "test": "node --test \"test/*.test.mjs\""

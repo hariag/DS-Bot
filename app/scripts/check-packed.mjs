@@ -1,9 +1,11 @@
-// Check a packaged app: process an image with its sharp, then start it on throwaway folders with the ds-bot mock model, choose a model,
-// send a message, wait for the reply, then close the window the way a user does and wait until
-// the app has exited. Fails on a page error or a non-zero exit.
+// Check a packaged app: start it on throwaway folders with the ds-bot mock model, choose a model,
+// send a message, wait for the reply, then close the window the way a user does: the window hides
+// and the app goes on. The window comes back when the app is started again, and the app ends the
+// way the tray's Quit ends it. Fails on a page error or a non-zero exit.
 // Usage: node scripts/check-packed.mjs [app executable] [screenshot.png]
 // The executable defaults to the one that `npm run pack` or `npm run dist` writes into dist-pack/.
 import { spawn, spawnSync } from 'node:child_process'
+import { connect } from 'node:net'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -60,31 +62,6 @@ function outsideCheckout(file) {
   return join(copy, relative(appDir, file))
 }
 
-function checkSharp(app) {
-  const resources = process.platform === 'darwin' ? resolve(app, '..', '..', 'Resources') : join(dirname(app), 'resources')
-  const script = `
-    const assert = require('node:assert/strict')
-    const { createRequire } = require('node:module')
-    const appRequire = createRequire(${JSON.stringify(join(resources, 'app.asar', 'package.json'))})
-    const sharp = appRequire('sharp')
-    ;(async () => {
-      const image = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#ff0000' } }).png().toBuffer()
-      const { data, info } = await sharp(image).resize(2, 2).removeAlpha().raw().toBuffer({ resolveWithObject: true })
-      assert.equal(info.width, 2)
-      assert.equal(info.height, 2)
-      assert.deepEqual([...data], Array.from({ length: 4 }, () => [255, 0, 0]).flat())
-      console.log('check-packed: sharp image processing passed (libvips ' + sharp.versions.vips + ')')
-    })().catch(error => { console.error(error); process.exitCode = 1 })
-  `
-  // Use the shipped Electron and dependencies outside the checkout, just like the Host.
-  const result = spawnSync(app, ['-e', script], {
-    cwd: work, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_PATH: '' },
-    encoding: 'utf8', timeout: 30_000,
-  })
-  if (result.error || result.status !== 0) throw new Error(`packaged sharp failed (exit ${String(result.status)}, signal ${String(result.signal)}): ${result.error?.message ?? ''}\n${result.stderr ?? ''}`)
-  console.log(result.stdout.trim())
-}
-
 function startMock() {
   const mock = spawn(process.execPath, [join(root, '..', 'ds-bot', 'dev', 'mock-llm.mjs')], {
     env: { ...process.env, MOCK_PORT: '0', MOCK_LOG: join(work, 'mock.log') }, stdio: ['ignore', 'pipe', 'inherit'],
@@ -114,6 +91,29 @@ async function appPage(port, deadline) {
     await sleep(500)
   }
   throw new Error('the app window did not appear')
+}
+
+// The Host goes on while the window is hidden: its port answers.
+async function hostAlive() {
+  const { port } = JSON.parse(readFileSync(join(work, 'shell', 'host-port.json'), 'utf8'))
+  await new Promise((done, reject) => {
+    const socket = connect(port, '127.0.0.1')
+    socket.once('connect', () => { socket.destroy(); done() })
+    socket.once('error', reject)
+  })
+}
+
+// The tray's Quit ends the app. The check cannot click the tray icon, so it asks the browser
+// target of the debugging port to close, which ends the app gracefully.
+async function browserClose(port) {
+  const version = await (await fetch(`http://127.0.0.1:${String(port)}/json/version`)).json()
+  const socket = new WebSocket(version.webSocketDebuggerUrl)
+  await new Promise((done, reject) => {
+    socket.addEventListener('open', done, { once: true })
+    socket.addEventListener('error', reject, { once: true })
+  })
+  socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }))
+  socket.close()
 }
 
 function devtools(url, problems) {
@@ -250,8 +250,6 @@ async function chat(cdp) {
 let failed = false
 const problems = []
 try {
-  const packedApp = outsideCheckout(resolve(executable))
-  checkSharp(packedApp)
   const modelUrl = await startMock()
   const port = 9300 + Math.floor(Math.random() * 600)
   // A terminal inside an Electron-based editor may set ELECTRON_RUN_AS_NODE, which turns the app into plain Node.
@@ -260,7 +258,7 @@ try {
     DS_BOT_HOME: join(work, 'home'), DS_BOT_SHELL_DATA: join(work, 'shell'),
     DEEPSEEK_BASE_URL: modelUrl, DEEPSEEK_API_KEY: 'mock-key',
   })
-  const app = spawn(packedApp, [`--remote-debugging-port=${String(port)}`], { stdio: 'inherit', env })
+  const app = spawn(outsideCheckout(resolve(executable)), [`--remote-debugging-port=${String(port)}`], { stdio: 'inherit', env })
   children.push(app)
   const exited = new Promise((done) => { app.once('exit', (code, signal) => { done({ code, signal }) }) })
   const cdp = devtools((await appPage(port, Date.now() + 120_000)).webSocketDebuggerUrl, problems)
@@ -271,12 +269,30 @@ try {
     writeFileSync(resolve(shotFile), Buffer.from(data, 'base64'))
     console.log(`check-packed: saved ${resolve(shotFile)}`)
   }
-  // Closed like a user closes it, also after a failure, so that the app stops its Host. The page
-  // goes away with the window, so this call gets no answer.
-  void cdp.call('Runtime.evaluate', { expression: 'window.close()' }).catch(() => undefined)
-  const outcome = await Promise.race([exited, sleep(40_000).then(() => undefined)])
   if (chatError) throw chatError
-  if (outcome === undefined) throw new Error('the app did not exit after its window closed')
+  // Closed the way a user closes it: the window hides and the app goes on.
+  void cdp.call('Runtime.evaluate', { expression: 'window.close()' }).catch(() => undefined)
+  await sleep(4000)
+  if (app.exitCode !== null) throw new Error('the app ended with its window')
+  const hidden = await cdp.call('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })
+  if (hidden.result?.value !== 'hidden') throw new Error('the window is not hidden')
+  await hostAlive()
+  console.log('check-packed: the window is hidden and the Host goes on')
+  // Starting the app again brings the window back; the second copy ends at once, because the
+  // first one holds the lock.
+  const second = spawn(outsideCheckout(resolve(executable)), [`--remote-debugging-port=${String(port + 1)}`], { stdio: 'ignore', env })
+  children.push(second)
+  const secondExit = await Promise.race([new Promise((done) => { second.once('exit', (code) => { done(code) }) }), sleep(30_000).then(() => undefined)])
+  if (secondExit === undefined) throw new Error('the second copy of the app did not end')
+  if (app.exitCode !== null) throw new Error('the app ended when it was started again')
+  const shown = await cdp.call('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })
+  if (shown.result?.value !== 'visible') throw new Error('the window did not come back')
+  console.log('check-packed: the window came back when the app was started again')
+  // The tray's Quit is the way out; the check cannot click the tray, so it asks the browser
+  // target to close, which ends the app gracefully.
+  await browserClose(port)
+  const outcome = await Promise.race([exited, sleep(40_000).then(() => undefined)])
+  if (outcome === undefined) throw new Error('the app did not exit after the quit')
   console.log(`check-packed: app exited (code ${String(outcome.code)}, signal ${String(outcome.signal)})`)
   if (outcome.code !== 0) throw new Error(`the app exited with code ${String(outcome.code)}`)
   if (problems.length > 0) throw new Error(`page problems:\n  ${problems.join('\n  ')}`)

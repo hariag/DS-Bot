@@ -24,6 +24,10 @@ MIT License, Copyright (c) 2026 DeepSeek
     apps/desktop/src/preload-windows.ts, apps/desktop/src/preload-platform.ts
     and apps/desktop/src/preload-theme.ts: the caption-band marks, the
     fullscreen mark, the caption-color measure and the theme sync.
+  - app/src/shell.mjs, app/src/tray.mjs and app/src/background-notice.mjs follow
+    apps/desktop/src/tray.ts and apps/desktop/src/background-notice.ts: the
+    system tray with its menu, the window that hides instead of closing, and
+    the one-time confirmation before it hides.
   - app/src/bot-browser.mjs adapts apps/desktop/src/browser-guests.ts, and
     the browser part of app/src/preload.cjs follows
     apps/desktop/src/preload-browser.ts: the webview leases, the attachment
