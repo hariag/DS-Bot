@@ -209,8 +209,15 @@ export class BotViews {
   #allowedDownloadPath(botId, requested) {
     if (typeof requested !== 'string' || !isAbsolute(requested)) return undefined
     const target = resolve(requested)
-    const roots = (this.#downloadRoots.get(botId) ?? []).filter(root =>
-      containsPath(root.path, target) || (root.realPath !== undefined && containsPath(root.realPath, target)))
+    const roots = this.#downloadRoots.get(botId) ?? []
+    const allowedByRoot = roots.some(root => {
+      if (containsPath(root, target)) return true
+      try {
+        return containsPath(realpathSync(root), target)
+      } catch {
+        return false
+      }
+    })
     const temporaryRoot = resolve(tmpdir())
     let temporaryRealRoot
     try {
@@ -218,12 +225,16 @@ export class BotViews {
     } catch {}
     const isArtifact = temporaryRealRoot !== undefined && [temporaryRoot, temporaryRealRoot].some(root =>
       isDirectChild(root, target) && basename(target).startsWith(PLAYWRIGHT_ARTIFACT_PREFIX))
-    if (roots.length === 0 && !isArtifact) return undefined
+    if (!allowedByRoot && !isArtifact) return undefined
     try {
       mkdirSync(target, { recursive: true })
       const realTarget = realpathSync(target)
       const inRoot = roots.some(root => {
-        return root.realPath !== undefined && containsPath(root.realPath, realTarget)
+        try {
+          return containsPath(realpathSync(root), realTarget)
+        } catch {
+          return false
+        }
       })
       const inArtifacts = isArtifact && temporaryRealRoot !== undefined
         && isDirectChild(temporaryRealRoot, realTarget)
@@ -298,13 +309,7 @@ export class BotViews {
       if (!Array.isArray(downloadRoots) || downloadRoots.length > 4 || !Array.from(downloadRoots).every(root => typeof root === 'string' && isAbsolute(root))) {
         throw new Error('Invalid browser download roots.')
       }
-      this.#downloadRoots.set(botId, [...new Set(downloadRoots.map(root => resolve(root)))].map(path => {
-        try {
-          return { path, realPath: realpathSync(path) }
-        } catch {
-          return { path, realPath: undefined }
-        }
-      }))
+      this.#downloadRoots.set(botId, [...new Set(downloadRoots.map(root => resolve(root)))])
       this.#downloadPaths.delete(botId)
       for (const entry of this.#views.values()) if (entry.botId === botId) entry.downloadPath = undefined
     }

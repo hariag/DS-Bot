@@ -201,6 +201,33 @@ test('CDP download behavior saves to the Bot path and emits download events', as
   assert.equal(sessionId.length > 0, true)
 })
 
+test('CDP accepts a download root created after endpoint setup', async t => {
+  const { manager, handlers, views } = fixture()
+  t.after(() => manager.dispose())
+  const parentPath = mkdtempSync(join(tmpdir(), 'bot-views-download-late-root-'))
+  const rootPath = join(parentPath, 'downloads-root')
+  t.after(() => rmSync(parentPath, { recursive: true, force: true }))
+  const entry = manager.create('a')
+  const socket = await openSocket(await manager.endpoint('a', { downloadRoots: [rootPath] }))
+  t.after(() => socket.close())
+  assert.equal(existsSync(rootPath), false)
+  await request(socket, 1, 'Target.attachToTarget', { targetId: entry.tabId, flatten: true })
+  const downloadPath = join(rootPath, 'downloads')
+  const response = await request(socket, 2, 'Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath })
+  assert.deepEqual(response.result, {})
+  let savePath
+  const item = Object.assign(new EventEmitter(), {
+    setSavePath(path) { savePath = path; writeFileSync(path, 'download') },
+    getURL() { return 'https://example.com/file' },
+    getFilename() { return 'report.pdf' },
+  })
+  let prevented = false
+  handlers.get('bot:a')({ preventDefault() { prevented = true } }, item, views[0].webContents)
+  assert.equal(prevented, false)
+  assert.equal(existsSync(savePath), true)
+  assert.equal(readFileSync(savePath, 'utf8'), 'download')
+})
+
 test('download roots are isolated per Bot', async t => {
   const { manager, handlers, views } = fixture()
   t.after(() => manager.dispose())
