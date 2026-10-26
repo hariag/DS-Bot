@@ -466,7 +466,9 @@ export function install(rt) {
   async function runRound(room, round, signal, agent) {
     // The inbox check keeps a message sent during the last speaker's turn inside
     // this round: it drains at the loop's head even once the slots ran out.
-    for (let index = 0; index < round.slots.length || waitingLines(agent).length > 0 || (rt.roomInbox.get(room.id) ?? []).length > 0; index += 1) {
+    // Entries the drains below cannot take — user lines need their own round —
+    // must not hold the loop open, so only posts a Bot sent count here.
+    for (let index = 0; index < round.slots.length || waitingLines(agent).length > 0 || (rt.roomInbox.get(room.id) ?? []).some(post => post.botId !== undefined); index += 1) {
       if (signal.aborted) break
       drainRoomInbox(room, round, index, agent)
       drainRoomPosts(room, round, index)
@@ -664,7 +666,9 @@ export function install(rt) {
         for (const turn of round.started) void rt.stopRoomTurn?.(room.sessions?.[turn.botId] ?? turn.sessionId, turn.exchangeId)
       }
       await rt.save()
-      for (const post of posts) {
+      // Posts steered into the running turn reported back through the round too:
+      // the relay's snapshot only sees what queued before it.
+      for (const post of [...posts, ...(round.postBacks ?? [])]) {
         if (post.reportBack && rt.botOf(post.botId)) void reportRound(room, post, round)
       }
       exec.concludeTurn?.()

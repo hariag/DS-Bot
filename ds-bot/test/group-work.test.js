@@ -427,7 +427,7 @@ const busyRound = async (t, room, services) => {
 
 test('a post steered into a busy group Session picks its speakers inside the running round', async (t) => {
   const { host, first } = await busyRound(t)
-  await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档' }, 'a')
+  await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档', report_back: true }, 'a')
   const post = host.takePost()
   // The steered post lands as a user/message inside the running turn: it queues
   // into the room inbox, and the running round drains it for its speakers.
@@ -438,6 +438,9 @@ test('a post steered into a busy group Session picks its speakers inside the run
   host.finish('gc', '看过了。')
   await settle(() => first() !== undefined)
   assert.ok(first().replies.some(reply => reply.botId === 'c'))
+  // Its report_back reaches the poster once the round it joined ends.
+  await settle(() => host.agentOf('a').calls.length === 1)
+  assert.match(text(host.agentOf('a').calls[0]), /Tester: 看过了。/)
 
   // The group Session itself hears the post at its next step while it works.
   host.emit('r1', 'turn/start', { turn: 9 })
