@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
@@ -362,4 +363,49 @@ test('the team view lays out the shell footer but never decides whether it shows
   const foot = document.querySelector('.x_footArea')
   const deciding = rules.filter(rule => foot.matches(rule.selector) && /(^|;)display:/.test(rule.body))
   assert.deepEqual(deciding.map(rule => rule.selector), [])
+})
+
+// 公开#164: the footer's grid gives other plugins' entries rows of their own; it holds
+// wherever the shell shows the footer, and stays out of the one place it hides it.
+test('the shell footer is a grid wherever the shell shows it', () => {
+  for (const platform of ['web', 'windows', 'mac']) {
+    for (const collapsed of [false, true]) {
+      const foot = shell({ platform, collapsed }).document.querySelector('.x_footArea')
+      const grid = rules.some(rule => foot.matches(rule.selector) && /(^|;)display:grid/.test(rule.body))
+      assert.equal(grid, !(platform === 'windows' && collapsed), `${platform} ${collapsed ? 'collapsed' : 'open'}`)
+    }
+  }
+})
+
+// #452: the footer lost its Connect plugins button; the account menu and the
+// entries other plugins add keep the places they had.
+test('the Bot footer lays out the account, another plugin\'s entry and the settings trigger', () => {
+  const html = `<!doctype html><html><body><div class="x_root"><div class="x_footArea">
+    <div class="x_footerActions">
+      <div><span class="bt-foot-account"></span></div>
+      <div><span class="x_other-plugin"></span></div>
+    </div>
+    <div class="x_settingsArea"><button class="x_trigger"><span class="x_label">Settings</span></button></div>
+  </div></div></body></html>`
+  const { document } = new JSDOM(html).window
+  // The last rule that places a node is the one that counts, as in the cascade.
+  const columnOf = node => {
+    const placed = rules.filter(rule => node.matches(rule.selector) && /grid-column:/.test(rule.body))
+    assert.ok(placed.length > 0, `no grid placement for ${node.className}`)
+    return placed[placed.length - 1].body.match(/grid-column:([^;]+)/)[1]
+  }
+  // The account menu keeps the left of the row.
+  assert.equal(columnOf(document.querySelector('.bt-foot-account')), '1')
+  // Another plugin's entry takes a row of its own, above the Bot row.
+  assert.equal(columnOf(document.querySelector('.x_other-plugin')), '1/-1')
+  // The settings trigger keeps the right of the row.
+  assert.equal(columnOf(document.querySelector('.x_settingsArea')), '3')
+})
+
+// #452: the Connect plugins button left the footer; what DS Bot puts there is
+// the account menu and the way back from Agent mode.
+test('the Bot footer holds the account and the return button only', () => {
+  const source = readFileSync(new URL('../src/client/index.js', import.meta.url), 'utf8')
+  const ids = [...source.matchAll(/shadow\('sidebar\.footer\.action',\s*\{[^}]*?id:\s*['"]([^'"]+)['"]/g)].map(match => match[1])
+  assert.deepEqual(ids.sort(), ['bot-account', 'bot-return'])
 })

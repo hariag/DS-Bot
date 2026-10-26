@@ -94,7 +94,6 @@ var ZH = {
   // Sidebar and account menu
   "Bot list": "Bot 列表",
   "Setting up your Main Bot…": "正在设置你的主 Bot…",
-  "Connect plugins": "连接插件",
   "Automation tasks": "自动化任务",
   Connectors: "连接器",
   "Search connectors": "搜索连接器",
@@ -2323,7 +2322,6 @@ function useLinger(value, ms) {
 }
 
 // src/client/styles.js
-var SKIN_FOOT = ':is(div,footer):not([class*="_footArea"]):has(> div > [data-slot="sidebar.footer.action"] > .bt-connect-wrap)';
 var SHELL_CSS = `
 body{--bt-ink:#141414;--bt-danger:#e02135;--bt-ink-2:rgba(20,20,20,.6);--bt-ink-3:rgba(20,20,20,.36);--bt-bubble:#eeeeee;--bt-sidebar:#f7f7f7;--bt-main:#fcfcfc;--bt-line:rgba(20,20,20,.08);--bt-line-2:rgba(20,20,20,.15);--bt-line-weak:rgba(20,20,20,.1);--bt-hover:rgba(119,119,119,.09);--bt-active:rgba(119,119,119,.17);--bt-card:#ffffff;--bt-accent:#4d6bfe;--bt-green:#00c972;--bt-star:#ff9800;--bt-user:#070707;--bt-user-ink:#fcfcfc;--bt-tag-bg:rgba(20,20,20,.06);--bt-tag-ink:rgba(20,20,20,.56);--bt-knob:#ffffff;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
 /* iOS waits out a double-tap zoom on buttons; the plugin's own controls never zoom. */
@@ -2454,10 +2452,6 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-rail{align-items:center;padding:0 0 8px}
 .bt-rail .bt-row{justify-content:center;padding:6px 0;min-height:44px}
 .bt-side-foot{display:flex;padding-top:8px}
-.bt-connect{flex:1;height:36px;border-radius:999px;border:1px solid var(--bt-line);background:var(--bt-main);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background-color .12s ease}
-.bt-connect:hover{background:var(--bt-hover)}
-.bt-connect svg{flex:none;width:15px;height:15px}
-.bt-connect-wrap{position:relative;display:flex;flex:1 1 auto;min-width:0}
 
 .bt-head{position:relative;display:flex;justify-content:center;align-items:center;height:40px;flex:none;pointer-events:none}
 .bt-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;height:40px;padding:7.5px 13.5px 7.5px 7.5px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;max-width:70%;box-sizing:border-box;transition:background-color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
@@ -2854,21 +2848,17 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
 html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
 html[data-windows-titlebar] .bt-side-collapse,html[data-platform=darwin] .bt-side-collapse{display:none}
-/* The footer ends in the Bot row: the whale's settings seat, then Connect plugins. Every
-   other plugin's entry takes a whole row above it, in the shell's order, so none of them
-   squeezes the Bot row. */
+/* The footer ends in the Bot row: the whale's settings seat, then the account menu
+   when no plugin holds that seat. Every other plugin's entry takes a whole row above
+   it, in the shell's order, so none of them squeezes the Bot row. */
 [class*="_footArea"]{grid-template-columns:auto minmax(0,1fr);grid-auto-flow:row dense;align-items:center;gap:4px 9px;padding:8px 6px 6px!important}
 /* DSH hides the footer of a collapsed sidebar under a Windows title bar; the grid
    stays out of that one place. */
 html:not([data-windows-titlebar]) [class*="_footArea"],:not([class*="_collapsed"])>[class*="_footArea"]{display:grid!important}
 [class*="_footArea"]>[class*="_footerActions"],[class*="_footArea"]>[class*="_footerActions"]>div{display:contents!important}
 [class*="_footArea"]>[class*="_footerActions"]>div>*{grid-column:1/-1}
-[class*="_footArea"]>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2;order:1}
 [class*="_footArea"]>[class*="_settingsArea"]{grid-column:1;order:1;width:auto!important}
 [class*="_footArea"] button[aria-label="Settings"]{width:auto!important;padding:0!important;background:none!important;border-radius:50%!important;height:auto!important}
-${SKIN_FOOT}{display:flex!important;flex-direction:row!important;align-items:center!important;gap:9px!important}
-${SKIN_FOOT}>div:has(> [data-slot="sidebar.footer.action"]){display:flex!important;align-items:center!important;flex:1 1 auto!important;min-width:0!important}
-${SKIN_FOOT}>div:has(> [data-slot="sidebar.settings"]){order:-1!important;flex:none!important;width:auto!important}
 [class*="_widthHandle"]{display:none!important}
 
 .bt-voice-pane{flex-direction:column;align-items:center;justify-content:center;animation:bt-fade .2s ease-out}
@@ -2938,7 +2928,6 @@ body[data-bt-layout=flat] .bt-tools::after{display:none}
 .bt-you{width:36px;height:36px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bt-ink) 5%,var(--bt-sidebar));color:var(--bt-ink-2);box-shadow:inset 0 0 0 1px var(--bt-line);transition:background-color .12s ease}
 button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-sidebar))}
 .bt-you-wrap{display:inline-flex;padding:0}
-.bt-connect-foot{width:100%;height:36px}
 
 .bt-menu{position:fixed;pointer-events:auto;z-index:60;min-width:200px;padding:6px;border-radius:12px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 10px 20px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1),0 0 0 1px rgba(228,228,228,.04);display:flex;flex-direction:column;gap:2px;transform-origin:var(--bt-origin,top left);animation:bt-pop-drop ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .14s ease-out;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;box-sizing:border-box}
 .bt-menu button{display:flex;align-items:center;gap:4px;width:100%;min-height:30px;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px;line-height:18px;color:var(--bt-ink);cursor:pointer;box-sizing:border-box}
@@ -8683,23 +8672,6 @@ function UpdateButton({ useUpdate, actions }) {
     ), document.body) : null
   );
 }
-function ConnectPlugins({ wide, actions }) {
-  if (!wide) return null;
-  return (0, import_react14.createElement)(
-    "span",
-    { className: "bt-connect-wrap" },
-    (0, import_react14.createElement)(
-      "button",
-      {
-        type: "button",
-        className: "bt-connect bt-connect-foot",
-        onClick: () => actions.selectPanel("plugins")
-      },
-      (0, import_react14.createElement)(PlugIcon),
-      t("Connect plugins")
-    )
-  );
-}
 function YouAvatar() {
   return (0, import_react14.createElement)(
     "span",
@@ -8991,7 +8963,6 @@ var SIDEBAR_CSS = `
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
-[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
@@ -19432,7 +19403,6 @@ function apply(ctx) {
     () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
     () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
     () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
-    () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
     () => shadow("settings.trigger", { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
