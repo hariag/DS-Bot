@@ -754,12 +754,12 @@ test('a non-Main Bot still cannot change another Bot\u2019s thinking level', asy
   assert.equal((await call('state', {})).value.bots.find(bot => bot.id === writer.id).effort, 'low')
 })
 
-test('list_models names the thinking levels of the models a Bot runs on', async (t) => {
+test('list_bot_models names the thinking levels of the models a Bot runs on', async (t) => {
   const { ctx, call, stop } = start(undefined, { models: ['deepseek-v4-flash', 'plain'], reasoning: TOOL_REASONING })
   t.after(stop)
   const chief = (await call('state', {})).value.mainBotId
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
-  const result = await ctx.registeredTools.get('list_models').execute({}, { agent: { id: chief } })
+  const result = await ctx.registeredTools.get('list_bot_models').execute({}, { agent: { id: chief } })
   assert.match(result, /deepseek\/deepseek-v4-flash.*thinking: low, high \(default: high\)/)
   assert.doesNotMatch(result.split('\n').find(line => line.includes('deepseek/plain')), /thinking/)
 })
