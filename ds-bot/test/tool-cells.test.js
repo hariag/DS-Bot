@@ -553,6 +553,17 @@ test('a pruned group relay still draws the replies that survived', () => {
   assert.match(text(gone), /The group replies could not be shown/)
 })
 
+// The prune marker's "]" must not end the scan, and a cut inside a string must
+// not hide the replies after it either.
+test('a group relay recovers replies after the prune marker', () => {
+  const between = '{"replies":[{"botId":"writer","text":"First."}[... tool result middle pruned ...],{"botId":"chief","text":"Last."}]}'
+  const out = show(call('group_relay', 'direct', { content: between }), { sessionId: 'room' })
+  assert.match(text(out), /Writer.*First\..*Chief.*Last\./)
+  const inside = '{"replies":[{"botId":"writer","text":"First."},{"botId":"chief","text":"cut[... tool result middle pruned ...]{"botId":"writer","text":"Last."}]}'
+  const out2 = show(call('group_relay', 'direct', { content: inside }), { sessionId: 'room' })
+  assert.match(text(out2), /Writer.*First\..*Last\./)
+})
+
 // #38: a PTC group round's replies vanished once the round ended.
 test('a PTC group relay shows its replies from the sub-call, live and after reload', async () => {
   const replies = [{ botId: 'writer', text: 'Hello from Writer.' }, { botId: 'chief', text: 'Hello from Chief.' }]

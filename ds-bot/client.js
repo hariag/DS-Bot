@@ -7783,6 +7783,7 @@ function useLiveNote(actions, sessionId, id, entry) {
   }, [sessionId, id, key]);
 }
 var RELAY_LIST = /"replies"\s*:\s*\[/;
+var PRUNE_MARKER = /\[\s*\.\.\.[^\]]*\]/;
 function parseReplies(text) {
   try {
     return { replies: JSON.parse(text).replies ?? [], broken: false };
@@ -7791,38 +7792,44 @@ function parseReplies(text) {
   const replies = [];
   const head = RELAY_LIST.exec(text);
   if (head) {
-    let depth = 0;
-    let from = -1;
-    let inString = false;
-    let escaped = false;
-    for (let i = head.index + head[0].length; i < text.length; i += 1) {
-      const ch = text[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === "\\") escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') {
-        inString = true;
-        continue;
-      }
-      if (ch === "{") {
-        if (depth === 0) from = i;
-        depth += 1;
-      } else if (ch === "}") {
-        depth -= 1;
-        if (depth === 0 && from >= 0) {
-          try {
-            replies.push(JSON.parse(text.slice(from, i + 1)));
-          } catch {
-          }
-          from = -1;
-        }
-      } else if (ch === "]" && depth === 0) break;
+    for (const piece of text.slice(head.index + head[0].length).split(PRUNE_MARKER)) {
+      const first = piece.indexOf('{"');
+      if (first !== -1) scanReplies(piece, first, replies);
     }
   }
   return { replies, broken: true };
+}
+function scanReplies(text, start, replies) {
+  let depth = 0;
+  let from = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) from = i;
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0 && from >= 0) {
+        try {
+          replies.push(JSON.parse(text.slice(from, i + 1)));
+        } catch {
+        }
+        from = -1;
+      }
+    } else if (ch === "]" && depth === 0) break;
+  }
 }
 function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
   const [live, setLive] = (0, import_react12.useState)({ replies: [], speaking: null });
