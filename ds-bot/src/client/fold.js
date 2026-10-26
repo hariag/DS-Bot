@@ -11,6 +11,13 @@ const PREVIEW_LINES = 10
 const PREVIEW_CHARS = 600
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
 
+// Cuts `text` at `end` code units, backing up one when the last character is a
+// high surrogate so an emoji is not split in half.
+function cutAt(text, end) {
+  const code = text.charCodeAt(end - 1)
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? end - 1 : end)
+}
+
 // More than `max` lines, counted only as far as needed.
 function moreLines(text, max) {
   let lines = 1
@@ -25,16 +32,16 @@ function moreLines(text, max) {
 // Null when `text` is within `limit`.
 export function foldPreview(text, limit = FOLD_AT, markdown = true) {
   if (text.length <= limit.chars && !moreLines(text, limit.lines)) return null
-  let head = text.split('\n', PREVIEW_LINES).join('\n')
-  // Blank lines first: the preview starts at the first visible character.
-  head = head.replace(/^(\s*\n)+/, '')
+  // Blank lines first: the preview starts at the first visible character. An
+  // all-blank message has nothing to preview, so it does not fold at all.
+  const body = text.replace(/^(\s*\n)+/, '')
+  if (body.trim() === '') return null
+  let head = body.split('\n', PREVIEW_LINES).join('\n')
   if (head.length > PREVIEW_CHARS) {
     const cut = head.lastIndexOf('\n', PREVIEW_CHARS)
-    const end = cut > 0 ? cut : PREVIEW_CHARS
-    const code = head.charCodeAt(end - 1)
-    head = head.slice(0, code >= 0xd800 && code <= 0xdbff ? end - 1 : end)
+    head = cutAt(head, cut > 0 ? cut : PREVIEW_CHARS)
   }
-  if (head.trim() === '') return null
+  if (head.trim() === '') head = cutAt(body, PREVIEW_CHARS)
   if (!markdown) return head
   let open = null
   let openLine = -1
@@ -49,7 +56,7 @@ export function foldPreview(text, limit = FOLD_AT, markdown = true) {
     // The cut kept only the fence marker (a card opening like ```dsh-ui on
     // its own line): an empty fence renders nothing, so pull the start of
     // the fenced text in as the preview instead.
-    head = text.replace(/^(\s*\n)+/, '').slice(0, PREVIEW_CHARS)
+    head = cutAt(body, PREVIEW_CHARS)
     lines = head.split('\n')
     open = null
     openLine = -1
