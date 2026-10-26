@@ -39,6 +39,11 @@ function requestOf(record) {
   return null
 }
 
+// Two stored records describe the same task when their create requests match.
+function keyOfRequest(request) {
+  return request === null ? '' : JSON.stringify(request)
+}
+
 // The settings form's timing as a create request selector.
 function selectorOf(when) {
   const zone = typeof when?.timeZone === 'string' && when.timeZone !== '' ? when.timeZone : 'UTC'
@@ -135,11 +140,22 @@ export function install(rt) {
       rt.warn('ds-bot: tasks of %s not moved: %s', fromId, error?.message ?? error)
       return
     }
+    // A retry after a crash between create and delete must not copy a task twice.
+    let moved
+    try {
+      moved = new Set((await service.list({ sessionId: toId })).map(record => keyOfRequest(requestOf(record))))
+    } catch {
+      moved = new Set()
+    }
     for (const record of records) {
       const request = requestOf(record)
       if (request === null || (request.at !== undefined && Date.parse(request.at) <= Date.now())) continue
       try {
-        await service.create(toId, request)
+        const key = keyOfRequest(request)
+        if (!moved.has(key)) {
+          await service.create(toId, request)
+          moved.add(key)
+        }
         await service.delete({ sessionId: fromId, id: record.id })
       } catch (error) {
         rt.warn('ds-bot: task %s stayed with the earlier part: %s', record.title, error?.message ?? error)
