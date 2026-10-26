@@ -29,7 +29,7 @@ function identity(keys: KeyPair = generateKeyPair()) {
   return { deviceId: deviceIdFor(keys.publicKey), ...keys }
 }
 
-async function computer(handle: Handler = async (method, params) => ({ method, params }), onReadyCount?: (count: number) => void) {
+async function computer(handle: Handler = async (method, params) => ({ method, params })) {
   const self = identity()
   const registry = new DeviceRegistry()
   let calls = 0
@@ -41,7 +41,6 @@ async function computer(handle: Handler = async (method, params) => ({ method, p
     admits: (deviceId, key) => registry.admits(deviceId, key),
     authorize: (deviceId, key, hello) => registry.authorize(deviceId, key, hello),
     handle: (method, params, request) => { calls += 1; return handle(method, params, request) },
-    onReadyCount,
     retryMs: [50, 200],
   })
   host.start()
@@ -87,8 +86,7 @@ test('an unpaired phone is refused', async () => {
   const desk = await computer()
   await assert.rejects(phone(desk.self).client.connect(), { code: 'NOT_PAIRED' })
   desk.registry.openPairing()
-  await assert.rejects(phone(desk.self, { pairingCode: 'wrong' }).client.connect(), { code: 'NOT_PAIRED' })
-  await assert.rejects(phone(desk.self).client.connect(), { code: 'NOT_PAIRED' })
+  await assert.rejects(phone(desk.self, { pairingCode: 'wrong' }).client.connect())
   assert.equal(desk.registry.list().length, 0)
   assert.equal(desk.calls(), 0)
 })
@@ -138,8 +136,6 @@ test('a removed phone is cut off and cannot come back', async () => {
   desk.host.disconnect(link.self.deviceId)
   await closed
   await assert.rejects(phone(desk.self, {}, link.self, link.token).client.connect(), { code: 'NOT_PAIRED' })
-  desk.registry.openPairing()
-  await assert.rejects(phone(desk.self, {}, link.self, link.token).client.connect(), { code: 'NOT_PAIRED' })
 })
 
 test('the Server says when the computer is offline', async () => {
@@ -183,279 +179,3 @@ async function hello(self: { deviceId: string; publicKey: string }, accessToken:
     ws.close()
   }
 }
-
-test('the ready count fires when a phone joins and leaves', async () => {
-  const counts: number[] = []
-  const desk = await computer(async (method, params) => ({ method, params }), count => counts.push(count))
-  const { code } = desk.registry.openPairing()
-  const offer = parsePairingUri(pairingUri({ server: server.url, hostDeviceId: desk.self.deviceId, hostKey: desk.self.publicKey, code, name: 'Desk' }))
-  const link = phone({ deviceId: offer.hostDeviceId, publicKey: offer.hostKey }, { pairingCode: offer.code })
-  await link.client.connect()
-  assert.deepEqual(counts, [1])
-  assert.deepEqual(desk.host.connectedDevices(), [link.self.deviceId])
-  await link.client.close()
-  await new Promise(resolve => setTimeout(resolve, 400))
-  assert.deepEqual(counts, [1, 0])
-  assert.deepEqual(desk.host.connectedDevices(), [])
-})
-
-class FakeSocket {
-  readyState = 0
-  sent: unknown[] = []
-  binaryType = ''
-  onopen?: () => void
-  onmessage?: (event: { data: unknown }) => void
-  onerror?: () => void
-  onclose?: () => void
-  send(data: unknown) { this.sent.push(data) }
-  close() { this.readyState = 3 }
-}
-
-test('events from a stale relay socket are ignored', async () => {
-  const opts = { deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host' }
-  const first = new FakeSocket()
-  const transport = new RelayTransport('ws://unused', { ...opts, handshakeTimeoutMs: 20, createSocket: () => first as unknown as WebSocket })
-  // The handshake times out while CONNECTING; the socket may still open later.
-  await assert.rejects(transport.connect(), { code: 'SERVER_UNREACHABLE' })
-  first.readyState = 1
-  assert.doesNotThrow(() => first.onopen?.())
-  assert.equal(first.sent.length, 0)
-
-  const sockets: FakeSocket[] = []
-  const again = new RelayTransport('ws://unused', { ...opts, handshakeTimeoutMs: 20, createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s as unknown as WebSocket } })
-  void again.connect().catch(() => {})
-  void again.close()
-  void again.connect().catch(() => {})
-  const [old, current] = sockets
-  assert.doesNotThrow(() => old.onclose?.())
-  old.readyState = 1
-  assert.doesNotThrow(() => old.onopen?.())
-  assert.equal(old.sent.length, 0)
-  current.readyState = 1
-  current.onopen?.()
-  assert.equal(current.sent.length, 1)
-})
-
-test('a ready connection the Server ends with an error still reports the close', async () => {
-  const socket = new FakeSocket()
-  const transport = new RelayTransport('ws://unused', { deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host', createSocket: () => socket as unknown as WebSocket })
-  const frame = (type: string, payload: unknown) => socket.onmessage?.({ data: JSON.stringify(createControlFrame(type as never, payload)) })
-  const ready = transport.connect()
-  socket.readyState = 1
-  socket.onopen?.()
-  frame('hello.ack', { protocol: PROTOCOL_VERSION, capabilities: ['transport.relay'] })
-  frame('connect.accepted', { connectionId: 'c-1' })
-  await ready
-  let closes = 0
-  transport.onClose(() => { closes += 1 })
-  frame('error', { code: 'HOST_OFFLINE', message: 'gone' })
-  socket.onclose?.()
-  assert.equal(closes, 1)
-  assert.equal(transport.closeReason?.message, 'gone')
-})
-
-test('a silent ready socket is probed, then reported once when it stays dead', async () => {
-  const sockets: FakeSocket[] = []
-  const transport = new RelayTransport('ws://unused', {
-    deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host',
-    watchdogIntervalMs: 10, watchdogSilenceMs: 30, probeTimeoutMs: 40,
-    createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s as unknown as WebSocket },
-  })
-  const closed = new Promise<Error | undefined>(resolve => transport.onClose(() => resolve(transport.closeReason)))
-  void transport.connect().catch(() => {})
-  const socket = sockets[0]
-  // Become ready the way the real handshake does.
-  socket.readyState = 1
-  socket.onopen?.()
-  ;(transport as unknown as { connectionId?: string }).connectionId = 'conn-1'
-  ;(transport as unknown as { finishConnection(): void }).finishConnection()
-  await new Promise(r => setTimeout(r, 45))
-  assert.equal(socket.sent.length, 2, 'hello then a watchdog ping')
-  const reason = await Promise.race([closed, new Promise(r => setTimeout(() => r('timeout'), 400))])
-  assert.ok(reason instanceof Error, 'close reported within the probe window')
-  assert.equal((reason as Error & { code?: string }).code, 'SERVER_UNREACHABLE')
-  socket.onclose?.()
-  assert.equal(socket.readyState, 3)
-})
-
-test('a pong after the probe keeps the link alive', async () => {
-  const sockets: FakeSocket[] = []
-  const transport = new RelayTransport('ws://unused', {
-    deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host',
-    watchdogIntervalMs: 10, watchdogSilenceMs: 60, probeTimeoutMs: 40,
-    createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s as unknown as WebSocket },
-  })
-  let closes = 0
-  transport.onClose(() => { closes += 1 })
-  void transport.connect().catch(() => {})
-  const socket = sockets[0]
-  socket.readyState = 1
-  socket.onopen?.()
-  ;(transport as unknown as { connectionId?: string }).connectionId = 'conn-1'
-  ;(transport as unknown as { finishConnection(): void }).finishConnection()
-  await new Promise(r => setTimeout(r, 75))
-  assert.equal(socket.sent.length, 2)
-  socket.onmessage?.({ data: JSON.stringify(createControlFrame('pong', { nonce: 1 })) })
-  await new Promise(r => setTimeout(r, 50))
-  assert.equal(closes, 0, 'a heard frame after the probe keeps the socket even past probeTimeoutMs')
-  assert.equal(socket.sent.length, 2, 'probe clears after the answer and waits a fresh silence window')
-  await new Promise(r => setTimeout(r, 25))
-  assert.equal(socket.sent.length, 3, 'a fresh silence window probes again instead of dying unprobed')
-  socket.onmessage?.({ data: JSON.stringify(createControlFrame('pong', { nonce: 2 })) })
-  await new Promise(r => setTimeout(r, 50))
-  assert.equal(closes, 0)
-  void transport.close()
-})
-
-test('probe(timeoutMs) closes an unresponsive half-open socket within its own budget and ends a closed socket at once', async () => {
-  const sockets: FakeSocket[] = []
-  const transport = new RelayTransport('ws://unused', {
-    deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host',
-    watchdogIntervalMs: 5_000, watchdogSilenceMs: 15_000, probeTimeoutMs: 10_000,
-    createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s as unknown as WebSocket },
-  })
-  const closed = new Promise<Error | undefined>(resolve => transport.onClose(() => resolve(transport.closeReason)))
-  void transport.connect().catch(() => {})
-  const socket = sockets[0]
-  socket.readyState = 1
-  socket.onopen?.()
-  ;(transport as unknown as { connectionId?: string }).connectionId = 'conn-1'
-  ;(transport as unknown as { finishConnection(): void }).finishConnection()
-
-  transport.probe(60)
-  assert.equal(socket.sent.length, 2)
-  const reason = await Promise.race([closed, new Promise(r => setTimeout(() => r('timeout'), 300))])
-  assert.ok(reason instanceof Error, 'unanswered wake probe closes well before the watchdog window')
-
-  const deadSockets: FakeSocket[] = []
-  const dead = new RelayTransport('ws://unused', {
-    deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host',
-    createSocket: () => { const s = new FakeSocket(); deadSockets.push(s); return s as unknown as WebSocket },
-  })
-  let deadCloses = 0
-  dead.onClose(() => { deadCloses += 1 })
-  void dead.connect().catch(() => {})
-  deadSockets[0].readyState = 1
-  deadSockets[0].onopen?.()
-  ;(dead as unknown as { connectionId?: string }).connectionId = 'conn-2'
-  ;(dead as unknown as { finishConnection(): void }).finishConnection()
-  deadSockets[0].readyState = 3
-  dead.probe(2_500)
-  assert.equal(deadCloses, 1, 'already-closed socket reports close immediately on probe()')
-})
-
-test('repeated unanswered probe() calls still close at the earliest deadline', async () => {
-  const sockets: FakeSocket[] = []
-  const transport = new RelayTransport('ws://unused', {
-    deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host',
-    watchdogIntervalMs: 5_000, watchdogSilenceMs: 15_000, probeTimeoutMs: 10_000,
-    createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s as unknown as WebSocket },
-  })
-  let closedAt = 0
-  const closed = new Promise<Error | undefined>(resolve => transport.onClose(() => {
-    closedAt = Date.now()
-    resolve(transport.closeReason)
-  }))
-  void transport.connect().catch(() => {})
-  const socket = sockets[0]
-  socket.readyState = 1
-  socket.onopen?.()
-  ;(transport as unknown as { connectionId?: string }).connectionId = 'conn-1'
-  ;(transport as unknown as { finishConnection(): void }).finishConnection()
-
-  const start = Date.now()
-  transport.probe(1_250)
-  await new Promise(r => setTimeout(r, 1_020))
-  transport.probe(1_250)
-  assert.equal(socket.sent.length, 3, 'hello plus initial and repeated wake pings')
-  const reason = await Promise.race([closed, new Promise(r => setTimeout(() => r('timeout'), 600))])
-  assert.ok(reason instanceof Error, 'repeated probe does not cancel or postpone original failure deadline')
-  assert.ok(closedAt - start < 1_650, `expected closure near 1250ms, got ${closedAt - start}ms`)
-})
-
-test('idle ping/pong over a real relay keeps a paired connection alive across multiple probe cycles', async () => {
-  const localServer = await startRelayServer()
-  const self = identity()
-  const registry = new DeviceRegistry()
-  const host = new HostLink({
-    url: localServer.url,
-    identity: identity(),
-    accessToken: randomToken(),
-    name: 'Desk',
-    admits: (deviceId, key) => registry.admits(deviceId, key),
-    authorize: (deviceId, key, hello) => registry.authorize(deviceId, key, hello),
-    handle: async (method, params) => ({ method, params }),
-    retryMs: [50, 200],
-  })
-  // @ts-expect-error read host identity off options
-  const hostIdentity = (host as { options: { identity: { deviceId: string; publicKey: string } } }).options.identity
-  host.start()
-  let client: RpcClient | undefined
-  try {
-    await host.waitOnline()
-    const { code } = registry.openPairing()
-    const relay = new RelayTransport(localServer.url, {
-      deviceId: self.deviceId,
-      identityKey: self.publicKey,
-      accessToken: randomToken(),
-      targetDeviceId: hostIdentity.deviceId,
-      watchdogIntervalMs: 25,
-      watchdogSilenceMs: 60,
-      probeTimeoutMs: 50,
-    })
-    const secure = new SecureTransport(relay, self, { deviceId: hostIdentity.deviceId, identityKey: hostIdentity.publicKey }, {
-      hello: { pairingCode: code, name: 'Phone' },
-      handshakeTimeoutMs: 2_000,
-    })
-    client = new RpcClient(secure, 5_000)
-    let closed = false
-    client.onClose(() => { closed = true })
-    await client.connect()
-    await new Promise(resolve => setTimeout(resolve, 220))
-    assert.equal(closed, false, 'pong replies reset probeAt instead of letting the watchdog kill healthy idle links')
-    assert.deepEqual(await client.rpc('ping', null), { method: 'ping', params: null })
-  } finally {
-    await client?.close().catch(() => {})
-    await host.stop().catch(() => {})
-    await localServer.close().catch(() => {})
-  }
-})
-
-test('probe() sends a ping at once', async () => {
-  const sockets: FakeSocket[] = []
-  const transport = new RelayTransport('ws://unused', {
-    deviceId: 'd-phone', identityKey: 'k', accessToken: 't', targetDeviceId: 'd-host',
-    createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s as unknown as WebSocket },
-  })
-  void transport.connect().catch(() => {})
-  const socket = sockets[0]
-  socket.readyState = 1
-  socket.onopen?.()
-  ;(transport as unknown as { connectionId?: string }).connectionId = 'conn-1'
-  ;(transport as unknown as { finishConnection(): void }).finishConnection()
-  transport.probe()
-  assert.equal(socket.sent.length, 2, 'hello then the probed ping')
-  transport.probe()
-  assert.equal(socket.sent.length, 2, 'no second ping while one is pending')
-  void transport.close()
-})
-
-test('the computer stops while its socket is still connecting', async () => {
-  const self = identity()
-  const registry = new DeviceRegistry()
-  const host = new HostLink({
-    url: 'ws://unused',
-    identity: self,
-    accessToken: randomToken(),
-    name: 'Desk',
-    admits: (deviceId, key) => registry.admits(deviceId, key),
-    authorize: (deviceId, key, hello) => registry.authorize(deviceId, key, hello),
-    handle: async () => null,
-    // A socket that never reports its close.
-    createSocket: () => new FakeSocket() as unknown as WebSocket,
-  })
-  host.start()
-  await new Promise(resolve => setTimeout(resolve, 10))
-  const stopped = await Promise.race([host.stop().then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 1_000))])
-  assert.equal(stopped, true)
-})

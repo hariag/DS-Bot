@@ -44,8 +44,6 @@ export interface HostLinkOptions {
   maxTunnels?: number
   retryMs?: readonly [number, number]
   onStatus?: (status: HostLinkStatus) => void
-  /** How many phones hold a ready tunnel, fired on each change. */
-  onReadyCount?: (count: number) => void
 }
 
 export type HostLinkStatus = 'stopped' | 'connecting' | 'online' | 'offline'
@@ -62,13 +60,10 @@ interface Tunnel {
   lastCounter: number
   sendTail: Promise<void>
   calls: Map<string, AbortController>
-  // Unsettled emit() sends; a phone too far behind gets dropped and reconnects.
-  emitPending?: number
 }
 
 const RELAY_CAPABILITY = 'transport.relay'
 const MAX_CALLS_PER_TUNNEL = 32
-const MAX_EMIT_PENDING = 64
 const SERVER_SILENCE_MS = 75_000
 
 class TunnelError extends Error {
@@ -92,9 +87,7 @@ export class HostLink {
   private running = false
   private loopDone?: Promise<void>
   private wake?: () => void
-  private endAttempt?: () => void
   private currentStatus: HostLinkStatus = 'stopped'
-  private lastError?: string
   private readonly statusWaiters = new Set<() => void>()
 
   constructor(options: HostLinkOptions) {
@@ -106,9 +99,6 @@ export class HostLink {
 
   get status(): HostLinkStatus { return this.currentStatus }
 
-  /** Why the last connect attempt failed, kept for surfaces that show 'offline'. */
-  get error(): string | undefined { return this.lastError }
-
   start(): void {
     if (this.running) return
     this.running = true
@@ -119,9 +109,6 @@ export class HostLink {
     this.running = false
     this.wake?.()
     this.socket?.close()
-    // A socket closed while it is still connecting may never report its close, so
-    // the attempt is ended here too.
-    this.endAttempt?.()
     await this.loopDone
     this.loopDone = undefined
   }
@@ -153,15 +140,7 @@ export class HostLink {
   emit(event: string, data: unknown): void {
     const message = encodeMessage(createMessage('event', { event, data }))
     for (const tunnel of this.tunnels.values()) {
-      if (tunnel.stage !== 'ready') continue
-      if ((tunnel.emitPending ?? 0) >= MAX_EMIT_PENDING) {
-        this.dropTunnel(tunnel, 'SEND_FAILED')
-        continue
-      }
-      tunnel.emitPending = (tunnel.emitPending ?? 0) + 1
-      void this.sendSecure(tunnel, message)
-        .catch(() => this.dropTunnel(tunnel, 'SEND_FAILED'))
-        .finally(() => { if (tunnel.emitPending !== undefined) tunnel.emitPending -= 1 })
+      if (tunnel.stage === 'ready') void this.sendSecure(tunnel, message).catch(() => this.dropTunnel(tunnel, 'SEND_FAILED'))
     }
   }
 
@@ -226,37 +205,20 @@ export class HostLink {
           if (frame.type === 'hello.ack') {
             this.acceptHello(frame.payload as Partial<HelloAckPayload>)
             accepted = true
-            this.lastError = undefined
             this.setStatus('online')
             return
           }
           if (!accepted) throw new Error('The Server did not answer hello first.')
           this.handleFrame(frame)
-        } catch (error) {
-          this.lastError = error instanceof Error ? error.message : String(error)
+        } catch {
           socket.close()
         }
       }
-      const end = (): void => {
+      socket.onerror = () => socket.close()
+      socket.onclose = () => {
         clearInterval(watchdog)
         if (this.socket === socket) this.socket = undefined
-        if (this.endAttempt === end) this.endAttempt = undefined
         resolve(accepted)
-      }
-      this.endAttempt = end
-      // An error ends the attempt here: on Node 22's WebSocket, close() on a socket that
-      // failed while connecting fires error again and no close, so it is called once.
-      let closing = false
-      socket.onerror = () => {
-        this.lastError = 'The Server did not answer the connection.'
-        if (closing) return
-        closing = true
-        socket.close()
-        end()
-      }
-      socket.onclose = () => {
-        if (!accepted && this.lastError === undefined) this.lastError = 'The Server closed the connection.'
-        end()
       }
     })
   }
@@ -334,7 +296,6 @@ export class HostLink {
       if (!allowed) throw new TunnelError('NOT_PAIRED', 'The phone is not paired.')
       const reply = tunnel.noise.writeHandshake(encodeHandshakeHello(this.options.name === undefined ? {} : { name: this.options.name }))
       tunnel.stage = 'ready'
-      this.options.onReadyCount?.(this.connectedDevices().length)
       this.sendControl('secure.handshake', {
         connectionId: tunnel.connectionId,
         targetDeviceId: tunnel.deviceId,
@@ -390,15 +351,13 @@ export class HostLink {
       for (const plaintext of tunnel.outgoing.encode(data)) {
         if (this.tunnels.get(tunnel.connectionId) !== tunnel || this.socket === undefined) throw new Error('The tunnel closed.')
         const ciphertext = tunnel.noise.encrypt(plaintext)
-        const socket = this.socket
-        const frame = encodeControlFrame(createControlFrame('relay', {
+        await waitForRelayCapacity(this.socket)
+        this.sendControl('relay', {
           connectionId: tunnel.connectionId,
           targetDeviceId: tunnel.deviceId,
           counter: tunnel.counter,
           ciphertext: toBase64Url(ciphertext),
-        } satisfies RelayPayload), this.limits)
-        await waitForRelayCapacity(socket, new TextEncoder().encode(frame).byteLength)
-        socket.send(frame)
+        } satisfies RelayPayload)
         tunnel.counter += 1
       }
     })
@@ -409,7 +368,6 @@ export class HostLink {
   private dropTunnel(tunnel: Tunnel, code: string | undefined): void {
     if (this.tunnels.get(tunnel.connectionId) !== tunnel) return
     this.tunnels.delete(tunnel.connectionId)
-    if (tunnel.stage === 'ready') this.options.onReadyCount?.(this.connectedDevices().length)
     for (const controller of tunnel.calls.values()) controller.abort(new Error('The phone link closed.'))
     tunnel.calls.clear()
     tunnel.noise.destroy()

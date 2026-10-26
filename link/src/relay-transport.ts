@@ -24,12 +24,6 @@ export interface RelayTransportOptions {
   targetDeviceId: string
   capabilities?: string[]
   handshakeTimeoutMs?: number
-  /** How often a ready socket's silence is checked; default 5 s. */
-  watchdogIntervalMs?: number
-  /** Silence after which a ready socket is probed; default 15 s. */
-  watchdogSilenceMs?: number
-  /** Silence after a probe that declares the link dead; default 10 s. */
-  probeTimeoutMs?: number
   createSocket?: (url: string) => WebSocket
 }
 
@@ -43,20 +37,10 @@ export class RelayTransport extends BaseTransport implements SecureHandshakeTran
   private bytesReceived = 0
   private connectionId?: string
   private relayCounter = 0
-  /** Why the Host or Server dropped a connection that was already set up, such as a phone no longer paired. */
-  closeReason?: Error
   private readyResolve?: () => void
   private readyReject?: (error: Error) => void
   private handshakeTimer?: ReturnType<typeof setTimeout>
   private controlFrameLimits: ControlFrameByteLimits = {}
-  /** Last frame heard from the current socket, unanswered probe start/last ping timestamps (0 = none), and its timer. */
-  private lastHeard = 0
-  private probeAt = 0
-  private pingSentAt = 0
-  private probeDeadline = 0
-  private probeTimer?: ReturnType<typeof setTimeout>
-  /** Ends the current socket (reports its close once, without waiting for its close event). */
-  private endCurrent?: (reason?: Error, emit?: boolean) => void
   private readonly url: string
   private readonly options: RelayTransportOptions
 
@@ -71,44 +55,17 @@ export class RelayTransport extends BaseTransport implements SecureHandshakeTran
     this.socket = this.options.createSocket?.(this.url) ?? new WebSocket(this.url)
     this.controlFrameLimits = {}
     this.relayCounter = 0
-    this.closeReason = undefined
     this.socket.binaryType = 'arraybuffer'
     await new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve
       this.readyReject = reject
       this.handshakeTimer = setTimeout(
-        () => this.failConnection(Object.assign(new Error('Relay control handshake timed out'), { code: 'SERVER_UNREACHABLE' })),
+        () => this.failConnection(new Error('Relay control handshake timed out')),
         this.options.handshakeTimeoutMs ?? 10_000,
       )
       const socket = this.socket!
-      // Every event from this socket counts only while it is still the current
-      // one: a timed-out or replaced socket may still deliver late events, and
-      // a stale close must never clear the live connection.
-      const stale = () => this.socket !== socket
-      // Giving up on this socket reports its close at once — on a half-open
-      // link the socket's own close event can take minutes to arrive.
-      let ended = false
-      let watchdog: ReturnType<typeof setInterval> | undefined
-      const endSocket = (reason?: Error, emit = true) => {
-        if (ended) return
-        ended = true
-        if (reason !== undefined) this.closeReason = reason
-        socket.close()
-        if (this.socket === socket) {
-          this.socket = undefined
-          this.connectionId = undefined
-          this.endCurrent = undefined
-        }
-        if (watchdog !== undefined) clearInterval(watchdog)
-        this.clearProbe()
-        if (emit) this.emitClose()
-      }
-      this.endCurrent = endSocket
-      this.lastHeard = Date.now()
-      this.clearProbe()
-      socket.onmessage = event => { if (!stale()) { this.lastHeard = Date.now(); this.clearProbe(); this.handleSocketMessage(event.data) } }
+      socket.onmessage = event => this.handleSocketMessage(event.data)
       socket.onopen = () => {
-        if (stale()) return
         this.sendControl('hello', {
           role: 'client',
           deviceId: this.options.deviceId,
@@ -118,46 +75,26 @@ export class RelayTransport extends BaseTransport implements SecureHandshakeTran
           capabilities: this.offeredCapabilities(),
         } satisfies HelloPayload)
       }
-      socket.onerror = () => { if (!stale()) this.failConnection(Object.assign(new Error(`RelayTransport failed to connect to ${this.url}`), { code: 'SERVER_UNREACHABLE' })) }
+      socket.onerror = () => this.failConnection(new Error(`RelayTransport failed to connect to ${this.url}`))
       socket.onclose = () => {
-        if (ended) return
-        // Only a newer socket makes this close stale: a socket that
-        // failConnection or close() cleared still has to report the close.
-        if (this.socket !== undefined && stale()) return
-        ended = true
-        if (watchdog !== undefined) clearInterval(watchdog)
-        this.clearProbe()
-        if (this.readyReject !== undefined) this.failConnection(Object.assign(new Error('Relay control channel closed before it was ready'), { code: 'SERVER_UNREACHABLE' }))
+        if (this.readyReject !== undefined) this.failConnection(new Error('Relay control channel closed before it was ready'))
         this.socket = undefined
         this.connectionId = undefined
         this.emitClose()
       }
-      watchdog = setInterval(() => {
-        if (ended || this.socket !== socket || this.connectionId === undefined) return
-        const now = Date.now()
-        if (this.probeAt > 0) {
-          if (now - Math.max(this.lastHeard, this.probeAt) >= (this.options.probeTimeoutMs ?? 10_000)) {
-            endSocket(Object.assign(new Error('The Server stopped answering'), { code: 'SERVER_UNREACHABLE' }))
-          }
-          return
-        }
-        if (now - this.lastHeard >= (this.options.watchdogSilenceMs ?? 15_000)) this.probeNow()
-      }, this.options.watchdogIntervalMs ?? 5_000)
     })
   }
 
   async send(data: Uint8Array): Promise<void> {
     if (this.socket?.readyState !== 1) throw new Error('relay transport is not connected')
     if (this.connectionId === undefined) throw new Error('relay connection has not been authorized')
-    const socket = this.socket
-    const frame = encodeControlFrame(createControlFrame('relay', {
+    await waitForRelayCapacity(this.socket)
+    this.sendControl('relay', {
       connectionId: this.connectionId,
       targetDeviceId: this.options.targetDeviceId,
       counter: this.relayCounter,
       ciphertext: toBase64Url(data),
-    } satisfies RelayPayload), this.controlFrameLimits)
-    await waitForRelayCapacity(socket, new TextEncoder().encode(frame).byteLength)
-    socket.send(frame)
+    } satisfies RelayPayload)
     this.bytesSent += data.byteLength
     this.relayCounter += 1
   }
@@ -188,56 +125,8 @@ export class RelayTransport extends BaseTransport implements SecureHandshakeTran
     return () => this.handshakeHandlers.delete(cb)
   }
 
-  /** Ask the Server for a liveness reply now; a dead socket ends itself promptly. */
-  probe(timeoutMs?: number): void {
-    const socket = this.socket
-    if (socket === undefined || this.connectionId === undefined) return
-    if (socket.readyState > 1) {
-      this.endCurrent?.(Object.assign(new Error('The connection to the Server closed'), { code: 'SERVER_UNREACHABLE' }))
-      return
-    }
-    if (socket.readyState !== 1) return
-    const limit = timeoutMs ?? (this.options.probeTimeoutMs ?? 10_000)
-    const now = Date.now()
-    if (this.probeAt === 0 || now - this.pingSentAt >= Math.min(limit, 1_000)) this.probeNow(now)
-    const deadline = now + limit
-    if (this.probeTimer !== undefined && deadline >= this.probeDeadline) return
-    if (this.probeTimer !== undefined) clearTimeout(this.probeTimer)
-    this.probeDeadline = deadline
-    this.probeTimer = setTimeout(() => {
-      this.probeTimer = undefined
-      this.probeDeadline = 0
-      if (this.socket !== socket || this.probeAt === 0) return
-      // Incoming frames already clear probeAt via socket.onmessage; reaching this
-      // deadline means zero bytes arrived since the first unanswered probe.
-      this.endCurrent?.(Object.assign(new Error('The Server stopped answering'), { code: 'SERVER_UNREACHABLE' }))
-    }, Math.max(0, limit))
-  }
-
-  private clearProbe(): void {
-    this.probeAt = 0
-    this.pingSentAt = 0
-    this.probeDeadline = 0
-    if (this.probeTimer !== undefined) {
-      clearTimeout(this.probeTimer)
-      this.probeTimer = undefined
-    }
-  }
-
-  private probeNow(now = Date.now()): void {
-    if (this.socket === undefined) return
-    if (this.probeAt === 0) this.probeAt = now
-    this.pingSentAt = now
-    // Runs from a timer: a throw here would be uncaught (a redbox on the phone).
-    try { this.sendControl('ping', { nonce: now }) }
-    catch { this.endCurrent?.(Object.assign(new Error('The Server stopped answering'), { code: 'SERVER_UNREACHABLE' })) }
-  }
-
   async close(): Promise<void> {
     this.clearHandshake()
-    this.clearProbe()
-    const end = this.endCurrent
-    if (end !== undefined) { end(); return }
     this.socket?.close()
     this.socket = undefined
     this.connectionId = undefined
@@ -330,21 +219,7 @@ export class RelayTransport extends BaseTransport implements SecureHandshakeTran
     const reject = this.readyReject
     this.readyResolve = undefined
     this.readyReject = undefined
-    if (reject === undefined) {
-      // Already ready: giving up on the socket is a close, reported at once.
-      const end = this.endCurrent
-      if (end !== undefined) { end(error); return }
-      this.closeReason = error
-      this.socket?.close()
-      this.socket = undefined
-      this.connectionId = undefined
-      return
-    }
-    reject(error)
-    // A socket that never became ready is ended quietly — its late close
-    // event must not be reported as a dropped connection.
-    const end = this.endCurrent
-    if (end !== undefined) { end(undefined, false); return }
+    reject?.(error)
     this.socket?.close()
     this.socket = undefined
     this.connectionId = undefined

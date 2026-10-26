@@ -109,8 +109,6 @@ export class RpcClient {
 
   getStats(): TransportStats { return this.transport.getStats() }
 
-  probe(timeoutMs?: number): void { this.transport.probe?.(timeoutMs) }
-
   async close(): Promise<void> {
     this.unsubscribeTransport?.()
     this.unsubscribeTransport = undefined
