@@ -216,7 +216,7 @@ export function install(rt) {
     })
   }
 
-  async function updateBot(id, patch, actorId) {
+  async function updateBot(id, patch, actorId, fromSessionId) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
     if (patch.browserGrants !== undefined && actorId !== undefined) {
@@ -296,9 +296,12 @@ export function install(rt) {
     if (bot.instructions !== instructionsBefore) notes.push(`Your instructions now read:\n${bot.instructions || '(none)'}`)
     // A held greeting means the model pick is still open: the kickoff it later sends
     // already reads the new profile, and a notice would start a turn before that.
-    // A Bot editing itself just got the tool result in the turn that made the edit;
-    // a notice there would only buy it a second, unsolicited reply.
-    if (notes.length > 0 && bot.kickoff === undefined && actorId !== bot.id) {
+    // A Bot editing itself in its own chat just got the tool result in the turn
+    // that made the edit; a notice there would only buy it a second, unsolicited
+    // reply. The same edit made from a group Session reaches no own-chat turn, so
+    // the notice still goes out.
+    const selfEditInChat = actorId === bot.id && fromSessionId === rt.chatOf(bot.id)
+    if (notes.length > 0 && bot.kickoff === undefined && !selfEditInChat) {
       void rt.deliver({ toId: bot.id, text: notes.join('\n'), role: 'update' })
         .catch(error => rt.warn('ds-bot: profile update for %s not delivered: %s', bot.name, error?.message ?? error))
     }

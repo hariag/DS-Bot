@@ -118,10 +118,15 @@ test('an instructions change lands as a message in the Bot chat', async (t) => {
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(sent.length, 1)
 
-  // A Bot editing itself just got the tool result; no second turn queues for it.
+  // A Bot editing itself in its own chat just got the tool result; no second
+  // turn queues for it. The same edit from a group Session still reaches it.
   assert.equal(await tool('update_bot', { instructions: 'Own fix' }, 'b2'), 'Updated Writer.')
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(sent.length, 1)
+  assert.equal(await tool('update_bot', { instructions: 'From the group' }, 'g3'), 'Updated Coder.')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(sent.length, 2)
+  assert.equal(sent[1].sessionId, 'b3')
 })
 
 test('a Bot whose greeting is still held gets no notice before its model pick', async (t) => {
