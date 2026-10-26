@@ -308,6 +308,12 @@ export function install(rt) {
     .filter(([, entry]) => entry.turn !== undefined && entry.since !== undefined)
     .map(([id, entry]) => [id, entry.since]))
 
+  // Per Session, when the user last steered its running turn: the input the
+  // activity row's phrase and clock restart from.
+  const steeredView = () => Object.fromEntries([...live]
+    .filter(([, entry]) => entry.turn !== undefined && entry.steeredAt !== undefined)
+    .map(([id, entry]) => [id, entry.steeredAt]))
+
   // Per group, the members whose turn there is running or who move on to a fresh part;
   // the round's current speaker is marked, since its round shows it.
   const roomWorkView = () => {
@@ -400,6 +406,7 @@ export function install(rt) {
         entry.opened = false
         entry.joined = []
         entry.later = []
+        entry.steeredAt = undefined
         if (entry.pending !== undefined) {
           claimTrigger(id, entry, entry.pending)
           entry.pending = undefined
@@ -506,6 +513,14 @@ export function install(rt) {
         }
         break
       }
+      case 'agent/inbox/spliced':
+        // A message the user steered into the running turn is fresh input, like
+        // a send that never queued.
+        if (event.data?.target === 'next-step' && entry.turn !== undefined
+          && (event.data.inserted ?? []).some(message => message?.source?.kind === 'user')) {
+          entry.steeredAt = event.time ?? Date.now()
+        }
+        break
       case 'assistant/message': {
         const content = event.data?.message?.content
         const text = textOf(content)
@@ -537,6 +552,7 @@ export function install(rt) {
         entry.switched = false
         entry.joined = []
         entry.since = undefined
+        entry.steeredAt = undefined
         entry.tool = undefined
         entry.calls = undefined
         entry.lastText = undefined
@@ -645,5 +661,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, callDetail, doingOf, stopRoomTurn, releaseBot })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, releaseBot })
 }

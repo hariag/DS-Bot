@@ -8100,6 +8100,11 @@ var import_react_dom2 = require("react-dom");
 var PHRASE_HOLD_MS = 800;
 var drawPhrase = (pool) => t(pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))]);
 var rowVisible = ({ running, streaming, tools, relaying, bot, room: room2 }) => running && (!streaming || tools.length > 0) && !relaying && (bot !== void 0 || room2 !== void 0);
+var freshInputAt = (submissions, steeredAt) => Math.max(
+  0,
+  steeredAt ?? 0,
+  ...(submissions ?? []).filter((sub) => sub.placement !== "queued").map((sub) => sub.time)
+);
 var mountMissed = false;
 function findHost() {
   const node = document.querySelector("[data-chat-flow] [data-chat-running]") ?? document.querySelector("[data-chat-flow]");
@@ -8191,7 +8196,8 @@ function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, us
   if (!running) runAt.current = 0;
   else if (runAt.current === 0) runAt.current = Date.now();
   const liveKey = useLive((state) => JSON.stringify(state[sessionId] ?? {}));
-  const pendingInput = useSession((snapshot) => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter((sub) => sub.placement !== "queued").map((sub) => sub.time)));
+  const steeredAt = useWork?.((work) => work.steered?.[sessionId]);
+  const pendingInput = useSession((snapshot) => freshInputAt(snapshot?.pendingSubmissions, steeredAt));
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
   const moveAt = useWork?.((work) => {
