@@ -49,13 +49,30 @@ test('a text folds past 1,500 characters or 25 lines, and shows its first ten li
 })
 
 test('the preview closes a code fence it cuts open, in Markdown only', () => {
+  // A fence the cut opened loses its language tag, so a downstream renderer
+  // (dsh-ui cards) does not claim a half message.
   const code = `Here:\n\`\`\`js\n${lines(30)}\n\`\`\``
-  assert.equal(foldPreview(code), `Here:\n\`\`\`js\n${lines(8)}\n\`\`\``)
+  assert.equal(foldPreview(code), `Here:\n\`\`\`\n${lines(8)}\n\`\`\``)
   assert.equal(foldPreview(code, FOLD_AT, false), `Here:\n\`\`\`js\n${lines(8)}`)
   const tilde = `~~~~\n\`\`\`\n${lines(30)}`
   assert.equal(foldPreview(tilde), `~~~~\n\`\`\`\n${lines(8)}\n~~~~`)
   const closed = `\`\`\`\na\n\`\`\`\n${lines(30)}`
   assert.equal(foldPreview(closed), `\`\`\`\na\n\`\`\`\n${lines(7)}`)
+})
+
+// #520: a card message is the fence marker, then one very long line — the
+// newline cut left an empty fence, so no preview and nothing on open either.
+test('a long message that opens with a card fence still previews its start', () => {
+  const card = `\`\`\`dsh-ui\n${'x'.repeat(2000)}`
+  const preview = foldPreview(card)
+  assert.equal(preview, `\`\`\`\n${'x'.repeat(590)}\n\`\`\``)
+})
+
+// Leading blank lines are not part of the preview; an all-blank message does
+// not fold at all.
+test('the preview starts at the first visible character', () => {
+  assert.equal(foldPreview(`\n\n\n${'x'.repeat(1500)}`), 'x'.repeat(600))
+  assert.equal(foldPreview(`${' '.repeat(2000)}\n${'\n'.repeat(30)}`), null)
 })
 
 test('a Bot reply in its own chat folds only past 20,000 characters', () => {
