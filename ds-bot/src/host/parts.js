@@ -1289,15 +1289,17 @@ export function install(rt) {
 
   async function partPage(parts, index, cursor) {
     const part = parts[index]
-    const agent = await rt.resolveAgent(part.sessionId)
+    // An archived earlier part may have no live agent left; its stored events
+    // still page fine, so resolve failure only drops the live-session cap.
+    const agent = await rt.resolveAgent(part.sessionId).catch(() => undefined)
     const page = await ctx.sessionController.page({
       address: { kind: 'session', sessionId: part.sessionId },
-      throughSeq: Number(agent.session.seq) - 1,
+      ...(agent ? { throughSeq: Number(agent.session.seq) - 1 } : {}),
       ...(Number.isInteger(cursor?.beforeSeq) ? { beforeSeq: cursor.beforeSeq } : {}),
       maxMessages: EARLIER_PAGE,
     }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
     const events = page.records.map(record => record.event)
-    const items = displayItems(part.sessionId, events, agent.session)
+    const items = displayItems(part.sessionId, events, agent?.session)
     const more = page.hasMore && events.length > 0
     // The line above a part's first message marks where it began.
     if (!more && index > 0) items.unshift({ kind: 'divider', time: part.startedAt })

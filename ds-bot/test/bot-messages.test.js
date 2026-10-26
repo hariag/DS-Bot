@@ -707,6 +707,17 @@ test('an earlier part keeps the request its Bot answered', async () => {
   assert.equal(items[0].botId, 'a')
 })
 
+// #537: an archived earlier part may have no live agent to resolve; the page
+// still loads from the stored events.
+test('an earlier part loads when its agent is gone', async () => {
+  const rt = earlierParts([
+    { type: 'user/message', seq: 1, time: 10, data: { content: [{ type: 'text', text: 'still here' }], source: { kind: 'user' } } },
+  ])
+  rt.resolveAgent = async () => { throw Object.assign(new Error('Session unavailable'), { code: 'session/gone' }) }
+  const { items } = await rt.earlierPage('b2')
+  assert.deepEqual(items.map(item => [item.kind, item.text]), [['user', 'still here']])
+})
+
 test('each text block of a Bot message is an entry of its own, as each is a bubble of its own', async () => {
   const rt = earlierParts([
     { type: 'assistant/message', seq: 1, time: 11, data: { turn: 1, message: { content: [{ type: 'text', text: 'First.' }, { type: 'tool-call', id: 'c1' }, { type: 'text', text: '  ' }, { type: 'text', text: 'Second.' }] } } },
