@@ -619,6 +619,7 @@ var ZH = {
   "{name} looked up its own chat for “{text}”": "{name} 在自己的对话里查找「{text}」",
   "{name} is typing…": "{name} 正在输入…",
   "{name} didn't answer in time": "{name} 没有及时回应",
+  "The group replies could not be shown": "群里的回复显示不出来",
   "Paused after {count} Bot relays. Waiting: {names}": "Bot 之间已接力 {count} 次，先停下了。还在等：{names}",
   "Continue": "继续",
   "{name} paused for your approval": "{name} 停下来等你批准",
@@ -7781,6 +7782,48 @@ function useLiveNote(actions, sessionId, id, entry) {
     return () => actions.noteLive(sessionId, id, null);
   }, [sessionId, id, key]);
 }
+var RELAY_LIST = /"replies"\s*:\s*\[/;
+function parseReplies(text) {
+  try {
+    return { replies: JSON.parse(text).replies ?? [], broken: false };
+  } catch {
+  }
+  const replies = [];
+  const head = RELAY_LIST.exec(text);
+  if (head) {
+    let depth = 0;
+    let from = -1;
+    let inString = false;
+    let escaped = false;
+    for (let i = head.index + head[0].length; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "{") {
+        if (depth === 0) from = i;
+        depth += 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0 && from >= 0) {
+          try {
+            replies.push(JSON.parse(text.slice(from, i + 1)));
+          } catch {
+          }
+          from = -1;
+        }
+      } else if (ch === "]" && depth === 0) break;
+    }
+  }
+  return { replies, broken: true };
+}
 function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
   const [live, setLive] = (0, import_react12.useState)({ replies: [], speaking: null });
   (0, import_react12.useEffect)(() => {
@@ -7806,17 +7849,18 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     };
   }, [done, sessionId, callId]);
   let replies = live.replies;
+  let broken = false;
   if (done) {
-    try {
-      replies = JSON.parse(contentText(content)).replies ?? [];
-    } catch {
-      replies = [];
-    }
+    const parsed = parseReplies(contentText(content));
+    replies = parsed.replies.length ? parsed.replies : live.replies;
+    broken = parsed.broken;
   }
   const pending = done || !live.speaking ? [] : [live.speaking];
   const speakerTool = useWork?.((work) => work.bots?.[live.speaking]?.tool) ?? void 0;
   const speakerDoing = useWork?.((work) => work.bots?.[live.speaking]?.tool ? workPhrase(work.bots[live.speaking]) : void 0) ?? void 0;
-  if (replies.length === 0 && pending.length === 0) return null;
+  if (replies.length === 0 && pending.length === 0) {
+    return broken ? (0, import_react12.createElement)("div", { className: "bt-group-replies" }, (0, import_react12.createElement)("div", { className: "bt-event" }, t("The group replies could not be shown"))) : null;
+  }
   const room2 = roster.roomsById[sessionId];
   return (0, import_react12.createElement)(
     "div",

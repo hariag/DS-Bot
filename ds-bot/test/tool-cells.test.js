@@ -543,6 +543,16 @@ test('a secret in a hidden turn shows in the dock instead of nowhere', () => {
   unmount()
 })
 
+// 公开#557: compaction prunes the middle of a long relay result, leaving invalid
+// JSON — draw the replies that survived, or a marker row, never a blank turn.
+test('a pruned group relay still draws the replies that survived', () => {
+  const pruned = '{"replies":[{"botId":"writer","text":"Still here."},{"botId":"chief","text":"[... tool result middle pruned ...'
+  const out = show(call('group_relay', 'direct', { content: pruned }), { sessionId: 'room' })
+  assert.match(text(out), /Writer.*Still here\./)
+  const gone = show(call('group_relay', 'direct', { content: '{"replies":[{"botId":"writer","text":"cut' }), { sessionId: 'room' })
+  assert.match(text(gone), /The group replies could not be shown/)
+})
+
 // #38: a PTC group round's replies vanished once the round ended.
 test('a PTC group relay shows its replies from the sub-call, live and after reload', async () => {
   const replies = [{ botId: 'writer', text: 'Hello from Writer.' }, { botId: 'chief', text: 'Hello from Chief.' }]
