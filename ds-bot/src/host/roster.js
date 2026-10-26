@@ -253,6 +253,8 @@ export function install(rt) {
       await ctx.sessionTitle.rename(agent.session, next)
       await followMemberNames(Object.values(state.rooms).filter(room => room.members.includes(id)))
     }
+    const roleBefore = bot.role
+    const instructionsBefore = bot.instructions
     if (patch.role !== undefined) bot.role = String(patch.role).trim().slice(0, 24)
     if (patch.instructions !== undefined) bot.instructions = String(patch.instructions).trim()
     let modelChanged = false
@@ -286,6 +288,16 @@ export function install(rt) {
       else bot.workDir = workDir
     }
     await rt.save()
+    // The system prompt reads the live profile every turn, but a Session with
+    // several rounds behind it follows the old kickoff's pull until a message
+    // lands; notify the Bot's chat so the next turn honors the new profile.
+    const notes = []
+    if (bot.role !== roleBefore) notes.push(`Your role is now "${bot.role || '(none)'}"`)
+    if (bot.instructions !== instructionsBefore) notes.push(`Your instructions now read:\n${bot.instructions || '(none)'}`)
+    if (notes.length > 0) {
+      void rt.deliver({ toId: bot.id, text: notes.join('\n'), role: 'update' })
+        .catch(error => rt.warn('ds-bot: profile update for %s not delivered: %s', bot.name, error?.message ?? error))
+    }
     if (modelChanged) await rt.applyModel(bot, { force: true })
     if (moved) void rt.followFolder(bot.id)
     if (bot.model && bot.kickoff !== undefined) {

@@ -32,6 +32,7 @@ function start() {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-update-'))
   if (!existsSync(join(home, 'state.json'))) writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const ctx = fakeContext()
+  const sent = []
   Object.assign(ctx, {
     llm: {
       listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
@@ -39,7 +40,7 @@ function start() {
       resolveModelInfo: async () => ({}),
     },
     sessionController: {
-      resolveAgent: async sessionId => ({ agent: { session: { id: sessionId, seq: 1 } } }),
+      resolveAgent: async sessionId => ({ agent: { session: { id: sessionId, seq: 1 }, followup: message => sent.push({ sessionId, message }) } }),
       selectModel: async () => {},
     },
     sessionTitle: { rename: async () => {} },
@@ -53,7 +54,7 @@ function start() {
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
-  return { ctx, tool, state, stop }
+  return { ctx, tool, state, sent, stop }
 }
 
 test('a Bot changes itself by leaving out bot, or by naming itself', async (t) => {
@@ -94,4 +95,22 @@ test('every Bot sees the update_bot rule in its identity section', async (t) => 
   const text = ctx.sections.get('bot-identity').text({ agent: { id: 'b2' } })
   assert.match(text, /update_bot changes your own settings/)
   assert.match(ctx.sections.get('bot-identity').text({ agent: { id: 'm1' } }), /update_bot changes your own settings/)
+})
+
+test('an instructions change lands as a message in the Bot chat', async (t) => {
+  const { tool, sent, stop } = start()
+  t.after(stop)
+  assert.equal(await tool('update_bot', { instructions: 'Ship the fix' }, 'b2'), 'Updated Writer.')
+  // The notice goes out as a follow-up; let the queued delivery run.
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].sessionId, 'b2')
+  const text = sent[0].message.content[0].text
+  assert.match(text, /updated your profile/)
+  assert.match(text, /Ship the fix/)
+  // A patch that changes nothing sends no message.
+  await tool('update_bot', { instructions: 'Ship the fix' }, 'b2')
+  await tool('update_bot', { color: 'red' }, 'b2')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(sent.length, 1)
 })

@@ -150,8 +150,8 @@ for (const kind of ['main', 'copy', 'made by a Main Bot', 'made by the user']) {
     } else {
       bot = (await call('create-bot', { name: 'Writer', instructions })).value
     }
-    await until(() => sent.some(entry => entry.sessionId === bot.id))
-    const greetings = sent.filter(entry => entry.sessionId === bot.id)
+    await until(() => sent.some(entry => entry.sessionId === bot.id && entry.message.source.role === 'kickoff'))
+    const greetings = sent.filter(entry => entry.sessionId === bot.id && entry.message.source.role === 'kickoff')
     assert.equal(greetings.length, 1)
     const { message } = greetings[0]
     const text = message.content[0].text
