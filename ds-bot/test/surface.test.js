@@ -132,6 +132,10 @@ test('remount takes a mounted group off and installs it again', (t) => {
   groups.remount('shell', groupsFor({ mode: 'bot' }))
   assert.deepEqual(log, ['conversation cells', 'conversation tokens', 'conversation styles', 'shell theme', 'shell styles', 'install shell', 'install conversation'])
   log.length = 0
+  // Without a wanted set remount falls back to the last reconciled one.
+  groups.remount('shell')
+  assert.deepEqual(log, ['conversation cells', 'conversation tokens', 'conversation styles', 'shell theme', 'shell styles', 'install shell', 'install conversation'])
+  log.length = 0
   // A group the surface does not want stays off — remount only retries mounts.
   groups.reconcile(groupsFor({ mode: 'agent' }))
   log.length = 0
