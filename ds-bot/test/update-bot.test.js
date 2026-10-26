@@ -28,9 +28,9 @@ const TEAM = {
   questions: {},
 }
 
-function start() {
+function start(team = TEAM) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-update-'))
-  if (!existsSync(join(home, 'state.json'))) writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
+  if (!existsSync(join(home, 'state.json'))) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   const ctx = fakeContext()
   const sent = []
   Object.assign(ctx, {
@@ -47,14 +47,18 @@ function start() {
     sessions: { flush: async () => {} },
     workspaceRegistry: { archiveSession: async () => {} },
   })
+  let route
+  const register = ctx.connection.fetch.register
+  ctx.connection.fetch.register = (options) => { route = options; return register(options) }
   apply(ctx, { home })
   const tool = (name, args, sessionId) => ctx.registeredTools.get(name).execute(args, { agent: { id: sessionId } })
+  const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   const stop = async () => {
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
-  return { ctx, tool, state, sent, stop }
+  return { ctx, tool, call, state, sent, stop }
 }
 
 test('a Bot changes itself by leaving out bot, or by naming itself', async (t) => {
@@ -98,9 +102,9 @@ test('every Bot sees the update_bot rule in its identity section', async (t) => 
 })
 
 test('an instructions change lands as a message in the Bot chat', async (t) => {
-  const { tool, sent, stop } = start()
+  const { call, tool, sent, stop } = start()
   t.after(stop)
-  assert.equal(await tool('update_bot', { instructions: 'Ship the fix' }, 'b2'), 'Updated Writer.')
+  assert.equal((await call('update-bot', { id: 'b2', instructions: 'Ship the fix' })).ok, true)
   // The notice goes out as a follow-up; let the queued delivery run.
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(sent.length, 1)
@@ -109,8 +113,24 @@ test('an instructions change lands as a message in the Bot chat', async (t) => {
   assert.match(text, /updated your profile/)
   assert.match(text, /Ship the fix/)
   // A patch that changes nothing sends no message.
-  await tool('update_bot', { instructions: 'Ship the fix' }, 'b2')
-  await tool('update_bot', { color: 'red' }, 'b2')
+  await call('update-bot', { id: 'b2', instructions: 'Ship the fix' })
+  await call('update-bot', { id: 'b2', color: 'red' })
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(sent.length, 1)
+
+  // A Bot editing itself just got the tool result; no second turn queues for it.
+  assert.equal(await tool('update_bot', { instructions: 'Own fix' }, 'b2'), 'Updated Writer.')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(sent.length, 1)
+})
+
+test('a Bot whose greeting is still held gets no notice before its model pick', async (t) => {
+  const team = JSON.parse(JSON.stringify(TEAM))
+  delete team.bots.b3.model
+  team.bots.b3.kickoff = { text: 'Greet the user.', from: null }
+  const { call, sent, stop } = start(team)
+  t.after(stop)
+  assert.equal((await call('update-bot', { id: 'b3', instructions: 'Ship the fix' })).ok, true)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(sent.length, 0)
 })

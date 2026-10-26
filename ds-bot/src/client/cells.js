@@ -590,6 +590,9 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'kickoff' || source.role === 'room') return null
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
+      // A profile notice is the user's edit landing in the Bot's chat, not a peer
+      // message: show it as an event, with no exchange to open.
+      if (source.role === 'update') return h('div', { className: 'bt-event' }, t('Profile updated'))
       if (source.role === 'post') {
         // A post logged into a running round already shows there, not again as a trigger.
         if (source.logged !== undefined) return null

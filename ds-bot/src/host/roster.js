@@ -294,7 +294,11 @@ export function install(rt) {
     const notes = []
     if (bot.role !== roleBefore) notes.push(`Your role is now "${bot.role || '(none)'}"`)
     if (bot.instructions !== instructionsBefore) notes.push(`Your instructions now read:\n${bot.instructions || '(none)'}`)
-    if (notes.length > 0) {
+    // A held greeting means the model pick is still open: the kickoff it later sends
+    // already reads the new profile, and a notice would start a turn before that.
+    // A Bot editing itself just got the tool result in the turn that made the edit;
+    // a notice there would only buy it a second, unsolicited reply.
+    if (notes.length > 0 && bot.kickoff === undefined && actorId !== bot.id) {
       void rt.deliver({ toId: bot.id, text: notes.join('\n'), role: 'update' })
         .catch(error => rt.warn('ds-bot: profile update for %s not delivered: %s', bot.name, error?.message ?? error))
     }
