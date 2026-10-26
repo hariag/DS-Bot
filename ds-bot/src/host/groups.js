@@ -298,9 +298,7 @@ export function install(rt) {
     const turn = { botId: member.id, sessionId, exchangeId }
     const { started } = round
     started.push(turn)
-    // The read position is the one of this turn's start, and moves only when the
-    // delivery lands: a delivery that failed leaves the member where it was.
-    const seenAt = room.seq
+    room.seen[member.id] = room.seq
     // Checked before the delivery, which may start the turn at once.
     const busy = rt.live.get(sessionId)?.turn !== undefined
     const done = new Promise((resolve) => {
@@ -328,9 +326,10 @@ export function install(rt) {
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, ...(by ? { askedBy: by } : {}) })
-      // The prompt reached the member: its read position moves on.
-      room.seen[member.id] = seenAt
+      // A member mid-turn would only read a queued post after that work: steer the
+      // call in, so a correction reaches it at the turn's next step instead of
+      // landing in its inbox once the crossing has already deepened.
+      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, steer: busy, ...(by ? { askedBy: by } : {}) })
       // Still held by an earlier request: this turn cannot start until the user answers.
       if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
       // Still at earlier work: the call waits in its inbox and is answered after that.
@@ -797,7 +796,10 @@ export function install(rt) {
       await rt.save()
     }
     const agent = await rt.resolveAgent(room.id)
-    agent.followup(createUserMessage({
+    // Same rule as a member turn: a group Session at work hears a post at its next
+    // step, not after it — otherwise corrections only queue while it keeps going.
+    const post = rt.live.get(room.id)?.turn !== undefined ? 'steer' : 'followup'
+    agent[post](createUserMessage({
       content: [{ type: 'text', text: `[Group post from ${sender.name}]\n${text}` }, ...files.map(attachment => ({ type: 'file', attachment }))],
       source: { kind: SOURCE_KIND, form: 'relay', role: 'post', exchangeId: randomUUID(), senderName: sender.name, senderSessionId: sender.id, roomId: room.id, ...extra, ...(logged !== undefined ? { logged } : {}) },
     }))

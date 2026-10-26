@@ -45,8 +45,9 @@ async function start(t, room, services, extraRooms) {
           return true
         },
       }
-      const keep = (message) => { calls.push(message); held.push(message) }
-      agents.set(sessionId, { session: { id: sessionId }, calls, cancelled, inbox, followup: keep, steer: keep, cancel(reason) { cancelled.push(reason) } })
+      const kinds = []
+      const keep = kind => (message) => { calls.push(message); held.push(message); kinds.push(kind) }
+      agents.set(sessionId, { session: { id: sessionId }, calls, cancelled, inbox, kinds, followup: keep('followup'), steer: keep('steer'), cancel(reason) { cancelled.push(reason) } })
     }
     return agents.get(sessionId)
   }
@@ -423,6 +424,24 @@ const busyRound = async (t, room, services) => {
   await settle(() => true)
   return { host, first }
 }
+
+test('a group call into a busy member steers it, and a post into a busy group steers', async (t) => {
+  const { host, first } = await busyRound(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '@Writer 看一下文档' }, 'a')
+  const post = host.takePost()
+  // Writer (gb) is mid-turn: the call cuts in at its next step rather than queueing
+  // for a turn of its own after the work.
+  const second = host.round('c2', post)
+  await settle(() => host.agentOf('gb').calls.length === 2)
+  assert.equal(host.agentOf('gb').kinds.at(-1), 'steer')
+  host.finish('gb', '整理好了。')
+  await settle(() => first() !== undefined && second() !== undefined)
+
+  // A busy group Session hears a member's post at its next step the same way.
+  host.emit('r1', 'turn/start', { turn: 9 })
+  await host.tool('post_to_group', { group: 'Ops', message: '暂停一下' }, 'a')
+  assert.equal(host.agentOf('r1').kinds.at(-1), 'steer')
+})
 
 test('a post during a running round is in the log at once, once, and shows in the round', async (t) => {
   const { host, first } = await busyRound(t)
