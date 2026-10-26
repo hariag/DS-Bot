@@ -141,20 +141,29 @@ export function install(rt) {
       return
     }
     // A retry after a crash between create and delete must not copy a task twice.
-    let moved
+    // Copies already on the fresh Session satisfy earlier records of the same
+    // request in order, so two genuinely identical tasks still both move.
+    const have = new Map()
     try {
-      moved = new Set((await service.list({ sessionId: toId })).map(record => keyOfRequest(requestOf(record))))
+      for (const record of await service.list({ sessionId: toId })) {
+        const key = keyOfRequest(requestOf(record))
+        have.set(key, (have.get(key) ?? 0) + 1)
+      }
     } catch {
-      moved = new Set()
+      // Without a read-back every source task is copied; a retry then adds one copy
+      // per source record, which is the correct multiplicity anyway.
     }
+    const seen = new Map()
     for (const record of records) {
       const request = requestOf(record)
       if (request === null || (request.at !== undefined && Date.parse(request.at) <= Date.now())) continue
       try {
         const key = keyOfRequest(request)
-        if (!moved.has(key)) {
+        const nth = (seen.get(key) ?? 0) + 1
+        seen.set(key, nth)
+        if (nth > (have.get(key) ?? 0)) {
           await service.create(toId, request)
-          moved.add(key)
+          have.set(key, (have.get(key) ?? 0) + 1)
         }
         await service.delete({ sessionId: fromId, id: record.id })
       } catch (error) {

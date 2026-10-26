@@ -139,16 +139,17 @@ test('a repeated task move copies each task only once', async (t) => {
   const { ctx, home, rt } = setup({ schedule })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
   await schedule.create('w2', { title: 'Ping', prompt: 'Check', every_seconds: 3600 })
+  await schedule.create('w2', { title: 'Ping', prompt: 'Check', every_seconds: 3600 })
 
   const remove = schedule.delete
   schedule.delete = async () => { throw new Error('down') }
   await rt.moveSchedules('w2', 's9')
   const on = id => [...schedule.tasks.values()].filter(task => task.sessionId === id)
-  assert.equal(on('s9').length, 1)
-  assert.equal(on('w2').length, 1)
+  assert.equal(on('s9').length, 2)
+  assert.equal(on('w2').length, 2)
 
   schedule.delete = remove
   await rt.moveSchedules('w2', 's9')
-  assert.equal(on('s9').length, 1)
+  assert.equal(on('s9').length, 2)
   assert.equal(on('w2').length, 0)
 })
