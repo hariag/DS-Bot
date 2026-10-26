@@ -329,6 +329,26 @@ test('a marked part that stayed current is woken for its kept input, once, in or
   assert.deepEqual(second.state().switching, {})
 })
 
+// #571: archiving with stopActivity drops the tasks the earlier part still owns, so
+// the archive waits for the task move the switch started.
+test('an earlier part is stopped only after its tasks moved to the fresh part', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  const order = []
+  let release
+  const moved = new Promise(resolve => { release = resolve })
+  host.rt.moveSchedules = async (from, to) => { order.push(['move', from, to]); await moved }
+  const archive = host.ctx.workspaceRegistry.archiveSession
+  host.ctx.workspaceRegistry.archiveSession = async (id, options) => { order.push(['archive', id]); return archive(id, options) }
+  await moveWriter(host, [])
+  await until(() => order.length >= 1)
+  await settle()
+  assert.deepEqual(order, [['move', 'b', 's1']])
+  release()
+  await until(() => order.some(([kind]) => kind === 'archive'))
+  assert.deepEqual(order, [['move', 'b', 's1'], ['archive', 'b']])
+})
+
 test('unmarked earlier parts are never resolved by the restart pass', async (t) => {
   const host = await start({ services })
   await moveWriter(host, [])

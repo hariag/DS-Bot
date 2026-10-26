@@ -788,6 +788,9 @@ export function install(rt) {
         if (currentOf(owner) !== sessionId) {
           await forward(owner, held)
           for (const message of held) agent.inbox.remove(message.id)
+          // An interrupted switch may not have finished moving the tasks over; stop
+          // the earlier part only after they sit on the part that replaced it.
+          await rt.moveSchedules?.(sessionId, currentOf(owner))
           await ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
             .catch(error => rt.warn('ds-bot: earlier part %s not archived: %s', sessionId, error))
         } else {
@@ -876,6 +879,9 @@ export function install(rt) {
     }
     if (job.moved) {
       rt.renewMemory(agent.id)
+      // The task move started inside the switch; stopping the earlier part while it
+      // still runs would drop the tasks it has not copied yet.
+      await job.movedSchedules
       await ctx.workspaceRegistry.archiveSession(agent.id, { stopActivity: true })
         .catch(error => rt.warn('ds-bot: earlier part %s not archived: %s', agent.id, error))
     }
@@ -977,7 +983,7 @@ export function install(rt) {
     const now = await freshRoute(bot, session)
     if (now !== undefined && (now.ref !== picked?.ref || now.effort !== picked?.effort)) await selectRoute(bot, freshId, now)
     if (job.failed !== undefined) rescued.set(freshId, job.bare ? 'bare' : 'carried')
-    void rt.moveSchedules(agent.id, freshId)
+    job.movedSchedules = rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
     // Then what the old part held: the stopped turn's input, then whatever waited. It
