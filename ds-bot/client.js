@@ -10037,22 +10037,35 @@ function surfaceGroups(install, { onError } = {}) {
     mounted[group] = [];
     disposeAll(disposers, `withdraw ${group}`);
   };
+  const mount = (group) => {
+    const disposers = [];
+    try {
+      for (const step of install[group]()) if (step) disposers.push(step());
+      mounted[group] = disposers;
+      return true;
+    } catch (error) {
+      disposeAll(disposers, `roll back ${group}`);
+      console.warn(`[ds-bot] install ${group}`, error);
+      onError?.(group, error);
+      return false;
+    }
+  };
   return {
     reconcile(wanted) {
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue;
-        const disposers = [];
-        try {
-          for (const step of install[group]()) if (step) disposers.push(step());
-          mounted[group] = disposers;
-        } catch (error) {
-          disposeAll(disposers, `roll back ${group}`);
-          console.warn(`[ds-bot] install ${group}`, error);
-          onError?.(group, error);
-          break;
-        }
+        if (!mount(group)) break;
       }
+    },
+    // A step can go on with nothing actually contributed — a slot inject whose
+    // callback threw inside the host still returns its disposer. remount takes
+    // the group off and puts it back, so a caller that notices the contribution
+    // is missing can retry instead of trusting `mounted`.
+    remount(group) {
+      if (!GROUPS.includes(group)) return;
+      withdraw(group);
+      mount(group);
     },
     dispose() {
       for (const group of [...GROUPS].reverse()) withdraw(group);
@@ -19005,6 +19018,24 @@ function apply(ctx) {
     expected2 = target;
     ctx.uiWorkspace.openSession(target);
   }, current: mainView });
+  const homeToMainBot = () => {
+    const snapshot = roster.getSnapshot();
+    if (!snapshot.ready || !snapshot.mainBotId) return;
+    const main = mainView();
+    if (main !== void 0 && snapshot.byId[main] === void 0 && snapshot.roomsById[main] === void 0) {
+      actions.openSession(snapshot.mainBotId);
+    }
+  };
+  const ensureBotHome = () => {
+    if (roster.getSnapshot().ready) homeToMainBot();
+    else {
+      const off = roster.subscribe(() => {
+        if (!roster.getSnapshot().ready) return;
+        off();
+        homeToMainBot();
+      });
+    }
+  };
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
@@ -19092,30 +19123,17 @@ function apply(ctx) {
     // surface closes first so nothing stale reopens on the way back.
     setSurface: (mode) => {
       if (mode !== "bot" && mode !== "agent") return;
-      if (surface.getSnapshot().mode === mode) return;
+      if (surface.getSnapshot().mode === mode) {
+        if (mode === "bot") ensureBotHome();
+        return;
+      }
       if (mode === "agent") {
         ui2.set((state) => ({ ...state, details: null, view: "details", settings: null, palette: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, toast: null }));
       }
       writeMode(mode);
       surface.set((state) => ({ ...state, mode }));
       if (mode !== "bot") return;
-      const home = () => {
-        const snapshot = roster.getSnapshot();
-        if (!snapshot.ready || !snapshot.mainBotId) return;
-        const list = ctx.sessions.list.getSnapshot();
-        const main = Object.values(list.byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
-        if (main !== void 0 && snapshot.byId[main] === void 0 && snapshot.roomsById[main] === void 0) {
-          actions.openSession(snapshot.mainBotId);
-        }
-      };
-      if (roster.getSnapshot().ready) home();
-      else {
-        const off = roster.subscribe(() => {
-          if (!roster.getSnapshot().ready) return;
-          off();
-          home();
-        });
-      }
+      ensureBotHome();
     },
     markUnread: (id) => writeUnread(id, true),
     beginVisit: (id) => {
@@ -19508,11 +19526,44 @@ function apply(ctx) {
     const groups = surfaceGroups({ shell: installShell, conversation: installConversation }, {
       onError: (_group, error) => actions.reportError(new Error(t("Bot mode could not be set up here: {error}", { error: error?.message ?? String(error) })), "surface")
     });
-    const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
+    let verifyTimer = 0;
+    let verifyAttempts = 0;
+    const verifySidebar = () => {
+      if (!groupsFor(surface.getSnapshot()).shell) return;
+      let landed = false;
+      let declared = true;
+      try {
+        landed = ctx.slots.entries("sidebar.workspaces").some((entry) => entry.component === TeamSidebar);
+        declared = ctx.slots.spec?.("sidebar.workspaces") !== void 0;
+      } catch {
+        declared = false;
+      }
+      if (landed) return;
+      if (!declared) {
+        if (verifyAttempts < 20) {
+          verifyAttempts += 1;
+          verifyTimer = setTimeout(verifySidebar, 250);
+        }
+        return;
+      }
+      if (verifyAttempts >= 3) return;
+      verifyAttempts += 1;
+      console.warn("[ds-bot] sidebar entry missing after shell mount; remounting");
+      groups.remount("shell");
+      verifyTimer = setTimeout(verifySidebar, 250);
+    };
+    const reconcile = () => {
+      groups.reconcile(groupsFor(surface.getSnapshot()));
+      clearTimeout(verifyTimer);
+      verifyAttempts = 0;
+      verifyTimer = setTimeout(verifySidebar, 250);
+    };
     reconcile();
+    if (surface.getSnapshot().mode === "bot") ensureBotHome();
     const unsub = surface.subscribe(reconcile);
     return () => {
       unsub();
+      clearTimeout(verifyTimer);
       groups.dispose();
     };
   }, "ds-bot: surface");

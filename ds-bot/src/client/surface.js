@@ -33,22 +33,35 @@ export function surfaceGroups(install, { onError } = {}) {
     mounted[group] = []
     disposeAll(disposers, `withdraw ${group}`)
   }
+  const mount = (group) => {
+    const disposers = []
+    try {
+      for (const step of install[group]()) if (step) disposers.push(step())
+      mounted[group] = disposers
+      return true
+    } catch (error) {
+      disposeAll(disposers, `roll back ${group}`)
+      console.warn(`[ds-bot] install ${group}`, error)
+      onError?.(group, error)
+      return false
+    }
+  }
   return {
     reconcile(wanted) {
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group)
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue
-        const disposers = []
-        try {
-          for (const step of install[group]()) if (step) disposers.push(step())
-          mounted[group] = disposers
-        } catch (error) {
-          disposeAll(disposers, `roll back ${group}`)
-          console.warn(`[ds-bot] install ${group}`, error)
-          onError?.(group, error)
-          break
-        }
+        if (!mount(group)) break
       }
+    },
+    // A step can go on with nothing actually contributed — a slot inject whose
+    // callback threw inside the host still returns its disposer. remount takes
+    // the group off and puts it back, so a caller that notices the contribution
+    // is missing can retry instead of trusting `mounted`.
+    remount(group) {
+      if (!GROUPS.includes(group)) return
+      withdraw(group)
+      mount(group)
     },
     dispose() { for (const group of [...GROUPS].reverse()) withdraw(group) },
   }

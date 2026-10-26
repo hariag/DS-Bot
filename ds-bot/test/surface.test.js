@@ -123,6 +123,23 @@ test('a shell that cannot go on keeps the conversation group off too', (t) => {
   assert.deepEqual([...live], [])
 })
 
+test('remount takes a mounted group off and installs it again', (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const log = []
+  const groups = recordingGroups(log)
+  groups.reconcile(groupsFor({ mode: 'bot' }))
+  log.length = 0
+  groups.remount('shell')
+  assert.deepEqual(log, ['shell theme', 'shell styles', 'install shell'])
+  log.length = 0
+  // A group that is not mounted installs without a withdraw pass.
+  groups.reconcile(groupsFor({ mode: 'agent' }))
+  log.length = 0
+  groups.remount('shell')
+  assert.deepEqual(log, ['install shell'])
+  groups.dispose()
+})
+
 test('a shadow goes below every entry of its cell, so a same-priority plugin does not block it', () => {
   const entry = options => ({ options })
   assert.equal(freePriority([], { priority: -100 }), -100)
