@@ -46,8 +46,10 @@ export function surfaceGroups(install, { onError } = {}) {
       return false
     }
   }
+  let lastWanted = {}
   const api = {
     reconcile(wanted) {
+      lastWanted = wanted
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group)
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue
@@ -61,7 +63,7 @@ export function surfaceGroups(install, { onError } = {}) {
     // `mounted`. Groups that lean on it (the conversation on the shell's
     // styles) come off first and go back only through the reconcile — a
     // failed remount never leaves one stranded.
-    remount(group, wanted = {}) {
+    remount(group, wanted = lastWanted) {
       if (!GROUPS.includes(group)) return
       for (const later of GROUPS.slice(GROUPS.indexOf(group) + 1)) withdraw(later)
       withdraw(group)

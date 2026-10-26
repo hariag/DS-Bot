@@ -947,7 +947,7 @@ export function apply(ctx) {
       if (verifyAttempts >= 3) return
       verifyAttempts += 1
       console.warn('[ds-bot] sidebar entry missing after shell mount; remounting')
-      groups.remount('shell', groupsFor(surface.getSnapshot()))
+      groups.remount('shell')
       verifyTimer = setTimeout(verifySidebar, 250)
     }
     const reconcile = () => {
