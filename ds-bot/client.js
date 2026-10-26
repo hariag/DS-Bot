@@ -7783,7 +7783,7 @@ function useLiveNote(actions, sessionId, id, entry) {
   }, [sessionId, id, key]);
 }
 var RELAY_LIST = /"replies"\s*:\s*\[/;
-var PRUNE_MARKER = /\[\s*\.\.\.[^\]]*\]/;
+var PRUNE_MARKER = /\[\.\.\. tool result middle pruned \.\.\.\]/;
 function parseReplies(text) {
   try {
     return { replies: JSON.parse(text).replies ?? [], broken: false };

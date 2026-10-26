@@ -822,7 +822,7 @@ const RELAY_LIST = /"replies"\s*:\s*\[/
 // Compaction marks a pruned span with a literal bracketed note like
 // "[... tool result middle pruned ...]". Its "]" looks like the end of the
 // replies array to a naive scan, so the text is split on the marker first.
-const PRUNE_MARKER = /\[\s*\.\.\.[^\]]*\]/
+const PRUNE_MARKER = /\[\.\.\. tool result middle pruned \.\.\.\]/
 function parseReplies(text) {
   try { return { replies: JSON.parse(text).replies ?? [], broken: false } } catch { /* fall through */ }
   const replies = []

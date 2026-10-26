@@ -564,6 +564,14 @@ test('a group relay recovers replies after the prune marker', () => {
   assert.match(text(out2), /Writer.*First\..*Last\./)
 })
 
+// Only the compactor's own marker splits the text: a reply that quotes a
+// bracketed ellipsis stays whole.
+test('a reply quoting a bracketed ellipsis is not mistaken for a prune marker', () => {
+  const quoted = '{"replies":[{"botId":"writer","text":"Step [... details ...] done."}[... tool result middle pruned ...]{"botId":"chief","text":"Last."}]}'
+  const out = show(call('group_relay', 'direct', { content: quoted }), { sessionId: 'room' })
+  assert.match(text(out), /Step \[... details ...] done\..*Chief.*Last\./)
+})
+
 // #38: a PTC group round's replies vanished once the round ended.
 test('a PTC group relay shows its replies from the sub-call, live and after reload', async () => {
   const replies = [{ botId: 'writer', text: 'Hello from Writer.' }, { botId: 'chief', text: 'Hello from Chief.' }]
