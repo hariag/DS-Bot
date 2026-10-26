@@ -10,10 +10,14 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Enough of the dsh services for the roster to make Sessions; kickoff messages are dropped.
-function start(team, { models = [], reasoning = {}, archiveError } = {}) {
+function start(team, { models = [], reasoning = {}, archiveError, selection } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-roster-'))
   if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   const ctx = fakeContext()
+  if (selection !== undefined) {
+    const baseGet = ctx.get
+    ctx.get = name => name === 'agentDefaultModel' ? { currentSelection: () => selection } : baseGet(name)
+  }
   const workspaces = new Map()
   const sent = []
   const selected = []
@@ -237,6 +241,27 @@ test('a Bot takes a thinking level its model serves, applied with the model', as
   await settle()
   assert.equal(writer.effort, 'high')
   assert.equal(selected.at(-1).reasoningEffort, 'high')
+})
+
+test('a new Bot inherits the profile default thinking level', async (t) => {
+  const reasoning = { 'deepseek/deepseek-v4-flash': { reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] } } }
+  const selection = { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'high' }
+  const { call, stop, selected } = start(undefined, { models: ['deepseek-v4-flash'], reasoning, selection })
+  t.after(stop)
+  const writer = (await call('create-bot', { name: 'Writer' })).value
+  await settle()
+  assert.equal(writer.model, 'deepseek/deepseek-v4-flash')
+  assert.equal(writer.effort, 'high')
+  assert.equal(selected.at(-1).reasoningEffort, 'high')
+
+  // An explicit level still wins, and a level the model does not serve is dropped.
+  const coder = (await call('create-bot', { name: 'Coder', effort: 'low' })).value
+  assert.equal(coder.effort, 'low')
+  const other = { provider: 'deepseek', model: 'other', reasoningEffort: 'max' }
+  const { call: call2, stop: stop2 } = start(undefined, { models: ['deepseek/deepseek-v4-flash'], reasoning, selection: other })
+  t.after(stop2)
+  const tester = (await call2('create-bot', { name: 'Tester' })).value
+  assert.equal(tester.effort, undefined)
 })
 
 test('the state reports a changed model list without a new revision', async (t) => {

@@ -123,7 +123,9 @@ export function install(rt) {
     // A thinking level needs a model to resolve against; with none it would be dropped
     // silently, so the create fails before a Session is made.
     if (effort !== undefined && effort !== '' && modelRef === undefined) throw new Error('Pick a model before choosing a thinking level')
-    const effortId = modelRef === undefined ? undefined : await rt.resolveEffort(modelRef, effort)
+    // An explicit level wins; else the Bot starts on the profile default's level.
+    const effortId = modelRef === undefined ? undefined
+      : (await rt.resolveEffort(modelRef, effort)) ?? await rt.defaultEffort(modelRef)
     const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
     const id = await createSession(cleanName, { dir })
     try {
