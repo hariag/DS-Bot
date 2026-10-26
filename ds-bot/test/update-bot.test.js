@@ -110,7 +110,7 @@ test('an instructions change lands as a message in the Bot chat', async (t) => {
   assert.equal(sent.length, 1)
   assert.equal(sent[0].sessionId, 'b2')
   const text = sent[0].message.content[0].text
-  assert.match(text, /updated your profile/)
+  assert.match(text, /profile was updated/)
   assert.match(text, /Ship the fix/)
   // A patch that changes nothing sends no message.
   await call('update-bot', { id: 'b2', instructions: 'Ship the fix' })
