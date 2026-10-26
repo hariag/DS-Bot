@@ -298,7 +298,9 @@ export function install(rt) {
     const turn = { botId: member.id, sessionId, exchangeId }
     const { started } = round
     started.push(turn)
-    room.seen[member.id] = room.seq
+    // The read position is the one of this turn's start, and moves only when the
+    // delivery lands: a delivery that failed leaves the member where it was.
+    const seenAt = room.seq
     // Checked before the delivery, which may start the turn at once.
     const busy = rt.live.get(sessionId)?.turn !== undefined
     const done = new Promise((resolve) => {
@@ -327,6 +329,8 @@ export function install(rt) {
     })
     try {
       await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, ...(by ? { askedBy: by } : {}) })
+      // The prompt reached the member: its read position moves on.
+      room.seen[member.id] = seenAt
       // Still held by an earlier request: this turn cannot start until the user answers.
       if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
       // Still at earlier work: the call waits in its inbox and is answered after that.

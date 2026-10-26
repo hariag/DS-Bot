@@ -105,7 +105,7 @@ async function start(t, room, services, extraRooms) {
     return { content: post.content, source: post.source }
   }
   await tool('list_bots', {}, 'a')
-  return { home, agentOf, emit, tool, call, begin, finish, round, say, takePost }
+  return { home, ctx, agentOf, emit, tool, call, begin, finish, round, say, takePost }
 }
 
 const settle = async (check) => {
@@ -733,6 +733,46 @@ test('members still at work show in the team view and in the prompts of the othe
   assert.deepEqual(value.work.rooms.r1.map(entry => [entry.botId, entry.tool, entry.speaking]), [['b', 'pwsh', undefined], ['c', undefined, true]])
   host.finish('gc', '没问题。')
   await settle(() => result() !== undefined)
+})
+
+// #510: the member's read position moved before the delivery, so a delivery that
+// failed left the member past the round it missed, and that round never reached it.
+test('a member whose delivery failed sees the round it missed in its next prompt', async (t) => {
+  const host = await start(t)
+  // The delivery to Writer fails once; the Session is there, the message did not land.
+  let failed = false
+  host.ctx.sessions.flush = async (session) => {
+    if (session?.id === 'gb' && !failed) {
+      failed = true
+      throw new Error('the session log could not be written')
+    }
+  }
+  const first = host.round('c1', host.say('@Chief 安排一下文档'))
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  host.finish('ga', '@Writer 把文档整理好')
+  await settle(() => first() !== undefined)
+  assert.deepEqual(kinds(first()), [['message', 'Chief'], ['failed', 'Writer']])
+  // The failed delivery leaves the member where it was: it has read nothing yet.
+  assert.equal(JSON.parse(readFileSync(join(host.home, 'state.json'), 'utf8')).rooms.r1.seen.b, undefined)
+
+  // Its next prompt carries the round it missed.
+  const second = host.round('c2', host.say('@Writer 继续'))
+  await settle(() => host.agentOf('gb').calls.length === 2)
+  const prompt = text(host.agentOf('gb').calls[1])
+  assert.match(prompt, /User: @Chief 安排一下文档/)
+  assert.match(prompt, /Chief: @Writer 把文档整理好/)
+  assert.match(prompt, /User: @Writer 继续/)
+
+  // The delivery that lands moves the position on, so those lines are not shown again.
+  host.begin('gb')
+  host.finish('gb', '整理好了。')
+  await settle(() => second() !== undefined)
+  host.round('c3', host.say('@Writer 还有别的吗'))
+  await settle(() => host.agentOf('gb').calls.length === 3)
+  const later = text(host.agentOf('gb').calls[2])
+  assert.doesNotMatch(later, /@Chief 安排一下文档/)
+  assert.doesNotMatch(later, /@Writer 继续/)
 })
 
 // A step that says something and calls a tool, as a model writes it while it works.
