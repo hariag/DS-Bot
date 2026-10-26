@@ -257,6 +257,14 @@ test('a new Bot inherits the profile default thinking level', async (t) => {
   // An explicit level still wins, and a level the model does not serve is dropped.
   const coder = (await call('create-bot', { name: 'Coder', effort: 'low' })).value
   assert.equal(coder.effort, 'low')
+
+  // An explicit Default pick (null) stays on the model's own level, and so does a
+  // copy of a Bot that has no level of its own.
+  const plain = (await call('create-bot', { name: 'Plain', effort: null })).value
+  assert.equal(plain.effort, undefined)
+  const copy = (await call('duplicate-bot', { id: plain.id })).value
+  assert.equal(copy.effort, undefined)
+
   const other = { provider: 'deepseek', model: 'other', reasoningEffort: 'max' }
   const { call: call2, stop: stop2 } = start(undefined, { models: ['deepseek/deepseek-v4-flash'], reasoning, selection: other })
   t.after(stop2)

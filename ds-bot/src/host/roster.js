@@ -2,7 +2,7 @@
 // the first Main Bot of a new team.
 import { mkdir } from 'node:fs/promises'
 import { MAX_AVATAR_IMAGE, ROOM_MAX_MEMBERS, ROOM_MODES, ROOM_NAME_MAX, ROOM_NOTICE_MAX } from './constants.js'
-import { currentColor, isColor, unquote } from './text.js'
+import { currentColor, isColor, normalize, unquote } from './text.js'
 import { nameProblem } from '../shared/mentions.js'
 
 const BROWSER_GRANT_KINDS = new Set(['post', 'upload', 'download', 'delete', '*'])
@@ -102,29 +102,52 @@ export function install(rt) {
     return Object.keys(avatar).length > 0 ? avatar : undefined
   }
 
+  // A new Bot or group is written only after its Session is made, several awaits after
+  // its name was checked. The name is held from the check until the create ends, so a
+  // create or rename that runs meanwhile cannot take it too.
+  const held = { bot: new Set(), room: new Set() }
+  const isHeld = (kind, name) => held[kind].has(normalize(name))
+  async function holdName(kind, name, work) {
+    const key = normalize(name)
+    if (key === '') return work()
+    held[kind].add(key)
+    try {
+      return await work()
+    } finally {
+      held[kind].delete(key)
+    }
+  }
+  const botNameTaken = name => rt.findBot(name) !== undefined || isHeld('bot', name)
+
   const freshName = (base) => {
     const stem = base.slice(0, 34)
-    if (!rt.findBot(stem)) return stem
+    if (!botNameTaken(stem)) return stem
     let index = 2
-    while (rt.findBot(`${stem} ${index}`)) index += 1
+    while (botNameTaken(`${stem} ${index}`)) index += 1
     return `${stem} ${index}`
   }
 
   // `pickModel` leaves the model to the user: the chat opens on a model card, and the
   // greeting waits until a model is chosen. So does a Bot made when no model is served.
-  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, copyOf, pickModel = false }) {
-    const cleanName = String(botName ?? '').trim().slice(0, 40)
+  async function createBot(options) {
+    const cleanName = String(options.name ?? '').trim().slice(0, 40)
     const problem = nameProblem(cleanName)
     if (problem !== undefined) throw new Error(problem)
-    if (rt.findBot(cleanName)) throw new Error(`A Bot named ${cleanName} already exists`)
+    if (botNameTaken(cleanName)) throw new Error(`A Bot named ${cleanName} already exists`)
+    return holdName('bot', cleanName, () => buildBot(cleanName, options))
+  }
+
+  async function buildBot(cleanName, { role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, copyOf, pickModel = false }) {
     const cleanAvatarValue = cleanAvatar(avatar)
     // The model is fixed at creation, so a later change of the DSH default leaves it alone.
     const modelRef = model ? await rt.resolveModel(model) : pickModel ? undefined : await rt.defaultModel()
     // A thinking level needs a model to resolve against; with none it would be dropped
     // silently, so the create fails before a Session is made.
-    if (effort !== undefined && effort !== '' && modelRef === undefined) throw new Error('Pick a model before choosing a thinking level')
-    // An explicit level wins; else the Bot starts on the profile default's level.
+    if (effort && modelRef === undefined) throw new Error('Pick a model before choosing a thinking level')
+    // An explicit level wins; an explicit Default (null) picks the model's own
+    // level; an untouched pick inherits the profile default's level.
     const effortId = modelRef === undefined ? undefined
+      : effort === null || effort === '' ? undefined
       : (await rt.resolveEffort(modelRef, effort)) ?? await rt.defaultEffort(modelRef)
     const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
     const id = await createSession(cleanName, { dir })
@@ -204,6 +227,9 @@ export function install(rt) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
     const served = (await rt.catalog()).some(entry => entry.ref === bot.model)
+    // A folder that went away since leaves the copy in the team workspace.
+    const workDir = bot.workDir !== undefined && await rt.isFolder(bot.workDir) ? bot.workDir : undefined
+    // No await from here to createBot's check, so two copies at once get different names.
     return createBot({
       name: freshName(`${bot.name} copy`),
       role: bot.role,
@@ -211,14 +237,15 @@ export function install(rt) {
       color: bot.color,
       avatar: bot.avatar,
       model: served ? bot.model : undefined,
-      effort: served ? bot.effort : undefined,
-      // A folder that went away since leaves the copy in the team workspace.
-      workDir: bot.workDir !== undefined && await rt.isFolder(bot.workDir) ? bot.workDir : undefined,
+      // A copy of a Bot on the model's own default stays on it (null marks the
+      // explicit Default pick); else the create would inherit the profile level.
+      effort: served ? (bot.effort ?? null) : undefined,
+      workDir,
       copyOf: bot.id,
     })
   }
 
-  async function updateBot(id, patch, actorId, fromSessionId) {
+  async function updateBot(id, patch, actorId) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
     if (patch.browserGrants !== undefined && actorId !== undefined) {
@@ -246,7 +273,8 @@ export function install(rt) {
     if (patch.name !== undefined) {
       const next = String(patch.name).trim().slice(0, 40)
       const clash = rt.findBot(next)
-      if (next === '' || (clash && clash.id !== id)) throw new Error(`Name ${next} is not available`)
+      const pending = isHeld('bot', next) && normalize(next) !== normalize(bot.name)
+      if (next === '' || (clash && clash.id !== id) || pending) throw new Error(`Name ${next} is not available`)
       // A name saved before the rule stays usable until it changes.
       const problem = next === bot.name ? undefined : nameProblem(next)
       if (problem !== undefined) throw new Error(problem)
@@ -255,8 +283,6 @@ export function install(rt) {
       await ctx.sessionTitle.rename(agent.session, next)
       await followMemberNames(Object.values(state.rooms).filter(room => room.members.includes(id)))
     }
-    const roleBefore = bot.role
-    const instructionsBefore = bot.instructions
     if (patch.role !== undefined) bot.role = String(patch.role).trim().slice(0, 24)
     if (patch.instructions !== undefined) bot.instructions = String(patch.instructions).trim()
     let modelChanged = false
@@ -290,23 +316,6 @@ export function install(rt) {
       else bot.workDir = workDir
     }
     await rt.save()
-    // The system prompt reads the live profile every turn, but a Session with
-    // several rounds behind it follows the old kickoff's pull until a message
-    // lands; notify the Bot's chat so the next turn honors the new profile.
-    const notes = []
-    if (bot.role !== roleBefore) notes.push(`Your role is now "${bot.role || '(none)'}"`)
-    if (bot.instructions !== instructionsBefore) notes.push(`Your instructions now read:\n${bot.instructions || '(none)'}`)
-    // A held greeting means the model pick is still open: the kickoff it later sends
-    // already reads the new profile, and a notice would start a turn before that.
-    // A Bot editing itself in its own chat just got the tool result in the turn
-    // that made the edit; a notice there would only buy it a second, unsolicited
-    // reply. The same edit made from a group Session reaches no own-chat turn, so
-    // the notice still goes out.
-    const selfEditInChat = actorId === bot.id && fromSessionId === rt.chatOf(bot.id)
-    if (notes.length > 0 && bot.kickoff === undefined && !selfEditInChat) {
-      void rt.deliver({ toId: bot.id, text: notes.join('\n'), role: 'update' })
-        .catch(error => rt.warn('ds-bot: profile update for %s not delivered: %s', bot.name, error?.message ?? error))
-    }
     if (modelChanged) await rt.applyModel(bot, { force: true })
     if (moved) void rt.followFolder(bot.id)
     if (bot.model && bot.kickoff !== undefined) {
@@ -337,7 +346,7 @@ export function install(rt) {
 
   function cleanRoomName(text, selfId) {
     const next = unquote(text).replace(/\s+/g, ' ').slice(0, ROOM_NAME_MAX)
-    if (next !== '' && rt.findRooms(next).some(room => room.id !== selfId)) throw new Error(`Another group chat is already called "${next}"`)
+    if (next !== '' && (rt.findRooms(next).some(room => room.id !== selfId) || isHeld('room', next))) throw new Error(`Another group chat is already called "${next}"`)
     return next
   }
 
@@ -377,6 +386,10 @@ export function install(rt) {
     const adminId = admin !== undefined ? admin : defaultAdmin(members, createdBy)
     if (adminId !== null && !members.includes(adminId)) throw new Error('The admin must be a member of the group')
     if (mode !== undefined && !ROOM_MODES.includes(mode)) throw new Error(`Reply mode must be one of ${ROOM_MODES.join(', ')}`)
+    return holdName('room', custom, () => buildRoom({ members, custom, notice, mode, adminId, createdBy }))
+  }
+
+  async function buildRoom({ members, custom, notice, mode, adminId, createdBy }) {
     const title = custom || autoRoomName(members)
     // The group's own Session only relays, so it stays in the team workspace; the
     // group's folder is for its members' Sessions.
@@ -584,6 +597,7 @@ export function install(rt) {
     const current = rt.chatOf(id)
     // Questions and exchange turns are kept per Session, so every part of the chat is cleared.
     const parts = new Set([id, current, ...(bot.segments ?? []).map(segment => segment.sessionId)])
+    await rt.releaseBot(id, [...parts, ...rt.groupSessionsOf(id)])
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]

@@ -10505,11 +10505,11 @@ function EffortRows({ reasoning, current, onPick }) {
         key: row.effort ?? "default",
         type: "button",
         role: "menuitemradio",
-        "aria-checked": row.effort === current,
+        "aria-checked": (row.effort ?? null) === (current ?? null),
         onClick: () => onPick(row.effort)
       },
       (0, import_react20.createElement)("span", { className: "bt-menu-label" }, row.label),
-      (0, import_react20.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, row.effort === current ? (0, import_react20.createElement)(CheckIcon) : null)
+      (0, import_react20.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, (row.effort ?? null) === (current ?? null) ? (0, import_react20.createElement)(CheckIcon) : null)
     ))
   );
 }
@@ -12315,7 +12315,7 @@ function startModel(roster) {
 function createPayload({ name, look, image, model, effort, brief }) {
   const payload = { name, color: look.color, avatar: image ? { shape: look.shape, image } : { shape: look.shape } };
   if (model) payload.model = model;
-  if (effort) payload.effort = effort;
+  if (effort !== void 0) payload.effort = effort;
   if (brief) payload.brief = brief;
   return payload;
 }
@@ -12438,7 +12438,7 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
       (0, import_react26.createElement)(ModelMenu, { bot: { id: "new-bot", name: finalName, model: model || void 0, effort }, roster, actions, wide: true, onPick: (ref) => {
         setModel(ref);
         setEffort(void 0);
-      }, onPickEffort: setEffort }),
+      }, onPickEffort: (picked) => setEffort(picked ?? null) }),
       (0, import_react26.createElement)("span", { className: "bt-note" }, (roster.models ?? []).length > 0 ? t("The Bot runs on this model. You can change it later in its details.") : t("Add a provider and a model in DeepSeek Harness first, or pick one in the Bot's chat later."))
     ),
     error ? (0, import_react26.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null,

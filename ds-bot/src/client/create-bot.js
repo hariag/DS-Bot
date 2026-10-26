@@ -87,7 +87,7 @@ export function CreateBot({ roster, actions, start, brief = '', onBack, canGoBac
         : clash ? h('span', { className: 'bt-note bt-danger' }, t('A Bot named {name} already exists', { name: finalName })) : null),
     h('div', { className: 'bt-field' },
       h('span', { className: 'bt-field-label' }, t('Model')),
-      h(ModelMenu, { bot: { id: 'new-bot', name: finalName, model: model || undefined, effort }, roster, actions, wide: true, onPick: ref => { setModel(ref); setEffort(undefined) }, onPickEffort: setEffort }),
+      h(ModelMenu, { bot: { id: 'new-bot', name: finalName, model: model || undefined, effort }, roster, actions, wide: true, onPick: ref => { setModel(ref); setEffort(undefined) }, onPickEffort: picked => setEffort(picked ?? null) }),
       h('span', { className: 'bt-note' }, (roster.models ?? []).length > 0
         ? t('The Bot runs on this model. You can change it later in its details.')
         : t('Add a provider and a model in DeepSeek Harness first, or pick one in the Bot\'s chat later.'))),
