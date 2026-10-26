@@ -46,7 +46,7 @@ export function surfaceGroups(install, { onError } = {}) {
       return false
     }
   }
-  return {
+  const api = {
     reconcile(wanted) {
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group)
       for (const group of GROUPS) {
@@ -56,15 +56,20 @@ export function surfaceGroups(install, { onError } = {}) {
     },
     // A step can go on with nothing actually contributed — a slot inject whose
     // callback threw inside the host still returns its disposer. remount takes
-    // the group off and puts it back, so a caller that notices the contribution
-    // is missing can retry instead of trusting `mounted`.
-    remount(group) {
+    // the group off and lets the reconcile put it back, so a caller that
+    // notices the contribution is missing can retry instead of trusting
+    // `mounted`. Groups that lean on it (the conversation on the shell's
+    // styles) come off first and go back only through the reconcile — a
+    // failed remount never leaves one stranded.
+    remount(group, wanted = {}) {
       if (!GROUPS.includes(group)) return
+      for (const later of GROUPS.slice(GROUPS.indexOf(group) + 1)) withdraw(later)
       withdraw(group)
-      mount(group)
+      api.reconcile(wanted)
     },
     dispose() { for (const group of [...GROUPS].reverse()) withdraw(group) },
   }
+  return api
 }
 
 // The priority that puts an entry below every other entry of its cell (lowest
