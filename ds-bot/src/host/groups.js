@@ -326,10 +326,7 @@ export function install(rt) {
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
-      // A member mid-turn would only read a queued post after that work: steer the
-      // call in, so a correction reaches it at the turn's next step instead of
-      // landing in its inbox once the crossing has already deepened.
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, steer: busy, ...(by ? { askedBy: by } : {}) })
+      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, files, ...(by ? { askedBy: by } : {}) })
       // Still held by an earlier request: this turn cannot start until the user answers.
       if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
       // Still at earlier work: the call waits in its inbox and is answered after that.
@@ -450,12 +447,29 @@ export function install(rt) {
     void rt.save().catch(() => {})
   }
 
+  // A member's post steered into the group Session's running turn lands in the
+  // room inbox mid-round: the relay took its snapshot at entry, so the post picks
+  // its speakers here, in the round it corrected, instead of losing its relay.
+  function drainRoomPosts(room, round, index) {
+    const queued = rt.roomInbox.get(room.id) ?? []
+    const posts = queued.filter(post => post.botId !== undefined)
+    if (posts.length === 0) return
+    rt.roomInbox.set(room.id, queued.filter(post => post.botId === undefined))
+    for (const post of posts) {
+      // The post wrote itself into the log already; it still needs its speakers and,
+      // when it asked for one, its report at the end of the round it joined.
+      callMembers(round, index - 1, openingSpeakers(room, post), `${post.name ?? 'a member'} posted to the group`, post.botId, 'bot')
+      if (post.reportBack === true) (round.postBacks ??= []).push(post)
+    }
+  }
+
   async function runRound(room, round, signal, agent) {
     // The inbox check keeps a message sent during the last speaker's turn inside
     // this round: it drains at the loop's head even once the slots ran out.
-    for (let index = 0; index < round.slots.length || waitingLines(agent).length > 0; index += 1) {
+    for (let index = 0; index < round.slots.length || waitingLines(agent).length > 0 || (rt.roomInbox.get(room.id) ?? []).length > 0; index += 1) {
       if (signal.aborted) break
       drainRoomInbox(room, round, index, agent)
+      drainRoomPosts(room, round, index)
       if (index >= round.slots.length) break
       const slot = round.slots[index]
       const member = rt.botOf(slot.id)

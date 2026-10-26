@@ -425,19 +425,21 @@ const busyRound = async (t, room, services) => {
   return { host, first }
 }
 
-test('a group call into a busy member steers it, and a post into a busy group steers', async (t) => {
+test('a post steered into a busy group Session picks its speakers inside the running round', async (t) => {
   const { host, first } = await busyRound(t)
-  await host.tool('post_to_group', { group: 'Ops', message: '@Writer 看一下文档' }, 'a')
+  await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档' }, 'a')
   const post = host.takePost()
-  // Writer (gb) is mid-turn: the call cuts in at its next step rather than queueing
-  // for a turn of its own after the work.
-  const second = host.round('c2', post)
-  await settle(() => host.agentOf('gb').calls.length === 2)
-  assert.equal(host.agentOf('gb').kinds.at(-1), 'steer')
+  // The steered post lands as a user/message inside the running turn: it queues
+  // into the room inbox, and the running round drains it for its speakers.
+  host.emit('r1', 'user/message', post)
   host.finish('gb', '整理好了。')
-  await settle(() => first() !== undefined && second() !== undefined)
+  await settle(() => host.agentOf('gc').calls.length === 1)
+  assert.equal(host.begin('gc').source.askedBy, 'a')
+  host.finish('gc', '看过了。')
+  await settle(() => first() !== undefined)
+  assert.ok(first().replies.some(reply => reply.botId === 'c'))
 
-  // A busy group Session hears a member's post at its next step the same way.
+  // The group Session itself hears the post at its next step while it works.
   host.emit('r1', 'turn/start', { turn: 9 })
   await host.tool('post_to_group', { group: 'Ops', message: '暂停一下' }, 'a')
   assert.equal(host.agentOf('r1').kinds.at(-1), 'steer')
