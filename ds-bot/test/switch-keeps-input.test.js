@@ -114,7 +114,7 @@ async function start({ fail = {}, services = {}, home: reuse } = {}) {
       list: () => [{ id: 'w1', path: team }],
       resolveByPath: async () => undefined,
       create: async path => ({ id: 'w-new', path }),
-      archiveSession: async (sessionId) => { archived.push(sessionId) },
+      archiveSession: async (sessionId, options) => { archived.push([sessionId, options]) },
     },
     sessionController: {
       create: async (options) => {
@@ -301,7 +301,7 @@ test('a marked earlier part hands its kept input on after a restart, once, and i
   assert.equal(delivered.filter(id => id === 'e-carry').length, 0) // already pending — not sent twice
   assert.equal(delivered.filter(id => id === 'e-held').length, 1)
   assert.deepEqual(inboxTexts(second.agentOf('b')), [])
-  assert.ok(second.archived.includes('b'))
+  assert.deepEqual(second.archived, [['b', { stopActivity: true }]])
   assert.deepEqual(second.state().switching, {})
 })
 
