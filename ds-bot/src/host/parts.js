@@ -98,8 +98,6 @@ export function handoffReply(hold, outcome) {
   }
 }
 
-
-
 export function readReply(text) {
   let value
   try { value = JSON.parse(text) } catch { return undefined }

@@ -5,10 +5,8 @@ import { AnsweredCell } from './questions.js'
 import { useDockHold } from './card-hold.js'
 import { SettledHandoff } from './handoff-card.js'
 import { heldCardKey } from './sources.js'
-import { WidgetCard, ViewUi, DEEP_UI_CSS } from 'dsh-deep-ui/react'
+import { WidgetCard, ViewUi, DEEP_UI_CSS, WidgetView as CoreWidgetView, ViewMenuList as CoreViewMenuList } from 'dsh-deep-ui/react'
 import { checkShownView } from 'dsh-deep-ui/core'
-
-import { WidgetView as CoreWidgetView, ViewMenuList as CoreViewMenuList } from 'dsh-deep-ui/react'
 
 // The core components draw with the host's labels: the submit keeps ds-bot's
 // wording, the rest resolve through ds-bot's dictionary.
@@ -127,5 +125,7 @@ body{
 --dui-ink-violet:var(--bt-ink-violet);--dui-ink-sky:var(--bt-ink-sky);
 --dui-ink-rose:var(--bt-ink-rose);--dui-ink-yellow:var(--bt-ink-yellow);
 --dui-ink-cyan:var(--bt-ink-cyan);--dui-ink-magenta:var(--bt-ink-magenta)}
-.bt-q-inline .dui-view{max-width:100%}
+.bt-q-inline .dui-view{margin:0;width:100%;max-width:min(100%,max(calc(var(--bt-msg-w,.8) * 100%),560px));order:0}
+body[data-bt-layout=flat] .bt-q-inline .dui-view{max-width:calc(var(--bt-flat-w,1) * 100%)}
+.bt-q-inline:has(>.dui-view-bare){margin:8px 0 12px}
 `
