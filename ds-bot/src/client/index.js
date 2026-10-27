@@ -383,11 +383,11 @@ export function apply(ctx) {
   const show = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly('refresh sessions')), open: (target) => { expected = target; ctx.uiWorkspace.openSession(target) }, current: mainView })
   // Whether the open Bot panel is folded away for lack of room: its opener then
   // means "show it" (the column yields), not "close it".
-  const panelFolded = () => {
+  const panelFolded = (view) => {
     const state = ui.getSnapshot()
     if (state.details === null) return false
     const f = frame.getSnapshot()
-    return frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, collapsedWidth: f.collapsedWidth, pref: sidebarPref.getSnapshot(), drawer: state.leftDrawer, panel: { view: state.view, yielded: false } }).panel === 'folded'
+    return frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, collapsedWidth: f.collapsedWidth, pref: sidebarPref.getSnapshot(), drawer: state.leftDrawer, panel: { view: view ?? state.view, yielded: false } }).panel === 'folded'
   }
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock, panelFolded }),
@@ -540,7 +540,7 @@ export function apply(ctx) {
         if (!bot) return
         browsers.ensureTabs(bot.id)
         if (browsers.tabs.getSnapshot()[bot.id]?.active == null) browsers.openTab(bot.id)
-        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null }))
+        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null, panelYield: panelFolded('browser') }))
       },
       // '+' on the strip or the drawer's new-tab card: a blank tab in the browser view.
       browserNewTab: (id) => {
@@ -548,7 +548,7 @@ export function apply(ctx) {
         if (!bot) return null
         browsers.ensureTabs(bot.id)
         const tabId = browsers.openTab(bot.id)
-        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null }))
+        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null, panelYield: panelFolded('browser') }))
         return tabId
       },
       // A drawer card: its tab active, the panel on the browser view.
@@ -556,7 +556,7 @@ export function apply(ctx) {
         const bot = roster.getSnapshot().byId[id]
         if (!bot) return
         browsers.activate(bot.id, tabId)
-        ui.set(state => ({ ...state, details: id, view: 'browser' }))
+        ui.set(state => ({ ...state, details: id, view: 'browser', panelYield: panelFolded('browser') }))
       },
       browserEnsure: botId => browsers.ensureTabs(botId),
       browserCloseTab: (botId, tabId) => browsers.closeTab(botId, tabId),
@@ -799,12 +799,15 @@ export function apply(ctx) {
   // that fits again, or is closed, and a drawer that no longer applies drop
   // their flags.
   const installFrameSync = () => {
-    let last = { details: ui.getSnapshot().details, view: ui.getSnapshot().view }
+    let lastDetails = ui.getSnapshot().details
     const sync = () => {
       const s = ui.getSnapshot()
       const f = frame.getSnapshot()
-      const opened = s.details !== null && (s.details !== last.details || s.view !== last.view)
-      last = { details: s.details, view: s.view }
+      // Only a fresh open counts: a folded panel that just follows the chat to
+      // another subject is not the user asking to see it — the openers in
+      // team-actions carry the yield themselves.
+      const opened = s.details !== null && lastDetails === null
+      lastDetails = s.details
       const layout = frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, collapsedWidth: f.collapsedWidth, pref: sidebarPref.getSnapshot(), drawer: s.leftDrawer === true, panel: s.details === null ? null : { view: s.view, yielded: false } })
       if (s.details === null) {
         if (s.panelYield) actions.setPanelYield(false)

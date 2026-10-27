@@ -73,7 +73,13 @@ export function installFrameWatch(frame) {
   const watched = new Set()
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => schedule()) : null
   const read = () => {
-    const width = sidebarTrackWidth()
+    // While the shell slides its sidebar (data-animating on the frame) the
+    // track reports in-between widths: keep the last settled ones. The viewport
+    // and the collapsed flag still update; the observer refires when the flag
+    // clears, so the settled width lands then.
+    const column = document.querySelector('[class*="_sidebarCol"]')
+    const animating = column?.closest('[data-animating]') != null
+    const width = animating ? null : sidebarTrackWidth()
     const collapsed = dshCollapsed()
     if (width !== null) {
       if (collapsed === true) collapsedWidth = width
@@ -97,7 +103,7 @@ export function installFrameWatch(frame) {
   }
   measure()
   const mutations = new MutationObserver(schedule)
-  mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-sidebar-collapsed'] })
+  mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-sidebar-collapsed', 'data-animating'] })
   window.addEventListener('resize', schedule)
   return () => {
     cancelAnimationFrame(raf)

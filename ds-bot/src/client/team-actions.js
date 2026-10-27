@@ -8,9 +8,13 @@ import { noteClientError } from './diagnostics.js'
 export function teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock, panelFolded }) {
   // A memory is a Bot's or a group chat's; both are opened by id.
   const memoryOf = id => (roster.getSnapshot().roomsById[id] ? { roomId: id } : { botId: id })
+  // An action that shows the panel lands the yield with it: when a folded
+  // panel's explicit opener fires, the column gives way in the same set.
+  // `view` is the next view, since its minimum decides what fits.
+  const yieldTo = view => panelFolded?.(view) === true
   // The panel on a side chat's view, on the chat the strip tab or menu named.
   const openSideChat = (sessionId, chatId) => {
-    ui.set(state => ({ ...state, details: sessionId, view: 'side', side: chatId ?? null, renaming: false, tab: null }))
+    ui.set(state => ({ ...state, details: sessionId, view: 'side', side: chatId ?? null, renaming: false, tab: null, panelYield: yieldTo('side') }))
   }
   return {
     openNewChat: (mode) => { ui.set(state => ({ ...state, newChat: mode, menu: null, palette: null })) },
@@ -25,7 +29,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
         const details = force || state.details !== id || state.view !== 'details' ? id : null
         // A folded panel is open but not shown: its opener then means "show it"
         // (the column yields it room), not "close it".
-        if (details === null && panelFolded?.() === true) return { ...state, renaming: false, tab: null, details: id, view: 'details', panelYield: true }
+        if (details === null && yieldTo('details')) return { ...state, renaming: false, tab: null, details: id, view: 'details', panelYield: true }
         return { ...state, renaming: false, tab: null, details, view: 'details' }
       })
     },
@@ -42,9 +46,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
         return { ...state, details: id, view, renaming: false, tab: null }
       })
     },
-    showDetails: (id, tab = null) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: false, tab })) },
+    showDetails: (id, tab = null) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: false, tab, panelYield: yieldTo('details') })) },
     // Opening the conversation would move focus to its composer and blur the name field.
-    renameBot: (id) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: true, tab: null })) },
+    renameBot: (id) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: true, tab: null, panelYield: yieldTo('details') })) },
     // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
     openSettings: (page = 'general', id = null) => { ui.set(state => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null })) },
     closeSettings: () => { ui.set(state => (state.settings ? { ...state, settings: null } : state)) },
@@ -53,7 +57,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     openConnectors: () => { ui.set(state => ({ ...state, settings: { page: 'connectors', id: null }, menu: null, palette: null, newChat: null })) },
     setPanelView: (view) => {
       if (view !== 'details' && view !== 'browser' && view !== 'side') return
-      ui.set(state => (state.details && state.view !== view ? { ...state, view } : state))
+      ui.set(state => (state.details && state.view !== view ? { ...state, view, panelYield: yieldTo(view) } : state))
     },
     // A side chat on the panel's own view, opened from the strip, the `···`
     // menus or `/side`. Closing the panel keeps the chats; only a tab's × deletes.

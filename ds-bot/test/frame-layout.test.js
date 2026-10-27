@@ -4,6 +4,8 @@ import {
   RAIL_WIDTH, DSH_NARROW,
   frameLayout, dshExpandedFor, userSidebarToggle,
 } from '../src/client/frame-layout.js'
+import { createSource } from '../src/client/sources.js'
+import { teamActions } from '../src/client/team-actions.js'
 
 // The window, the shell sidebar's track width and what is open decide which left
 // column shows and how the Bot panel sits; the chat keeps MIN_CHAT.
@@ -96,4 +98,38 @@ test('an unrequested flip on one side of the line is the user', () => {
   const before = { collapsed: false, viewport: 1400 }
   assert.equal(userSidebarToggle({ before, after: { collapsed: true, viewport: 1300 } }), true)
   assert.equal(userSidebarToggle({ before: { collapsed: true, viewport: 800 }, after: { collapsed: false, viewport: 700 } }), true)
+})
+
+// A folded panel is open but not shown. The panel following the chat to another
+// subject is not the user asking to see it; the openers are.
+const bench = (folded) => {
+  const ui = createSource({ details: 'chief', view: 'details', renaming: false, tab: null, side: null, panelYield: false, leftDrawer: false })
+  const roster = createSource({ byId: { chief: { id: 'chief' }, writer: { id: 'writer' } }, roomsById: {}, sideChats: {} })
+  const actions = teamActions({
+    call: () => Promise.resolve(null), after: promise => promise, partFor: id => id,
+    roster, ui, panelFolded: () => folded,
+  })
+  return { ui, actions }
+}
+
+test('the folded panel does not resurface when it follows the chat elsewhere', () => {
+  const { ui, actions } = bench(true)
+  actions.followPanel('writer')
+  assert.equal(ui.getSnapshot().details, 'writer')
+  assert.equal(ui.getSnapshot().panelYield, false)
+})
+
+test('explicit openers on the folded panel yield the column to it', () => {
+  const { ui, actions } = bench(true)
+  actions.showDetails('writer')
+  assert.equal(ui.getSnapshot().panelYield, true)
+  ui.set(state => ({ ...state, panelYield: false }))
+  actions.openSideChat('chief', 'chat-1')
+  assert.equal(ui.getSnapshot().panelYield, true)
+})
+
+test('openers on a panel that fits do not yield', () => {
+  const { ui, actions } = bench(false)
+  actions.showDetails('writer')
+  assert.equal(ui.getSnapshot().panelYield, false)
 })
