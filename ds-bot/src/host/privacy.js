@@ -83,6 +83,7 @@ export function install(rt) {
   ].filter(Boolean).map(spellings))).flat()
 
   const teamFolder = () => rt.teamFolder() ?? resolve(rt.defaultTeamFolder())
+  const teamMemory = join(rt.home, 'memory', 'team')
 
   // The private Bot that `path` belongs to, other than `self`; undefined when it is open.
   // `search` is for tools that walk a folder: a folder that holds a closed one is closed
@@ -106,7 +107,7 @@ export function install(rt) {
       const ownBot = rt.botOf(self)
       const ownIds = ownBot === undefined ? [] : sessionsOf(ownBot).map(fold)
       const ownRegions = ownBot === undefined ? [] : await regionsOf(ownBot)
-      const open = [rt.workDirOf({ botId: self }), teamFolder(), ...ownRegions].filter(Boolean)
+      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, ...ownRegions].filter(Boolean)
       const folders = (await Promise.all(open.map(spellings))).flat()
       const roots = (await Promise.all(dataRoots().map(spellings))).flat()
       for (const key of keys) {
@@ -208,6 +209,26 @@ export function install(rt) {
     }
   }
 
+  // A Session started under a private Bot is closed too, even when its own id is not in
+  // the Bot's chat history. Walk the same parent chain as the caller check.
+  async function ownerOfSession(id, self) {
+    const bots = protectedBots()
+    const owns = (sessionId, bot) => bot.id !== self && sessionsOf(bot).includes(sessionId)
+    const direct = bots.find(bot => owns(id, bot))
+    if (direct) return direct
+    const seen = new Set([id])
+    let current = id
+    for (;;) {
+      const agent = await rt.resolveAgent(current).catch(() => undefined)
+      const parent = agent?.session?.header?.parentSession
+      if (parent === undefined || seen.has(parent)) return undefined
+      const owner = bots.find(bot => owns(parent, bot))
+      if (owner) return owner
+      seen.add(parent)
+      current = parent
+    }
+  }
+
   // The file tools, the shell and the session search: where the path or text names a
   // closed place, the call fails before it runs.
   async function guardFiles(exec, self) {
@@ -223,7 +244,8 @@ export function install(rt) {
       // A private Bot's file changes stay in its own folder unless the user allows them.
       if (isPrivate(self) && WRITE_TOOLS.includes(name)) {
         const own = await spellings(rt.botOf(self).workDir)
-        const target = await spellings(resolve(folder(), path))
+        const base = folder()
+        const target = await spellings(base === undefined ? path : resolve(base, path))
         if (!target.every(key => own.some(root => within(key, root)))) await approve(exec, { en: `Let ${rt.botOf(self).name} change ${path}? It is outside its own folder.`, zh: `允许 ${rt.botOf(self).name} 修改 ${path} 吗？它在自己的文件夹之外。` })
       }
       return
@@ -240,6 +262,11 @@ export function install(rt) {
       if (bot) refuse(bot)
       return
     }
+    if ((name === 'subagent' || name === 'subagent_fork') && typeof args.cwd === 'string') {
+      const bot = await ownerOfPath(args.cwd, { self, search: true, base: folder() })
+      if (bot) refuse(bot)
+      return
+    }
     if (name === 'working_directory' && typeof args.cd === 'string') {
       const bot = await ownerOfPath(args.cd, { self, search: true, base: folder() })
       if (bot) refuse(bot)
@@ -247,8 +274,10 @@ export function install(rt) {
     }
     if (SESSION_TOOLS.includes(name)) {
       const asked = strings([args.session_id, args.session_ids, args.parent_session_ids])
-      const bot = protectedBots().find(found => found.id !== self && sessionsOf(found).some(id => asked.includes(id)))
-      if (bot) refuse(bot)
+      for (const id of asked) {
+        const bot = await ownerOfSession(id, self)
+        if (bot) refuse(bot)
+      }
       // DSH scopes Session search to the caller's cwd. A subagent can have another cwd,
       // so an unfiltered search is closed too; explicit safe ids still narrow it.
       if (name === 'session_search' && args.session_ids === undefined && args.parent_session_ids === undefined) {

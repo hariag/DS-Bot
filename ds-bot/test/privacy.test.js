@@ -258,6 +258,8 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
   await refused('bash', { command: `cat ${posix(join(home, 'chat-index.sqlite'))}` })
   await refused('working_directory', { cd: diary })
   await refused('working_directory', { cd: root })
+  await refused('subagent', { cwd: diary, prompt: 'read notes.txt' })
+  await refused('subagent_fork', { cwd: relative(team, diary), prompt: 'read notes.txt' })
   await refused('session_search', { query: 'x' })
   await refused('session_search', { query: 'x', session_id: P })
   await refused('session_trace', { session_ids: ['b', P] })
@@ -268,10 +270,13 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
     ['read', { file_path: 'a.txt' }],
     ['write', { file_path: join(team, 'a.txt'), content: 'x' }],
     ['read', { file_path: join(dsh, 'sessions', 'b.jsonl') }],
+    ['read', { file_path: join(home, 'memory', 'team', 'MEMORY.md') }],
+    ['glob', { pattern: '**/*', path: join(home, 'memory', 'team') }],
     ['glob', { pattern: '**/*', path: project }],
     ['glob', { pattern: '**/*', path: team }],
     ['grep', { pattern: 'x' }],
     ['bash', { command: 'ls', workdir: project }],
+    ['subagent', { cwd: project, prompt: 'work in the open folder' }],
     ['working_directory', { cd: join(team, 'sub') }],
     ['session_search', { query: 'x', session_ids: ['b'] }],
   ]) {
@@ -306,6 +311,9 @@ test('the private Bot reads its own and the team\'s files; a Session it starts s
   assert.deepEqual(await run('glob', { pattern: '**/*', path: home }, P), { ran: true })
   assert.deepEqual(await run('read', { file_path: join(project, 'a.txt') }, P), { ran: true })
   assert.deepEqual(await run('glob', { pattern: '**/*', path: team }, P), { ran: true })
+  assert.deepEqual(await run('read', { file_path: join(home, 'memory', 'team', 'MEMORY.md') }, P), { ran: true })
+  assert.deepEqual(await run('glob', { pattern: '**/*', path: join(home, 'memory', 'team') }, P), { ran: true })
+  assert.deepEqual(await run('subagent', { cwd: diary, prompt: 'work in my folder' }, P), { ran: true })
   const sub = parent => ({ id: 'sub1', session: { id: 'sub1', header: { cwd: team, parentSession: parent } } })
   const fromWriter = await run('read', { file_path: join(diary, 'notes.txt') }, 'b', sub('b'))
   assert.equal(fromWriter.ran, false)
@@ -354,7 +362,7 @@ test('a message of a private Bot that the user does not allow is not sent', asyn
 
 test('a private Bot changes files outside its folder only with the user\'s approval', async (t) => {
   const approval = fakeApproval('allowed-once')
-  const { run, diary, project, stop } = await start({ services: { approval } })
+  const { run, ctx, diary, project, stop } = await start({ services: { approval } })
   t.after(stop)
   assert.deepEqual(await run('write', { file_path: join(diary, 'today.txt'), content: 'x' }, P), { ran: true })
   assert.deepEqual(await run('write', { file_path: 'today.txt', content: 'x' }, P), { ran: true })
@@ -368,6 +376,15 @@ test('a private Bot changes files outside its folder only with the user\'s appro
   // Reading is free.
   assert.deepEqual(await run('read', { file_path: join(project, 'a.txt') }, P), { ran: true })
   assert.equal(approval.requests.length, 2)
+  // A subagent can have no cwd of its own; an absolute path still needs no TypeError.
+  const getWorkspace = ctx.workspaceRegistry.get
+  try {
+    ctx.workspaceRegistry.get = () => undefined
+    const noCwd = { id: 'sub-no-cwd', session: { id: 'sub-no-cwd', header: { parentSession: P } } }
+    assert.deepEqual(await run('write', { file_path: join(diary, 'no-cwd.txt'), content: 'x' }, P, noCwd), { ran: true })
+  } finally {
+    ctx.workspaceRegistry.get = getWorkspace
+  }
 })
 
 test('a write of a private Bot outside its folder that the user does not allow is not made', async (t) => {
@@ -421,11 +438,18 @@ test('a nested subagent speaks for the private Bot at its root', async (t) => {
   const { run, diary, agentOf, stop } = await start({ services: { approval } })
   t.after(stop)
   agentOf('sub1').session.header.parentSession = P
-  const nested = { id: 'sub2', session: { id: 'sub2', header: { cwd: diary, parentSession: 'sub1' } } }
+  const nested = agentOf('sub2')
+  nested.session.header.cwd = diary
+  nested.session.header.parentSession = 'sub1'
   assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, P, nested), { ran: true })
   assert.deepEqual(await run('message_bot', { to: 'Writer', message: 'from a nested subagent' }, P, nested), { ran: true })
   assert.equal(approval.requests.length, 1)
   assert.match(approval.requests[0].reason, /from a nested subagent/)
+  for (const id of ['sub1', 'sub2']) {
+    const result = await run('session_trace', { session_id: id }, 'b')
+    assert.equal(result.ran, false, id)
+    assert.match(result.error, CLOSED)
+  }
 })
 
 test('deleting a private Bot keeps its folder and archived memory closed', async (t) => {
