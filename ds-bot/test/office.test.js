@@ -7,11 +7,11 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 import assert from 'node:assert'
-import { readZip } from '../src/office/zip.js'
+import { readZip, writeZip } from '../src/office/zip.js'
 import { Package } from '../src/office/package.js'
 import { checkPackage, fixPackage } from '../src/office/check.js'
 import { docxRead, docxEdit, resolveChanges } from '../src/office/docx.js'
-import { pptxInventory, pptxLayout, pptxClean } from '../src/office/pptx.js'
+import { pptxInventory, pptxLayout, pptxClean, pptxSlides } from '../src/office/pptx.js'
 import { xlsxInventory, xlsxRead } from '../src/office/xlsx.js'
 import { decodePng, encodePng, contactSheet } from '../src/office/png.js'
 import { parseXml, elementsOf, childrenOf, textOf } from '../src/office/xml.js'
@@ -464,6 +464,164 @@ describe('re-review fixes', () => {
     const read = docxRead(Package.open(out))
     assert.ok(read.comments.some(c => c.text === 'hi' && c.anchorsTo === 'p7'))
     assert.deepEqual(checkPackage(Package.open(out)), [])
+  })
+})
+
+describe('re-review pass 2', () => {
+  test('zip slip: unsafe member names are refused on open', () => {
+    for (const name of ['../evil.xml', 'word/../../x.xml', '/abs/x.xml', 'C:/win/x.xml', 'word\\..\\x.xml']) {
+      const buf = writeZip([{ name, data: Buffer.from('x') }])
+      const file = join(tmp(), 'z.docx')
+      writeFileSync(file, buf)
+      assert.throws(() => Package.open(file), /unsafe member name/)
+    }
+  })
+  test('zip bomb: inflate stops at the declared size', () => {
+    const buf = writeZip([{ name: 'x.xml', data: Buffer.alloc(5000, 65) }])
+    buf.writeUInt32LE(10, 22) // lie: declared usize 10, real 5000
+    const cdOff = buf.readUInt32LE(buf.length - 22 + 16)
+    buf.writeUInt32LE(10, cdOff + 24)
+    assert.throws(() => readZip(buf), /past its declared size/)
+  })
+  test('replace: several matches in one run, adjacent and spanning', () => {
+    const pkg = Package.open(fixture('sample.docx'))
+    const doc = pkg.xml('word/document.xml')
+    const body = childrenOf(doc.documentElement, 'w:body')[0]
+    const addP = (runs) => {
+      const p = parseXml(`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${runs.map(r => `<w:r><w:t xml:space="preserve">${r}</w:t></w:r>`).join('')}</w:p>`).documentElement
+      body.appendChild(doc.importNode(p, true))
+    }
+    addP(['cat cat'])
+    addP(['x x x'])
+    addP(['catcat'])
+    addP(['ca', 't c', 'at'])
+    pkg.putXml('word/document.xml', doc)
+    docxEdit(pkg, [{ replace: { find: 'cat', with: 'dog' } }, { replace: { find: 'x', with: 'y' } }])
+    const { blocks } = docxRead(pkg)
+    const texts = blocks.slice(-4).map(b => b.text)
+    assert.equal(texts[0], 'dog dog')
+    assert.equal(texts[1], 'y y y')
+    assert.equal(texts[2], 'dogdog')
+    assert.equal(texts[3], 'dog dog')
+  })
+  test('replace and comment keep run rPr', () => {
+    const pkg = Package.open(fixture('sample.docx'))
+    const doc = pkg.xml('word/document.xml')
+    const body = childrenOf(doc.documentElement, 'w:body')[0]
+    body.appendChild(doc.importNode(parseXml(`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:rPr><w:b/></w:rPr><w:t>bold bold</w:t></w:r></w:p>`).documentElement, true))
+    pkg.putXml('word/document.xml', doc)
+    docxEdit(pkg, [{ replace: { find: 'bold', with: 'strong' } }])
+    const fresh = pkg.xml('word/document.xml')
+    const strongs = elementsOf(fresh.documentElement, 'w:r').filter(r => elementsOf(r, 'w:t').some(t => t.textContent === 'strong'))
+    assert.equal(strongs.length, 2)
+    assert.ok(strongs.every(r => childrenOf(childrenOf(r, 'w:rPr')[0], 'w:b')[0] !== undefined))
+  })
+  test('comment anchors: mid-run, run edges, spanning, hyperlink', () => {
+    const mkPkg = (runs) => {
+      const pkg = Package.open(fixture('sample.docx'))
+      const doc = pkg.xml('word/document.xml')
+      const body = childrenOf(doc.documentElement, 'w:body')[0]
+      body.appendChild(doc.importNode(parseXml(`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${runs}</w:p>`).documentElement, true))
+      pkg.putXml('word/document.xml', doc)
+      return pkg
+    }
+    const anchorOk = (pkg, pId, anchor) => {
+      docxEdit(pkg, [{ comment: { paragraph: pId, text: 'c', anchor } }])
+      const doc = pkg.xml('word/document.xml')
+      const p = elementsOf(doc.documentElement, 'w:p').at(-1)
+      const order = []
+      for (const el of elementsOf(p)) {
+        if (el.tagName === 'w:commentRangeStart') order.push('S')
+        if (el.tagName === 'w:commentRangeEnd') order.push('E')
+        if (el.tagName === 'w:commentReference') order.push('R')
+      }
+      assert.ok(order.indexOf('S') < order.indexOf('E'), `${anchor}: ${order}`)
+      assert.ok(order.indexOf('E') < order.indexOf('R'))
+    }
+    anchorOk(mkPkg('<w:r><w:t xml:space="preserve">aa bb cc</w:t></w:r>'), 'p7', 'bb')
+    anchorOk(mkPkg('<w:r><w:t xml:space="preserve">aa bb cc</w:t></w:r>'), 'p7', 'aa')
+    anchorOk(mkPkg('<w:r><w:t xml:space="preserve">aa bb cc</w:t></w:r>'), 'p7', 'cc')
+    anchorOk(mkPkg('<w:r><w:t>ab</w:t></w:r><w:r><w:t>cd</w:t></w:r>'), 'p7', 'bc')
+    anchorOk(mkPkg('<w:hyperlink w:anchor="t"><w:r><w:t>click here</w:t></w:r></w:hyperlink>'), 'p7', 'here')
+  })
+  test('check --fix on an unpacked dir flushes the model to disk', () => {
+    const dir = join(tmp(), 'un')
+    cli('unpack', fixture('sample.docx'), dir)
+    const pkg = Package.loadDir(dir)
+    pkg.override('word/styles.xml', 'application/xml')
+    pkg.relsOf('word/document.xml').set('rId99', { id: 'rId99', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/header', target: 'missing.xml', mode: 'Internal' })
+    pkg.unpack(dir)
+    const res = cli('check', dir, '--fix', '--in-place')
+    assert.equal(res.ok, true)
+    assert.deepEqual(res.data.findings, [])
+    assert.deepEqual(checkPackage(Package.loadDir(dir)), [])
+    assert.ok(!readFileSync(join(dir, 'word/_rels/document.xml.rels'), 'utf8').includes('rId99'))
+  })
+  test('check --fix on a file no longer reports the dangling rel it fixed', () => {
+    const dir = tmp()
+    const bad = join(dir, 'b.docx')
+    const pkg = Package.open(fixture('sample.docx'))
+    pkg.relsOf('word/document.xml').set('rId99', { id: 'rId99', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/header', target: 'missing.xml', mode: 'Internal' })
+    writeFileSync(bad, pkg.save())
+    const res = cli('check', bad, '--fix', '-o', join(dir, 'fixed.docx'))
+    assert.equal(res.ok, true)
+    assert.deepEqual(res.data.findings, [])
+    assert.deepEqual(checkPackage(Package.open(join(dir, 'fixed.docx'))), [])
+  })
+  test('pptx clean works on docx and xlsx', () => {
+    const dir = tmp()
+    for (const ext of ['docx', 'xlsx']) {
+      const res = cli('pptx', 'clean', fixture(`sample.${ext}`), '-o', join(dir, `c.${ext}`))
+      assert.equal(res.ok, true, JSON.stringify(res))
+    }
+  })
+  test('duplicated slides never overwrite a live rel id', () => {
+    const pkg = Package.open(fixture('sample.pptx'))
+    const pres = pkg.xml('ppt/presentation.xml')
+    const lst = childrenOf(pres.documentElement, 'p:sldIdLst')[0]
+    const entries = childrenOf(lst, 'p:sldId')
+    const removedRid = entries[1].getAttribute('r:id')
+    lst.removeChild(entries[1]) // gap in the rel ids
+    pkg.rels.get('ppt/presentation.xml').delete(removedRid)
+    pkg.putXml('ppt/presentation.xml', pres)
+    pptxSlides(pkg, [1, 1, 2])
+    const after = pkg.xml('ppt/presentation.xml')
+    const rids = childrenOf(childrenOf(after.documentElement, 'p:sldIdLst')[0], 'p:sldId').map(e => e.getAttribute('r:id'))
+    assert.equal(new Set(rids).size, rids.length)
+    for (const rid of rids) {
+      const rel = pkg.rels.get('ppt/presentation.xml').get(rid)
+      assert.ok(rel && pkg.parts.has(pkg.targetOf('ppt/presentation.xml', rel.target)), `${rid} unresolved`)
+    }
+    assert.equal(rids.length, 3)
+  })
+  test('docx read shows comments on their anchored block', () => {
+    const { blocks, comments } = docxRead(Package.open(fixture('sample.docx')))
+    const p3 = blocks.find(b => b.id === 'p3') // the fixture comment anchors to p3
+    assert.ok(comments.length > 0)
+    assert.ok(p3.comments?.length > 0)
+  })
+  test('xlsx dates honour date1904', () => {
+    const read = (pkg) => xlsxRead(pkg, 'Sheet1').rows.flatMap(r => Object.values(r.cells).map(c => c.v)).find(v => /^\d{4}-\d{2}-\d{2}/.test(String(v)))
+    const normal = read(Package.open(fixture('sample.xlsx')))
+    const pkg = Package.open(fixture('sample.xlsx'))
+    const wb = pkg.xml('xl/workbook.xml')
+    let pr = childrenOf(wb.documentElement, 'workbookPr')[0]
+    if (!pr) { pr = wb.createElement('workbookPr'); wb.documentElement.appendChild(pr) }
+    pr.setAttribute('date1904', '1')
+    pkg.putXml('xl/workbook.xml', wb)
+    const shifted = read(pkg)
+    assert.notEqual(shifted, normal)
+    assert.ok(Date.parse(shifted) > Date.parse(normal))
+  })
+  test('layout flags a picture past the slide edge', () => {
+    const pkg = Package.open(fixture('sample.pptx'))
+    const doc = pkg.xml('ppt/slides/slide1.xml')
+    const pic = elementsOf(doc.documentElement, 'p:pic')[0]
+    const off = elementsOf(pic, 'a:off')[0]
+    off.setAttribute('x', String(9144000)) // one inch past a 10in slide
+    pkg.putXml('ppt/slides/slide1.xml', doc)
+    const { findings } = pptxLayout(pkg)
+    assert.ok(findings.some(f => f.rule === 'off-slide' && /picture|pic/i.test(f.shape ?? '')))
   })
 })
 

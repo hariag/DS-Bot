@@ -2,7 +2,7 @@
 // Loads from a .docx/.pptx/.xlsx ZIP or from an `unpack` directory; saves back
 // keeping untouched members' compressed bytes.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, posix } from 'node:path'
+import { dirname, join, posix, resolve, sep } from 'node:path'
 import { parseXml, serializeXml, childrenOf } from './xml.js'
 import { readZip, writeZip } from './zip.js'
 
@@ -175,15 +175,19 @@ export class Package {
 
   /** Write an `unpack` directory tree. An existing non-empty dir must hold an
    * earlier unpack ([Content_Types].xml at its root); files the package no
-   * longer has are removed. */
+   * longer has are removed. The model is flushed first so .rels and content
+   * types written to disk match the in-memory state. */
   unpack(dir) {
+    this.flush()
     if (existsSync(dir) && readdirSync(dir).length > 0 && !existsSync(join(dir, '[Content_Types].xml'))) {
       fail(`unpack: ${dir} exists and is not an earlier unpack`)
     }
     mkdirSync(dir, { recursive: true })
+    const root = resolve(dir)
     const keep = new Set()
     for (const [name] of this.parts) {
       const file = join(dir, name)
+      if (!resolve(file).startsWith(root + sep) && resolve(file) !== root) fail(`unpack: unsafe member name ${name}`)
       keep.add(file)
       mkdirSync(dirname(file), { recursive: true })
       const data = this.get(name)

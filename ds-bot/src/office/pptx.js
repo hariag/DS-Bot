@@ -196,7 +196,18 @@ export function pptxLayout(pkg, slidesFilter, { autofit = false } = {}) {
   const fitted = []
   for (const slide of inv.slides) {
     if (!slide.shapes) continue
+    // Off-slide bounds apply to every shape with a resolved box (pictures,
+    // charts, tables, group children); overlap stays among text shapes.
+    const allBoxes = []
+    const collect = (shapes) => { for (const s of shapes) { if (s.box) allBoxes.push(s); if (s.children) collect(s.children) } }
+    collect(slide.shapes)
     const boxes = slide.shapes.filter(s => s.box && s.text?.length)
+    for (const s of allBoxes) {
+      const a = s.box
+      if (a.x < 0 || a.y < 0 || a.x + a.w > size.cx + 0.01 || a.y + a.h > size.cy + 0.01) {
+        findings.push({ slide: slide.position, rule: 'off-slide', shape: s.name, box: a })
+      }
+    }
     for (let i = 0; i < boxes.length; i++) {
       for (let j = i + 1; j < boxes.length; j++) {
         const a = boxes[i].box, b = boxes[j].box
@@ -206,10 +217,6 @@ export function pptxLayout(pkg, slidesFilter, { autofit = false } = {}) {
         if (area <= 0) continue
         const share = area / Math.min(a.w * a.h, b.w * b.h)
         findings.push({ slide: slide.position, rule: 'overlap', shapes: [boxes[i].name, boxes[j].name], area: +area.toFixed(2), shareOfSmaller: +share.toFixed(2) })
-      }
-      const a = boxes[i].box
-      if (a.x < 0 || a.y < 0 || a.x + a.w > size.cx + 0.01 || a.y + a.h > size.cy + 0.01) {
-        findings.push({ slide: slide.position, rule: 'off-slide', shape: boxes[i].name, box: a })
       }
     }
     if (autofit) {
@@ -249,7 +256,11 @@ export function pptxSlides(pkg, order) {
   const pres = pkg.xml('ppt/presentation.xml')
   const lst = firstOf(pres.documentElement, 'p:sldIdLst')
   const presRels = pkg.rels.get('ppt/presentation.xml')
-  const nextIds = { slide: maxNum(slideParts(pkg), /slide(\d+)\.xml$/) + 1, sldId: Math.max(...current.map(e => Number(e.sldId))) + 1, rid: nextRid(presRels) }
+  // Every allocation probes the live map/set — a gap below a live id must not
+  // be overwritten by a later duplicate in the same batch.
+  const usedSldIds = new Set(current.map(e => Number(e.sldId)))
+  const newSlidePart = () => { let n = 1; while (pkg.parts.has(`ppt/slides/slide${n}.xml`)) n++; return n }
+  const newSldId = () => { let n = Math.max(256, ...usedSldIds) + 1; usedSldIds.add(n); return n }
   const seen = new Set()
   const newEntries = []
   const duplicated = []
@@ -258,14 +269,14 @@ export function pptxSlides(pkg, order) {
     if (!source) throw new Error(`no slide at position ${pos}`)
     if (!seen.has(pos)) { newEntries.push({ ...source }); seen.add(pos); continue }
     // Duplicate: copy slide + notes slide + chart parts + embedded workbooks.
-    const dup = String(nextIds.slide++)
+    const dup = String(newSlidePart())
     const newPart = `ppt/slides/slide${dup}.xml`
     pkg.parts.set(newPart, { data: pkg.get(source.part) })
     if (pkg.overrides.has(source.part)) pkg.overrides.set(newPart, pkg.overrides.get(source.part))
     const mapped = new Map([[source.part, newPart]])
-    const rid = `rId${nextIds.rid++}`
+    const rid = `rId${nextRid(presRels)}`
     presRels.set(rid, { id: rid, type: presRels.get(source.rid)?.type ?? 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide', target: `slides/slide${dup}.xml`, mode: 'Internal' })
-    const sid = String(nextIds.sldId++)
+    const sid = String(newSldId())
     // Copy the slide's .rels, duplicating owned parts (notes, charts, workbooks).
     const slideRels = new Map()
     for (const [id, rel] of pkg.relsOf(source.part)) {
@@ -358,7 +369,8 @@ export function pptxClean(pkg, { dryRun = false } = {}) {
     }
   }
   // Slides not in sldIdLst.
-  const listed = new Set(deckOrder(pkg).map(e => e.part))
+  // Slides not in sldIdLst — pptx only; docx/xlsx have no presentation part.
+  const listed = new Set(pkg.parts.has('ppt/presentation.xml') ? deckOrder(pkg).map(e => e.part) : [])
   for (const part of slideParts(pkg)) {
     if (!listed.has(part)) { removed.push(part); if (!dryRun) pkg.remove(part) }
   }

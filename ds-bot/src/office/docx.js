@@ -53,7 +53,7 @@ export function docxRead(pkg, { changes = false } = {}) {
   const body = firstOf(doc.documentElement, 'w:body')
   const blocks = []
   let pi = 0, ti = 0
-  const commentIds = commentsIndex(pkg)
+  const commentIds = commentsIndex(pkg, doc)
   for (const el of childrenOf(body)) {
     if (el.tagName === 'w:p') {
       pi++
@@ -95,11 +95,12 @@ export function docxRead(pkg, { changes = false } = {}) {
   return { blocks, sections, notes, comments: commentsList(pkg, changes) }
 }
 
-// pN ids number only the body's top-level paragraphs — the same ids docxRead gives.
-function commentsIndex(pkg) {
+// pN ids number only the body's top-level paragraphs — the same ids docxRead
+// gives. `doc` must be the parse the blocks come from: element keys from a
+// second parse never match.
+function commentsIndex(pkg, doc) {
   const byEl = new Map()
   if (!pkg.parts.has('word/comments.xml')) return byEl
-  const doc = pkg.xml('word/document.xml')
   for (const ref of elementsOf(doc.documentElement, 'w:commentReference')) {
     let p = ref.parentNode
     while (p && p.tagName !== 'w:p') p = p.parentNode
@@ -319,10 +320,20 @@ const expand = (m, withText) =>
 
 const nearestPara = (el) => { for (let n = el.parentNode; n; n = n.parentNode) if (n.tagName === 'w:p') return n; return null }
 
-// Replace text across runs inside one document; deletions skipped; formatting of
-// the match-start run kept. Matches are found once on the original text and
-// applied right-to-left, so offsets never shift and the replacement text itself
-// is never re-scanned. Returns the number of replacements.
+// A new run holding `text`, with `src`'s w:rPr cloned so formatting survives.
+const cloneRun = (doc, src, text) => {
+  const clone = src.cloneNode(false)
+  const rPr = childrenOf(src, 'w:rPr')[0]
+  if (rPr) clone.appendChild(rPr.cloneNode(true))
+  const t = doc.createElement('w:t'); t.setAttribute('xml:space', 'preserve')
+  t.appendChild(doc.createTextNode(text)); clone.appendChild(t)
+  return clone
+}
+
+// Replace text across runs inside one document; deletions skipped; formatting
+// of the match-start run kept. Each affected run is rebuilt once from its
+// original text and every match that touches it, so several matches in one
+// run, adjacent matches and spanning matches all compose. Returns the count.
 function replaceInDoc(doc, re, withText) {
   let total = 0
   const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
@@ -330,42 +341,44 @@ function replaceInDoc(doc, re, withText) {
     const runs = elementsOf(p, 'w:r').filter(r => !isDeleted(p, r) && nearestPara(r) === p)
     const texts = runs.map(r => elementsOf(r, 'w:t').map(t => t.textContent).join(''))
     const joined = texts.join('')
-    for (const m of [...joined.matchAll(global)].reverse()) {
-      let cursor = 0, first = -1, last = -1
-      for (let i = 0; i < runs.length; i++) {
-        const end = cursor + texts[i].length
-        if (first < 0 && m.index < end) first = i
-        if (m.index + m[0].length <= end) { last = i; break }
-        cursor = end
+    const matches = [...joined.matchAll(global)]
+    if (matches.length === 0) continue
+    const bounds = []
+    let cursor = 0
+    for (const t of texts) { bounds.push([cursor, cursor + t.length]); cursor += t.length }
+    for (let i = 0; i < runs.length; i++) {
+      const [rs, rend] = bounds[i]
+      const covers = matches.filter(m => m.index < rend && (m.index + m[0].length > rs || (m.index >= rs && m.index < rend)))
+      if (covers.length === 0) continue
+      // Pieces in order: kept text fragments alternating with replacement runs
+      // (a run emits a replacement only for matches starting inside it).
+      const pieces = []
+      let pos = 0
+      for (const m of covers) {
+        const cs = Math.max(0, m.index - rs)
+        const ce = Math.min(texts[i].length, m.index + m[0].length - rs)
+        if (cs > pos) pieces.push({ text: texts[i].slice(pos, cs) })
+        if (m.index >= rs && m.index < rend) pieces.push({ repl: expand(m, withText) })
+        pos = ce
       }
-      if (first < 0) continue
-      if (last < 0) last = runs.length - 1
-      const startRun = runs[first]
-      const preStart = texts[first].slice(0, m.index - sumTo(texts, first))
-      const postEnd = texts[last].slice(m.index + m[0].length - sumTo(texts, last))
-      const makeRun = (text) => {
-        const clone = startRun.cloneNode(false)
-        while (clone.firstChild && clone.firstChild.tagName !== 'w:rPr') clone.removeChild(clone.firstChild)
-        const t = doc.createElement('w:t'); t.setAttribute('xml:space', 'preserve')
-        t.appendChild(doc.createTextNode(text)); clone.appendChild(t)
-        return clone
+      pieces.push({ text: texts[i].slice(pos) })
+      const run = runs[i]
+      let anchor = run
+      for (const [k, piece] of pieces.entries()) {
+        if (k === 0) {
+          setRunText(run, piece.text ?? '')
+          if (piece.text !== undefined) continue
+        }
+        const clone = cloneRun(doc, run, piece.repl ?? piece.text)
+        anchor.parentNode.insertBefore(clone, anchor.nextSibling)
+        anchor = clone
       }
-      setRunText(startRun, preStart)
-      const repl = makeRun(expand(m, withText))
-      startRun.parentNode.insertBefore(repl, startRun.nextSibling)
-      if (first === last) {
-        if (postEnd !== '') startRun.parentNode.insertBefore(makeRun(postEnd), repl.nextSibling)
-      } else {
-        setRunText(runs[last], postEnd)
-        for (let i = first + 1; i < last; i++) setRunText(runs[i], '')
-      }
-      total++
+      total += covers.filter(m => m.index >= rs && m.index < rend).length
     }
   }
   return total
 }
 
-const sumTo = (arr, n) => arr.slice(0, n).reduce((a, b) => a + b.length, 0)
 
 function setRunText(run, text) {
   const ts = elementsOf(run, 'w:t')
@@ -436,11 +449,7 @@ const ancestor = (node, tag) => { for (let n = node.parentNode; n; n = n.parentN
 // rPr takes the rest right after it. Returns the clone.
 function splitRunAt(doc, run, offset) {
   const text = elementsOf(run, 'w:t').map(t => t.textContent).join('')
-  const clone = run.cloneNode(false)
-  while (clone.firstChild && clone.firstChild.tagName !== 'w:rPr') clone.removeChild(clone.firstChild)
-  const t = doc.createElement('w:t'); t.setAttribute('xml:space', 'preserve')
-  t.appendChild(doc.createTextNode(text.slice(offset)))
-  clone.appendChild(t)
+  const clone = cloneRun(doc, run, text.slice(offset))
   setRunText(run, text.slice(0, offset))
   run.parentNode.insertBefore(clone, run.nextSibling)
   return clone
@@ -465,11 +474,16 @@ function phraseRuns(doc, p, anchor) {
     return { i: runs.length - 1, off: texts.at(-1).length }
   }
   const e = locate(end), s = locate(start)
-  let lastRun
+  let lastRun, firstRun
   if (e.off === texts[e.i].length) lastRun = runs[e.i]
   else if (e.off === 0) lastRun = runs[e.i - 1]
   else { splitRunAt(doc, runs[e.i], e.off); lastRun = runs[e.i] }
-  const firstRun = s.off === 0 ? runs[s.i] : splitRunAt(doc, runs[s.i], s.off)
+  if (s.i === e.i && s.off > 0) {
+    // The phrase lives in the clone the start split creates, not the prefix run.
+    firstRun = lastRun = splitRunAt(doc, runs[s.i], s.off)
+  } else {
+    firstRun = s.off === 0 ? runs[s.i] : splitRunAt(doc, runs[s.i], s.off)
+  }
   return { firstRun, lastRun }
 }
 

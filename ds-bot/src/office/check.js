@@ -315,6 +315,9 @@ export function fixPackage(pkg) {
       if (rel.mode !== 'External' && !pkg.parts.has(pkg.targetOf(owner, rel.target))) { map.delete(id); fixed.push(`${owner || '/'}#${id}`) }
     }
   }
+  // Flush so the re-check reads .rels parts reflecting the model, not the
+  // bytes the package was opened with.
+  pkg.flush()
   return { fixed, remaining: checkPackage(pkg) }
 }
 

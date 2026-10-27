@@ -6520,7 +6520,7 @@ import { parseArgs } from "node:util";
 
 // src/office/package.js
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { dirname, join, posix, resolve, sep } from "node:path";
 
 // src/office/xml.js
 var xml_exports = {};
@@ -6676,14 +6676,22 @@ function readZip(buf) {
     const localOff = buf.readUInt32LE(cdOff + 42);
     if (csize === 4294967295 || usize === 4294967295) fail("zip64 archives are not supported");
     const name = buf.subarray(cdOff + 46, cdOff + 46 + nameLen).toString("utf8");
+    const norm = name.replace(/\\/g, "/");
+    if (norm.startsWith("/") || /^[A-Za-z]:/.test(norm) || norm.split("/").includes("..")) fail(`zip: unsafe member name ${name}`);
     if (buf.readUInt32LE(localOff) !== LOCAL) fail(`corrupt local header for ${name}`);
     const lNameLen = buf.readUInt16LE(localOff + 26);
     const lExtraLen = buf.readUInt16LE(localOff + 28);
     const raw = buf.subarray(localOff + 30 + lNameLen + lExtraLen, localOff + 30 + lNameLen + lExtraLen + csize);
     let data;
     if (method === 0) data = raw.subarray(0, usize);
-    else if (method === 8) data = inflateRawSync(raw);
-    else fail(`unsupported compression method ${method} for ${name}`);
+    else if (method === 8) {
+      try {
+        data = usize === 0 ? Buffer.alloc(0) : inflateRawSync(raw, { maxOutputLength: usize });
+      } catch (err) {
+        if (err instanceof RangeError || err?.code === "ERR_OUT_OF_RANGE") fail(`${name} inflates past its declared size`);
+        fail(`corrupt data for ${name}`);
+      }
+    } else fail(`unsupported compression method ${method} for ${name}`);
     if (data.length !== usize) fail(`size mismatch for ${name}`);
     members.push({ name, data, raw, method, crc, flags: flags & 2048, extra: buf.subarray(cdOff + 46 + nameLen, cdOff + 46 + nameLen + extraLen) });
     cdOff += 46 + nameLen + extraLen + commentLen;
@@ -6946,15 +6954,19 @@ var Package = class _Package {
   }
   /** Write an `unpack` directory tree. An existing non-empty dir must hold an
    * earlier unpack ([Content_Types].xml at its root); files the package no
-   * longer has are removed. */
+   * longer has are removed. The model is flushed first so .rels and content
+   * types written to disk match the in-memory state. */
   unpack(dir) {
+    this.flush();
     if (existsSync(dir) && readdirSync(dir).length > 0 && !existsSync(join(dir, "[Content_Types].xml"))) {
       fail2(`unpack: ${dir} exists and is not an earlier unpack`);
     }
     mkdirSync(dir, { recursive: true });
+    const root = resolve(dir);
     const keep = /* @__PURE__ */ new Set();
     for (const [name] of this.parts) {
       const file = join(dir, name);
+      if (!resolve(file).startsWith(root + sep) && resolve(file) !== root) fail2(`unpack: unsafe member name ${name}`);
       keep.add(file);
       mkdirSync(dirname(file), { recursive: true });
       const data = this.get(name);
@@ -7301,6 +7313,7 @@ function fixPackage(pkg) {
       }
     }
   }
+  pkg.flush();
   return { fixed, remaining: checkPackage(pkg) };
 }
 function hasIdAnywhere(doc, tag, id) {
@@ -7379,7 +7392,7 @@ function docxRead(pkg, { changes = false } = {}) {
   const body = firstOf(doc.documentElement, "w:body");
   const blocks = [];
   let pi = 0, ti = 0;
-  const commentIds = commentsIndex(pkg);
+  const commentIds = commentsIndex(pkg, doc);
   for (const el of childrenOf(body)) {
     if (el.tagName === "w:p") {
       pi++;
@@ -7420,10 +7433,9 @@ function docxRead(pkg, { changes = false } = {}) {
   }
   return { blocks, sections, notes, comments: commentsList(pkg, changes) };
 }
-function commentsIndex(pkg) {
+function commentsIndex(pkg, doc) {
   const byEl = /* @__PURE__ */ new Map();
   if (!pkg.parts.has("word/comments.xml")) return byEl;
-  const doc = pkg.xml("word/document.xml");
   for (const ref of elementsOf(doc.documentElement, "w:commentReference")) {
     let p = ref.parentNode;
     while (p && p.tagName !== "w:p") p = p.parentNode;
@@ -7643,6 +7655,16 @@ var nearestPara = (el) => {
   for (let n = el.parentNode; n; n = n.parentNode) if (n.tagName === "w:p") return n;
   return null;
 };
+var cloneRun = (doc, src, text) => {
+  const clone = src.cloneNode(false);
+  const rPr = childrenOf(src, "w:rPr")[0];
+  if (rPr) clone.appendChild(rPr.cloneNode(true));
+  const t = doc.createElement("w:t");
+  t.setAttribute("xml:space", "preserve");
+  t.appendChild(doc.createTextNode(text));
+  clone.appendChild(t);
+  return clone;
+};
 function replaceInDoc(doc, re, withText) {
   let total = 0;
   const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
@@ -7650,46 +7672,44 @@ function replaceInDoc(doc, re, withText) {
     const runs = elementsOf(p, "w:r").filter((r) => !isDeleted(p, r) && nearestPara(r) === p);
     const texts = runs.map((r) => elementsOf(r, "w:t").map((t) => t.textContent).join(""));
     const joined = texts.join("");
-    for (const m of [...joined.matchAll(global)].reverse()) {
-      let cursor = 0, first = -1, last = -1;
-      for (let i = 0; i < runs.length; i++) {
-        const end = cursor + texts[i].length;
-        if (first < 0 && m.index < end) first = i;
-        if (m.index + m[0].length <= end) {
-          last = i;
-          break;
+    const matches = [...joined.matchAll(global)];
+    if (matches.length === 0) continue;
+    const bounds = [];
+    let cursor = 0;
+    for (const t of texts) {
+      bounds.push([cursor, cursor + t.length]);
+      cursor += t.length;
+    }
+    for (let i = 0; i < runs.length; i++) {
+      const [rs, rend] = bounds[i];
+      const covers = matches.filter((m) => m.index < rend && (m.index + m[0].length > rs || m.index >= rs && m.index < rend));
+      if (covers.length === 0) continue;
+      const pieces = [];
+      let pos = 0;
+      for (const m of covers) {
+        const cs = Math.max(0, m.index - rs);
+        const ce = Math.min(texts[i].length, m.index + m[0].length - rs);
+        if (cs > pos) pieces.push({ text: texts[i].slice(pos, cs) });
+        if (m.index >= rs && m.index < rend) pieces.push({ repl: expand(m, withText) });
+        pos = ce;
+      }
+      pieces.push({ text: texts[i].slice(pos) });
+      const run = runs[i];
+      let anchor = run;
+      for (const [k, piece] of pieces.entries()) {
+        if (k === 0) {
+          setRunText(run, piece.text ?? "");
+          if (piece.text !== void 0) continue;
         }
-        cursor = end;
+        const clone = cloneRun(doc, run, piece.repl ?? piece.text);
+        anchor.parentNode.insertBefore(clone, anchor.nextSibling);
+        anchor = clone;
       }
-      if (first < 0) continue;
-      if (last < 0) last = runs.length - 1;
-      const startRun = runs[first];
-      const preStart = texts[first].slice(0, m.index - sumTo(texts, first));
-      const postEnd = texts[last].slice(m.index + m[0].length - sumTo(texts, last));
-      const makeRun = (text) => {
-        const clone = startRun.cloneNode(false);
-        while (clone.firstChild && clone.firstChild.tagName !== "w:rPr") clone.removeChild(clone.firstChild);
-        const t = doc.createElement("w:t");
-        t.setAttribute("xml:space", "preserve");
-        t.appendChild(doc.createTextNode(text));
-        clone.appendChild(t);
-        return clone;
-      };
-      setRunText(startRun, preStart);
-      const repl = makeRun(expand(m, withText));
-      startRun.parentNode.insertBefore(repl, startRun.nextSibling);
-      if (first === last) {
-        if (postEnd !== "") startRun.parentNode.insertBefore(makeRun(postEnd), repl.nextSibling);
-      } else {
-        setRunText(runs[last], postEnd);
-        for (let i = first + 1; i < last; i++) setRunText(runs[i], "");
-      }
-      total++;
+      total += covers.filter((m) => m.index >= rs && m.index < rend).length;
     }
   }
   return total;
 }
-var sumTo = (arr, n) => arr.slice(0, n).reduce((a, b) => a + b.length, 0);
 function setRunText(run, text) {
   const ts = elementsOf(run, "w:t");
   if (ts.length === 0) return;
@@ -7763,13 +7783,8 @@ var ancestor = (node, tag) => {
   return null;
 };
 function splitRunAt(doc, run, offset) {
-  const text = elementsOf(run, "w:t").map((t2) => t2.textContent).join("");
-  const clone = run.cloneNode(false);
-  while (clone.firstChild && clone.firstChild.tagName !== "w:rPr") clone.removeChild(clone.firstChild);
-  const t = doc.createElement("w:t");
-  t.setAttribute("xml:space", "preserve");
-  t.appendChild(doc.createTextNode(text.slice(offset)));
-  clone.appendChild(t);
+  const text = elementsOf(run, "w:t").map((t) => t.textContent).join("");
+  const clone = cloneRun(doc, run, text.slice(offset));
   setRunText(run, text.slice(0, offset));
   run.parentNode.insertBefore(clone, run.nextSibling);
   return clone;
@@ -7791,14 +7806,18 @@ function phraseRuns(doc, p, anchor) {
     return { i: runs.length - 1, off: texts.at(-1).length };
   };
   const e = locate(end), s = locate(start);
-  let lastRun;
+  let lastRun, firstRun;
   if (e.off === texts[e.i].length) lastRun = runs[e.i];
   else if (e.off === 0) lastRun = runs[e.i - 1];
   else {
     splitRunAt(doc, runs[e.i], e.off);
     lastRun = runs[e.i];
   }
-  const firstRun = s.off === 0 ? runs[s.i] : splitRunAt(doc, runs[s.i], s.off);
+  if (s.i === e.i && s.off > 0) {
+    firstRun = lastRun = splitRunAt(doc, runs[s.i], s.off);
+  } else {
+    firstRun = s.off === 0 ? runs[s.i] : splitRunAt(doc, runs[s.i], s.off);
+  }
   return { firstRun, lastRun };
 }
 function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = "Bot", initials = "B" }) {
@@ -8139,20 +8158,30 @@ function pptxLayout(pkg, slidesFilter, { autofit = false } = {}) {
   const fitted = [];
   for (const slide of inv.slides) {
     if (!slide.shapes) continue;
+    const allBoxes = [];
+    const collect = (shapes) => {
+      for (const s of shapes) {
+        if (s.box) allBoxes.push(s);
+        if (s.children) collect(s.children);
+      }
+    };
+    collect(slide.shapes);
     const boxes = slide.shapes.filter((s) => s.box && s.text?.length);
+    for (const s of allBoxes) {
+      const a = s.box;
+      if (a.x < 0 || a.y < 0 || a.x + a.w > size.cx + 0.01 || a.y + a.h > size.cy + 0.01) {
+        findings.push({ slide: slide.position, rule: "off-slide", shape: s.name, box: a });
+      }
+    }
     for (let i = 0; i < boxes.length; i++) {
       for (let j = i + 1; j < boxes.length; j++) {
-        const a2 = boxes[i].box, b = boxes[j].box;
-        const ox = Math.max(0, Math.min(a2.x + a2.w, b.x + b.w) - Math.max(a2.x, b.x));
-        const oy = Math.max(0, Math.min(a2.y + a2.h, b.y + b.h) - Math.max(a2.y, b.y));
+        const a = boxes[i].box, b = boxes[j].box;
+        const ox = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+        const oy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
         const area = ox * oy;
         if (area <= 0) continue;
-        const share = area / Math.min(a2.w * a2.h, b.w * b.h);
+        const share = area / Math.min(a.w * a.h, b.w * b.h);
         findings.push({ slide: slide.position, rule: "overlap", shapes: [boxes[i].name, boxes[j].name], area: +area.toFixed(2), shareOfSmaller: +share.toFixed(2) });
-      }
-      const a = boxes[i].box;
-      if (a.x < 0 || a.y < 0 || a.x + a.w > size.cx + 0.01 || a.y + a.h > size.cy + 0.01) {
-        findings.push({ slide: slide.position, rule: "off-slide", shape: boxes[i].name, box: a });
       }
     }
     if (autofit) {
@@ -8184,7 +8213,17 @@ function pptxSlides(pkg, order) {
   const pres = pkg.xml("ppt/presentation.xml");
   const lst = firstOf(pres.documentElement, "p:sldIdLst");
   const presRels = pkg.rels.get("ppt/presentation.xml");
-  const nextIds = { slide: maxNum(slideParts(pkg), /slide(\d+)\.xml$/) + 1, sldId: Math.max(...current.map((e) => Number(e.sldId))) + 1, rid: nextRid(presRels) };
+  const usedSldIds = new Set(current.map((e) => Number(e.sldId)));
+  const newSlidePart = () => {
+    let n = 1;
+    while (pkg.parts.has(`ppt/slides/slide${n}.xml`)) n++;
+    return n;
+  };
+  const newSldId = () => {
+    let n = Math.max(256, ...usedSldIds) + 1;
+    usedSldIds.add(n);
+    return n;
+  };
   const seen = /* @__PURE__ */ new Set();
   const newEntries = [];
   const duplicated = [];
@@ -8196,14 +8235,14 @@ function pptxSlides(pkg, order) {
       seen.add(pos);
       continue;
     }
-    const dup = String(nextIds.slide++);
+    const dup = String(newSlidePart());
     const newPart = `ppt/slides/slide${dup}.xml`;
     pkg.parts.set(newPart, { data: pkg.get(source.part) });
     if (pkg.overrides.has(source.part)) pkg.overrides.set(newPart, pkg.overrides.get(source.part));
     const mapped = /* @__PURE__ */ new Map([[source.part, newPart]]);
-    const rid = `rId${nextIds.rid++}`;
+    const rid = `rId${nextRid(presRels)}`;
     presRels.set(rid, { id: rid, type: presRels.get(source.rid)?.type ?? "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide", target: `slides/slide${dup}.xml`, mode: "Internal" });
-    const sid = String(nextIds.sldId++);
+    const sid = String(newSldId());
     const slideRels = /* @__PURE__ */ new Map();
     for (const [id, rel] of pkg.relsOf(source.part)) {
       if (rel.mode === "External") {
@@ -8285,7 +8324,7 @@ function pptxClean(pkg, { dryRun = false } = {}) {
       if (!xml.includes(`"${id}"`) && !xml.includes(`'${id}'`)) map.delete(id);
     }
   }
-  const listed = new Set(deckOrder(pkg).map((e) => e.part));
+  const listed = new Set(pkg.parts.has("ppt/presentation.xml") ? deckOrder(pkg).map((e) => e.part) : []);
   for (const part of slideParts(pkg)) {
     if (!listed.has(part)) {
       removed.push(part);
@@ -8367,7 +8406,11 @@ function sheetList(pkg) {
 var colOf = (ref) => /^([A-Z]+)/.exec(ref)[1];
 var rowOf = (ref) => Number(/(\d+)$/.exec(ref)[1]);
 var colNum = (col) => [...col].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
-function cellValue(c, shared, fmt) {
+function dateEpoch(pkg) {
+  const wb = pkg.parts.has("xl/workbook.xml") ? pkg.xml("xl/workbook.xml") : void 0;
+  return firstOf(wb?.documentElement, "workbookPr")?.getAttribute("date1904") === "1" ? 24107 : 25569;
+}
+function cellValue(c, shared, fmt, epoch = 25569) {
   const t = c.getAttribute("t"), v = firstOf(c, "v"), f = firstOf(c, "f");
   let value = v == null ? void 0 : v.textContent;
   if (t === "s" && value !== void 0) value = shared[Number(value)] ?? `#SST${value}`;
@@ -8375,7 +8418,7 @@ function cellValue(c, shared, fmt) {
   else if (t === "str" || t === "inlineStr") value = t === "inlineStr" ? textOf(firstOf(c, "is") ?? c) : value;
   else if (t === "e") value = value;
   else if (value !== void 0 && fmt.get(Number(c.getAttribute("s") ?? 0)) === "date" && !Number.isNaN(Number(value))) {
-    const days = Number(value) - 25569;
+    const days = Number(value) - epoch;
     value = new Date(days * 864e5).toISOString().slice(0, value.includes(".") ? 19 : 10);
   }
   return { value, formula: f?.textContent };
@@ -8424,6 +8467,7 @@ function xlsxRead(pkg, sheetName, range) {
   }
   const shared = sharedStrings(pkg);
   const fmt = numFmts(pkg);
+  const epoch = dateEpoch(pkg);
   const doc = pkg.xml(sheet.part);
   const inRange = (ref) => {
     if (!range) return true;
@@ -8437,7 +8481,7 @@ function xlsxRead(pkg, sheetName, range) {
     for (const c of childrenOf(row, "c")) {
       const ref = c.getAttribute("r");
       if (!inRange(ref)) continue;
-      const { value, formula } = cellValue(c, shared, fmt);
+      const { value, formula } = cellValue(c, shared, fmt, epoch);
       cells[ref] = formula ? { v: value, f: formula } : { v: value };
     }
     if (Object.keys(cells).length > 0) rows.push({ row: Number(row.getAttribute("r")), cells });

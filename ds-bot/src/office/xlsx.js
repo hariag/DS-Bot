@@ -38,7 +38,14 @@ const colOf = (ref) => /^([A-Z]+)/.exec(ref)[1]
 const rowOf = (ref) => Number(/(\d+)$/.exec(ref)[1])
 const colNum = (col) => [...col].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0)
 
-function cellValue(c, shared, fmt) {
+// Serial → unix-day offset: 1899-12-30 (Lotus 1900 compat), or 1904-01-01 when
+// the workbook declares <workbookPr date1904="1"/>.
+function dateEpoch(pkg) {
+  const wb = pkg.parts.has('xl/workbook.xml') ? pkg.xml('xl/workbook.xml') : undefined
+  return firstOf(wb?.documentElement, 'workbookPr')?.getAttribute('date1904') === '1' ? 24107 : 25569
+}
+
+function cellValue(c, shared, fmt, epoch = 25569) {
   const t = c.getAttribute('t'), v = firstOf(c, 'v'), f = firstOf(c, 'f')
   let value = v == null ? undefined : v.textContent
   if (t === 's' && value !== undefined) value = shared[Number(value)] ?? `#SST${value}`
@@ -46,7 +53,7 @@ function cellValue(c, shared, fmt) {
   else if (t === 'str' || t === 'inlineStr') value = t === 'inlineStr' ? textOf(firstOf(c, 'is') ?? c) : value
   else if (t === 'e') value = value // error text as stored
   else if (value !== undefined && fmt.get(Number(c.getAttribute('s') ?? 0)) === 'date' && !Number.isNaN(Number(value))) {
-    const days = Number(value) - 25569 // 1899-12-30 epoch → unix days (Lotus 1900 bug compat: Excel serial)
+    const days = Number(value) - epoch
     value = new Date(days * 86400_000).toISOString().slice(0, value.includes('.') ? 19 : 10)
   }
   return { value, formula: f?.textContent }
@@ -89,6 +96,7 @@ export function xlsxRead(pkg, sheetName, range) {
   if (!pkg.parts.has(sheet.part)) { const e = new Error(`sheet part ${sheet.part} missing`); e.code = 'args'; throw e }
   const shared = sharedStrings(pkg)
   const fmt = numFmts(pkg)
+  const epoch = dateEpoch(pkg)
   const doc = pkg.xml(sheet.part)
   const inRange = (ref) => {
     if (!range) return true
@@ -102,7 +110,7 @@ export function xlsxRead(pkg, sheetName, range) {
     for (const c of childrenOf(row, 'c')) {
       const ref = c.getAttribute('r')
       if (!inRange(ref)) continue
-      const { value, formula } = cellValue(c, shared, fmt)
+      const { value, formula } = cellValue(c, shared, fmt, epoch)
       cells[ref] = formula ? { v: value, f: formula } : { v: value }
     }
     if (Object.keys(cells).length > 0) rows.push({ row: Number(row.getAttribute('r')), cells })
