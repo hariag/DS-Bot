@@ -9,7 +9,7 @@ import { absoluteLinks } from './links.js'
 import { NAME_MAX } from './requests.js'
 import { unquote } from './text.js'
 import { mentionSpans } from '../shared/mentions.js'
-import { checkShownView, showViewDescription, showViewParameters } from 'dsh-deep-ui/core'
+import { checkShownView, showViewDescription, showViewParameters } from 'deep-view/core'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }

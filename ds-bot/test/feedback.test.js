@@ -19,7 +19,7 @@ function page(window) {
   useContext: ctx => ctx.value,
   useMemo: make => make(),
   useCallback: fn => fn,
-  useId: () => 'dui-id',
+  useId: () => 'dv-id',
   useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
     Fragment: 'fragment',

@@ -52,7 +52,7 @@ function rig(initial) {
   useContext: ctx => ctx.value,
   useMemo: make => make(),
   useCallback: fn => fn,
-  useId: () => 'dui-id',
+  useId: () => 'dv-id',
   useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
     Fragment: 'fragment',
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
-import { normalizeView, VIEW_BYTE_LIMIT, viewBytes } from 'dsh-deep-ui/core'
+import { normalizeView, VIEW_BYTE_LIMIT, viewBytes } from 'deep-view/core'
 import { fakeContext } from './fake-ctx.js'
 
 const TEAM = {

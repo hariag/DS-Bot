@@ -5,8 +5,8 @@ import { AnsweredCell } from './questions.js'
 import { useDockHold } from './card-hold.js'
 import { SettledHandoff } from './handoff-card.js'
 import { heldCardKey } from './sources.js'
-import { WidgetCard, ViewUi, DEEP_UI_CSS, WidgetView as CoreWidgetView, ViewMenuList as CoreViewMenuList } from 'dsh-deep-ui/react'
-import { checkShownView } from 'dsh-deep-ui/core'
+import { WidgetCard, ViewUi, DEEP_VIEW_CSS, WidgetView as CoreWidgetView, ViewMenuList as CoreViewMenuList } from 'deep-view/react'
+import { checkShownView } from 'deep-view/core'
 
 // The core components draw with the host's labels: the submit keeps ds-bot's
 // wording, the rest resolve through ds-bot's dictionary.
@@ -110,23 +110,23 @@ export function AnsweredReply({ node }) {
   return h(AnsweredCell, { node })
 }
 
-// The core styles, with the --dui-* tokens rebound to ds-bot's --bt-* palette so
+// The core styles, with the --dv-* tokens rebound to ds-bot's --bt-* palette so
 // a view card keeps the Bot theme.
-export const WIDGET_CSS = `${DEEP_UI_CSS}
+export const WIDGET_CSS = `${DEEP_VIEW_CSS}
 body{
---dui-ink:var(--bt-ink);--dui-ink-2:var(--bt-ink-2);--dui-ink-3:var(--bt-ink-3);
---dui-line:var(--bt-line);--dui-line-2:var(--bt-line-2);
---dui-card:var(--bt-card);--dui-main:var(--bt-main);
---dui-hover:var(--bt-hover);--dui-active:var(--bt-active);
---dui-accent:var(--bt-accent);--dui-accent-ink:var(--bt-accent-ink);
---dui-green:var(--bt-green);--dui-star:var(--bt-star);--dui-danger:var(--bt-danger);
---dui-knob:var(--bt-knob);--dui-tag-bg:var(--bt-tag-bg);
---dui-ink-tangerine:var(--bt-ink-tangerine);--dui-ink-green:var(--bt-ink-green);
---dui-ink-violet:var(--bt-ink-violet);--dui-ink-sky:var(--bt-ink-sky);
---dui-ink-rose:var(--bt-ink-rose);--dui-ink-yellow:var(--bt-ink-yellow);
---dui-ink-cyan:var(--bt-ink-cyan);--dui-ink-magenta:var(--bt-ink-magenta)}
-.bt-q-inline .dui-view{margin:0;width:100%;max-width:min(100%,max(calc(var(--bt-msg-w,.8) * 100%),560px));order:0}
-.bt-q-inline .dui-q{margin:0;max-width:min(550px,86%);order:0}
-body[data-bt-layout=flat] .bt-q-inline .dui-view{max-width:calc(var(--bt-flat-w,1) * 100%)}
-.bt-q-inline:has(>.dui-view-bare){margin:8px 0 12px}
+--dv-ink:var(--bt-ink);--dv-ink-2:var(--bt-ink-2);--dv-ink-3:var(--bt-ink-3);
+--dv-line:var(--bt-line);--dv-line-2:var(--bt-line-2);
+--dv-card:var(--bt-card);--dv-main:var(--bt-main);
+--dv-hover:var(--bt-hover);--dv-active:var(--bt-active);
+--dv-accent:var(--bt-accent);--dv-accent-ink:var(--bt-accent-ink);
+--dv-green:var(--bt-green);--dv-star:var(--bt-star);--dv-danger:var(--bt-danger);
+--dv-knob:var(--bt-knob);--dv-tag-bg:var(--bt-tag-bg);
+--dv-ink-tangerine:var(--bt-ink-tangerine);--dv-ink-green:var(--bt-ink-green);
+--dv-ink-violet:var(--bt-ink-violet);--dv-ink-sky:var(--bt-ink-sky);
+--dv-ink-rose:var(--bt-ink-rose);--dv-ink-yellow:var(--bt-ink-yellow);
+--dv-ink-cyan:var(--bt-ink-cyan);--dv-ink-magenta:var(--bt-ink-magenta)}
+.bt-q-inline .dv-view{margin:0;width:100%;max-width:min(100%,max(calc(var(--bt-msg-w,.8) * 100%),560px));order:0}
+.bt-q-inline .dv-q{margin:0;max-width:min(550px,86%);order:0}
+body[data-bt-layout=flat] .bt-q-inline .dv-view{max-width:calc(var(--bt-flat-w,1) * 100%)}
+.bt-q-inline:has(>.dv-view-bare){margin:8px 0 12px}
 `

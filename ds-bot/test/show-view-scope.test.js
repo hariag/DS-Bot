@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 
-// Deep UI registers show_view globally for plain sessions; ds-bot registers its
+// Deep View registers show_view globally for plain sessions; ds-bot registers its
 // own in the agent scope of every session it owns, and the scoped one wins.
 const tool = (description) => defineTool({
   name: 'show_view',

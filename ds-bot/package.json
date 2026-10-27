@@ -67,6 +67,6 @@
     "esbuild": "0.28.2"
   },
   "dependencies": {
-    "dsh-deep-ui": "file:../../../DeepSeek Bot/deep-ui"
+    "deep-view": "file:../../../DeepSeek Bot/deep-view"
   }
 }
