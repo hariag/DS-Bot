@@ -4,6 +4,7 @@ import { CheckIcon, CloseIcon, CopyIcon, DotsIcon, DownloadIcon, InfoIcon } from
 import { t } from './i18n.js'
 import { AnsweredCell, keyLetter, useOptionKeys } from './questions.js'
 import { useDockHold } from './card-hold.js'
+import { SettledHandoff } from './handoff-card.js'
 import { heldCardKey } from './sources.js'
 import { Segmented } from './motion.js'
 import { CHART_CSS, TableIcon, WidgetChart } from './widget-chart.js'
@@ -479,15 +480,20 @@ export function AnsweredView({ node }) {
   return h('div', { className: 'bt-q-inline' }, h(WidgetCard, { title: view.title ?? '', view: view.view, settled: true, answer }))
 }
 
-// A question reply node carries either questions (data.questions) or a view answer
-// (JSON text discriminated by kind); each shape gets its own renderer.
+// A question reply node carries either questions (data.questions), a view answer or
+// a browser handoff answer (JSON text discriminated by kind); each shape gets its
+// own renderer. A history page has already read the handoff answer into data.handoff.
 export function AnsweredReply({ node }) {
   const data = node?.data ?? {}
   if (Array.isArray(data.views) && data.views.length > 0) return h(AnsweredView, { node })
+  if (data.handoff !== null && typeof data.handoff === 'object') return h(SettledHandoff, { handoff: data.handoff })
   if (!Array.isArray(data.questions) || data.questions.length === 0) {
     let parsed = null
     try { parsed = typeof data.text === 'string' ? JSON.parse(data.text) : null } catch { parsed = null }
     if (parsed?.kind === 'answer_to_pending_view') return h(AnsweredView, { node })
+    if (parsed?.kind === 'answer_to_pending_handoff' && typeof parsed.reason === 'string') {
+      return h(SettledHandoff, { handoff: { reason: parsed.reason, note: parsed.note ?? '', outcome: parsed.outcome } })
+    }
   }
   return h(AnsweredCell, { node })
 }

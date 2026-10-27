@@ -14,18 +14,6 @@ export const browserOutput = {
         properties: {
           text: { type: 'string', required: true },
           image: { type: 'string' },
-          attachment: {
-            type: 'object',
-            properties: {
-              attachmentId: { type: 'string', required: true },
-              mediaType: { type: 'string', required: true },
-              bytes: { type: 'number' },
-              width: { type: 'number' },
-              height: { type: 'number' },
-              name: { type: 'string' },
-            },
-            additionalProperties: true,
-          },
         },
         additionalProperties: false,
       },
@@ -34,47 +22,11 @@ export const browserOutput = {
   render(_args, value) {
     if (value && typeof value === 'object') {
       const blocks = [{ type: 'text', text: String(value.text ?? '') }]
-      // Image blocks must reference a stored attachment; a raw base64 payload is
-      // not a valid content block and breaks the session's transport encoding.
-      if (value.attachment) blocks.push({ type: 'image', attachment: value.attachment })
+      if (value.image) blocks.push({ type: 'image', data: value.image, mediaType: 'image/jpeg' })
       return blocks
     }
     return [{ type: 'text', text: String(value) }]
   },
-}
-
-function attachmentsOf(ctx) {
-  try {
-    const service = ctx.get?.('attachments')
-    if (service !== undefined) return service
-  } catch {
-    // Not a cordis context, or the service was never provided.
-  }
-  try {
-    return ctx.attachments
-  } catch {
-    return undefined
-  }
-}
-
-// Tool bodies return screenshot bytes; the model-facing result must carry the
-// stored attachment instead, since content blocks cannot inline image data.
-async function saveShot(ctx, value) {
-  if (!value || typeof value !== 'object' || typeof value.image !== 'string') return value
-  const attachments = attachmentsOf(ctx)
-  if (typeof attachments?.saveImage === 'function') {
-    try {
-      const attachment = await attachments.saveImage({
-        mediaType: 'image/jpeg',
-        data: Buffer.from(value.image, 'base64'),
-        name: 'Browser screenshot',
-      })
-      return { text: value.text, attachment }
-    } catch (error) {
-      ctx.logger?.warn?.('ds-bot: screenshot could not be stored: %s', error?.message ?? error)
-    }
-  }
-  return { text: `${value.text ?? ''} (The screenshot could not be attached.)` }
 }
 
 /**
@@ -144,12 +96,13 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
         }
         session = await session
         const gate = authorize ? action => authorize(exec, botId, action) : undefined
-        return saveShot(ctx, await gateScope.run(gate, () => spec.execute(args ?? {}, {
+        return gateScope.run(gate, () => spec.execute(args ?? {}, {
           botId,
           profileDir: join(profileRoot, botId),
           session,
           complete: completeFor?.(exec),
-        })))
+          origin: { ...(exec.callId !== undefined ? { callId: exec.callId } : {}), ...(exec.agent?.id !== undefined ? { sessionId: exec.agent.id } : {}) },
+        }))
       },
     }))
   }

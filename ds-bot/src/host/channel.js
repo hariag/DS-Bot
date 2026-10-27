@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { install as installBtw } from './btw.js'
 import { install as installSide } from './side.js'
-import { questionReply, viewReply } from './parts.js'
+import { handoffReply, questionReply, viewReply } from './parts.js'
 import { defaultRelayLimit } from './groups.js'
 import { validateViewAnswer } from '../shared/views.js'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
@@ -478,16 +478,38 @@ export function install(rt) {
           await rt.load()
           const botId = String(body.botId ?? '')
           if (!rt.botOf(botId)) return fail('Unknown Bot', 'bot/not-found')
-          rt.browserChannel.setHold(botId, { by: 'user', reason: 'takeover', note: 'The user is controlling this browser.' })
+          // Taking over a handoff keeps its reason, note, and call, so its card stays up.
+          const asked = rt.browserChannel.holdOf(botId)
+          rt.browserChannel.setHold(botId, asked?.callId !== undefined
+            ? { by: 'user', reason: asked.reason, note: asked.note, callId: asked.callId }
+            : { by: 'user', reason: 'takeover', note: 'The user is controlling this browser.' })
           return ok(true)
         }
+        // Gives the browser back. The user's answer to a handoff card ('done' or 'skip')
+        // tells the Bot how it went; any other hold is cleared without a word.
         case 'browser-give-back': {
           if (rt.browserChannel === undefined) return fail('Bot browsers are off on this host', 'bot/browser-off')
           await rt.load()
           const botId = String(body.botId ?? '')
           if (!rt.botOf(botId)) return fail('Unknown Bot', 'bot/not-found')
-          if (rt.browserChannel.holdOf(botId) === null) return fail('This browser is not held', 'bot/forbidden')
+          if (body.outcome !== undefined && body.outcome !== 'done' && body.outcome !== 'skip') return fail('Nothing to send', 'bot/invalid')
+          const hold = rt.browserChannel.holdOf(botId)
+          if (hold === null) return fail('This browser is not held', 'bot/forbidden')
+          if (body.callId !== undefined && body.callId !== hold.callId) return fail('This handoff is no longer open', 'bot/stale')
+          // Claim the hold before queueing so a second answer is refused.
           rt.browserChannel.setHold(botId, null)
+          if (hold.callId === undefined) return ok(true)
+          try {
+            const sessionId = rt.chatOf(botId)
+            const reply = handoffReply(hold, body.outcome)
+            await rt.ensureCapabilities(sessionId)
+            const agent = await rt.resolveAgent(sessionId)
+            agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
+            await ctx.sessions.flush(agent.session)
+          } catch (error) {
+            if (rt.browserChannel.holdOf(botId) === null) rt.browserChannel.setHold(botId, hold)
+            throw error
+          }
           return ok(true)
         }
         case 'browser-stop': {

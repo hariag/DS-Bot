@@ -700,11 +700,12 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       return finishAction(() => target.goBack({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {}), target)
     },
     shot,
-    handoff(reason, note) {
+    // `origin` names the call and Session that asked, so a card can answer them.
+    handoff(reason, note, origin) {
       ready()
       const kind = REASONS.has(reason) ? reason : 'other'
       hold = { reason: kind, note: String(note ?? '').slice(0, 300) }
-      onHold?.({ by: 'bot', reason: kind, note: hold.note })
+      onHold?.({ by: 'bot', reason: kind, note: hold.note, ...origin })
       return `Waiting for the user (${kind}). ${hold.note || 'Ask them to take over.'} Call browser_resume when they have finished.`
     },
     resume() {
@@ -713,7 +714,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       onHold?.(null)
       return 'The browser is yours again.'
     },
-    async runScript(source) {
+    async runScript(source, origin) {
       const body = String(source ?? '')
       if (body.length > 8_000) throw new Error('Script is longer than 8000 characters.')
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
@@ -739,7 +740,7 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
         },
         () => this.snapshotText(),
         (ref, paths) => this.upload(ref, paths),
-        (reason, note) => this.handoff(reason, note),
+        (reason, note) => this.handoff(reason, note, origin),
         () => this.resume(),
         () => this.back(),
         done,

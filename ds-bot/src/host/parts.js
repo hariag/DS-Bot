@@ -101,11 +101,38 @@ export function viewReply(record, action, values) {
   }
 }
 
+// The user's answer to a browser_handoff card: they finished the step, or skipped it.
+// The message carries the reason with the answer, so it still makes sense after a
+// checkpoint drops the card.
+export function handoffReply(hold, outcome) {
+  const skipped = outcome === 'skip'
+  const callId = hold.callId
+  const message = skipped
+    ? 'The user skipped this step and gave the browser back. Do not retry it. Do what you can without it, or tell the user you cannot.'
+    : 'The user finished this step and gave the browser back. Carry on from where you stopped. Take a browser_snapshot first to see the page.'
+  return {
+    text: JSON.stringify({
+      kind: 'answer_to_pending_handoff',
+      tool: 'browser_handoff',
+      callId,
+      reason: hold.reason,
+      ...(hold.note ? { note: hold.note } : {}),
+      outcome: skipped ? 'skipped' : 'done',
+      message,
+    }),
+    source: { kind: REPLY_KIND, callId, outcome: 'answered' },
+  }
+}
+
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 export function readReply(text) {
   let value
   try { value = JSON.parse(text) } catch { return undefined }
+  if (value?.kind === 'answer_to_pending_handoff') {
+    if (typeof value.callId !== 'string' || typeof value.reason !== 'string') return undefined
+    return { handoff: { callId: value.callId, reason: value.reason, note: typeof value.note === 'string' ? value.note : '', outcome: value.outcome === 'skipped' ? 'skipped' : 'done' } }
+  }
   if (value?.kind === 'answer_to_pending_view' || (Array.isArray(value?.views) && value.views.length > 0 && value?.kind !== 'answer_to_pending_question')) {
     const views = (Array.isArray(value.views) ? value.views : []).filter(item => typeof item?.id === 'string' && typeof item.title === 'string' && isRecord(item.view))
     if (views.length === 0) return undefined
@@ -138,6 +165,10 @@ function actionSummary(answer, view) {
 export function replyText(text) {
   const reply = readReply(text)
   if (reply === undefined) return text
+  if (reply.handoff !== undefined) {
+    const { reason, note, outcome } = reply.handoff
+    return `[Browser handoff] ${note === '' ? reason : `${reason} — ${note}`}\nAnswer: ${outcome}`
+  }
   if (reply.views !== undefined) {
     return reply.views.map((view) => {
       const answer = reply.answers.find(item => item.id === view.id)
@@ -1280,6 +1311,7 @@ export function install(rt) {
         const text = textOf(event.data.content)
         const reply = readReply(text)
         if (reply?.questions !== undefined) stamp(event, { kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
+        else if (reply?.handoff !== undefined) stamp(event, { kind: 'answer', text: replyText(text), handoff: reply.handoff, time: event.time })
         else if (reply?.views !== undefined) stamp(event, { kind: 'answer', text: replyText(text), views: reply.views, answers: reply.answers, time: event.time })
       } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
         stamp(event, { kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })

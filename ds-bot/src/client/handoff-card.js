@@ -3,7 +3,6 @@ import { CheckIcon, GlobeIcon } from './icons.js'
 import { t } from './i18n.js'
 import { useDockHold } from './card-hold.js'
 import { heldCardKey } from './sources.js'
-import { CellEmpty } from './cell-empty.js'
 
 // -------------------------------------------------------------------------
 // Browser handoff: a Bot's browser reached a step only the user can do (a sign-in,
@@ -87,8 +86,8 @@ export function HandoffCall({ sessionId, callId, roster, actions, heldCards, hoo
   const bot = roster.byId[sessionId]
   const hold = hooks.useBrowserHolds?.(map => (bot ? map[bot.id] : undefined))
   // Answered, taken back, or never raised on this machine: no card, and no gap where it was.
-  if (!bot || hold?.callId !== callId || !actions.browserGiveBack) return h(CellEmpty, { className: 'bt-q-gone' })
-  if (heldCards?.[heldCardKey('handoff', callId)] > 0) return h(CellEmpty)
+  if (!bot || hold?.callId !== callId || !actions.browserGiveBack) return h('span', { className: 'bt-q-gone', hidden: true })
+  if (heldCards?.[heldCardKey('handoff', callId)] > 0) return null
   return h(PendingHandoff, { key: callId, sessionId, bot, hold, hooks, actions, inline: true })
 }
 
@@ -109,14 +108,13 @@ export function HandoffDock({ sessionId, useRoster, useCards, useHeldCards, useB
 // The answered card the transcript keeps: the title and how it ended, read-only.
 export function SettledHandoff({ handoff }) {
   const skipped = handoff.outcome === 'skipped'
-  const returned = handoff.outcome === 'returned'
   const title = titleOf(handoff.reason)
   return h('div', { className: 'bt-q-inline' },
     h('div', { className: skipped ? 'bt-q bt-q-settled bt-q-dismissed' : 'bt-q bt-q-settled', role: 'group', 'aria-label': title },
       h('div', { className: 'bt-q-head' },
         h('div', { className: 'bt-q-text' }, h('p', { className: 'bt-q-title' }, title)),
-        skipped || returned
-          ? h('span', { className: 'bt-q-badge' }, t(skipped ? 'Skipped' : 'Returned'))
+        skipped
+          ? h('span', { className: 'bt-q-badge' }, t('Skipped'))
           : h('span', { className: 'bt-q-check', title: t('Done') }, h(CheckIcon)))))
 }
 
@@ -129,4 +127,5 @@ export const HANDOFF_CSS = `
 .bt-handoff-dot{flex:none;width:6px;height:6px;border-radius:50%;corner-shape:round;background:var(--bt-green)}
 .bt-handoff.bt-q-raised .bt-q-head{padding-bottom:12px}
 .bt-handoff .bt-q-foot{flex-wrap:wrap}
+.bt-handoff :is(.bt-q-btn,.bt-q-submit):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 `
