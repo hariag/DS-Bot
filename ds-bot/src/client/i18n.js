@@ -628,6 +628,7 @@ const ZH = {
   'Copy data': '复制数据',
   'Download image': '下载图片',
   'This view tried to open a page and was stopped.': '这个视图想打开一个网页，已被拦下。',
+  'Send to Bot': '发给 Bot',
 
   // Secrets
   'All Bots': '所有 Bot',

@@ -35,6 +35,11 @@ const effect = (make, deps) => {
   }
 }
 const react = {
+  Fragment: 'fragment',
+  createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx },
+  useContext: ctx => ctx.value,
+  useMemo: make => make(),
+  useCallback: fn => fn,
   createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
   useState: (initial) => {
     const cell = slot(() => ({ value: typeof initial === 'function' ? initial() : initial }))

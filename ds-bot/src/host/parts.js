@@ -21,7 +21,7 @@ import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, REPLY_KIND, SOURCE_KIND } from './cons
 import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
 import { RESUME_DELAY_MS } from './resume.js'
 import { clip, createClock, escapeRegExp, estimateTokens, splitRef, textOf } from './text.js'
-import { checkShownView, inputsSummary, normalizeView, validateViewAnswer, viewSummary } from '../shared/views.js'
+import { checkShownView, normalizeView, readViewReply, viewCardText, viewReply, viewReplyText } from 'dsh-deep-ui/core'
 
 // An ask_user card as the user saw it. The user's reply is often just an option label,
 // which means nothing without the card. Arguments the tool would refuse (no question,
@@ -40,23 +40,8 @@ export function cardText(args) {
   return `[Question card] ${question}${detail ? ` (${detail})` : ''}\nOptions: ${options.join(' / ')}`
 }
 
-// A show_view card as the user saw it. A call the tool would refuse (an oversized
-// or invalid view, no title, a display-only card asked to wait or an interactive
-// one told not to) showed no card, so it gives no text. checkShownView runs the
-// tool's own checks, normalization included, so a wrapped card keeps its summary.
-export function viewCardText(args) {
-  let card = args
-  if (typeof card === 'string') {
-    try { card = JSON.parse(card) } catch { return '' }
-  }
-  const shown = checkShownView(card?.title, card?.view)
-  if (shown.error !== undefined) return ''
-  if (!shown.interactive && card?.await_reply === true) return ''
-  if (shown.interactive && card?.await_reply === false) return ''
-  const summary = viewSummary(shown.view)
-  const head = shown.title === '' ? '[View card]' : `[View card] ${shown.title}`
-  return summary === '' ? head : `${head}\n${summary}`
-}
+// The card text and reply format live in the shared dsh-deep-ui core.
+export { viewCardText, viewReply }
 
 // What one event adds to a Bot's chat history: an answer of the Bot's (its text, or a
 // question card), or a message from the user (`who: 'user'`) or another Bot
@@ -87,19 +72,6 @@ export function questionReply(question, answer) {
   }
 }
 
-// The user's answer to a show_view card. The message carries the blueprint with
-// the answer, so the answer still makes sense after a checkpoint drops the card.
-export function viewReply(record, action, values) {
-  const checked = validateViewAnswer(record?.view, action, values)
-  if (checked.error !== undefined) return undefined
-  const callId = record.callId ?? record.id
-  const shown = { id: record.id, title: record.title, view: record.view }
-  const given = { id: record.id, action, values: checked }
-  return {
-    text: JSON.stringify({ kind: 'answer_to_pending_view', tool: 'show_view', callId, views: [shown], answers: [given] }),
-    source: { kind: REPLY_KIND, callId, outcome: 'answered' },
-  }
-}
 
 // The user's answer to a browser_handoff card: they finished the step, skipped it,
 // or only gave the browser back from its panel. The message carries the reason with
@@ -126,7 +98,7 @@ export function handoffReply(hold, outcome) {
   }
 }
 
-const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+
 
 export function readReply(text) {
   let value
@@ -135,33 +107,12 @@ export function readReply(text) {
     if (typeof value.callId !== 'string' || typeof value.reason !== 'string') return undefined
     return { handoff: { callId: value.callId, reason: value.reason, note: typeof value.note === 'string' ? value.note : '', outcome: value.outcome === 'skipped' || value.outcome === 'returned' ? value.outcome : 'done' } }
   }
-  if (value?.kind === 'answer_to_pending_view' || (Array.isArray(value?.views) && value.views.length > 0 && value?.kind !== 'answer_to_pending_question')) {
-    const views = (Array.isArray(value.views) ? value.views : []).filter(item => typeof item?.id === 'string' && typeof item.title === 'string' && isRecord(item.view))
-    if (views.length === 0) return undefined
-    const answers = (Array.isArray(value.answers) ? value.answers : []).filter(item => typeof item?.id === 'string' && typeof item.action === 'string' && isRecord(item.values))
-    return { views, answers }
-  }
+  const viewReplyData = readViewReply(text)
+  if (viewReplyData !== undefined) return viewReplyData
   const questions = Array.isArray(value?.questions) ? value.questions.filter(item => typeof item?.id === 'string' && typeof item.question === 'string') : []
   if (questions.length === 0) return undefined
   const answers = (Array.isArray(value.answers) ? value.answers : []).filter(item => typeof item?.id === 'string' && Array.isArray(item.selected))
   return { questions, answers }
-}
-
-// The submitted component, and the view's inputs as the user left them. A long form
-// is cut so a checkpoint stays small.
-function actionSummary(answer, view) {
-  const values = answer?.values
-  if (!isRecord(values)) return '(skipped)'
-  const inputs = inputsSummary(view, values.inputs)
-  let text
-  if (Array.isArray(values.selected)) text = `selected: ${values.selected.join(', ')}`
-  else if (typeof values.confirmed === 'boolean') text = values.confirmed ? 'confirmed' : 'cancelled'
-  else if (isRecord(values.fields)) text = Object.entries(values.fields).map(([key, value]) => `${key}: ${value}`).join('; ')
-  else if (inputs !== '') text = ''
-  else text = typeof answer.action === 'string' && answer.action !== '' ? answer.action : '(skipped)'
-  if (inputs !== '') text = text === '' ? inputs : `${text}; ${inputs}`
-  if (text === '') text = '(empty)'
-  return text.length > 500 ? text.slice(0, 500) : text
 }
 
 export function replyText(text) {
@@ -171,12 +122,7 @@ export function replyText(text) {
     const { reason, note, outcome } = reply.handoff
     return `[Browser handoff] ${note === '' ? reason : `${reason} — ${note}`}\nAnswer: ${outcome}`
   }
-  if (reply.views !== undefined) {
-    return reply.views.map((view) => {
-      const answer = reply.answers.find(item => item.id === view.id)
-      return `${view.title === '' ? '[Answer to view card]' : `[Answer to view card] ${view.title}`}\nAnswer: ${actionSummary(answer, view.view)}`
-    }).join('\n\n')
-  }
+  if (reply.views !== undefined) return viewReplyText(text)
   return reply.questions.map((question) => {
     const answer = reply.answers.find(item => item.id === question.id)
     const values = [...(answer?.selected ?? []), ...(answer?.custom ? [answer.custom] : [])]

@@ -5,7 +5,7 @@ import { install as installBtw } from './btw.js'
 import { install as installSide } from './side.js'
 import { handoffReply, questionReply, viewReply } from './parts.js'
 import { defaultRelayLimit } from './groups.js'
-import { validateViewAnswer } from '../shared/views.js'
+import { validateViewAnswer } from 'dsh-deep-ui/core'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const LANGUAGES = { zh: 'Chinese (简体中文)', en: 'English' }

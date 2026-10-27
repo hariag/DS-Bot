@@ -13,6 +13,12 @@ const bundle = await build({
 let slots = []
 let at = 0
 const react = {
+  Fragment: 'fragment',
+  createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx },
+  useContext: ctx => ctx.value,
+  useCallback: fn => fn,
+  useId: () => 'dui-id',
+  useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
   createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
   useState: (initial) => {
     const index = at++

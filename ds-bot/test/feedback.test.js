@@ -15,6 +15,12 @@ const ISSUES = 'https://github.com/Fei2411/DS-Bot/issues/new'
 function page(window) {
   const notes = []
   const react = {
+  createContext: (initial) => { const ctx = { value: initial }; ctx.Provider = ({ value, children }) => { ctx.value = value; return children }; return ctx },
+  useContext: ctx => ctx.value,
+  useMemo: make => make(),
+  useCallback: fn => fn,
+  useId: () => 'dui-id',
+  useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
     Fragment: 'fragment',
     useState: initial => [initial, (next) => { if (typeof next === 'string') notes.push(next) }],

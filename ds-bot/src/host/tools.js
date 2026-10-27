@@ -9,7 +9,7 @@ import { absoluteLinks } from './links.js'
 import { NAME_MAX } from './requests.js'
 import { unquote } from './text.js'
 import { mentionSpans } from '../shared/mentions.js'
-import { checkShownView } from '../shared/views.js'
+import { checkShownView, showViewDescription, showViewParameters } from 'dsh-deep-ui/core'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
@@ -665,19 +665,12 @@ export function install(rt) {
     },
   }))
 
-  ctx.tools.register(defineTool({
+  // Scoped per Bot session, not global: another plugin's global show_view serves
+  // the sessions ds-bot does not own, while this one shadows it inside them.
+  const showViewTool = defineTool({
     name: 'show_view',
-    description: 'Draw a view in your own chat as part of your reply: a chart, key numbers, a table, a small calculator the user can try values in, or a choice, confirmation or short form. Text you write before and after the call shows around it. Use a view when it answers better than text: a chart to compare values or show a trend, inputs with formulas to let the user try numbers (worked out in the page, no new turn), options to let the user pick. Plain rows and columns read fine as a Markdown table, and one number needs no view. Give the answer first, then the view. Never invent data; mark sample numbers and assumptions as such. Do not repeat the same data as text, chart and table. Add only the controls the user needs. A view with options, confirm, form or submit ends your turn, and the answer arrives as the user\'s next message. Never collect a key, token or password. Keep the view under 8 KB.',
-    parameters: {
-      title: { type: 'string', description: 'Optional short heading shown above the view' },
-      view: {
-        type: 'object',
-        required: true,
-        additionalProperties: true,
-        description: 'One component { type, ...props }. Layout: stack (children, top to bottom) and row (children, side by side, wraps when narrow), 1 to 16 children; the outermost may define let: { name: "formula" }. Display: text ({ text: Markdown, tone?: "muted" }), metric ({ label, value, tone?: good|warn|bad, caption? }), table ({ columns: [{ key, label }], rows: [[cells]] }), chart ({ kind?: bar|hbar|line|area|donut, categories: [labels], series: [{ name?, values: [numbers] }], unit?, caption? }; donut takes one series), progress ({ label?, percent 0-100, or value with max, valueLabel?, tone? }), callout ({ text, tone?: info|good|warn|bad }), sources ({ items: [{ label, url }] }), html ({ html, summary, height? }: only for what nothing else can draw; it runs sandboxed with no network, cannot submit, and should use the CSS variables --bt-ink, --bt-ink-2, --bt-line, --bt-card, --bt-accent, --bt-green, --bt-star, --bt-danger). Inputs, which keep their value in the page: slider ({ id, label, min, max, step?, value, unit? }), number ({ id, label, value, min?, max?, step?, unit? }), choice ({ id, label, options: [{ label, value }], value? }), toggle ({ id, label, value? }); an input id is a plain name such as price. A metric value, caption or tone, a text, a progress field, a callout, a table cell or a chart value may be a formula { "=": "expression" } over input ids and let names: numbers, \'text\', + - * / %, < <= > >= == !=, && || !, a ? b : c, and min max abs floor ceil sqrt pow round clamp fixed(x, digits) format(x, digits) percent(x, digits). Answers, which end your turn: options ({ id, options: [{ label, description? }], multi? }), confirm ({ id, confirmLabel?, cancelLabel? }), form ({ id, fields: [{ id, label, placeholder? }], submitLabel? }), submit ({ id, label }: sends the inputs\' values to you).',
-      },
-      await_reply: { type: 'boolean', description: 'Wait for the user to submit the view. A view with options, confirm, form or submit always waits; a view without them cannot.' },
-    },
+    description: showViewDescription({ where: 'your own chat' }),
+    parameters: showViewParameters,
     output,
     async execute(args, exec) {
       await rt.load()
@@ -707,7 +700,22 @@ export function install(rt) {
       exec.concludeTurn?.()
       return 'The view is on screen; the user\'s answer arrives as their next message.'
     },
-  }))
+  })
+
+  // ds-bot registers show_view in the agent's own scope so it answers even in a
+  // group — where it only refuses — instead of a global registration falling to
+  // another plugin. Once per agent; the agent ctx carries the session.
+  const scopedTools = new WeakSet()
+  const shareBotTools = (agent) => {
+    if (agent === undefined || scopedTools.has(agent) || !rt.isBotSession(agent.session?.id)) return
+    if (typeof agent.ctx?.tools?.register !== 'function') return
+    try {
+      agent.ctx.tools.register(showViewTool)
+      scopedTools.add(agent)
+    } catch (error) {
+      rt.warn('ds-bot: scoping show_view for %s failed: %s', agent.session?.id, error)
+    }
+  }
 
   // dsh's own question tool holds the turn open until the user answers, and every
   // message from another Bot or a group round queues behind it. Bot Sessions ask
@@ -715,6 +723,7 @@ export function install(rt) {
   // goal tools.
   const hiddenTools = new WeakSet()
   const hideBotUnusedTools = (agent) => {
+    shareBotTools(agent)
     if (agent === undefined || hiddenTools.has(agent) || !rt.isBotSession(agent.session?.id)) return
     if (typeof agent.ctx?.tools?.restrict !== 'function') return
     try {
