@@ -359,6 +359,43 @@ test('a write of a private Bot outside its folder that the user does not allow i
   assert.match(result.error, /not done/)
 })
 
+test('a nested subagent speaks for the private Bot at its root', async (t) => {
+  const approval = fakeApproval('allowed-once')
+  const { run, diary, agentOf, stop } = await start({ services: { approval } })
+  t.after(stop)
+  agentOf('sub1').session.header.parentSession = P
+  const nested = { id: 'sub2', session: { id: 'sub2', header: { cwd: diary, parentSession: 'sub1' } } }
+  assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, P, nested), { ran: true })
+  assert.deepEqual(await run('message_bot', { to: 'Writer', message: 'from a nested subagent' }, P, nested), { ran: true })
+  assert.equal(approval.requests.length, 1)
+  assert.match(approval.requests[0].reason, /from a nested subagent/)
+})
+
+test('deleting a private Bot keeps its folder and archived memory closed', async (t) => {
+  const { rt, run, home, diary, state, stop } = await start()
+  t.after(stop)
+  const memory = join(home, 'memory', 'bots', P)
+  mkdirSync(memory, { recursive: true })
+  writeFileSync(join(memory, 'MEMORY.md'), 'private memory')
+  await rt.deleteBot(P)
+  assert.equal(state().bots[P], undefined)
+  const archived = state().privateArchives
+  assert.equal(archived.length, 1)
+  assert.equal(archived[0].id, P)
+  assert.equal(typeof archived[0].archivePath, 'string')
+  for (const [name, args] of [
+    ['read', { file_path: join(diary, 'notes.txt') }],
+    ['read', { file_path: join(archived[0].archivePath, 'MEMORY.md') }],
+    ['glob', { pattern: '**/*', path: home }],
+    ['session_trace', { session_id: P }],
+  ]) {
+    const result = await run(name, args, 'b')
+    assert.equal(result.ran, false, name)
+    assert.match(result.error, CLOSED)
+  }
+  await assert.rejects(rt.createBot({ name: 'Third', workDir: diary }), CLOSED)
+})
+
 test('with no private Bot the tools run as they did', async (t) => {
   const { run, diary, stop } = await start({ privateBot: false })
   t.after(stop)

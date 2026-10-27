@@ -28,23 +28,34 @@ export function install(rt) {
 
   const isPrivate = id => rt.botOf(id)?.private === true
   const privateBots = () => Object.values(state.bots).filter(bot => bot.private === true)
-  const sessionsOf = bot => [...new Set([bot.id, rt.chatOf(bot.id), ...(bot.segments ?? []).map(segment => segment.sessionId), ...rt.groupSessionsOf(bot.id)])]
+  // Deleting a private Bot does not make the files and memory it leaves behind public.
+  const protectedBots = () => [...new Map([...(state.privateArchives ?? []), ...privateBots()].map(bot => [bot.id, bot])).values()]
+  const sessionsOf = bot => [...new Set([bot.id, ...(bot.sessionIds ?? [rt.chatOf(bot.id), ...(bot.segments ?? []).map(segment => segment.sessionId), ...rt.groupSessionsOf(bot.id)])])]
   const dataRoots = () => [rt.dshHome, rt.home, process.env.DS_BOT_USER_DSH_HOME?.trim()].filter(Boolean)
 
   // A path as it is and as the file system resolves it, folded for comparing.
   const spellings = async (path) => [...new Set([fold(resolve(path)), fold(await rt.real(path))])]
 
-  // The Bot a call speaks for. A subagent speaks for the Bot that started it.
-  const callerOf = (exec) => {
-    const own = rt.selfOf(exec.agent?.id)
+  // The Bot a call speaks for. A subagent speaks for the Bot at the root of its
+  // parent chain, however many subagents sit between them.
+  const callerOf = async (exec) => {
+    const own = rt.selfOf(exec.agent?.id) ?? rt.selfOf(exec.agent?.session?.id)
     if (own !== undefined) return own
-    const parent = exec.agent?.session?.header?.parentSession
-    return parent === undefined ? undefined : rt.selfOf(parent)
+    let parent = exec.agent?.session?.header?.parentSession
+    const seen = new Set()
+    while (parent !== undefined && !seen.has(parent)) {
+      seen.add(parent)
+      const owner = rt.selfOf(parent)
+      if (owner !== undefined) return owner
+      const agent = await rt.resolveAgent(parent).catch(() => undefined)
+      parent = agent?.session?.header?.parentSession
+    }
+    return undefined
   }
 
   // Where a private Bot keeps what must stay closed: its folder and its memory. Its
   // Sessions and its id are in file names under DSH's and the team's data.
-  const regionsOf = async bot => (await Promise.all([bot.workDir, join(rt.home, 'memory', 'bots', bot.id)].filter(Boolean).map(spellings))).flat()
+  const regionsOf = async bot => (await Promise.all([bot.workDir, join(rt.home, 'memory', 'bots', bot.id), bot.archivePath].filter(Boolean).map(spellings))).flat()
   const sharedFiles = async () => (await Promise.all([rt.statePath, join(rt.home, 'memory', 'journal.jsonl')].filter(Boolean).map(spellings))).flat()
 
   const teamFolder = () => rt.teamFolder() ?? resolve(rt.defaultTeamFolder())
@@ -53,7 +64,7 @@ export function install(rt) {
   // `search` is for tools that walk a folder: a folder that holds a closed one is closed
   // too, and so are the data folders, where the walk cannot be told which files to skip.
   async function ownerOfPath(path, { self, search = false, base } = {}) {
-    const bots = privateBots()
+    const bots = protectedBots()
     if (bots.length === 0) return undefined
     const keys = await spellings(base === undefined ? path : resolve(base, path))
     for (const bot of bots) {
@@ -65,8 +76,8 @@ export function install(rt) {
         if (needles.some(needle => key.includes(needle))) return bot
       }
     }
-    for (const file of await sharedFiles()) if (keys.some(key => key.startsWith(file))) return bots[0]
     const other = bots.find(bot => bot.id !== self)
+    for (const file of await sharedFiles()) if (other !== undefined && keys.some(key => key.startsWith(file))) return other
     if (search && other !== undefined) {
       const open = [rt.workDirOf({ botId: self }), teamFolder()].filter(Boolean)
       const folders = (await Promise.all(open.map(spellings))).flat()
@@ -81,12 +92,14 @@ export function install(rt) {
   // command builds, or reaches by walking up from a folder, is not seen.
   async function ownerInText(text, self) {
     const flat = fold(text.replace(/\\/g, '/'))
-    for (const bot of privateBots()) {
+    const bots = protectedBots()
+    for (const bot of bots) {
       if (bot.id === self) continue
       const spelled = (await regionsOf(bot)).flatMap(asShell)
       if (spelled.some(region => flat.includes(region)) || sessionsOf(bot).some(id => flat.includes(fold(id)))) return bot
     }
-    for (const file of await sharedFiles()) if (asShell(file).some(spelled => flat.includes(spelled))) return privateBots()[0]
+    const other = bots.find(bot => bot.id !== self)
+    for (const file of await sharedFiles()) if (other !== undefined && asShell(file).some(spelled => flat.includes(spelled))) return other
     return undefined
   }
 
@@ -197,15 +210,15 @@ export function install(rt) {
     }
     if (SESSION_TOOLS.includes(name)) {
       const asked = strings([args.session_id, args.session_ids, args.parent_session_ids])
-      const bot = privateBots().find(found => found.id !== self && sessionsOf(found).some(id => asked.includes(id)))
+      const bot = protectedBots().find(found => found.id !== self && sessionsOf(found).some(id => asked.includes(id)))
       if (bot) refuse(bot)
     }
   }
 
   // Before the tools' own hooks, so that a closed call never reaches a card they show.
   ctx.on('tools/execute', async (exec, next) => {
-    if (privateBots().length === 0) return next()
-    const self = callerOf(exec)
+    if (protectedBots().length === 0) return next()
+    const self = await callerOf(exec)
     await guardTeam(exec, self)
     await guardFiles(exec, self)
     return next()
@@ -214,7 +227,7 @@ export function install(rt) {
   // A folder that a private Bot's folder would overlap, or that overlaps one.
   async function privateClash(path, { except } = {}) {
     const keys = await spellings(path)
-    for (const bot of privateBots()) {
+    for (const bot of protectedBots()) {
       if (bot.id === except || bot.workDir === undefined) continue
       const dirs = await spellings(bot.workDir)
       if (keys.some(key => dirs.some(dir => overlap(key, dir)))) return bot

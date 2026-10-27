@@ -666,7 +666,14 @@ export function install(rt) {
     const current = rt.chatOf(id)
     // Questions and exchange turns are kept per Session, so every part of the chat is cleared.
     const parts = new Set([id, current, ...(bot.segments ?? []).map(segment => segment.sessionId)])
+    const closedArchive = bot.private === true ? {
+      id: bot.id,
+      name: bot.name,
+      ...(bot.workDir === undefined ? {} : { workDir: bot.workDir }),
+      sessionIds: [...parts, ...rt.groupSessionsOf(id)],
+    } : undefined
     await rt.releaseBot(id, [...parts, ...rt.groupSessionsOf(id)])
+    if (closedArchive !== undefined) state.privateArchives = [...(state.privateArchives ?? []).filter(entry => entry.id !== id), closedArchive]
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]
@@ -684,7 +691,8 @@ export function install(rt) {
     }
     await followMemberNames(touched)
     await rt.forgetBotSecrets(id)
-    await archived
+    const archivePath = await archived
+    if (closedArchive !== undefined && archivePath !== undefined) closedArchive.archivePath = archivePath
     const failed = await saveForDelete()
     // Same as deleteRoom: stopActivity removes the Session's armed scheduled tasks.
     // Past parts are archived too: a part move can leave tasks on the old Session,
