@@ -34,10 +34,10 @@ test('every window reaches the host model providers, and key changes read the te
   assert.equal(pulls(), 4)
 })
 
-test('Retry sends the failed Bot, Session and turn to the host', async () => {
+test('Retry after a failed turn asks the host to resume the Bot, with nothing but its id', async () => {
   const { actions, sent, pulls } = bench()
-  await actions.resume('chief','member-session',3)
-  assert.deepEqual(sent, [['resume', { botId: 'chief', sessionId:'member-session', turn:3 }]])
+  await actions.resume('chief')
+  assert.deepEqual(sent, [['resume', { botId: 'chief' }]])
   assert.equal(pulls(), 1)
 })
 
@@ -48,12 +48,4 @@ test('openModels opens DS Bot settings on the Models page and closes the menus',
   assert.equal(ui.getSnapshot().menu, null)
   actions.openSettings()
   assert.deepEqual(ui.getSnapshot().settings, { page: 'general', id: null })
-})
-
-test('the details status line asks the host for one Bot\'s current part', async () => {
-  const { actions, sent, pulls } = bench()
-  await actions.runStats('chief')
-  assert.deepEqual(sent, [['run-stats', { botId: 'chief' }]])
-  // A read: it does not pull the whole team again.
-  assert.equal(pulls(), 0)
 })

@@ -3,8 +3,17 @@
 //
 // Turn tracking: which turns were triggered by another Bot, and what they said.
 import { HANDOFF_ACK, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND } from './constants.js'
-import { textOf } from './text.js'
+import { absoluteLinks } from './links.js'
+import { splitRef, textOf } from './text.js'
 import { reminderText } from './schedules.js'
+
+// Failures only the user can fix: a key, a sign-in, a balance. They block the Bot
+// until it is fixed (`bot.blocked`, for the repair card).
+export const BLOCKING_CODES = new Set(['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'AUTH', 'QUOTA', 'ACCOUNT_QUOTA', 'ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_SIGNED_OUT', 'ACCOUNT_TOKEN_INVALID'])
+// The ones a key set outside a turn can fix, and the ones a sign-in can (unblockBots).
+// A balance only a turn that completes shows fixed, as Retry runs one.
+const KEY_CODES = new Set(['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'AUTH'])
+const SIGN_IN_CODES = new Set(['ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_SIGNED_OUT', 'ACCOUNT_TOKEN_INVALID'])
 
 // A failed turn's `LlmFailure`, kept to what can be shown and logged. Like DSH's own
 // error row, an AUTH failure loses its message: providers may echo part of the key.
@@ -308,12 +317,6 @@ export function install(rt) {
     .filter(([, entry]) => entry.turn !== undefined && entry.since !== undefined)
     .map(([id, entry]) => [id, entry.since]))
 
-  // Per Session, when the user last steered its running turn: the input the
-  // activity row's phrase and clock restart from.
-  const steeredView = () => Object.fromEntries([...live]
-    .filter(([, entry]) => entry.turn !== undefined && entry.steeredAt !== undefined)
-    .map(([id, entry]) => [id, entry.steeredAt]))
-
   // Per group, the members whose turn there is running or who move on to a fresh part;
   // the round's current speaker is marked, since its round shows it.
   const roomWorkView = () => {
@@ -362,6 +365,65 @@ export function install(rt) {
     })
   }
 
+  // The facts of a blocking failure stay on its Bot, from any of its Sessions, until a
+  // turn of it completes, a change that can fix it (unblockBots), or its model changes
+  // (roster.js). Never the message: a provider may echo part of the key. The provider
+  // is the failing route's, which is the Session's last request, else the model the
+  // Bot runs on.
+  const blockBot = (id, session, failure) => {
+    const bot = rt.botOf(rt.selfOf(id))
+    if (bot === undefined || !BLOCKING_CODES.has(failure.code)) return false
+    const provider = session?.requestHeader?.()?.config?.provider ?? splitRef(bot.appliedModel)?.provider
+    bot.blocked = {
+      code: failure.code,
+      ...(failure.status === undefined ? {} : { status: failure.status }),
+      ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
+      ...(provider ? { provider } : {}),
+      at: Date.now(),
+    }
+    void rt.save().catch(() => {})
+    return true
+  }
+  const unblockBot = (botId) => {
+    const bot = rt.botOf(botId)
+    if (bot?.blocked === undefined) return
+    delete bot.blocked
+    void rt.save().catch(() => {})
+  }
+
+  // A key set (`ref`) or a sign-in may be the user's fix (models.js): the blocks it can
+  // fix lift, and a greeting held for one goes out again. A key lifts the key failures
+  // of the providers that read it; one whose provider names no key, or that failed on
+  // a provider not known, lifts on any key. A host that only reads the team leaves it
+  // to the one that holds it.
+  function unblockBots({ ref, signedIn = false, keyed } = {}) {
+    if (rt.readOnly?.() !== undefined) return
+    let refs
+    try { refs = ref === undefined ? undefined : rt.keyRefs?.() } catch {}
+    const fixes = ({ code, provider }) => (signedIn && SIGN_IN_CODES.has(code))
+      || (ref !== undefined && KEY_CODES.has(code) && (refs?.get(provider) ?? ref) === ref)
+      || (code === 'MISSING_CREDENTIAL' && provider !== undefined && keyed?.has(provider) === true)
+    const lifted = Object.values(state.bots ?? {}).filter(bot => bot.blocked !== undefined && fixes(bot.blocked))
+    if (lifted.length === 0) return
+    for (const bot of lifted) delete bot.blocked
+    void rt.save().catch(() => {})
+    for (const bot of lifted) void rt.releaseKickoff(bot).catch(error => rt.warn('ds-bot: greeting of %s not sent again: %s', bot.name, error))
+  }
+
+  // The repair card's Retry. A greeting that failed goes out again; otherwise the Bot
+  // answers the user's last message, which is not sent again. A greeting on its way, or
+  // a turn under way in the Bot's chat, answers already: a turn on top answers twice.
+  async function resumeBot(bot) {
+    if (await rt.releaseKickoff(bot)) return
+    if (rt.greetingOut?.(bot.id) || live.get(rt.chatOf(bot.id))?.turn !== undefined) return
+    const code = bot.blocked?.code
+    await rt.deliver({
+      toId: bot.id,
+      role: 'continue',
+      text: `Your last turn failed${code ? ` (${code})` : ''} and the user has fixed it. Answer the user's last unanswered message.`,
+    })
+  }
+
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
@@ -406,7 +468,6 @@ export function install(rt) {
         entry.opened = false
         entry.joined = []
         entry.later = []
-        entry.steeredAt = undefined
         if (entry.pending !== undefined) {
           claimTrigger(id, entry, entry.pending)
           entry.pending = undefined
@@ -498,7 +559,7 @@ export function install(rt) {
             queueRoomMessage(id, { text: textOf(event.data.content), ...(images.length > 0 ? { images } : {}), ...(files.length > 0 ? { files } : {}) })
           }
           const own = rt.chatOwners.get(id)
-          if (own !== undefined) rt.dropKickoff(own)
+          if (own !== undefined) rt.userWrote(own)
           // Any user message answers or supersedes the open question card and view card.
           let dropped = false
           if (state.questions[id] !== undefined) {
@@ -513,20 +574,13 @@ export function install(rt) {
         }
         break
       }
-      case 'agent/inbox/spliced':
-        // A message the user steered into the running turn is fresh input, like
-        // a send that never queued.
-        if (event.data?.target === 'next-step' && entry.turn !== undefined
-          && (event.data.inserted ?? []).some(message => message?.source?.kind === 'user')) {
-          entry.steeredAt = event.time ?? Date.now()
-        }
-        break
       case 'assistant/message': {
         const content = event.data?.message?.content
         const text = textOf(content)
         const called = Array.isArray(content) && content.some(block => block?.type === 'tool-call')
         if (text !== '' && text !== HANDOFF_ACK) {
-          entry.texts.push(text)
+          // What a turn says goes on to the group or the sender, read from other folders.
+          entry.texts.push(absoluteLinks(text, rt.sessionFolder?.(session)))
           if (entry.turn !== undefined) showSteps(id, entry, called ? entry.texts.length : entry.texts.length - 1)
         }
         entry.lastText = text
@@ -552,7 +606,6 @@ export function install(rt) {
         entry.switched = false
         entry.joined = []
         entry.since = undefined
-        entry.steeredAt = undefined
         entry.tool = undefined
         entry.calls = undefined
         entry.lastText = undefined
@@ -577,6 +630,14 @@ export function install(rt) {
         if (failure !== undefined) noteTurnFailure(id, failure)
         const held = rt.groupOwners.has(id) ? rt.takeRoomSteps?.(id) ?? '' : ''
         if (switched) break
+        const owner = rt.chatOwners.get(id)
+        if (failure !== undefined) {
+          if (blockBot(id, session, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
+        } else if (reason?.kind === 'completed') {
+          unblockBot(rt.selfOf(id))
+          // A turn the user opened, or the Retry that answers the user.
+          if (owner !== undefined && (info === undefined || info.role === 'continue')) rt.userAnswered(owner)
+        }
         // A model that writes its tool call as text ends the turn as if it were done,
         // though nothing ran. It gets one more turn on the same trigger, so a waiting
         // round or sender gets the real answer; a second time, the text goes on without
@@ -633,7 +694,10 @@ export function install(rt) {
             else void rt.lateRoomReply?.(id, info, groupReply(), { shown })
           }
         } else if (!retry && speaksInGroup(id, info)) {
-          if (failure !== undefined) void rt.lateRoomFailure?.(id, info ?? {}, failure)
+          // A turn that failed before it took any input (DSH can turn it down before its
+          // first step) never names its call, so the call waiting on this Session fails.
+          const inRound = failure !== undefined && info === undefined && rt.failRoomTurn?.(id, failure) === true
+          if (failure !== undefined) { if (!inRound) void rt.lateRoomFailure?.(id, info ?? {}, failure) }
           else if (reason?.kind !== 'aborted') void rt.lateRoomReply?.(id, info ?? {}, groupReply(), { shown })
         } else if (!retry && info !== undefined) {
           finish(info, replyText())
@@ -661,5 +725,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, releaseBot })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, callDetail, doingOf, stopRoomTurn, releaseBot, unblockBots, resumeBot })
 }

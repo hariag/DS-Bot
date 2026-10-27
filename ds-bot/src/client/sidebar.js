@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { FishLogo } from './dsh-primitives.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, SignOutIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, SignInIcon, SignOutIcon, SlidersIcon } from './icons.js'
 import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
@@ -413,6 +413,17 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
+// The footer entry to the shell's plugin panel.
+export function ConnectPlugins({ wide, actions }) {
+  if (!wide) return null
+  return h('span', { className: 'bt-connect-wrap' },
+    h('button', {
+      type: 'button', className: 'bt-connect bt-connect-foot',
+      onClick: () => actions.selectPanel('plugins'),
+    },
+    h(PlugIcon), t('Connect plugins')))
+}
+
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
 export function YouAvatar() {
   return h('span', { className: 'bt-you-wrap' },
@@ -449,6 +460,23 @@ export function openHarnessOnboarding(id) {
     if (openShellOnboarding) openShellOnboarding(id)
     else openHarnessSettings()
   })
+}
+
+// The launcher seat can only open DSH's settings on their first section. This onboarding
+// step of DS Bot's own, opened by id, hands the shell's openSection the Models page; the
+// first-run pass meets it last and it steps aside at once.
+export const MODELS_STEP = 'ds-bot-models'
+export const MODELS_STEP_ORDER = 1000
+
+export function OpenModelsStep({ explicit, complete, openSection }) {
+  useEffect(() => {
+    if (explicit) {
+      if (typeof openSection === 'function') openSection('models')
+      else openHarnessSettings()
+    }
+    complete()
+  }, [explicit])
+  return null
 }
 
 function openThroughMenu(trigger) {
@@ -523,6 +551,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   const accountSource = ops.hooks?.account
   const account = useSyncExternalStore(accountSource?.subscribe ?? NO_SUBSCRIBE, accountSource ? () => accountSource.getSnapshot() : NO_SNAPSHOT)
   const signedIn = signIn !== null && typeof ops.signOut === 'function' && account?.view?.status === 'credential-stored'
+  const signedOut = signIn !== null && typeof actions.signIn === 'function' && account?.view?.status === 'signed-out'
   const accountT = actions.accountT?.() ?? (key => key)
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -563,18 +592,22 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
     setSignOutError('')
     setBusy(false)
   }, [open])
+  // DS Bot's Models page where the host serves the providers, else DSH's own.
+  const openModels = actions.providers ? actions.openModels : actions.openHarnessModels
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
+      openModels ? [t('Models and API keys'), SlidersIcon, () => openModels()] : null,
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
       [t('Automation tasks'), ClockIcon, () => actions.selectPanel('schedules')],
       [t('Bot settings'), GearIcon, () => actions.openSettings('general')],
-    ],
+    ].filter(Boolean),
     [
       [t('Switch to classic Agent mode'), SwitchIcon, () => actions.setSurface('agent')],
     ],
   ]
   if (signedIn) groups.push([[accountT('signOut'), SignOutIcon, askSignOut, undefined, true]])
+  else if (signedOut) groups.push([[t('Sign in to DeepSeek'), SignInIcon, () => actions.signIn()]])
   return h(Fragment, null,
     h('button', { ref: button, type: 'button', className: 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
       h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 }))),
@@ -658,9 +691,9 @@ export function BrandName() {
   return h('span', { style: { fontWeight: 600, fontSize: 14 } }, 'DS Bot')
 }
 
-// With the whale holding the settings seat, the Bot row is just the account menu;
-// FooterAccount only shows when the seat went to no one. The shell's footer classes
-// are CSS-module names, so they match on their stems.
+// With the whale holding the settings seat, the Bot row is just the account menu
+// and Connect plugins; FooterAccount only shows when the seat went to no one. The
+// shell's footer classes are CSS-module names, so they match on their stems.
 export const SIDEBAR_CSS = `
 .bt-confirm{width:260px;max-width:72vw;padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px}
 .bt-confirm-text{margin:0;font-size:13px;line-height:19px;color:var(--bt-ink-2)}
@@ -679,6 +712,7 @@ export const SIDEBAR_CSS = `
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
+[class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 

@@ -42,7 +42,8 @@ export function install(rt) {
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
-    // `waiting`: the Bot holds its greeting until the user picks its model.
+    // `waiting`: the Bot holds its greeting until the user picks its model or fixes
+    // what failed it. `blocked`: the facts of a failure only the user can fix (turns.js).
     bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => ({
       ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId), ...(kickoff ? { waiting: true } : {}),
     })),
@@ -65,6 +66,7 @@ export function install(rt) {
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
+    capabilities: rt.capabilityLibraryView(),
     secretRequests: state.secretRequests ?? {},
     colors: [...COLORS, ...EXTRA_COLORS],
     models: rt.cachedCatalog(),
@@ -86,14 +88,15 @@ export function install(rt) {
   // and per Session, when its running turn began.
   const live = () => ({
     activity: rt.activityView(),
-    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {} },
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {} },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
+    capabilityStatuses: rt.capabilityStatusesView(),
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library'])
+  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -230,16 +233,14 @@ export function install(rt) {
         case 'update-bot':
           await rt.load()
           return ok(await rt.updateBot(body.id, body))
-        // The avatar library: photos the user imported once, kept beside the team.
-        case 'avatar-library':
+        // The repair card's Retry, once the user fixed what failed the Bot's turn.
+        case 'resume': {
           await rt.load()
-          return ok(await rt.avatarLibraryView({ offset: body.offset, limit: body.limit }))
-        case 'avatar-import':
-          await rt.load()
-          return ok(await rt.avatarLibraryImport(Array.isArray(body.items) ? body.items : []))
-        case 'avatar-delete':
-          await rt.load()
-          return ok(await rt.avatarLibraryDelete(String(body.id ?? '')))
+          const bot = rt.botOf(String(body.botId ?? ''))
+          if (bot === undefined) return fail('Unknown Bot', 'bot/not-found')
+          await rt.resumeBot(bot)
+          return ok(true)
+        }
         case 'delete-bot':
           await rt.load()
           await rt.deleteBot(body.id)
@@ -345,6 +346,12 @@ export function install(rt) {
         case 'connector-retry':
           await rt.load()
           return ok(await rt.connectorEndpoint(endpoint, body))
+        case 'capability-save':
+        case 'capability-delete':
+        case 'capability-approve':
+        case 'bot-capability':
+          await rt.load()
+          return ok(await rt.capabilityEndpoint(endpoint, body))
         case 'schedules':
         case 'schedule-create':
         case 'schedule-delete':
@@ -367,6 +374,7 @@ export function install(rt) {
           // Claim the question before queueing so a second answer is refused.
           delete state.questions[sessionId]
           try {
+            await rt.ensureCapabilities(sessionId)
             const agent = await rt.resolveAgent(sessionId)
             agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
             await ctx.sessions.flush(agent.session)
@@ -409,6 +417,7 @@ export function install(rt) {
           // A Bot id or an earlier part of its own chat means the current part.
           const past = rt.pastOwners.get(body.sessionId)
           const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
+          await rt.ensureCapabilities(sessionId)
           await ctx.sessionController.prompt({
             requestId: randomUUID(),
             sessionId,
@@ -416,11 +425,6 @@ export function install(rt) {
             content: [{ type: 'text', text }],
           }, AbortSignal.timeout(30_000))
           return ok(true)
-        }
-        case 'btw-delete': {
-          if (typeof body.sessionId !== 'string' || body.sessionId === '' || typeof body.cardId !== 'string' || body.cardId === '') return fail('Nothing to delete', 'bot/invalid')
-          await rt.load()
-          return ok(await rt.btwDelete({ sessionId: body.sessionId, cardId: body.cardId }))
         }
         // Side chats in the Bot's panel: each question is an aside on a fresh
         // snapshot of this Bot's private chat; the earlier finished pairs of
