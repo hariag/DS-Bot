@@ -67,12 +67,17 @@
       ${EndIf}
       ${If} $R3 == 0
         ClearErrors
-        FileOpen $R2 "$dsbCheckTarget\~dsb-writetest.tmp" w
+        GetTempFileName $R2 "$dsbCheckTarget"
         ${If} ${Errors}
+        ${OrIf} $R2 == ""
           StrCpy $R3 1
         ${Else}
-          FileClose $R2
-          Delete "$dsbCheckTarget\~dsb-writetest.tmp"
+          ; updates replace files, so a folder must also allow deleting them
+          ClearErrors
+          Delete "$R2"
+          ${If} ${Errors}
+            StrCpy $R3 1
+          ${EndIf}
         ${EndIf}
       ${EndIf}
 
