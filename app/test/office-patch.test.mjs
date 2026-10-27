@@ -15,6 +15,8 @@ function makePayload() {
   mkdirSync(dirname(node), { recursive: true })
   writeFileSync(node, '')
   writeFileSync(join(source, 'runtime.json'), '{}')
+  mkdirSync(join(runtimeDir, 'office-skills', 'office'), { recursive: true })
+  writeFileSync(join(runtimeDir, 'office-skills', 'office', 'SKILL.md'), '---\ndescription: office\n---\n')
 }
 // A stand-in profile under a throwaway DSH_HOME.
 function profile() {
