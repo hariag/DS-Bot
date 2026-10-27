@@ -47,9 +47,9 @@ At every start the Host puts these three bundles at the head of the profile's bu
 
 ## Check a change
 
-`npm test` checks the composition of the profile, the import on throwaway folders, the first-run check on a chat with a record that the pinned DSH does not know, and that every package the app runs on is a dependency (see [Package](#package)). It also checks the window and the tray: the close hides the window, the tray opens it again, a window that is gone is built anew against the Host that runs, the application menu of macOS has no Quit of its own, the launch URL of the Host is used once, and the update waits for a window that is hidden. The main process runs there with the Electron parts as test doubles (`test/helpers/`), so that no display, no DSH and no data of the user are needed.
+`npm test` checks the composition of the profile, the import on throwaway folders, the first-run check on a chat with a record that the pinned DSH does not know, and that every package the app runs on is a dependency (see [Package](#package)).
 
-`scripts/shot.mjs` starts the app on throwaway folders, saves a screenshot of its window, prints the page text, closes the window the way a user does (it hides, and the app goes on) and ends the app the way the tray's Quit ends it. Use the mock model of the plugin, `../ds-bot/dev/mock-llm.mjs` (`MOCK_PORT=<port> node ../ds-bot/dev/mock-llm.mjs`).
+`scripts/shot.mjs` starts the app on throwaway folders, saves a screenshot of its window, prints the page text, closes the window the way a user does and waits until the app exits. Use the mock model of the plugin, `../ds-bot/dev/mock-llm.mjs` (`MOCK_PORT=<port> node ../ds-bot/dev/mock-llm.mjs`).
 
 ```sh
 DS_BOT_HOME=<tmp>/home DS_BOT_SHELL_DATA=<tmp>/shell \
@@ -97,7 +97,7 @@ node scripts/check-update.mjs "dist-pack/win-unpacked/DeepSeek Bot.exe" dist-nex
 node scripts/check-update.mjs ./deepseek-bot.AppImage dist-next --kill                     # a Linux AppImage (latest-linux.yml)
 ```
 
-It serves the feed folder, starts the app on throwaway folders and waits until the app has downloaded the update and checked its sha512. Then it ends the app the way the tray's Quit ends it, so that the app installs the update as it quits; with `--kill` it ends the app, so that nothing is installed. On your own machine use `--kill`: the installer would install into `%LOCALAPPDATA%\Programs\DeepSeek Bot`, and an AppImage replaces itself. The download stays in `%LOCALAPPDATA%\deepseek-bot-updater` (`~/.cache/deepseek-bot-updater` on Linux). CI runs it without `--kill` on its installed app, then checks that the installed version is the new one and that the updated app passes `check-packed`; for an AppImage it checks that the file is the new one.
+It serves the feed folder, starts the app on throwaway folders and waits until the app has downloaded the update and checked its sha512. Then it closes the app as a user does, so that the app installs the update as it quits; with `--kill` it ends the app, so that nothing is installed. On your own machine use `--kill`: the installer would install into `%LOCALAPPDATA%\Programs\DeepSeek Bot`, and an AppImage replaces itself. The download stays in `%LOCALAPPDATA%\deepseek-bot-updater` (`~/.cache/deepseek-bot-updater` on Linux). CI runs it without `--kill` on its installed app, then checks that the installed version is the new one and that the updated app passes `check-packed`; for an AppImage it checks that the file is the new one.
 
 On macOS and for a Linux deb, pass the app executable and a version to mock a newer release:
 
@@ -105,31 +105,13 @@ On macOS and for a Linux deb, pass the app executable and a version to mock a ne
 node scripts/check-update.mjs "<app executable>" 99.0.0
 ```
 
-The script serves a releases list with one release of that version that has this machine's package (the Mac's zip, or the `linux-amd64` deb), starts the app on throwaway folders with it, waits until the app logs the new version, and ends the app the way the tray's Quit ends it. It does not open a browser.
-
-## The tray and quitting
-
-The app builds a system tray icon on Windows, macOS and Linux (`src/shell.mjs`, `src/tray.mjs`); the icon is the app's own whale (`assets/tray.*`, drawn by `npm run icon`). The menu holds "Open DeepSeek Bot" and "Quit DeepSeek Bot". Whether the icon is visible belongs to the desktop: on Linux, GNOME and KDE draw it only with a tray extension.
-
-Closing the window hides it: the Host and the Bots go on working, and the Bot browsers' tabs stay. Starting the app again brings the window back, because the second copy hands itself to the one that runs. When the window is gone for good, the tray's Open builds a new one that talks to the Host that runs: it loads the Host's plain address, and the cookie of the first load still carries the session, so neither the launch token nor a second Host is needed.
-
-No window closed ends the app; the tray's Quit is the one ordinary way out. The first close asks once, because the app stays in the tray; the answer is kept in the app's own data (the `tray-close-acknowledged` file in its user data folder). A close during the first start's import or during a data move cancels that work, as it did before. An update that restarts the app, a data move that restarts it, a failed start and the end of the operating system's session close the window for good.
-
-The application menu of macOS has no Quit and no ⌘Q, for the same reason: the tray's Quit is the one ordinary way out. Only when the tray cannot be built does the menu carry a Quit, so that the app can still be ended.
-
-Without a tray (some Linux desktops have none), closing the window asks whether the app should end, and minimizes it when the answer is no: the window stays reachable, and the app does not vanish. This is the one exceptional path, and it is the only place where the app asks before it ends.
-
-The launch URL of the Host is good for one use only. When the first load never came through (the window died while it loaded), no window carries the token again: the new window loads the Host's plain address, and the Host refuses it when the cookie is not there. Starting the app again then gives a new token.
-
-`scripts/check-lifecycle.mjs` (`npm run check-lifecycle`) checks this in a real Electron with a fake Host: no DSH, no model, no data of the user. It keeps its data in `app/.dsh-test-tray-lifecycle` and removes it afterwards. It needs a desktop; the unit tests cover the same rules without one.
+The script serves a releases list with one release of that version that has this machine's package (the Mac's zip, or the `linux-amd64` deb), starts the app on throwaway folders with it, waits until the app logs the new version, and closes the window. It does not open a browser.
 
 ## Layout
 
 | File | What it does |
 |---|---|
 | `src/main.mjs` | Main process: one instance, the window, which loads the Host's loopback address as DSH Web does, and the sign-in page DSH opens, which goes to the system browser |
-| `src/shell.mjs`, `src/tray.mjs`, `src/background-notice.mjs` | The window and the tray: the window hides instead of closing, the tray opens it again and quits the app, and the one-time confirmation before the window hides |
-| `src/update-prompt.mjs` | An update prompt that waits for the window to be shown again |
 | `src/host-port.mjs` | The Host's port, kept between starts, since the page keeps its storage per address |
 | `src/preload.cjs` | Hands DS Bot's settings the data location and its move, and DS Bot's Bot browsers their webview leases and cookie imports. On Windows it marks the page for the frameless window and sends the caption buttons the colors of the surface under them |
 | `src/bot-browser.mjs` | The Bot browsers' webviews: only a leased one attaches, with fixed preferences; each Bot's logins stay on disk until the Bot is deleted; pages cannot reach the Host |
@@ -138,19 +120,20 @@ The launch URL of the Host is good for one use only. When the first load never c
 | `src/host-process.mjs` | Starts the Host in Electron's Node mode and owns its exit |
 | `src/host.mjs` | The Host: boots the profile with `runProfile()` and reports the launch URL and the page injections; for the first-run check (`DS_BOT_CHECK`), the chats it cannot read |
 | `src/profile.mjs` | The profiles: the app's own and the first-run check's, their bundles, and their creation and update |
+| `src/app-patch.mjs` | The app's own profile overlay (`profiles/app-onboarding.patch.yml`, passed through `patchFiles`): it turns off DSH Web's automatic credential step (`credentialOnboarding: false`), since models are set up in DS Bot's Models page and the Main Bot's key card |
 | `src/session-check.mjs` | Which chats the pinned DSH refuses because a newer DSH wrote them |
 | `src/first-run.mjs` | The first start's dialogs (the two folders and the offer to import) and the texts of the data move |
 | `src/import.mjs` | The import of a Bot team from the user's DSH |
 | `src/move-data.mjs` | The move of the data location: which folders can take it, and the copy through a staging folder |
 | `src/updates.mjs` | The self-updates (Windows installer, Linux AppImage) and the release-page checks (macOS, Linux deb) |
 | `engine/` | On hold, not installed: the bundle `deepseek-bot-engine` for the app's own window in `ui/` |
-| `test/` | `npm test`: the composition of the profile, the dependencies that the package needs, and the window and the tray (the main process runs there with the Electron parts as test doubles, in `test/helpers/`) |
+| `test/` | `npm test`: the composition of the profile, and the dependencies that the package needs |
 | `ui/` | On hold, not built or packaged: the app's own window. React, built with Vite (`vite.config.js`) into `ui/dist`. It draws the plugin's own Bot views from `../ds-bot/src/client/` (sidebar, chat rows, docks, dialogs and their stylesheets) and puts its own Markdown in place of DSH's. It uses ds-bot's `api/bot` channel and its live feed `api/bot/feed` |
-| `assets/` | The app icon: `icon.svg`, `icon.png` (1024 px) and `icon.ico` (Windows, 16 to 256 px), and the tray marks: `tray.ico` (Windows), `tray.png` (Linux) and `trayTemplate.png` with its `@2x` (macOS). `npm run icon` (`scripts/icon.mjs`) draws them again from the Main Bot's whale in `../ds-bot` |
+| `assets/` | The app icon: `icon.svg`, `icon.png` (1024 px) and `icon.ico` (Windows, 16 to 256 px). `npm run icon` (`scripts/icon.mjs`) draws them again from the Main Bot's whale in `../ds-bot` |
 | `electron-builder.yml`, `build/` | The package and the installers: app identity, files, icons, the Windows installer, the macOS zip and the Linux AppImage and deb |
 | `scripts/check-packed.mjs` | `npm run check-packed`: the check of a packaged app |
 | `scripts/check-update.mjs` | The check of a packaged app's update from a feed folder (Windows, AppImage) or a mocked release (macOS, deb) |
-| `scripts/check-lifecycle.mjs` | `npm run check-lifecycle`: the check of the window and the tray in a real Electron, with a fake Host |
+| `scripts/release-notes.mjs` | The release's `Download / 下载` table, `SHA256SUMS.txt` and the version-less package copies, run by the release workflow after every package is attached |
 
 The Host installs plugins with the app's own pnpm (`node_modules/pnpm`).
 
