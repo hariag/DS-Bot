@@ -131,9 +131,10 @@ export function MemberDock({ sessionId, useRoster, useWork, actions }) {
   const faces = model.faces.map(face => ({ ...face, bot: roster.byId[face.id] })).filter(face => face.bot)
   const label = [model.waiting, model.doing].filter(Boolean).join(' · ')
   const open = () => (model.open.details ? actions.showDetails(model.open.details) : actions.openSession(model.open.session))
-  // The stop button hangs off the capsule's side, so the capsule stays centred.
+  // The stop button hangs off the capsule's side, so the capsule stays centred; the
+  // capsule keeps room for it on both sides, so it never leaves a narrow chat column.
   return h('div', { className: 'bt-mw-dock', 'data-leaving': leaving || undefined },
-    h('span', { className: 'bt-mw-pair' },
+    h('span', { className: 'bt-mw-pair', 'data-stop': model.stop ? true : undefined },
       h('button', { type: 'button', className: 'bt-mw-pill', 'aria-label': label, onClick: open, disabled: leaving, style: width ? { width } : undefined },
         h('span', { ref: inner, className: 'bt-mw-pill-in' },
           h('span', { className: 'bt-mw-faces', 'aria-hidden': true }, faces.map(face => h(Face, { key: face.id, ...face }))),
@@ -211,6 +212,7 @@ export const MEMBER_CSS = `
 .bt-mw-pill:active{scale:.97}
 .bt-mw-dock[data-leaving] .bt-mw-pill,.bt-mw-dock[data-leaving] .bt-mw-stop{animation:bt-mw-out .16s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
 .bt-mw-pair{position:relative;display:inline-flex;min-width:0;max-width:100%}
+.bt-mw-pair[data-stop]{max-width:calc(100% - 76px)}
 .bt-mw-stop{pointer-events:auto;position:absolute;top:0;left:calc(100% + 6px);display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 .5px var(--bt-line-2),0 2px 8px -2px rgba(0,0,0,.12);color:var(--bt-ink-2);cursor:pointer;animation:bt-mw-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .18s ease-out backwards;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, 'scale')}}
 .bt-mw-stop:hover:not(:disabled){background:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main));color:var(--bt-ink)}
 .bt-mw-stop:active:not(:disabled){scale:.9}

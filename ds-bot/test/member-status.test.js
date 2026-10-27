@@ -22,7 +22,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return platform[name]
   },
 })
-const { busyMembers, summaryText, MemberDock, MemberState, StopMemberWork } = module.exports
+const { busyMembers, summaryText, MemberDock, MemberState, StopMemberWork, MEMBER_CSS } = module.exports
 // Values from the bundle's realm compare by content only.
 const plain = value => JSON.parse(JSON.stringify(value))
 // The dock's capsule in an element tree.
@@ -142,6 +142,14 @@ test('a stop button beside a group\'s capsule stops all work there, and only the
   assert.equal(stopOf('r1', elsewhere), null)
   // A Bot's own chat shows its group work, but stopping it belongs to the group.
   assert.equal(stopOf('a', { bots: { a: { since: 1, roomId: 'r1' } }, rooms: { r1: [{ botId: 'a', since: 1 }] }, approvals: [] }), null)
+})
+
+// The button hangs outside the capsule, so in a narrow chat column it would go past the edge.
+test('a group\'s capsule keeps room on both sides for its stop button', () => {
+  const pairOf = work => MemberDock({ sessionId: 'r1', useRoster: pick => pick(team), useWork: pick => pick(work), actions: {} }).children[0]
+  assert.equal(pairOf({ bots: {}, rooms: { r1: [{ botId: 'a', since: 1 }] }, approvals: [] }).props['data-stop'], true)
+  assert.equal(pairOf({ bots: { a: { since: 1, tool: 'pwsh' } }, rooms: {}, approvals: [] }).props['data-stop'], undefined)
+  assert.match(MEMBER_CSS, /\.bt-mw-pair\[data-stop\]\{max-width:calc\(100% - 76px\)\}/)
 })
 
 test('a failed stop of a group\'s work is reported', async () => {
