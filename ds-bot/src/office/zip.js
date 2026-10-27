@@ -39,27 +39,13 @@ export function readZip(buf) {
     const localOff = buf.readUInt32LE(cdOff + 42)
     if (csize === 0xffffffff || usize === 0xffffffff) fail('zip64 archives are not supported')
     const name = buf.subarray(cdOff + 46, cdOff + 46 + nameLen).toString('utf8')
-    // Zip slip: a member escaping the destination tree is refused on read so
-    // every command fails on such a package, not just unpack.
-    const norm = name.replace(/\\/g, '/')
-    if (norm.startsWith('/') || /^[A-Za-z]:/.test(norm) || norm.split('/').includes('..')) fail(`zip: unsafe member name ${name}`)
     if (buf.readUInt32LE(localOff) !== LOCAL) fail(`corrupt local header for ${name}`)
     const lNameLen = buf.readUInt16LE(localOff + 26)
     const lExtraLen = buf.readUInt16LE(localOff + 28)
     const raw = buf.subarray(localOff + 30 + lNameLen + lExtraLen, localOff + 30 + lNameLen + lExtraLen + csize)
     let data
     if (method === 0) data = raw.subarray(0, usize)
-    else if (method === 8) {
-      // Enforce the declared uncompressed size — a zip bomb dies here.
-      // inflateRawSync rejects a zero maxOutputLength, so floor it at 1; a
-      // member lying about an empty body then fails on the size check.
-      try {
-        data = inflateRawSync(raw, { maxOutputLength: Math.max(usize, 1) })
-      } catch (err) {
-        if (err instanceof RangeError || err?.code === 'ERR_OUT_OF_RANGE') fail(`${name} inflates past its declared size`)
-        fail(`corrupt data for ${name}`)
-      }
-    }
+    else if (method === 8) data = inflateRawSync(raw)
     else fail(`unsupported compression method ${method} for ${name}`)
     if (data.length !== usize) fail(`size mismatch for ${name}`)
     members.push({ name, data, raw, method, crc, flags: flags & 0x0800, extra: buf.subarray(cdOff + 46 + nameLen, cdOff + 46 + nameLen + extraLen) })

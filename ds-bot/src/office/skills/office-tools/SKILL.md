@@ -7,7 +7,7 @@ description: Inspect, check, and edit .docx/.pptx/.xlsx packages in place — bl
 
 A bundled command line for the jobs the format skills cannot do safely: reading a document's structure with stable ids, repairing packages, targeted edits, tracked changes, layout findings, and contact sheets of rendered pages. Run every command through the Node and CLI paths in the runtime block at the end of this skill.
 
-Every command accepts `--json` and prints `{"ok":true,"data":…}` for a run that completed, or `{"ok":false,"error":{"code","message"}}` when it failed. Findings are results, not failures: they land inside `data.findings` with `ok` still true, and the exit code carries them — 0 = ok, 1 = findings remain, 2 = usage or failure. Edits write a new file (`-o out`) or overwrite the input (`--in-place`); they never touch the input otherwise.
+Every command accepts `--json` and prints `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message"}}`. Exit codes: 0 = ok, 1 = findings remain, 2 = usage or failure. Edits write a new file (`-o out`) or overwrite the input (`--in-place`); they never touch the input otherwise.
 
 ## Commands
 
@@ -28,9 +28,9 @@ Every command accepts `--json` and prints `{"ok":true,"data":…}` for a run tha
 
 **Word** — `docx read` for the ids → one `docx edit` batch over the opened document → `docx read` again to confirm → `check --against <the untouched original>` for anything left. Keep the original copy untouched (no `--in-place` on it).
 
-**PowerPoint** — `pptx inventory` → edit (python-pptx through the format skill; `pptx slides`/`pptx clean` for structure) → `pptx layout` for overlap/off-slide findings → when `office_render` (or `office-render`) is available, render → `sheet` over the rendered images and look at the contact sheet before single slides → fix → recheck.
+**PowerPoint** — `pptx inventory` → edit (python-pptx through the format skill; `pptx slides`/`pptx clean` for structure) → `pptx layout` for overlap/off-slide findings → when `office-render` is in the catalog, render → `sheet` over the rendered images and look at the contact sheet before single slides → fix → recheck.
 
-**Excel** — `xlsx inventory` → edit with openpyxl (format skill) → `office_recalculate` (or `office-recalculate`) → `xlsx inventory` again and confirm no error cells and no uncached formulas.
+**Excel** — `xlsx inventory` → edit with openpyxl (format skill) → `office-recalculate` → `xlsx inventory` again and confirm no error cells and no uncached formulas.
 
 **XML edits** — only through `unpack`, a real XML parser, and `pack --against`. Never sed or string-splice XML.
 

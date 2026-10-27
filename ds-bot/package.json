@@ -33,7 +33,9 @@
     "index.js",
     "src/host/",
     "src/shared/",
+    "src/office/",
     "client.js",
+    "office.js",
     "web-search.js",
     "cordis.patch.yml",
     "README.md",
@@ -61,6 +63,7 @@
     }
   },
   "devDependencies": {
+    "@xmldom/xmldom": "^0.9.12",
     "esbuild": "0.28.2"
   },
   "dependencies": {
