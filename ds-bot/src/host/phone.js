@@ -7,11 +7,10 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { DeviceRegistry, HostLink, LINK_PATH, deviceIdFor, generateKeyPair, pairingUri, randomToken } from '../../link.js'
+import { DeviceRegistry, HostLink, deviceIdFor, generateKeyPair, pairingUri, randomToken } from '../../link.js'
 
 const FILE = 'phone.json'
 const SERVER = /^wss?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/i
-export const DEFAULT_SERVER = `wss://relay.dsbot.app${LINK_PATH}`
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
@@ -20,7 +19,6 @@ export function install(rt) {
   let data
   let registry
   let link = null
-  let feedUntap = null
   let linkServer
   let serve = null
   let pairing = null
@@ -39,8 +37,6 @@ export function install(rt) {
     writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 })
     renameSync(temp, path)
   }
-  // An empty address means the DS Bot relay; a user's own Server replaces it.
-  const serverUrl = () => data.server || DEFAULT_SERVER
   const identity = () => {
     const keys = data.identity
     try {
@@ -56,57 +52,36 @@ export function install(rt) {
   }
 
   // A phone may call every endpoint but these: pairing stays on the computer.
-  // When the call carries `state` (the payload the phone would send `state`) and
-  // it moved the team, the reply carries the new state too — one round trip
-  // through the relay instead of waiting for the revision event and a read.
   const callBot = async (params, signal) => {
     const endpoint = String(params?.endpoint ?? '')
     if (endpoint.startsWith('phone-')) return { ok: false, error: { code: 'bot/refused', message: 'Phones are paired and removed on the computer', details: {} } }
-    const wanted = params?.state !== null && typeof params?.state === 'object' && !Array.isArray(params.state) ? params.state : undefined
-    const before = rt.state.revision
-    const result = await serve(endpoint, params?.payload ?? null, signal)
-    if (wanted === undefined || result?.ok !== true || rt.state.revision === before) return result
-    const state = await serve('state', wanted, signal).then(answer => (answer?.ok === true ? answer.value : undefined), () => undefined)
-    return state === undefined ? result : { ...result, state }
+    return serve(endpoint, params?.payload ?? null, signal)
   }
 
   const stop = () => {
     const running = link
     link = null
-    feedUntap?.()
-    feedUntap = null
     return running?.stop()
   }
   const reconcile = () => {
     read()
-    blocked = !data.on ? undefined
+    blocked = !data.on || !data.server ? undefined
       : rt.readOnly() !== undefined ? 'Another dsh has this Bot team open, so phones connect to that one'
         : typeof WebSocket !== 'function' ? 'This dsh runs on a Node without WebSocket'
           : undefined
-    const want = data.on === true && serve !== null && blocked === undefined
-    if (link !== null && (!want || linkServer !== serverUrl())) void stop()
+    const want = data.on === true && typeof data.server === 'string' && data.server !== '' && serve !== null && blocked === undefined
+    if (link !== null && (!want || linkServer !== data.server)) void stop()
     if (!want || link !== null) return
     link = new HostLink({
-      url: serverUrl(),
+      url: data.server,
       identity: identity(),
       accessToken: data.accessToken,
       name: hostname(),
       admits: (deviceId, key) => registry.admits(deviceId, key),
       authorize: (deviceId, key, hello) => registry.authorize(deviceId, key, hello),
       handle: (method, params, request) => method === 'bot' ? callBot(params, request.signal) : Promise.reject(Object.assign(new Error(`Unknown method ${method}`), { code: 'METHOD_NOT_FOUND' })),
-      // Feed events ride the link instead of SSE, but only while a phone is
-      // actually ready to hear them — no tunnel, no feed work on the host.
-      onReadyCount: count => {
-        if (count > 0 && feedUntap === null) {
-          const running = link
-          feedUntap = rt.feedTap((event, data) => running.emit(event, data))
-        } else if (count === 0 && feedUntap !== null) {
-          feedUntap()
-          feedUntap = null
-        }
-      },
     })
-    linkServer = serverUrl()
+    linkServer = data.server
     link.start()
   }
 
@@ -114,12 +89,11 @@ export function install(rt) {
     reconcile()
     if (pairing !== null && !registry.pairingOpen()) pairing = null
     const connected = new Set(link?.connectedDevices() ?? [])
-    const reason = blocked ?? link?.error
     return {
-      server: serverUrl(),
+      server: data.server ?? '',
       on: data.on === true,
       status: link?.status ?? 'off',
-      ...(reason === undefined ? {} : { error: reason }),
+      ...(blocked === undefined ? {} : { error: blocked }),
       phones: registry.list().map(({ deviceId, name, pairedAt }) => ({ id: deviceId, name, pairedAt, connected: connected.has(deviceId) })),
       pairing,
     }
@@ -130,15 +104,14 @@ export function install(rt) {
     switch (endpoint) {
       case 'phone-set': {
         if (body.server !== undefined) {
-          const entered = String(body.server).trim().replace(/\/+$/, '')
-          if (entered !== '' && !SERVER.test(entered)) throw invalid('The Server address must start with ws:// or wss://')
-          // A bare host means this relay; the Server only serves LINK_PATH.
-          const server = entered !== '' && new URL(entered).pathname === '/' ? entered + LINK_PATH : entered
+          const server = String(body.server).trim().replace(/\/+$/, '')
+          if (server !== '' && !SERVER.test(server)) throw invalid('The Server address must start with ws:// or wss://')
           data.server = server
           pairing = null
           registry?.closePairing()
         }
         if (body.on !== undefined) data.on = body.on === true
+        if (data.on && !data.server) throw invalid('Enter the Server address first')
         identity()
         write()
         break
@@ -147,7 +120,7 @@ export function install(rt) {
         reconcile()
         if (link === null) throw invalid(blocked ?? 'Turn on phone access first')
         const { code, expiresAt } = registry.openPairing()
-        pairing = { uri: pairingUri({ server: serverUrl(), hostDeviceId: data.identity.deviceId, hostKey: data.identity.publicKey, code, name: hostname() }), expiresAt }
+        pairing = { uri: pairingUri({ server: data.server, hostDeviceId: data.identity.deviceId, hostKey: data.identity.publicKey, code, name: hostname() }), expiresAt }
         break
       }
       case 'phone-pair-cancel':

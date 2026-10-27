@@ -1,12 +1,9 @@
 // Generated from ../link/src by `npm run build` (scripts/build-link.mjs). Do not edit by hand.
 // src/frames.ts
 var PROTOCOL_VERSION = 1;
-var LINK_PATH = "/v1/link";
 var MAX_CONTROL_FRAME_BYTES = 64 * 1024;
 var MAX_RELAY_FRAME_BYTES = 1024 * 1024;
 var SECURE_FRAGMENT_CHUNK_BYTES = 48 * 1024;
-var MAX_RELAY_BYTES_PER_SECOND = 8 * MAX_RELAY_FRAME_BYTES;
-var MAX_RELAY_FRAMES_PER_SECOND = 512;
 var MAX_SECURE_MESSAGE_BYTES = 4 * 1024 * 1024;
 var SECURE_FRAGMENT_MAGIC = new Uint8Array([68, 83, 66, 70]);
 var SECURE_FRAGMENT_VERSION = 1;
@@ -7487,19 +7484,11 @@ var BaseTransport = class {
     for (const handler of this.closeHandlers) handler();
   }
 };
-var nextSends = /* @__PURE__ */ new WeakMap();
-async function waitForRelayCapacity(socket, wireBytes = 0) {
+async function waitForRelayCapacity(socket) {
   const started = Date.now();
   while ((socket.bufferedAmount ?? 0) > 512 * 1024) {
     if (socket.readyState !== 1 || Date.now() - started > 1e4) throw new Error("Relay consumer is too slow or disconnected");
     await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  if (wireBytes > 0) {
-    const now = Date.now();
-    const due = Math.max(now, nextSends.get(socket) ?? now);
-    const interval = Math.max(1e3 / (MAX_RELAY_FRAMES_PER_SECOND - 1), 1e3 * wireBytes / (MAX_RELAY_BYTES_PER_SECOND - MAX_RELAY_FRAME_BYTES));
-    nextSends.set(socket, due + interval);
-    if (due > now) await new Promise((resolve) => setTimeout(resolve, Math.ceil(due - now)));
   }
   if (socket.readyState !== 1) throw new Error("Relay transport closed");
 }
@@ -7507,7 +7496,6 @@ async function waitForRelayCapacity(socket, wireBytes = 0) {
 // src/host.ts
 var RELAY_CAPABILITY = "transport.relay";
 var MAX_CALLS_PER_TUNNEL = 32;
-var MAX_EMIT_PENDING = 64;
 var SERVER_SILENCE_MS = 75e3;
 var TunnelError = class extends Error {
   code;
@@ -7524,9 +7512,7 @@ var HostLink = class {
   running = false;
   loopDone;
   wake;
-  endAttempt;
   currentStatus = "stopped";
-  lastError;
   statusWaiters = /* @__PURE__ */ new Set();
   constructor(options) {
     if (deviceIdFor(options.identity.publicKey) !== options.identity.deviceId) {
@@ -7537,10 +7523,6 @@ var HostLink = class {
   get status() {
     return this.currentStatus;
   }
-  /** Why the last connect attempt failed, kept for surfaces that show 'offline'. */
-  get error() {
-    return this.lastError;
-  }
   start() {
     if (this.running) return;
     this.running = true;
@@ -7550,7 +7532,6 @@ var HostLink = class {
     this.running = false;
     this.wake?.();
     this.socket?.close();
-    this.endAttempt?.();
     await this.loopDone;
     this.loopDone = void 0;
   }
@@ -7581,15 +7562,7 @@ var HostLink = class {
   emit(event, data) {
     const message = encodeMessage(createMessage("event", { event, data }));
     for (const tunnel of this.tunnels.values()) {
-      if (tunnel.stage !== "ready") continue;
-      if ((tunnel.emitPending ?? 0) >= MAX_EMIT_PENDING) {
-        this.dropTunnel(tunnel, "SEND_FAILED");
-        continue;
-      }
-      tunnel.emitPending = (tunnel.emitPending ?? 0) + 1;
-      void this.sendSecure(tunnel, message).catch(() => this.dropTunnel(tunnel, "SEND_FAILED")).finally(() => {
-        if (tunnel.emitPending !== void 0) tunnel.emitPending -= 1;
-      });
+      if (tunnel.stage === "ready") void this.sendSecure(tunnel, message).catch(() => this.dropTunnel(tunnel, "SEND_FAILED"));
     }
   }
   setStatus(status) {
@@ -7651,35 +7624,20 @@ var HostLink = class {
           if (frame.type === "hello.ack") {
             this.acceptHello(frame.payload);
             accepted = true;
-            this.lastError = void 0;
             this.setStatus("online");
             return;
           }
           if (!accepted) throw new Error("The Server did not answer hello first.");
           this.handleFrame(frame);
-        } catch (error) {
-          this.lastError = error instanceof Error ? error.message : String(error);
+        } catch {
           socket.close();
         }
       };
-      const end = () => {
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
         clearInterval(watchdog);
         if (this.socket === socket) this.socket = void 0;
-        if (this.endAttempt === end) this.endAttempt = void 0;
         resolve(accepted);
-      };
-      this.endAttempt = end;
-      let closing = false;
-      socket.onerror = () => {
-        this.lastError = "The Server did not answer the connection.";
-        if (closing) return;
-        closing = true;
-        socket.close();
-        end();
-      };
-      socket.onclose = () => {
-        if (!accepted && this.lastError === void 0) this.lastError = "The Server closed the connection.";
-        end();
       };
     });
   }
@@ -7771,7 +7729,6 @@ var HostLink = class {
       if (!allowed) throw new TunnelError("NOT_PAIRED", "The phone is not paired.");
       const reply = tunnel.noise.writeHandshake(encodeHandshakeHello(this.options.name === void 0 ? {} : { name: this.options.name }));
       tunnel.stage = "ready";
-      this.options.onReadyCount?.(this.connectedDevices().length);
       this.sendControl("secure.handshake", {
         connectionId: tunnel.connectionId,
         targetDeviceId: tunnel.deviceId,
@@ -7823,15 +7780,13 @@ var HostLink = class {
       for (const plaintext of tunnel.outgoing.encode(data)) {
         if (this.tunnels.get(tunnel.connectionId) !== tunnel || this.socket === void 0) throw new Error("The tunnel closed.");
         const ciphertext = tunnel.noise.encrypt(plaintext);
-        const socket = this.socket;
-        const frame = encodeControlFrame(createControlFrame("relay", {
+        await waitForRelayCapacity(this.socket);
+        this.sendControl("relay", {
           connectionId: tunnel.connectionId,
           targetDeviceId: tunnel.deviceId,
           counter: tunnel.counter,
           ciphertext: toBase64Url(ciphertext)
-        }), this.limits);
-        await waitForRelayCapacity(socket, new TextEncoder().encode(frame).byteLength);
-        socket.send(frame);
+        });
         tunnel.counter += 1;
       }
     });
@@ -7841,7 +7796,6 @@ var HostLink = class {
   dropTunnel(tunnel, code) {
     if (this.tunnels.get(tunnel.connectionId) !== tunnel) return;
     this.tunnels.delete(tunnel.connectionId);
-    if (tunnel.stage === "ready") this.options.onReadyCount?.(this.connectedDevices().length);
     for (const controller of tunnel.calls.values()) controller.abort(new Error("The phone link closed."));
     tunnel.calls.clear();
     tunnel.noise.destroy();
@@ -7872,20 +7826,10 @@ var RelayTransport = class extends BaseTransport {
   bytesReceived = 0;
   connectionId;
   relayCounter = 0;
-  /** Why the Host or Server dropped a connection that was already set up, such as a phone no longer paired. */
-  closeReason;
   readyResolve;
   readyReject;
   handshakeTimer;
   controlFrameLimits = {};
-  /** Last frame heard from the current socket, unanswered probe start/last ping timestamps (0 = none), and its timer. */
-  lastHeard = 0;
-  probeAt = 0;
-  pingSentAt = 0;
-  probeDeadline = 0;
-  probeTimer;
-  /** Ends the current socket (reports its close once, without waiting for its close event). */
-  endCurrent;
   url;
   options;
   constructor(url, options) {
@@ -7898,45 +7842,17 @@ var RelayTransport = class extends BaseTransport {
     this.socket = this.options.createSocket?.(this.url) ?? new WebSocket(this.url);
     this.controlFrameLimits = {};
     this.relayCounter = 0;
-    this.closeReason = void 0;
     this.socket.binaryType = "arraybuffer";
     await new Promise((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
       this.handshakeTimer = setTimeout(
-        () => this.failConnection(Object.assign(new Error("Relay control handshake timed out"), { code: "SERVER_UNREACHABLE" })),
+        () => this.failConnection(new Error("Relay control handshake timed out")),
         this.options.handshakeTimeoutMs ?? 1e4
       );
       const socket = this.socket;
-      const stale = () => this.socket !== socket;
-      let ended = false;
-      let watchdog;
-      const endSocket = (reason, emit = true) => {
-        if (ended) return;
-        ended = true;
-        if (reason !== void 0) this.closeReason = reason;
-        socket.close();
-        if (this.socket === socket) {
-          this.socket = void 0;
-          this.connectionId = void 0;
-          this.endCurrent = void 0;
-        }
-        if (watchdog !== void 0) clearInterval(watchdog);
-        this.clearProbe();
-        if (emit) this.emitClose();
-      };
-      this.endCurrent = endSocket;
-      this.lastHeard = Date.now();
-      this.clearProbe();
-      socket.onmessage = (event) => {
-        if (!stale()) {
-          this.lastHeard = Date.now();
-          this.clearProbe();
-          this.handleSocketMessage(event.data);
-        }
-      };
+      socket.onmessage = (event) => this.handleSocketMessage(event.data);
       socket.onopen = () => {
-        if (stale()) return;
         this.sendControl("hello", {
           role: "client",
           deviceId: this.options.deviceId,
@@ -7946,45 +7862,25 @@ var RelayTransport = class extends BaseTransport {
           capabilities: this.offeredCapabilities()
         });
       };
-      socket.onerror = () => {
-        if (!stale()) this.failConnection(Object.assign(new Error(`RelayTransport failed to connect to ${this.url}`), { code: "SERVER_UNREACHABLE" }));
-      };
+      socket.onerror = () => this.failConnection(new Error(`RelayTransport failed to connect to ${this.url}`));
       socket.onclose = () => {
-        if (ended) return;
-        if (this.socket !== void 0 && stale()) return;
-        ended = true;
-        if (watchdog !== void 0) clearInterval(watchdog);
-        this.clearProbe();
-        if (this.readyReject !== void 0) this.failConnection(Object.assign(new Error("Relay control channel closed before it was ready"), { code: "SERVER_UNREACHABLE" }));
+        if (this.readyReject !== void 0) this.failConnection(new Error("Relay control channel closed before it was ready"));
         this.socket = void 0;
         this.connectionId = void 0;
         this.emitClose();
       };
-      watchdog = setInterval(() => {
-        if (ended || this.socket !== socket || this.connectionId === void 0) return;
-        const now = Date.now();
-        if (this.probeAt > 0) {
-          if (now - Math.max(this.lastHeard, this.probeAt) >= (this.options.probeTimeoutMs ?? 1e4)) {
-            endSocket(Object.assign(new Error("The Server stopped answering"), { code: "SERVER_UNREACHABLE" }));
-          }
-          return;
-        }
-        if (now - this.lastHeard >= (this.options.watchdogSilenceMs ?? 15e3)) this.probeNow();
-      }, this.options.watchdogIntervalMs ?? 5e3);
     });
   }
   async send(data) {
     if (this.socket?.readyState !== 1) throw new Error("relay transport is not connected");
     if (this.connectionId === void 0) throw new Error("relay connection has not been authorized");
-    const socket = this.socket;
-    const frame = encodeControlFrame(createControlFrame("relay", {
+    await waitForRelayCapacity(this.socket);
+    this.sendControl("relay", {
       connectionId: this.connectionId,
       targetDeviceId: this.options.targetDeviceId,
       counter: this.relayCounter,
       ciphertext: toBase64Url(data)
-    }), this.controlFrameLimits);
-    await waitForRelayCapacity(socket, new TextEncoder().encode(frame).byteLength);
-    socket.send(frame);
+    });
     this.bytesSent += data.byteLength;
     this.relayCounter += 1;
   }
@@ -8011,56 +7907,8 @@ var RelayTransport = class extends BaseTransport {
     this.handshakeHandlers.add(cb);
     return () => this.handshakeHandlers.delete(cb);
   }
-  /** Ask the Server for a liveness reply now; a dead socket ends itself promptly. */
-  probe(timeoutMs) {
-    const socket = this.socket;
-    if (socket === void 0 || this.connectionId === void 0) return;
-    if (socket.readyState > 1) {
-      this.endCurrent?.(Object.assign(new Error("The connection to the Server closed"), { code: "SERVER_UNREACHABLE" }));
-      return;
-    }
-    if (socket.readyState !== 1) return;
-    const limit = timeoutMs ?? (this.options.probeTimeoutMs ?? 1e4);
-    const now = Date.now();
-    if (this.probeAt === 0 || now - this.pingSentAt >= Math.min(limit, 1e3)) this.probeNow(now);
-    const deadline = now + limit;
-    if (this.probeTimer !== void 0 && deadline >= this.probeDeadline) return;
-    if (this.probeTimer !== void 0) clearTimeout(this.probeTimer);
-    this.probeDeadline = deadline;
-    this.probeTimer = setTimeout(() => {
-      this.probeTimer = void 0;
-      this.probeDeadline = 0;
-      if (this.socket !== socket || this.probeAt === 0) return;
-      this.endCurrent?.(Object.assign(new Error("The Server stopped answering"), { code: "SERVER_UNREACHABLE" }));
-    }, Math.max(0, limit));
-  }
-  clearProbe() {
-    this.probeAt = 0;
-    this.pingSentAt = 0;
-    this.probeDeadline = 0;
-    if (this.probeTimer !== void 0) {
-      clearTimeout(this.probeTimer);
-      this.probeTimer = void 0;
-    }
-  }
-  probeNow(now = Date.now()) {
-    if (this.socket === void 0) return;
-    if (this.probeAt === 0) this.probeAt = now;
-    this.pingSentAt = now;
-    try {
-      this.sendControl("ping", { nonce: now });
-    } catch {
-      this.endCurrent?.(Object.assign(new Error("The Server stopped answering"), { code: "SERVER_UNREACHABLE" }));
-    }
-  }
   async close() {
     this.clearHandshake();
-    this.clearProbe();
-    const end = this.endCurrent;
-    if (end !== void 0) {
-      end();
-      return;
-    }
     this.socket?.close();
     this.socket = void 0;
     this.connectionId = void 0;
@@ -8141,24 +7989,7 @@ var RelayTransport = class extends BaseTransport {
     const reject = this.readyReject;
     this.readyResolve = void 0;
     this.readyReject = void 0;
-    if (reject === void 0) {
-      const end2 = this.endCurrent;
-      if (end2 !== void 0) {
-        end2(error);
-        return;
-      }
-      this.closeReason = error;
-      this.socket?.close();
-      this.socket = void 0;
-      this.connectionId = void 0;
-      return;
-    }
-    reject(error);
-    const end = this.endCurrent;
-    if (end !== void 0) {
-      end(void 0, false);
-      return;
-    }
+    reject?.(error);
     this.socket?.close();
     this.socket = void 0;
     this.connectionId = void 0;
@@ -8242,9 +8073,6 @@ var RpcClient = class {
   }
   getStats() {
     return this.transport.getStats();
-  }
-  probe(timeoutMs) {
-    this.transport.probe?.(timeoutMs);
   }
   async close() {
     this.unsubscribeTransport?.();
@@ -8380,9 +8208,6 @@ var SecureTransport = class {
   onClose(handler) {
     return this.inner.onClose?.(handler) ?? (() => void 0);
   }
-  probe(timeoutMs) {
-    this.inner.probe?.(timeoutMs);
-  }
   async close() {
     if (this.closed) return;
     this.closed = true;
@@ -8439,7 +8264,7 @@ async function waitForResponder(inner, noise, hello, timeoutMs) {
       if (error === void 0) resolve(reply);
       else reject(error);
     };
-    const unsubscribeClose = inner.onClose?.(() => finish(inner.closeReason ?? new Error("The link closed during the secure handshake.")));
+    const unsubscribeClose = inner.onClose?.(() => finish(new Error("The link closed during the secure handshake.")));
     inner.sendHandshake(1, noise.writeHandshake(hello)).catch((error) => {
       finish(error instanceof Error ? error : new Error("The secure handshake failed."));
     });
@@ -8449,10 +8274,7 @@ export {
   BaseTransport,
   DeviceRegistry,
   HostLink,
-  LINK_PATH,
   MAX_CONTROL_FRAME_BYTES,
-  MAX_RELAY_BYTES_PER_SECOND,
-  MAX_RELAY_FRAMES_PER_SECOND,
   MAX_RELAY_FRAME_BYTES,
   MAX_SECURE_MESSAGE_BYTES,
   NOISE_IK_PROTOCOL,
