@@ -1054,6 +1054,8 @@ var ZH = {
   Private: "隐私",
   "Other Bots cannot read its folder, memory or chats, and you approve what it shares with them.": "其他 Bot 不能读取它的文件夹、记忆或对话；它分享给其他 Bot 的内容需要你批准。",
   "A Main Bot cannot be private.": "主 Bot 不能设为隐私 Bot。",
+  "Leave its group chats before making it private.": "先退出所有群聊，才能设为隐私 Bot。",
+  "Choose a working folder of its own first.": "先选择一个独立的工作文件夹。",
   "A private Bot cannot be a Main Bot.": "隐私 Bot 不能设为主 Bot。",
   "Team workspace": "总工作区",
   "Team workspace: {folder}": "总工作区：{folder}",
@@ -12122,6 +12124,9 @@ function BotSettingsForm({ bot, roster, actions, run: run2 }) {
   const isMainBot = isMainOf(roster, bot.id);
   const onlyMain = isMainBot && (roster.mainBotIds ?? []).length === 1;
   const isTile = roster.mainBotId === bot.id;
+  const inGroup = (roster.rooms ?? []).some((room2) => room2.members?.includes(bot.id));
+  const privateHint = t("Other Bots cannot read its folder, memory or chats, and you approve what it shares with them.");
+  const privacyHint = bot.private === true ? privateHint : isMainBot ? t("A Main Bot cannot be private.") : inGroup ? t("Leave its group chats before making it private.") : !bot.workDir ? t("Choose a working folder of its own first.") : privateHint;
   const save = (patch) => run2(actions.updateBot(bot.id, patch));
   const duplicate = () => run2(actions.duplicateBot(bot.id).then((copy2) => actions.openSession(copy2.id)));
   const remove = () => {
@@ -12186,9 +12191,9 @@ function BotSettingsForm({ bot, roster, actions, run: run2 }) {
       { title: t("Privacy") },
       (0, import_react25.createElement)(SwitchRow, {
         label: t("Private"),
-        hint: isMainBot ? t("A Main Bot cannot be private.") : t("Other Bots cannot read its folder, memory or chats, and you approve what it shares with them."),
+        hint: privacyHint,
         on: bot.private === true,
-        disabled: isMainBot,
+        disabled: bot.private !== true && (isMainBot || inGroup || !bot.workDir),
         onChange: (value) => save({ private: value })
       })
     ),

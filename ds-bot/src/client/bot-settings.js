@@ -187,6 +187,9 @@ export function BotSettingsForm({ bot, roster, actions, run }) {
   const isMainBot = isMainOf(roster, bot.id)
   const onlyMain = isMainBot && (roster.mainBotIds ?? []).length === 1
   const isTile = roster.mainBotId === bot.id
+  const inGroup = (roster.rooms ?? []).some(room => room.members?.includes(bot.id))
+  const privateHint = t('Other Bots cannot read its folder, memory or chats, and you approve what it shares with them.')
+  const privacyHint = bot.private === true ? privateHint : isMainBot ? t('A Main Bot cannot be private.') : inGroup ? t('Leave its group chats before making it private.') : !bot.workDir ? t('Choose a working folder of its own first.') : privateHint
   const save = patch => run(actions.updateBot(bot.id, patch))
   const duplicate = () => run(actions.duplicateBot(bot.id).then(copy => actions.openSession(copy.id)))
   const remove = () => { if (confirming) void run(actions.deleteBot(bot.id)); else setConfirming(true) }
@@ -216,9 +219,9 @@ export function BotSettingsForm({ bot, roster, actions, run }) {
     h(Card, { title: t('Privacy') },
       h(SwitchRow, {
         label: t('Private'),
-        hint: isMainBot ? t('A Main Bot cannot be private.') : t('Other Bots cannot read its folder, memory or chats, and you approve what it shares with them.'),
+        hint: privacyHint,
         on: bot.private === true,
-        disabled: isMainBot,
+        disabled: bot.private !== true && (isMainBot || inGroup || !bot.workDir),
         onChange: value => save({ private: value }),
       })),
     h(Card, { title: t('Instructions') },

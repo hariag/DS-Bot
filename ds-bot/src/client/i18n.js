@@ -1026,6 +1026,8 @@ const ZH = {
   Private: '隐私',
   'Other Bots cannot read its folder, memory or chats, and you approve what it shares with them.': '其他 Bot 不能读取它的文件夹、记忆或对话；它分享给其他 Bot 的内容需要你批准。',
   'A Main Bot cannot be private.': '主 Bot 不能设为隐私 Bot。',
+  'Leave its group chats before making it private.': '先退出所有群聊，才能设为隐私 Bot。',
+  'Choose a working folder of its own first.': '先选择一个独立的工作文件夹。',
   'A private Bot cannot be a Main Bot.': '隐私 Bot 不能设为主 Bot。',
   'Team workspace': '总工作区',
   'Team workspace: {folder}': '总工作区：{folder}',

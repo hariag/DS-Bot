@@ -33,8 +33,9 @@ export function install(rt) {
   const sessionsOf = bot => [...new Set([bot.id, ...(bot.sessionIds ?? [rt.chatOf(bot.id), ...(bot.segments ?? []).map(segment => segment.sessionId), ...rt.groupSessionsOf(bot.id)])])]
   const dataRoots = () => [rt.dshHome, rt.home, process.env.DS_BOT_USER_DSH_HOME?.trim()].filter(Boolean)
 
-  // A path as it is and as the file system resolves it, folded for comparing.
-  const spellings = async (path) => [...new Set([fold(resolve(path)), fold(await rt.real(path))])]
+  // A path as it is and as the file system resolves it, folded for comparing. realBeyond
+  // also resolves a link above a file that does not exist yet.
+  const spellings = async (path) => [...new Set([fold(resolve(path)), fold(await rt.realBeyond(resolve(path)))])]
 
   // The Bot a call speaks for. A subagent speaks for the Bot at the root of its
   // parent chain, however many subagents sit between them.
@@ -55,8 +56,31 @@ export function install(rt) {
 
   // Where a private Bot keeps what must stay closed: its folder and its memory. Its
   // Sessions and its id are in file names under DSH's and the team's data.
-  const regionsOf = async bot => (await Promise.all([bot.workDir, join(rt.home, 'memory', 'bots', bot.id), bot.archivePath].filter(Boolean).map(spellings))).flat()
-  const sharedFiles = async () => (await Promise.all([rt.statePath, join(rt.home, 'memory', 'journal.jsonl')].filter(Boolean).map(spellings))).flat()
+  const regionsOf = async bot => (await Promise.all([
+    bot.workDir,
+    join(rt.home, 'memory', 'bots', bot.id),
+    join(rt.home, 'browser-profiles', bot.id),
+    join(rt.home, 'browser-downloads', bot.id),
+    join(rt.home, 'side', `${bot.id}.json`),
+    join(rt.home, 'btw', bot.id),
+    bot.archivePath,
+  ].filter(Boolean).map(spellings))).flat()
+  const sharedFiles = async () => (await Promise.all([
+    rt.statePath,
+    join(rt.home, 'chat-index.sqlite'),
+    join(rt.home, 'chat-index.sqlite-wal'),
+    join(rt.home, 'chat-index.sqlite-shm'),
+    join(rt.home, 'usage.sqlite'),
+    join(rt.home, 'usage.sqlite-wal'),
+    join(rt.home, 'usage.sqlite-shm'),
+    join(rt.home, 'inflight.json'),
+    join(rt.home, 'ocr.json'),
+    join(rt.home, 'secrets.json'),
+    join(rt.home, 'memory', 'journal.jsonl'),
+    join(rt.home, 'memory', 'journal.torn'),
+    join(rt.home, 'memory', 'pending.json'),
+    join(rt.home, 'logs', 'diagnostics.jsonl'),
+  ].filter(Boolean).map(spellings))).flat()
 
   const teamFolder = () => rt.teamFolder() ?? resolve(rt.defaultTeamFolder())
 
@@ -78,11 +102,18 @@ export function install(rt) {
     }
     const other = bots.find(bot => bot.id !== self)
     for (const file of await sharedFiles()) if (other !== undefined && keys.some(key => key.startsWith(file))) return other
-    if (search && other !== undefined) {
-      const open = [rt.workDirOf({ botId: self }), teamFolder()].filter(Boolean)
+    if (other !== undefined) {
+      const ownBot = rt.botOf(self)
+      const ownIds = ownBot === undefined ? [] : sessionsOf(ownBot).map(fold)
+      const ownRegions = ownBot === undefined ? [] : await regionsOf(ownBot)
+      const open = [rt.workDirOf({ botId: self }), teamFolder(), ...ownRegions].filter(Boolean)
       const folders = (await Promise.all(open.map(spellings))).flat()
-      for (const root of (await Promise.all(dataRoots().map(spellings))).flat()) {
-        if (keys.some(key => within(root, key) || (within(key, root) && !folders.some(folder => within(key, folder))))) return other
+      const roots = (await Promise.all(dataRoots().map(spellings))).flat()
+      for (const key of keys) {
+        if ((!search && ownIds.some(id => key.includes(id))) || folders.some(folder => within(key, folder))) continue
+        // Direct reads are closed too, not only walks: an index, pending record or log
+        // can hold the same private text without naming the Session in its file name.
+        if (roots.some(root => within(key, root) || (search && within(root, key)))) return other
       }
     }
     return undefined
@@ -146,13 +177,19 @@ export function install(rt) {
       // Every Bot reads the shared capabilities, so saving one shares what is in it.
       case 'save_capability': {
         if (!isPrivate(self)) return
-        const shown = [args.name, args.description, typeof args.content === 'string' ? args.content.slice(0, 500) : ''].filter(Boolean).join('\n\n')
+        const shown = JSON.stringify(args, null, 2)
         await approve(exec, { en: `Let ${rt.botOf(self).name} share this with the team?\n\n${shown}`, zh: `允许 ${rt.botOf(self).name} 把下面的内容共享给团队吗？\n\n${shown}` })
         return
       }
       case 'stop_bot': {
         const bot = target(args.bot)
         if (bot) throw closed(bot, 'turns')
+        return
+      }
+      case 'attach_capability':
+      case 'detach_capability': {
+        const bot = target(args.bot)
+        if (bot) throw closed(bot, 'capabilities')
         return
       }
       case 'update_bot': {
@@ -212,6 +249,12 @@ export function install(rt) {
       const asked = strings([args.session_id, args.session_ids, args.parent_session_ids])
       const bot = protectedBots().find(found => found.id !== self && sessionsOf(found).some(id => asked.includes(id)))
       if (bot) refuse(bot)
+      // DSH scopes Session search to the caller's cwd. A subagent can have another cwd,
+      // so an unfiltered search is closed too; explicit safe ids still narrow it.
+      if (name === 'session_search' && args.session_ids === undefined && args.parent_session_ids === undefined) {
+        const closedBot = protectedBots().find(found => found.id !== self)
+        if (closedBot) throw closed(closedBot, 'Sessions')
+      }
     }
   }
 
@@ -249,6 +292,8 @@ export function install(rt) {
     if (rt.isMain(bot.id)) throw new Error(`${bot.name} is a Main Bot, so it cannot be private`)
     if (dir === undefined) throw new Error(`${bot.name} needs a folder of its own to be private`)
     if (Object.values(state.rooms).some(room => room.members.includes(bot.id))) throw new Error(`${bot.name} is in a group chat, where every member reads what is said. Remove it from its groups first`)
+    const clash = await privateClash(dir, { except: bot.id })
+    if (clash) throw new Error(`${dir} is in or around the folder of ${clash.name}, a private Bot, so ${bot.name} cannot work there`)
     const keys = await spellings(dir)
     const others = [
       ['the team workspace', teamFolder()],
