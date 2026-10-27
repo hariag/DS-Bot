@@ -346,12 +346,18 @@ export function install(rt) {
     if (bot === undefined) throw new Error('The Bot that learned this skill is gone')
     const current = skillsOf()[proposal.name]
     const store = data()
-    if (proposal.action === 'create' && !(proposal.saved && current !== undefined)) {
-      if (current !== undefined) throw new Error(`A skill named ${proposal.name} exists now`)
-      const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
-      proposal.saved = true
-      store.learned[bot.id] = [...new Set([...(store.learned[bot.id] ?? []), item.name])]
-      await persist()
+    if (proposal.action === 'create') {
+      if (proposal.saved) {
+        if (current === undefined || current.description !== proposal.description || current.content !== proposal.content) {
+          throw new Error(`${proposal.name} changed since this was proposed`)
+        }
+      } else {
+        if (current !== undefined) throw new Error(`A skill named ${proposal.name} exists now`)
+        const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
+        proposal.saved = true
+        store.learned[bot.id] = [...new Set([...(store.learned[bot.id] ?? []), item.name])]
+        await persist()
+      }
     } else if (proposal.action === 'update') {
       if (current === undefined || hashOf(`${current.description}\n${current.content}`) !== proposal.base) throw new Error(`${proposal.name} changed since this was proposed`)
       const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
@@ -366,11 +372,33 @@ export function install(rt) {
     throw new Error(`Unknown endpoint ${endpoint}`)
   }
 
+  async function removeLearned(name) {
+    const learned = data().learned
+    const deleted = String(name ?? '')
+    for (const [botId, names] of Object.entries(learned)) {
+      learned[botId] = (Array.isArray(names) ? names : []).filter(entry => entry !== deleted)
+    }
+    await persist()
+  }
+
   // Per Bot, its proposals waiting for the user.
   const learningView = () => {
     const byBot = {}
     for (const entry of Object.values(data().proposals)) (byBot[entry.botId] ??= []).push(entry)
     return byBot
+  }
+
+  const capabilityDelete = rt.capabilityDelete
+  rt.capabilityDelete = async (...args) => {
+    const result = await capabilityDelete(...args)
+    await removeLearned(args[0])
+    return result
+  }
+  const capabilityEndpoint = rt.capabilityEndpoint
+  rt.capabilityEndpoint = async (endpoint, body, ...args) => {
+    const result = await capabilityEndpoint(endpoint, body, ...args)
+    if (endpoint === 'capability-delete') await removeLearned(body?.name)
+    return result
   }
 
   Object.assign(rt, { learningView, learningEndpoint, learningRun: run })

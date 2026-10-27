@@ -268,6 +268,79 @@ test('a failed create attachment can be retried without resaving or losing the p
   assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
 })
 
+test('a failed create retry refuses a skill edited after it was saved', async t => {
+  const runtime = await startRuntime({ replies: [createReply] })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => Object.keys(runtime.learningState().proposals ?? {}).length === 1)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  const endpoint = runtime.rt.capabilityEndpoint
+  let fail = true
+  runtime.rt.capabilityEndpoint = async (name, body, ...args) => {
+    if (name === 'bot-capability' && fail) {
+      fail = false
+      throw new Error('temporary attachment failure')
+    }
+    return endpoint(name, body, ...args)
+  }
+
+  const first = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(first.ok, false)
+  assert.equal(runtime.learningState().proposals[proposal.id].saved, true)
+  const edit = await runtime.call('capability-save', {
+    name: 'release-checks',
+    kind: 'skill',
+    description: 'Use when checking a release.',
+    content: 'Run the revised release checks.',
+  })
+  assert.equal(edit.ok, true)
+
+  const retry = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(retry.ok, false)
+  assert.match(JSON.stringify(retry), /release-checks changed since this was proposed/)
+  assert.ok(runtime.learningState().proposals[proposal.id])
+  assert.equal(runtime.teamState().capabilities.items['release-checks'].content, 'Run the revised release checks.')
+  assert.equal(runtime.teamState().bots.b2.capabilities.includes('release-checks'), false)
+})
+
+test('deleting a learned skill clears ownership before a same-name skill is recreated', async t => {
+  const history = { b2: [...ownChat] }
+  const runtime = await startRuntime({
+    history,
+    replies: [createReply, noneReply],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  await until(() => Object.keys(runtime.learningState().proposals ?? {}).length === 1)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  const answer = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(answer.value.applied, true)
+  assert.deepEqual(runtime.learningState().learned.b2, ['release-checks'])
+
+  const deleted = await runtime.call('capability-delete', { name: 'release-checks' })
+  assert.equal(deleted.ok, true)
+  assert.deepEqual(runtime.learningState().learned.b2, [])
+  await runtime.call('capability-save', {
+    name: 'release-checks',
+    kind: 'skill',
+    description: 'Use when checking a release.',
+    content: 'Run the release checks.',
+  })
+  await runtime.call('bot-capability', { botId: 'b2', name: 'release-checks', attached: true })
+  assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
+
+  addNextTurn(history)
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  assert.equal(runtime.requests.length, 2)
+  const request = runtime.requests[1].messages[0].content[0].text
+  assert.match(request, /This Bot has no learned skills yet\./)
+  assert.match(request, /Other skills on the team:\n- release-checks:/)
+  assert.deepEqual(runtime.learningState().learned.b2, [])
+})
+
 test('declined proposals are recorded and included in the next skill request', async t => {
   const history = { b2: [...ownChat] }
   const runtime = await startRuntime({ history, replies: [createReply, noneReply] })
