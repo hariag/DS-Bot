@@ -34,14 +34,13 @@
     "src/host/",
     "src/shared/",
     "client.js",
-    "link.js",
     "web-search.js",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "node scripts/build-client.mjs && node scripts/build-link.mjs",
+    "build": "node scripts/build-client.mjs",
     "test": "node --import ./test/harness-resolve.mjs --test \"test/*.test.js\"",
     "lint": "node scripts/lint.mjs",
     "harness": "npm install --prefix dev/harness --legacy-peer-deps=false --no-package-lock --no-fund --no-audit",
@@ -62,7 +61,9 @@
     }
   },
   "devDependencies": {
-    "esbuild": "0.28.2",
-    "qrcode-generator": "2.0.4"
+    "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "dsh-deep-ui": "file:../../../DeepSeek Bot/deep-ui"
   }
 }
