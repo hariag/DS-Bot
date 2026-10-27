@@ -268,6 +268,44 @@ test('a failed create attachment can be retried without resaving or losing the p
   assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
 })
 
+test('a recreated approved skill is learned when its saved proposal is retried', async t => {
+  const runtime = await startRuntime({ replies: [createReply] })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => Object.keys(runtime.learningState().proposals ?? {}).length === 1)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  const endpoint = runtime.rt.capabilityEndpoint
+  let fail = true
+  runtime.rt.capabilityEndpoint = async (name, body, ...args) => {
+    if (name === 'bot-capability' && fail) {
+      fail = false
+      throw new Error('temporary attachment failure')
+    }
+    return endpoint(name, body, ...args)
+  }
+
+  const first = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(first.ok, false)
+  assert.equal(runtime.learningState().proposals[proposal.id].saved, true)
+  assert.deepEqual(runtime.learningState().learned.b2, ['release-checks'])
+
+  const deleted = await runtime.call('capability-delete', { name: 'release-checks' })
+  assert.equal(deleted.ok, true)
+  assert.deepEqual(runtime.learningState().learned.b2, [])
+  await runtime.call('capability-save', {
+    name: 'release-checks',
+    kind: 'skill',
+    description: 'Use when checking a release.',
+    content: 'Run the release checks.',
+  })
+
+  const retry = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(retry.value.applied, true)
+  assert.equal(runtime.learningState().proposals[proposal.id], undefined)
+  assert.deepEqual(runtime.learningState().learned.b2, ['release-checks'])
+  assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
+})
+
 test('a failed create retry refuses a skill edited after it was saved', async t => {
   const runtime = await startRuntime({ replies: [createReply] })
   t.after(() => runtime.stop())

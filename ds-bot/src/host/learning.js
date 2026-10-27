@@ -351,6 +351,8 @@ export function install(rt) {
         if (current === undefined || current.description !== proposal.description || current.content !== proposal.content) {
           throw new Error(`${proposal.name} changed since this was proposed`)
         }
+        store.learned[bot.id] = [...new Set([...(store.learned[bot.id] ?? []), current.name])]
+        await persist()
       } else {
         if (current !== undefined) throw new Error(`A skill named ${proposal.name} exists now`)
         const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
