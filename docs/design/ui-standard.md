@@ -111,10 +111,10 @@ Bot 名字、提及用同一个颜色写字；纯黑读起来像标题，所以�
 
 ### 3.1 字族
 
-- 界面：`-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif`。
+- 界面：`var(--bt-font)`，即 DSH 的正文字体 `--dsw-font-family`（用户在 DSH 里设了正文字体就用它）；没有 DSH 主题时退回 `-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`。
 - 代码、密钥、路径：`ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`。
 - 对话内容的字号跟随 DSH 的 `--dsh-content-font-size`（默认 14px）。
-- 对话内容的中文字体不点名：桌面应用的字体列表里不写中文字体，交给系统回退（macOS 经 `-apple-system` 是苹方，Linux 由 fontconfig 选，Windows 用系统或用户装的中文字体）；在 DSH Desktop / Web 里跟随 DSH 的正文字体设置。
+- 中文字体不点名：桌面应用把 DSH 的内置字体换成一份不写中文字体的（`app/src/fonts.css`），中文交给系统回退（macOS 经 `-apple-system` 是苹方，Linux 由 fontconfig 选，Windows 用系统或用户装的中文字体）；DSH Desktop / Web 里跟随 DSH。
 
 ### 3.2 字号档
 

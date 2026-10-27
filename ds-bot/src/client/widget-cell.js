@@ -500,7 +500,7 @@ export function AnsweredReply({ node }) {
 
 export const WIDGET_CSS = `
 .bt-view{min-width:0}
-.bt-view-bare{display:flex;flex-direction:column;gap:8px;width:100%;color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:bt-veil-in .2s ease-out backwards}
+.bt-view-bare{display:flex;flex-direction:column;gap:8px;width:100%;color:var(--bt-ink);font-family:var(--bt-font);animation:bt-veil-in .2s ease-out backwards}
 .bt-view-head{display:flex;align-items:flex-start;gap:8px;min-width:0}
 .bt-view-title{flex:1 1 0;min-width:0;margin:0;font-size:13px;line-height:18px;font-weight:500;color:var(--bt-ink);overflow-wrap:anywhere}
 .bt-q-settled .bt-view-title{color:var(--bt-ink-2)}
