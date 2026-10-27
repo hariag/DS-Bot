@@ -499,7 +499,9 @@ function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors
   const win32 = process.platform === 'win32'
   mainWindow = new BrowserWindow({
-    width: 1320, height: 860, minWidth: 720, minHeight: 480,
+    // The window never squeezes the chat: RAIL_WIDTH + MIN_CHAT from ds-bot's
+    // src/client/frame-layout.js is the avatar rail plus the smallest chat column.
+    width: 1320, height: 860, minWidth: 508, minHeight: 480,
     title: 'DeepSeek Bot', show: false, icon: iconFile,
     backgroundColor: mica ? '#00000000' : dark ? '#1b1b1c' : '#ffffff',
     // Frameless as in DSH Desktop: the caption buttons overlay the page's band. They keep the

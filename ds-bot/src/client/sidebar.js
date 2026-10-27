@@ -11,6 +11,8 @@ import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE, useViewport, viewBottom } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
+import { frameLayout, MIN_CHAT, RAIL_WIDTH, FALLBACK_SIDEBAR_WIDTH, dshExpandedFor, userSidebarToggle } from './frame-layout.js'
+import { chatRoom, dshCollapsed } from './frame-watch.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -94,7 +96,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
     'data-bot-id': id, title: wide ? undefined : bot.name, onMouseEnter: wide ? nameIfCut : undefined, onClick: () => actions.openSession(id), onContextMenu,
   },
-  h(BotAvatar, { bot, size: 36, state, main }),
+  h(BotAvatar, { bot, size: wide ? 36 : 44, state, main }),
   pinned && !wide ? h(PinMark) : null,
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, bot.name), pinned ? h(PinMark) : null),
@@ -102,7 +104,8 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       : awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
         : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
           : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
-  wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
+  wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true })
+    : !wide && !active && (alert || unread) ? h('span', { className: `bt-dot${alert ? ' bt-dot-wait' : ''}`, 'aria-hidden': true }) : null)
 }
 
 function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
@@ -124,13 +127,14 @@ function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSess
     'data-room-id': id, title: wide ? undefined : room.name, onMouseEnter: wide ? nameIfCut : undefined, onClick: () => actions.openSession(id),
     onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'room', id, x: event.clientX, y: event.clientY }) },
   },
-  h(RoomAvatar, { room, roster, size: 36 }),
+  h(RoomAvatar, { room, roster, size: wide ? 36 : 44 }),
   pinned && !wide ? h(PinMark) : null,
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, room.name), pinned ? h(PinMark) : null),
     workingLine ? h('span', { className: 'bt-row-preview' }, workingLine) : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   wide && approval && !active ? h('span', { className: 'bt-unread bt-unread-wait', 'aria-hidden': true })
-    : wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
+    : wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true })
+      : !wide && !active && (approval || unread) ? h('span', { className: `bt-dot${approval ? ' bt-dot-wait' : ''}`, 'aria-hidden': true }) : null)
 }
 
 // One expanded DSH Agent Session row: title, relative stamp, rename field, and a
@@ -218,11 +222,12 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
       'data-agent-id': agent.id, title: wide ? undefined : 'DSH Agent', onClick: () => actions.openAgent(agent.id),
       onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'agent', id: agent.id, x: event.clientX, y: event.clientY }) },
     },
-    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(FishLogo, { size: 22 })),
+    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(FishLogo, { size: wide ? 22 : 24 })),
     wide ? h('span', { className: 'bt-row-body' },
       h('span', { className: 'bt-row-name' }, 'DSH Agent'),
       preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
-    wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
+    wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true })
+      : !wide && unread && !active ? h('span', { className: 'bt-dot', 'aria-hidden': true }) : null),
     h('div', { className: 'bt-agent-sub', 'data-open': open || undefined },
       h('div', { className: 'bt-agent-sub-in' },
         h('button', { type: 'button', className: 'bt-agent-sub-row bt-agent-new', style: { '--i': 0 }, onClick: () => { void actions.newAgentSession(agent.id).catch(error => actions.reportError(error, 'agent-session')) } },
@@ -257,14 +262,30 @@ function useListGlide(listRef, layout, key) {
   }, [layout, key])
 }
 
+// While the shell's sidebar is collapsed we draw the left column ourselves on
+// <body>: the open column or the avatar rail push the conversation over, the
+// drawer floats above it.
+function LeftColumn({ mode, width, children }) {
+  return createPortal(h('div', { className: 'bt-leftcol', 'data-left': mode, style: { width: `${width}px` } }, children), document.body)
+}
+
 export function TeamSidebar(props) {
-  const { wide, expandSidebar, useRoster, useUi, useSessions, actions } = props
+  const { wide, useRoster, useUi, useSessions, actions } = props
   const listRef = useRef(null)
-  const closing = useRef(false)
-  useLayoutEffect(() => { closing.current = false })
   const roster = useRoster(value => value)
   const markedUnread = useUi(value => value.unread)
+  const uiNow = useUi(value => value)
   props.useRegistry(value => value)
+  const frameSnap = props.useFrame ? props.useFrame(value => value) : { viewport: typeof window === 'undefined' ? 0 : window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0 }
+  const pref = props.useSidebarPref ? props.useSidebarPref(value => value) : 'open'
+  const layout = frameLayout({
+    viewport: frameSnap.viewport, sidebarWidth: frameSnap.sidebarWidth, collapsedWidth: frameSnap.collapsedWidth ?? 0,
+    pref, drawer: uiNow.leftDrawer === true,
+    panel: uiNow.details ? { view: uiNow.view, yielded: uiNow.panelYield === true } : null,
+  })
+  // 'inline' is the shell's own expanded sidebar; the rest are our portalled column.
+  const mode = wide ? 'inline' : layout.left
+  const wideContent = mode !== 'rail'
   const updated = useSessions(list => {
     const stamps = {}
     for (const id of list.ids) stamps[id] = list.byId[id]?.updatedAt ?? 0
@@ -281,18 +302,71 @@ export function TeamSidebar(props) {
     return entries.sort((a, b) => Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
   }, [roster, updated])
   const main = roster.byId[roster.mainBotId]
-  useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))
+  useListGlide(listRef, wideContent, order.map(entry => entry.item.id).join(','))
   useLandOnMainBot(roster, useSessions, actions)
-  // The shell keeps wide content during its collapse fade. Normalize through its
-  // public expansion action before toggling; coalesce synchronous activations
-  // until React commits the result.
+
+  // Our column pushes the conversation over by what it takes beyond the shell's
+  // collapsed track; a floating drawer does not push.
+  const ourWidth = layout.left === 'rail' ? RAIL_WIDTH : frameSnap.sidebarWidth
+  useLayoutEffect(() => {
+    if (typeof document === 'undefined') return
+    chatRoom.setLeft(mode === 'inline' || mode === 'drawer' ? null : Math.max(0, ourWidth - (frameSnap.collapsedWidth ?? 0)))
+  }, [mode, ourWidth, frameSnap.collapsedWidth])
+  useEffect(() => () => { if (typeof document !== 'undefined') chatRoom.setLeft(null) }, [])
+
+  // The shell sidebar's collapsed flag follows what our column needs. A flip we
+  // did not ask for is the user's own switch gesture (the shell's title-bar
+  // button or shortcut), unless the width just crossed the auto-collapse line.
+  const dsh = useRef(null)
+  const requested = useRef(false)
+  useLayoutEffect(() => {
+    if (typeof document === 'undefined' || typeof actions.toggleSidebar !== 'function') return undefined
+    const collapsed = dshCollapsed() ?? !wide
+    const prev = dsh.current
+    dsh.current = { collapsed, viewport: frameSnap.viewport, left: layout.left }
+    if (prev !== null && collapsed !== prev.collapsed) {
+      if (requested.current) requested.current = false
+      else if (userSidebarToggle({ before: prev, after: { collapsed, viewport: frameSnap.viewport } })) {
+        // The last explicit gesture wins: fold to the rail, or open the column —
+        // as a drawer when it no longer fits docked.
+        if (prev.left === 'open') actions.setSidebarPref?.('rail')
+        else {
+          actions.setSidebarPref?.('open')
+          if (frameSnap.viewport < frameSnap.sidebarWidth + MIN_CHAT) actions.setLeftDrawer?.(true)
+        }
+        actions.setPanelYield?.(false)
+        return undefined
+      }
+    }
+    const wantOpen = dshExpandedFor(frameSnap.viewport, layout.left)
+    if (collapsed === !wantOpen) { requested.current = false; return undefined }
+    if (requested.current) return undefined
+    requested.current = true
+    actions.toggleSidebar()
+    const timer = setTimeout(() => { requested.current = false }, 300)
+    return () => clearTimeout(timer)
+  }, [wide, frameSnap.viewport, frameSnap.sidebarWidth, layout.left])
+
+  // The drawer closes on a row pick, on Escape and on a press outside it.
+  useEffect(() => {
+    if (mode !== 'drawer') return undefined
+    const onDown = (event) => {
+      if (event.target instanceof Element && event.target.closest('.bt-leftcol')) return
+      actions.setLeftDrawer?.(false)
+    }
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      actions.setLeftDrawer?.(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true) }
+  }, [mode])
+
   const navigate = (open, id) => {
     const result = open(id)
-    if (wide && window.innerWidth < 1024 && !closing.current) {
-      closing.current = true
-      expandSidebar?.()
-      actions.toggleSidebar()
-    }
+    if (uiNow.leftDrawer === true) actions.setLeftDrawer?.(false)
     return result
   }
   const rowActions = {
@@ -302,7 +376,7 @@ export function TeamSidebar(props) {
     openAgentSession: id => navigate(actions.openAgentSession, id),
     newAgentSession: id => navigate(actions.newAgentSession, id),
   }
-  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide }
+  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide: wideContent }
   // Typing while the sidebar has focus starts a search.
   const typeToSearch = (event) => {
     if (event.defaultPrevented || event.key.length !== 1 || event.key === ' ' || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
@@ -310,24 +384,43 @@ export function TeamSidebar(props) {
     event.preventDefault()
     actions.openPalette(event.key)
   }
-  return h('div', { className: wide ? 'bt-side' : 'bt-side bt-rail', onKeyDown: typeToSearch },
-    wide ? h('div', { className: 'bt-side-top' },
-      h('span', { className: 'bt-brand' }, h(BrandMark, { size: 22 }), h(BrandName)),
-      h(UpdateButton, { useUpdate: props.useUpdate, actions }),
-      h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Search'), title: t('Search'), onClick: () => actions.openPalette() }, h(SearchIcon)),
-      h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
-      h('button', { type: 'button', className: 'bt-round bt-side-collapse', 'aria-label': t('Collapse sidebar'), title: t('Collapse sidebar'), onClick: () => actions.toggleSidebar() }, h(SidebarIcon)))
-      : h(Fragment, null,
-          h(UpdateButton, { useUpdate: props.useUpdate, actions }),
-          h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon))),
-    wide && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
+  const expandLeft = () => {
+    actions.setSidebarPref?.('open')
+    if (frameSnap.viewport < frameSnap.sidebarWidth + MIN_CHAT) actions.setLeftDrawer?.(true)
+  }
+  const top = wideContent
+    ? h('div', { className: 'bt-side-top' },
+        h('span', { className: 'bt-brand' }, h(BrandMark, { size: 22 }), h(BrandName)),
+        h(UpdateButton, { useUpdate: props.useUpdate, actions }),
+        h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Search'), title: t('Search'), onClick: () => actions.openPalette() }, h(SearchIcon)),
+        h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
+        h('button', { type: 'button', className: 'bt-round bt-side-collapse', 'aria-label': t('Collapse sidebar'), title: t('Collapse sidebar'), onClick: () => { actions.setLeftDrawer?.(false); actions.setSidebarPref?.('rail') } }, h(SidebarIcon)))
+    : h('div', { className: 'bt-rail-top' },
+        h(UpdateButton, { useUpdate: props.useUpdate, actions }),
+        h('button', { type: 'button', className: 'bt-round bt-rail-expand', 'aria-label': t('Expand sidebar'), title: t('Expand sidebar'), onClick: expandLeft }, h(SidebarIcon)),
+        main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, t('Setting up your Main Bot…')),
+        h('span', { className: 'bt-rail-sep', 'aria-hidden': true }))
+  // The foot stands in for the shell's hidden footer: the account avatar, then
+  // Connect plugins as its row, and on the rail the new-chat and plug buttons.
+  const foot = mode === 'inline' ? null : wideContent
+    ? h('div', { className: 'bt-leftcol-foot' }, h(AccountLauncher, { seat: false, actions }), h(ConnectPlugins, { wide: true, actions }))
+    : h('div', { className: 'bt-leftcol-foot bt-leftcol-foot-rail' },
+        h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
+        h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Connect plugins'), title: t('Connect plugins'), onClick: () => actions.selectPanel('plugins') }, h(PlugIcon)),
+        h(AccountLauncher, { seat: false, actions }))
+  const content = h('div', { className: wideContent ? 'bt-side' : 'bt-side bt-rail', onKeyDown: typeToSearch },
+    top,
+    wideContent && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
-      main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, t('Setting up your Main Bot…')),
+      wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, t('Setting up your Main Bot…'))) : null,
       order.map(entry => (entry.kind === 'bot'
         ? h(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true })
         : entry.kind === 'room'
           ? h(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true })
-          : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))))
+          : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))),
+    foot)
+  if (mode === 'inline') return content
+  return h(LeftColumn, { mode, width: ourWidth }, content)
 }
 
 // The update button at the sidebar's top right: a cloud while a newer DS Bot —
@@ -717,7 +810,7 @@ export const SIDEBAR_CSS = `
 .bt-brand .bt-mark{flex:none}
 .bt-pin{flex:none;display:inline-flex;color:var(--bt-ink-3)}
 .bt-rail .bt-row{position:relative}
-.bt-rail .bt-pin{position:absolute;top:3px;left:calc(50% + 12px)}
+.bt-rail .bt-pin{position:absolute;top:1px;left:calc(50% + 14px)}
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}

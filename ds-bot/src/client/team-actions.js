@@ -1,19 +1,17 @@
-import { countCards } from './sources.js'
+import { countCards, heldCardKey } from './sources.js'
 import { noteClientError } from './diagnostics.js'
 
 // The actions every window that draws the Bot views shares: dialogs and panels (the `ui`
 // source), requests to the host, and the notes the transcript keeps. The shell around the
 // views adds navigation and its own panels. `after` reads the team again once a request
 // is done; `partFor` maps a Bot id, or any part of its chat, to its current part.
-export function teamActions({ call, after, partFor, roster, ui, live, cards, turnClock }) {
+export function teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock, panelFolded }) {
   // A memory is a Bot's or a group chat's; both are opened by id.
   const memoryOf = id => (roster.getSnapshot().roomsById[id] ? { roomId: id } : { botId: id })
   // The panel on a side chat's view, on the chat the strip tab or menu named.
   const openSideChat = (sessionId, chatId) => {
     ui.set(state => ({ ...state, details: sessionId, view: 'side', side: chatId ?? null, renaming: false, tab: null }))
   }
-  // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
-  const openSettings = (page = 'general', id = null) => { ui.set(state => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null })) }
   return {
     openNewChat: (mode) => { ui.set(state => ({ ...state, newChat: mode, menu: null, palette: null })) },
     openPalette: (query = '') => { ui.set(state => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null })) },
@@ -25,6 +23,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     toggleDetails: (id, force) => {
       ui.set((state) => {
         const details = force || state.details !== id || state.view !== 'details' ? id : null
+        // A folded panel is open but not shown: its opener then means "show it"
+        // (the column yields it room), not "close it".
+        if (details === null && panelFolded?.() === true) return { ...state, renaming: false, tab: null, details: id, view: 'details', panelYield: true }
         return { ...state, renaming: false, tab: null, details, view: 'details' }
       })
     },
@@ -44,9 +45,8 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     showDetails: (id, tab = null) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: false, tab })) },
     // Opening the conversation would move focus to its composer and blur the name field.
     renameBot: (id) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: true, tab: null })) },
-    openSettings,
-    // DS Bot's own Models page: the providers DSH serves, their keys and models.
-    openModels: () => openSettings('models'),
+    // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
+    openSettings: (page = 'general', id = null) => { ui.set(state => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null })) },
     closeSettings: () => { ui.set(state => (state.settings ? { ...state, settings: null } : state)) },
     openMemory: (id) => { ui.set(state => ({ ...state, memory: id, menu: null, palette: null })) },
     closeMemory: () => { ui.set(state => (state.memory ? { ...state, memory: null } : state)) },
@@ -81,28 +81,15 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     closeMenu: () => { ui.set(state => (state.menu ? { ...state, menu: null } : state)) },
     closeOverlay: () => { ui.set(state => ({ ...state, newChat: null, exchange: null, details: state.newChat || state.exchange ? state.details : null })) },
     createBot: payload => after(call('create-bot', payload)),
-    // The avatar library: photos the user imported once, kept by the host.
-    avatarLibrary: (options = {}) => call('avatar-library', options),
-    importAvatars: items => call('avatar-import', { items }),
-    deleteAvatar: id => call('avatar-delete', { id }),
     createRoom: (members, options = {}) => after(call('create-room', { members, ...options })),
     updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
     refreshModels: () => after(call('models')).catch(() => {}),
     efforts: ref => call('efforts', { ref }),
-    // Model providers and their API keys; DSH keeps them, and a key only travels to the host.
-    providers: () => call('providers'),
-    setProviderKey: (provider, value) => after(call('provider-key', { provider, value })),
-    addProvider: body => after(call('provider-add', body)),
-    providerModels: body => call('provider-models', body),
-    removeProvider: provider => after(call('provider-remove', { provider })),
-    // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
-    resume: botId => after(call('resume', { botId })),
     folders: () => call('folders'),
     folderPick: () => call('folder-pick'),
     folderList: path => call('folder-list', { path: path ?? '' }),
     setTeamWorkspace: path => after(call('team-workspace', { path })),
     deleteBot: id => after(call('delete-bot', { id })),
-    releasePrivate: id => after(call('private-release', { id })),
     duplicateBot: id => after(call('duplicate-bot', { id })),
     setPrefs: prefs => after(call('set-prefs', prefs)),
     setMain: (id, main = true, options = {}) => after(call('set-main', { id, main, ...options })),
@@ -113,7 +100,6 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call('view-reply', { sessionId: partFor(sessionId), viewId, action, values })),
     dismissView: sessionId => after(call('dismiss-view', { sessionId: partFor(sessionId) })),
-    deleteBtw: (sessionId, cardId) => after(call('btw-delete', { sessionId, cardId })),
     answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
     stopMemberWork: (roomId, botId) => after(call('stop-member-work', { roomId, botId })),
     // Values go out in these requests and never come back in a response.
@@ -125,10 +111,6 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     connectorConnect: (id, token) => after(call('connector-connect', { id, token })),
     connectorDisconnect: id => after(call('connector-disconnect', { id })),
     connectorRetry: id => after(call('connector-retry', { id })),
-    phoneSet: settings => after(call('phone-set', settings)),
-    phonePair: () => after(call('phone-pair')),
-    phonePairCancel: () => after(call('phone-pair-cancel')),
-    phoneRemove: id => after(call('phone-remove', { id })),
     saveCapability: capability => after(call('capability-save', capability)),
     deleteCapability: name => after(call('capability-delete', { name })),
     approveCapability: name => after(call('capability-approve', { name })),
@@ -190,6 +172,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     },
     noteCards: (sessionId, callIds, delta) => {
       if (sessionId !== undefined) cards.set(state => countCards(state, sessionId, callIds, delta))
+    },
+    noteHeldCard: (sessionId, kind, requestId, delta) => {
+      if (sessionId !== undefined) heldCards.set(state => countCards(state, sessionId, [heldCardKey(kind, requestId)], delta))
     },
     clearLive: sessionId => live.set((state) => {
       if (!state[sessionId]) return state

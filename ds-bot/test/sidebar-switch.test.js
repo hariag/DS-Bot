@@ -39,16 +39,16 @@ runInNewContext(outputFiles[0].text, {
 })
 const { SHELL_CSS, SIDEBAR_CSS, TeamSidebar } = module.exports
 
-function navigationSidebar(wide, { shell = true } = {}) {
+function navigationSidebar(wide, { leftDrawer = false } = {}) {
   const calls = []
   const refs = []
-  let collapsed = !wide
   const bot = { id: 'writer', name: 'Writer', createdAt: 1 }
   const room = { id: 'room', name: 'Team', members: [], createdAt: 2 }
   const agent = { id: 'agent', sessions: ['session'], createdAt: 3 }
   const roster = { bots: [bot], rooms: [room], agents: [agent], byId: { writer: bot }, ready: true }
   const actions = Object.fromEntries(['openSession', 'openAgent', 'openAgentSession', 'newAgentSession'].map(name => [name, id => { calls.push([name, id]); return id }]))
-  actions.toggleSidebar = () => { collapsed = !collapsed; calls.push(['toggleSidebar']) }
+  actions.toggleSidebar = () => { calls.push(['toggleSidebar']) }
+  actions.setLeftDrawer = (on) => { calls.push(['setLeftDrawer', on]) }
   const rows = []
   const walk = (node) => {
     if (Array.isArray(node)) { node.forEach(walk); return }
@@ -56,18 +56,14 @@ function navigationSidebar(wide, { shell = true } = {}) {
     if (['BotRow', 'RoomRow', 'AgentRow'].includes(node.type?.name)) rows.push(node)
     walk(node.props?.children)
   }
-  const render = (nextWide = shell ? wide : !collapsed) => {
+  const render = (nextWide = wide) => {
     wide = nextWide
-    // The public owner action closes over the shell's committed collapsed state;
-    // wide may still be true during the shell's 150ms content fade-out.
-    const committedCollapsed = collapsed
     renderRefs = refs
     refIndex = 0
     layoutEffects = []
     const tree = TeamSidebar({
       wide, actions,
-      ...(shell ? { expandSidebar: () => { if (committedCollapsed) actions.toggleSidebar() } } : {}),
-      useRoster: pick => pick(roster), useUi: pick => pick({ unread: {} }), useRegistry: pick => pick({}),
+      useRoster: pick => pick(roster), useUi: pick => pick({ unread: {}, leftDrawer }), useRegistry: pick => pick({}),
       useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
     })
     renderRefs = undefined
@@ -78,12 +74,12 @@ function navigationSidebar(wide, { shell = true } = {}) {
     walk(tree)
   }
   render()
-  return { calls, rows, actions, render, get collapsed() { return collapsed } }
+  return { calls, rows, actions, render }
 }
 
 for (const width of [390, 1023, 1024, 1280]) {
   for (const wide of [false, true]) {
-    test(`sidebar navigation at ${width}px with ${wide ? 'expanded content' : 'a collapsed rail'} only closes an open mobile sidebar`, () => {
+    test(`sidebar navigation at ${width}px with ${wide ? 'expanded content' : 'our own column'} just navigates`, () => {
       viewport.innerWidth = width
       const initial = navigationSidebar(wide)
       assert.equal(initial.rows.length, 3)
@@ -92,77 +88,25 @@ for (const width of [390, 1023, 1024, 1280]) {
         for (const name of names) {
           const { rows, calls } = navigationSidebar(wide)
           assert.equal(rows[index].props.actions[name]('selected'), 'selected')
-          assert.deepEqual(calls, wide && width < 1024 ? [[name, 'selected'], ['toggleSidebar']] : [[name, 'selected']])
+          assert.deepEqual(calls, [[name, 'selected']])
         }
       }
     })
   }
 }
 
-test('repeated sidebar navigation before another commit closes only once', () => {
+test('a row picked from the floating drawer closes it', () => {
   viewport.innerWidth = 390
-  const side = navigationSidebar(true)
-  side.rows[0].props.actions.openAgent('first')
-  side.rows[1].props.actions.openSession('second')
-  assert.equal(side.collapsed, true)
-  assert.deepEqual(side.calls, [['openAgent', 'first'], ['toggleSidebar'], ['openSession', 'second']])
+  const side = navigationSidebar(false, { leftDrawer: true })
+  side.rows[0].props.actions.openSession('picked')
+  assert.deepEqual(side.calls, [['openSession', 'picked'], ['setLeftDrawer', false]])
 })
 
-test('the standalone UI can navigate without a shell expansion action', () => {
+test('a row picked outside the drawer leaves it alone', () => {
   viewport.innerWidth = 390
-  // app/ui passes its actual wide state directly, without the DSH owner action.
-  const side = navigationSidebar(true, { shell: false })
-  side.rows[1].props.actions.openSession('first')
-  side.rows[2].props.actions.openSession('second')
-  assert.equal(side.collapsed, true)
-  assert.deepEqual(side.calls, [['openSession', 'first'], ['toggleSidebar'], ['openSession', 'second']])
-  side.render()
-  side.calls.length = 0
-  side.rows[1].props.actions.openSession('from-rail')
-  assert.deepEqual(side.calls, [['openSession', 'from-rail']])
-  side.actions.toggleSidebar()
-  side.render()
-  side.rows[2].props.actions.openSession('after-expansion')
-  assert.equal(side.collapsed, true)
-})
-
-test('navigation during the shell fade-out keeps the already collapsed sidebar closed', () => {
-  viewport.innerWidth = 390
-  const side = navigationSidebar(true)
-  side.rows[0].props.actions.openAgentSession('first')
-  assert.equal(side.collapsed, true)
-  side.render(true)
-  side.calls.length = 0
-  side.rows[1].props.actions.openSession('during-fade')
-  assert.equal(side.collapsed, true, 'wide remains true until the content fade settles')
-  assert.equal(side.calls.filter(([name]) => name === 'openSession').length, 1)
-})
-
-test('a sidebar reopened before wide becomes false still closes on the next navigation', () => {
-  viewport.innerWidth = 390
-  const side = navigationSidebar(true)
-  side.rows[0].props.actions.openAgent('first')
-  side.render(true)
-  side.actions.toggleSidebar()
-  side.render(true)
-  assert.equal(side.collapsed, false)
-  side.rows[1].props.actions.openSession('after-reopen')
-  assert.equal(side.collapsed, true)
-})
-
-test('the navigation guard resets across a full collapse and expansion cycle', () => {
-  viewport.innerWidth = 390
-  const side = navigationSidebar(true)
-  side.rows[0].props.actions.newAgentSession('first')
-  side.render(false)
-  side.calls.length = 0
-  side.rows[1].props.actions.openSession('from-rail')
-  assert.equal(side.collapsed, true)
-  assert.deepEqual(side.calls, [['openSession', 'from-rail']])
-  side.actions.toggleSidebar()
-  side.render(true)
-  side.rows[1].props.actions.openSession('after-expansion')
-  assert.equal(side.collapsed, true)
+  const side = navigationSidebar(false)
+  side.rows[0].props.actions.openSession('picked')
+  assert.deepEqual(side.calls, [['openSession', 'picked']])
 })
 
 // A Bot working in its own chat previews what it is doing, the way a group row does
@@ -370,14 +314,14 @@ for (const platform of ['web', 'windows', 'mac']) {
   }
 }
 
-test('an open sidebar has a button that collapses it; the rail leaves that to the shell', () => {
+test('an open sidebar has a button that folds it to the rail; the rail offers the way back', () => {
   const calls = []
   const roster = { bots: [], rooms: [], agents: [], byId: {}, ready: true }
   const props = wide => ({
     wide,
     useRoster: pick => pick(roster), useUi: pick => pick({ unread: {} }), useRegistry: pick => pick({}),
     useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
-    actions: { toggleSidebar: () => calls.push('toggle') },
+    actions: { setSidebarPref: pref => calls.push(pref), setLeftDrawer: on => calls.push(['drawer', on]), toggleSidebar: () => calls.push('toggle') },
   })
   const find = (node, match) => {
     if (Array.isArray(node)) return node.map(child => find(child, match)).find(Boolean)
@@ -388,8 +332,13 @@ test('an open sidebar has a button that collapses it; the rail leaves that to th
   const button = find(TeamSidebar(props(true)), collapse)
   assert.ok(button?.props.className.split(' ').includes('bt-side-collapse'))
   button.props.onClick()
-  assert.deepEqual(calls, ['toggle'])
-  assert.equal(find(TeamSidebar(props(false)), collapse), undefined)
+  assert.deepEqual(calls, [['drawer', false], 'rail'])
+  // The collapsed column is our own rail with an expand button (hidden where the
+  // shell's title-bar switch shows).
+  const rail = TeamSidebar(props(false))
+  assert.equal(find(rail, collapse), undefined)
+  const expand = find(rail, node => node.type === 'button' && node.props['aria-label'] === 'Expand sidebar')
+  assert.ok(expand?.props.className.split(' ').includes('bt-rail-expand'))
 })
 
 test('the logo row takes no room in an open sidebar under a Windows title bar', () => {
