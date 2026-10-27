@@ -479,6 +479,41 @@ test('deleting a private Bot keeps its folder and archived memory closed', async
   await assert.rejects(rt.updateBot(third.id, { workDir: diary, private: true }), CLOSED)
 })
 
+test('the user lifts what a deleted private Bot left closed, one Bot at a time', async (t) => {
+  const { rt, call, run, root, diary, state, stop } = await start()
+  t.after(stop)
+  const ledgerDir = join(root, 'ledger')
+  mkdirSync(ledgerDir)
+  writeFileSync(join(ledgerDir, 'books.txt'), 'secret')
+  const ledger = await rt.createBot({ name: 'Ledger', workDir: ledgerDir })
+  await rt.updateBot(ledger.id, { private: true })
+  await rt.deleteBot(P)
+  await rt.deleteBot(ledger.id)
+
+  // The list names each place and keeps Session ids and the archive path on the host.
+  const listed = (await call('state', {})).value.privateArchives
+  assert.deepEqual(listed, [{ id: P, name: 'Diary', workDir: diary }, { id: ledger.id, name: 'Ledger', workDir: ledgerDir }])
+  assert.equal((await run('read', { file_path: join(diary, 'notes.txt') }, 'b')).ran, false)
+  await assert.rejects(rt.createBot({ name: 'Third', workDir: diary }), CLOSED)
+
+  const lifted = await call('private-release', { id: P })
+  assert.equal(lifted.ok, true)
+  assert.deepEqual(lifted.value.privateArchives.map(entry => entry.id), [ledger.id])
+  assert.deepEqual(state().privateArchives.map(entry => entry.id), [ledger.id])
+  assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, 'b'), { ran: true })
+  assert.deepEqual(await run('session_trace', { session_id: P }, 'b'), { ran: true })
+  assert.equal((await rt.createBot({ name: 'Third', workDir: diary })).workDir, diary)
+
+  // The other Bot's places stay closed.
+  const kept = await run('read', { file_path: join(ledgerDir, 'books.txt') }, 'b')
+  assert.equal(kept.ran, false)
+  assert.match(kept.error, CLOSED)
+
+  const again = await call('private-release', { id: P })
+  assert.equal(again.ok, false)
+  assert.match(again.error.message, /Nothing kept closed/)
+})
+
 test('with no private Bot the tools run as they did', async (t) => {
   const { run, diary, stop } = await start({ privateBot: false })
   t.after(stop)

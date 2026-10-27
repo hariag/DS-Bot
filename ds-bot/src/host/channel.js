@@ -53,6 +53,8 @@ export function install(rt) {
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
       return { ...room, relayLimitDefault: defaultRelayLimit(room), parts, ...(last ? { preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
+    // Deleted private Bots whose folder, memory and chats stay closed to the others.
+    privateArchives: rt.archivesView(),
     exchangeTurns: state.exchangeTurns,
     questions: state.questions,
     views: state.views ?? {},
@@ -245,6 +247,10 @@ export function install(rt) {
         case 'delete-bot':
           await rt.load()
           await rt.deleteBot(body.id)
+          return ok(view())
+        case 'private-release':
+          await rt.load()
+          await rt.releaseArchive(String(body.id ?? ''))
           return ok(view())
         case 'set-main':
           await rt.load()

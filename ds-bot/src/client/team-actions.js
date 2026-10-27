@@ -102,6 +102,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, tur
     folderList: path => call('folder-list', { path: path ?? '' }),
     setTeamWorkspace: path => after(call('team-workspace', { path })),
     deleteBot: id => after(call('delete-bot', { id })),
+    releasePrivate: id => after(call('private-release', { id })),
     duplicateBot: id => after(call('duplicate-bot', { id })),
     setPrefs: prefs => after(call('set-prefs', prefs)),
     setMain: (id, main = true, options = {}) => after(call('set-main', { id, main, ...options })),

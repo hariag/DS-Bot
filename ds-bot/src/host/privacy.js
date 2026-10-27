@@ -340,5 +340,17 @@ export function install(rt) {
     if (found) throw new Error(`${found.name} is a private Bot and cannot be in a group chat: what is said in a group is read by every member`)
   }
 
-  Object.assign(rt, { isPrivate, privateClash, checkPrivacyChange: checkChange, checkNoPrivate })
+  // Deleting a private Bot keeps its places closed (see roster.js deleteBot); only the
+  // user opens them again, one Bot at a time. The files stay where they are.
+  async function releaseArchive(id) {
+    const kept = state.privateArchives ?? []
+    if (!kept.some(entry => entry.id === id)) throw new Error('Nothing kept closed for this Bot')
+    state.privateArchives = kept.filter(entry => entry.id !== id)
+    await rt.save()
+  }
+
+  // What the settings list shows. Session ids stay on the host.
+  const archivesView = () => (state.privateArchives ?? []).map(({ id, name, workDir }) => ({ id, name, ...(workDir === undefined ? {} : { workDir }) }))
+
+  Object.assign(rt, { isPrivate, privateClash, checkPrivacyChange: checkChange, checkNoPrivate, releaseArchive, archivesView })
 }
