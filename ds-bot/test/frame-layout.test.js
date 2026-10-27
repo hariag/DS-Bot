@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  RAIL_WIDTH, DSH_NARROW,
-  frameLayout, dshExpandedFor, userSidebarToggle,
+  RAIL_WIDTH, RAIL_SNAP, SIDEBAR_MIN, SIDEBAR_MAX, MIN_CHAT, FALLBACK_SIDEBAR_WIDTH,
+  frameLayout, dragColumn, toggledPref, userSidebarToggle, readSidebar, writeSidebar,
 } from '../src/client/frame-layout.js'
 import { createSource } from '../src/client/sources.js'
 import { teamActions } from '../src/client/team-actions.js'
@@ -73,13 +73,51 @@ test('an unknown panel view folds by the details minimum', () => {
   assert.equal(at(1000, 280, { panel: { view: 'mystery', yielded: false } }).panel, 'folded')
 })
 
-// The shell's own sidebar is expanded only for our open column above DSH_NARROW.
-test('the shell sidebar stays expanded only for the open column on a wide window', () => {
-  assert.equal(dshExpandedFor(DSH_NARROW, 'open'), true)
-  assert.equal(dshExpandedFor(1400, 'open'), true)
-  assert.equal(dshExpandedFor(DSH_NARROW - 1, 'open'), false)
-  assert.equal(dshExpandedFor(1400, 'rail'), false)
-  assert.equal(dshExpandedFor(1400, 'drawer'), false)
+// The switch hides the whole column: nothing is left beside the chat.
+test('a hidden column takes no room, and a panel shows or covers beside nothing', () => {
+  const layout = at(1000, 280, { pref: 'hidden', panel: details() })
+  assert.deepEqual({ left: layout.left, panel: layout.panel, room: layout.room }, { left: 'hidden', panel: 'shown', room: 1000 })
+  assert.equal(at(600, 280, { pref: 'hidden', panel: details() }).panel, 'folded')
+  assert.deepEqual(at(600, 280, { pref: 'hidden', panel: details(true) }), { left: 'hidden', panel: 'overlay', room: 600 })
+})
+
+test('the switch hides the column and brings back the one it hid', () => {
+  assert.equal(toggledPref('open', 'open'), 'hidden')
+  assert.equal(toggledPref('rail', 'rail'), 'hidden')
+  assert.equal(toggledPref('hidden', 'rail'), 'rail')
+  assert.equal(toggledPref('hidden', 'open'), 'open')
+})
+
+// The edge drag: a width in the open range, docked while the chat keeps its
+// room; short of the snap point the rail.
+test('a drag short of the snap point lands on the rail', () => {
+  assert.deepEqual(dragColumn(RAIL_SNAP - 1, 1400), { left: 'rail', width: RAIL_WIDTH })
+  assert.deepEqual(dragColumn(30, 1400), { left: 'rail', width: RAIL_WIDTH })
+})
+
+test('a drag past the snap point opens a column within its width range', () => {
+  assert.deepEqual(dragColumn(RAIL_SNAP, 1400), { left: 'open', width: SIDEBAR_MIN })
+  assert.deepEqual(dragColumn(333.4, 1400), { left: 'open', width: 333 })
+  assert.deepEqual(dragColumn(900, 1400), { left: 'open', width: SIDEBAR_MAX })
+  // The chat keeps MIN_CHAT beside a docked column.
+  assert.deepEqual(dragColumn(400, 800), { left: 'open', width: 800 - MIN_CHAT })
+})
+
+test('a drag past the snap point on a window too narrow to dock floats a drawer', () => {
+  assert.deepEqual(dragColumn(300, 600), { left: 'drawer', width: 300 })
+  assert.deepEqual(dragColumn(500, 600), { left: 'drawer', width: SIDEBAR_MAX })
+})
+
+test('the saved column reads back, and anything unknown falls back to the open default', () => {
+  const store = new Map()
+  const storage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) }
+  assert.deepEqual(readSidebar(storage), { pref: 'open', shown: 'open', width: FALLBACK_SIDEBAR_WIDTH })
+  writeSidebar({ pref: 'hidden', shown: 'rail', width: 350 }, storage)
+  assert.deepEqual(readSidebar(storage), { pref: 'hidden', shown: 'rail', width: 350 })
+  writeSidebar({ pref: 'odd', shown: 'odd', width: 9999 }, storage)
+  assert.deepEqual(readSidebar(storage), { pref: 'open', shown: 'open', width: SIDEBAR_MAX })
+  store.set('ds-bot:sidebar', 'rail')
+  assert.deepEqual(readSidebar(storage), { pref: 'open', shown: 'open', width: FALLBACK_SIDEBAR_WIDTH })
 })
 
 // A flip of the shell's collapsed flag is the user's switch gesture only when we

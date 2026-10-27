@@ -303,33 +303,53 @@ function shell({ platform, collapsed }) {
   return { document, hidden, switches }
 }
 
-for (const platform of ['web', 'windows', 'mac']) {
-  for (const collapsed of [false, true]) {
-    test(`${collapsed ? 'a collapsed' : 'an open'} sidebar on ${platform} shows exactly one sidebar switch`, () => {
-      const { document, hidden, switches } = shell({ platform, collapsed })
-      assert.equal(switches.length, 1, `switches shown: ${switches.map(node => node.className).join(' | ') || 'none'}`)
-      const [shown] = switches
-      // An open sidebar on the web has the team's own button; under a Windows
-      // title bar our own switch replaces the shell's (which would flash the
-      // shell's column before we pull it back); elsewhere the shell's stays.
-      assert.equal(shown.classList.contains('bt-side-collapse'), platform === 'web' && !collapsed)
-      assert.equal(shown.classList.contains('bt-title-toggle'), platform === 'windows')
-      // What the team view replaces stays out of sight.
+// The switch is always ours. Under a Windows title bar it is the title-band
+// button and the shell's own is hidden (left to the shell, it would expand the
+// shell's sidebar before we pull it back, a flash); elsewhere it is the column's
+// top-row button, or the floating one while the column is hidden.
+for (const collapsed of [false, true]) {
+  test(`${collapsed ? 'a collapsed' : 'an open'} shell sidebar under a Windows title bar shows only our switch`, () => {
+    const { switches } = shell({ platform: 'windows', collapsed })
+    assert.deepEqual(switches.map(node => node.className), ['bt-title-toggle'])
+  })
+}
+
+test('off a Windows title bar the column\'s top row and the floating switch are never hidden by style', () => {
+  for (const platform of ['web', 'mac']) {
+    const { document, hidden } = shell({ platform, collapsed: false })
+    assert.equal(hidden(document.querySelector('.bt-side-collapse')), false, platform)
+    assert.equal(hidden(document.querySelector('.bt-title-toggle')), false, platform)
+  }
+})
+
+test('what the team view replaces in the shell sidebar stays out of sight', () => {
+  for (const platform of ['web', 'windows', 'mac']) {
+    for (const collapsed of [false, true]) {
+      const { document, hidden } = shell({ platform, collapsed })
       assert.equal(hidden(document.querySelector('.x_newSession')), true)
       const brand = document.querySelector('.x_brand')
       if (brand) assert.equal(hidden(brand), true)
-    })
+    }
   }
-}
+})
 
-test('an open sidebar has a button that folds it to the rail; the rail offers the way back', () => {
+// The shell's collapsed sidebar keeps no track in the Bot view, so a hidden
+// column leaves nothing behind; the shell's right column keeps its own geometry.
+test('the shell\'s collapsed sidebar keeps no track while its right column is closed', () => {
+  const frame = [...rulesOf(SHELL_CSS), ...rulesOf(SIDEBAR_CSS)].find(rule => rule.selector.includes('[data-sidebar-collapsed][data-rightbar-collapsed]'))
+  assert.match(frame?.body ?? '', /grid-template-columns:0px/)
+})
+
+test('the column\'s top row hides it, on the rail too, and its edge is a drag grip', () => {
+  viewport.innerWidth = 1280
   const calls = []
   const roster = { bots: [], rooms: [], agents: [], byId: {}, ready: true }
-  const props = wide => ({
-    wide,
+  const props = pref => ({
+    wide: false,
     useRoster: pick => pick(roster), useUi: pick => pick({ unread: {} }), useRegistry: pick => pick({}),
     useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
-    actions: { setSidebarPref: pref => calls.push(pref), setLeftDrawer: on => calls.push(['drawer', on]), toggleSidebar: () => calls.push('toggle') },
+    useSidebarPref: pick => pick(pref),
+    actions: { toggleLeftHidden: () => calls.push('toggle'), toggleSidebar: () => {} },
   })
   const find = (node, match) => {
     if (Array.isArray(node)) return node.map(child => find(child, match)).find(Boolean)
@@ -337,16 +357,21 @@ test('an open sidebar has a button that folds it to the rail; the rail offers th
     return match(node) ? node : find(node.props?.children, match)
   }
   const collapse = node => node.type === 'button' && node.props['aria-label'] === 'Collapse sidebar'
-  const button = find(TeamSidebar(props(true)), collapse)
-  assert.ok(button?.props.className.split(' ').includes('bt-side-collapse'))
-  button.props.onClick()
-  assert.deepEqual(calls, [['drawer', false], 'rail'])
-  // The collapsed column is our own rail with an expand button (hidden where the
-  // shell's title-bar switch shows).
-  const rail = TeamSidebar(props(false))
-  assert.equal(find(rail, collapse), undefined)
-  const expand = find(rail, node => node.type === 'button' && node.props['aria-label'] === 'Expand sidebar')
-  assert.ok(expand?.props.className.split(' ').includes('bt-rail-expand'))
+  for (const pref of ['open', 'rail']) {
+    const tree = TeamSidebar(props(pref))
+    const button = find(tree, collapse)
+    assert.ok(button?.props.className.split(' ').includes('bt-side-collapse'), pref)
+    button.props.onClick()
+    const column = find(tree, node => node.type?.name === 'LeftColumn')
+    assert.equal(column.props.mode, pref)
+    assert.equal(typeof column.props.onGrip, 'function')
+  }
+  assert.deepEqual(calls, ['toggle', 'toggle'])
+  // Hidden, there is no column at all; the floating switch brings it back.
+  const hidden = TeamSidebar(props('hidden'))
+  assert.equal(find(hidden, node => node.type?.name === 'LeftColumn'), undefined)
+  const toggle = find(hidden, node => node.type?.name === 'TitleToggle')
+  assert.equal(toggle.props.hidden, true)
 })
 
 test('the logo row takes no room in an open sidebar under a Windows title bar', () => {

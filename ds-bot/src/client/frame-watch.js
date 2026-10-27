@@ -2,7 +2,6 @@
 // sidebar track, and the one CSS rule that writes the conversation column's
 // margins (our own column on the left, the Bot panel on the right).
 import { installStyles } from './styles.js'
-import { FALLBACK_SIDEBAR_WIDTH } from './frame-layout.js'
 
 export const sidebarTrackWidth = () =>
   typeof document === 'undefined' ? null : document.querySelector('[class*="_sidebarCol"]')?.getBoundingClientRect().width ?? null
@@ -63,11 +62,10 @@ export const chatRoom = {
 }
 
 // Feeds the frame source the geometry the layout rules read: viewport, the
-// shell sidebar's expanded and collapsed track widths, and its collapsed flag.
-// A resize or a sidebar slide does not always come with a window event, so the
-// column widths come off a ResizeObserver and the flag off a MutationObserver.
+// shell sidebar's collapsed track width, and its collapsed flag. A resize or a
+// sidebar slide does not always come with a window event, so the track width
+// comes off a ResizeObserver and the flag off a MutationObserver.
 export function installFrameWatch(frame) {
-  let sidebarWidth = FALLBACK_SIDEBAR_WIDTH
   let collapsedWidth = collapsedTrackWidth()
   let raf = 0
   const watched = new Set()
@@ -81,13 +79,10 @@ export function installFrameWatch(frame) {
     const animating = column?.closest('[data-animating]') != null
     const width = animating ? null : sidebarTrackWidth()
     const collapsed = dshCollapsed()
-    if (width !== null) {
-      if (collapsed === true) collapsedWidth = width
-      else if (collapsed === false) sidebarWidth = width
-    }
+    if (width !== null && collapsed === true) collapsedWidth = width
     frame.set((state) => {
-      const next = { viewport: window.innerWidth, sidebarWidth, collapsedWidth, collapsed: collapsed === true }
-      return state.viewport === next.viewport && state.sidebarWidth === next.sidebarWidth && state.collapsedWidth === next.collapsedWidth && state.collapsed === next.collapsed ? state : next
+      const next = { ...state, viewport: window.innerWidth, collapsedWidth, collapsed: collapsed === true }
+      return state.viewport === next.viewport && state.collapsedWidth === next.collapsedWidth && state.collapsed === next.collapsed ? state : next
     })
   }
   const measure = () => {
