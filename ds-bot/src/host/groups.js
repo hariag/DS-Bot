@@ -61,6 +61,7 @@ const unseenLines = (room, memberId) => {
 const noticeText = (line) => {
   if (line.reason === 'missed') return `${(line.names ?? []).join(' and ')} did not answer within ${line.minutes} minutes, so this round moved on without it. If it is still working, it posts its result later as a late reply; if it is urgent, the user can write here or the admin can follow up.`
   if (line.reason === 'paused') return `Paused: Bots have called each other ${line.limit} times since the user last wrote here. The calls to @${(line.names ?? []).join(' and @')} wait until the user continues or writes here; do not call them again.`
+  if (line.reason === 'admin-passed') return `${(line.names ?? []).join(' and ') || 'The admin'} did not answer or call anyone; call a member with @Name.`
   return line.text ?? ''
 }
 // `text` is what to show of a message line, by default what the log keeps of it.
@@ -564,6 +565,17 @@ export function install(rt) {
       const callees = leads && all ? [...found, ...others.filter(other => !found.includes(other))] : found
       callMembers(round, index, callees, `${member.name} mentioned you`, member.id, 'bot')
     }
+    // The admin was alone with the user's message and passed: the round ends with
+    // nothing said. The group says so once, so the user knows to call a member.
+    const alone = round.soleAdmin !== undefined && round.slots.find(slot => slot.id === round.soleAdmin.id)?.status === 'passed'
+    // An answer that came, or is still coming, means the round is not left silent.
+    const answered = round.slots.some(slot => ['posted', 'working', 'waiting-approval'].includes(slot.status))
+    if (alone && !answered) {
+      appendRoom(room, { who: 'DS Bot', kind: 'notice', reason: 'admin-passed', names: [round.soleAdmin.name] })
+      // The round the user watched shows the same notice as one line of its replies.
+      round.replies.push({ kind: 'admin-passed', botId: round.soleAdmin.id, name: round.soleAdmin.name, color: round.soleAdmin.color, time: Date.now() })
+      await rt.save()
+    }
     // A round that ended with parked calls says so once, to the group and to the
     // user: the log's "@Name" lines are real calls that wait, not drops in silence.
     if (round.parked !== undefined) {
@@ -619,19 +631,26 @@ export function install(rt) {
       const references = posts.flatMap(post => post.references ?? [])
       // A member a Bot's post calls by name works for that Bot.
       const named = opener.botId === undefined ? [] : mentionsIn(opener.text ?? '', room.members.map(rt.botOf).filter(Boolean)).found
+      const speakers = openingSpeakers(room, opener)
+      // The admin alone with the user's message: when it passes, the round ends with
+      // nothing said, and the group says so once.
+      const admin = room.members.map(rt.botOf).filter(Boolean).find(bot => rt.isAdminOf(room, bot.id))
+      const soleAdmin = opener.botId === undefined && !opener.kickoff && room.mode === 'admin' && admin !== undefined
+        && speakers.length === 1 && speakers[0].id === admin.id
       const round = {
         roomId: room.id,
         members: room.members,
         startSeq,
         ...(opener.kickoff ? { kickoff: true } : {}),
         ...(references.length > 0 ? { references, shown: [] } : {}),
-        slots: openingSpeakers(room, opener).map(member => ({
+        slots: speakers.map(member => ({
           id: member.id, name: member.name, status: 'waiting',
           origin: opener.botId === undefined ? 'user' : 'bot',
           ...(opener.kickoff ? { note: 'the group was just created' } : {}),
           ...(named.includes(member) ? { by: opener.botId } : {}),
           ...(opener.done ? { note: `${opener.name ?? 'a member'} finished the work you asked for` } : {}),
         })),
+        ...(soleAdmin ? { soleAdmin: { id: admin.id, name: admin.name, color: admin.color } } : {}),
         speaking: null,
         replies: [],
         passed: [],

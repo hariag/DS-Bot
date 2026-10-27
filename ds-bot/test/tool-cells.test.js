@@ -176,6 +176,15 @@ test('a paused group shows the wait, and Continue releases it while calls are pa
   assert.deepEqual(clicked, ['room'])
 })
 
+// The admin was alone with the user's message and passed: the round shows the
+// notice, so the user sees why nothing was answered.
+test('a group whose admin passed alone shows the notice', () => {
+  const replies = [{ kind: 'admin-passed', botId: 'chief', name: 'Chief', time: at(0, 14, 5) }]
+  const out = show(call('group_relay', 'direct', { content: { replies } }), { sessionId: 'room' })
+  const events = findAll(out, node => node.props?.className === 'bt-event').map(text)
+  assert.deepEqual(events, ['Chief did not answer or call anyone; call a member with @Name'])
+})
+
 // The trigger of a post in a group chat carries the event's time, not the post's.
 test('a group post drawn from its trigger shows the time it came in', () => {
   const time = at(0, 16, 42)

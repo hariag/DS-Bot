@@ -925,6 +925,10 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       if (reply.kind === 'missed') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' }, t("{name} didn't answer in time", { name: bot.name }))
       }
+      if (reply.kind === 'admin-passed') {
+        return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event' },
+          t('{name} did not answer or call anyone; call a member with @Name', { name: bot.name }))
+      }
       if (reply.kind === 'paused') {
         return h('div', { key: `paused-${index}`, className: 'bt-event' },
           h('span', null, t('Paused after {count} Bot relays. Waiting: {names}', { count: reply.count, names: (reply.names ?? []).join(t(' and ')) })),
