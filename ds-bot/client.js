@@ -6716,6 +6716,7 @@ body{
 --dui-ink-rose:var(--bt-ink-rose);--dui-ink-yellow:var(--bt-ink-yellow);
 --dui-ink-cyan:var(--bt-ink-cyan);--dui-ink-magenta:var(--bt-ink-magenta)}
 .bt-q-inline .dui-view{margin:0;width:100%;max-width:min(100%,max(calc(var(--bt-msg-w,.8) * 100%),560px));order:0}
+.bt-q-inline .dui-q{margin:0;max-width:min(550px,86%);order:0}
 body[data-bt-layout=flat] .bt-q-inline .dui-view{max-width:calc(var(--bt-flat-w,1) * 100%)}
 .bt-q-inline:has(>.dui-view-bare){margin:8px 0 12px}
 `;
