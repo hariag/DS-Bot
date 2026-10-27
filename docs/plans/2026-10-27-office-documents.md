@@ -20,7 +20,7 @@ Bot 要能直接处理 .docx/.pptx/.xlsx：打开看结构、检查包健康、�
 
 ## ds-bot 自己的命令行（`office.js`）
 
-打进 npm 包的单文件 CLI，只依赖 Node 内建，所有运行面通用（桌面应用、DSH Desktop、DSH Web）。退出码：0 成功、1 仍有 finding、2 用法或失败；`--json` 时输出 `{"ok":true,"data":…}` / `{"ok":false,"error":{…}}`。编辑默认另存（`-o`），`--in-place` 才原地写。
+打进 npm 包的单文件 CLI，依赖 Node 内建加打包进去的 XML 解析库，所有运行面通用（桌面应用、DSH Desktop、DSH Web）。退出码：0 成功、1 仍有 finding、2 用法或失败；`--json` 时输出 `{"ok":true,"data":…}` / `{"ok":false,"error":{…}}`（finding 在 `data.findings` 里，ok 仍为 true）。编辑默认另存（`-o`），`--in-place` 才原地写。
 
 - `unpack`/`pack`：把包解成可读 XML（`pack` 还原排版空白并跑 `check --against`）
 - `check [--against] [--fix]`：只查会让 Office 拒开或弹修复的问题——XML 良构、内容类型完整、内部关系可达、r:id 引用存在、pptx 形状/幻灯片 id、docx docPr/paraId、`xml:space`、批注 id 一致。`--against` 只看新引入的问题；`--fix` 修安全的几类
@@ -45,14 +45,15 @@ DSH 的六个格式/操作技能（office-docx/pptx/xlsx、office-render、offic
 
 ## 各运行面的运行时
 
-- 桌面应用：payload 的 Node（host 注入 `DS_BOT_OFFICE_NODE`），office.js 走 `app.asar.unpacked`
-- DSH Desktop / Web 插件：宿主是纯 Node 时用宿主解释器；否则技能文本指示调 `load_workspace_dependencies` 取 payload node
+- 桌面应用：全部可用——payload 的 Python/Node/LibreOffice、DSH 的 Office 技能、`office.js` 全部命令（host 注入 `DS_BOT_OFFICE_NODE`，office.js 走 `app.asar.unpacked`）
+- DSH Desktop：DSH 自带的 Python 和渲染器照常，外加我们的 `office.js` 命令（纯 Node 宿主用宿主解释器；否则技能文本指示调 `load_workspace_dependencies` 取 node）
+- DSH Web：只有 `office.js` 命令——没有随包的 Python（建新文件受限），没有渲染器（除非用户自己装 DSH 提供的 Office sidecar）
 
 ## 不做的
 
 - 不做模板/母题生成；排版规则写成技能文本
 - 不做 XSD 校验——`check` 只覆盖「Office 拒开/弹修复」这一档
-- docx 的复杂修订细节（字段内修订、编号变更等）按出现再补
+- `accept_changes`/`reject_changes` 不处理嵌套在字段指令里的修订，也不处理 `w:numberingChange` 的内容回滚（编号变更只去标记不还原编号）
 
 ## 升 DSH 版本时
 

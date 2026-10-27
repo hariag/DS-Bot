@@ -225,7 +225,10 @@ export function pptxLayout(pkg, slidesFilter, { autofit = false } = {}) {
               const old = firstOf(bodyPr, tag)
               if (old) bodyPr.removeChild(old)
             }
-            bodyPr.appendChild(doc.createElement('a:normAutofit'))
+            // a:normAutofit belongs before a:scene3d / a:sp3d / a:flatTx / a:extLst.
+            const anchor = childrenOf(bodyPr).find(c =>
+              ['a:scene3d', 'a:sp3d', 'a:flatTx', 'a:extLst'].includes(c.tagName))
+            bodyPr.insertBefore(doc.createElement('a:normAutofit'), anchor ?? null)
             fitted.push(`${slide.position}:${shapeName(el)}`)
           }
         }
@@ -258,6 +261,8 @@ export function pptxSlides(pkg, order) {
     const dup = String(nextIds.slide++)
     const newPart = `ppt/slides/slide${dup}.xml`
     pkg.parts.set(newPart, { data: pkg.get(source.part) })
+    if (pkg.overrides.has(source.part)) pkg.overrides.set(newPart, pkg.overrides.get(source.part))
+    const mapped = new Map([[source.part, newPart]])
     const rid = `rId${nextIds.rid++}`
     presRels.set(rid, { id: rid, type: presRels.get(source.rid)?.type ?? 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide', target: `slides/slide${dup}.xml`, mode: 'Internal' })
     const sid = String(nextIds.sldId++)
@@ -267,11 +272,22 @@ export function pptxSlides(pkg, order) {
       if (rel.mode === 'External') { slideRels.set(id, { ...rel }); continue }
       const target = pkg.targetOf(source.part, rel.target)
       if (/notesSlide|chart|package|oleObject|embeddings/i.test(rel.type) && pkg.parts.has(target)) {
-        const newTarget = copyPart(pkg, target)
+        const newTarget = copyPart(pkg, target, mapped)
         slideRels.set(id, { ...rel, target: posix.relative(posix.dirname(newPart), newTarget) })
       } else slideRels.set(id, { ...rel })
     }
     pkg.rels.set(newPart, slideRels)
+    // Copied parts keep rels to mapped sources — the notes slide must point at
+    // the new slide, a chart at its new embedded workbook.
+    for (const copy of mapped.values()) {
+      const map = pkg.rels.get(copy)
+      if (!map) continue
+      for (const rel of map.values()) {
+        if (rel.mode === 'External') continue
+        const abs = pkg.targetOf(copy, rel.target)
+        if (mapped.has(abs)) rel.target = posix.relative(posix.dirname(copy), mapped.get(abs))
+      }
+    }
     newEntries.push({ sldId: sid, rid, part: newPart })
     duplicated.push(pos)
   }
@@ -297,12 +313,13 @@ export function pptxSlides(pkg, order) {
 const maxNum = (names, re) => Math.max(0, ...names.map(n => Number(re.exec(n)?.[1] ?? 0)))
 const nextRid = (map) => { let i = 1; while (map.has(`rId${i}`)) i++; return i }
 
-function copyPart(pkg, part) {
+function copyPart(pkg, part, mapped = new Map()) {
   const dir = posix.dirname(part), base = posix.basename(part)
   const stem = base.replace(/\d+(\.\w+)$/, ''), extn = base.match(/\.\w+$/)[0]
   const n = maxNum([...pkg.parts.keys()].filter(k => k.startsWith(dir + '/')), new RegExp(`${stem}(\\d+)${extn.replace('.', '\\.')}$`)) + 1
   const target = `${dir}/${stem}${n}${extn}`
   pkg.parts.set(target, { data: pkg.get(part) })
+  mapped.set(part, target)
   if (pkg.overrides.has(part)) pkg.overrides.set(target, pkg.overrides.get(part))
   // Copy that part's rels; duplicate its own embedded parts (chart workbooks).
   const map = new Map()
@@ -310,7 +327,7 @@ function copyPart(pkg, part) {
     if (rel.mode === 'External') { map.set(id, { ...rel }); continue }
     const t = pkg.targetOf(part, rel.target)
     if (/package|oleObject|workbook|embeddings|xlsx/i.test(rel.type) && pkg.parts.has(t)) {
-      map.set(id, { ...rel, target: posix.relative(dir, copyPart(pkg, t)) })
+      map.set(id, { ...rel, target: posix.relative(dir, copyPart(pkg, t, mapped)) })
     } else map.set(id, { ...rel })
   }
   if (map.size > 0) pkg.rels.set(target, map)
@@ -323,8 +340,22 @@ function copyPart(pkg, part) {
  * remaining rel references.
  * @returns {{ removed: string[] }}
  */
+// Relationship kinds that only matter when the owning XML references them:
+// deleting a picture leaves its r:embed rel behind, and so on. Structural rels
+// (layouts, masters, notes, themes, comments, tags) are not listed.
+const CONTENT_REL = /\/(image|media|video|audio|chart|oleObject|package|diagramData|diagramLayout|diagramColors|diagramQuickStyle|drawing|hyperlink)$/
+
 export function pptxClean(pkg, { dryRun = false } = {}) {
   const removed = []
+  // Drop content relationships whose Id no part XML uses any more.
+  for (const [owner, map] of [...pkg.rels]) {
+    if (!pkg.parts.has(owner)) continue
+    const xml = pkg.get(owner) ?? Buffer.alloc(0)
+    for (const [id, rel] of [...map]) {
+      if (rel.mode !== 'Internal' || !CONTENT_REL.test(rel.type)) continue
+      if (!xml.includes(`"${id}"`)) map.delete(id)
+    }
+  }
   // Slides not in sldIdLst.
   const listed = new Set(deckOrder(pkg).map(e => e.part))
   for (const part of slideParts(pkg)) {

@@ -66,10 +66,8 @@ async function main(argv) {
 
   if (command === 'unpack') {
     need(positional[1], 'unpack <file> <dir>')
-    const dir = positional[1]
-    const prior = existsSync(dir) && statSync(dir).isDirectory() ? dir : undefined
-    Package.open(file).unpack(dir, prior)
-    return { dir }
+    Package.open(file).unpack(positional[1])
+    return { dir: positional[1] }
   }
   if (command === 'pack') {
     const dir = file, target = positional[1]
@@ -89,10 +87,8 @@ async function main(argv) {
     if (values.fix) {
       const { fixed, remaining } = fixPackage(pkg)
       const out = outArgs(values, file)
-      if (out !== file || statSync(file).isDirectory()) {
-        if (statSync(file).isDirectory()) pkg.unpack(file, file)
-        else writeFileSync(out, pkg.save())
-      } else writeFileSync(out, pkg.save())
+      if (statSync(file).isDirectory()) pkg.unpack(out)
+      else writeFileSync(out, pkg.save())
       return remaining.length > 0 ? findingsResult(remaining, { fixed }) : { fixed, findings: [] }
     }
     const against = values.against ? openAny(values.against) : undefined
@@ -138,13 +134,13 @@ async function main(argv) {
     if (sub === 'clean') {
       const dry = values['dry-run']
       const result = pptxClean(pkg, { dryRun: dry })
-      if (!dry && result.removed.length > 0) {
+      if (!dry) {
         const out = outArgs(values, file)
-        if (statSync(file).isDirectory()) pkg.unpack(out, out === file ? file : undefined)
+        if (statSync(file).isDirectory()) pkg.unpack(out)
         else writeFileSync(out, pkg.save())
         result.file = out
-      } else if (!dry) result.file = file
-      return result.removed.length > 0 && !dry ? result : result
+      }
+      return result
     }
     throw new Usage('pptx inventory|layout|slides|clean')
   }
@@ -176,10 +172,11 @@ function findingsResult(findings, extra = {}) {
 
 main(process.argv.slice(2)).then(result => {
   if (JSON_MODE) {
-    const ok = !result?.__findings
-    const data = result?.__findings ? { findings: result.findings, ...omit(result, ['__findings', 'findings']) } : result
-    console.log(JSON.stringify({ ok, data }))
-    process.exit(ok ? 0 : 1)
+    // Findings are a successful run with results: ok stays true, the exit code
+    // (1) carries "findings remain". ok:false is for errors only.
+    const data = result?.__findings ? omit(result, ['__findings']) : result
+    console.log(JSON.stringify({ ok: true, data }))
+    process.exit(result?.__findings ? 1 : 0)
   }
   if (result?.__findings) {
     for (const f of result.findings) console.log(`${f.part}: ${f.message}`)

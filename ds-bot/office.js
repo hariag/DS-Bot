@@ -6519,7 +6519,7 @@ import { join as join2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/office/package.js
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
 // src/office/xml.js
@@ -6774,6 +6774,7 @@ var absTarget = (base, target) => {
   if (target.startsWith("/")) return target.slice(1);
   return posix.normalize(posix.join(posix.dirname(base), target));
 };
+var relSig = (map) => [...map.values()].map((r) => `${r.id}${r.type}${r.target}${r.mode}`).join("");
 var Package = class _Package {
   constructor() {
     this.parts = /* @__PURE__ */ new Map();
@@ -6837,6 +6838,8 @@ var Package = class _Package {
       }
       this.rels.set(owner, map);
     }
+    this.relSigs = new Map([...this.rels].map(([owner, map]) => [owner, relSig(map)]));
+    this.ctSig = JSON.stringify([...this.defaults].sort().concat([...this.overrides].filter(([n]) => this.parts.has(n)).sort()));
   }
   /** @returns {Buffer|undefined} part bytes */
   get(name) {
@@ -6883,7 +6886,8 @@ var Package = class _Package {
   relsName(owner) {
     return owner === "" ? "_rels/.rels" : `${posix.dirname(owner)}/_rels/${posix.basename(owner)}.rels`;
   }
-  /** Write .rels and [Content_Types].xml back into parts from the model. */
+  /** Write .rels and [Content_Types].xml back into parts from the model — only
+   * when the model changed, so untouched members keep their original bytes. */
   flush() {
     for (const name of [...this.parts.keys()]) if (name.endsWith(".rels") && !this.#ownerStillHasRels(name)) this.parts.delete(name);
     for (const [owner, map] of this.rels) {
@@ -6896,6 +6900,8 @@ var Package = class _Package {
         this.parts.delete(name);
         continue;
       }
+      const sig = relSig(map);
+      if (sig === (this.relSigs ??= /* @__PURE__ */ new Map()).get(owner) && this.parts.has(name)) continue;
       const doc = parseXml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>');
       for (const rel of map.values()) {
         const el = doc.createElement("Relationship");
@@ -6906,22 +6912,27 @@ var Package = class _Package {
         doc.documentElement.appendChild(el);
       }
       this.putXml(name, doc);
+      this.relSigs.set(owner, sig);
     }
-    const ct = parseXml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
-    for (const [ext2, type] of this.defaults) {
-      const el = ct.createElement("Default");
-      el.setAttribute("Extension", ext2);
-      el.setAttribute("ContentType", type);
-      ct.documentElement.appendChild(el);
+    const ctSig = JSON.stringify([...this.defaults].sort().concat([...this.overrides].filter(([n]) => this.parts.has(n)).sort()));
+    if (ctSig !== this.ctSig || !this.parts.has("[Content_Types].xml")) {
+      const ct = parseXml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+      for (const [ext2, type] of this.defaults) {
+        const el = ct.createElement("Default");
+        el.setAttribute("Extension", ext2);
+        el.setAttribute("ContentType", type);
+        ct.documentElement.appendChild(el);
+      }
+      for (const [name, type] of this.overrides) {
+        if (!this.parts.has(name)) continue;
+        const el = ct.createElement("Override");
+        el.setAttribute("PartName", `/${name}`);
+        el.setAttribute("ContentType", type);
+        ct.documentElement.appendChild(el);
+      }
+      this.putXml("[Content_Types].xml", ct);
+      this.ctSig = ctSig;
     }
-    for (const [name, type] of this.overrides) {
-      if (!this.parts.has(name)) continue;
-      const el = ct.createElement("Override");
-      el.setAttribute("PartName", `/${name}`);
-      el.setAttribute("ContentType", type);
-      ct.documentElement.appendChild(el);
-    }
-    this.putXml("[Content_Types].xml", ct);
     this.parts.delete("");
   }
   #ownerStillHasRels(name) {
@@ -6933,11 +6944,12 @@ var Package = class _Package {
     this.flush();
     return writeZip([...this.parts.entries()].map(([name, part]) => ({ name, ...part })));
   }
-  /** Write an `unpack` directory tree. `dir` must be new or the output of a previous unpack. */
-  unpack(dir, previous) {
-    if (existsSync(dir)) {
-      const names = readdirSync(dir);
-      if (names.length > 0 && !(previous && previous === dir)) fail2(`unpack: ${dir} exists and is not an earlier unpack`);
+  /** Write an `unpack` directory tree. An existing non-empty dir must hold an
+   * earlier unpack ([Content_Types].xml at its root); files the package no
+   * longer has are removed. */
+  unpack(dir) {
+    if (existsSync(dir) && readdirSync(dir).length > 0 && !existsSync(join(dir, "[Content_Types].xml"))) {
+      fail2(`unpack: ${dir} exists and is not an earlier unpack`);
     }
     mkdirSync(dir, { recursive: true });
     const keep = /* @__PURE__ */ new Set();
@@ -6955,6 +6967,17 @@ var Package = class _Package {
       }
       writeFileSync(file, data);
     }
+    const sweep = (rel) => {
+      for (const entry of readdirSync(join(dir, rel))) {
+        const path = rel === "" ? entry : `${rel}/${entry}`;
+        const full = join(dir, path);
+        if (statSync(full).isDirectory()) {
+          sweep(path);
+          if (readdirSync(full).length === 0) rmdirSync(full);
+        } else if (!keep.has(full)) unlinkSync(full);
+      }
+    };
+    sweep("");
   }
 };
 function prettyForUnpack(data) {
@@ -7040,16 +7063,69 @@ function runRules(pkg) {
     if (name.endsWith(".rels")) continue;
     const rels = pkg.relsOf(name);
     for (const el of elementsOf(doc.documentElement)) {
-      for (const attr of ["r:id", "r:embed", "r:link", "r:dm", "r:lo", "r:qs", "r:cs", "o:id"]) {
+      for (const attr of ["r:id", "r:embed", "r:link", "r:dm", "r:lo", "r:qs", "r:cs"]) {
         const value = el.getAttribute?.(attr);
         if (value && !rels.has(value)) out.push(finding("unknown-rel-ref", name, `${el.tagName} ${attr}="${value}" has no relationship`));
       }
     }
   }
+  contentTypeRules(pkg, out);
   const isPptx = pkg.parts.has("ppt/presentation.xml"), isDocx = pkg.parts.has("word/document.xml");
   if (isPptx) pptxRules(pkg, xmlDocs, out);
   if (isDocx) docxRules(pkg, xmlDocs, out);
   return out;
+}
+var CT_BASE = "application/vnd.openxmlformats-officedocument.";
+var pkgKind = (pkg) => pkg.parts.has("word/document.xml") ? "docx" : pkg.parts.has("ppt/presentation.xml") ? "pptx" : pkg.parts.has("xl/workbook.xml") ? "xlsx" : void 0;
+var MAIN_CT = { docx: CT_BASE + "wordprocessingml.document.main+xml", pptx: CT_BASE + "presentationml.presentation.main+xml", xlsx: CT_BASE + "spreadsheetml.sheet.main+xml" };
+var REL_TYPE_CT = {
+  officeDocument: MAIN_CT,
+  document: MAIN_CT,
+  styles: { docx: CT_BASE + "wordprocessingml.styles+xml", xlsx: CT_BASE + "spreadsheetml.styles+xml" },
+  numbering: CT_BASE + "wordprocessingml.numbering+xml",
+  settings: CT_BASE + "wordprocessingml.settings+xml",
+  comments: CT_BASE + "wordprocessingml.comments+xml",
+  footnotes: CT_BASE + "wordprocessingml.footnotes+xml",
+  endnotes: CT_BASE + "wordprocessingml.endnotes+xml",
+  header: CT_BASE + "wordprocessingml.header+xml",
+  footer: CT_BASE + "wordprocessingml.footer+xml",
+  fontTable: CT_BASE + "wordprocessingml.fontTable+xml",
+  theme: CT_BASE + "theme+xml",
+  slide: CT_BASE + "presentationml.slide+xml",
+  slideLayout: CT_BASE + "presentationml.slideLayout+xml",
+  slideMaster: CT_BASE + "presentationml.slideMaster+xml",
+  notesSlide: CT_BASE + "presentationml.notesSlide+xml",
+  notesMaster: CT_BASE + "presentationml.notesMaster+xml",
+  chart: CT_BASE + "drawingml.chart+xml",
+  worksheet: CT_BASE + "spreadsheetml.worksheet+xml",
+  sharedStrings: CT_BASE + "spreadsheetml.sharedStrings+xml",
+  coreProperties: "application/vnd.openxmlformats-package.core-properties+xml",
+  "core-properties": "application/vnd.openxmlformats-package.core-properties+xml",
+  extendedProperties: CT_BASE + "extended-properties+xml",
+  "extended-properties": CT_BASE + "extended-properties+xml"
+};
+function expectedContentType(pkg, relType) {
+  const suffix = relType.split("/").pop();
+  const rule = REL_TYPE_CT[suffix];
+  if (rule === void 0) return void 0;
+  if (typeof rule === "string") return rule;
+  const kind = pkgKind(pkg);
+  return kind ? rule[kind] : void 0;
+}
+function contentTypeRules(pkg, out) {
+  for (const [owner, map] of pkg.rels) {
+    for (const rel of map.values()) {
+      if (rel.mode === "External") continue;
+      const expected = expectedContentType(pkg, rel.type);
+      if (expected === void 0) continue;
+      const target = pkg.targetOf(owner, rel.target);
+      if (!pkg.parts.has(target)) continue;
+      const actual = pkg.contentType(target);
+      if (actual !== expected) {
+        out.push(finding("wrong-content-type", target, `${target} is ${actual ?? "untyped"}, expected ${expected} for ${rel.type.split("/").pop()}`));
+      }
+    }
+  }
 }
 function uniqueIds(elements, attr, part, rule, out) {
   const seen = /* @__PURE__ */ new Set();
@@ -7155,6 +7231,14 @@ function fixPackage(pkg) {
       fixed.push(name);
     }
   }
+  const paraIds = /* @__PURE__ */ new Set();
+  for (const name of pkg.parts.keys()) {
+    if (!/^word\//.test(name) || !name.endsWith(".xml")) continue;
+    try {
+      for (const p of elementsOf(parseXml(pkg.get(name)).documentElement, "w:p")) paraIds.add(p.getAttribute("w14:paraId"));
+    } catch {
+    }
+  }
   for (const name of pkg.parts.keys()) {
     if (!/^word\//.test(name) || !name.endsWith(".xml")) continue;
     let doc;
@@ -7169,8 +7253,11 @@ function fixPackage(pkg) {
       const id = p.getAttribute("w14:paraId");
       if (!id) continue;
       if (seen.has(id) || parseInt(id, 16) >= 2147483648) {
-        const next = Math.floor(Math.random() * 2147483647).toString(16).padStart(8, "0");
-        p.setAttribute("w14:paraId", seen.has(next) ? (parseInt(next, 16) ^ 74565).toString(16) : next);
+        let next = 1;
+        while (paraIds.has(next.toString(16).padStart(8, "0")) || paraIds.has(next.toString(16))) next++;
+        const fresh = next.toString(16).padStart(8, "0");
+        p.setAttribute("w14:paraId", fresh);
+        paraIds.add(fresh);
         dirty = true;
       }
       seen.add(p.getAttribute("w14:paraId"));
@@ -7178,6 +7265,18 @@ function fixPackage(pkg) {
     if (dirty) {
       pkg.putXml(name, doc);
       fixed.push(name);
+    }
+  }
+  for (const [owner, map] of pkg.rels) {
+    for (const rel of map.values()) {
+      if (rel.mode === "External") continue;
+      const expected = expectedContentType(pkg, rel.type);
+      if (expected === void 0) continue;
+      const target = pkg.targetOf(owner, rel.target);
+      if (pkg.parts.has(target) && pkg.contentType(target) !== expected) {
+        pkg.override(target, expected);
+        fixed.push(target);
+      }
     }
   }
   for (const part of [...pkg.overrides.keys()]) {
@@ -7467,19 +7566,23 @@ function applyOp(pkg, getDoc, changed, op) {
   if (op.set_field) {
     const { match, value } = op.set_field;
     const re = new RegExp(match);
-    let done = false;
+    let any = false;
     for (const name of EDIT_PARTS(pkg, false)) {
       const doc = getDoc(name);
+      let hit = false;
       for (const fld of elementsOf(doc.documentElement, "w:fldSimple")) {
         if (re.test(fld.getAttribute("w:instr") ?? "")) {
           setFieldResult(doc, fld, String(value));
-          done = true;
+          hit = true;
         }
       }
-      if (setComplexFieldResult(doc, re, String(value))) done = true;
-      if (done) changed.add(name);
+      if (setComplexFieldResult(doc, re, String(value))) hit = true;
+      if (hit) {
+        changed.add(name);
+        any = true;
+      }
     }
-    if (!done) throw new Error(`no field instruction matches /${match}/`);
+    if (!any) throw new Error(`no field instruction matches /${match}/`);
     return;
   }
   if (op.insert) {
@@ -7535,19 +7638,21 @@ function applyOp(pkg, getDoc, changed, op) {
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+var expand = (m, withText) => withText.replace(/\$(\$|&|[1-9]\d?)/g, (_, g) => g === "$" ? "$" : g === "&" ? m[0] : m[Number(g)] ?? "");
+var nearestPara = (el) => {
+  for (let n = el.parentNode; n; n = n.parentNode) if (n.tagName === "w:p") return n;
+  return null;
+};
 function replaceInDoc(doc, re, withText) {
   let total = 0;
-  const once = () => new RegExp(re.source, re.flags.replace("g", ""));
+  const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
   for (const p of elementsOf(doc.documentElement, "w:p")) {
-    let guard = 0;
-    while (guard++ < 200) {
-      const runs = elementsOf(p, "w:r").filter((r) => !isDeleted(p, r));
-      const texts = runs.map((r) => elementsOf(r, "w:t").map((t) => t.textContent).join(""));
-      const joined = texts.join("");
-      const m = once().exec(joined);
-      if (!m) break;
+    const runs = elementsOf(p, "w:r").filter((r) => !isDeleted(p, r) && nearestPara(r) === p);
+    const texts = runs.map((r) => elementsOf(r, "w:t").map((t) => t.textContent).join(""));
+    const joined = texts.join("");
+    for (const m of [...joined.matchAll(global)].reverse()) {
       let cursor = 0, first = -1, last = -1;
-      for (const [i] of runs.entries()) {
+      for (let i = 0; i < runs.length; i++) {
         const end = cursor + texts[i].length;
         if (first < 0 && m.index < end) first = i;
         if (m.index + m[0].length <= end) {
@@ -7556,9 +7661,8 @@ function replaceInDoc(doc, re, withText) {
         }
         cursor = end;
       }
-      if (first < 0) break;
+      if (first < 0) continue;
       if (last < 0) last = runs.length - 1;
-      const replacement = m[0].replace(new RegExp(re.source), withText);
       const startRun = runs[first];
       const preStart = texts[first].slice(0, m.index - sumTo(texts, first));
       const postEnd = texts[last].slice(m.index + m[0].length - sumTo(texts, last));
@@ -7572,7 +7676,7 @@ function replaceInDoc(doc, re, withText) {
         return clone;
       };
       setRunText(startRun, preStart);
-      const repl = makeRun(replacement);
+      const repl = makeRun(expand(m, withText));
       startRun.parentNode.insertBefore(repl, startRun.nextSibling);
       if (first === last) {
         if (postEnd !== "") startRun.parentNode.insertBefore(makeRun(postEnd), repl.nextSibling);
@@ -7594,9 +7698,15 @@ function setRunText(run, text) {
   for (const extra of ts.slice(1)) extra.textContent = "";
 }
 function setCellText(doc, tc, text) {
-  for (const p2 of childrenOf(tc, "w:p")) tc.removeChild(p2);
+  const paras = childrenOf(tc, "w:p");
+  const pPr = paras[0] && childrenOf(paras[0], "w:pPr")[0];
+  const firstRun = paras[0] && elementsOf(paras[0], "w:r")[0];
+  const rPr = firstRun && childrenOf(firstRun, "w:rPr")[0];
+  for (const p2 of paras) tc.removeChild(p2);
   const p = doc.createElement("w:p");
+  if (pPr) p.appendChild(pPr);
   const r = doc.createElement("w:r");
+  if (rPr) r.appendChild(rPr);
   const t = doc.createElement("w:t");
   t.setAttribute("xml:space", "preserve");
   t.appendChild(doc.createTextNode(text));
@@ -7605,8 +7715,10 @@ function setCellText(doc, tc, text) {
   tc.appendChild(p);
 }
 function setFieldResult(doc, fld, value) {
+  const rPr = elementsOf(fld, "w:r")[0] && childrenOf(elementsOf(fld, "w:r")[0], "w:rPr")[0];
   for (const child2 of [...fld.childNodes]) fld.removeChild(child2);
   const r = doc.createElement("w:r");
+  if (rPr) r.appendChild(rPr.cloneNode(true));
   const t = doc.createElement("w:t");
   t.setAttribute("xml:space", "preserve");
   t.appendChild(doc.createTextNode(value));
@@ -7614,32 +7726,81 @@ function setFieldResult(doc, fld, value) {
   fld.appendChild(r);
 }
 function setComplexFieldResult(doc, re, value) {
-  let done = false;
-  const nodes = elementsOf(doc.documentElement);
-  for (let i = 0; i < nodes.length; i++) {
-    if (nodes[i].tagName === "w:instrText" && re.test(nodes[i].textContent)) {
-      const p = ancestor(nodes[i], "w:p");
-      if (!p) continue;
-      let phase = "pre", resultRun = null;
-      for (const el of elementsOf(p)) {
-        if (el.tagName === "w:fldChar") {
-          const type = el.getAttribute("w:fldCharType");
-          if (type === "separate") phase = "result";
-          else if (type === "end") phase = "post";
-        } else if (phase === "result" && el.tagName === "w:r" && resultRun === null) resultRun = el;
+  let hit = false;
+  let depth = 0, inField = false, inResult = false, first = true;
+  for (const el of elementsOf(doc.documentElement)) {
+    if (el.tagName === "w:instrText") {
+      if (!inField && re.test(el.textContent)) {
+        inField = true;
+        depth = 1;
+        inResult = false;
+        first = true;
       }
-      if (resultRun) {
-        setRunText(resultRun, value);
-        done = true;
-      }
+      continue;
+    }
+    if (!inField) continue;
+    if (el.tagName === "w:fldChar") {
+      const type = el.getAttribute("w:fldCharType");
+      if (type === "begin") depth++;
+      else if (type === "end") {
+        depth--;
+        if (depth === 0) inField = false;
+      } else if (type === "separate" && depth === 1) inResult = true;
+      continue;
+    }
+    if (inResult && el.tagName === "w:r") {
+      if (first) {
+        setRunText(el, value);
+        first = false;
+      } else setRunText(el, "");
+      hit = true;
     }
   }
-  return done;
+  return hit;
 }
 var ancestor = (node, tag) => {
   for (let n = node.parentNode; n; n = n.parentNode) if (n.tagName === tag) return n;
   return null;
 };
+function splitRunAt(doc, run, offset) {
+  const text = elementsOf(run, "w:t").map((t2) => t2.textContent).join("");
+  const clone = run.cloneNode(false);
+  while (clone.firstChild && clone.firstChild.tagName !== "w:rPr") clone.removeChild(clone.firstChild);
+  const t = doc.createElement("w:t");
+  t.setAttribute("xml:space", "preserve");
+  t.appendChild(doc.createTextNode(text.slice(offset)));
+  clone.appendChild(t);
+  setRunText(run, text.slice(0, offset));
+  run.parentNode.insertBefore(clone, run.nextSibling);
+  return clone;
+}
+function phraseRuns(doc, p, anchor) {
+  const runs = elementsOf(p, "w:r").filter((r) => !isDeleted(p, r) && nearestPara(r) === p);
+  const texts = runs.map((r) => elementsOf(r, "w:t").map((t) => t.textContent).join(""));
+  const joined = texts.join("");
+  const start = joined.indexOf(anchor);
+  if (start < 0) return void 0;
+  const end = start + anchor.length;
+  const locate = (pos) => {
+    let c = 0;
+    for (let i = 0; i < runs.length; i++) {
+      const e2 = c + texts[i].length;
+      if (pos < e2 || pos === e2 && i === runs.length - 1) return { i, off: pos - c };
+      c = e2;
+    }
+    return { i: runs.length - 1, off: texts.at(-1).length };
+  };
+  const e = locate(end), s = locate(start);
+  let lastRun;
+  if (e.off === texts[e.i].length) lastRun = runs[e.i];
+  else if (e.off === 0) lastRun = runs[e.i - 1];
+  else {
+    splitRunAt(doc, runs[e.i], e.off);
+    lastRun = runs[e.i];
+  }
+  const firstRun = s.off === 0 ? runs[s.i] : splitRunAt(doc, runs[s.i], s.off);
+  return { firstRun, lastRun };
+}
 function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = "Bot", initials = "B" }) {
   const doc = getDoc("word/document.xml");
   const p = blockIndex(doc).get(paragraph);
@@ -7677,11 +7838,15 @@ function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = "B
   const refEl = doc.createElement("w:commentReference");
   refEl.setAttribute("w:id", id);
   ref.appendChild(refEl);
+  const pPr = childrenOf(p, "w:pPr")[0];
   if (anchor) {
-    p.insertBefore(rangeStart, p.firstChild);
-    p.appendChild(rangeEnd);
-    p.appendChild(ref);
+    const span = phraseRuns(doc, p, anchor);
+    if (!span) throw new Error(`anchor "${anchor}" not found in ${paragraph}`);
+    p.insertBefore(rangeStart, span.firstRun);
+    span.lastRun.parentNode.insertBefore(rangeEnd, span.lastRun.nextSibling);
+    span.lastRun.parentNode.insertBefore(ref, rangeEnd.nextSibling);
   } else {
+    p.insertBefore(rangeStart, pPr ? pPr.nextSibling : p.firstChild);
     p.appendChild(rangeEnd);
     p.appendChild(ref);
   }
@@ -7693,6 +7858,47 @@ function resolveChanges(doc, accept) {
     while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
     el.parentNode.removeChild(el);
   };
+  const mergeIntoNext = (p, pPr) => {
+    const next = p.nextSibling;
+    if (!next || next.tagName !== "w:p") return false;
+    const nextPPr = childrenOf(next, "w:pPr")[0];
+    const anchor = nextPPr ? nextPPr.nextSibling : next.firstChild;
+    for (const node of [...p.childNodes]) {
+      if (node === pPr) continue;
+      next.insertBefore(node, anchor);
+    }
+    p.parentNode.removeChild(p);
+    return true;
+  };
+  for (const p of elementsOf(doc.documentElement, "w:p")) {
+    const pPr = childrenOf(p, "w:pPr")[0];
+    const rPr = pPr && childrenOf(pPr, "w:rPr")[0];
+    if (!rPr) continue;
+    const del = childrenOf(rPr, "w:del")[0];
+    const ins = childrenOf(rPr, "w:ins")[0];
+    if (del) {
+      dirty = true;
+      if (!accept || !mergeIntoNext(p, pPr)) rPr.removeChild(del);
+    } else if (ins) {
+      dirty = true;
+      if (accept || !mergeIntoNext(p, pPr)) rPr.removeChild(ins);
+    }
+  }
+  for (const tr of elementsOf(doc.documentElement, "w:tr")) {
+    const trPr = childrenOf(tr, "w:trPr")[0];
+    if (!trPr) continue;
+    const ins = childrenOf(trPr, "w:ins")[0];
+    const del = childrenOf(trPr, "w:del")[0];
+    if (ins) {
+      dirty = true;
+      if (accept) trPr.removeChild(ins);
+      else tr.parentNode.removeChild(tr);
+    } else if (del) {
+      dirty = true;
+      if (accept) tr.parentNode.removeChild(tr);
+      else trPr.removeChild(del);
+    }
+  }
   for (const el of elementsOf(doc.documentElement)) {
     const tag = el.tagName;
     if (tag === "w:moveFromRangeStart" || tag === "w:moveFromRangeEnd" || tag === "w:moveToRangeStart" || tag === "w:moveToRangeEnd" || tag === "w:customXmlInsRangeStart" || tag === "w:customXmlInsRangeEnd" || tag === "w:customXmlDelRangeStart" || tag === "w:customXmlDelRangeEnd" || tag === "w:customXmlMoveFromRangeStart" || tag === "w:customXmlMoveFromRangeEnd" || tag === "w:customXmlMoveToRangeStart" || tag === "w:customXmlMoveToRangeEnd") {
@@ -7717,18 +7923,33 @@ function resolveChanges(doc, accept) {
         lift(el);
         dirty = true;
       }
-    } else if (/^w:(pPrChange|rPrChange|tblPrChange|tcPrChange|trPrChange|sectPrChange|numberingChange)$/.test(tag)) {
+    } else if (tag === "w:numberingChange") {
+      el.parentNode.removeChild(el);
+      dirty = true;
+    } else if (/^w:(pPrChange|rPrChange|tblPrChange|tcPrChange|trPrChange|sectPrChange)$/.test(tag)) {
+      const parent = el.parentNode;
       if (accept) {
-        el.parentNode.removeChild(el);
+        parent.removeChild(el);
         dirty = true;
       } else {
-        const parent = el.parentNode;
         const stored = childrenOf(el)[0];
-        if (stored) parent.replaceChild(stored.cloneNode(true), el);
-        else parent.removeChild(el);
+        const keep = /* @__PURE__ */ new Set();
+        if (parent.tagName === "w:pPr") {
+          keep.add("w:rPr");
+          keep.add("w:sectPr");
+        }
+        if (parent.tagName === "w:sectPr") {
+          keep.add("w:headerReference");
+          keep.add("w:footerReference");
+        }
+        for (const c of [...parent.childNodes]) if (!keep.has(c.tagName) && c !== el) parent.removeChild(c);
+        if (stored) {
+          const anchor = [...parent.childNodes].find((c) => keep.has(c.tagName)) ?? null;
+          for (const s of [...stored.childNodes]) parent.insertBefore(s, anchor);
+        }
+        parent.removeChild(el);
         dirty = true;
       }
-    } else if (tag === "w:del" && el.parentNode?.tagName === "w:rPr" && el.parentNode.parentNode?.tagName === "w:pPr") {
     } else if (tag === "w:cellIns" || tag === "w:cellDel") {
       const tc = ancestor(el, "w:tc");
       if (tc) {
@@ -7737,24 +7958,6 @@ function resolveChanges(doc, accept) {
         el.parentNode.removeChild(el);
         dirty = true;
       }
-    }
-  }
-  for (const p of elementsOf(doc.documentElement, "w:p")) {
-    const pPr = firstOf(p, "w:pPr");
-    const rPr = pPr && firstOf(pPr, "w:rPr");
-    const del = rPr && firstOf(rPr, "w:del");
-    if (!del) continue;
-    dirty = true;
-    if (accept) {
-      const next = p.nextSibling;
-      if (next && next.tagName === "w:p") {
-        for (const child2 of [...p.childNodes]) if (child2 !== pPr) next.insertBefore(child2, next.firstChild);
-        p.parentNode.removeChild(p);
-      } else {
-        rPr.removeChild(del);
-      }
-    } else {
-      rPr.removeChild(del);
     }
   }
   return dirty;
@@ -7964,7 +8167,8 @@ function pptxLayout(pkg, slidesFilter, { autofit = false } = {}) {
               const old = firstOf(bodyPr, tag);
               if (old) bodyPr.removeChild(old);
             }
-            bodyPr.appendChild(doc.createElement("a:normAutofit"));
+            const anchor = childrenOf(bodyPr).find((c) => ["a:scene3d", "a:sp3d", "a:flatTx", "a:extLst"].includes(c.tagName));
+            bodyPr.insertBefore(doc.createElement("a:normAutofit"), anchor ?? null);
             fitted.push(`${slide.position}:${shapeName(el)}`);
           }
         }
@@ -7994,6 +8198,8 @@ function pptxSlides(pkg, order) {
     const dup = String(nextIds.slide++);
     const newPart = `ppt/slides/slide${dup}.xml`;
     pkg.parts.set(newPart, { data: pkg.get(source.part) });
+    if (pkg.overrides.has(source.part)) pkg.overrides.set(newPart, pkg.overrides.get(source.part));
+    const mapped = /* @__PURE__ */ new Map([[source.part, newPart]]);
     const rid = `rId${nextIds.rid++}`;
     presRels.set(rid, { id: rid, type: presRels.get(source.rid)?.type ?? "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide", target: `slides/slide${dup}.xml`, mode: "Internal" });
     const sid = String(nextIds.sldId++);
@@ -8005,11 +8211,20 @@ function pptxSlides(pkg, order) {
       }
       const target = pkg.targetOf(source.part, rel.target);
       if (/notesSlide|chart|package|oleObject|embeddings/i.test(rel.type) && pkg.parts.has(target)) {
-        const newTarget = copyPart(pkg, target);
+        const newTarget = copyPart(pkg, target, mapped);
         slideRels.set(id, { ...rel, target: posix3.relative(posix3.dirname(newPart), newTarget) });
       } else slideRels.set(id, { ...rel });
     }
     pkg.rels.set(newPart, slideRels);
+    for (const copy of mapped.values()) {
+      const map = pkg.rels.get(copy);
+      if (!map) continue;
+      for (const rel of map.values()) {
+        if (rel.mode === "External") continue;
+        const abs = pkg.targetOf(copy, rel.target);
+        if (mapped.has(abs)) rel.target = posix3.relative(posix3.dirname(copy), mapped.get(abs));
+      }
+    }
     newEntries.push({ sldId: sid, rid, part: newPart });
     duplicated.push(pos);
   }
@@ -8036,12 +8251,13 @@ var nextRid = (map) => {
   while (map.has(`rId${i}`)) i++;
   return i;
 };
-function copyPart(pkg, part) {
+function copyPart(pkg, part, mapped = /* @__PURE__ */ new Map()) {
   const dir = posix3.dirname(part), base = posix3.basename(part);
   const stem = base.replace(/\d+(\.\w+)$/, ""), extn = base.match(/\.\w+$/)[0];
   const n = maxNum([...pkg.parts.keys()].filter((k) => k.startsWith(dir + "/")), new RegExp(`${stem}(\\d+)${extn.replace(".", "\\.")}$`)) + 1;
   const target = `${dir}/${stem}${n}${extn}`;
   pkg.parts.set(target, { data: pkg.get(part) });
+  mapped.set(part, target);
   if (pkg.overrides.has(part)) pkg.overrides.set(target, pkg.overrides.get(part));
   const map = /* @__PURE__ */ new Map();
   for (const [id, rel] of pkg.relsOf(part)) {
@@ -8051,14 +8267,23 @@ function copyPart(pkg, part) {
     }
     const t = pkg.targetOf(part, rel.target);
     if (/package|oleObject|workbook|embeddings|xlsx/i.test(rel.type) && pkg.parts.has(t)) {
-      map.set(id, { ...rel, target: posix3.relative(dir, copyPart(pkg, t)) });
+      map.set(id, { ...rel, target: posix3.relative(dir, copyPart(pkg, t, mapped)) });
     } else map.set(id, { ...rel });
   }
   if (map.size > 0) pkg.rels.set(target, map);
   return target;
 }
+var CONTENT_REL = /\/(image|media|video|audio|chart|oleObject|package|diagramData|diagramLayout|diagramColors|diagramQuickStyle|drawing|hyperlink)$/;
 function pptxClean(pkg, { dryRun = false } = {}) {
   const removed = [];
+  for (const [owner, map] of [...pkg.rels]) {
+    if (!pkg.parts.has(owner)) continue;
+    const xml = pkg.get(owner) ?? Buffer.alloc(0);
+    for (const [id, rel] of [...map]) {
+      if (rel.mode !== "Internal" || !CONTENT_REL.test(rel.type)) continue;
+      if (!xml.includes(`"${id}"`)) map.delete(id);
+    }
+  }
   const listed = new Set(deckOrder(pkg).map((e) => e.part));
   for (const part of slideParts(pkg)) {
     if (!listed.has(part)) {
@@ -8475,10 +8700,8 @@ async function main(argv) {
   need(command !== void 0 && file !== void 0 || cmd === "sheet" && file !== void 0, USAGE);
   if (command === "unpack") {
     need(positional[1], "unpack <file> <dir>");
-    const dir = positional[1];
-    const prior = existsSync2(dir) && statSync2(dir).isDirectory() ? dir : void 0;
-    Package.open(file).unpack(dir, prior);
-    return { dir };
+    Package.open(file).unpack(positional[1]);
+    return { dir: positional[1] };
   }
   if (command === "pack") {
     const dir = file, target = positional[1];
@@ -8503,10 +8726,8 @@ async function main(argv) {
     if (values.fix) {
       const { fixed, remaining } = fixPackage(pkg2);
       const out = outArgs(values, file);
-      if (out !== file || statSync2(file).isDirectory()) {
-        if (statSync2(file).isDirectory()) pkg2.unpack(file, file);
-        else writeFileSync2(out, pkg2.save());
-      } else writeFileSync2(out, pkg2.save());
+      if (statSync2(file).isDirectory()) pkg2.unpack(out);
+      else writeFileSync2(out, pkg2.save());
       return remaining.length > 0 ? findingsResult(remaining, { fixed }) : { fixed, findings: [] };
     }
     const against = values.against ? openAny(values.against) : void 0;
@@ -8550,13 +8771,13 @@ async function main(argv) {
     if (sub === "clean") {
       const dry = values["dry-run"];
       const result = pptxClean(pkg, { dryRun: dry });
-      if (!dry && result.removed.length > 0) {
+      if (!dry) {
         const out = outArgs(values, file);
-        if (statSync2(file).isDirectory()) pkg.unpack(out, out === file ? file : void 0);
+        if (statSync2(file).isDirectory()) pkg.unpack(out);
         else writeFileSync2(out, pkg.save());
         result.file = out;
-      } else if (!dry) result.file = file;
-      return result.removed.length > 0 && !dry ? result : result;
+      }
+      return result;
     }
     throw new Usage("pptx inventory|layout|slides|clean");
   }
@@ -8584,10 +8805,9 @@ function findingsResult(findings, extra = {}) {
 }
 main(process.argv.slice(2)).then((result) => {
   if (JSON_MODE) {
-    const ok = !result?.__findings;
-    const data = result?.__findings ? { findings: result.findings, ...omit(result, ["__findings", "findings"]) } : result;
-    console.log(JSON.stringify({ ok, data }));
-    process.exit(ok ? 0 : 1);
+    const data = result?.__findings ? omit(result, ["__findings"]) : result;
+    console.log(JSON.stringify({ ok: true, data }));
+    process.exit(result?.__findings ? 1 : 0);
   }
   if (result?.__findings) {
     for (const f of result.findings) console.log(`${f.part}: ${f.message}`);

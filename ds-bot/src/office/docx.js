@@ -249,16 +249,17 @@ function applyOp(pkg, getDoc, changed, op) {
   if (op.set_field) {
     const { match, value } = op.set_field
     const re = new RegExp(match)
-    let done = false
+    let any = false
     for (const name of EDIT_PARTS(pkg, false)) {
       const doc = getDoc(name)
+      let hit = false
       for (const fld of elementsOf(doc.documentElement, 'w:fldSimple')) {
-        if (re.test(fld.getAttribute('w:instr') ?? '')) { setFieldResult(doc, fld, String(value)); done = true }
+        if (re.test(fld.getAttribute('w:instr') ?? '')) { setFieldResult(doc, fld, String(value)); hit = true }
       }
-      if (setComplexFieldResult(doc, re, String(value))) done = true
-      if (done) changed.add(name)
+      if (setComplexFieldResult(doc, re, String(value))) hit = true
+      if (hit) { changed.add(name); any = true }
     }
-    if (!done) throw new Error(`no field instruction matches /${match}/`)
+    if (!any) throw new Error(`no field instruction matches /${match}/`)
     return
   }
   if (op.insert) {
@@ -311,29 +312,34 @@ function applyOp(pkg, getDoc, changed, op) {
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
 
+// Replacement text with $1..$9 group, $& match and $$ escapes resolved — the
+// pattern is not re-run, so anchors and lookarounds cannot be lost.
+const expand = (m, withText) =>
+  withText.replace(/\$(\$|&|[1-9]\d?)/g, (_, g) => g === '$' ? '$' : g === '&' ? m[0] : (m[Number(g)] ?? ''))
+
+const nearestPara = (el) => { for (let n = el.parentNode; n; n = n.parentNode) if (n.tagName === 'w:p') return n; return null }
+
 // Replace text across runs inside one document; deletions skipped; formatting of
-// the match-start run kept. Returns the number of replacements.
+// the match-start run kept. Matches are found once on the original text and
+// applied right-to-left, so offsets never shift and the replacement text itself
+// is never re-scanned. Returns the number of replacements.
 function replaceInDoc(doc, re, withText) {
   let total = 0
-  const once = () => new RegExp(re.source, re.flags.replace('g', ''))
+  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
   for (const p of elementsOf(doc.documentElement, 'w:p')) {
-    let guard = 0
-    while (guard++ < 200) {
-      const runs = elementsOf(p, 'w:r').filter(r => !isDeleted(p, r))
-      const texts = runs.map(r => elementsOf(r, 'w:t').map(t => t.textContent).join(''))
-      const joined = texts.join('')
-      const m = once().exec(joined)
-      if (!m) break
+    const runs = elementsOf(p, 'w:r').filter(r => !isDeleted(p, r) && nearestPara(r) === p)
+    const texts = runs.map(r => elementsOf(r, 'w:t').map(t => t.textContent).join(''))
+    const joined = texts.join('')
+    for (const m of [...joined.matchAll(global)].reverse()) {
       let cursor = 0, first = -1, last = -1
-      for (const [i] of runs.entries()) {
+      for (let i = 0; i < runs.length; i++) {
         const end = cursor + texts[i].length
         if (first < 0 && m.index < end) first = i
         if (m.index + m[0].length <= end) { last = i; break }
         cursor = end
       }
-      if (first < 0) break
+      if (first < 0) continue
       if (last < 0) last = runs.length - 1
-      const replacement = m[0].replace(new RegExp(re.source), withText)
       const startRun = runs[first]
       const preStart = texts[first].slice(0, m.index - sumTo(texts, first))
       const postEnd = texts[last].slice(m.index + m[0].length - sumTo(texts, last))
@@ -345,7 +351,7 @@ function replaceInDoc(doc, re, withText) {
         return clone
       }
       setRunText(startRun, preStart)
-      const repl = makeRun(replacement)
+      const repl = makeRun(expand(m, withText))
       startRun.parentNode.insertBefore(repl, startRun.nextSibling)
       if (first === last) {
         if (postEnd !== '') startRun.parentNode.insertBefore(makeRun(postEnd), repl.nextSibling)
@@ -370,47 +376,102 @@ function setRunText(run, text) {
 }
 
 function setCellText(doc, tc, text) {
-  for (const p of childrenOf(tc, 'w:p')) tc.removeChild(p)
+  // w:tcPr stays; the first paragraph's pPr and the first run's rPr carry over.
+  const paras = childrenOf(tc, 'w:p')
+  const pPr = paras[0] && childrenOf(paras[0], 'w:pPr')[0]
+  const firstRun = paras[0] && elementsOf(paras[0], 'w:r')[0]
+  const rPr = firstRun && childrenOf(firstRun, 'w:rPr')[0]
+  for (const p of paras) tc.removeChild(p)
   const p = doc.createElement('w:p')
+  if (pPr) p.appendChild(pPr)
   const r = doc.createElement('w:r')
+  if (rPr) r.appendChild(rPr)
   const t = doc.createElement('w:t'); t.setAttribute('xml:space', 'preserve')
   t.appendChild(doc.createTextNode(text))
   r.appendChild(t); p.appendChild(r); tc.appendChild(p)
 }
 
 function setFieldResult(doc, fld, value) {
-  // Drop existing runs; one fresh run with the value.
+  // One run with the value, carrying the first run's rPr.
+  const rPr = elementsOf(fld, 'w:r')[0] && childrenOf(elementsOf(fld, 'w:r')[0], 'w:rPr')[0]
   for (const child of [...fld.childNodes]) fld.removeChild(child)
   const r = doc.createElement('w:r')
+  if (rPr) r.appendChild(rPr.cloneNode(true))
   const t = doc.createElement('w:t'); t.setAttribute('xml:space', 'preserve')
   t.appendChild(doc.createTextNode(value))
   r.appendChild(t); fld.appendChild(r)
 }
 
+// Complex fields can nest and span paragraphs: track begin/end depth, and in
+// the result span (after the depth-1 separate, before the matching end) give
+// the first run the value and clear the rest.
 function setComplexFieldResult(doc, re, value) {
-  let done = false
-  const nodes = elementsOf(doc.documentElement)
-  for (let i = 0; i < nodes.length; i++) {
-    if (nodes[i].tagName === 'w:instrText' && re.test(nodes[i].textContent)) {
-      // Find the separate→end span in the same paragraph, keep the run right
-      // after 'separate' and set its text.
-      const p = ancestor(nodes[i], 'w:p')
-      if (!p) continue
-      let phase = 'pre', resultRun = null
-      for (const el of elementsOf(p)) {
-        if (el.tagName === 'w:fldChar') {
-          const type = el.getAttribute('w:fldCharType')
-          if (type === 'separate') phase = 'result'
-          else if (type === 'end') phase = 'post'
-        } else if (phase === 'result' && el.tagName === 'w:r' && resultRun === null) resultRun = el
-      }
-      if (resultRun) { setRunText(resultRun, value); done = true }
+  let hit = false
+  let depth = 0, inField = false, inResult = false, first = true
+  for (const el of elementsOf(doc.documentElement)) {
+    if (el.tagName === 'w:instrText') {
+      if (!inField && re.test(el.textContent)) { inField = true; depth = 1; inResult = false; first = true }
+      continue
+    }
+    if (!inField) continue
+    if (el.tagName === 'w:fldChar') {
+      const type = el.getAttribute('w:fldCharType')
+      if (type === 'begin') depth++
+      else if (type === 'end') { depth--; if (depth === 0) inField = false }
+      else if (type === 'separate' && depth === 1) inResult = true
+      continue
+    }
+    if (inResult && el.tagName === 'w:r') {
+      if (first) { setRunText(el, value); first = false }
+      else setRunText(el, '')
+      hit = true
     }
   }
-  return done
+  return hit
 }
 
 const ancestor = (node, tag) => { for (let n = node.parentNode; n; n = n.parentNode) if (n.tagName === tag) return n; return null }
+
+// Split `run` at `offset`: the original keeps the first half, a clone with its
+// rPr takes the rest right after it. Returns the clone.
+function splitRunAt(doc, run, offset) {
+  const text = elementsOf(run, 'w:t').map(t => t.textContent).join('')
+  const clone = run.cloneNode(false)
+  while (clone.firstChild && clone.firstChild.tagName !== 'w:rPr') clone.removeChild(clone.firstChild)
+  const t = doc.createElement('w:t'); t.setAttribute('xml:space', 'preserve')
+  t.appendChild(doc.createTextNode(text.slice(offset)))
+  clone.appendChild(t)
+  setRunText(run, text.slice(0, offset))
+  run.parentNode.insertBefore(clone, run.nextSibling)
+  return clone
+}
+
+// The run sequence covering `anchor` inside `p`, split at its exact edges.
+// Returns { firstRun, lastRun } or undefined when the phrase is not there.
+function phraseRuns(doc, p, anchor) {
+  const runs = elementsOf(p, 'w:r').filter(r => !isDeleted(p, r) && nearestPara(r) === p)
+  const texts = runs.map(r => elementsOf(r, 'w:t').map(t => t.textContent).join(''))
+  const joined = texts.join('')
+  const start = joined.indexOf(anchor)
+  if (start < 0) return undefined
+  const end = start + anchor.length
+  const locate = (pos) => {
+    let c = 0
+    for (let i = 0; i < runs.length; i++) {
+      const e = c + texts[i].length
+      if (pos < e || (pos === e && i === runs.length - 1)) return { i, off: pos - c }
+      c = e
+    }
+    return { i: runs.length - 1, off: texts.at(-1).length }
+  }
+  const e = locate(end), s = locate(start)
+  let lastRun
+  if (e.off === texts[e.i].length) lastRun = runs[e.i]
+  else if (e.off === 0) lastRun = runs[e.i - 1]
+  else { splitRunAt(doc, runs[e.i], e.off); lastRun = runs[e.i] }
+  const firstRun = s.off === 0 ? runs[s.i] : splitRunAt(doc, runs[s.i], s.off)
+  return { firstRun, lastRun }
+}
 
 function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = 'Bot', initials = 'B' }) {
   const doc = getDoc('word/document.xml')
@@ -440,11 +501,18 @@ function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = 'B
   const ref = doc.createElement('w:r')
   const refEl = doc.createElement('w:commentReference'); refEl.setAttribute('w:id', id)
   ref.appendChild(refEl)
+  // Range markers sit between runs, never before the paragraph's w:pPr.
+  const pPr = childrenOf(p, 'w:pPr')[0]
   if (anchor) {
-    p.insertBefore(rangeStart, p.firstChild)
-    p.appendChild(rangeEnd); p.appendChild(ref)
+    const span = phraseRuns(doc, p, anchor)
+    if (!span) throw new Error(`anchor "${anchor}" not found in ${paragraph}`)
+    p.insertBefore(rangeStart, span.firstRun)
+    span.lastRun.parentNode.insertBefore(rangeEnd, span.lastRun.nextSibling)
+    span.lastRun.parentNode.insertBefore(ref, rangeEnd.nextSibling)
   } else {
-    p.appendChild(rangeEnd); p.appendChild(ref)
+    p.insertBefore(rangeStart, pPr ? pPr.nextSibling : p.firstChild)
+    p.appendChild(rangeEnd)
+    p.appendChild(ref)
   }
   changed.add('word/document.xml')
 }
@@ -453,7 +521,40 @@ function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = 'B
 export function resolveChanges(doc, accept) {
   let dirty = false
   const lift = (el) => { while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el); el.parentNode.removeChild(el) }
-  // Range markers first so wrappers see clean ranges.
+  // Paragraph and row marks first: they restructure the tree, so the generic
+  // ins/del pass must not see them. Merging moves this paragraph's content
+  // children (all but w:pPr), in order, into the next paragraph after its w:pPr
+  // — the merged paragraph keeps the next paragraph's mark and properties.
+  const mergeIntoNext = (p, pPr) => {
+    const next = p.nextSibling
+    if (!next || next.tagName !== 'w:p') return false
+    const nextPPr = childrenOf(next, 'w:pPr')[0]
+    const anchor = nextPPr ? nextPPr.nextSibling : next.firstChild
+    for (const node of [...p.childNodes]) {
+      if (node === pPr) continue
+      next.insertBefore(node, anchor)
+    }
+    p.parentNode.removeChild(p)
+    return true
+  }
+  for (const p of elementsOf(doc.documentElement, 'w:p')) {
+    const pPr = childrenOf(p, 'w:pPr')[0]
+    const rPr = pPr && childrenOf(pPr, 'w:rPr')[0]
+    if (!rPr) continue
+    const del = childrenOf(rPr, 'w:del')[0]
+    const ins = childrenOf(rPr, 'w:ins')[0]
+    if (del) { dirty = true; if (!accept || !mergeIntoNext(p, pPr)) rPr.removeChild(del) }
+    else if (ins) { dirty = true; if (accept || !mergeIntoNext(p, pPr)) rPr.removeChild(ins) }
+  }
+  for (const tr of elementsOf(doc.documentElement, 'w:tr')) {
+    const trPr = childrenOf(tr, 'w:trPr')[0]
+    if (!trPr) continue
+    const ins = childrenOf(trPr, 'w:ins')[0]
+    const del = childrenOf(trPr, 'w:del')[0]
+    if (ins) { dirty = true; if (accept) trPr.removeChild(ins); else tr.parentNode.removeChild(tr) }
+    else if (del) { dirty = true; if (accept) tr.parentNode.removeChild(tr); else trPr.removeChild(del) }
+  }
+  // Range markers next so wrappers see clean ranges.
   for (const el of elementsOf(doc.documentElement)) {
     const tag = el.tagName
     if (tag === 'w:moveFromRangeStart' || tag === 'w:moveFromRangeEnd' || tag === 'w:moveToRangeStart' || tag === 'w:moveToRangeEnd'
@@ -478,18 +579,27 @@ export function resolveChanges(doc, accept) {
         for (const t of elementsOf(el, 'w:delText')) { t.tagName = 'w:t' }
         lift(el); dirty = true
       }
-    } else if (/^w:(pPrChange|rPrChange|tblPrChange|tcPrChange|trPrChange|sectPrChange|numberingChange)$/.test(tag)) {
-      if (accept) { el.parentNode.removeChild(el); dirty = true }
+    } else if (tag === 'w:numberingChange') {
+      el.parentNode.removeChild(el); dirty = true
+    } else if (/^w:(pPrChange|rPrChange|tblPrChange|tcPrChange|trPrChange|sectPrChange)$/.test(tag)) {
+      const parent = el.parentNode
+      if (accept) { parent.removeChild(el); dirty = true }
       else {
-        // Restore the stored old properties into place of the change marker.
-        const parent = el.parentNode
+        // Restore the stored old properties: the parent keeps the parts the
+        // stored copy never holds (a pPr's mark rPr and sectPr; a sectPr's
+        // header/footer references) and takes the rest from the stored copy.
         const stored = childrenOf(el)[0]
-        if (stored) parent.replaceChild(stored.cloneNode(true), el)
-        else parent.removeChild(el)
+        const keep = new Set()
+        if (parent.tagName === 'w:pPr') { keep.add('w:rPr'); keep.add('w:sectPr') }
+        if (parent.tagName === 'w:sectPr') { keep.add('w:headerReference'); keep.add('w:footerReference') }
+        for (const c of [...parent.childNodes]) if (!keep.has(c.tagName) && c !== el) parent.removeChild(c)
+        if (stored) {
+          const anchor = [...parent.childNodes].find(c => keep.has(c.tagName)) ?? null
+          for (const s of [...stored.childNodes]) parent.insertBefore(s, anchor)
+        }
+        parent.removeChild(el)
         dirty = true
       }
-    } else if (tag === 'w:del' && el.parentNode?.tagName === 'w:rPr' && el.parentNode.parentNode?.tagName === 'w:pPr') {
-      // handled above via generic w:del
     } else if (tag === 'w:cellIns' || tag === 'w:cellDel') {
       const tc = ancestor(el, 'w:tc')
       if (tc) {
@@ -497,26 +607,6 @@ export function resolveChanges(doc, accept) {
         else if (!accept && tag === 'w:cellIns') tc.parentNode?.removeChild(tc)
         el.parentNode.removeChild(el); dirty = true
       }
-    }
-  }
-  // Deleted paragraph marks: w:pPr/w:rPr/w:del merges the paragraph with the next
-  // on accept; on reject the mark alone disappears.
-  for (const p of elementsOf(doc.documentElement, 'w:p')) {
-    const pPr = firstOf(p, 'w:pPr')
-    const rPr = pPr && firstOf(pPr, 'w:rPr')
-    const del = rPr && firstOf(rPr, 'w:del')
-    if (!del) continue
-    dirty = true
-    if (accept) {
-      const next = p.nextSibling
-      if (next && next.tagName === 'w:p') {
-        for (const child of [...p.childNodes]) if (child !== pPr) next.insertBefore(child, next.firstChild)
-        p.parentNode.removeChild(p)
-      } else {
-        rPr.removeChild(del)
-      }
-    } else {
-      rPr.removeChild(del)
     }
   }
   return dirty

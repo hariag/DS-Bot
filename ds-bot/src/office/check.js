@@ -89,17 +89,77 @@ function runRules(pkg) {
     if (name.endsWith('.rels')) continue
     const rels = pkg.relsOf(name)
     for (const el of elementsOf(doc.documentElement)) {
-      for (const attr of ['r:id', 'r:embed', 'r:link', 'r:dm', 'r:lo', 'r:qs', 'r:cs', 'o:id']) {
+      for (const attr of ['r:id', 'r:embed', 'r:link', 'r:dm', 'r:lo', 'r:qs', 'r:cs']) {
         const value = el.getAttribute?.(attr)
         if (value && !rels.has(value)) out.push(finding('unknown-rel-ref', name, `${el.tagName} ${attr}="${value}" has no relationship`))
       }
     }
   }
+  // Parts reached by a known relationship type must carry its content type —
+  // an application/xml Default is not a match.
+  contentTypeRules(pkg, out)
   // Part-kind rules.
   const isPptx = pkg.parts.has('ppt/presentation.xml'), isDocx = pkg.parts.has('word/document.xml')
   if (isPptx) pptxRules(pkg, xmlDocs, out)
   if (isDocx) docxRules(pkg, xmlDocs, out)
   return out
+}
+
+const CT_BASE = 'application/vnd.openxmlformats-officedocument.'
+const pkgKind = (pkg) => pkg.parts.has('word/document.xml') ? 'docx' : pkg.parts.has('ppt/presentation.xml') ? 'pptx' : pkg.parts.has('xl/workbook.xml') ? 'xlsx' : undefined
+const MAIN_CT = { docx: CT_BASE + 'wordprocessingml.document.main+xml', pptx: CT_BASE + 'presentationml.presentation.main+xml', xlsx: CT_BASE + 'spreadsheetml.sheet.main+xml' }
+
+// Relationship-type suffix → expected content type (or a per-package map).
+const REL_TYPE_CT = {
+  officeDocument: MAIN_CT,
+  document: MAIN_CT,
+  styles: { docx: CT_BASE + 'wordprocessingml.styles+xml', xlsx: CT_BASE + 'spreadsheetml.styles+xml' },
+  numbering: CT_BASE + 'wordprocessingml.numbering+xml',
+  settings: CT_BASE + 'wordprocessingml.settings+xml',
+  comments: CT_BASE + 'wordprocessingml.comments+xml',
+  footnotes: CT_BASE + 'wordprocessingml.footnotes+xml',
+  endnotes: CT_BASE + 'wordprocessingml.endnotes+xml',
+  header: CT_BASE + 'wordprocessingml.header+xml',
+  footer: CT_BASE + 'wordprocessingml.footer+xml',
+  fontTable: CT_BASE + 'wordprocessingml.fontTable+xml',
+  theme: CT_BASE + 'theme+xml',
+  slide: CT_BASE + 'presentationml.slide+xml',
+  slideLayout: CT_BASE + 'presentationml.slideLayout+xml',
+  slideMaster: CT_BASE + 'presentationml.slideMaster+xml',
+  notesSlide: CT_BASE + 'presentationml.notesSlide+xml',
+  notesMaster: CT_BASE + 'presentationml.notesMaster+xml',
+  chart: CT_BASE + 'drawingml.chart+xml',
+  worksheet: CT_BASE + 'spreadsheetml.worksheet+xml',
+  sharedStrings: CT_BASE + 'spreadsheetml.sharedStrings+xml',
+  coreProperties: 'application/vnd.openxmlformats-package.core-properties+xml',
+  'core-properties': 'application/vnd.openxmlformats-package.core-properties+xml',
+  extendedProperties: CT_BASE + 'extended-properties+xml',
+  'extended-properties': CT_BASE + 'extended-properties+xml',
+}
+
+export function expectedContentType(pkg, relType) {
+  const suffix = relType.split('/').pop()
+  const rule = REL_TYPE_CT[suffix]
+  if (rule === undefined) return undefined
+  if (typeof rule === 'string') return rule
+  const kind = pkgKind(pkg)
+  return kind ? rule[kind] : undefined
+}
+
+function contentTypeRules(pkg, out) {
+  for (const [owner, map] of pkg.rels) {
+    for (const rel of map.values()) {
+      if (rel.mode === 'External') continue
+      const expected = expectedContentType(pkg, rel.type)
+      if (expected === undefined) continue
+      const target = pkg.targetOf(owner, rel.target)
+      if (!pkg.parts.has(target)) continue
+      const actual = pkg.contentType(target)
+      if (actual !== expected) {
+        out.push(finding('wrong-content-type', target, `${target} is ${actual ?? 'untyped'}, expected ${expected} for ${rel.type.split('/').pop()}`))
+      }
+    }
+  }
 }
 
 function uniqueIds(elements, attr, part, rule, out) {
@@ -201,7 +261,13 @@ export function fixPackage(pkg) {
     }
     if (dirty) { pkg.putXml(name, doc); fixed.push(name) }
   }
-  // paraId duplicates.
+  // paraId duplicates: renumber in document order to the next unused value
+  // below 0x80000000, deterministically.
+  const paraIds = new Set()
+  for (const name of pkg.parts.keys()) {
+    if (!/^word\//.test(name) || !name.endsWith('.xml')) continue
+    try { for (const p of elementsOf(parseXml(pkg.get(name)).documentElement, 'w:p')) paraIds.add(p.getAttribute('w14:paraId')) } catch { /* malformed stays */ }
+  }
   for (const name of pkg.parts.keys()) {
     if (!/^word\//.test(name) || !name.endsWith('.xml')) continue
     let doc
@@ -211,12 +277,28 @@ export function fixPackage(pkg) {
       const id = p.getAttribute('w14:paraId')
       if (!id) continue
       if (seen.has(id) || parseInt(id, 16) >= 0x80000000) {
-        const next = (Math.floor(Math.random() * 0x7fffffff)).toString(16).padStart(8, '0')
-        p.setAttribute('w14:paraId', seen.has(next) ? (parseInt(next, 16) ^ 0x12345).toString(16) : next); dirty = true
+        let next = 1
+        while (paraIds.has(next.toString(16).padStart(8, '0')) || paraIds.has(next.toString(16))) next++
+        const fresh = next.toString(16).padStart(8, '0')
+        p.setAttribute('w14:paraId', fresh)
+        paraIds.add(fresh)
+        dirty = true
       }
       seen.add(p.getAttribute('w14:paraId'))
     }
     if (dirty) { pkg.putXml(name, doc); fixed.push(name) }
+  }
+  // Wrong content types on parts a known relationship type points at.
+  for (const [owner, map] of pkg.rels) {
+    for (const rel of map.values()) {
+      if (rel.mode === 'External') continue
+      const expected = expectedContentType(pkg, rel.type)
+      if (expected === undefined) continue
+      const target = pkg.targetOf(owner, rel.target)
+      if (pkg.parts.has(target) && pkg.contentType(target) !== expected) {
+        pkg.override(target, expected); fixed.push(target)
+      }
+    }
   }
   // Content types: drop Overrides for absent parts, add Overrides for known types.
   for (const part of [...pkg.overrides.keys()]) {

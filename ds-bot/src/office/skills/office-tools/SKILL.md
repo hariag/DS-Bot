@@ -7,7 +7,7 @@ description: Inspect, check, and edit .docx/.pptx/.xlsx packages in place — bl
 
 A bundled command line for the jobs the format skills cannot do safely: reading a document's structure with stable ids, repairing packages, targeted edits, tracked changes, layout findings, and contact sheets of rendered pages. Run every command through the Node and CLI paths in the runtime block at the end of this skill.
 
-Every command accepts `--json` and prints `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message"}}`. Exit codes: 0 = ok, 1 = findings remain, 2 = usage or failure. Edits write a new file (`-o out`) or overwrite the input (`--in-place`); they never touch the input otherwise.
+Every command accepts `--json` and prints `{"ok":true,"data":…}` for a run that completed, or `{"ok":false,"error":{"code","message"}}` when it failed. Findings are results, not failures: they land inside `data.findings` with `ok` still true, and the exit code carries them — 0 = ok, 1 = findings remain, 2 = usage or failure. Edits write a new file (`-o out`) or overwrite the input (`--in-place`); they never touch the input otherwise.
 
 ## Commands
 

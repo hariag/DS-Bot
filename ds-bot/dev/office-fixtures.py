@@ -60,15 +60,16 @@ def touch_docx(path):
             data = zin.read(item)
             if item == "word/document.xml":
                 text = data.decode("utf8")
-                # A complex PAGE field in the second-to-last paragraph.
-                text = text.replace(
-                    "</w:body>",
-                    '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
-                    '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
-                    '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
-                    '<w:r><w:t>1</w:t></w:r>'
-                    '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
-                    "</w:body>", 1)
+                # A complex PAGE field as the last paragraph — inside the body
+                # before its closing sectPr, never after it.
+                sect = text.rfind("<w:sectPr")
+                text = (text[:sect]
+                        + '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                        '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+                        '<w:r><w:t>1</w:t></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+                        + text[sect:])
                 # Tracked changes in the first real paragraph: inserted word,
                 # deleted word, moved text, a run-property change, and a
                 # paragraph whose mark is deleted (merges on accept). Run-level

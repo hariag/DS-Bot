@@ -1,7 +1,7 @@
 // The OOXML package: parts, [Content_Types].xml, and .rels files as a small model.
 // Loads from a .docx/.pptx/.xlsx ZIP or from an `unpack` directory; saves back
 // keeping untouched members' compressed bytes.
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, posix } from 'node:path'
 import { parseXml, serializeXml, childrenOf } from './xml.js'
 import { readZip, writeZip } from './zip.js'
@@ -14,6 +14,8 @@ const absTarget = (base, target) => {
   if (target.startsWith('/')) return target.slice(1)
   return posix.normalize(posix.join(posix.dirname(base), target))
 }
+
+const relSig = (map) => [...map.values()].map(r => `${r.id}${r.type}${r.target}${r.mode}`).join('')
 
 /** One package: a name→{data|raw} part map plus content-type and relationship views. */
 export class Package {
@@ -80,6 +82,9 @@ export class Package {
       } catch { /* malformed rels surface through check */ }
       this.rels.set(owner, map)
     }
+    // Baselines for flush(): a .rels part is rewritten only when its map changed.
+    this.relSigs = new Map([...this.rels].map(([owner, map]) => [owner, relSig(map)]))
+    this.ctSig = JSON.stringify([...this.defaults].sort().concat([...this.overrides].filter(([n]) => this.parts.has(n)).sort()))
   }
 
   /** @returns {Buffer|undefined} part bytes */
@@ -121,13 +126,16 @@ export class Package {
     return owner === '' ? '_rels/.rels' : `${posix.dirname(owner)}/_rels/${posix.basename(owner)}.rels`
   }
 
-  /** Write .rels and [Content_Types].xml back into parts from the model. */
+  /** Write .rels and [Content_Types].xml back into parts from the model — only
+   * when the model changed, so untouched members keep their original bytes. */
   flush() {
     for (const name of [...this.parts.keys()]) if (name.endsWith('.rels') && !this.#ownerStillHasRels(name)) this.parts.delete(name)
     for (const [owner, map] of this.rels) {
       if (owner !== '' && !this.parts.has(owner)) { this.rels.delete(owner); continue }
       const name = this.relsName(owner)
       if (map.size === 0) { this.parts.delete(name); continue }
+      const sig = relSig(map)
+      if (sig === (this.relSigs ??= new Map()).get(owner) && this.parts.has(name)) continue
       const doc = parseXml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
       for (const rel of map.values()) {
         const el = doc.createElement('Relationship')
@@ -136,16 +144,21 @@ export class Package {
         doc.documentElement.appendChild(el)
       }
       this.putXml(name, doc)
+      this.relSigs.set(owner, sig)
     }
-    const ct = parseXml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
-    for (const [ext, type] of this.defaults) {
-      const el = ct.createElement('Default'); el.setAttribute('Extension', ext); el.setAttribute('ContentType', type); ct.documentElement.appendChild(el)
+    const ctSig = JSON.stringify([...this.defaults].sort() .concat([...this.overrides].filter(([n]) => this.parts.has(n)).sort()))
+    if (ctSig !== this.ctSig || !this.parts.has('[Content_Types].xml')) {
+      const ct = parseXml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+      for (const [ext, type] of this.defaults) {
+        const el = ct.createElement('Default'); el.setAttribute('Extension', ext); el.setAttribute('ContentType', type); ct.documentElement.appendChild(el)
+      }
+      for (const [name, type] of this.overrides) {
+        if (!this.parts.has(name)) continue
+        const el = ct.createElement('Override'); el.setAttribute('PartName', `/${name}`); el.setAttribute('ContentType', type); ct.documentElement.appendChild(el)
+      }
+      this.putXml('[Content_Types].xml', ct)
+      this.ctSig = ctSig
     }
-    for (const [name, type] of this.overrides) {
-      if (!this.parts.has(name)) continue
-      const el = ct.createElement('Override'); el.setAttribute('PartName', `/${name}`); el.setAttribute('ContentType', type); ct.documentElement.appendChild(el)
-    }
-    this.putXml('[Content_Types].xml', ct)
     this.parts.delete('') // never emit a directory entry
   }
 
@@ -160,11 +173,12 @@ export class Package {
     return writeZip([...this.parts.entries()].map(([name, part]) => ({ name, ...part })))
   }
 
-  /** Write an `unpack` directory tree. `dir` must be new or the output of a previous unpack. */
-  unpack(dir, previous) {
-    if (existsSync(dir)) {
-      const names = readdirSync(dir)
-      if (names.length > 0 && !(previous && previous === dir)) fail(`unpack: ${dir} exists and is not an earlier unpack`)
+  /** Write an `unpack` directory tree. An existing non-empty dir must hold an
+   * earlier unpack ([Content_Types].xml at its root); files the package no
+   * longer has are removed. */
+  unpack(dir) {
+    if (existsSync(dir) && readdirSync(dir).length > 0 && !existsSync(join(dir, '[Content_Types].xml'))) {
+      fail(`unpack: ${dir} exists and is not an earlier unpack`)
     }
     mkdirSync(dir, { recursive: true })
     const keep = new Set()
@@ -178,6 +192,15 @@ export class Package {
       }
       writeFileSync(file, data)
     }
+    const sweep = (rel) => {
+      for (const entry of readdirSync(join(dir, rel))) {
+        const path = rel === '' ? entry : `${rel}/${entry}`
+        const full = join(dir, path)
+        if (statSync(full).isDirectory()) { sweep(path); if (readdirSync(full).length === 0) rmdirSync(full) }
+        else if (!keep.has(full)) unlinkSync(full)
+      }
+    }
+    sweep('')
   }
 }
 

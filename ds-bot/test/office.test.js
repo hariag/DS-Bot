@@ -10,11 +10,11 @@ import assert from 'node:assert'
 import { readZip } from '../src/office/zip.js'
 import { Package } from '../src/office/package.js'
 import { checkPackage, fixPackage } from '../src/office/check.js'
-import { docxRead } from '../src/office/docx.js'
+import { docxRead, docxEdit } from '../src/office/docx.js'
 import { pptxInventory, pptxLayout } from '../src/office/pptx.js'
 import { xlsxInventory, xlsxRead } from '../src/office/xlsx.js'
 import { decodePng, encodePng, contactSheet } from '../src/office/png.js'
-import { parseXml } from '../src/office/xml.js'
+import { parseXml, elementsOf, childrenOf, textOf } from '../src/office/xml.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const FIXTURES = join(ROOT, 'test', 'fixtures', 'office')
@@ -258,5 +258,199 @@ describe('unpack/pack', () => {
     const res = cli('pack', dest, join(dir, 'back.docx'), '--against', fixture('sample.docx'))
     assert.ok(res.ok)
     assert.equal(checkPackage(Package.open(join(dir, 'back.docx'))).length, 0)
+  })
+  test('unpack reuses an earlier unpack and removes stale files', () => {
+    const dir = tmp()
+    const dest = join(dir, 'un')
+    cli('unpack', fixture('sample.docx'), dest)
+    writeFileSync(join(dest, 'stale.xml'), '<x/>')
+    cli('unpack', fixture('sample.docx'), dest)
+    assert.ok(!existsSync(join(dest, 'stale.xml')))
+  })
+  test('unpack refuses an existing directory that is not an unpack', () => {
+    const dir = tmp()
+    writeFileSync(join(dir, 'random.txt'), 'hi')
+    assert.throws(() => execFileSync(NODE, [CLI, 'unpack', fixture('sample.docx'), dir, '--json']), /unpack/)
+  })
+})
+
+describe('paragraph and row marks (review 1)', () => {
+  test('accept merges a paragraph with a deleted mark into the next, in order', () => {
+    const dir = tmp()
+    const out = join(dir, 'merged.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops', JSON.stringify([{ accept_changes: {} }]))
+    const { blocks } = docxRead(Package.open(out))
+    assert.equal(blocks.length, 6) // p5 merged into the field paragraph
+    const merged = blocks.find(b => /Final closing/.test(b.text))
+    assert.match(merged.text, /Final closing paragraph\. PAGE/)
+    assert.ok(!merged.deletedParagraphMark)
+  })
+  test('reject drops the deleted paragraph mark and keeps both paragraphs', () => {
+    const dir = tmp()
+    const out = join(dir, 'rejected.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops', JSON.stringify([{ reject_changes: {} }]))
+    const { blocks } = docxRead(Package.open(out))
+    assert.ok(blocks.some(b => b.text === 'Final closing paragraph.' && !b.deletedParagraphMark))
+    assert.ok(blocks.some(b => / PAGE /.test(b.text)))
+  })
+})
+
+describe('property change restore (review 2)', () => {
+  test('reject restores stored run properties under the run rPr', () => {
+    const dir = tmp()
+    const out = join(dir, 'rej.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops', JSON.stringify([{ reject_changes: {} }]))
+    const doc = Package.open(out).xml('word/document.xml')
+    // The "." run carried rPrChange storing a bold rPr: on reject the run
+    // becomes bold again, with no change element left.
+    const runs = elementsOf(doc.documentElement, 'w:r')
+    const dot = runs.find(r => textOf(r) === '.')
+    assert.ok(dot, 'no "." run')
+    assert.ok(childrenOf(childrenOf(dot, 'w:rPr')[0], 'w:b')[0] !== undefined)
+    assert.equal(elementsOf(doc.documentElement, 'w:rPrChange').length, 0)
+  })
+})
+
+describe('replace edge cases (review 3)', () => {
+  test('a→aa terminates (no re-scan of inserted text)', () => {
+    const dir = tmp()
+    const out = join(dir, 'aa.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops', JSON.stringify([{ replace: { find: 'a', with: 'aa' } }]))
+    const { blocks } = docxRead(Package.open(out))
+    assert.ok(blocks.some(b => (b.text ?? '').includes('aa')))
+  })
+  test('regex groups expand ($1), and case-insensitive flags hold', () => {
+    const dir = tmp()
+    const out = join(dir, 're.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
+      JSON.stringify([{ replace: { find: '(north) region', with: 'south-$1 area', regex: true } }]))
+    assert.match(docxRead(Package.open(out)).blocks[1].text, /south-north area/)
+  })
+})
+
+describe('comment op (review 4)', () => {
+  test('anchor wraps exactly the phrase and passes check', () => {
+    const dir = tmp()
+    const out = join(dir, 'c.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
+      JSON.stringify([{ comment: { paragraph: 'p2', text: 'look here', anchor: 'north' } }]))
+    const pkg = Package.open(out)
+    assert.deepEqual(checkPackage(pkg), [])
+    const doc = pkg.xml('word/document.xml')
+    const p = elementsOf(doc.documentElement, 'w:p').find(p => textOf(p).includes('south') || textOf(p).includes('north'))
+    const start = elementsOf(p, 'w:commentRangeStart')[0]
+    assert.ok(start)
+    // The range opens right before the run holding the phrase.
+    assert.match(textOf(start.nextSibling), /^north$/)
+  })
+  test('an anchor that is not in the paragraph fails the whole batch', () => {
+    const dir = tmp()
+    const out = join(dir, 'c2.docx')
+    const res = cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
+      JSON.stringify([{ comment: { paragraph: 'p2', text: 'x', anchor: 'zz-not-there' } }]))
+    assert.equal(res.ok, false)
+    assert.match(res.error.message, /op 0/)
+    assert.ok(!existsSync(out))
+  })
+})
+
+describe('field and cell edits (review 5, 6)', () => {
+  test('set_field rewrites the complex result and touches only document.xml', () => {
+    const dir = tmp()
+    const out = join(dir, 'f.docx')
+    const res = cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
+      JSON.stringify([{ set_field: { match: 'PAGE', value: '7' } }]))
+    assert.deepEqual(res.data.changed, ['word/document.xml'])
+    const fields = cli('docx', 'fields', out).data
+    assert.ok(fields.some(f => f.instruction.includes('PAGE') && f.result === '7'))
+  })
+  test('set_cell keeps tcPr, pPr and the run rPr', () => {
+    const dir = tmp()
+    const out = join(dir, 'cell.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
+      JSON.stringify([{ set_cell: { table: 1, row: 1, col: 1, text: 'New title' } }]))
+    const { blocks } = docxRead(Package.open(out))
+    assert.equal(blocks.find(b => b.id === 't1').rows[0][0].gridSpan, 2)
+  })
+})
+
+describe('pptx duplication and clean (review 7, 8)', () => {
+  test('duplicated slide gets its Override and the notes slide points back at it', () => {
+    const dir = tmp()
+    const out = join(dir, 'dup.pptx')
+    cli('pptx', 'slides', fixture('sample.pptx'), '-o', out, '--order', '1,1,2,3')
+    const pkg = Package.open(out)
+    const dup = 'ppt/slides/slide4.xml'
+    assert.equal(pkg.contentType(dup), 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml')
+    const notesRel = [...pkg.relsOf(dup).values()].find(r => r.type.endsWith('/notesSlide'))
+    assert.ok(notesRel, 'duplicated slide kept no notes slide')
+    const notes = pkg.targetOf(dup, notesRel.target)
+    const back = [...pkg.relsOf(notes).values()].find(r => r.type.endsWith('/slide'))
+    assert.equal(pkg.targetOf(notes, back.target), dup)
+    assert.deepEqual(checkPackage(pkg), [])
+  })
+  test('clean drops relationship ids that no XML uses', () => {
+    const dir = tmp()
+    const broken = join(dir, 'b.pptx')
+    const pkg = Package.open(fixture('sample.pptx'))
+    const doc = pkg.xml('ppt/slides/slide1.xml')
+    const pic = elementsOf(doc.documentElement, 'p:pic')[0]
+    pic.parentNode.removeChild(pic)
+    pkg.putXml('ppt/slides/slide1.xml', doc)
+    writeFileSync(broken, pkg.save())
+    const res = cli('pptx', 'clean', broken, '-o', join(dir, 'c.pptx'))
+    assert.ok(res.data.removed.some(n => n === 'ppt/media/image1.png'))
+    assert.deepEqual(checkPackage(Package.open(res.data.file)), [])
+  })
+})
+
+describe('check rules (review 10, 11)', () => {
+  test('o:id in VML is not a relationship reference', () => {
+    const pkg = Package.open(fixture('sample.docx'))
+    const doc = pkg.xml('word/document.xml')
+    const p = parseXml(`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r><w:pict><v:shape o:id="_x0000_s1" id="x" style="width:10pt;height:10pt"/></w:pict></w:r></w:p>`).documentElement
+    doc.documentElement.appendChild(doc.importNode(p, true))
+    pkg.putXml('word/document.xml', doc)
+    assert.ok(!checkPackage(pkg).some(f => f.rule === 'unknown-rel-ref'))
+  })
+  test('wrong-content-type reports and --fix sets the Override', () => {
+    const pkg = Package.open(fixture('sample.docx'))
+    pkg.override('word/styles.xml', 'application/xml')
+    const found = checkPackage(pkg)
+    assert.ok(found.some(f => f.rule === 'wrong-content-type' && f.part === 'word/styles.xml'))
+    const { remaining } = fixPackage(pkg)
+    assert.deepEqual(remaining, [])
+    assert.equal(pkg.contentType('word/styles.xml'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml')
+  })
+})
+
+describe('JSON findings shape (review 14)', () => {
+  test('findings come back ok:true with exit 1', () => {
+    const dir = tmp()
+    const pkg = Package.open(fixture('sample.docx'))
+    pkg.override('word/styles.xml', 'application/xml')
+    const file = join(dir, 'bad.docx')
+    writeFileSync(file, pkg.save())
+    const res = cli('check', file)
+    assert.equal(res.ok, true)
+    assert.ok(res.data.findings.some(f => f.rule === 'wrong-content-type'))
+    let status = 0
+    try { execFileSync(NODE, [CLI, 'check', file, '--json']) } catch (e) { status = e.status }
+    assert.equal(status, 1)
+  })
+})
+
+describe('flush keeps untouched members (review 16)', () => {
+  test('a document.xml-only edit preserves every other member byte', () => {
+    const src = fixture('sample.docx')
+    const pkg = Package.open(src)
+    const before = readZip(readFileSync(src))
+    docxEdit(pkg, [{ set_cell: { table: 1, row: 2, col: 2, text: '99' } }])
+    const after = readZip(pkg.save())
+    const changed = after.filter(m => {
+      const old = before.find(b => b.name === m.name)
+      return !old || !old.raw.equals(m.raw)
+    }).map(m => m.name)
+    assert.deepEqual(changed.sort(), ['word/document.xml'])
   })
 })
