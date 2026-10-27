@@ -1759,6 +1759,6 @@ export function install(rt) {
 
   Object.assign(rt, {
     memoryEnabled: true, renewMemory, archiveBotMemory, archiveGroupMemory, memoryEndpoint, memoryReviews,
-    memoryNews: () => Object.fromEntries(news),
+    memoryNews: () => Object.fromEntries(news), botShot,
   })
 }

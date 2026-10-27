@@ -83,7 +83,8 @@ export function install(rt) {
     // Set while another dsh host holds the team (store.js): why this one cannot change it.
     readOnly: rt.readOnly() ?? null,
   })
-  // What changes without a new revision, sent with every state answer. `memoryNews`:
+  // What changes without a new revision, sent with every state answer. `learning`:
+  // each Bot's pending skill proposals. `memoryNews`:
   // per Bot or group chat, its latest memory change; `memoryReviews`: memory reviews waiting or
   // running; `work`: per Bot, the turn it runs and its tool; per group, the members whose
   // turn there runs; the approvals waiting; per Bot, who it waits for to hand back work;
@@ -93,6 +94,7 @@ export function install(rt) {
     work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {} },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
+    learning: rt.learningView(),
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
     phone: rt.phoneView(),
@@ -376,6 +378,9 @@ export function install(rt) {
         case 'memory-forget':
           await rt.load()
           return ok(await rt.memoryEndpoint(endpoint, body))
+        case 'learning-answer':
+          await rt.load()
+          return ok(await rt.learningEndpoint(endpoint, body))
         case 'answer-question': {
           if (typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           await rt.load()
