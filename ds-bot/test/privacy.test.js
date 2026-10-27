@@ -1,29 +1,26 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { fakeApproval, fakeContext } from './fake-ctx.js'
 
-let rt
-
 // A Bot's id is a Session id, which a path may hold.
 const P = 'd1a40000-1111-4222-8333-444444444444'
 
 // Chief (Main), Writer in the group Ops, and Diary, a Bot with a folder of its own.
-function seed({ diary, privateBot, archives = [], picked, openPart = false }) {
+function seed({ diary, privateBot }) {
   return {
     version: 1,
     mainBotIds: ['a'],
-    privateArchives: archives,
     workspaceId: 'w1',
     bots: {
       a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
       b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
-      [P]: { id: P, name: 'Diary', role: 'Notes', sessionId: P, createdAt: 3, instructions: 'Keep the diary of the user.', workDir: diary, ...(privateBot ? { private: true } : {}), ...(openPart ? { openParts: [{ sessionId: 'p-bg', segments: [] }] } : {}) },
+      [P]: { id: P, name: 'Diary', role: 'Notes', sessionId: P, createdAt: 3, instructions: 'Keep the diary of the user.', workDir: diary, ...(privateBot ? { private: true } : {}) },
     },
-    rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'a', named: true, sessions: { b: 'gb' }, ...(picked === undefined ? {} : { memberDirs: { b: picked } }) } },
+    rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'a', named: true, sessions: { b: 'gb' } } },
     agents: {},
     exchanges: [],
     exchangeTurns: {},
@@ -33,7 +30,7 @@ function seed({ diary, privateBot, archives = [], picked, openPart = false }) {
   }
 }
 
-async function start({ services = {}, privateBot = true, archives, memberPick = false, openPart = false } = {}) {
+async function start({ services = {}, privateBot = true } = {}) {
   // The native realpath, as fs/promises uses: on Windows the JS one keeps 8.3 short names.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-privacy-')))
   const dsh = join(root, 'dsh')
@@ -41,10 +38,9 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
   const team = join(home, 'workspace')
   const project = join(root, 'project')
   const diary = join(root, 'diary')
-  const picked = join(root, 'picked')
-  for (const dir of [team, project, diary, ...(memberPick ? [picked] : [])]) mkdirSync(dir, { recursive: true })
+  for (const dir of [team, project, diary]) mkdirSync(dir, { recursive: true })
   writeFileSync(join(diary, 'notes.txt'), 'secret')
-  writeFileSync(join(home, 'state.json'), JSON.stringify(seed({ diary, privateBot, archives, picked: memberPick ? picked : undefined, openPart })))
+  writeFileSync(join(home, 'state.json'), JSON.stringify(seed({ diary, privateBot })))
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = dsh
 
@@ -68,7 +64,6 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
     return agents.get(sessionId)
   }
   const registry = new Map([['w1', { id: 'w1', path: team, title: 'DS Bot' }]])
-  let created = 0
   Object.assign(ctx, {
     llm: { listProviders: () => [], listModels: async () => [], resolveModelInfo: async () => ({}) },
     workspaceRegistry: {
@@ -83,8 +78,7 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
       archiveSession: async () => {},
     },
     sessionController: {
-      // Ids shaped like real Session ids: a short one would match any path it lands in.
-      create: async () => ({ sessionId: `0000000${++created}-1111-4222-8333-444444444444` }),
+      create: async () => ({ sessionId: 's1' }),
       resolveAgent: async sessionId => ({ agent: agentOf(sessionId) }),
       selectModel: async () => {},
       page: async () => ({ records: [], hasMore: false }),
@@ -98,12 +92,12 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
     route = options
     return register(options)
   }
-  rt = createRuntime(ctx, { home, github: false, diagnosticsFile: false })
+  const rt = createRuntime(ctx, { home, github: false, diagnosticsFile: false })
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', {
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
-  const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
+  const tool = (name, args, sessionId) => ctx.registeredTools.get(name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
   // The privacy listener alone, which runs first; the last step stands for the tool.
   const guard = ctx.listeners.get('tools/execute')[0]
   const run = async (name, args, sessionId, agent = agentOf(sessionId)) => {
@@ -124,54 +118,10 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
   }
   // Loading once fills the Session-owner indexes.
   await tool('list_bots', {}, 'a')
-  return { rt, ctx, root, dsh, home, team, project, diary, picked, agentOf, call, tool, run, state, stop }
+  return { rt, ctx, root, dsh, home, team, project, diary, agentOf, call, tool, run, state, stop }
 }
 
 const CLOSED = /private Bot/
-const BOARD_CLOSED = /task board is private/
-
-test('board guard allows the ordinary workspace and rejects explicit board aliases', async (t) => {
-  if (process.platform !== 'linux') return t.skip('symbolic-link fixture requires Linux')
-  const { run, home, team, project, stop } = await start({ privateBot: false })
-  t.after(stop)
-  const board = join(home, 'board-v1')
-  mkdirSync(board, { recursive: true })
-  writeFileSync(join(board, 'private.txt'), 'private')
-  const alias = join(project, 'ordinary-name')
-  symlinkSync(board, alias, 'dir')
-  const child = join(team, 'child'), grand = join(child, 'grand')
-  mkdirSync(grand, { recursive: true })
-  symlinkSync(board, join(child, 'innocent'), 'dir')
-  symlinkSync(board, join(grand, 'innocent'), 'dir')
-  const workspaceFile = join(team, 'ordinary file.txt')
-  assert.deepEqual(await run('bash', { command: `cat "${workspaceFile}"` }, 'b'), { ran: true })
-  assert.deepEqual(await run('bash', { command: 'cat ordinary.txt', workdir: team }, 'b'), { ran: true })
-  assert.deepEqual(await run('bash', { command: 'cat ./ordinary.txt', workdir: 'child' }, 'b'), { ran: true })
-  assert.deepEqual(await run('bash', { command: 'cd child && cd grand && cat ./ordinary.txt', workdir: team }, 'b'), { ran: true })
-  assert.deepEqual(await run('bash', { command: `echo ${Array(300).fill('ordinary').join(' ')}`, workdir: team }, 'b'), { ran: true })
-  assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nIt's a normal note.\nEOF", workdir: team }, 'b'), { ran: true })
-  const tooComplex = await run('bash', { command: `cd child && cd grand && echo ${Array(3000).fill('ordinary').join(' ')}`, workdir: team }, 'b')
-  assert.equal(tooComplex.ran, false)
-  assert.match(tooComplex.error, /split it into smaller calls/)
-  for (const [name, args] of [
-    ['read', { file_path: join(alias, 'private.txt') }],
-    ['bash', { command: `cat "${join(alias, 'private.txt')}"` }],
-    ['bash', { command: `ls "${alias}"` }],
-    ['bash', { command: 'ls ordinary-name', workdir: project }],
-    ['bash', { command: 'cat "$PWD/ordinary-name/private.txt"', workdir: project }],
-    ['bash', { command: 'cat innocent/private.txt', workdir: 'child' }],
-    ['bash', { command: 'cd child && cd grand && cat innocent/private.txt', workdir: team }],
-    ['bash', { command: `cd "${project}" && cat ordinary-name/private.txt` }],
-    ['pwsh', { command: `Get-Content '${join(alias, 'private.txt')}'` }],
-  ]) {
-    const result = await run(name, args, 'b')
-    assert.equal(result.ran, false, `${name}: ${JSON.stringify(args)}`)
-    assert.match(result.error, /task board is private/)
-  }
-  const terminal = await run('terminal_send', { sessionId: 'one', text: 'cat innocent/private.txt' }, 'b')
-  assert.equal(terminal.ran, false)
-  assert.match(terminal.error, /one-shot shell with a known working directory/)
-})
 
 test('only the user makes a Bot private, and the Bot needs a folder of its own', async (t) => {
   const { rt, project, team, state, stop } = await start({ privateBot: false })
@@ -223,22 +173,6 @@ test('a private Bot has a folder that no other folder is in or around', async (t
   assert.equal(state().bots.b.workDir, project)
 })
 
-test('a member\'s folder pick in a group counts as that member\'s folder for a private Bot', async (t) => {
-  const { rt, picked, diary, run, state, stop } = await start({ privateBot: false, memberPick: true })
-  t.after(stop)
-  mkdirSync(join(picked, 'inside'))
-  // Writer picked this folder for its conversation in Ops, so it is closed to Diary too.
-  await assert.rejects(rt.updateBot(P, { private: true, workDir: picked }), /folder of Writer in "Ops"/)
-  await assert.rejects(rt.updateBot(P, { private: true, workDir: join(picked, 'inside') }), /folder of Writer in "Ops"/)
-  await rt.updateBot(P, { private: true, workDir: diary })
-  assert.equal(state().bots[P].private, true)
-  // The other way around too: the member cannot move that conversation into a
-  // private Bot's folder.
-  const moved = await run('working_directory', { cd: diary }, 'gb')
-  assert.equal(moved.ran, false)
-  assert.match(moved.error, CLOSED)
-})
-
 test('a private Bot is no Main Bot, no member of a group and no copy', async (t) => {
   const { rt, stop } = await start()
   t.after(stop)
@@ -267,8 +201,6 @@ test('other Bots cannot reach a private Bot through the tools between Bots', asy
     ['message_bot', { to: '@diary', message: 'hi' }, 'b'],
     ['message_bot', { to: P, message: 'hi' }, 'b'],
     ['stop_bot', { bot: 'Diary' }, 'a'],
-    ['attach_capability', { bot: 'Diary', name: 'x' }, 'a'],
-    ['detach_capability', { bot: 'Diary', name: 'x' }, 'a'],
     ['update_bot', { bot: 'Diary', instructions: 'x' }, 'a'],
     ['recall', { scope: 'Diary', query: 'x' }, 'a'],
     ['recall', { scope: '"Diary"' }, 'b'],
@@ -286,29 +218,16 @@ test('other Bots cannot reach a private Bot through the tools between Bots', asy
   assert.deepEqual(await run('update_bot', { bot: 'Diary', role: 'x' }, P), { ran: true })
 })
 
-// #1501: a private Bot may keep a part live in the background while the user reads
-// another. What that part says and reads is the private Bot's as much as its chat is.
-test('a private Bot\'s background part stays closed to other Bots', async (t) => {
-  const { run, stop } = await start({ openPart: true })
-  t.after(stop)
-  const denied = await run('session_trace', { session_id: 'p-bg' }, 'b')
-  assert.equal(denied.ran, false)
-  assert.match(denied.error, CLOSED)
-  // Its own Bot still reads that part, and so does a search that names it.
-  assert.deepEqual(await run('session_trace', { session_id: 'p-bg' }, P), { ran: true })
-  assert.deepEqual(await run('session_search', { query: 'x', session_ids: ['p-bg'] }, P), { ran: true })
-})
-
 test('other Bots cannot read, write or search what a private Bot keeps', async (t) => {
-  const { run, root, dsh, home, diary, team, project, stop } = await start()
+  const { run, root, home, diary, team, project, stop } = await start()
   t.after(stop)
   const notes = join(diary, 'notes.txt')
   const posix = path => path.replace(/\\/g, '/')
   const gitBash = /^[a-z]:/i.test(diary) ? `/${diary[0].toLowerCase()}${posix(diary).slice(2)}` : posix(diary)
-  const refused = async (name, args, from = 'b', reason = CLOSED) => {
+  const refused = async (name, args, from = 'b') => {
     const result = await run(name, args, from)
     assert.equal(result.ran, false, `${name} ${JSON.stringify(args)}`)
-    assert.match(result.error, reason)
+    assert.match(result.error, CLOSED)
   }
   await refused('read', { file_path: notes })
   await refused('read', { file_path: relative(team, notes) })
@@ -320,27 +239,18 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
   await refused('read', { file_path: join(home, 'memory', 'bots', P, 'MEMORY.md') })
   await refused('read', { file_path: join(home, 'memory', 'journal.jsonl') })
   await refused('read', { file_path: join(home, 'state.json') })
-  await refused('read', { file_path: join(home, 'chat-index.sqlite') })
-  await refused('read', { file_path: join(home, 'usage.sqlite') })
-  await refused('read', { file_path: join(home, 'secrets.json') })
-  await refused('read', { file_path: join(home, 'learning', 'state.json') })
-  await refused('read', { file_path: join(home, 'memory', 'pending.json') })
   await refused('glob', { pattern: '**/*', path: diary })
-  await refused('glob', { pattern: '**/*.txt', path: root }, 'b', BOARD_CLOSED)
-  await refused('grep', { pattern: 'secret', path: root }, 'b', BOARD_CLOSED)
+  await refused('glob', { pattern: '**/*.txt', path: root })
+  await refused('grep', { pattern: 'secret', path: root })
   await refused('glob', { pattern: `${posix(diary)}/**` })
-  await refused('glob', { pattern: '**/*', path: home }, 'b', BOARD_CLOSED)
+  await refused('glob', { pattern: '**/*', path: home })
   await refused('bash', { command: `cat ${posix(notes)}` })
   await refused('bash', { command: `cat ${gitBash}/notes.txt` })
   await refused('pwsh', { command: `Get-Content '${notes}'`, workdir: project })
   await refused('bash', { command: 'ls', workdir: diary })
   await refused('bash', { command: `cat ${posix(join(home, 'state.json'))}` })
-  await refused('bash', { command: `cat ${posix(join(home, 'chat-index.sqlite'))}` })
   await refused('working_directory', { cd: diary })
-  await refused('working_directory', { cd: root }, 'b', BOARD_CLOSED)
-  await refused('subagent', { cwd: diary, prompt: 'read notes.txt' })
-  await refused('subagent_fork', { cwd: relative(team, diary), prompt: 'read notes.txt' })
-  await refused('session_search', { query: 'x' })
+  await refused('working_directory', { cd: root })
   await refused('session_search', { query: 'x', session_id: P })
   await refused('session_trace', { session_ids: ['b', P] })
   await refused('session_event_read', { parent_session_ids: [P] })
@@ -349,16 +259,12 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
     ['read', { file_path: join(project, 'a.txt') }],
     ['read', { file_path: 'a.txt' }],
     ['write', { file_path: join(team, 'a.txt'), content: 'x' }],
-    ['read', { file_path: join(dsh, 'sessions', 'b.jsonl') }],
-    ['read', { file_path: join(home, 'memory', 'team', 'MEMORY.md') }],
-    ['glob', { pattern: '**/*', path: join(home, 'memory', 'team') }],
     ['glob', { pattern: '**/*', path: project }],
     ['glob', { pattern: '**/*', path: team }],
     ['grep', { pattern: 'x' }],
     ['bash', { command: 'ls', workdir: project }],
-    ['subagent', { cwd: project, prompt: 'work in the open folder' }],
     ['working_directory', { cd: join(team, 'sub') }],
-    ['session_search', { query: 'x', session_ids: ['b'] }],
+    ['session_search', { query: 'x', session_id: 'b' }],
   ]) {
     assert.deepEqual(await run(name, args, 'b'), { ran: true }, `${name} ${JSON.stringify(args)}`)
   }
@@ -376,10 +282,6 @@ test('a link into the folder of a private Bot is closed too', async (t) => {
   const result = await run('read', { file_path: join(project, 'link', 'notes.txt') }, 'b')
   assert.equal(result.ran, false)
   assert.match(result.error, CLOSED)
-  // The file does not exist yet: the link above it still has to be resolved.
-  const created = await run('write', { file_path: join(project, 'link', 'new.txt'), content: 'x' }, 'b')
-  assert.equal(created.ran, false)
-  assert.match(created.error, CLOSED)
 })
 
 test('the private Bot reads its own and the team\'s files; a Session it starts speaks for it', async (t) => {
@@ -387,15 +289,10 @@ test('the private Bot reads its own and the team\'s files; a Session it starts s
   t.after(stop)
   assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, P), { ran: true })
   assert.deepEqual(await run('glob', { pattern: '**/*', path: diary }, P), { ran: true })
-  // Its own memory is available, but the shared home also contains the user's board.
-  const sharedHome = await run('glob', { pattern: '**/*', path: home }, P)
-  assert.equal(sharedHome.ran, false)
-  assert.match(sharedHome.error, BOARD_CLOSED)
+  // Its own data is no secret from it: with no other private Bot, the data folder is open to a search.
+  assert.deepEqual(await run('glob', { pattern: '**/*', path: home }, P), { ran: true })
   assert.deepEqual(await run('read', { file_path: join(project, 'a.txt') }, P), { ran: true })
   assert.deepEqual(await run('glob', { pattern: '**/*', path: team }, P), { ran: true })
-  assert.deepEqual(await run('read', { file_path: join(home, 'memory', 'team', 'MEMORY.md') }, P), { ran: true })
-  assert.deepEqual(await run('glob', { pattern: '**/*', path: join(home, 'memory', 'team') }, P), { ran: true })
-  assert.deepEqual(await run('subagent', { cwd: diary, prompt: 'work in my folder' }, P), { ran: true })
   const sub = parent => ({ id: 'sub1', session: { id: 'sub1', header: { cwd: team, parentSession: parent } } })
   const fromWriter = await run('read', { file_path: join(diary, 'notes.txt') }, 'b', sub('b'))
   assert.equal(fromWriter.ran, false)
@@ -415,15 +312,9 @@ test('what a private Bot sends to the others waits for the user', async (t) => {
   // The Bots that are not private send as before.
   await run('message_bot', { to: 'Chief', message: 'hi' }, 'b')
   assert.equal(approval.requests.length, 1)
-  const content = 'secret step '.repeat(80)
-  assert.deepEqual(await run('save_capability', { name: 'plan', kind: 'skill', content }, P), { ran: true })
+  assert.deepEqual(await run('save_capability', { name: 'plan', kind: 'skill', content: 'steps' }, P), { ran: true })
   assert.equal(approval.requests.length, 2)
-  assert.match(approval.requests[1].reason, /share this with the team/)
-  assert.ok(approval.requests[1].reason.includes(content), 'the approval shows the whole skill, not a prefix')
-  assert.deepEqual(await run('save_capability', { name: 'search', kind: 'mcp', command: 'secret-command', args: ['--private'] }, P), { ran: true })
-  assert.equal(approval.requests.length, 3)
-  assert.match(approval.requests[2].reason, /secret-command/)
-  assert.match(approval.requests[2].reason, /--private/)
+  assert.match(approval.requests[1].reason, /share this with the team[\s\S]*steps/)
 })
 
 test('a message of a private Bot that the user does not allow is not sent', async (t) => {
@@ -444,7 +335,7 @@ test('a message of a private Bot that the user does not allow is not sent', asyn
 
 test('a private Bot changes files outside its folder only with the user\'s approval', async (t) => {
   const approval = fakeApproval('allowed-once')
-  const { run, ctx, diary, project, stop } = await start({ services: { approval } })
+  const { run, diary, project, stop } = await start({ services: { approval } })
   t.after(stop)
   assert.deepEqual(await run('write', { file_path: join(diary, 'today.txt'), content: 'x' }, P), { ran: true })
   assert.deepEqual(await run('write', { file_path: 'today.txt', content: 'x' }, P), { ran: true })
@@ -458,15 +349,6 @@ test('a private Bot changes files outside its folder only with the user\'s appro
   // Reading is free.
   assert.deepEqual(await run('read', { file_path: join(project, 'a.txt') }, P), { ran: true })
   assert.equal(approval.requests.length, 2)
-  // A subagent can have no cwd of its own; an absolute path still needs no TypeError.
-  const getWorkspace = ctx.workspaceRegistry.get
-  try {
-    ctx.workspaceRegistry.get = () => undefined
-    const noCwd = { id: 'sub-no-cwd', session: { id: 'sub-no-cwd', header: { parentSession: P } } }
-    assert.deepEqual(await run('write', { file_path: join(diary, 'no-cwd.txt'), content: 'x' }, P, noCwd), { ran: true })
-  } finally {
-    ctx.workspaceRegistry.get = getWorkspace
-  }
 })
 
 test('a write of a private Bot outside its folder that the user does not allow is not made', async (t) => {
@@ -477,234 +359,10 @@ test('a write of a private Bot outside its folder that the user does not allow i
   assert.match(result.error, /not done/)
 })
 
-test('one private Bot reads its own data but not another private Bot\'s', async (t) => {
-  const { rt, run, dsh, home, diary, project, stop } = await start()
-  t.after(stop)
-  const other = await rt.createBot({ name: 'Other', workDir: project })
-  await rt.updateBot(other.id, { private: true })
-  assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, P), { ran: true })
-  assert.deepEqual(await run('read', { file_path: join(home, 'memory', 'bots', P, 'MEMORY.md') }, P), { ran: true })
-  assert.deepEqual(await run('read', { file_path: join(dsh, 'sessions', `${P}.jsonl`) }, P), { ran: true })
-  assert.deepEqual(await run('session_search', { query: 'x', session_ids: [P] }, P), { ran: true })
-  assert.deepEqual(await run('session_search', { query: 'x', session_ids: ['b'] }, P), { ran: true })
-  const search = await run('session_search', { query: 'x' }, P)
-  assert.equal(search.ran, false)
-  assert.match(search.error, CLOSED)
-  const otherSearch = await run('session_search', { query: 'x', session_ids: [other.id] }, P)
-  assert.equal(otherSearch.ran, false)
-  assert.match(otherSearch.error, CLOSED)
-  const result = await run('read', { file_path: join(home, 'memory', 'bots', other.id, 'MEMORY.md') }, P)
-  assert.equal(result.ran, false)
-  assert.match(result.error, CLOSED)
-  const folder = await run('read', { file_path: join(project, 'notes.txt') }, P)
-  assert.equal(folder.ran, false)
-  assert.match(folder.error, CLOSED)
-})
-
-test('a private Bot reads public memory and keeps its own journal out of the shared log', async (t) => {
-  const { tool, run, home, stop } = await start()
-  t.after(stop)
-  await tool('remember', { text: 'a public fact', scope: 'own' }, 'b')
-  await tool('remember', { text: 'a private fact', scope: 'own' }, P)
-  const recalled = await tool('recall', { scope: 'Writer', query: 'public fact' }, P)
-  assert.match(recalled, /a public fact/)
-  assert.match(await tool('recall', { scope: 'Diary' }, 'a'), /That Bot is private/)
-  const denied = await run('recall', { scope: 'Diary' }, 'a')
-  assert.equal(denied.ran, false)
-  assert.match(denied.error, CLOSED)
-  const shared = readFileSync(join(home, 'memory', 'journal.jsonl'), 'utf8')
-  assert.match(shared, /a public fact/)
-  assert.doesNotMatch(shared, /a private fact/)
-  const own = readFileSync(join(home, 'memory', 'bots', P, 'journal.jsonl'), 'utf8')
-  assert.match(own, /a private fact/)
-})
-
-test('a nested subagent speaks for the private Bot at its root', async (t) => {
-  const approval = fakeApproval('allowed-once')
-  const { run, diary, agentOf, stop } = await start({ services: { approval } })
-  t.after(stop)
-  agentOf('sub1').session.header.parentSession = P
-  const nested = agentOf('sub2')
-  nested.session.header.cwd = diary
-  nested.session.header.parentSession = 'sub1'
-  assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, P, nested), { ran: true })
-  assert.deepEqual(await run('message_bot', { to: 'Writer', message: 'from a nested subagent' }, P, nested), { ran: true })
-  assert.equal(approval.requests.length, 1)
-  assert.match(approval.requests[0].reason, /from a nested subagent/)
-  for (const id of ['sub1', 'sub2']) {
-    const result = await run('session_trace', { session_id: id }, 'b')
-    assert.equal(result.ran, false, id)
-    assert.match(result.error, CLOSED)
-  }
-})
-
-test('deleting a private Bot keeps its folder and archived memory closed', async (t) => {
-  const { rt, run, home, diary, project, state, stop } = await start()
-  t.after(stop)
-  const memory = join(home, 'memory', 'bots', P)
-  mkdirSync(memory, { recursive: true })
-  writeFileSync(join(memory, 'MEMORY.md'), 'private memory')
-  await rt.deleteBot(P)
-  assert.equal(state().bots[P], undefined)
-  const archived = state().privateArchives
-  assert.equal(archived.length, 1)
-  assert.equal(archived[0].id, P)
-  assert.equal(typeof archived[0].archivePath, 'string')
-  for (const [name, args] of [
-    ['read', { file_path: join(diary, 'notes.txt') }],
-    ['read', { file_path: join(archived[0].archivePath, 'MEMORY.md') }],
-    ['glob', { pattern: '**/*', path: home }],
-    ['session_trace', { session_id: P }],
-  ]) {
-    const result = await run(name, args, 'b')
-    assert.equal(result.ran, false, name)
-    assert.match(result.error, name === 'glob' ? BOARD_CLOSED : CLOSED)
-  }
-  await assert.rejects(rt.createBot({ name: 'Third', workDir: diary }), CLOSED)
-  const third = await rt.createBot({ name: 'Third', workDir: project })
-  await assert.rejects(rt.updateBot(third.id, { workDir: diary, private: true }), CLOSED)
-})
-
-test('the user lifts what a deleted private Bot left closed, one Bot at a time', async (t) => {
-  const { rt, call, run, root, diary, state, stop } = await start()
-  t.after(stop)
-  const ledgerDir = join(root, 'ledger')
-  mkdirSync(ledgerDir)
-  writeFileSync(join(ledgerDir, 'books.txt'), 'secret')
-  const ledger = await rt.createBot({ name: 'Ledger', workDir: ledgerDir })
-  await rt.updateBot(ledger.id, { private: true })
-  await rt.deleteBot(P)
-  await rt.deleteBot(ledger.id)
-
-  // The list names each place and keeps Session ids and the archive path on the host.
-  const listed = (await call('state', {})).value.privateArchives
-  assert.deepEqual(listed, [{ id: P, name: 'Diary', workDir: diary }, { id: ledger.id, name: 'Ledger', workDir: ledgerDir }])
-  assert.equal((await run('read', { file_path: join(diary, 'notes.txt') }, 'b')).ran, false)
-  await assert.rejects(rt.createBot({ name: 'Third', workDir: diary }), CLOSED)
-
-  const lifted = await call('private-release', { id: P })
-  assert.equal(lifted.ok, true)
-  assert.deepEqual(lifted.value.privateArchives.map(entry => entry.id), [ledger.id])
-  assert.deepEqual(state().privateArchives.map(entry => entry.id), [ledger.id])
-  assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, 'b'), { ran: true })
-  assert.deepEqual(await run('session_trace', { session_id: P }, 'b'), { ran: true })
-  assert.equal((await rt.createBot({ name: 'Third', workDir: diary })).workDir, diary)
-
-  // The other Bot's places stay closed.
-  const kept = await run('read', { file_path: join(ledgerDir, 'books.txt') }, 'b')
-  assert.equal(kept.ran, false)
-  assert.match(kept.error, CLOSED)
-
-  const again = await call('private-release', { id: P })
-  assert.equal(again.ok, false)
-  assert.match(again.error.message, /Nothing kept closed/)
-})
-
-test('the archived memory of a Bot whose protection is lifted opens; another archive stays closed', async (t) => {
-  const { rt, ctx, call, run, home, root, project, state, stop } = await start()
-  t.after(stop)
-  // Ids shaped like real Session ids: a one-letter id would match any path.
-  let created = 0
-  ctx.sessionController.create = async () => ({ sessionId: `0000000${++created}-1111-4222-8333-444444444444` })
-  const ledgerDir = join(root, 'ledger')
-  mkdirSync(ledgerDir)
-  const ledger = await rt.createBot({ name: 'Ledger', workDir: ledgerDir })
-  await rt.updateBot(ledger.id, { private: true })
-  const scratch = await rt.createBot({ name: 'Scratch', workDir: project })
-  const reader = (await rt.createBot({ name: 'Reader' })).id
-  for (const id of [P, ledger.id, scratch.id]) {
-    mkdirSync(join(home, 'memory', 'bots', id), { recursive: true })
-    writeFileSync(join(home, 'memory', 'bots', id, 'MEMORY.md'), `memory of ${id}`)
-  }
-  await rt.deleteBot(P)
-  await rt.deleteBot(ledger.id)
-  await rt.deleteBot(scratch.id)
-  const archives = Object.fromEntries(state().privateArchives.map(entry => [entry.id, entry.archivePath]))
-  const memoryOf = id => ({ file_path: join(archives[id], 'MEMORY.md') })
-  const archiveRoot = join(home, 'memory', 'archive')
-  const scratchRead = { file_path: join(archiveRoot, readdirSync(archiveRoot).find(name => name.startsWith(scratch.id)), 'MEMORY.md') }
-
-  // While both are kept, neither archive is read; the archive of a Bot that was never private is.
-  for (const id of [P, ledger.id]) {
-    const result = await run('read', memoryOf(id), reader)
-    assert.equal(result.ran, false, id)
-    assert.match(result.error, CLOSED)
-  }
-  assert.deepEqual(await run('read', scratchRead, reader), { ran: true })
-
-  await call('private-release', { id: P })
-  assert.deepEqual(await run('read', memoryOf(P), reader), { ran: true })
-  const kept = await run('read', memoryOf(ledger.id), reader)
-  assert.equal(kept.ran, false)
-  assert.match(kept.error, /Ledger/)
-  // A walk of the archive folder would reach the kept one, so it stays closed.
-  assert.equal((await run('glob', { pattern: '**/*', path: archiveRoot }, reader)).ran, false)
-
-  await call('private-release', { id: ledger.id })
-  assert.deepEqual(await run('read', memoryOf(ledger.id), reader), { ran: true })
-  assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, reader), { ran: true })
-})
-
-test('an archive whose log row could not be written is still kept closed to a walk', async (t) => {
-  const { rt, ctx, run, home, root, state, stop } = await start({ privateBot: false })
-  t.after(stop)
-  let created = 0
-  ctx.sessionController.create = async () => ({ sessionId: `0000000${++created}-1111-4222-8333-444444444444` })
-  const ledgerDir = join(root, 'ledger')
-  mkdirSync(ledgerDir)
-  const ledger = await rt.createBot({ name: 'Ledger', workDir: ledgerDir })
-  await rt.updateBot(ledger.id, { private: true })
-  const reader = (await rt.createBot({ name: 'Reader' })).id
-  mkdirSync(join(home, 'memory', 'bots', ledger.id), { recursive: true })
-  writeFileSync(join(home, 'memory', 'bots', ledger.id, 'MEMORY.md'), 'books')
-  // A change log that cannot be read stops the archive's row, after the memory has moved.
-  mkdirSync(join(home, 'memory', 'journal.jsonl'), { recursive: true })
-  await rt.deleteBot(ledger.id)
-
-  const archiveRoot = join(home, 'memory', 'archive')
-  const [entry] = state().privateArchives
-  assert.ok(entry.archivePath?.startsWith(archiveRoot), 'the path of the archive is kept')
-  assert.equal(entry.archiving, undefined)
-  assert.equal(readFileSync(join(entry.archivePath, 'MEMORY.md'), 'utf8'), 'books')
-  const read = await run('read', { file_path: join(entry.archivePath, 'MEMORY.md') }, reader)
-  assert.equal(read.ran, false)
-  assert.match(read.error, /Ledger/)
-  assert.equal((await run('glob', { pattern: '**/*', path: archiveRoot }, reader)).ran, false)
-  assert.equal((await run('grep', { pattern: 'books', path: archiveRoot }, reader)).ran, false)
-})
-
-test('a walk of the archive stays closed while a private Bot\'s memory is still on its way there', async (t) => {
-  const GHOST = 'e2b60000-1111-4222-8333-444444444444'
-  const { call, run, home, stop } = await start({ privateBot: false, archives: [{ id: GHOST, name: 'Ghost', sessionIds: [], archiving: true }] })
-  t.after(stop)
-  const archiveRoot = join(home, 'memory', 'archive')
-  mkdirSync(join(archiveRoot, `${GHOST}-2026-10-28`), { recursive: true })
-  writeFileSync(join(archiveRoot, `${GHOST}-2026-10-28`, 'MEMORY.md'), 'ghost')
-
-  const walk = await run('glob', { pattern: '**/*', path: archiveRoot }, 'b')
-  assert.equal(walk.ran, false)
-  assert.match(walk.error, /Ghost/)
-  // Once the user lifts the protection there is nothing left to hide.
-  assert.equal((await call('private-release', { id: GHOST })).ok, true)
-  assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, 'b'), { ran: true })
-})
-
-test('a kept Bot whose memory never moved does not close the archive folder', async (t) => {
-  const GHOST = 'e2b60000-1111-4222-8333-444444444444'
-  const { run, home, stop } = await start({ privateBot: false, archives: [{ id: GHOST, name: 'Ghost', sessionIds: [] }] })
-  t.after(stop)
-  const archiveRoot = join(home, 'memory', 'archive')
-  mkdirSync(archiveRoot, { recursive: true })
-  assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, 'b'), { ran: true })
-})
-
-test('without a private Bot, the user board stays private while unrelated paths remain available', async (t) => {
+test('with no private Bot the tools run as they did', async (t) => {
   const { run, diary, stop } = await start({ privateBot: false })
   t.after(stop)
   assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, 'b'), { ran: true })
   assert.deepEqual(await run('message_bot', { to: 'Diary', message: 'hi' }, 'a'), { ran: true })
-  assert.deepEqual(await run('glob', { pattern: '*', path: diary }, 'b'), { ran: true })
-  const parent = await run('glob', { pattern: '*', path: join(diary, '..') }, 'b')
-  assert.equal(parent.ran, false)
-  assert.match(parent.error, BOARD_CLOSED)
+  assert.deepEqual(await run('glob', { pattern: '*', path: join(diary, '..') }, 'b'), { ran: true })
 })

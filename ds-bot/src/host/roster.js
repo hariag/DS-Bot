@@ -156,6 +156,8 @@ export function install(rt) {
       : effort === null || effort === '' ? undefined
       : (await rt.resolveEffort(modelRef, effort)) ?? await rt.defaultEffort(modelRef)
     const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
+    const clash = dir === undefined ? undefined : await rt.privateClash(dir)
+    if (clash) throw new Error(`${dir} is in or around the folder of ${clash.name}, a private Bot, so ${cleanName} cannot work there`)
     const id = await createSession(cleanName, { dir })
     try {
       state.bots[id] = {
@@ -283,6 +285,7 @@ export function install(rt) {
   async function duplicateBot(id) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
+    if (bot.private === true) throw new Error(`${bot.name} is private, so it cannot be copied`)
     const served = (await rt.catalog()).some(entry => entry.ref === bot.model)
     // A folder that went away since leaves the copy in the team workspace.
     const workDir = bot.workDir !== undefined && await rt.isFolder(bot.workDir) ? bot.workDir : undefined
@@ -308,11 +311,16 @@ export function install(rt) {
     if (patch.browserGrants !== undefined && actorId !== undefined) {
       throw new Error(`Only the user can set what ${bot.name} may do in the browser`)
     }
+    if (patch.private !== undefined && actorId !== undefined) {
+      throw new Error(`Only the user can make ${bot.name} private or open`)
+    }
     const browserGrants = patch.browserGrants === undefined ? undefined : cleanBrowserGrants(patch.browserGrants)
     // Checked first, so a folder, model or level that does not pass leaves the rest
     // unchanged too.
     const moving = patch.workDir !== undefined
     const workDir = moving ? await rt.cleanWorkDir(patch.workDir ?? '') : undefined
+    const flag = patch.private === undefined ? undefined : patch.private === true
+    await rt.checkPrivacyChange(bot, { flag, moving, workDir })
     const modelRef = patch.model === undefined ? undefined
       : patch.model === null || patch.model === '' ? null
       : await rt.resolveModel(patch.model)
@@ -369,6 +377,8 @@ export function install(rt) {
       if (browserGrants === null) delete bot.browserGrants
       else bot.browserGrants = browserGrants
     }
+    if (flag === true) bot.private = true
+    else if (flag === false) delete bot.private
     const moved = moving && workDir !== bot.workDir
     if (moving) {
       if (workDir === undefined) delete bot.workDir
@@ -428,6 +438,7 @@ export function install(rt) {
   function checkMembers(members) {
     if (members.length < 2) throw new Error('A group chat needs at least two Bots')
     if (members.length > ROOM_MAX_MEMBERS) throw new Error(`A group chat holds at most ${ROOM_MAX_MEMBERS} Bots`)
+    rt.checkNoPrivate(members)
   }
 
   // A Main Bot leads the groups it makes; a group the user makes is led by a Main Bot
@@ -533,6 +544,8 @@ export function install(rt) {
     planRoomChange(asked, patch, actorId)
     const moving = patch.workDir !== undefined
     const workDir = moving ? await rt.cleanWorkDir(patch.workDir ?? '') : undefined
+    const clash = workDir === undefined ? undefined : await rt.privateClash(workDir)
+    if (clash) throw new Error(`${workDir} is in or around the folder of ${clash.name}, a private Bot, so a group cannot work there`)
     // No await from here until every change is written.
     const room = rt.roomOf(id)
     if (room === undefined) throw new Error('Unknown group chat')
@@ -618,6 +631,7 @@ export function install(rt) {
   async function setMain(id, main, { primary = false, replace } = {}) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
+    if (main && bot.private === true) throw new Error(`${bot.name} is private, so it cannot be a Main Bot`)
     const others = state.mainBotIds.filter(other => other !== id)
     let next
     if (!main) {
