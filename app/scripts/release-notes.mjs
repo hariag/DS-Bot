@@ -10,22 +10,21 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const REPO = 'Fei2411/DS-Bot'
-// The order of the table: Windows first, where most downloads are; the phone app last.
+// The order of the table: Windows first, where most downloads are.
 export const PACKAGES = [
   { file: 'win-x64.exe', system: '**Windows 10/11 (64-bit / 64 位)**', note: 'Double-click to install / 双击安装' },
   { file: 'mac-arm64.zip', system: 'macOS, Apple chip / Apple 芯片' },
   { file: 'mac-x64.zip', system: 'macOS, Intel' },
   { file: 'linux-x86_64.AppImage', system: 'Linux, AppImage' },
   { file: 'linux-amd64.deb', system: 'Linux, deb (Debian, Ubuntu)' },
-  { file: 'android.apk', system: 'Android (phone app / 手机 App)' },
 ]
 export const SUMS = 'SHA256SUMS.txt'
 // The table sits between these, so a second run replaces it instead of adding another.
 const START = '<!-- downloads -->'
 const END = '<!-- /downloads -->'
 
-export const packageName = (version, entry) => `DS-Bot-${version}-${entry.file}`
-export const copyName = entry => `DS-Bot-${entry.file}`
+export const packageName = (version, entry) => `DeepSeek-Bot-${version}-${entry.file}`
+export const copyName = entry => `DeepSeek-Bot-${entry.file}`
 
 /** @returns {string[]} the packages of `version` that are not among `names` */
 export function missingPackages(version, names) {
