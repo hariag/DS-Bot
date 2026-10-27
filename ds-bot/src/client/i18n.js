@@ -582,6 +582,7 @@ const ZH = {
   '{first}, {second} and {count} more are waiting for your approval': '{first}、{second} 等 {total} 个等你批准',
   'Waiting for your approval': '等你批准',
   'in its own chat': '在自己的对话里',
+  'Stop all work in this group': '停止本群的所有工作',
   Reject: '拒绝',
   'Allow once': '允许一次',
   "Couldn't message {name}": '没能给 {name} 发消息',

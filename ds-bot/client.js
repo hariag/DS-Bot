@@ -644,6 +644,7 @@ var ZH = {
   "{first}, {second} and {count} more are waiting for your approval": "{first}、{second} 等 {total} 个等你批准",
   "Waiting for your approval": "等你批准",
   "in its own chat": "在自己的对话里",
+  "Stop all work in this group": "停止本群的所有工作",
   Reject: "拒绝",
   "Allow once": "允许一次",
   "Couldn't message {name}": "没能给 {name} 发消息",
@@ -1635,6 +1636,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     dismissView: (sessionId) => after(call2("dismiss-view", { sessionId: partFor(sessionId) })),
     answerApproval: (id, choice) => after(call2("approval-answer", { id, choice })),
     stopMemberWork: (roomId, botId) => after(call2("stop-member-work", { roomId, botId })),
+    stopRoomWork: (roomId) => after(call2("stop-room-work", { roomId })),
     // Values go out in these requests and never come back in a response.
     secretSet: (payload) => after(call2("secret-set", payload)),
     secretAllow: (requestId) => after(call2("secret-allow", { requestId })),
@@ -3757,6 +3759,9 @@ function ShareIcon() {
 }
 function CloseIcon() {
   return (0, import_react3.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", "aria-hidden": true }, (0, import_react3.createElement)("path", { d: "M5 5l10 10M15 5L5 15", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" }));
+}
+function StopIcon() {
+  return (0, import_react3.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", "aria-hidden": true }, (0, import_react3.createElement)("rect", { x: 4, y: 4, width: 12, height: 12, rx: 2.5, fill: "currentColor" }));
 }
 var ChevronLeftIcon = () => (0, import_react3.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react3.createElement)("path", { d: "M12.5 4.5L7 10l5.5 5.5" }));
 var ChevronRightIcon = () => (0, import_react3.createElement)("svg", { width: 14, height: 14, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react3.createElement)("path", { d: "M7.5 4.5L13 10l-5.5 5.5" }));
@@ -15992,11 +15997,14 @@ function summaryText(busy) {
 function dockModel(sessionId, roster, work) {
   const room2 = roster.roomsById[sessionId];
   if (room2) {
-    const busy = dockMembers(busyMembers(room2, work, roster));
+    const all = busyMembers(room2, work, roster);
+    const busy = dockMembers(all);
     if (busy.length === 0) return null;
     const { waiting, doing } = summaryText(busy);
     return {
       open: { details: room2.id },
+      // A member busy only elsewhere is shown here, but its work is not this group's to stop.
+      ...all.some((entry) => entry.here) ? { stop: room2.id } : {},
       faces: busy.slice(0, FACES_MAX).map((entry) => ({ id: entry.id, ask: entry.state === "ask", state: workState(entry.doing) })),
       waiting,
       doing
@@ -16028,6 +16036,15 @@ function useFitWidth(inner, key) {
   }, [key]);
   return width;
 }
+function StopRoomWork({ roomId, actions }) {
+  const [stopping, setStopping] = (0, import_react41.useState)(false);
+  const stop = () => {
+    setStopping(true);
+    void Promise.resolve(actions.stopRoomWork(roomId)).catch((error) => actions.reportError(error, "stop")).finally(() => setStopping(false));
+  };
+  const label = t("Stop all work in this group");
+  return (0, import_react41.createElement)("button", { type: "button", className: "bt-mw-stop", "aria-label": label, title: label, disabled: stopping, onClick: stop }, (0, import_react41.createElement)(StopIcon));
+}
 function MemberDock({ sessionId, useRoster, useWork, actions }) {
   const roster = useRoster((value) => value);
   const work = useWork((value) => value);
@@ -16044,20 +16061,25 @@ function MemberDock({ sessionId, useRoster, useWork, actions }) {
     "div",
     { className: "bt-mw-dock", "data-leaving": leaving || void 0 },
     (0, import_react41.createElement)(
-      "button",
-      { type: "button", className: "bt-mw-pill", "aria-label": label, onClick: open, disabled: leaving, style: width ? { width } : void 0 },
+      "span",
+      { className: "bt-mw-pair" },
       (0, import_react41.createElement)(
-        "span",
-        { ref: inner, className: "bt-mw-pill-in" },
-        (0, import_react41.createElement)("span", { className: "bt-mw-faces", "aria-hidden": true }, faces.map((face) => (0, import_react41.createElement)(Face, { key: face.id, ...face }))),
+        "button",
+        { type: "button", className: "bt-mw-pill", "aria-label": label, onClick: open, disabled: leaving, style: width ? { width } : void 0 },
         (0, import_react41.createElement)(
           "span",
-          { key: label, className: "bt-mw-label", "aria-hidden": true },
-          model.waiting ? (0, import_react41.createElement)("span", { className: "bt-mw-ask" }, model.waiting) : null,
-          model.waiting && model.doing ? (0, import_react41.createElement)("span", { className: "bt-mw-dot" }, "·") : null,
-          model.doing ? (0, import_react41.createElement)("span", { className: "bt-mw-doing" }, (0, import_react41.createElement)(Shimmer, null, model.doing)) : null
+          { ref: inner, className: "bt-mw-pill-in" },
+          (0, import_react41.createElement)("span", { className: "bt-mw-faces", "aria-hidden": true }, faces.map((face) => (0, import_react41.createElement)(Face, { key: face.id, ...face }))),
+          (0, import_react41.createElement)(
+            "span",
+            { key: label, className: "bt-mw-label", "aria-hidden": true },
+            model.waiting ? (0, import_react41.createElement)("span", { className: "bt-mw-ask" }, model.waiting) : null,
+            model.waiting && model.doing ? (0, import_react41.createElement)("span", { className: "bt-mw-dot" }, "·") : null,
+            model.doing ? (0, import_react41.createElement)("span", { className: "bt-mw-doing" }, (0, import_react41.createElement)(Shimmer, null, model.doing)) : null
+          )
         )
-      )
+      ),
+      model.stop ? (0, import_react41.createElement)(StopRoomWork, { roomId: model.stop, actions }) : null
     )
   );
 }
@@ -16120,7 +16142,12 @@ var MEMBER_CSS = `
 .bt-mw-pill{pointer-events:auto;position:relative;display:inline-flex;align-items:center;flex:none;box-sizing:border-box;height:32px;max-width:100%;padding:0;border:0;border-radius:999px;overflow:hidden;background:var(--bt-main);box-shadow:0 0 0 .5px var(--bt-line-2),0 2px 8px -2px rgba(0,0,0,.12);color:var(--bt-ink-2);font:inherit;font-size:13px;line-height:18px;cursor:pointer;animation:bt-mw-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .18s ease-out backwards;transition:background-color .12s ease,${spring(SPRING_SHAPE, "width")},${spring(SPRING_TAP, "scale")}}
 .bt-mw-pill:hover{background:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main))}
 .bt-mw-pill:active{scale:.97}
-.bt-mw-dock[data-leaving] .bt-mw-pill{animation:bt-mw-out .16s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+.bt-mw-dock[data-leaving] .bt-mw-pill,.bt-mw-dock[data-leaving] .bt-mw-stop{animation:bt-mw-out .16s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+.bt-mw-pair{position:relative;display:inline-flex;min-width:0;max-width:100%}
+.bt-mw-stop{pointer-events:auto;position:absolute;top:0;left:calc(100% + 6px);display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 .5px var(--bt-line-2),0 2px 8px -2px rgba(0,0,0,.12);color:var(--bt-ink-2);cursor:pointer;animation:bt-mw-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .18s ease-out backwards;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
+.bt-mw-stop:hover:not(:disabled){background:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main));color:var(--bt-ink)}
+.bt-mw-stop:active:not(:disabled){scale:.9}
+.bt-mw-stop:disabled{opacity:.35;cursor:default}
 .bt-mw-pill-in{display:inline-flex;align-items:center;gap:8px;flex:none;padding:0 13px 0 6px;white-space:nowrap}
 .bt-mw-faces{display:inline-flex;align-items:center;flex:none;line-height:0}
 .bt-mw-face{position:relative;display:inline-flex;flex:none;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 2px var(--bt-main);animation:bt-mw-seat .26s cubic-bezier(.34,1.56,.64,1) backwards}
@@ -16164,7 +16191,7 @@ body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
 .bt-mw-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:4px}
 .bt-mw-actions>button{height:28px;padding:0 12px;font-size:12px}
 .bt-mw-actions>button:disabled{opacity:.5;cursor:default}
-@media (prefers-reduced-motion:reduce){.bt-mw-pill,.bt-mw-face,.bt-mw-label,.bt-member,.bt-mw-card{animation:none}.bt-mw-pill{transition:background-color .12s ease}}
+@media (prefers-reduced-motion:reduce){.bt-mw-pill,.bt-mw-stop,.bt-mw-face,.bt-mw-label,.bt-member,.bt-mw-card{animation:none}.bt-mw-pill{transition:background-color .12s ease}.bt-mw-stop{transition:background-color .12s ease,color .12s ease}}
 `;
 
 // src/client/details-drawer.js
@@ -16571,7 +16598,7 @@ var GlobeIcon2 = icon(["M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z", "M3 10h14", "M10 
 var BackIcon = icon(["M12.5 4.5L7 10l5.5 5.5"]);
 var ForwardIcon = icon(["M7.5 4.5L13 10l-5.5 5.5"]);
 var ReloadIcon = icon(["M15.5 10a5.5 5.5 0 1 1-1.6-3.9", "M15.5 3.5v3.5H12"]);
-var StopIcon = icon(["M5.5 5.5l9 9M14.5 5.5l-9 9"]);
+var StopIcon2 = icon(["M5.5 5.5l9 9M14.5 5.5l-9 9"]);
 var CloseIcon2 = icon(["M5.5 5.5l9 9M14.5 5.5l-9 9"]);
 var PlusTabIcon = icon(["M10 5v10M5 10h10"]);
 var LockIcon2 = icon(["M6.5 9V7a3.5 3.5 0 0 1 7 0v2", "M5.5 9h9v7h-9z"]);
@@ -17009,7 +17036,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages, ho
         "aria-label": page.loading ? t("Stop") : t("Reload"),
         title: page.loading ? t("Stop") : t("Reload"),
         onClick: () => actions.browserCommand(tabId, page.loading ? "stop" : "reload")
-      }, (0, import_react43.createElement)(page.loading ? StopIcon : ReloadIcon)),
+      }, (0, import_react43.createElement)(page.loading ? StopIcon2 : ReloadIcon)),
       (0, import_react43.createElement)(
         "form",
         { className: "bt-browser-address", onSubmit: go, "data-editing": editing || void 0 },

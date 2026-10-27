@@ -1,6 +1,7 @@
 import { createElement as h, useLayoutEffect, useRef, useState } from 'react'
 import { BotMark, toolState } from './mark.js'
 import { Elapsed, Shimmer, workPhrase } from './cells.js'
+import { StopIcon } from './icons.js'
 import { SPRING_SHAPE, SPRING_TAP, spring, useLinger } from './motion.js'
 import { t } from './i18n.js'
 
@@ -63,11 +64,14 @@ export function summaryText(busy) {
 function dockModel(sessionId, roster, work) {
   const room = roster.roomsById[sessionId]
   if (room) {
-    const busy = dockMembers(busyMembers(room, work, roster))
+    const all = busyMembers(room, work, roster)
+    const busy = dockMembers(all)
     if (busy.length === 0) return null
     const { waiting, doing } = summaryText(busy)
     return {
       open: { details: room.id },
+      // A member busy only elsewhere is shown here, but its work is not this group's to stop.
+      ...(all.some(entry => entry.here) ? { stop: room.id } : {}),
       faces: busy.slice(0, FACES_MAX).map(entry => ({ id: entry.id, ask: entry.state === 'ask', state: workState(entry.doing) })),
       waiting, doing,
     }
@@ -99,6 +103,20 @@ function useFitWidth(inner, key) {
   return width
 }
 
+// Beside a group's capsule, one press stops everything at work in the group: DSH's own
+// stop reaches only the round, and a member the round moved on from keeps working.
+function StopRoomWork({ roomId, actions }) {
+  const [stopping, setStopping] = useState(false)
+  const stop = () => {
+    setStopping(true)
+    void Promise.resolve(actions.stopRoomWork(roomId))
+      .catch(error => actions.reportError(error, 'stop'))
+      .finally(() => setStopping(false))
+  }
+  const label = t('Stop all work in this group')
+  return h('button', { type: 'button', className: 'bt-mw-stop', 'aria-label': label, title: label, disabled: stopping, onClick: stop }, h(StopIcon))
+}
+
 // Above the composer, one capsule for everything at work: it opens the group's details,
 // or from a Bot's own chat the group it is at work in.
 export function MemberDock({ sessionId, useRoster, useWork, actions }) {
@@ -113,14 +131,17 @@ export function MemberDock({ sessionId, useRoster, useWork, actions }) {
   const faces = model.faces.map(face => ({ ...face, bot: roster.byId[face.id] })).filter(face => face.bot)
   const label = [model.waiting, model.doing].filter(Boolean).join(' · ')
   const open = () => (model.open.details ? actions.showDetails(model.open.details) : actions.openSession(model.open.session))
+  // The stop button hangs off the capsule's side, so the capsule stays centred.
   return h('div', { className: 'bt-mw-dock', 'data-leaving': leaving || undefined },
-    h('button', { type: 'button', className: 'bt-mw-pill', 'aria-label': label, onClick: open, disabled: leaving, style: width ? { width } : undefined },
-      h('span', { ref: inner, className: 'bt-mw-pill-in' },
-        h('span', { className: 'bt-mw-faces', 'aria-hidden': true }, faces.map(face => h(Face, { key: face.id, ...face }))),
-        h('span', { key: label, className: 'bt-mw-label', 'aria-hidden': true },
-          model.waiting ? h('span', { className: 'bt-mw-ask' }, model.waiting) : null,
-          model.waiting && model.doing ? h('span', { className: 'bt-mw-dot' }, '·') : null,
-          model.doing ? h('span', { className: 'bt-mw-doing' }, h(Shimmer, null, model.doing)) : null))))
+    h('span', { className: 'bt-mw-pair' },
+      h('button', { type: 'button', className: 'bt-mw-pill', 'aria-label': label, onClick: open, disabled: leaving, style: width ? { width } : undefined },
+        h('span', { ref: inner, className: 'bt-mw-pill-in' },
+          h('span', { className: 'bt-mw-faces', 'aria-hidden': true }, faces.map(face => h(Face, { key: face.id, ...face }))),
+          h('span', { key: label, className: 'bt-mw-label', 'aria-hidden': true },
+            model.waiting ? h('span', { className: 'bt-mw-ask' }, model.waiting) : null,
+            model.waiting && model.doing ? h('span', { className: 'bt-mw-dot' }, '·') : null,
+            model.doing ? h('span', { className: 'bt-mw-doing' }, h(Shimmer, null, model.doing)) : null))),
+      model.stop ? h(StopRoomWork, { roomId: model.stop, actions }) : null))
 }
 
 // The clock stays whole at the end; only what comes before it is cut.
@@ -188,7 +209,12 @@ export const MEMBER_CSS = `
 .bt-mw-pill{pointer-events:auto;position:relative;display:inline-flex;align-items:center;flex:none;box-sizing:border-box;height:32px;max-width:100%;padding:0;border:0;border-radius:999px;overflow:hidden;background:var(--bt-main);box-shadow:0 0 0 .5px var(--bt-line-2),0 2px 8px -2px rgba(0,0,0,.12);color:var(--bt-ink-2);font:inherit;font-size:13px;line-height:18px;cursor:pointer;animation:bt-mw-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .18s ease-out backwards;transition:background-color .12s ease,${spring(SPRING_SHAPE, 'width')},${spring(SPRING_TAP, 'scale')}}
 .bt-mw-pill:hover{background:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main))}
 .bt-mw-pill:active{scale:.97}
-.bt-mw-dock[data-leaving] .bt-mw-pill{animation:bt-mw-out .16s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+.bt-mw-dock[data-leaving] .bt-mw-pill,.bt-mw-dock[data-leaving] .bt-mw-stop{animation:bt-mw-out .16s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+.bt-mw-pair{position:relative;display:inline-flex;min-width:0;max-width:100%}
+.bt-mw-stop{pointer-events:auto;position:absolute;top:0;left:calc(100% + 6px);display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 .5px var(--bt-line-2),0 2px 8px -2px rgba(0,0,0,.12);color:var(--bt-ink-2);cursor:pointer;animation:bt-mw-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .18s ease-out backwards;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, 'scale')}}
+.bt-mw-stop:hover:not(:disabled){background:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main));color:var(--bt-ink)}
+.bt-mw-stop:active:not(:disabled){scale:.9}
+.bt-mw-stop:disabled{opacity:.35;cursor:default}
 .bt-mw-pill-in{display:inline-flex;align-items:center;gap:8px;flex:none;padding:0 13px 0 6px;white-space:nowrap}
 .bt-mw-faces{display:inline-flex;align-items:center;flex:none;line-height:0}
 .bt-mw-face{position:relative;display:inline-flex;flex:none;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 2px var(--bt-main);animation:bt-mw-seat .26s cubic-bezier(.34,1.56,.64,1) backwards}
@@ -232,5 +258,5 @@ body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
 .bt-mw-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:4px}
 .bt-mw-actions>button{height:28px;padding:0 12px;font-size:12px}
 .bt-mw-actions>button:disabled{opacity:.5;cursor:default}
-@media (prefers-reduced-motion:reduce){.bt-mw-pill,.bt-mw-face,.bt-mw-label,.bt-member,.bt-mw-card{animation:none}.bt-mw-pill{transition:background-color .12s ease}}
+@media (prefers-reduced-motion:reduce){.bt-mw-pill,.bt-mw-stop,.bt-mw-face,.bt-mw-label,.bt-member,.bt-mw-card{animation:none}.bt-mw-pill{transition:background-color .12s ease}.bt-mw-stop{transition:background-color .12s ease,color .12s ease}}
 `

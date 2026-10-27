@@ -943,6 +943,22 @@ export function install(rt) {
   }
   rt.stopMemberWork = stopMemberWork
 
+  // The user stops everything at work in this group at once: the round the group's own
+  // Session runs, which takes the member turns it started with it, then each member's
+  // turn here. The round goes first, so it calls no one else meanwhile. Work the same
+  // Bots do in their own chats or other groups goes on.
+  async function stopRoomWork(roomId) {
+    await rt.load()
+    const room = rt.roomOf(roomId)
+    if (room === undefined) return false
+    const round = rt.roomBusy(room.id)
+    if (round) (await rt.resolveAgent(room.id)).cancel({ kind: 'user' })
+    let stopped = false
+    for (const botId of room.members) stopped = (await stopMemberWork(room.id, botId)) || stopped
+    return round || stopped
+  }
+  rt.stopRoomWork = stopRoomWork
+
   // The round said such a member posts when done; a failed model call is how it ended.
   // Nobody answers it.
   async function lateRoomFailure(sessionId, info, failure) {

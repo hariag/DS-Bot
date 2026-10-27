@@ -327,6 +327,8 @@ export function install(rt) {
           return ok(true)
         case 'stop-member-work':
           return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
+        case 'stop-room-work':
+          return ok(await rt.stopRoomWork(String(body.roomId ?? '')))
         case 'dismiss-question':
           await rt.load()
           if (rt.own(state.questions, body.sessionId) !== undefined) {

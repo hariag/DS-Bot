@@ -743,6 +743,27 @@ test('the user stops a member\'s work in a group, and the group shows it', async
   assert.deepEqual(log.map(line => [line.who, line.kind]), [['Writer', 'stopped']])
 })
 
+// #592: DSH's own stop reaches only the round; a member the round moved on from kept working.
+test('one press stops the group\'s round and every member at work there, and nothing elsewhere', async (t) => {
+  const host = await start(t)
+  assert.equal((await host.call('stop-room-work', { roomId: 'r1' })).value, false)
+  // Writer still works on what an earlier round asked; Chief speaks in the round that runs.
+  host.emit('gb', 'turn/start', { turn: 1 })
+  const first = host.round('c1', host.say('@Chief 看看进度'))
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  // Tester works in its own chat.
+  host.emit('c', 'turn/start', { turn: 1 })
+  const stopped = await host.call('stop-room-work', { roomId: 'r1' })
+  assert.deepEqual([stopped.ok, stopped.value], [true, true])
+  for (const id of ['r1', 'ga', 'gb']) assert.deepEqual(host.agentOf(id).cancelled, [{ kind: 'user' }], id)
+  for (const id of ['c', 'gc']) assert.deepEqual(host.agentOf(id).cancelled, [], id)
+  assert.deepEqual(logLines(host).map(line => [line.who, line.kind]), [['User', undefined], ['Chief', 'stopped'], ['Writer', 'stopped']])
+  host.emit('ga', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+  await settle(() => first() !== undefined)
+  assert.deepEqual(kinds(first()).filter(([kind]) => kind === 'stopped'), [['stopped', 'Chief'], ['stopped', 'Writer']])
+})
+
 test('members still at work show in the team view and in the prompts of the others', async (t) => {
   const host = await start(t)
   host.emit('gb', 'turn/start', { turn: 1 })

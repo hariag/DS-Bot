@@ -114,6 +114,47 @@ test('one capsule names who waits and who works, without the round\'s speaker, a
   assert.equal(dock('r1', { bots: {}, rooms: { r1: [{ botId: 'd', since: 1, speaking: true }] }, approvals: [] }), null)
 })
 
+// The stop button beside the capsule, rendered.
+const stopOf = (sessionId, work, actions = {}) => {
+  const find = (node) => {
+    if (node === null || typeof node !== 'object') return null
+    if (node.type?.name === 'StopRoomWork') return node.type(node.props)
+    for (const child of node.children) {
+      const found = find(child)
+      if (found) return found
+    }
+    return null
+  }
+  return find(MemberDock({ sessionId, useRoster: pick => pick(team), useWork: pick => pick(work), actions }))
+}
+
+// #592: DSH's own stop reaches only the round; a member the round moved on from kept working.
+test('a stop button beside a group\'s capsule stops all work there, and only there', async () => {
+  const stopped = []
+  const button = stopOf('r1', { bots: {}, rooms: { r1: [{ botId: 'a', since: 1, tool: 'pwsh' }] }, approvals: [] }, { stopRoomWork: id => stopped.push(id) })
+  assert.equal(button.props['aria-label'], 'Stop all work in this group')
+  button.props.onClick()
+  await Promise.resolve()
+  assert.deepEqual(stopped, ['r1'])
+  // Members busy only in their own chats or other groups show in the capsule, with nothing here to stop.
+  const elsewhere = { bots: { a: { since: 1, tool: 'pwsh' }, b: { since: 1, roomId: 'r2' } }, rooms: { r2: [{ botId: 'b', since: 1 }] }, approvals: [] }
+  assert.ok(dock('r1', elsewhere))
+  assert.equal(stopOf('r1', elsewhere), null)
+  // A Bot's own chat shows its group work, but stopping it belongs to the group.
+  assert.equal(stopOf('a', { bots: { a: { since: 1, roomId: 'r1' } }, rooms: { r1: [{ botId: 'a', since: 1 }] }, approvals: [] }), null)
+})
+
+test('a failed stop of a group\'s work is reported', async () => {
+  const reported = []
+  const button = stopOf('r1', { bots: {}, rooms: { r1: [{ botId: 'a', since: 1 }] }, approvals: [{ botId: 'a', roomId: 'r1', at: 1 }] }, {
+    stopRoomWork: () => Promise.reject(new Error('connection lost')),
+    reportError: (error, action) => reported.push([error.message, action]),
+  })
+  button.props.onClick()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(reported, [['connection lost', 'stop']])
+})
+
 test('a Bot\'s own chat shows the groups it is at work in, unless its own chat runs', () => {
   const away = { bots: { a: { since: 1, roomId: 'r1', tool: 'pwsh' } }, rooms: { r1: [{ botId: 'a', since: 1, tool: 'pwsh' }], r2: [{ botId: 'a', since: 1 }] }, approvals: [] }
   assert.deepEqual(plain(dock('a', away)), { label: 'in Ops · Running shell commands… +1', calls: [['session', 'r1']] })
