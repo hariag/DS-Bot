@@ -9,8 +9,8 @@ import { teamActions } from '../src/client/team-actions.js'
 
 // The window, the shell sidebar's track width and what is open decide which left
 // column shows and how the Bot panel sits; the chat keeps MIN_CHAT.
-const at = (viewport, sidebarWidth, { pref = 'open', drawer = false, panel = null, collapsedWidth = 0 } = {}) =>
-  frameLayout({ viewport, sidebarWidth, pref, drawer, panel, collapsedWidth })
+const at = (viewport, sidebarWidth, { pref = 'open', drawer = false, panel = null } = {}) =>
+  frameLayout({ viewport, sidebarWidth, pref, drawer, panel })
 const details = (yielded = false) => ({ view: 'details', yielded })
 const browser = (yielded = false) => ({ view: 'browser', yielded })
 
@@ -47,8 +47,8 @@ test('without a panel the column stays open while the chat fits, then folds to t
   assert.equal(at(690, 280).left, 'rail')
   assert.equal(at(690, 280).room, 690 - RAIL_WIDTH)
   assert.equal(at(690, 280, { drawer: true }).left, 'drawer')
-  // A drawer floats over the chat: the room loses only the shell's collapsed track.
-  assert.equal(at(690, 280, { drawer: true, collapsedWidth: 56 }).room, 690 - 56)
+  // A drawer floats over the rail's place: the chat keeps the room it had beside the rail.
+  assert.equal(at(690, 280, { drawer: true }).room, 690 - RAIL_WIDTH)
 })
 
 test('a rail preference keeps the rail beside a shown panel', () => {
@@ -94,6 +94,12 @@ test('a flip across the auto-collapse line is the shell rule, not a gesture', ()
   assert.equal(userSidebarToggle({ before, after: { collapsed: true, viewport: 1000 } }), false)
 })
 
+test('a flip right after a width change is the shell settling, not a gesture', () => {
+  const before = { collapsed: true, viewport: 1386 }
+  assert.equal(userSidebarToggle({ before, after: { collapsed: false, viewport: 1386 }, sinceResize: 120 }), false)
+  assert.equal(userSidebarToggle({ before, after: { collapsed: false, viewport: 1386 }, sinceResize: 800 }), true)
+})
+
 test('an unrequested flip on one side of the line is the user', () => {
   const before = { collapsed: false, viewport: 1400 }
   assert.equal(userSidebarToggle({ before, after: { collapsed: true, viewport: 1300 } }), true)
@@ -102,8 +108,8 @@ test('an unrequested flip on one side of the line is the user', () => {
 
 // A folded panel is open but not shown. The panel following the chat to another
 // subject is not the user asking to see it; the openers are.
-const bench = (folded) => {
-  const ui = createSource({ details: 'chief', view: 'details', renaming: false, tab: null, side: null, panelYield: false, leftDrawer: false })
+const bench = (folded, panelYield = false) => {
+  const ui = createSource({ details: 'chief', view: 'details', renaming: false, tab: null, side: null, panelYield, leftDrawer: false })
   const roster = createSource({ byId: { chief: { id: 'chief' }, writer: { id: 'writer' } }, roomsById: {}, sideChats: {} })
   const actions = teamActions({
     call: () => Promise.resolve(null), after: promise => promise, partFor: id => id,
@@ -132,4 +138,20 @@ test('openers on a panel that fits do not yield', () => {
   const { ui, actions } = bench(false)
   actions.showDetails('writer')
   assert.equal(ui.getSnapshot().panelYield, false)
+})
+
+// A panel shown because the column yielded is not folded: its opener closes it,
+// and the other openers keep the yield it already has.
+test('the opener closes a panel the column yielded to', () => {
+  const { ui, actions } = bench(false, true)
+  actions.toggleDetails('chief')
+  assert.equal(ui.getSnapshot().details, null)
+})
+
+test('openers keep a yield already given', () => {
+  const { ui, actions } = bench(false, true)
+  actions.showDetails('writer')
+  assert.equal(ui.getSnapshot().panelYield, true)
+  actions.setPanelView('side')
+  assert.equal(ui.getSnapshot().panelYield, true)
 })

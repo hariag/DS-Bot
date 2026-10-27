@@ -628,7 +628,6 @@ var ZH = {
   "{name} looked up its own chat for “{text}”": "{name} 在自己的对话里查找「{text}」",
   "{name} is typing…": "{name} 正在输入…",
   "{name} didn't answer in time": "{name} 没有及时回应",
-  "The group replies could not be shown": "群里的回复显示不出来",
   "Paused after {count} Bot relays. Waiting: {names}": "Bot 之间已接力 {count} 次，先停下了。还在等：{names}",
   "Continue": "继续",
   "{name} paused for your approval": "{name} 停下来等你批准",
@@ -638,7 +637,6 @@ var ZH = {
   "{name} was cut off by a restart and picked its work back up": "{name} 的工作被重启打断，已经接着做",
   "{name} was cut off by a restart again and stopped": "{name} 的工作又被重启打断，已停下",
   "Picked up its work after a restart": "重启后接着做之前的工作",
-  "Profile updated": "资料已更新",
   "Asked to make the tool call it wrote as text": "工具调用被写成了文字，已让它重新调用",
   "A Bot": "一个 Bot",
   "{name} is waiting for your approval": "{name} 等你批准",
@@ -1512,10 +1510,11 @@ function countCards(state, sessionId, callIds, delta) {
 }
 
 // src/client/team-actions.js
-function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock }) {
+function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock, panelFolded }) {
   const memoryOf = (id) => roster.getSnapshot().roomsById[id] ? { roomId: id } : { botId: id };
+  const yieldTo = (state, view) => state.panelYield === true || panelFolded?.(view) === true;
   const openSideChat = (sessionId, chatId) => {
-    ui2.set((state) => ({ ...state, details: sessionId, view: "side", side: chatId ?? null, renaming: false, tab: null }));
+    ui2.set((state) => ({ ...state, details: sessionId, view: "side", side: chatId ?? null, renaming: false, tab: null, panelYield: yieldTo(state, "side") }));
   };
   return {
     openNewChat: (mode) => {
@@ -1540,6 +1539,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     toggleDetails: (id, force) => {
       ui2.set((state) => {
         const details = force || state.details !== id || state.view !== "details" ? id : null;
+        if (details === null && panelFolded?.("details") === true) return { ...state, renaming: false, tab: null, details: id, view: "details", panelYield: true };
         return { ...state, renaming: false, tab: null, details, view: "details" };
       });
     },
@@ -1555,11 +1555,11 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
       });
     },
     showDetails: (id, tab = null) => {
-      ui2.set((state) => ({ ...state, details: id, view: "details", renaming: false, tab }));
+      ui2.set((state) => ({ ...state, details: id, view: "details", renaming: false, tab, panelYield: yieldTo(state, "details") }));
     },
     // Opening the conversation would move focus to its composer and blur the name field.
     renameBot: (id) => {
-      ui2.set((state) => ({ ...state, details: id, view: "details", renaming: true, tab: null }));
+      ui2.set((state) => ({ ...state, details: id, view: "details", renaming: true, tab: null, panelYield: yieldTo(state, "details") }));
     },
     // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
     openSettings: (page = "general", id = null) => {
@@ -1579,7 +1579,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     },
     setPanelView: (view) => {
       if (view !== "details" && view !== "browser" && view !== "side") return;
-      ui2.set((state) => state.details && state.view !== view ? { ...state, view } : state);
+      ui2.set((state) => state.details && state.view !== view ? { ...state, view, panelYield: yieldTo(state, view) } : state);
     },
     // A side chat on the panel's own view, opened from the strip, the `···`
     // menus or `/side`. Closing the panel keeps the chats; only a tab's × deletes.
@@ -2452,12 +2452,6 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-round:hover{background:var(--bt-hover)}
 .bt-round:active{transform:scale(.94)}
 .bt-list{display:flex;flex-direction:column;gap:3px;overflow-y:auto;min-height:0;flex:1 1 auto}
-/* Chromium ignores ::-webkit-scrollbar when scrollbar-width or scrollbar-color (inherited) is non-auto. */
-.bt-side:not(.bt-rail)>.bt-list{margin-right:-12px;scrollbar-gutter:stable;scrollbar-width:auto;scrollbar-color:auto}
-.bt-side:not(.bt-rail)>.bt-list::-webkit-scrollbar{width:12px}
-.bt-side:not(.bt-rail)>.bt-list::-webkit-scrollbar-track{background:transparent}
-.bt-side:not(.bt-rail)>.bt-list::-webkit-scrollbar-thumb{border:4px solid transparent;border-radius:6px;background:color-mix(in srgb,var(--bt-ink) 16%,transparent) padding-box}
-.bt-side:not(.bt-rail)>.bt-list:hover::-webkit-scrollbar-thumb{background-color:color-mix(in srgb,var(--bt-ink) 30%,transparent)}
 .bt-tile-wrap{display:flex;justify-content:center;padding:20px 0 15px}
 .bt-tile{display:flex;flex-direction:column;align-items:center;gap:4px;width:95px;padding:6px 8px 4px;border-radius:12px;border:0;background:transparent;color:var(--bt-ink);cursor:pointer;font-family:inherit;transition:background-color .12s ease}
 .bt-tile:hover{background:var(--bt-hover)}
@@ -2474,8 +2468,28 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-row-preview{font-size:13px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-unread{width:8px;height:8px;border-radius:50%;background:var(--bt-accent);flex:none;margin-right:2px;animation:bt-fade .13s cubic-bezier(.22,1,.36,1)}
 .bt-unread-wait{background:var(--bt-star)}
-.bt-rail{align-items:center;padding:0 0 8px}
-.bt-rail .bt-row{justify-content:center;padding:6px 0;min-height:44px}
+/* Our own left column, portalled over the shell's collapsed sidebar. It reaches
+   the window's top edge so the title band and the column share one fill (under
+   Mica the app styles DSH's sidebar the same way, via --bt-leftcol-fill there);
+   it stays under the shell's title-bar switch (z 30) and the popovers (z 60),
+   and the floating drawer keeps the opaque fill over the conversation. */
+.bt-leftcol{position:fixed;left:0;top:0;bottom:0;z-index:25;display:flex;--bt-lc-clear:var(--dsh-frame-top-clearance,var(--dsh-windows-titlebar-height,0px));background:var(--bt-leftcol-fill,var(--bt-sidebar));border-right:.5px solid var(--bt-line);box-sizing:border-box;padding:calc(var(--bt-lc-clear) + 6px) 12px 6px;color:var(--bt-ink);font-family:var(--bt-font)}
+html[data-windows-titlebar] .bt-leftcol,html[data-platform=darwin] .bt-leftcol{border-right:none}
+.bt-leftcol[data-left=drawer]{background:var(--bt-sidebar);box-shadow:8px 0 24px rgba(0,0,0,.14)}
+.bt-leftcol>.bt-side{width:100%}
+.bt-leftcol-foot{display:flex;align-items:center;gap:9px;padding-top:8px;flex:none}
+.bt-rail{align-items:center;padding:0}
+.bt-rail .bt-row{justify-content:center;width:56px;height:56px;min-height:56px;padding:0;border-radius:16px}
+.bt-rail-top{display:flex;flex-direction:column;align-items:center;gap:6px;padding-bottom:8px}
+.bt-rail-sep{width:24px;height:1px;flex:none;background:var(--bt-line)}
+.bt-rail .bt-agent-ava{width:44px;height:44px}
+.bt-rail .bt-list{align-self:stretch;align-items:center;gap:4px}
+/* The rail's list spans the whole column: the badges and dots that sit on a row's
+   edge need room beside the 56px rows, or the list scrolls sideways. */
+.bt-leftcol[data-left=rail]{padding:calc(var(--bt-lc-clear) + 8px) 0 8px}
+.bt-leftcol-foot-rail{flex-direction:column;gap:6px}
+.bt-dot{position:absolute;top:4px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--bt-accent);box-shadow:0 0 0 1.5px var(--bt-sidebar)}
+.bt-dot-wait{background:var(--bt-star)}
 .bt-side-foot{display:flex;padding-top:8px}
 .bt-connect{flex:1;height:36px;border-radius:999px;border:1px solid var(--bt-line);background:var(--bt-main);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background-color .12s ease}
 .bt-connect:hover{background:var(--bt-hover)}
@@ -2592,7 +2606,6 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-q-submit:disabled{opacity:.4;cursor:default}
 .bt-q-btn{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-q-btn:hover{background:var(--bt-active)}
-.bt-q-submit:focus-visible,.bt-q-btn:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 .bt-q-foot{display:flex;justify-content:flex-end;gap:8px}
 .bt-q-raised{width:calc(var(--dsh-chat-content-width,748px) - 32px);max-width:calc(100% - 32px);gap:0;padding:0;box-shadow:0 2px 8px rgba(20,20,20,.035),inset 0 0 0 .5px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
 .bt-q-raised .bt-q-head{padding:14px 16px 4px 20px}
@@ -2691,7 +2704,7 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-panel[data-leaving]{transform:translateX(100%);transition:transform .3s cubic-bezier(.2,0,0,1);pointer-events:none}
 .bt-panel[data-instant]{transition:none}
 @keyframes bt-pane-in{from{transform:translateX(100%)}}
-[class*="_centerCol"]{transition:margin-right ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
+[class*="_centerCol"]{transition:margin-right ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 .bt-panel-grip{position:absolute;left:-5px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:3;touch-action:none}
 .bt-panel-grip:hover,.bt-panel[data-dragging] .bt-panel-grip{background:linear-gradient(to right,transparent 4px,var(--bt-line-2) 4px,var(--bt-line-2) 6px,transparent 6px)}
 .bt-drag-shield{position:fixed;inset:0;z-index:45;cursor:col-resize}
@@ -2881,7 +2894,14 @@ button.bt-set-row:hover{background:var(--bt-hover)}
    the sidebar is open. Elsewhere an open sidebar uses the team's own top row. */
 html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
 html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
-html[data-windows-titlebar] .bt-side-collapse,html[data-platform=darwin] .bt-side-collapse{display:none}
+html[data-windows-titlebar] :is(.bt-side-collapse,.bt-rail-expand),html[data-platform=darwin] :is(.bt-side-collapse,.bt-rail-expand){display:none}
+/* Under a Windows title bar our own switch replaces the shell's: the shell's
+   toggle expands the shell sidebar first, and pulling it back afterwards is a
+   visible flash of the shell's column. */
+html[data-windows-titlebar] [class*="_logoRow"]>[class*="_toggle"]{display:none!important}
+.bt-title-toggle{display:none;position:fixed;left:12px;top:calc((var(--dsh-windows-titlebar-height,0px) - 28px) / 2);width:28px;height:28px;z-index:30;-webkit-app-region:no-drag;align-items:center;justify-content:center;border:0;border-radius:6px;padding:0;background:transparent;color:var(--bt-ink);cursor:pointer;font-family:var(--bt-font)}
+html[data-windows-titlebar] .bt-title-toggle{display:inline-flex}
+.bt-title-toggle:hover{background:var(--bt-hover)}
 /* The footer ends in the Bot row: the whale's settings seat, then Connect plugins. Every
    other plugin's entry takes a whole row above it, in the shell's order, so none of them
    squeezes the Bot row. */
@@ -2936,10 +2956,7 @@ ${SKIN_FOOT}>div:has(> [data-slot="sidebar.settings"]){order:-1!important;flex:n
 /* The same bubble width as beside an avatar column: the share of (100% - 30px), plus the 30px. */
 .bt-astack[data-lead]>.bt-msg{max-width:min(calc(var(--bt-msg-w) * (100% - 30px) + 30px),calc(100% - 52px))}
 .bt-tools{position:absolute;top:50%;left:100%;margin-left:6px;transform:translateY(-50%);display:flex;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
-/* The hover bridge spans only the 6px gap (plus a little overlap) between the
-   bubble's edge and the toolbar: wider, it sits over the bubble's tail and
-   blocks text selection and link clicks there. */
-.bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:10px;z-index:-1}
+.bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:128px;z-index:-1}
 .bt-msg:hover>.bt-msg-line>.bt-tools,.bt-msg:focus-within>.bt-msg-line>.bt-tools,.bt-tools[data-open]{opacity:1;visibility:visible}
 /* The flat layout: a Bot's text has no bubble and takes its own share of the column
    (the whole of it unless set). The toolbar floats over the message's top right. */
@@ -4243,6 +4260,7 @@ var HANDOFF_CSS = `
 .bt-handoff-dot{flex:none;width:6px;height:6px;border-radius:50%;corner-shape:round;background:var(--bt-green)}
 .bt-handoff.bt-q-raised .bt-q-head{padding-bottom:12px}
 .bt-handoff .bt-q-foot{flex-wrap:wrap}
+.bt-handoff :is(.bt-q-btn,.bt-q-submit):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 `;
 
 // src/shared/formula.js
@@ -6837,10 +6855,6 @@ var ALWAYS = { chars: -1, lines: 0 };
 var PREVIEW_LINES = 10;
 var PREVIEW_CHARS = 600;
 var FENCE = /^ {0,3}(`{3,}|~{3,})/;
-function cutAt(text, end) {
-  const code = text.charCodeAt(end - 1);
-  return text.slice(0, code >= 55296 && code <= 56319 ? end - 1 : end);
-}
 function moreLines(text, max) {
   let lines = 1;
   for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) {
@@ -6850,43 +6864,22 @@ function moreLines(text, max) {
 }
 function foldPreview(text, limit = FOLD_AT, markdown = true) {
   if (text.length <= limit.chars && !moreLines(text, limit.lines)) return null;
-  const body = text.replace(/^(\s*\n)+/, "");
-  if (body.trim() === "") return null;
-  let head = body.split("\n", PREVIEW_LINES).join("\n");
+  let head = text.split("\n", PREVIEW_LINES).join("\n");
   if (head.length > PREVIEW_CHARS) {
     const cut = head.lastIndexOf("\n", PREVIEW_CHARS);
-    head = cutAt(head, cut > 0 ? cut : PREVIEW_CHARS);
+    const end = cut > 0 ? cut : PREVIEW_CHARS;
+    const code = head.charCodeAt(end - 1);
+    head = head.slice(0, code >= 55296 && code <= 56319 ? end - 1 : end);
   }
-  if (head.trim() === "") head = cutAt(body, PREVIEW_CHARS);
   if (!markdown) return head;
   let open = null;
-  let openLine = -1;
-  let lines = head.split("\n");
-  for (let i = 0; i < lines.length; i += 1) {
-    const marker = FENCE.exec(lines[i])?.[1];
+  for (const line of head.split("\n")) {
+    const marker = FENCE.exec(line)?.[1];
     if (marker === void 0) continue;
-    if (open === null) {
-      open = marker;
-      openLine = i;
-    } else if (marker[0] === open[0] && marker.length >= open.length) open = null;
+    if (open === null) open = marker;
+    else if (marker[0] === open[0] && marker.length >= open.length) open = null;
   }
-  if (open !== null && lines.slice(openLine + 1).join("").trim() === "") {
-    head = cutAt(body, PREVIEW_CHARS);
-    lines = head.split("\n");
-    open = null;
-    openLine = -1;
-    for (let i = 0; i < lines.length; i += 1) {
-      const marker = FENCE.exec(lines[i])?.[1];
-      if (marker === void 0) continue;
-      if (open === null) {
-        open = marker;
-        openLine = i;
-      } else if (marker[0] === open[0] && marker.length >= open.length) open = null;
-    }
-  }
-  if (open === null) return head;
-  lines[openLine] = open;
-  return `${lines.join("\n")}
+  return open === null ? head : `${head}
 ${open}`;
 }
 var stripLongNote = (text) => text.replace(/^\[A long message: \d+ characters\.[^\]\n]*\]\n/, "");
@@ -7797,7 +7790,6 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.handoff === true) return roster.roomsById[sessionId] ? null : (0, import_react13.createElement)(EarlierParts, { sessionId, roster, actions });
       if (source.role === "kickoff" || source.role === "room") return null;
       if (source.role === "secret" || deferred) return null;
-      if (source.role === "update") return (0, import_react13.createElement)("div", { className: "bt-event" }, t("Profile updated"));
       if (source.role === "post") {
         if (source.logged !== void 0) return null;
         if (source.failed !== void 0 || source.resumed === true || source.stopped === true || source.done === true) return null;
@@ -8009,55 +8001,6 @@ function useLiveNote(actions, sessionId, id, entry) {
     return () => actions.noteLive(sessionId, id, null);
   }, [sessionId, id, key]);
 }
-var RELAY_LIST = /"replies"\s*:\s*\[/;
-var PRUNE_MARKER = /\[\.\.\. tool result middle pruned \.\.\.\]/;
-function parseReplies(text) {
-  try {
-    return { replies: JSON.parse(text).replies ?? [], broken: false };
-  } catch {
-  }
-  const replies = [];
-  const head = RELAY_LIST.exec(text);
-  if (head) {
-    for (const piece of text.slice(head.index + head[0].length).split(PRUNE_MARKER)) {
-      const first = piece.indexOf('{"');
-      if (first !== -1) scanReplies(piece, first, replies);
-    }
-  }
-  return { replies, broken: true };
-}
-function scanReplies(text, start, replies) {
-  let depth = 0;
-  let from = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === "{") {
-      if (depth === 0) from = i;
-      depth += 1;
-    } else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0 && from >= 0) {
-        try {
-          replies.push(JSON.parse(text.slice(from, i + 1)));
-        } catch {
-        }
-        from = -1;
-      }
-    } else if (ch === "]" && depth === 0) break;
-  }
-}
 function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
   const [live, setLive] = (0, import_react13.useState)({ replies: [], speaking: null });
   (0, import_react13.useEffect)(() => {
@@ -8083,18 +8026,17 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     };
   }, [done, sessionId, callId]);
   let replies = live.replies;
-  let broken = false;
   if (done) {
-    const parsed = parseReplies(contentText(content));
-    replies = parsed.replies.length ? parsed.replies : live.replies;
-    broken = parsed.broken;
+    try {
+      replies = JSON.parse(contentText(content)).replies ?? [];
+    } catch {
+      replies = [];
+    }
   }
   const pending = done || !live.speaking ? [] : [live.speaking];
   const speakerTool = useWork?.((work) => work.bots?.[live.speaking]?.tool) ?? void 0;
   const speakerDoing = useWork?.((work) => work.bots?.[live.speaking]?.tool ? workPhrase(work.bots[live.speaking]) : void 0) ?? void 0;
-  if (replies.length === 0 && pending.length === 0) {
-    return broken ? (0, import_react13.createElement)("div", { className: "bt-group-replies" }, (0, import_react13.createElement)("div", { className: "bt-event" }, t("The group replies could not be shown"))) : null;
-  }
+  if (replies.length === 0 && pending.length === 0) return null;
   const room2 = roster.roomsById[sessionId];
   return (0, import_react13.createElement)(
     "div",
@@ -8488,6 +8430,213 @@ function showsDshRow(dsh, app) {
   return dsh.kind === "app" && APP_OFFER.has(app?.phase) && sameVersion(app.version, dsh.verified);
 }
 
+// src/client/storage.js
+var STORAGE = {
+  unread: "ds-bot:unread",
+  reactions: "ds-bot:reactions",
+  seen: "ds-bot:seen",
+  prefs: "ds-bot:prefs",
+  surface: "ds-bot:surface",
+  agentSessions: "ds-bot:agent-sessions",
+  browserWidth: "ds-bot:browser-width",
+  sidebar: "ds-bot:sidebar",
+  browsers: "ds-bot.browser.v2"
+};
+var LEGACY_PREFIXES = ["dsh-bot:", "dsh-bot-team:"];
+var LEGACY_BROWSER_KEYS = ["ds-bot.browser.v1", "dsh-bot.browser.v1"];
+var LEGACY_THEMES = { grok: "mono" };
+function legacyKeys(key) {
+  if (key === STORAGE.browsers) return LEGACY_BROWSER_KEYS;
+  const name = key.slice(key.indexOf(":") + 1);
+  return LEGACY_PREFIXES.map((prefix) => `${prefix}${name}`);
+}
+var migrateBrowsers = (storage) => {
+  if (storage.getItem(STORAGE.browsers) !== null) {
+    for (const key of LEGACY_BROWSER_KEYS) storage.removeItem(key);
+    return;
+  }
+  for (const key of LEGACY_BROWSER_KEYS) {
+    try {
+      const value = storage.getItem(key);
+      if (value === null) continue;
+      const previous = JSON.parse(value) ?? {};
+      const tabs = Object.fromEntries(Object.entries(previous).filter(([, page]) => page && typeof page === "object").map(([botId, page]) => {
+        const tab = { id: `v1-${botId}`, url: page.url ?? "", title: page.title ?? "" };
+        return [botId, { tabs: [tab], active: tab.id }];
+      }));
+      storage.setItem(STORAGE.browsers, JSON.stringify(tabs));
+      for (const earlier of LEGACY_BROWSER_KEYS) storage.removeItem(earlier);
+      return;
+    } catch {
+    }
+  }
+};
+function migrateStorage(storage = globalThis.localStorage) {
+  for (const key of Object.values(STORAGE)) {
+    if (key === STORAGE.browsers) continue;
+    for (const legacy of legacyKeys(key)) {
+      try {
+        const value = storage.getItem(legacy);
+        if (value !== null && storage.getItem(key) === null) storage.setItem(key, value);
+        storage.removeItem(legacy);
+      } catch {
+      }
+    }
+  }
+  try {
+    migrateBrowsers(storage);
+  } catch {
+  }
+  try {
+    const prefs = JSON.parse(storage.getItem(STORAGE.prefs) ?? "null");
+    if (prefs && Object.hasOwn(LEGACY_THEMES, prefs.theme ?? "")) {
+      storage.setItem(STORAGE.prefs, JSON.stringify({ ...prefs, theme: LEGACY_THEMES[prefs.theme] }));
+    }
+  } catch {
+  }
+}
+
+// src/client/frame-layout.js
+var MIN_CHAT = 420;
+var RAIL_WIDTH = 88;
+var PANEL_MIN = { details: 320, browser: 360, side: 320 };
+var DSH_NARROW = 1024;
+var FALLBACK_SIDEBAR_WIDTH = 280;
+function frameLayout({ viewport, sidebarWidth, pref, drawer = false, panel = null }) {
+  const fits = pref === "open" && viewport >= sidebarWidth + MIN_CHAT;
+  let left = fits ? "open" : drawer && pref === "open" ? "drawer" : "rail";
+  let occupied = left === "open" ? sidebarWidth : RAIL_WIDTH;
+  let panelState = "none";
+  if (panel !== null) {
+    const need = (PANEL_MIN[panel.view] ?? PANEL_MIN.details) + MIN_CHAT;
+    if (occupied + need <= viewport) panelState = "shown";
+    else if (panel.yielded === true) {
+      left = "rail";
+      occupied = RAIL_WIDTH;
+      panelState = RAIL_WIDTH + need <= viewport ? "shown" : "overlay";
+    } else panelState = "folded";
+  }
+  return { left, panel: panelState, room: Math.max(0, viewport - occupied) };
+}
+var dshExpandedFor = (viewport, left) => viewport >= DSH_NARROW && left === "open";
+var RESIZE_SETTLE_MS = 500;
+var userSidebarToggle = ({ before, after, requested = false, sinceResize = Infinity }) => before.collapsed !== after.collapsed && !requested && sinceResize >= RESIZE_SETTLE_MS && before.viewport < DSH_NARROW === after.viewport < DSH_NARROW;
+function readSidebarPref(storage = globalThis.localStorage) {
+  try {
+    return storage.getItem(STORAGE.sidebar) === "rail" ? "rail" : "open";
+  } catch {
+    return "open";
+  }
+}
+function writeSidebarPref(pref, storage = globalThis.localStorage) {
+  try {
+    storage.setItem(STORAGE.sidebar, pref === "rail" ? "rail" : "open");
+  } catch {
+  }
+}
+
+// src/client/frame-watch.js
+var sidebarTrackWidth = () => typeof document === "undefined" ? null : document.querySelector('[class*="_sidebarCol"]')?.getBoundingClientRect().width ?? null;
+var dshCollapsed = () => {
+  if (typeof document === "undefined") return null;
+  const column = document.querySelector('[class*="_sidebarCol"]');
+  return column ? column.parentElement?.hasAttribute("data-sidebar-collapsed") ?? false : null;
+};
+var collapsedTrackWidth = () => document.documentElement.hasAttribute("data-windows-titlebar") || document.documentElement.dataset.platform === "darwin" ? 0 : 56;
+var room = { rule: null, selector: "" };
+var roomRule = () => {
+  const live = room.rule?.parentStyleSheet?.ownerNode?.isConnected;
+  if (live && room.selector) return room.rule;
+  const column = document.querySelector('[class*="_centerCol"]');
+  const selector = column ? [...column.classList].filter((name) => name.includes("_centerCol")).map((name) => `.${CSS.escape(name)}`).join(",") : "";
+  if (live && !selector) return room.rule;
+  const declarations2 = room.rule?.style.cssText ?? "";
+  room.rule?.parentStyleSheet?.ownerNode?.remove();
+  const style = installStyles(`${selector || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
+  room.rule = style.sheet.cssRules[0];
+  room.selector = selector;
+  return room.rule;
+};
+var margin = (side, width, style) => {
+  if (width === null) style.removeProperty(`margin-${side}`);
+  else style.setProperty(`margin-${side}`, `${width}px`, "important");
+};
+var roomHold = 0;
+var chatRoom = {
+  /** The margin the Bot panel takes on the right, in px, or null for the shell's own. */
+  setRight(width) {
+    margin("right", width, roomRule().style);
+  },
+  /** The margin our own left column takes while the shell sidebar is collapsed. */
+  setLeft(width) {
+    margin("left", width, roomRule().style);
+  },
+  /** While on, a margin change lands at once instead of gliding. */
+  hold(on) {
+    cancelAnimationFrame(roomHold);
+    if (on) {
+      roomRule().style.setProperty("transition", "none", "important");
+      return;
+    }
+    roomHold = requestAnimationFrame(() => {
+      roomHold = requestAnimationFrame(() => roomRule().style.removeProperty("transition"));
+    });
+  },
+  /** The columns themselves, for a drag's per-frame writes. */
+  columns() {
+    roomRule();
+    return room.selector ? [...document.querySelectorAll(room.selector)] : [];
+  }
+};
+function installFrameWatch(frame) {
+  let sidebarWidth = FALLBACK_SIDEBAR_WIDTH;
+  let collapsedWidth = collapsedTrackWidth();
+  let raf = 0;
+  const watched = /* @__PURE__ */ new Set();
+  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => schedule()) : null;
+  const read = () => {
+    const column = document.querySelector('[class*="_sidebarCol"]');
+    const animating = column?.closest("[data-animating]") != null;
+    const width = animating ? null : sidebarTrackWidth();
+    const collapsed = dshCollapsed();
+    if (width !== null) {
+      if (collapsed === true) collapsedWidth = width;
+      else if (collapsed === false) sidebarWidth = width;
+    }
+    frame.set((state) => {
+      const next = { viewport: window.innerWidth, sidebarWidth, collapsedWidth, collapsed: collapsed === true };
+      return state.viewport === next.viewport && state.sidebarWidth === next.sidebarWidth && state.collapsedWidth === next.collapsedWidth && state.collapsed === next.collapsed ? state : next;
+    });
+  };
+  const measure = () => {
+    for (const selector of ['[class*="_sidebarCol"]', '[class*="_centerCol"]']) {
+      for (const column of document.querySelectorAll(selector)) {
+        if (!watched.has(column)) {
+          watched.add(column);
+          observer?.observe(column);
+        }
+      }
+    }
+    read();
+  };
+  const schedule = () => {
+    if (raf === 0) raf = requestAnimationFrame(() => {
+      raf = 0;
+      measure();
+    });
+  };
+  measure();
+  const mutations = new MutationObserver(schedule);
+  mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-animating"] });
+  window.addEventListener("resize", schedule);
+  return () => {
+    cancelAnimationFrame(raf);
+    mutations.disconnect();
+    observer?.disconnect();
+    window.removeEventListener("resize", schedule);
+  };
+}
+
 // src/client/sidebar.js
 var import_react15 = require("react");
 var import_react_dom3 = require("react-dom");
@@ -8564,7 +8713,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       onClick: () => actions.openSession(id),
       onContextMenu
     },
-    (0, import_react15.createElement)(BotAvatar, { bot, size: 36, state, main }),
+    (0, import_react15.createElement)(BotAvatar, { bot, size: wide ? 36 : 44, state, main }),
     pinned && !wide ? (0, import_react15.createElement)(PinMark) : null,
     wide ? (0, import_react15.createElement)(
       "span",
@@ -8572,7 +8721,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       (0, import_react15.createElement)("span", { className: "bt-row-name" }, (0, import_react15.createElement)("span", { className: "bt-row-title" }, bot.name), pinned ? (0, import_react15.createElement)(PinMark) : null),
       runningLine ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, runningLine) : awayLine ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
-    wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
+    wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : !wide && !active && (alert || unread) ? (0, import_react15.createElement)("span", { className: `bt-dot${alert ? " bt-dot-wait" : ""}`, "aria-hidden": true }) : null
   );
 }
 function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
@@ -8603,7 +8752,7 @@ function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, 
         actions.openMenu({ kind: "room", id, x: event.clientX, y: event.clientY });
       }
     },
-    (0, import_react15.createElement)(RoomAvatar, { room: room2, roster, size: 36 }),
+    (0, import_react15.createElement)(RoomAvatar, { room: room2, roster, size: wide ? 36 : 44 }),
     pinned && !wide ? (0, import_react15.createElement)(PinMark) : null,
     wide ? (0, import_react15.createElement)(
       "span",
@@ -8611,7 +8760,7 @@ function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, 
       (0, import_react15.createElement)("span", { className: "bt-row-name" }, (0, import_react15.createElement)("span", { className: "bt-row-title" }, room2.name), pinned ? (0, import_react15.createElement)(PinMark) : null),
       workingLine ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, workingLine) : preview ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
-    wide && approval && !active ? (0, import_react15.createElement)("span", { className: "bt-unread bt-unread-wait", "aria-hidden": true }) : wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
+    wide && approval && !active ? (0, import_react15.createElement)("span", { className: "bt-unread bt-unread-wait", "aria-hidden": true }) : wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : !wide && !active && (approval || unread) ? (0, import_react15.createElement)("span", { className: `bt-dot${approval ? " bt-dot-wait" : ""}`, "aria-hidden": true }) : null
   );
 }
 function AgentSessionRow({ session, agent, actions, renaming, index }) {
@@ -8721,14 +8870,14 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
           actions.openMenu({ kind: "agent", id: agent.id, x: event.clientX, y: event.clientY });
         }
       },
-      (0, import_react15.createElement)("span", { className: `bt-agent-ava${running ? " bt-run" : ""}` }, (0, import_react15.createElement)(import_dsh_client_ui_primitives.FishLogo, { size: 22 })),
+      (0, import_react15.createElement)("span", { className: `bt-agent-ava${running ? " bt-run" : ""}` }, (0, import_react15.createElement)(import_dsh_client_ui_primitives.FishLogo, { size: wide ? 22 : 24 })),
       wide ? (0, import_react15.createElement)(
         "span",
         { className: "bt-row-body" },
         (0, import_react15.createElement)("span", { className: "bt-row-name" }, "DSH Agent"),
         preview ? (0, import_react15.createElement)("span", { className: "bt-row-preview" }, preview) : null
       ) : null,
-      wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
+      wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : !wide && unread && !active ? (0, import_react15.createElement)("span", { className: "bt-dot", "aria-hidden": true }) : null
     ),
     (0, import_react15.createElement)(
       "div",
@@ -8776,16 +8925,38 @@ function useListGlide(listRef, layout, key) {
     tops.current = { layout, map: next };
   }, [layout, key]);
 }
+function LeftColumn({ mode, width, children }) {
+  return (0, import_react_dom3.createPortal)((0, import_react15.createElement)("div", { className: "bt-leftcol", "data-left": mode, style: { width: `${width}px` } }, children), document.body);
+}
+function TitleToggle({ left, onToggle }) {
+  if (typeof document === "undefined" || !document.documentElement.hasAttribute("data-windows-titlebar")) return null;
+  const collapse = left === "open" || left === "drawer";
+  return (0, import_react_dom3.createPortal)((0, import_react15.createElement)("button", {
+    type: "button",
+    className: "bt-title-toggle",
+    "aria-label": t(collapse ? "Collapse sidebar" : "Expand sidebar"),
+    title: t(collapse ? "Collapse sidebar" : "Expand sidebar"),
+    onClick: onToggle
+  }, (0, import_react15.createElement)(SidebarIcon)), document.body);
+}
 function TeamSidebar(props) {
-  const { wide, expandSidebar, useRoster, useUi, useSessions, actions } = props;
+  const { wide, useRoster, useUi, useSessions, actions } = props;
   const listRef = (0, import_react15.useRef)(null);
-  const closing = (0, import_react15.useRef)(false);
-  (0, import_react15.useLayoutEffect)(() => {
-    closing.current = false;
-  });
   const roster = useRoster((value) => value);
   const markedUnread = useUi((value) => value.unread);
+  const uiNow = useUi((value) => value);
   props.useRegistry((value) => value);
+  const frameSnap = props.useFrame ? props.useFrame((value) => value) : { viewport: typeof window === "undefined" ? 0 : window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0 };
+  const pref = props.useSidebarPref ? props.useSidebarPref((value) => value) : "open";
+  const layout = frameLayout({
+    viewport: frameSnap.viewport,
+    sidebarWidth: frameSnap.sidebarWidth,
+    pref,
+    drawer: uiNow.leftDrawer === true,
+    panel: uiNow.details ? { view: uiNow.view, yielded: uiNow.panelYield === true } : null
+  });
+  const mode = wide ? "inline" : layout.left;
+  const wideContent = mode !== "rail";
   const updated = useSessions((list) => {
     const stamps = {};
     for (const id of list.ids) stamps[id] = list.byId[id]?.updatedAt ?? 0;
@@ -8802,15 +8973,82 @@ function TeamSidebar(props) {
     return entries2.sort((a, b) => Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at);
   }, [roster, updated]);
   const main = roster.byId[roster.mainBotId];
-  useListGlide(listRef, wide, order.map((entry) => entry.item.id).join(","));
+  useListGlide(listRef, wideContent, order.map((entry) => entry.item.id).join(","));
   useLandOnMainBot(roster, useSessions, actions);
+  const ourWidth = layout.left === "rail" ? RAIL_WIDTH : frameSnap.sidebarWidth;
+  const pushed = layout.left === "open" ? frameSnap.sidebarWidth : RAIL_WIDTH;
+  (0, import_react15.useLayoutEffect)(() => {
+    if (typeof document === "undefined") return;
+    chatRoom.setLeft(mode === "inline" ? null : Math.max(0, pushed - (frameSnap.collapsedWidth ?? 0)));
+  }, [mode, pushed, frameSnap.collapsedWidth]);
+  (0, import_react15.useEffect)(() => () => {
+    if (typeof document !== "undefined") chatRoom.setLeft(null);
+  }, []);
+  const dsh = (0, import_react15.useRef)(null);
+  const requested = (0, import_react15.useRef)(false);
+  const requestLapse = (0, import_react15.useRef)(0);
+  (0, import_react15.useEffect)(() => () => clearTimeout(requestLapse.current), []);
+  const resizedAt = (0, import_react15.useRef)(0);
+  (0, import_react15.useEffect)(() => {
+    const onResize = () => {
+      resizedAt.current = performance.now();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  (0, import_react15.useLayoutEffect)(() => {
+    if (typeof document === "undefined" || typeof actions.toggleSidebar !== "function") return void 0;
+    const collapsed = dshCollapsed() ?? !wide;
+    const prev = dsh.current;
+    const viewport = window.innerWidth;
+    dsh.current = { collapsed, viewport, left: layout.left };
+    if (prev !== null && collapsed !== prev.collapsed) {
+      if (requested.current) requested.current = false;
+      else if (userSidebarToggle({ before: prev, after: { collapsed, viewport }, sinceResize: performance.now() - resizedAt.current })) {
+        if (prev.left === "open") actions.setSidebarPref?.("rail");
+        else {
+          actions.setSidebarPref?.("open");
+          if (frameSnap.viewport < frameSnap.sidebarWidth + MIN_CHAT) actions.setLeftDrawer?.(true);
+        }
+        actions.setPanelYield?.(false);
+        return void 0;
+      }
+    }
+    const wantOpen = dshExpandedFor(frameSnap.viewport, layout.left);
+    if (collapsed === !wantOpen) {
+      requested.current = false;
+      return void 0;
+    }
+    if (requested.current) return void 0;
+    requested.current = true;
+    actions.toggleSidebar();
+    clearTimeout(requestLapse.current);
+    requestLapse.current = setTimeout(() => {
+      requested.current = false;
+    }, 300);
+    return void 0;
+  }, [wide, frameSnap.viewport, frameSnap.sidebarWidth, layout.left]);
+  (0, import_react15.useEffect)(() => {
+    if (mode !== "drawer") return void 0;
+    const onDown = (event) => {
+      if (event.target instanceof Element && event.target.closest(".bt-leftcol")) return;
+      actions.setLeftDrawer?.(false);
+    };
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      actions.setLeftDrawer?.(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [mode]);
   const navigate = (open, id) => {
     const result = open(id);
-    if (wide && window.innerWidth < 1024 && !closing.current) {
-      closing.current = true;
-      expandSidebar?.();
-      actions.toggleSidebar();
-    }
+    if (uiNow.leftDrawer === true) actions.setLeftDrawer?.(false);
     return result;
   };
   const rowActions = {
@@ -8820,37 +9058,83 @@ function TeamSidebar(props) {
     openAgentSession: (id) => navigate(actions.openAgentSession, id),
     newAgentSession: (id) => navigate(actions.newAgentSession, id)
   };
-  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide };
+  const rowProps = { roster, actions: rowActions, useSessions, useUi, useSessionStatus: props.useSessionStatus, useSessionRetainInfo: props.useSessionRetainInfo, useActivity: props.useActivity, useWork: props.useWork, wide: wideContent };
   const typeToSearch = (event) => {
     if (event.defaultPrevented || event.key.length !== 1 || event.key === " " || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return;
     if (event.target instanceof Element && event.target.closest("input,textarea,[contenteditable]")) return;
     event.preventDefault();
     actions.openPalette(event.key);
   };
-  return (0, import_react15.createElement)(
+  const expandLeft = () => {
+    actions.setPanelYield?.(false);
+    actions.setSidebarPref?.("open");
+    if (frameSnap.viewport < frameSnap.sidebarWidth + MIN_CHAT) actions.setLeftDrawer?.(true);
+  };
+  const onTitleToggle = () => {
+    if (layout.left === "open") {
+      actions.setLeftDrawer?.(false);
+      actions.setSidebarPref?.("rail");
+    } else if (layout.left === "drawer") actions.setLeftDrawer?.(false);
+    else expandLeft();
+  };
+  const toggleRef = (0, import_react15.useRef)(onTitleToggle);
+  toggleRef.current = onTitleToggle;
+  (0, import_react15.useEffect)(() => {
+    const onKey = (event) => {
+      if (event.defaultPrevented || event.isComposing || !pressesShellShortcut(event, "sidebar.left.toggle")) return;
+      if (event.target instanceof Element && event.target.closest(".xterm")) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleRef.current();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+  const top = wideContent ? (0, import_react15.createElement)(
     "div",
-    { className: wide ? "bt-side" : "bt-side bt-rail", onKeyDown: typeToSearch },
-    wide ? (0, import_react15.createElement)(
-      "div",
-      { className: "bt-side-top" },
-      (0, import_react15.createElement)("span", { className: "bt-brand" }, (0, import_react15.createElement)(BrandMark, { size: 22 }), (0, import_react15.createElement)(BrandName)),
-      (0, import_react15.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
-      (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react15.createElement)(SearchIcon)),
-      (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react15.createElement)(PlusIcon)),
-      (0, import_react15.createElement)("button", { type: "button", className: "bt-round bt-side-collapse", "aria-label": t("Collapse sidebar"), title: t("Collapse sidebar"), onClick: () => actions.toggleSidebar() }, (0, import_react15.createElement)(SidebarIcon))
-    ) : (0, import_react15.createElement)(
-      import_react15.Fragment,
-      null,
-      (0, import_react15.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
-      (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react15.createElement)(PlusIcon))
-    ),
-    wide && roster.readOnly ? (0, import_react15.createElement)("div", { className: "bt-hint bt-read-only", role: "status" }, hostText(roster.readOnly)) : null,
+    { className: "bt-side-top" },
+    (0, import_react15.createElement)("span", { className: "bt-brand" }, (0, import_react15.createElement)(BrandMark, { size: 22 }), (0, import_react15.createElement)(BrandName)),
+    (0, import_react15.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
+    (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react15.createElement)(SearchIcon)),
+    (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react15.createElement)(PlusIcon)),
+    (0, import_react15.createElement)("button", { type: "button", className: "bt-round bt-side-collapse", "aria-label": t("Collapse sidebar"), title: t("Collapse sidebar"), onClick: () => {
+      actions.setLeftDrawer?.(false);
+      actions.setSidebarPref?.("rail");
+    } }, (0, import_react15.createElement)(SidebarIcon))
+  ) : (0, import_react15.createElement)(
+    "div",
+    { className: "bt-rail-top" },
+    (0, import_react15.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
+    (0, import_react15.createElement)("button", { type: "button", className: "bt-round bt-rail-expand", "aria-label": t("Expand sidebar"), title: t("Expand sidebar"), onClick: expandLeft }, (0, import_react15.createElement)(SidebarIcon)),
+    main ? (0, import_react15.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react15.createElement)("div", { className: "bt-hint" }, t("Setting up your Main Bot…")),
+    (0, import_react15.createElement)("span", { className: "bt-rail-sep", "aria-hidden": true })
+  );
+  const foot = mode === "inline" ? null : wideContent ? (0, import_react15.createElement)("div", { className: "bt-leftcol-foot" }, (0, import_react15.createElement)(AccountLauncher, { seat: false, actions }), (0, import_react15.createElement)(ConnectPlugins, { wide: true, actions })) : (0, import_react15.createElement)(
+    "div",
+    { className: "bt-leftcol-foot bt-leftcol-foot-rail" },
+    (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react15.createElement)(PlusIcon)),
+    (0, import_react15.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Connect plugins"), title: t("Connect plugins"), onClick: () => actions.selectPanel("plugins") }, (0, import_react15.createElement)(PlugIcon)),
+    (0, import_react15.createElement)(AccountLauncher, { seat: false, actions })
+  );
+  const content = (0, import_react15.createElement)(
+    "div",
+    { className: wideContent ? "bt-side" : "bt-side bt-rail", onKeyDown: typeToSearch },
+    top,
+    wideContent && roster.readOnly ? (0, import_react15.createElement)("div", { className: "bt-hint bt-read-only", role: "status" }, hostText(roster.readOnly)) : null,
     (0, import_react15.createElement)(
       "div",
       { ref: listRef, className: "bt-list", role: "region", "aria-label": t("Bot list") },
-      main ? (0, import_react15.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react15.createElement)("div", { className: "bt-hint" }, t("Setting up your Main Bot…")),
+      wideContent ? main ? (0, import_react15.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react15.createElement)("div", { className: "bt-hint" }, t("Setting up your Main Bot…")) : null,
       order.map((entry) => entry.kind === "bot" ? (0, import_react15.createElement)(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true }) : entry.kind === "room" ? (0, import_react15.createElement)(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true }) : (0, import_react15.createElement)(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))
-    )
+    ),
+    foot
+  );
+  return (0, import_react15.createElement)(
+    import_react15.Fragment,
+    null,
+    (0, import_react15.createElement)(TitleToggle, { left: layout.left, onToggle: onTitleToggle }),
+    mode === "inline" ? content : (0, import_react15.createElement)(LeftColumn, { mode, width: ourWidth }, content)
   );
 }
 function UpdateButton({ useUpdate, actions }) {
@@ -9039,6 +9323,12 @@ function pressSettingsShortcut() {
     shiftKey: held.has("shift"),
     metaKey: held.has("meta")
   }));
+}
+function pressesShellShortcut(event, id) {
+  const binding = shellShortcuts?.catalog.getSnapshot().find((row) => row.id === id)?.binding;
+  if (!binding) return false;
+  const held = new Set(binding.modifiers);
+  return event.code === binding.code && event.ctrlKey === held.has("control") && event.altKey === held.has("alt") && event.shiftKey === held.has("shift") && event.metaKey === held.has("meta");
 }
 var NO_SUBSCRIBE = () => () => {
 };
@@ -9265,7 +9555,7 @@ var SIDEBAR_CSS = `
 .bt-brand .bt-mark{flex:none}
 .bt-pin{flex:none;display:inline-flex;color:var(--bt-ink-3)}
 .bt-rail .bt-row{position:relative}
-.bt-rail .bt-pin{position:absolute;top:3px;left:calc(50% + 12px)}
+.bt-rail .bt-pin{position:absolute;top:1px;left:calc(50% + 14px)}
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
@@ -10258,71 +10548,6 @@ function turnDetector({ loud = 0.12, quiet = 0.06, quietMs = 1200 } = {}) {
   };
 }
 
-// src/client/storage.js
-var STORAGE = {
-  unread: "ds-bot:unread",
-  reactions: "ds-bot:reactions",
-  seen: "ds-bot:seen",
-  prefs: "ds-bot:prefs",
-  surface: "ds-bot:surface",
-  agentSessions: "ds-bot:agent-sessions",
-  browserWidth: "ds-bot:browser-width",
-  browsers: "ds-bot.browser.v2"
-};
-var LEGACY_PREFIXES = ["dsh-bot:", "dsh-bot-team:"];
-var LEGACY_BROWSER_KEYS = ["ds-bot.browser.v1", "dsh-bot.browser.v1"];
-var LEGACY_THEMES = { grok: "mono" };
-function legacyKeys(key) {
-  if (key === STORAGE.browsers) return LEGACY_BROWSER_KEYS;
-  const name = key.slice(key.indexOf(":") + 1);
-  return LEGACY_PREFIXES.map((prefix) => `${prefix}${name}`);
-}
-var migrateBrowsers = (storage) => {
-  if (storage.getItem(STORAGE.browsers) !== null) {
-    for (const key of LEGACY_BROWSER_KEYS) storage.removeItem(key);
-    return;
-  }
-  for (const key of LEGACY_BROWSER_KEYS) {
-    try {
-      const value = storage.getItem(key);
-      if (value === null) continue;
-      const previous = JSON.parse(value) ?? {};
-      const tabs = Object.fromEntries(Object.entries(previous).filter(([, page]) => page && typeof page === "object").map(([botId, page]) => {
-        const tab = { id: `v1-${botId}`, url: page.url ?? "", title: page.title ?? "" };
-        return [botId, { tabs: [tab], active: tab.id }];
-      }));
-      storage.setItem(STORAGE.browsers, JSON.stringify(tabs));
-      for (const earlier of LEGACY_BROWSER_KEYS) storage.removeItem(earlier);
-      return;
-    } catch {
-    }
-  }
-};
-function migrateStorage(storage = globalThis.localStorage) {
-  for (const key of Object.values(STORAGE)) {
-    if (key === STORAGE.browsers) continue;
-    for (const legacy of legacyKeys(key)) {
-      try {
-        const value = storage.getItem(legacy);
-        if (value !== null && storage.getItem(key) === null) storage.setItem(key, value);
-        storage.removeItem(legacy);
-      } catch {
-      }
-    }
-  }
-  try {
-    migrateBrowsers(storage);
-  } catch {
-  }
-  try {
-    const prefs = JSON.parse(storage.getItem(STORAGE.prefs) ?? "null");
-    if (prefs && Object.hasOwn(LEGACY_THEMES, prefs.theme ?? "")) {
-      storage.setItem(STORAGE.prefs, JSON.stringify({ ...prefs, theme: LEGACY_THEMES[prefs.theme] }));
-    }
-  } catch {
-  }
-}
-
 // src/client/surface.js
 function groupsFor({ mode, plain = false }) {
   return { shell: mode === "bot", conversation: mode === "bot" && !plain };
@@ -10344,47 +10569,27 @@ function surfaceGroups(install, { onError } = {}) {
     mounted[group] = [];
     disposeAll(disposers, `withdraw ${group}`);
   };
-  const mount = (group) => {
-    const disposers = [];
-    try {
-      for (const step of install[group]()) if (step) disposers.push(step());
-      mounted[group] = disposers;
-      return true;
-    } catch (error) {
-      disposeAll(disposers, `roll back ${group}`);
-      console.warn(`[ds-bot] install ${group}`, error);
-      onError?.(group, error);
-      return false;
-    }
-  };
-  let lastWanted = {};
-  const api = {
+  return {
     reconcile(wanted) {
-      lastWanted = wanted;
       for (const group of [...GROUPS].reverse()) if (!wanted[group]) withdraw(group);
       for (const group of GROUPS) {
         if (!wanted[group] || mounted[group].length > 0) continue;
-        if (!mount(group)) break;
+        const disposers = [];
+        try {
+          for (const step of install[group]()) if (step) disposers.push(step());
+          mounted[group] = disposers;
+        } catch (error) {
+          disposeAll(disposers, `roll back ${group}`);
+          console.warn(`[ds-bot] install ${group}`, error);
+          onError?.(group, error);
+          break;
+        }
       }
-    },
-    // A step can go on with nothing actually contributed — a slot inject whose
-    // callback threw inside the host still returns its disposer. remount takes
-    // the group off and lets the reconcile put it back, so a caller that
-    // notices the contribution is missing can retry instead of trusting
-    // `mounted`. Groups that lean on it (the conversation on the shell's
-    // styles) come off first and go back only through the reconcile — a
-    // failed remount never leaves one stranded.
-    remount(group, wanted = lastWanted) {
-      if (!GROUPS.includes(group)) return;
-      for (const later of GROUPS.slice(GROUPS.indexOf(group) + 1)) withdraw(later);
-      withdraw(group);
-      api.reconcile(wanted);
     },
     dispose() {
       for (const group of [...GROUPS].reverse()) withdraw(group);
     }
   };
-  return api;
 }
 function freePriority(entries2, { priority, key, id }) {
   if (priority === void 0) return void 0;
@@ -10734,11 +10939,11 @@ function EffortRows({ reasoning, current, onPick }) {
         key: row.effort ?? "default",
         type: "button",
         role: "menuitemradio",
-        "aria-checked": (row.effort ?? null) === (current ?? null),
+        "aria-checked": row.effort === current,
         onClick: () => onPick(row.effort)
       },
       (0, import_react21.createElement)("span", { className: "bt-menu-label" }, row.label),
-      (0, import_react21.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, (row.effort ?? null) === (current ?? null) ? (0, import_react21.createElement)(CheckIcon) : null)
+      (0, import_react21.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, row.effort === current ? (0, import_react21.createElement)(CheckIcon) : null)
     ))
   );
 }
@@ -12544,7 +12749,7 @@ function startModel(roster) {
 function createPayload({ name, look, image, model, effort, brief }) {
   const payload = { name, color: look.color, avatar: image ? { shape: look.shape, image } : { shape: look.shape } };
   if (model) payload.model = model;
-  if (effort !== void 0) payload.effort = effort;
+  if (effort) payload.effort = effort;
   if (brief) payload.brief = brief;
   return payload;
 }
@@ -12667,7 +12872,7 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
       (0, import_react27.createElement)(ModelMenu, { bot: { id: "new-bot", name: finalName, model: model || void 0, effort }, roster, actions, wide: true, onPick: (ref) => {
         setModel(ref);
         setEffort(void 0);
-      }, onPickEffort: (picked) => setEffort(picked ?? null) }),
+      }, onPickEffort: setEffort }),
       (0, import_react27.createElement)("span", { className: "bt-note" }, (roster.models ?? []).length > 0 ? t("The Bot runs on this model. You can change it later in its details.") : t("Add a provider and a model in DeepSeek Harness first, or pick one in the Bot's chat later."))
     ),
     error ? (0, import_react27.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, error) : null,
@@ -16659,9 +16864,6 @@ var DEFAULT_WIDTH = 520;
 var DETAILS_WIDTH = 320;
 var DETAILS_MAX = 520;
 var MIN_WIDTH = 360;
-var MIN_CHAT = 420;
-var PANEL_MIN = { details: DETAILS_WIDTH, browser: MIN_WIDTH, side: DETAILS_WIDTH };
-var overlayAt = (view, viewport) => viewport < MIN_CHAT + PANEL_MIN[view];
 var READ_FLASH_MS = 2400;
 var EMPTY_PAGE = { url: "", title: "", favicon: null, loading: false, canGoBack: false, canGoForward: false, error: null, excerpt: "" };
 var EMPTY_TABS2 = { ids: [], active: null };
@@ -16698,47 +16900,8 @@ var savedWidth = () => {
     return null;
   }
 };
-var widthRange = (view, viewport) => view === "browser" ? [MIN_WIDTH, viewport - MIN_CHAT] : [DETAILS_WIDTH, Math.min(DETAILS_MAX, viewport - MIN_CHAT)];
+var widthRange = (view, room2) => view === "browser" ? [MIN_WIDTH, room2 - MIN_CHAT] : [DETAILS_WIDTH, Math.min(DETAILS_MAX, room2 - MIN_CHAT)];
 var fitWidth = (width, [low, high]) => Math.round(Math.max(low, Math.min(width, high)));
-var room = { rule: null, selector: "" };
-var roomRule = () => {
-  const live = room.rule?.parentStyleSheet?.ownerNode?.isConnected;
-  if (live && room.selector) return room.rule;
-  const column = document.querySelector('[class*="_centerCol"]');
-  const selector = column ? [...column.classList].filter((name) => name.includes("_centerCol")).map((name) => `.${CSS.escape(name)}`).join(",") : "";
-  if (live && !selector) return room.rule;
-  const declarations2 = room.rule?.style.cssText ?? "";
-  room.rule?.parentStyleSheet?.ownerNode?.remove();
-  const style = installStyles(`${selector || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
-  room.rule = style.sheet.cssRules[0];
-  room.selector = selector;
-  return room.rule;
-};
-var roomHold = 0;
-var chatRoom = {
-  /** The column's right margin in px, or null for the shell's own. */
-  set(width) {
-    const { style } = roomRule();
-    if (width === null) style.removeProperty("margin-right");
-    else style.setProperty("margin-right", `${width}px`, "important");
-  },
-  /** While on, a margin change lands at once instead of gliding. */
-  hold(on) {
-    cancelAnimationFrame(roomHold);
-    if (on) {
-      roomRule().style.setProperty("transition", "none", "important");
-      return;
-    }
-    roomHold = requestAnimationFrame(() => {
-      roomHold = requestAnimationFrame(() => roomRule().style.removeProperty("transition"));
-    });
-  },
-  /** The columns themselves, for a drag's per-frame writes. */
-  columns() {
-    roomRule();
-    return room.selector ? [...document.querySelectorAll(room.selector)] : [];
-  }
-};
 var shortAddress = (url) => String(url ?? "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 var reducedMotion2 = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 var tabLabel = (page) => page.title || shortAddress(page.url) || t("New tab");
@@ -17341,7 +17504,7 @@ function ImportCard({ flow, page, busy, onApply, onCancel, onCloseAndImport, onD
     )
   ));
 }
-function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }) {
+function BotPanel({ pane, leaving, room: room2, overlay, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }) {
   const bot = roster.byId[pane.id];
   const canBrowse = Boolean(bot && roster.browser === true && actions.browserShow);
   const sideChats = bot ? sideChatsOf(roster, bot.id) : [];
@@ -17356,13 +17519,11 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
   const [landed, setLanded] = (0, import_react43.useState)(false);
   const [settling, setSettling] = (0, import_react43.useState)(false);
   const [width, setWidth] = (0, import_react43.useState)(savedWidth);
-  const [viewport, setViewport] = (0, import_react43.useState)(() => window.innerWidth);
   const [dragging, setDragging] = (0, import_react43.useState)(false);
   const [resizing, setResizing] = (0, import_react43.useState)(false);
   const instant = dragging || resizing;
   const [reading, setReading] = (0, import_react43.useState)(false);
-  const overlay = overlayAt(view, viewport);
-  const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport));
+  const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, room2));
   (0, import_react43.useLayoutEffect)(() => {
     if (view === "browser" && width === null) setWidth(DEFAULT_WIDTH);
   }, [view, width]);
@@ -17379,27 +17540,23 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     const switched = settling && shownView.current !== view;
     shownView.current = view;
     if (switched) chatRoom.hold(true);
-    chatRoom.set(leaving || overlay ? null : panelWidth);
+    chatRoom.setRight(leaving || overlay ? null : panelWidth);
     if (switched) chatRoom.hold(false);
   }, [view, panelWidth, leaving, overlay]);
   (0, import_react43.useEffect)(() => () => {
-    chatRoom.set(null);
+    chatRoom.setRight(null);
     chatRoom.hold(false);
   }, []);
+  const mounted = (0, import_react43.useRef)(false);
   (0, import_react43.useEffect)(() => {
-    let timer;
-    const onResize = () => {
-      setResizing(true);
-      setViewport(window.innerWidth);
-      clearTimeout(timer);
-      timer = setTimeout(() => setResizing(false), 160);
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
+    if (!mounted.current) {
+      mounted.current = true;
+      return void 0;
+    }
+    setResizing(true);
+    const timer = setTimeout(() => setResizing(false), 160);
+    return () => clearTimeout(timer);
+  }, [room2]);
   (0, import_react43.useEffect)(() => {
     if (!settling) return void 0;
     const timer = setTimeout(() => setSettling(false), SPRING_SHAPE.duration + 40);
@@ -17512,7 +17669,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     const panel = root.current;
     const grip = event.currentTarget;
     grip.setPointerCapture?.(event.pointerId);
-    const range = widthRange(view, window.innerWidth);
+    const range = widthRange(view, room2);
     const from = { x: event.clientX, width: panelWidth };
     let next = panelWidth;
     setDragging(true);
@@ -17523,7 +17680,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     const onMove = (move) => {
       next = fitWidth(from.width + from.x - move.clientX, range);
       panel.style.width = `${next}px`;
-      if (columns2.length === 0) chatRoom.set(next);
+      if (columns2.length === 0) chatRoom.setRight(next);
       for (const column of columns2) column.style.setProperty("margin-right", `${next}px`, "important");
     };
     const ends = ["pointerup", "pointercancel", "lostpointercapture"];
@@ -17531,7 +17688,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
       if (end.type === "pointerup") onMove(end);
       grip.removeEventListener("pointermove", onMove);
       for (const name of ends) grip.removeEventListener(name, onEnd);
-      chatRoom.set(next);
+      chatRoom.setRight(next);
       for (const column of columns2) {
         column.style.removeProperty("margin-right");
         column.style.removeProperty("transition");
@@ -17721,10 +17878,12 @@ var import_react44 = require("react");
 var import_react_dom9 = require("react-dom");
 var DIALOG_EXIT_MS = 160;
 var MENU_EXIT_MS3 = 120;
-function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity, useWork, useRegistry, useBrowserPages, useBrowserTabs, useBrowserHolds, useUpdate, actions }) {
+function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity, useWork, useRegistry, useBrowserPages, useBrowserTabs, useBrowserHolds, useUpdate, useFrame, useSidebarPref, actions }) {
   const roster = useRoster((value) => value);
   const ui2 = useUi((value) => value);
   useRegistry((value) => value);
+  const frameSnap = useFrame ? useFrame((value) => value) : { viewport: window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0 };
+  const pref = useSidebarPref ? useSidebarPref((value) => value) : "open";
   const current = useSessions((list) => Object.values(list.byId).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id ?? null);
   const previous = (0, import_react44.useRef)(current);
   (0, import_react44.useEffect)(() => {
@@ -17733,16 +17892,24 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     if (current) actions.followPanel?.(current);
   }, [current]);
   const open = ui2.details ? { id: ui2.details, view: ui2.view ?? "details", renaming: ui2.renaming, tab: ui2.tab, side: ui2.side } : null;
-  const [kept, setKept] = (0, import_react44.useState)(open);
+  const layout = frameLayout({
+    viewport: frameSnap.viewport,
+    sidebarWidth: frameSnap.sidebarWidth,
+    pref,
+    drawer: ui2.leftDrawer === true,
+    panel: open ? { view: open.view, yielded: ui2.panelYield === true } : null
+  });
+  const shown = open !== null && layout.panel !== "folded" ? open : null;
+  const [kept, setKept] = (0, import_react44.useState)(shown);
   (0, import_react44.useEffect)(() => {
-    if (open) {
-      setKept(open);
+    if (shown) {
+      setKept(shown);
       return void 0;
     }
     const timer = setTimeout(() => setKept(null), PANEL_LINGER_MS);
     return () => clearTimeout(timer);
-  }, [ui2.details, ui2.view, ui2.renaming, ui2.tab]);
-  const pane = open ?? kept;
+  }, [ui2.details, ui2.view, ui2.renaming, ui2.tab, shown === null]);
+  const pane = shown ?? kept;
   const [settings, settingsLeaving] = useLinger(ui2.settings, DIALOG_EXIT_MS);
   const memoryOwner = (id) => {
     const bot = roster.byId[id];
@@ -17756,7 +17923,7 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   return (0, import_react44.createElement)(
     import_react44.Fragment,
     null,
-    pane ? (0, import_react_dom9.createPortal)((0, import_react44.createElement)(BotPanel, { pane, leaving: open === null, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
+    pane ? (0, import_react_dom9.createPortal)((0, import_react44.createElement)(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === "overlay", roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
     ui2.newChat ? (0, import_react_dom9.createPortal)((0, import_react44.createElement)(NewChat, { key: ui2.newChat, mode: ui2.newChat, roster, actions }), document.body) : null,
     ui2.palette ? (0, import_react_dom9.createPortal)((0, import_react44.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
     ui2.exchange ? (0, import_react_dom9.createPortal)((0, import_react44.createElement)(ExchangeDialog, { pair: ui2.exchange, roster, actions }), document.body) : null,
@@ -18993,7 +19160,9 @@ function apply(ctx) {
   const reactionStore = sharedMap(STORAGE.reactions);
   const seenStore = sharedMap(STORAGE.seen);
   let seenAt = seenStore.read();
-  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {} });
+  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false });
+  const sidebarPref = createSource(readSidebarPref());
+  const frame = createSource({ viewport: typeof window === "undefined" ? 0 : window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0, collapsed: false });
   const surface = createSource({ mode: readMode(), plain: false });
   let agentSessionCache = /* @__PURE__ */ new Set();
   try {
@@ -19333,26 +19502,15 @@ function apply(ctx) {
     expected2 = target;
     ctx.uiWorkspace.openSession(target);
   }, current: mainView });
-  const homeToMainBot = () => {
-    const snapshot = roster.getSnapshot();
-    if (!snapshot.ready || !snapshot.mainBotId) return;
-    const main = mainView();
-    if (main !== void 0 && snapshot.byId[main] === void 0 && snapshot.roomsById[main] === void 0) {
-      actions.openSession(snapshot.mainBotId);
-    }
+  const panelFolded = (view) => {
+    const state = ui2.getSnapshot();
+    if (state.details === null) return false;
+    const f = frame.getSnapshot();
+    return frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, pref: sidebarPref.getSnapshot(), drawer: state.leftDrawer, panel: { view: view ?? state.view, yielded: state.panelYield === true } }).panel === "folded";
   };
-  const ensureBotHome = () => {
-    if (roster.getSnapshot().ready) homeToMainBot();
-    else {
-      const off = roster.subscribe(() => {
-        if (!roster.getSnapshot().ready) return;
-        off();
-        homeToMainBot();
-      });
-    }
-  };
+  const yieldBrowser = (state) => state.panelYield === true || panelFolded("browser");
   const actions = {
-    ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock }),
+    ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock, panelFolded }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
     // or the click appears to do nothing.
     isAgentSession: (id) => isAgentSessionId(id),
@@ -19434,21 +19592,43 @@ function apply(ctx) {
     toggleSidebar: () => {
       ctx.layout.toggleSidebar();
     },
+    // The left column's own preference; the sidebar sync pulls the shell's
+    // collapsed flag after it (TeamSidebar's frame effect).
+    setSidebarPref: (pref) => {
+      const next = pref === "rail" ? "rail" : "open";
+      writeSidebarPref(next);
+      sidebarPref.set(next);
+    },
+    setLeftDrawer: (on) => ui2.set((state) => state.leftDrawer === on ? state : { ...state, leftDrawer: on }),
+    setPanelYield: (on) => ui2.set((state) => state.panelYield === on ? state : { ...state, panelYield: on }),
     // Agent mode hands the surface back to the shell; everything open on the Bot
     // surface closes first so nothing stale reopens on the way back.
     setSurface: (mode) => {
       if (mode !== "bot" && mode !== "agent") return;
-      if (surface.getSnapshot().mode === mode) {
-        if (mode === "bot") ensureBotHome();
-        return;
-      }
+      if (surface.getSnapshot().mode === mode) return;
       if (mode === "agent") {
         ui2.set((state) => ({ ...state, details: null, view: "details", settings: null, palette: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, toast: null }));
       }
       writeMode(mode);
       surface.set((state) => ({ ...state, mode }));
       if (mode !== "bot") return;
-      ensureBotHome();
+      const home = () => {
+        const snapshot = roster.getSnapshot();
+        if (!snapshot.ready || !snapshot.mainBotId) return;
+        const list = ctx.sessions.list.getSnapshot();
+        const main = Object.values(list.byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
+        if (main !== void 0 && snapshot.byId[main] === void 0 && snapshot.roomsById[main] === void 0) {
+          actions.openSession(snapshot.mainBotId);
+        }
+      };
+      if (roster.getSnapshot().ready) home();
+      else {
+        const off = roster.subscribe(() => {
+          if (!roster.getSnapshot().ready) return;
+          off();
+          home();
+        });
+      }
     },
     markUnread: (id) => writeUnread(id, true),
     beginVisit: (id) => {
@@ -19479,7 +19659,7 @@ function apply(ctx) {
         if (!bot) return;
         browsers.ensureTabs(bot.id);
         if (browsers.tabs.getSnapshot()[bot.id]?.active == null) browsers.openTab(bot.id);
-        ui2.set((state) => ({ ...state, details: id, view: "browser", renaming: false, tab: null }));
+        ui2.set((state) => ({ ...state, details: id, view: "browser", renaming: false, tab: null, panelYield: yieldBrowser(state) }));
       },
       // '+' on the strip or the drawer's new-tab card: a blank tab in the browser view.
       browserNewTab: (id) => {
@@ -19487,7 +19667,7 @@ function apply(ctx) {
         if (!bot) return null;
         browsers.ensureTabs(bot.id);
         const tabId = browsers.openTab(bot.id);
-        ui2.set((state) => ({ ...state, details: id, view: "browser", renaming: false, tab: null }));
+        ui2.set((state) => ({ ...state, details: id, view: "browser", renaming: false, tab: null, panelYield: yieldBrowser(state) }));
         return tabId;
       },
       // A drawer card: its tab active, the panel on the browser view.
@@ -19495,7 +19675,7 @@ function apply(ctx) {
         const bot = roster.getSnapshot().byId[id];
         if (!bot) return;
         browsers.activate(bot.id, tabId);
-        ui2.set((state) => ({ ...state, details: id, view: "browser" }));
+        ui2.set((state) => ({ ...state, details: id, view: "browser", panelYield: yieldBrowser(state) }));
       },
       browserEnsure: (botId) => browsers.ensureTabs(botId),
       browserCloseTab: (botId, tabId) => browsers.closeTab(botId, tabId),
@@ -19576,7 +19756,7 @@ function apply(ctx) {
   const browserPages = browsers?.pages ?? createSource({});
   const browserTabs = browsers?.tabs ?? createSource({});
   const browserHolds = browsers?.holds ?? createSource({});
-  const face = () => ({ actions, hooks: { roster, ui: ui2, activity, work, memoryNews, registry, turnClock, live, cards, heldCards, browserPages, browserTabs, browserHolds, surface, update } });
+  const face = () => ({ actions, hooks: { roster, ui: ui2, activity, work, memoryNews, registry, turnClock, live, cards, heldCards, browserPages, browserTabs, browserHolds, surface, update, frame, sidebarPref } });
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -19720,6 +19900,25 @@ function apply(ctx) {
     if (controller === void 0 || span === void 0) return;
     controller.toggleSource(CHATS_SOURCE, { trigger: "@", query: "", quoted: false, position: "inline", span });
   };
+  const installFrameSync = () => {
+    let lastDetails = ui2.getSnapshot().details;
+    const sync = () => {
+      const s = ui2.getSnapshot();
+      const f = frame.getSnapshot();
+      const opened = s.details !== null && lastDetails === null;
+      lastDetails = s.details;
+      const layout = frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, pref: sidebarPref.getSnapshot(), drawer: s.leftDrawer === true, panel: s.details === null ? null : { view: s.view, yielded: false } });
+      if (s.details === null) {
+        if (s.panelYield) actions.setPanelYield(false);
+      } else if (!s.panelYield && opened && layout.panel === "folded") actions.setPanelYield(true);
+      else if (s.panelYield && layout.panel === "shown") actions.setPanelYield(false);
+      if (s.leftDrawer === true && layout.left !== "drawer") actions.setLeftDrawer(false);
+    };
+    const offs = [ui2.subscribe(sync), frame.subscribe(sync), sidebarPref.subscribe(sync)];
+    return () => {
+      for (const off of offs) off();
+    };
+  };
   const installShell = () => [
     () => installCompiledStyles(SHELL_CSS, "shell"),
     () => installCompiledStyles(SIDEBAR_CSS, "sidebar"),
@@ -19736,6 +19935,8 @@ function apply(ctx) {
     () => installCompiledStyles(SIDE_CSS, "side"),
     // Strip and panel styles also serve the side-chat tabs, which need no bridge.
     () => installCompiledStyles(BROWSER_CSS, "browser"),
+    () => installFrameWatch(frame),
+    () => installFrameSync(),
     () => installTheme(),
     () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
     () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
@@ -19816,7 +20017,6 @@ function apply(ctx) {
       const snapshot = roster.getSnapshot();
       if (snapshot.byId[main] !== void 0 || snapshot.roomsById[main] !== void 0 || agentOfSession(main) !== void 0) return;
       const row = list.byId[main];
-      if (row?.origin === "subagent") return;
       const parent = row?.parentId ?? row?.parentSessionId;
       const forkedFromAgent = parent !== void 0 && agentOfSession(parent) === agentId;
       if (row?.blank !== true && !forkedFromAgent) return;
@@ -19846,44 +20046,11 @@ function apply(ctx) {
     const groups = surfaceGroups({ shell: installShell, conversation: installConversation }, {
       onError: (_group, error) => actions.reportError(new Error(t("Bot mode could not be set up here: {error}", { error: error?.message ?? String(error) })), "surface")
     });
-    let verifyTimer = 0;
-    let verifyAttempts = 0;
-    const verifySidebar = () => {
-      if (!groupsFor(surface.getSnapshot()).shell) return;
-      let landed = false;
-      let declared = true;
-      try {
-        landed = ctx.slots.entries("sidebar.workspaces").some((entry) => entry.component === TeamSidebar);
-        declared = ctx.slots.spec?.("sidebar.workspaces") !== void 0;
-      } catch {
-        declared = false;
-      }
-      if (landed) return;
-      if (!declared) {
-        if (verifyAttempts < 20) {
-          verifyAttempts += 1;
-          verifyTimer = setTimeout(verifySidebar, 250);
-        }
-        return;
-      }
-      if (verifyAttempts >= 3) return;
-      verifyAttempts += 1;
-      console.warn("[ds-bot] sidebar entry missing after shell mount; remounting");
-      groups.remount("shell");
-      verifyTimer = setTimeout(verifySidebar, 250);
-    };
-    const reconcile = () => {
-      groups.reconcile(groupsFor(surface.getSnapshot()));
-      clearTimeout(verifyTimer);
-      verifyAttempts = 0;
-      verifyTimer = setTimeout(verifySidebar, 250);
-    };
+    const reconcile = () => groups.reconcile(groupsFor(surface.getSnapshot()));
     reconcile();
-    if (surface.getSnapshot().mode === "bot") ensureBotHome();
     const unsub = surface.subscribe(reconcile);
     return () => {
       unsub();
-      clearTimeout(verifyTimer);
       groups.dispose();
     };
   }, "ds-bot: surface");

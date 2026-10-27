@@ -35,7 +35,7 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
   // mounted — the usual exit plays and the webview goes with it — until the room
   // returns and it shows again on its own.
   const layout = frameLayout({
-    viewport: frameSnap.viewport, sidebarWidth: frameSnap.sidebarWidth, collapsedWidth: frameSnap.collapsedWidth ?? 0,
+    viewport: frameSnap.viewport, sidebarWidth: frameSnap.sidebarWidth,
     pref, drawer: ui.leftDrawer === true,
     panel: open ? { view: open.view, yielded: ui.panelYield === true } : null,
   })

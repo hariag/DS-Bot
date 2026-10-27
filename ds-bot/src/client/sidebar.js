@@ -292,7 +292,7 @@ export function TeamSidebar(props) {
   const frameSnap = props.useFrame ? props.useFrame(value => value) : { viewport: typeof window === 'undefined' ? 0 : window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0 }
   const pref = props.useSidebarPref ? props.useSidebarPref(value => value) : 'open'
   const layout = frameLayout({
-    viewport: frameSnap.viewport, sidebarWidth: frameSnap.sidebarWidth, collapsedWidth: frameSnap.collapsedWidth ?? 0,
+    viewport: frameSnap.viewport, sidebarWidth: frameSnap.sidebarWidth,
     pref, drawer: uiNow.leftDrawer === true,
     panel: uiNow.details ? { view: uiNow.view, yielded: uiNow.panelYield === true } : null,
   })
@@ -319,12 +319,14 @@ export function TeamSidebar(props) {
   useLandOnMainBot(roster, useSessions, actions)
 
   // Our column pushes the conversation over by what it takes beyond the shell's
-  // collapsed track; a floating drawer does not push.
+  // collapsed track; a drawer floats over the rail's place, so it pushes as much
+  // as the rail and the chat stays put when it opens or closes.
   const ourWidth = layout.left === 'rail' ? RAIL_WIDTH : frameSnap.sidebarWidth
+  const pushed = layout.left === 'open' ? frameSnap.sidebarWidth : RAIL_WIDTH
   useLayoutEffect(() => {
     if (typeof document === 'undefined') return
-    chatRoom.setLeft(mode === 'inline' || mode === 'drawer' ? null : Math.max(0, ourWidth - (frameSnap.collapsedWidth ?? 0)))
-  }, [mode, ourWidth, frameSnap.collapsedWidth])
+    chatRoom.setLeft(mode === 'inline' ? null : Math.max(0, pushed - (frameSnap.collapsedWidth ?? 0)))
+  }, [mode, pushed, frameSnap.collapsedWidth])
   useEffect(() => () => { if (typeof document !== 'undefined') chatRoom.setLeft(null) }, [])
 
   // The shell sidebar's collapsed flag follows what our column needs. A flip we
@@ -332,14 +334,27 @@ export function TeamSidebar(props) {
   // button or shortcut), unless the width just crossed the auto-collapse line.
   const dsh = useRef(null)
   const requested = useRef(false)
+  // The request mark always lapses on its own: a re-render before the shell's
+  // flip must not leave it set, or the user's next switch would read as ours.
+  const requestLapse = useRef(0)
+  useEffect(() => () => clearTimeout(requestLapse.current), [])
+  // The window's own resize event lands before the shell's next-frame measure,
+  // so it dates a width change even while our frame source still holds the old one.
+  const resizedAt = useRef(0)
+  useEffect(() => {
+    const onResize = () => { resizedAt.current = performance.now() }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   useLayoutEffect(() => {
     if (typeof document === 'undefined' || typeof actions.toggleSidebar !== 'function') return undefined
     const collapsed = dshCollapsed() ?? !wide
     const prev = dsh.current
-    dsh.current = { collapsed, viewport: frameSnap.viewport, left: layout.left }
+    const viewport = window.innerWidth
+    dsh.current = { collapsed, viewport, left: layout.left }
     if (prev !== null && collapsed !== prev.collapsed) {
       if (requested.current) requested.current = false
-      else if (userSidebarToggle({ before: prev, after: { collapsed, viewport: frameSnap.viewport } })) {
+      else if (userSidebarToggle({ before: prev, after: { collapsed, viewport }, sinceResize: performance.now() - resizedAt.current })) {
         // The last explicit gesture wins: fold to the rail, or open the column —
         // as a drawer when it no longer fits docked.
         if (prev.left === 'open') actions.setSidebarPref?.('rail')
@@ -356,8 +371,9 @@ export function TeamSidebar(props) {
     if (requested.current) return undefined
     requested.current = true
     actions.toggleSidebar()
-    const timer = setTimeout(() => { requested.current = false }, 300)
-    return () => clearTimeout(timer)
+    clearTimeout(requestLapse.current)
+    requestLapse.current = setTimeout(() => { requested.current = false }, 300)
+    return undefined
   }, [wide, frameSnap.viewport, frameSnap.sidebarWidth, layout.left])
 
   // The drawer closes on a row pick, on Escape and on a press outside it.
@@ -397,7 +413,10 @@ export function TeamSidebar(props) {
     event.preventDefault()
     actions.openPalette(event.key)
   }
+  // Opening the column is the latest explicit gesture: it takes back the room a
+  // yielded panel had, and opens as a drawer when it cannot dock.
   const expandLeft = () => {
+    actions.setPanelYield?.(false)
     actions.setSidebarPref?.('open')
     if (frameSnap.viewport < frameSnap.sidebarWidth + MIN_CHAT) actions.setLeftDrawer?.(true)
   }
@@ -406,6 +425,23 @@ export function TeamSidebar(props) {
     else if (layout.left === 'drawer') actions.setLeftDrawer?.(false)
     else expandLeft()
   }
+  // The shell's sidebar shortcut is caught on its way down, before the shell's
+  // own listener on window sees it: left to the shell, it would expand the shell's
+  // sidebar first and our sync would pull it back, a visible flash.
+  const toggleRef = useRef(onTitleToggle)
+  toggleRef.current = onTitleToggle
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.defaultPrevented || event.isComposing || !pressesShellShortcut(event, 'sidebar.left.toggle')) return
+      if (event.target instanceof Element && event.target.closest('.xterm')) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      event.preventDefault()
+      event.stopPropagation()
+      toggleRef.current()
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [])
   const top = wideContent
     ? h('div', { className: 'bt-side-top' },
         h('span', { className: 'bt-brand' }, h(BrandMark, { size: 22 }), h(BrandName)),
@@ -622,6 +658,15 @@ function pressSettingsShortcut() {
     code: binding.code, key: binding.code === 'Comma' ? ',' : '', bubbles: true, cancelable: true,
     ctrlKey: held.has('control'), altKey: held.has('alt'), shiftKey: held.has('shift'), metaKey: held.has('meta'),
   }))
+}
+
+// Whether a key press is the shell's current binding for one of its shortcuts.
+function pressesShellShortcut(event, id) {
+  const binding = shellShortcuts?.catalog.getSnapshot().find(row => row.id === id)?.binding
+  if (!binding) return false
+  const held = new Set(binding.modifiers)
+  return event.code === binding.code && event.ctrlKey === held.has('control') && event.altKey === held.has('alt')
+    && event.shiftKey === held.has('shift') && event.metaKey === held.has('meta')
 }
 
 const NO_SUBSCRIBE = () => () => {}

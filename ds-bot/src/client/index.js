@@ -382,13 +382,15 @@ export function apply(ctx) {
   const mainView = () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
   const show = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly('refresh sessions')), open: (target) => { expected = target; ctx.uiWorkspace.openSession(target) }, current: mainView })
   // Whether the open Bot panel is folded away for lack of room: its opener then
-  // means "show it" (the column yields), not "close it".
+  // means "show it" (the column yields), not "close it". A panel shown because
+  // the column already yielded is not folded, so its opener closes it.
   const panelFolded = (view) => {
     const state = ui.getSnapshot()
     if (state.details === null) return false
     const f = frame.getSnapshot()
-    return frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, collapsedWidth: f.collapsedWidth, pref: sidebarPref.getSnapshot(), drawer: state.leftDrawer, panel: { view: view ?? state.view, yielded: false } }).panel === 'folded'
+    return frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, pref: sidebarPref.getSnapshot(), drawer: state.leftDrawer, panel: { view: view ?? state.view, yielded: state.panelYield === true } }).panel === 'folded'
   }
+  const yieldBrowser = state => state.panelYield === true || panelFolded('browser')
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock, panelFolded }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
@@ -540,7 +542,7 @@ export function apply(ctx) {
         if (!bot) return
         browsers.ensureTabs(bot.id)
         if (browsers.tabs.getSnapshot()[bot.id]?.active == null) browsers.openTab(bot.id)
-        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null, panelYield: panelFolded('browser') }))
+        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null, panelYield: yieldBrowser(state) }))
       },
       // '+' on the strip or the drawer's new-tab card: a blank tab in the browser view.
       browserNewTab: (id) => {
@@ -548,7 +550,7 @@ export function apply(ctx) {
         if (!bot) return null
         browsers.ensureTabs(bot.id)
         const tabId = browsers.openTab(bot.id)
-        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null, panelYield: panelFolded('browser') }))
+        ui.set(state => ({ ...state, details: id, view: 'browser', renaming: false, tab: null, panelYield: yieldBrowser(state) }))
         return tabId
       },
       // A drawer card: its tab active, the panel on the browser view.
@@ -556,7 +558,7 @@ export function apply(ctx) {
         const bot = roster.getSnapshot().byId[id]
         if (!bot) return
         browsers.activate(bot.id, tabId)
-        ui.set(state => ({ ...state, details: id, view: 'browser', panelYield: panelFolded('browser') }))
+        ui.set(state => ({ ...state, details: id, view: 'browser', panelYield: yieldBrowser(state) }))
       },
       browserEnsure: botId => browsers.ensureTabs(botId),
       browserCloseTab: (botId, tabId) => browsers.closeTab(botId, tabId),
@@ -808,7 +810,7 @@ export function apply(ctx) {
       // team-actions carry the yield themselves.
       const opened = s.details !== null && lastDetails === null
       lastDetails = s.details
-      const layout = frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, collapsedWidth: f.collapsedWidth, pref: sidebarPref.getSnapshot(), drawer: s.leftDrawer === true, panel: s.details === null ? null : { view: s.view, yielded: false } })
+      const layout = frameLayout({ viewport: f.viewport, sidebarWidth: f.sidebarWidth, pref: sidebarPref.getSnapshot(), drawer: s.leftDrawer === true, panel: s.details === null ? null : { view: s.view, yielded: false } })
       if (s.details === null) {
         if (s.panelYield) actions.setPanelYield(false)
       } else if (!s.panelYield && opened && layout.panel === 'folded') actions.setPanelYield(true)

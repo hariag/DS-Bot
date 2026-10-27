@@ -16,18 +16,18 @@ export const DSH_NARROW = 1024
 export const FALLBACK_SIDEBAR_WIDTH = 280
 
 /**
- * @param {{viewport: number, sidebarWidth: number, collapsedWidth?: number,
+ * @param {{viewport: number, sidebarWidth: number,
  *   pref: 'open'|'rail', drawer?: boolean,
  *   panel: null | {view: string, yielded: boolean}}} input
  * @returns {{left: 'open'|'rail'|'drawer', panel: 'none'|'shown'|'folded'|'overlay', room: number}}
  *   `room` is the width the panel and the conversation share: the viewport minus
- *   what the left column occupies (its full width when open, the rail's, or only
- *   the shell's collapsed track under a floating drawer).
+ *   what the left column occupies (its full width when open, else the rail's —
+ *   a drawer floats over the rail's place, so the chat does not move under it).
  */
-export function frameLayout({ viewport, sidebarWidth, collapsedWidth = 0, pref, drawer = false, panel = null }) {
+export function frameLayout({ viewport, sidebarWidth, pref, drawer = false, panel = null }) {
   const fits = pref === 'open' && viewport >= sidebarWidth + MIN_CHAT
   let left = fits ? 'open' : drawer && pref === 'open' ? 'drawer' : 'rail'
-  let occupied = left === 'open' ? sidebarWidth : left === 'rail' ? RAIL_WIDTH : collapsedWidth
+  let occupied = left === 'open' ? sidebarWidth : RAIL_WIDTH
   let panelState = 'none'
   if (panel !== null) {
     const need = (PANEL_MIN[panel.view] ?? PANEL_MIN.details) + MIN_CHAT
@@ -47,11 +47,16 @@ export function frameLayout({ viewport, sidebarWidth, collapsedWidth = 0, pref, 
 // window; under DSH_NARROW it is always collapsed and our own column draws.
 export const dshExpandedFor = (viewport, left) => viewport >= DSH_NARROW && left === 'open'
 
+// The shell measures the window on its own frame, a beat apart from us, and
+// re-applies its own rule when it does: a flip this soon after a width change is
+// the shell settling, not a gesture.
+export const RESIZE_SETTLE_MS = 500
 // A flip of the shell's collapsed flag counts as the user's own switch gesture
-// only when we did not request it and the width stayed on one side of the
-// auto-collapse line (a crossing is the shell's own rule firing).
-export const userSidebarToggle = ({ before, after, requested = false }) =>
-  before.collapsed !== after.collapsed && !requested && (before.viewport < DSH_NARROW) === (after.viewport < DSH_NARROW)
+// only when we did not request it, the width has settled, and it stayed on one
+// side of the auto-collapse line (a crossing is the shell's own rule firing).
+export const userSidebarToggle = ({ before, after, requested = false, sinceResize = Infinity }) =>
+  before.collapsed !== after.collapsed && !requested && sinceResize >= RESIZE_SETTLE_MS
+  && (before.viewport < DSH_NARROW) === (after.viewport < DSH_NARROW)
 
 // The user's sidebar preference survives restarts: 'open' by default, 'rail'
 // after they collapse the column themselves.

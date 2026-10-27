@@ -149,9 +149,9 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
    Mica the app styles DSH's sidebar the same way, via --bt-leftcol-fill there);
    it stays under the shell's title-bar switch (z 30) and the popovers (z 60),
    and the floating drawer keeps the opaque fill over the conversation. */
-.bt-leftcol{position:fixed;left:0;top:0;bottom:0;z-index:25;display:flex;--bt-lc-clear:var(--dsh-frame-top-clearance,var(--dsh-windows-titlebar-height,0px));background:var(--bt-leftcol-fill,var(--dsw-specific-sidebar-fill));border-right:.5px solid var(--bt-line);box-sizing:border-box;padding:calc(var(--bt-lc-clear) + 6px) 12px 6px;color:var(--bt-ink);font-family:var(--bt-font)}
+.bt-leftcol{position:fixed;left:0;top:0;bottom:0;z-index:25;display:flex;--bt-lc-clear:var(--dsh-frame-top-clearance,var(--dsh-windows-titlebar-height,0px));background:var(--bt-leftcol-fill,var(--bt-sidebar));border-right:.5px solid var(--bt-line);box-sizing:border-box;padding:calc(var(--bt-lc-clear) + 6px) 12px 6px;color:var(--bt-ink);font-family:var(--bt-font)}
 html[data-windows-titlebar] .bt-leftcol,html[data-platform=darwin] .bt-leftcol{border-right:none}
-.bt-leftcol[data-left=drawer]{background:var(--dsw-specific-sidebar-fill);box-shadow:8px 0 24px rgba(0,0,0,.14)}
+.bt-leftcol[data-left=drawer]{background:var(--bt-sidebar);box-shadow:8px 0 24px rgba(0,0,0,.14)}
 .bt-leftcol>.bt-side{width:100%}
 .bt-leftcol-foot{display:flex;align-items:center;gap:9px;padding-top:8px;flex:none}
 .bt-rail{align-items:center;padding:0}
@@ -159,8 +159,10 @@ html[data-windows-titlebar] .bt-leftcol,html[data-platform=darwin] .bt-leftcol{b
 .bt-rail-top{display:flex;flex-direction:column;align-items:center;gap:6px;padding-bottom:8px}
 .bt-rail-sep{width:24px;height:1px;flex:none;background:var(--bt-line)}
 .bt-rail .bt-agent-ava{width:44px;height:44px}
-.bt-rail .bt-list{align-items:center;gap:4px}
-.bt-leftcol[data-left=rail]{padding:calc(var(--bt-lc-clear) + 8px) 16px 8px}
+.bt-rail .bt-list{align-self:stretch;align-items:center;gap:4px}
+/* The rail's list spans the whole column: the badges and dots that sit on a row's
+   edge need room beside the 56px rows, or the list scrolls sideways. */
+.bt-leftcol[data-left=rail]{padding:calc(var(--bt-lc-clear) + 8px) 0 8px}
 .bt-leftcol-foot-rail{flex-direction:column;gap:6px}
 .bt-dot{position:absolute;top:4px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--bt-accent);box-shadow:0 0 0 1.5px var(--bt-sidebar)}
 .bt-dot-wait{background:var(--bt-star)}
