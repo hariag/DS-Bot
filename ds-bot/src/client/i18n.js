@@ -11,6 +11,7 @@ const ZH = {
   'Waiting for your answer': '等你回答',
   'Waiting for {names}': '等 {names} 交回',
   'Unread activity': '有未读',
+  'Not read yet': '未读',
   Search: '搜索',
   'New chat': '新对话',
   'Back to chat': '返回对话',
