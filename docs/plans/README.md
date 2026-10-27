@@ -38,7 +38,6 @@
 |---|---|
 | [DSH 让步总账](2026-10-13-dsh-concessions.md) | 因 DSH 本身的限制而做的妥协，以及桌面应用之后怎么处理。判断「是 DS Bot 的 bug 还是 DSH 的限制」先看这里 |
 | [角色与权限](2026-10-07-roles-and-permissions.md) | 用户、Main Bot、群管理员、普通 Bot 各能做什么；Bot 的权限预设和群的统一权限 |
-| [隐私 Bot](2026-10-27-private-bots.md) | 只有用户能开关；其他 Bot 读不到它的文件夹、记忆和会话，外发由用户批准；独立文件夹、删除后的保护和隔离边界 |
 | [群聊](2026-10-07-group-chat.md) | 谁来回答、按顺序发言、@ 提及、轮数上限、干活中的进度和迟到的回复、审批 |
 | [浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md) | 每个 Bot 的浏览器和 `read_browser`、`auto` 联网搜索、密钥卡和替换规则、GitHub 连接器 |
 | [浏览器插件](2026-10-21-browser-plugins.md) | 全团队一个浏览器后端，每个 Bot 一份 profile；`refs` / `script` / `task` |
@@ -50,4 +49,4 @@
 | [Bot 视图](2026-10-20-widget-views.md) | Bot 在回答里画视图：固定组件目录的 JSON 蓝图（含图表、输入和本地公式），目录外的放沙箱 html；提问卡回路的泛化 |
 | [Side chat（侧边对话）](2026-10-21-btw.md) | 人顺带问一句：侧栏里的常驻对话，以与会话同构的请求回答、不执行工具、不打断、不进模型可见历史；可追问、可开多条；Bot 之间的 `ask_bot` 另行提案 |
 | [消息布局和宽度](2026-10-22-message-layout.md) | 气泡 / 平铺两种布局；平铺时 Bot 的话带头像、名字、时间；气泡宽度和平铺正文宽度各用一个滑块，按正文列的百分比调 |
-| [Windows 上手流程](2026-10-26-windows-onboarding.md) | 从下载到第一条回复：下载区和信任说明、安装、窗口先出来的启动页、启动页上的导入、Main Bot 聊天里的模型设置卡（登录或检查过的 key、自动选模型）、修复卡、第一个小时的 Windows 问题、卸载时问一次 |
+| [Office 文档](2026-10-27-office-documents.md) | Bot 离线处理 .docx/.pptx/.xlsx：应用带的 payload、`office.js` 命令行、office 路由换成带 `office-tools` 的版本 |

@@ -127,6 +127,10 @@ In **Settings** → **Usage**, you can see token usage by time, by bot and by mo
 
 ![Usage page](docs/images/usage.png)
 
+### Office files
+
+Bots work with Office documents offline. They can create and edit .docx, .pptx and .xlsx, read a document's structure with stable ids, check a package for the defects Office would refuse, make targeted edits (comments, tracked changes, fields, table cells), reorder or duplicate slides, list workbook errors, render pages to images and review them on a contact sheet — nothing needs to be installed, the desktop app includes everything needed.
+
 ## Data
 
 All data stays on your own computer, in `bot/` and `sessions/` in the DSH home folder (`~/.dsh` by default). Uninstalling the plugin does not delete this data.
