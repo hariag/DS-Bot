@@ -368,7 +368,6 @@ export function pptxClean(pkg, { dryRun = false } = {}) {
       if (!xml.includes(`"${id}"`) && !xml.includes(`'${id}'`)) map.delete(id)
     }
   }
-  // Slides not in sldIdLst.
   // Slides not in sldIdLst — pptx only; docx/xlsx have no presentation part.
   const listed = new Set(pkg.parts.has('ppt/presentation.xml') ? deckOrder(pkg).map(e => e.part) : [])
   for (const part of slideParts(pkg)) {

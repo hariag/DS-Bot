@@ -361,7 +361,7 @@ function replaceInDoc(doc, re, withText) {
         if (m.index >= rs && m.index < rend) pieces.push({ repl: expand(m, withText) })
         pos = ce
       }
-      pieces.push({ text: texts[i].slice(pos) })
+      if (pos < texts[i].length || pieces.length === 0) pieces.push({ text: texts[i].slice(pos) })
       const run = runs[i]
       let anchor = run
       for (const [k, piece] of pieces.entries()) {
