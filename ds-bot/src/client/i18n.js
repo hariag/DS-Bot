@@ -294,6 +294,7 @@ const ZH = {
   'Verification needed': '需要验证',
   'Help needed in the browser': '需要你在浏览器里帮忙',
   Skipped: '已跳过',
+  Returned: '已交还',
   "I'm done": '我完成了',
   '{name} is running': '{name} 正在运行',
   'It must close for a moment so its cookies can be copied. It will reopen with your tabs.': '需要先把它关掉一下才能复制 cookie，之后会自动重新打开并恢复你的标签页。',

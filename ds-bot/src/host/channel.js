@@ -485,14 +485,14 @@ export function install(rt) {
             : { by: 'user', reason: 'takeover', note: 'The user is controlling this browser.' })
           return ok(true)
         }
-        // Gives the browser back. The user's answer to a handoff card ('done' or 'skip')
-        // tells the Bot how it went; any other hold is cleared without a word.
+        // A card's 'done' or 'skip' says how the handoff went. The panel's Give back
+        // sends no outcome, so its reply only says that control returned to the Bot.
         case 'browser-give-back': {
           if (rt.browserChannel === undefined) return fail('Bot browsers are off on this host', 'bot/browser-off')
           await rt.load()
           const botId = String(body.botId ?? '')
           if (!rt.botOf(botId)) return fail('Unknown Bot', 'bot/not-found')
-          if (body.outcome !== undefined && body.outcome !== 'done' && body.outcome !== 'skip') return fail('Nothing to send', 'bot/invalid')
+          if (body.outcome !== undefined && !['done', 'skip', 'returned'].includes(body.outcome)) return fail('Nothing to send', 'bot/invalid')
           const hold = rt.browserChannel.holdOf(botId)
           if (hold === null) return fail('This browser is not held', 'bot/forbidden')
           if (body.callId !== undefined && body.callId !== hold.callId) return fail('This handoff is no longer open', 'bot/stale')

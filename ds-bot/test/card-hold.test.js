@@ -14,7 +14,8 @@ const { outputFiles } = await build({
       "export { useDockHold } from './src/client/card-hold.js'",
       "export { PendingQuestion } from './src/client/questions.js'",
       "export { SecretCard } from './src/client/secret-card.js'",
-      "export { PendingView } from './src/client/widget-cell.js'",
+      "export { PendingView, AnsweredReply } from './src/client/widget-cell.js'",
+      "export { AnsweredCell } from './src/client/questions.js'",
       "export { HandoffCall, HandoffDock, PendingHandoff, SettledHandoff } from './src/client/handoff-card.js'",
     ].join('\n'),
     resolveDir: fileURLToPath(new URL('..', import.meta.url)),
@@ -60,7 +61,7 @@ runInNewContext(outputFiles[0].text, {
   HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {}, HTMLElement: class {},
   URL,
 })
-const { useDockHold, PendingQuestion, SecretCard, PendingView, HandoffCall, HandoffDock, PendingHandoff, SettledHandoff } = module.exports
+const { useDockHold, PendingQuestion, SecretCard, PendingView, AnsweredReply, AnsweredCell, HandoffCall, HandoffDock, PendingHandoff, SettledHandoff } = module.exports
 const mount = (Component, props) => {
   const instance = {
     slots: [], effects: [], props,
@@ -486,4 +487,27 @@ test('an answered handoff keeps its title and how it ended, and nothing to press
   assert.equal(byClass(skipped, 'bt-q-check'), undefined)
   assert.match(skipped.props.children[0].props.className, /bt-q-dismissed/)
   assert.doesNotMatch(done.props.children[0].props.className, /bt-q-dismissed/)
+  const returned = SettledHandoff({ handoff: { reason: 'login', note: '', outcome: 'returned' } })
+  assert.equal(byClass(returned, 'bt-q-badge').props.children[0], 'Returned')
+  assert.equal(byClass(returned, 'bt-q-check'), undefined)
+  assert.doesNotMatch(returned.props.children[0].props.className, /bt-q-dismissed/)
+})
+
+test('answered handoff replies route to their settled row in history and live transcripts', () => {
+  const fromHistory = AnsweredReply({ node: { data: { handoff: { reason: 'login', note: 'Sign in', outcome: 'returned' } } } })
+  assert.equal(fromHistory.type, SettledHandoff)
+  assert.deepEqual(plain(fromHistory.props.handoff), { reason: 'login', note: 'Sign in', outcome: 'returned' })
+
+  const fromText = AnsweredReply({ node: { data: { text: JSON.stringify({
+    kind: 'answer_to_pending_handoff', callId: 'call-1', reason: 'payment', note: 'Pay', outcome: 'done',
+  }) } } })
+  assert.equal(fromText.type, SettledHandoff)
+  assert.deepEqual(plain(fromText.props.handoff), { reason: 'payment', note: 'Pay', outcome: 'done' })
+
+  for (const node of [
+    { data: { handoff: { reason: 7, outcome: 'done' } } },
+    { data: { text: JSON.stringify({ kind: 'answer_to_pending_handoff', callId: 'call-1', reason: 7, outcome: 'done' }) } },
+  ]) {
+    assert.equal(AnsweredReply({ node }).type, AnsweredCell)
+  }
 })

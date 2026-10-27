@@ -6,8 +6,10 @@ import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { handoffHold } from '../src/host/browser-plugins.js'
 import { mountBrowserPlugin } from '../src/host/browser/mount.js'
+import { createSession } from '../src/host/browser/session.js'
 import { toolDefs as refsTools } from '../src/host/browser/refs.js'
 import { toolDefs as scriptTools } from '../src/host/browser/script.js'
+import { toolDefs as taskTools } from '../src/host/browser/task.js'
 import { REPLY_KIND } from '../src/host/constants.js'
 import { handoffReply, historyEntry, install as installParts, readReply, replyText } from '../src/host/parts.js'
 import { fakeContext } from './fake-ctx.js'
@@ -97,6 +99,48 @@ test('a browser handoff names the call and the Session that raised it', async ()
   ])
 })
 
+test('browser_task forwards its outer call origin to a nested handoff', async () => {
+  const tools = new Map()
+  const holds = []
+  let completions = 0
+  mountBrowserPlugin({
+    effect() {},
+    tools: { register(tool) { tools.set(tool.name, tool) } },
+  }, {
+    toolDefs: taskTools,
+    defineTool: value => value,
+    keyOf: async () => 'b2',
+    profileRoot: '/profiles',
+    headless: true,
+    onHold: (botId, hold) => holds.push([botId, hold]),
+    completeFor: () => async () => {
+      completions += 1
+      if (completions === 1) {
+        return { choices: [{ message: { tool_calls: [{
+          id: 'inner-call',
+          function: { name: 'browser_handoff', arguments: JSON.stringify({ reason: 'login', note: 'Sign in' }) },
+        }] } }] }
+      }
+      return { choices: [{ message: { content: 'Waiting for sign-in.' } }] }
+    },
+    openSession: async ({ onHold }) => ({
+      botId: 'b2',
+      userDataDir: '/profiles/b2',
+      handoff(reason, note, origin) {
+        onHold({ by: 'bot', reason, note, ...origin })
+        return 'waiting'
+      },
+      async close() {},
+    }),
+  })
+
+  const result = await tools.get('browser_task').execute({ goal: 'Sign in' }, { agent: { id: 'b2' }, callId: 'outer-call' })
+  assert.match(result.text, /Waiting for sign-in/)
+  assert.deepEqual(holds, [
+    ['b2', { by: 'bot', reason: 'login', note: 'Sign in', callId: 'outer-call', sessionId: 'b2' }],
+  ])
+})
+
 test('only a handoff raised in the Bot\'s own chat keeps its call and drops the Session', async (t) => {
   const { rt, stop } = start()
   t.after(stop)
@@ -110,6 +154,34 @@ test('only a handoff raised in the Bot\'s own chat keeps its call and drops the 
   assert.deepEqual(handoffHold(rt, 'b2', { ...raised, sessionId: 'm1' }), { by: 'bot', reason: 'login', note: 'Sign in' })
   assert.deepEqual(handoffHold(rt, 'b2', { by: 'bot', reason: 'login', note: 'Sign in', sessionId: 'b2' }), { by: 'bot', reason: 'login', note: 'Sign in' })
   assert.deepEqual(handoffHold(rt, 'b2', { by: 'bot', reason: 'other', note: '' }), { by: 'bot', reason: 'other', note: '' })
+})
+
+test('a handoff outside the Bot\'s own chat says to ask there instead of waiting for a card', async (t) => {
+  const { rt, stop } = start()
+  t.after(stop)
+  await rt.load()
+  const makeSession = () => createSession({
+    context: { pages: () => [], on() {} },
+    page: null,
+    botId: 'b2',
+    userDataDir: '/profiles/b2',
+    cookieFile: '/profiles/b2/cookies.json',
+    downloadDir: '/downloads',
+    actionTimeout: 1000,
+    getHold: () => rt.browserChannel.holdOf('b2'),
+    onHold: hold => rt.browserChannel.setHold('b2', hold && handoffHold(rt, 'b2', hold)),
+  })
+
+  const own = makeSession().handoff('login', 'Sign in', { callId: 'call-1', sessionId: 'b2' })
+  assert.match(own, /Call browser_resume when they have finished/)
+  assert.doesNotMatch(own, /no handoff card/)
+
+  rt.browserChannel.setHold('b2', null)
+  const group = makeSession().handoff('login', 'Sign in', { callId: 'call-2', sessionId: 'room-session' })
+  assert.match(group, /no handoff card in this conversation/)
+  assert.match(group, /Tell the user here what you need them to do/)
+  assert.match(group, /browser_snapshot or call browser_resume/)
+  assert.deepEqual(rt.browserChannel.holdOf('b2'), { by: 'bot', reason: 'login', note: 'Sign in' })
 })
 
 test('the channel keeps a handoff\'s call on its hold', async (t) => {
@@ -187,7 +259,11 @@ test('browser-give-back answers an open handoff once, and a plain hold without a
 
   rt.browserChannel.setHold('b2', BOT_HOLD)
   assert.equal((await call('browser-give-back', { botId: 'b2', callId: 'call-1' })).value, true)
-  assert.equal(JSON.parse(sent[0].message.content[0].text).outcome, 'done')
+  const returned = JSON.parse(sent[0].message.content[0].text)
+  assert.equal(returned.outcome, 'returned')
+  assert.match(returned.message, /gave the browser back/)
+  assert.match(returned.message, /Do not assume this step is finished/)
+  assert.match(returned.message, /browser_snapshot/)
 
   // A second answer finds nothing held.
   const again = await call('browser-give-back', { botId: 'b2', callId: 'call-1', outcome: 'done' })
@@ -245,8 +321,13 @@ test('a handoff answer carries its reason, so it reads on its own', () => {
   assert.deepEqual(readReply(plain.text).handoff, { callId: 'call-3', reason: 'captcha', note: '', outcome: 'skipped' })
   assert.equal(replyText(plain.text), '[Browser handoff] captcha\nAnswer: skipped')
 
-  // Anything but a skip is done, and a reply without its call or reason is no handoff.
-  assert.equal(JSON.parse(handoffReply(BOT_HOLD, undefined).text).outcome, 'done')
+  // The panel sends no outcome: that only returns control, without claiming completion.
+  const returned = handoffReply(BOT_HOLD, undefined)
+  assert.equal(JSON.parse(returned.text).outcome, 'returned')
+  assert.match(JSON.parse(returned.text).message, /Do not assume this step is finished/)
+  assert.equal(JSON.parse(handoffReply(BOT_HOLD, 'returned').text).outcome, 'returned')
+  assert.deepEqual(readReply(returned.text).handoff, { callId: 'call-1', reason: 'login', note: 'Sign in to the shop.', outcome: 'returned' })
+  assert.equal(replyText(returned.text), '[Browser handoff] login — Sign in to the shop.\nAnswer: returned')
   assert.equal(readReply(JSON.stringify({ kind: 'answer_to_pending_handoff', reason: 'login' })), undefined)
   assert.equal(readReply(JSON.stringify({ kind: 'answer_to_pending_handoff', callId: 'call-1' })), undefined)
 

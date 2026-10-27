@@ -117,7 +117,7 @@ export async function openBotBrowser({ botId, profileRoot, downloadDir, headless
   return createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir: getDownloadDir, actionTimeout, getHold, onHold, uploadRoots })
 }
 
-function createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold, uploadRoots }) {
+export function createSession({ context, browser, page, botId, userDataDir, cookieFile, downloadDir, actionTimeout, getHold, onHold, uploadRoots }) {
   const pages = new Set()
   const unknownByOrigin = new Map()
   const unknownPageOrigins = new WeakMap()
@@ -706,7 +706,11 @@ function createSession({ context, browser, page, botId, userDataDir, cookieFile,
       const kind = REASONS.has(reason) ? reason : 'other'
       hold = { reason: kind, note: String(note ?? '').slice(0, 300) }
       onHold?.({ by: 'bot', reason: kind, note: hold.note, ...origin })
-      return `Waiting for the user (${kind}). ${hold.note || 'Ask them to take over.'} Call browser_resume when they have finished.`
+      const recorded = getHold?.()
+      const guidance = origin?.callId !== undefined && recorded && recorded.callId === undefined
+        ? 'There is no handoff card in this conversation. Tell the user here what you need them to do. After they reply, check with browser_snapshot or call browser_resume.'
+        : 'Call browser_resume when they have finished.'
+      return `Waiting for the user (${kind}). ${hold.note || 'Ask them to take over.'} ${guidance}`
     },
     resume() {
       if (getHold?.()?.by === 'user') throw new Error('The user has taken over this browser. Only the user can give it back.')

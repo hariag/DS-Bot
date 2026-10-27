@@ -101,15 +101,17 @@ export function viewReply(record, action, values) {
   }
 }
 
-// The user's answer to a browser_handoff card: they finished the step, or skipped it.
-// The message carries the reason with the answer, so it still makes sense after a
-// checkpoint drops the card.
+// The user's answer to a browser_handoff card: they finished the step, skipped it,
+// or only gave the browser back from its panel. The message carries the reason with
+// the answer, so it still makes sense after a checkpoint drops the card.
 export function handoffReply(hold, outcome) {
-  const skipped = outcome === 'skip'
+  const settled = outcome === 'done' ? 'done' : outcome === 'skip' ? 'skipped' : 'returned'
   const callId = hold.callId
-  const message = skipped
+  const message = settled === 'skipped'
     ? 'The user skipped this step and gave the browser back. Do not retry it. Do what you can without it, or tell the user you cannot.'
-    : 'The user finished this step and gave the browser back. Carry on from where you stopped. Take a browser_snapshot first to see the page.'
+    : settled === 'done'
+      ? 'The user finished this step and gave the browser back. Carry on from where you stopped. Take a browser_snapshot first to see the page.'
+      : 'The user gave the browser back. Do not assume this step is finished. Take a browser_snapshot to see the page, then carry on or ask the user what remains.'
   return {
     text: JSON.stringify({
       kind: 'answer_to_pending_handoff',
@@ -117,7 +119,7 @@ export function handoffReply(hold, outcome) {
       callId,
       reason: hold.reason,
       ...(hold.note ? { note: hold.note } : {}),
-      outcome: skipped ? 'skipped' : 'done',
+      outcome: settled,
       message,
     }),
     source: { kind: REPLY_KIND, callId, outcome: 'answered' },
@@ -131,7 +133,7 @@ export function readReply(text) {
   try { value = JSON.parse(text) } catch { return undefined }
   if (value?.kind === 'answer_to_pending_handoff') {
     if (typeof value.callId !== 'string' || typeof value.reason !== 'string') return undefined
-    return { handoff: { callId: value.callId, reason: value.reason, note: typeof value.note === 'string' ? value.note : '', outcome: value.outcome === 'skipped' ? 'skipped' : 'done' } }
+    return { handoff: { callId: value.callId, reason: value.reason, note: typeof value.note === 'string' ? value.note : '', outcome: value.outcome === 'skipped' || value.outcome === 'returned' ? value.outcome : 'done' } }
   }
   if (value?.kind === 'answer_to_pending_view' || (Array.isArray(value?.views) && value.views.length > 0 && value?.kind !== 'answer_to_pending_question')) {
     const views = (Array.isArray(value.views) ? value.views : []).filter(item => typeof item?.id === 'string' && typeof item.title === 'string' && isRecord(item.view))

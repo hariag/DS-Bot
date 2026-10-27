@@ -3,17 +3,17 @@
 import { runToolLoop } from './loop.js'
 import { systemPrompt as refsPrompt, toolDefs as refTools } from './refs.js'
 
-const driverTools = (session) => refTools.map(tool => ({
+const driverTools = (session, origin) => refTools.map(tool => ({
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
-    execute: (args) => tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir }),
+    execute: (args) => tool.execute(args, { session, botId: session.botId, profileDir: session.userDataDir, origin }),
   }))
 
-export async function runTask({ session, goal, complete, maxSteps = 8 }) {
+export async function runTask({ session, goal, complete, origin, maxSteps = 8 }) {
   if (typeof complete !== 'function') throw new Error('browser_task needs a Bot session model')
   const result = await runToolLoop({
-    tools: driverTools(session),
+    tools: driverTools(session, origin),
     complete,
     goal,
     system: refsPrompt,
@@ -47,6 +47,7 @@ export const toolDefs = [
         session: ctx.session,
         goal: String(args.goal ?? ''),
         complete: ctx.complete,
+        origin: ctx.origin,
       })
       return { text: result.text }
     },

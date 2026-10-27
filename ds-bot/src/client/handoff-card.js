@@ -108,13 +108,14 @@ export function HandoffDock({ sessionId, useRoster, useCards, useHeldCards, useB
 // The answered card the transcript keeps: the title and how it ended, read-only.
 export function SettledHandoff({ handoff }) {
   const skipped = handoff.outcome === 'skipped'
+  const returned = handoff.outcome === 'returned'
   const title = titleOf(handoff.reason)
   return h('div', { className: 'bt-q-inline' },
     h('div', { className: skipped ? 'bt-q bt-q-settled bt-q-dismissed' : 'bt-q bt-q-settled', role: 'group', 'aria-label': title },
       h('div', { className: 'bt-q-head' },
         h('div', { className: 'bt-q-text' }, h('p', { className: 'bt-q-title' }, title)),
-        skipped
-          ? h('span', { className: 'bt-q-badge' }, t('Skipped'))
+        skipped || returned
+          ? h('span', { className: 'bt-q-badge' }, t(skipped ? 'Skipped' : 'Returned'))
           : h('span', { className: 'bt-q-check', title: t('Done') }, h(CheckIcon)))))
 }
 

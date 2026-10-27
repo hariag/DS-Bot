@@ -486,7 +486,7 @@ export function AnsweredView({ node }) {
 export function AnsweredReply({ node }) {
   const data = node?.data ?? {}
   if (Array.isArray(data.views) && data.views.length > 0) return h(AnsweredView, { node })
-  if (data.handoff !== null && typeof data.handoff === 'object') return h(SettledHandoff, { handoff: data.handoff })
+  if (typeof data.handoff?.reason === 'string') return h(SettledHandoff, { handoff: data.handoff })
   if (!Array.isArray(data.questions) || data.questions.length === 0) {
     let parsed = null
     try { parsed = typeof data.text === 'string' ? JSON.parse(data.text) : null } catch { parsed = null }
