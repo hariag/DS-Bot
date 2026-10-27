@@ -51,9 +51,10 @@ export function readZip(buf) {
     if (method === 0) data = raw.subarray(0, usize)
     else if (method === 8) {
       // Enforce the declared uncompressed size — a zip bomb dies here.
-      // inflateRawSync rejects a zero maxOutputLength, so empty members skip it.
+      // inflateRawSync rejects a zero maxOutputLength, so floor it at 1; a
+      // member lying about an empty body then fails on the size check.
       try {
-        data = usize === 0 ? Buffer.alloc(0) : inflateRawSync(raw, { maxOutputLength: usize })
+        data = inflateRawSync(raw, { maxOutputLength: Math.max(usize, 1) })
       } catch (err) {
         if (err instanceof RangeError || err?.code === 'ERR_OUT_OF_RANGE') fail(`${name} inflates past its declared size`)
         fail(`corrupt data for ${name}`)

@@ -6519,7 +6519,7 @@ import { join as join2 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/office/package.js
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, resolve, sep } from "node:path";
 
 // src/office/xml.js
@@ -6686,7 +6686,7 @@ function readZip(buf) {
     if (method === 0) data = raw.subarray(0, usize);
     else if (method === 8) {
       try {
-        data = usize === 0 ? Buffer.alloc(0) : inflateRawSync(raw, { maxOutputLength: usize });
+        data = inflateRawSync(raw, { maxOutputLength: Math.max(usize, 1) });
       } catch (err) {
         if (err instanceof RangeError || err?.code === "ERR_OUT_OF_RANGE") fail(`${name} inflates past its declared size`);
         fail(`corrupt data for ${name}`);
@@ -6894,22 +6894,29 @@ var Package = class _Package {
   relsName(owner) {
     return owner === "" ? "_rels/.rels" : `${posix.dirname(owner)}/_rels/${posix.basename(owner)}.rels`;
   }
-  /** Write .rels and [Content_Types].xml back into parts from the model — only
-   * when the model changed, so untouched members keep their original bytes. */
+  /** Write .rels and [Content_Types].xml back into parts from the model — a
+   * .rels part changes only when its owner part is gone or its map's signature
+   * differs from the load baseline, so malformed or empty-but-valid .rels keep
+   * their bytes instead of being dropped. */
   flush() {
-    for (const name of [...this.parts.keys()]) if (name.endsWith(".rels") && !this.#ownerStillHasRels(name)) this.parts.delete(name);
+    for (const name of [...this.parts.keys()]) {
+      if (!name.endsWith(".rels")) continue;
+      const owner = this.#relsOwner(name);
+      if (owner !== "" && !this.parts.has(owner)) this.parts.delete(name);
+    }
     for (const [owner, map] of this.rels) {
       if (owner !== "" && !this.parts.has(owner)) {
         this.rels.delete(owner);
         continue;
       }
       const name = this.relsName(owner);
+      const sig = relSig(map);
+      const base = (this.relSigs ??= /* @__PURE__ */ new Map()).get(owner);
       if (map.size === 0) {
-        this.parts.delete(name);
+        if (base !== void 0 && base !== sig) this.parts.delete(name);
         continue;
       }
-      const sig = relSig(map);
-      if (sig === (this.relSigs ??= /* @__PURE__ */ new Map()).get(owner) && this.parts.has(name)) continue;
+      if (sig === base && this.parts.has(name)) continue;
       const doc = parseXml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>');
       for (const rel of map.values()) {
         const el = doc.createElement("Relationship");
@@ -6943,9 +6950,8 @@ var Package = class _Package {
     }
     this.parts.delete("");
   }
-  #ownerStillHasRels(name) {
-    const owner = name === "_rels/.rels" ? "" : posix.dirname(posix.dirname(name)) + "/" + posix.basename(name, ".rels");
-    return this.rels.get(owner)?.size > 0;
+  #relsOwner(name) {
+    return name === "_rels/.rels" ? "" : posix.dirname(posix.dirname(name)) + "/" + posix.basename(name, ".rels");
   }
   /** @returns {Buffer} the package as a ZIP */
   save() {
@@ -6963,12 +6969,16 @@ var Package = class _Package {
     }
     mkdirSync(dir, { recursive: true });
     const root = resolve(dir);
+    const rootReal = realpathSync(dir);
     const keep = /* @__PURE__ */ new Set();
     for (const [name] of this.parts) {
       const file = join(dir, name);
       if (!resolve(file).startsWith(root + sep) && resolve(file) !== root) fail2(`unpack: unsafe member name ${name}`);
       keep.add(file);
       mkdirSync(dirname(file), { recursive: true });
+      const parentReal = realpathSync(dirname(file));
+      if (parentReal !== rootReal && !parentReal.startsWith(rootReal + sep)) fail2(`unpack: ${name} resolves outside ${dir}`);
+      if (existsSync(file) && lstatSync(file).isSymbolicLink()) fail2(`unpack: ${name} is a link`);
       const data = this.get(name);
       if (name.endsWith(".xml") || name.endsWith(".rels")) {
         try {
@@ -6983,7 +6993,9 @@ var Package = class _Package {
       for (const entry of readdirSync(join(dir, rel))) {
         const path = rel === "" ? entry : `${rel}/${entry}`;
         const full = join(dir, path);
-        if (statSync(full).isDirectory()) {
+        const st = lstatSync(full);
+        if (st.isSymbolicLink()) fail2(`unpack: link inside ${dir}`);
+        if (st.isDirectory()) {
           sweep(path);
           if (readdirSync(full).length === 0) rmdirSync(full);
         } else if (!keep.has(full)) unlinkSync(full);
@@ -8408,7 +8420,7 @@ var rowOf = (ref) => Number(/(\d+)$/.exec(ref)[1]);
 var colNum = (col) => [...col].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
 function dateEpoch(pkg) {
   const wb = pkg.parts.has("xl/workbook.xml") ? pkg.xml("xl/workbook.xml") : void 0;
-  return firstOf(wb?.documentElement, "workbookPr")?.getAttribute("date1904") === "1" ? 24107 : 25569;
+  return /^(1|true)$/i.test(firstOf(wb?.documentElement, "workbookPr")?.getAttribute("date1904") ?? "") ? 24107 : 25569;
 }
 function cellValue(c, shared, fmt, epoch = 25569) {
   const t = c.getAttribute("t"), v = firstOf(c, "v"), f = firstOf(c, "f");

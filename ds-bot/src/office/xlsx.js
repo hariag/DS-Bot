@@ -42,7 +42,7 @@ const colNum = (col) => [...col].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64,
 // the workbook declares <workbookPr date1904="1"/>.
 function dateEpoch(pkg) {
   const wb = pkg.parts.has('xl/workbook.xml') ? pkg.xml('xl/workbook.xml') : undefined
-  return firstOf(wb?.documentElement, 'workbookPr')?.getAttribute('date1904') === '1' ? 24107 : 25569
+  return /^(1|true)$/i.test(firstOf(wb?.documentElement, 'workbookPr')?.getAttribute('date1904') ?? '') ? 24107 : 25569
 }
 
 function cellValue(c, shared, fmt, epoch = 25569) {

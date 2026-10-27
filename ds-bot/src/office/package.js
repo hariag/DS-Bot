@@ -1,7 +1,7 @@
 // The OOXML package: parts, [Content_Types].xml, and .rels files as a small model.
 // Loads from a .docx/.pptx/.xlsx ZIP or from an `unpack` directory; saves back
 // keeping untouched members' compressed bytes.
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { parseXml, serializeXml, childrenOf } from './xml.js'
 import { readZip, writeZip } from './zip.js'
@@ -126,16 +126,29 @@ export class Package {
     return owner === '' ? '_rels/.rels' : `${posix.dirname(owner)}/_rels/${posix.basename(owner)}.rels`
   }
 
-  /** Write .rels and [Content_Types].xml back into parts from the model — only
-   * when the model changed, so untouched members keep their original bytes. */
+  /** Write .rels and [Content_Types].xml back into parts from the model — a
+   * .rels part changes only when its owner part is gone or its map's signature
+   * differs from the load baseline, so malformed or empty-but-valid .rels keep
+   * their bytes instead of being dropped. */
   flush() {
-    for (const name of [...this.parts.keys()]) if (name.endsWith('.rels') && !this.#ownerStillHasRels(name)) this.parts.delete(name)
+    for (const name of [...this.parts.keys()]) {
+      if (!name.endsWith('.rels')) continue
+      const owner = this.#relsOwner(name)
+      if (owner !== '' && !this.parts.has(owner)) this.parts.delete(name)
+    }
     for (const [owner, map] of this.rels) {
       if (owner !== '' && !this.parts.has(owner)) { this.rels.delete(owner); continue }
       const name = this.relsName(owner)
-      if (map.size === 0) { this.parts.delete(name); continue }
       const sig = relSig(map)
-      if (sig === (this.relSigs ??= new Map()).get(owner) && this.parts.has(name)) continue
+      const base = (this.relSigs ??= new Map()).get(owner)
+      if (map.size === 0) {
+        // The model emptied a previously non-empty map → drop the part; a map
+        // that was empty at load (malformed, or a real empty Relationships)
+        // leaves the member's bytes alone.
+        if (base !== undefined && base !== sig) this.parts.delete(name)
+        continue
+      }
+      if (sig === base && this.parts.has(name)) continue
       const doc = parseXml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
       for (const rel of map.values()) {
         const el = doc.createElement('Relationship')
@@ -162,9 +175,8 @@ export class Package {
     this.parts.delete('') // never emit a directory entry
   }
 
-  #ownerStillHasRels(name) {
-    const owner = name === '_rels/.rels' ? '' : posix.dirname(posix.dirname(name)) + '/' + posix.basename(name, '.rels')
-    return this.rels.get(owner)?.size > 0
+  #relsOwner(name) {
+    return name === '_rels/.rels' ? '' : posix.dirname(posix.dirname(name)) + '/' + posix.basename(name, '.rels')
   }
 
   /** @returns {Buffer} the package as a ZIP */
@@ -184,12 +196,17 @@ export class Package {
     }
     mkdirSync(dir, { recursive: true })
     const root = resolve(dir)
+    const rootReal = realpathSync(dir)
     const keep = new Set()
     for (const [name] of this.parts) {
       const file = join(dir, name)
       if (!resolve(file).startsWith(root + sep) && resolve(file) !== root) fail(`unpack: unsafe member name ${name}`)
       keep.add(file)
       mkdirSync(dirname(file), { recursive: true })
+      // A linked subdirectory walks the write outside the destination.
+      const parentReal = realpathSync(dirname(file))
+      if (parentReal !== rootReal && !parentReal.startsWith(rootReal + sep)) fail(`unpack: ${name} resolves outside ${dir}`)
+      if (existsSync(file) && lstatSync(file).isSymbolicLink()) fail(`unpack: ${name} is a link`)
       const data = this.get(name)
       if (name.endsWith('.xml') || name.endsWith('.rels')) {
         try { writeFileSync(file, prettyForUnpack(data)); continue } catch { /* fall back to raw */ }
@@ -200,7 +217,9 @@ export class Package {
       for (const entry of readdirSync(join(dir, rel))) {
         const path = rel === '' ? entry : `${rel}/${entry}`
         const full = join(dir, path)
-        if (statSync(full).isDirectory()) { sweep(path); if (readdirSync(full).length === 0) rmdirSync(full) }
+        const st = lstatSync(full) // no link following: a link inside the tree is refused
+        if (st.isSymbolicLink()) fail(`unpack: link inside ${dir}`)
+        if (st.isDirectory()) { sweep(path); if (readdirSync(full).length === 0) rmdirSync(full) }
         else if (!keep.has(full)) unlinkSync(full)
       }
     }
