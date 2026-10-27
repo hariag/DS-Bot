@@ -53,14 +53,14 @@ const TEXT_RULES = [
   { id: 'vendor-in-look-file', level: MUST, re: new RegExp(VENDORS.source, 'gi'), files: LOOK_FILES, legacyOk: true },
   { id: 'vendor-brand', level: MUST, re: /brand[^\n]{0,40}\b(qwen|minimax|stepfun|kimi|zhipu|mimo|deepseek)\b|\b(qwen|minimax|stepfun|kimi|zhipu|mimo)\b[^\n]{0,40}brand/gi, legacyOk: true },
   // A test may name the logo to check that the look no longer uses it.
-  { id: 'third-party-logo', level: MUST, re: /WhaleLogo|favicon\.svg/g, notFiles: /(^|\/)test\/|^scripts\/scan\.mjs$/ },
+  { id: 'third-party-logo', level: MUST, re: /WhaleLogo|favicon\.svg/g, notFiles: /(^|\/)test\// },
   { id: 'vendor-name', level: KEEP, re: new RegExp(VENDORS.source, 'gi'), notFiles: LOOK_FILES, summary: true },
   // Former names of the project and the package.
   { id: 'old-project-name', level: MUST, re: /DSH Bot\b/g, legacyOk: true },
   { id: 'old-package-name', level: MUST, re: /\bdsh-bot\b/g, legacyOk: true },
   { id: 'legacy-name-in-migration', level: KEEP, re: /\bdsh-bot\b|DeepSeek Bot\b/gi, onlyLegacy: true, summary: true },
   // Drafts and local-only material.
-  { id: 'draft-marker', level: MUST, re: /TBD\(|DRAFT for|草稿/g, notFiles: /^scripts\/scan\.mjs$/ },
+  { id: 'draft-marker', level: MUST, re: /TBD\(|DRAFT for|草稿/g },
   { id: 'not-public-path-in-docs', level: MUST, re: new RegExp(NOT_PUBLIC.source, 'g'), files: /\.md$/ },
   { id: 'not-public-path-in-code', level: KEEP, re: new RegExp(NOT_PUBLIC.source, 'g'), notFiles: /\.md$/ },
   { id: 'public-ip', level: KEEP, re: /\b(?!(127|10|0)\.)(?!192\.168\.)(?!172\.(1[6-9]|2\d|3[01])\.)(?!192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|169\.254\.)(\d{1,3}\.){3}\d{1,3}\b/g, unless: /version|v\d|@\d/i },
