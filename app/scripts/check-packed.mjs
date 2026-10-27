@@ -30,6 +30,25 @@ if (!existsSync(executable)) {
   process.exit(2)
 }
 
+// The Office payload sits next to the asar as extraResources, and the LibreOffice Kit CLI is a
+// plain file in the unpacked tree; without them the app's Office skills and tools cannot run.
+{
+  const resources = process.platform === 'darwin' ? join(dirname(executable), '..', 'Resources') : join(dirname(executable), 'resources')
+  const windows = process.platform === 'win32'
+  const required = [
+    'primary-runtime/runtime.json',
+    join('primary-runtime', 'dependencies', 'python', ...(windows ? ['python.exe'] : ['bin', 'python3'])),
+    join('primary-runtime', 'dependencies', 'node', 'bin', windows ? 'node.exe' : 'node'),
+    join('office-skills', 'office', 'SKILL.md'),
+    join('app.asar.unpacked', 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js'),
+  ]
+  const missing = required.filter((entry) => !existsSync(join(resources, entry)))
+  if (missing.length > 0) {
+    console.error(`check-packed: FAILED: missing from ${resources}:\n  ${missing.join('\n  ')}`)
+    process.exit(1)
+  }
+}
+
 const work = realpathSync.native(mkdtempSync(join(realpathSync.native(tmpdir()), 'ds-bot-packed-')))
 mkdirSync(join(work, 'home'))
 mkdirSync(join(work, 'shell'))

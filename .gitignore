@@ -1,10 +1,13 @@
 node_modules/
 *.tgz
 # The desktop app's window build (npm run build in app/), its packages (npm run pack, npm run dist)
-# and the next version that checks its update (see app/README.md).
+# and the next version that checks its update (see app/README.md). The Office runtime payload
+# (npm run runtime in app/) is downloaded per machine.
 /app/ui/dist/
 /app/dist-pack/
 /app/dist-next/
+/app/build/runtime/
+/app/build/runtime-cache/
 
 # A DeepSeek Harness checkout for the tests and the test bench.
 /deepseek-harness/

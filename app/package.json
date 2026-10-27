@@ -16,7 +16,7 @@
     "pack": "electron-builder --dir --publish never",
     "dist": "electron-builder --publish never",
     "check-packed": "node scripts/check-packed.mjs",
-    "check-lifecycle": "node scripts/check-lifecycle.mjs",
+    "runtime": "node scripts/prepare-runtime.mjs",
     "shot": "node scripts/shot.mjs",
     "icon": "node scripts/icon.mjs",
     "test": "node --test \"test/*.test.mjs\""
@@ -50,10 +50,13 @@
     "@deepseek-ai/dsh-session-telemetry": "0.2.1-rc.2",
     "@deepseek-ai/dsh-session-title-llm": "0.2.1-rc.2",
     "@deepseek-ai/dsh-shell": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-skill-office": "0.2.1-rc.2",
     "@deepseek-ai/dsh-spill": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-workspace-dependencies": "0.2.1-rc.2",
     "@deepseek-ai/dsh-util-time": "0.2.1-rc.2",
     "@deepseek-ai/dsh-util-workspace-path": "0.2.1-rc.2",
     "@deepseek-ai/dsh-workflow": "0.2.1-rc.2",
+    "@deepseek-ai/libreoffice-kit": "0.1.5",
     "ds-bot": "file:../ds-bot",
     "electron-updater": "6.8.10",
     "pnpm": "11.7.0",
@@ -63,10 +66,13 @@
   "devDependencies": {
     "electron": "44.7.0",
     "electron-builder": "26.17.0",
+    "extract-zip": "2.0.1",
+    "papaparse": "5.5.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
+    "tar": "7.5.22",
     "vite": "8.3.4"
   },
   "overrides": {

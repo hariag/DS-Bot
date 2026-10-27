@@ -16,7 +16,13 @@ MIT License, Copyright (c) 2026 DeepSeek
     developer script for screenshots on Linux and is not in the npm package.
   - app/src/host.mjs and app/src/profile.mjs follow
     apps/desktop-host/src/index.ts: the profile boot and the ready, fatal and
-    shutdown messages.
+    shutdown messages. app/src/office-patch.mjs follows
+    apps/desktop-host/src/office.ts: the workspace-dependencies and skill-office
+    plugin rows with the payload's Node and the unpacked LibreOffice Kit CLI.
+  - app/scripts/prepare-runtime.mjs and app/scripts/primary-runtime.lock.json are a
+    JavaScript port of scripts/primary-runtime/ (prepare.ts, prune-python-tests.ts
+    and lock.json): the pinned Python, Node and wheel downloads with checksum
+    verification, the wheel test pruning and the Office skill asset copy.
   - app/src/host-process.mjs follows apps/desktop/src/host-process.ts: the
     Host in Electron's Node mode and the shutdown escalation.
   - app/src/main.mjs follows apps/desktop/src/main.ts for the Windows window
