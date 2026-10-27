@@ -21,32 +21,35 @@ const TEAM = {
   questions: {},
 }
 
-// An in-memory stand-in for DSH's schedule service.
-function scheduleService() {
+// The record DSH stores, so a task that is moved can be read back.
+function stored(id, request) {
+  const base = { id, title: request.title, prompt: request.prompt, scheduledAt: '2030-01-01T01:00:00.000Z' }
+  if (request.every_seconds !== undefined) return { ...base, kind: 'every', everySeconds: request.every_seconds, timing: request.every_seconds }
+  if (request.daily !== undefined) return { ...base, kind: 'daily', time: request.daily.time, timeZone: request.daily.time_zone, timing: request.daily }
+  if (request.weekly !== undefined) return { ...base, kind: 'weekly', time: request.weekly.time, timeZone: request.weekly.time_zone, weekdays: request.weekly.weekdays, timing: request.weekly }
+  return { ...base, kind: 'at', timing: request.at }
+}
+
+// An in-memory stand-in for DSH's schedule service. `broken` tells it how a removal
+// fails on a Session: 'throw' for a failed write, 'refuse' for the not-found result
+// the service returns instead of failing.
+function scheduleService({ broken = {} } = {}) {
   const tasks = new Map()
   let next = 1
   return {
     tasks,
     async create(sessionId, request) {
       const id = `schedule-${next++}`
-      const kind = { every_seconds: 'every' }[Object.keys(request).find(key => !['title', 'prompt'].includes(key))]
-        ?? Object.keys(request).find(key => !['title', 'prompt'].includes(key))
-      const record = {
-        id, kind, title: request.title, prompt: request.prompt,
-        timing: request[Object.keys(request).find(key => !['title', 'prompt'].includes(key))],
-        scheduledAt: request.at ?? '2030-01-01T01:00:00.000Z',
-        everySeconds: request.every_seconds,
-        time: request.daily?.time ?? request.weekly?.time,
-        timeZone: request.daily?.time_zone ?? request.weekly?.time_zone ?? request.cron?.time_zone,
-        weekdays: request.weekly?.weekdays,
-        expression: request.cron?.expression,
-      }
+      const record = stored(id, request)
       tasks.set(id, { sessionId, record })
       return record
     },
     async list({ sessionId }) { return [...tasks.values()].filter(task => task.sessionId === sessionId).map(task => task.record) },
     async catalog() { return [...tasks.values()].map(task => ({ ...task.record, sessionId: task.sessionId, status: 'active' })) },
     async delete({ sessionId, id }) {
+      const failure = broken[sessionId]
+      if (failure === 'throw') throw new Error('the schedule store refused the removal')
+      if (failure === 'refuse') return { id, deleted: false, code: 'schedule_not_found' }
       if (tasks.get(id)?.sessionId !== sessionId) return { id, deleted: false, code: 'schedule_not_found' }
       tasks.delete(id)
       return { id, deleted: true }
@@ -62,7 +65,7 @@ function setup(services = {}) {
   ctx.connection.fetch.register = (route) => { ctx.route = route; return register(route) }
   const rt = createRuntime(ctx, { home })
   const call = async (endpoint, payload) => (await ctx.route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
-  return { ctx, home, call, rt }
+  return { ctx, home, rt, call }
 }
 
 test('without the schedule service the page says so and creating is refused', async (t) => {
@@ -132,24 +135,59 @@ test('a due reminder reaches a group as its prompts', () => {
   assert.equal(reminderText('plain text'), 'plain text')
 })
 
-// #571: a restart pass re-runs the task move; a crash between create and delete must
-// not leave a second copy of a recurring task on the fresh part.
-test('a repeated task move copies each task only once', async (t) => {
-  const schedule = scheduleService()
+// #511: a Bot's chat moves on to a fresh part, and its task moves with it. The
+// earlier part of a Bot's chat is 'w1' and the fresh one is 'w2'.
+async function moveSetup(broken = {}) {
+  const schedule = scheduleService({ broken })
   const { ctx, home, rt } = setup({ schedule })
+  await schedule.create('w1', { title: 'Standup', prompt: 'Where are we?', every_seconds: 3600 })
+  const warnings = []
+  rt.warn = (...args) => warnings.push(args)
+  return { schedule, ctx, home, rt, warnings }
+}
+
+test('a task that moves goes to the fresh part alone', async (t) => {
+  const { schedule, ctx, home, rt, warnings } = await moveSetup()
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  await schedule.create('w2', { title: 'Ping', prompt: 'Check', every_seconds: 3600 })
-  await schedule.create('w2', { title: 'Ping', prompt: 'Check', every_seconds: 3600 })
+  await rt.moveSchedules('w1', 'w2')
+  const armed = [...schedule.tasks.values()]
+  assert.equal(armed.length, 1, JSON.stringify(armed))
+  assert.equal(armed[0].sessionId, 'w2')
+  assert.equal(armed[0].record.title, 'Standup')
+  assert.deepEqual(warnings, [])
+})
 
-  const remove = schedule.delete
-  schedule.delete = async () => { throw new Error('down') }
-  await rt.moveSchedules('w2', 's9')
-  const on = id => [...schedule.tasks.values()].filter(task => task.sessionId === id)
-  assert.equal(on('s9').length, 2)
-  assert.equal(on('w2').length, 2)
+test('a task whose removal fails stays with the earlier part alone', async (t) => {
+  const { schedule, ctx, home, rt, warnings } = await moveSetup({ w1: 'throw' })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.moveSchedules('w1', 'w2')
+  const armed = [...schedule.tasks.values()]
+  assert.equal(armed.length, 1, JSON.stringify(armed))
+  assert.equal(armed[0].sessionId, 'w1')
+  assert.equal(armed[0].record.title, 'Standup')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0][0], /stayed with the earlier part/)
+})
 
-  schedule.delete = remove
-  await rt.moveSchedules('w2', 's9')
-  assert.equal(on('s9').length, 2)
-  assert.equal(on('w2').length, 0)
+test('a task the service refuses to remove stays with the earlier part alone', async (t) => {
+  const { schedule, ctx, home, rt, warnings } = await moveSetup({ w1: 'refuse' })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.moveSchedules('w1', 'w2')
+  const armed = [...schedule.tasks.values()]
+  assert.equal(armed.length, 1, JSON.stringify(armed))
+  assert.equal(armed[0].sessionId, 'w1')
+  assert.equal(armed[0].record.title, 'Standup')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0][0], /stayed with the earlier part/)
+})
+
+test('a task that cannot be rolled back is reported as left in two parts', async (t) => {
+  const { schedule, ctx, home, rt, warnings } = await moveSetup({ w1: 'throw', w2: 'throw' })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.moveSchedules('w1', 'w2')
+  const armed = [...schedule.tasks.values()]
+  assert.equal(armed.length, 2, JSON.stringify(armed))
+  assert.deepEqual(armed.map(task => task.sessionId).sort(), ['w1', 'w2'])
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0][0], /left in two parts/)
 })
