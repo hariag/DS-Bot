@@ -10,8 +10,8 @@ import assert from 'node:assert'
 import { readZip } from '../src/office/zip.js'
 import { Package } from '../src/office/package.js'
 import { checkPackage, fixPackage } from '../src/office/check.js'
-import { docxRead, docxEdit } from '../src/office/docx.js'
-import { pptxInventory, pptxLayout } from '../src/office/pptx.js'
+import { docxRead, docxEdit, resolveChanges } from '../src/office/docx.js'
+import { pptxInventory, pptxLayout, pptxClean } from '../src/office/pptx.js'
 import { xlsxInventory, xlsxRead } from '../src/office/xlsx.js'
 import { decodePng, encodePng, contactSheet } from '../src/office/png.js'
 import { parseXml, elementsOf, childrenOf, textOf } from '../src/office/xml.js'
@@ -421,6 +421,49 @@ describe('check rules (review 10, 11)', () => {
     const { remaining } = fixPackage(pkg)
     assert.deepEqual(remaining, [])
     assert.equal(pkg.contentType('word/styles.xml'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml')
+  })
+})
+
+describe('re-review fixes', () => {
+  test('clean keeps a single-quoted r:embed', () => {
+    const pkg = Package.open(fixture('sample.pptx'))
+    const rel = [...pkg.relsOf('ppt/slides/slide1.xml').values()].find(r => r.type.endsWith('/image'))
+    const xml = String(pkg.get('ppt/slides/slide1.xml')).replace(`"${rel.id}"`, `'${rel.id}'`)
+    pkg.put('ppt/slides/slide1.xml', xml)
+    assert.ok(pptxClean(pkg, { dryRun: true }).removed.every(n => n !== 'ppt/media/image1.png'))
+  })
+  test('sectPr reject puts header/footer references before restored properties', () => {
+    const pkg = Package.open(fixture('sample.docx'))
+    const doc = pkg.xml('word/document.xml')
+    const sectPr = elementsOf(doc.documentElement, 'w:sectPr')[0]
+    const ref = doc.createElement('w:headerReference')
+    ref.setAttribute('w:type', 'default')
+    sectPr.insertBefore(ref, sectPr.firstChild)
+    const change = doc.createElement('w:sectPrChange')
+    const stored = doc.createElement('w:sectPr')
+    const sz = doc.createElement('w:pgSz')
+    sz.setAttribute('w:w', '11906'); sz.setAttribute('w:h', '16838')
+    stored.appendChild(sz); change.appendChild(stored)
+    sectPr.appendChild(change)
+    resolveChanges(doc, false)
+    const names = childrenOf(sectPr).map(c => c.tagName)
+    assert.equal(names[0], 'w:headerReference')
+    assert.ok(names.includes('w:pgSz'))
+    assert.ok(!names.includes('w:sectPrChange'))
+  })
+  test('comment anchor inside a w:hyperlink wraps the phrase', () => {
+    const pkg = Package.open(fixture('sample.docx'))
+    const doc = pkg.xml('word/document.xml')
+    const p = parseXml(`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:hyperlink w:history="1" w:anchor="top"><w:r><w:t xml:space="preserve">click here text</w:t></w:r></w:hyperlink></w:p>`).documentElement
+    childrenOf(doc.documentElement, 'w:body')[0].appendChild(doc.importNode(p, true))
+    pkg.putXml('word/document.xml', doc)
+    const dir = tmp(), out = join(dir, 'hl.docx')
+    writeFileSync(join(dir, 'hl-src.docx'), pkg.save())
+    cli('docx', 'edit', join(dir, 'hl-src.docx'), '-o', out, '--ops',
+      JSON.stringify([{ comment: { paragraph: 'p7', text: 'hi', anchor: 'here' } }]))
+    const read = docxRead(Package.open(out))
+    assert.ok(read.comments.some(c => c.text === 'hi' && c.anchorsTo === 'p7'))
+    assert.deepEqual(checkPackage(Package.open(out)), [])
   })
 })
 

@@ -353,7 +353,8 @@ export function pptxClean(pkg, { dryRun = false } = {}) {
     const xml = pkg.get(owner) ?? Buffer.alloc(0)
     for (const [id, rel] of [...map]) {
       if (rel.mode !== 'Internal' || !CONTENT_REL.test(rel.type)) continue
-      if (!xml.includes(`"${id}"`)) map.delete(id)
+      // Non-Office generators can write single-quoted attributes.
+      if (!xml.includes(`"${id}"`) && !xml.includes(`'${id}'`)) map.delete(id)
     }
   }
   // Slides not in sldIdLst.

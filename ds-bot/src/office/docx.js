@@ -506,7 +506,8 @@ function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = 'B
   if (anchor) {
     const span = phraseRuns(doc, p, anchor)
     if (!span) throw new Error(`anchor "${anchor}" not found in ${paragraph}`)
-    p.insertBefore(rangeStart, span.firstRun)
+    // The phrase can sit inside a w:hyperlink — insert beside the run itself.
+    span.firstRun.parentNode.insertBefore(rangeStart, span.firstRun)
     span.lastRun.parentNode.insertBefore(rangeEnd, span.lastRun.nextSibling)
     span.lastRun.parentNode.insertBefore(ref, rangeEnd.nextSibling)
   } else {
@@ -594,7 +595,13 @@ export function resolveChanges(doc, accept) {
         if (parent.tagName === 'w:sectPr') { keep.add('w:headerReference'); keep.add('w:footerReference') }
         for (const c of [...parent.childNodes]) if (!keep.has(c.tagName) && c !== el) parent.removeChild(c)
         if (stored) {
-          const anchor = [...parent.childNodes].find(c => keep.has(c.tagName)) ?? null
+          // pPr keeps its mark rPr/sectPr at the end; a sectPr's header/footer
+          // references come first, so restored children go after them (the
+          // change element is removed anyway).
+          const kept = [...parent.childNodes].filter(c => keep.has(c.tagName))
+          const anchor = parent.tagName === 'w:sectPr'
+            ? (kept.length > 0 ? kept.at(-1).nextSibling : parent.firstChild === el ? null : parent.firstChild)
+            : (kept[0] ?? el)
           for (const s of [...stored.childNodes]) parent.insertBefore(s, anchor)
         }
         parent.removeChild(el)

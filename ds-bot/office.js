@@ -7842,7 +7842,7 @@ function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = "B
   if (anchor) {
     const span = phraseRuns(doc, p, anchor);
     if (!span) throw new Error(`anchor "${anchor}" not found in ${paragraph}`);
-    p.insertBefore(rangeStart, span.firstRun);
+    span.firstRun.parentNode.insertBefore(rangeStart, span.firstRun);
     span.lastRun.parentNode.insertBefore(rangeEnd, span.lastRun.nextSibling);
     span.lastRun.parentNode.insertBefore(ref, rangeEnd.nextSibling);
   } else {
@@ -7944,7 +7944,8 @@ function resolveChanges(doc, accept) {
         }
         for (const c of [...parent.childNodes]) if (!keep.has(c.tagName) && c !== el) parent.removeChild(c);
         if (stored) {
-          const anchor = [...parent.childNodes].find((c) => keep.has(c.tagName)) ?? null;
+          const kept = [...parent.childNodes].filter((c) => keep.has(c.tagName));
+          const anchor = parent.tagName === "w:sectPr" ? kept.length > 0 ? kept.at(-1).nextSibling : parent.firstChild === el ? null : parent.firstChild : kept[0] ?? el;
           for (const s of [...stored.childNodes]) parent.insertBefore(s, anchor);
         }
         parent.removeChild(el);
@@ -8281,7 +8282,7 @@ function pptxClean(pkg, { dryRun = false } = {}) {
     const xml = pkg.get(owner) ?? Buffer.alloc(0);
     for (const [id, rel] of [...map]) {
       if (rel.mode !== "Internal" || !CONTENT_REL.test(rel.type)) continue;
-      if (!xml.includes(`"${id}"`)) map.delete(id);
+      if (!xml.includes(`"${id}"`) && !xml.includes(`'${id}'`)) map.delete(id);
     }
   }
   const listed = new Set(deckOrder(pkg).map((e) => e.part));
