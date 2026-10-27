@@ -6978,7 +6978,7 @@ var Package = class _Package {
       mkdirSync(dirname(file), { recursive: true });
       const parentReal = realpathSync(dirname(file));
       if (parentReal !== rootReal && !parentReal.startsWith(rootReal + sep)) fail2(`unpack: ${name} resolves outside ${dir}`);
-      if (existsSync(file) && lstatSync(file).isSymbolicLink()) fail2(`unpack: ${name} is a link`);
+      if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) fail2(`unpack: ${name} is a link`);
       const data = this.get(name);
       if (name.endsWith(".xml") || name.endsWith(".rels")) {
         try {

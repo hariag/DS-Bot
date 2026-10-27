@@ -206,7 +206,7 @@ export class Package {
       // A linked subdirectory walks the write outside the destination.
       const parentReal = realpathSync(dirname(file))
       if (parentReal !== rootReal && !parentReal.startsWith(rootReal + sep)) fail(`unpack: ${name} resolves outside ${dir}`)
-      if (existsSync(file) && lstatSync(file).isSymbolicLink()) fail(`unpack: ${name} is a link`)
+      if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) fail(`unpack: ${name} is a link`)
       const data = this.get(name)
       if (name.endsWith('.xml') || name.endsWith('.rels')) {
         try { writeFileSync(file, prettyForUnpack(data)); continue } catch { /* fall back to raw */ }
