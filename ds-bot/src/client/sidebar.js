@@ -24,6 +24,15 @@ function useMarkedUnread(id, active, marked, actions) {
 
 const PinMark = () => h('span', { className: 'bt-pin', 'aria-hidden': true }, h(PinMarkIcon))
 
+// The rail shows a row's name only on hover; the wide list does so when the name is
+// cut, which only the laid-out row can tell, so it is measured as the pointer enters.
+const nameIfCut = (event) => {
+  const row = event.currentTarget
+  const name = row.querySelector('.bt-row-title')
+  if (name && name.scrollWidth > name.clientWidth) row.title = name.textContent
+  else row.removeAttribute('title')
+}
+
 // Whether an approval waits for the user: for a Bot, in any of its Sessions; for a group,
 // from any of its members there.
 const useApproval = (useWork, match) => (useWork ? useWork(work => (work.approvals ?? []).some(match)) : false)
@@ -83,7 +92,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   }
   return h('button', {
     type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
-    'data-bot-id': id, title: wide ? undefined : bot.name, onClick: () => actions.openSession(id), onContextMenu,
+    'data-bot-id': id, title: wide ? undefined : bot.name, onMouseEnter: wide ? nameIfCut : undefined, onClick: () => actions.openSession(id), onContextMenu,
   },
   h(BotAvatar, { bot, size: 36, state, main }),
   pinned && !wide ? h(PinMark) : null,
@@ -112,7 +121,7 @@ function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSess
   const label = [room.name, pinned ? t('Pinned') : '', members.length > 0 ? t('Working') : '', approval ? t('Waiting for your approval') : ''].filter(Boolean).join(', ')
   return h('button', {
     type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
-    'data-room-id': id, onClick: () => actions.openSession(id),
+    'data-room-id': id, title: wide ? undefined : room.name, onMouseEnter: wide ? nameIfCut : undefined, onClick: () => actions.openSession(id),
     onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'room', id, x: event.clientX, y: event.clientY }) },
   },
   h(RoomAvatar, { room, roster, size: 36 }),
