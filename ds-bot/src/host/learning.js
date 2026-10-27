@@ -305,17 +305,16 @@ export function install(rt) {
     const store = data()
     const proposal = Object.hasOwn(store.proposals, id) ? store.proposals[id] : undefined
     if (proposal === undefined) throw Object.assign(new Error('This proposal is no longer open'), { code: 'bot/stale' })
-    delete store.proposals[id]
     if (approve !== true) {
+      delete store.proposals[id]
       store.declined = [...store.declined, { name: proposal.name, description: proposal.description, at: Date.now() }].slice(-settings.declinedMax)
       await persist()
       return { applied: false }
     }
-    try {
-      await applySkill(proposal)
-    } finally {
-      await persist()
-    }
+    // A failed approval keeps the card, so the user can still decline it.
+    await applySkill(proposal)
+    delete store.proposals[id]
+    await persist()
     return { applied: true }
   }
 

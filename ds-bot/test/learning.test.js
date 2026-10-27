@@ -273,5 +273,8 @@ test('an update approval fails if the learned skill changed after the proposal',
   assert.equal(answer.ok, false)
   assert.match(JSON.stringify(answer), /release-checks changed since this was proposed/)
   assert.equal(runtime.teamState().capabilities.items['release-checks'].content, 'Changed independently after the proposal.')
+  assert.equal(Object.keys(runtime.learningState().proposals).length, 1)
+  const declined = await runtime.call('learning-answer', { id: proposal.id, approve: false })
+  assert.equal(declined.ok, true)
   assert.equal(Object.keys(runtime.learningState().proposals).length, 0)
 })
