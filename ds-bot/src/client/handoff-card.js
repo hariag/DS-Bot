@@ -128,5 +128,4 @@ export const HANDOFF_CSS = `
 .bt-handoff-dot{flex:none;width:6px;height:6px;border-radius:50%;corner-shape:round;background:var(--bt-green)}
 .bt-handoff.bt-q-raised .bt-q-head{padding-bottom:12px}
 .bt-handoff .bt-q-foot{flex-wrap:wrap}
-.bt-handoff :is(.bt-q-btn,.bt-q-submit):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 `
