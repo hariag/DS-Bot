@@ -20,6 +20,7 @@ export const LEARNING = {
   tickMs: 60_000,
   readMs: 15_000,
   textMax: 24_000,
+  userTextMax: 8_000,
   userLineMax: 2_000,
   botLineMax: 1_200,
   learnedMax: 5,
@@ -112,9 +113,10 @@ export function skillProblem(proposal, { skills, learned, limit = LEARNING.learn
   }
   const description = typeof proposal.description === 'string' ? proposal.description.trim() : ''
   const content = typeof proposal.content === 'string' ? proposal.content.trim() : ''
+  const why = typeof proposal.why === 'string' ? proposal.why.trim() : ''
   if (description === '' || description.length > LEARNING.descriptionMax) return `the description must have 1 to ${LEARNING.descriptionMax} characters`
   if (content === '' || content.length > LEARNING.contentMax) return `the content must have 1 to ${LEARNING.contentMax} characters`
-  if (holdsSecret(description) || holdsSecret(content)) return 'it looks like it holds a secret'
+  if (holdsSecret(description) || holdsSecret(content) || holdsSecret(why)) return 'it looks like it holds a secret'
   const existing = Object.hasOwn(skills, name) ? skills[name] : undefined
   if (action === 'create') {
     if (existing !== undefined) return `${name} already exists`
@@ -142,7 +144,7 @@ export function install(rt) {
   const path = join(root, 'state.json')
   // `pending`: Bot id → the chat Sessions with a long turn since the last pass.
   // `cursors`: Session id → the newest line a pass has read. `proposals`: waiting
-  // for the user, by id. `declined`: the latest proposals the user turned down.
+  // for the user, by id. `learned`: skill names learned by each Bot.
   let saved
   const data = () => {
     if (saved !== undefined) return saved
@@ -156,6 +158,7 @@ export function install(rt) {
     saved.cursors ??= {}
     saved.proposals ??= {}
     saved.declined ??= []
+    saved.learned ??= {}
     return saved
   }
   let writing = Promise.resolve()
@@ -190,25 +193,35 @@ export function install(rt) {
     void persist()
   })
 
-  // What was said in a chat since the last pass, newest lines first until the budget.
+  // After the text budget, keep scanning to the cursor for user corrections.
   async function linesSince(sessionId) {
     const cursor = data().cursors[sessionId]
     const kept = []
+    const userLines = []
     let used = 0
+    let userUsed = 0
+    let overBudget = false
     let through
     for await (const line of rt.partLines(sessionId, AbortSignal.timeout(settings.readMs), { pages: Infinity })) {
       through ??= line.seq
       if (cursor !== undefined && line.seq <= cursor) break
       const text = clip(line.text, line.who === 'user' ? settings.userLineMax : settings.botLineMax)
-      if (kept.length > 0 && used + text.length > settings.textMax) break
-      kept.push(text)
-      used += text.length
+      if (!overBudget && used + text.length <= settings.textMax) {
+        kept.push(text)
+        used += text.length
+        continue
+      }
+      overBudget = true
+      if (text.startsWith('User: ') && userUsed + text.length <= settings.userTextMax) {
+        userLines.push(text)
+        userUsed += text.length
+      }
     }
-    return { lines: kept.reverse(), through }
+    return { lines: [...kept, ...userLines].reverse(), through }
   }
 
   const skillsOf = () => Object.fromEntries(Object.entries(state.capabilities?.items ?? {}).filter(([, item]) => item.kind === 'skill'))
-  const learnedOf = bot => (bot.capabilities ?? []).filter(name => skillsOf()[name]?.learned === true)
+  const learnedOf = bot => (data().learned[bot.id] ?? []).filter(name => skillsOf()[name] !== undefined && (bot.capabilities ?? []).includes(name))
   const waitingFor = botId => Object.values(data().proposals).filter(entry => entry.botId === botId)
 
   async function reviewSkill(bot, lines) {
@@ -226,6 +239,13 @@ export function install(rt) {
     })
     const reply = await rt.botShot(bot, skillSystem(), text, { sessionId: rt.chatOf(bot.id), kind: 'memory' })
     const proposal = parseJson(reply)
+    if (['description', 'content', 'why'].some(key => {
+      const value = proposal?.[key]
+      return typeof value === 'string' && rt.redactSecrets(value) !== value
+    })) {
+      rt.warn('ds-bot: the skill review of %s proposed content containing a saved secret', bot.name)
+      return undefined
+    }
     const problem = skillProblem(proposal, { skills, learned, limit: settings.learnedMax })
     if (problem !== undefined) {
       rt.warn('ds-bot: the skill review of %s proposed nothing usable: %s', bot.name, problem)
@@ -244,7 +264,10 @@ export function install(rt) {
       description: proposal.description.trim(),
       content: proposal.content.trim(),
       why: typeof proposal.why === 'string' ? clip(proposal.why.trim(), 300) : '',
-      ...(previous ? { previous: { description: previous.description, content: previous.content }, base: hashOf(previous.content) } : {}),
+      ...(previous ? {
+        previous: { description: previous.description, content: previous.content },
+        base: hashOf(`${previous.description}\n${previous.content}`),
+      } : {}),
     }
   }
 
@@ -264,21 +287,21 @@ export function install(rt) {
           continue
         }
         if (waitingFor(botId).length > 0) continue
-        const read = []
-        for (const sessionId of sessions) read.push({ sessionId, ...await linesSince(sessionId) })
-        const lines = read.flatMap(entry => entry.lines)
         try {
+          const read = []
+          for (const sessionId of sessions) read.push({ sessionId, ...await linesSince(sessionId) })
+          const lines = read.flatMap(entry => entry.lines)
           const proposal = lines.length === 0 ? undefined : await reviewSkill(bot, lines)
           if (proposal !== undefined) {
             store.proposals[proposal.id] = proposal
             made += 1
           }
+          for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through
+          delete store.pending[botId]
         } catch (error) {
           rt.warn('ds-bot: the skill review of %s failed: %s', bot.name, error?.message ?? error)
           continue
         }
-        for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through
-        delete store.pending[botId]
       }
       await persist()
       return made
@@ -322,12 +345,20 @@ export function install(rt) {
     const bot = rt.botOf(proposal.botId)
     if (bot === undefined) throw new Error('The Bot that learned this skill is gone')
     const current = skillsOf()[proposal.name]
-    if (proposal.action === 'create' && current !== undefined) throw new Error(`A skill named ${proposal.name} exists now`)
-    if (proposal.action === 'update' && (current === undefined || hashOf(current.content) !== proposal.base)) throw new Error(`${proposal.name} changed since this was proposed`)
-    const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
-    item.learned = true
-    await rt.save()
-    if (!(bot.capabilities ?? []).includes(item.name)) await rt.capabilityEndpoint('bot-capability', { botId: bot.id, name: item.name, attached: true })
+    const store = data()
+    if (proposal.action === 'create' && !(proposal.saved && current !== undefined)) {
+      if (current !== undefined) throw new Error(`A skill named ${proposal.name} exists now`)
+      const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
+      proposal.saved = true
+      store.learned[bot.id] = [...new Set([...(store.learned[bot.id] ?? []), item.name])]
+      await persist()
+    } else if (proposal.action === 'update') {
+      if (current === undefined || hashOf(`${current.description}\n${current.content}`) !== proposal.base) throw new Error(`${proposal.name} changed since this was proposed`)
+      const item = await rt.capabilitySave({ name: proposal.name, kind: 'skill', description: proposal.description, content: proposal.content }, { botId: bot.id, ui: false })
+      store.learned[bot.id] = [...new Set([...(store.learned[bot.id] ?? []), item.name])]
+      await persist()
+    }
+    if (!(bot.capabilities ?? []).includes(proposal.name)) await rt.capabilityEndpoint('bot-capability', { botId: bot.id, name: proposal.name, attached: true })
   }
 
   async function learningEndpoint(endpoint, body) {

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { apply } from '../index.js'
+import { createRuntime } from '../index.js'
 import { LEARNING, parseJson, skillProblem } from '../src/host/learning.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -37,9 +37,13 @@ const createReply = JSON.stringify({
 })
 const noneReply = JSON.stringify({ action: 'none', reason: 'This work taught nothing reusable.' })
 
-function start({ replies = [], config = {}, history = {}, seed = TEAM } = {}) {
+function start({ replies = [], config = {}, history = {}, seed = TEAM, learningSeed = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-learning-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(JSON.parse(JSON.stringify(seed))))
+  if (Object.keys(learningSeed).length > 0) {
+    mkdirSync(join(home, 'learning'), { recursive: true })
+    writeFileSync(join(home, 'learning', 'state.json'), JSON.stringify(learningSeed))
+  }
   const ctx = fakeContext()
   const requests = []
   Object.assign(ctx, {
@@ -88,7 +92,7 @@ function start({ replies = [], config = {}, history = {}, seed = TEAM } = {}) {
     ...config,
     learningTimes: { minTurnMs: 0, idleMs: 0, intervalMs: 0, tickMs: 10, ...config.learningTimes },
   }
-  apply(ctx, { home, ...settings })
+  const rt = createRuntime(ctx, { home, ...settings })
   const call = async (endpoint, payload = {}) => {
     const response = await route.fetch(new Request('http://localhost/api/bot', {
       method: 'POST',
@@ -103,7 +107,7 @@ function start({ replies = [], config = {}, history = {}, seed = TEAM } = {}) {
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
-  return { ctx, home, call, requests, history, learningPath, learningState, teamState, stop }
+  return { ctx, home, call, requests, history, learningPath, learningState, teamState, rt, stop }
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -164,6 +168,7 @@ test('skillProblem validates actions, learned-skill limits, and secret-looking c
     learned: ['release-checks'],
   }), /changes nothing/)
   assert.match(skillProblem({ ...proposal, content: 'The root password is hunter2' }, { skills: {}, learned: [] }), /secret/)
+  assert.match(skillProblem({ ...proposal, why: 'The root password is hunter2' }, { skills: {}, learned: [] }), /secret/)
   assert.equal(skillProblem({ ...proposal, content: 'Compare `password == input` with a timing-safe check' }, { skills: {}, learned: [] }), undefined)
   assert.match(skillProblem({ ...proposal, description: 'x'.repeat(LEARNING.descriptionMax + 1) }, { skills: {}, learned: [] }), /description/)
 })
@@ -191,11 +196,23 @@ test('a none reply makes no proposal and advances the chat cursor', async t => {
   assert.deepEqual((await runtime.call('state')).value.learning ?? {}, {})
 })
 
-test('a waiting proposal is skipped and approval saves and attaches a learned skill', async t => {
+test('approval ownership survives a normal skill edit and remains learned on review', async t => {
   const history = { b2: [...ownChat] }
-  const runtime = await startRuntime({ history, replies: [createReply, noneReply] })
+  const updateReply = JSON.stringify({
+    action: 'update',
+    name: 'release-checks',
+    description: 'Use when checking any release.',
+    content: 'Run the release checks.',
+    why: 'The work showed the scope should be broader.',
+  })
+  const runtime = await startRuntime({
+    history,
+    replies: [createReply, updateReply],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
   t.after(() => runtime.stop())
   await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
   await until(() => Object.keys(runtime.learningState().proposals ?? {}).length === 1)
   const proposal = (await runtime.call('state')).value.learning.b2[0]
   assert.equal(proposal.name, 'release-checks')
@@ -205,14 +222,50 @@ test('a waiting proposal is skipped and approval saves and attaches a learned sk
   await until(() => runtime.learningState().pending?.b2?.includes('b2'))
   await settle()
   assert.equal(runtime.requests.length, 1)
-
   const answer = await runtime.call('learning-answer', { id: proposal.id, approve: true })
   assert.equal(answer.value.applied, true)
-  await until(() => runtime.learningState().cursors?.b2 === 13 && runtime.learningState().pending?.b2 === undefined)
+  await runtime.call('capability-save', {
+    name: 'release-checks',
+    kind: 'skill',
+    description: 'Use when checking a release candidate.',
+    content: 'Run the release checks.',
+  })
+  await runtime.rt.learningRun()
+  await until(() => runtime.requests.length === 2)
+  await until(() => Object.values(runtime.learningState().proposals ?? {}).some(entry => entry.action === 'update'))
   const saved = runtime.teamState()
-  assert.equal(saved.capabilities.items['release-checks'].learned, true)
+  assert.equal(saved.capabilities.items['release-checks'].learned, undefined)
   assert.ok(saved.bots.b2.capabilities.includes('release-checks'))
-  assert.equal(runtime.requests.length, 2)
+  assert.deepEqual(runtime.learningState().learned.b2, ['release-checks'])
+  assert.match(runtime.requests[1].messages[0].content[0].text, /This Bot's learned skills[\s\S]*Use when checking a release candidate\./)
+})
+
+test('a failed create attachment can be retried without resaving or losing the proposal', async t => {
+  const runtime = await startRuntime({ replies: [createReply] })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => Object.keys(runtime.learningState().proposals ?? {}).length === 1)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  const attach = runtime.rt.capabilityEndpoint
+  let fail = true
+  runtime.rt.capabilityEndpoint = async (...args) => {
+    if (fail) {
+      fail = false
+      throw new Error('temporary attachment failure')
+    }
+    return attach(...args)
+  }
+
+  const first = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(first.ok, false)
+  assert.equal(runtime.learningState().proposals[proposal.id].saved, true)
+  assert.ok(runtime.learningState().learned.b2.includes('release-checks'))
+  assert.ok(runtime.learningState().proposals[proposal.id])
+
+  const second = await runtime.call('learning-answer', { id: proposal.id, approve: true })
+  assert.equal(second.value.applied, true)
+  assert.equal(runtime.learningState().proposals[proposal.id], undefined)
+  assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
 })
 
 test('declined proposals are recorded and included in the next skill request', async t => {
@@ -237,7 +290,7 @@ test('declined proposals are recorded and included in the next skill request', a
   assert.match(runtime.requests[1].messages[0].content[0].text, /Proposals the user declined[\s\S]*- release-checks: Use when checking a release\./)
 })
 
-test('an update approval fails if the learned skill changed after the proposal', async t => {
+test('an update approval fails if the learned skill description alone changed', async t => {
   const seed = JSON.parse(JSON.stringify(TEAM))
   seed.bots.b2.capabilities = ['release-checks']
   seed.capabilities.items['release-checks'] = {
@@ -257,7 +310,7 @@ test('an update approval fails if the learned skill changed after the proposal',
     content: 'Run the new release checks.',
     why: 'The work showed an additional step.',
   })
-  const runtime = await startRuntime({ seed, replies: [updateReply] })
+  const runtime = await startRuntime({ seed, replies: [updateReply], learningSeed: { learned: { b2: ['release-checks'] } } })
   t.after(() => runtime.stop())
   await finishTurn(runtime.ctx)
   await until(() => Object.keys(runtime.learningState().proposals ?? {}).length === 1)
@@ -266,15 +319,71 @@ test('an update approval fails if the learned skill changed after the proposal',
   await runtime.call('capability-save', {
     name: 'release-checks',
     kind: 'skill',
-    description: 'Use when checking a release.',
-    content: 'Changed independently after the proposal.',
+    description: 'Use when checking a release candidate.',
+    content: 'Run the original release checks.',
   })
   const answer = await runtime.call('learning-answer', { id: proposal.id, approve: true })
   assert.equal(answer.ok, false)
   assert.match(JSON.stringify(answer), /release-checks changed since this was proposed/)
-  assert.equal(runtime.teamState().capabilities.items['release-checks'].content, 'Changed independently after the proposal.')
+  assert.equal(runtime.teamState().capabilities.items['release-checks'].description, 'Use when checking a release candidate.')
   assert.equal(Object.keys(runtime.learningState().proposals).length, 1)
   const declined = await runtime.call('learning-answer', { id: proposal.id, approve: false })
   assert.equal(declined.ok, true)
   assert.equal(Object.keys(runtime.learningState().proposals).length, 0)
+})
+
+test('a saved secret in a proposed skill is not shown as a proposal', async t => {
+  const secretValue = 'saved-secret-value-37'
+  const runtime = await startRuntime({
+    replies: [JSON.stringify({
+      action: 'create',
+      name: 'release-checks',
+      description: 'Use when checking a release.',
+      content: `Run with ${secretValue}.`,
+      why: 'The work showed it is needed.',
+    })],
+  })
+  t.after(() => runtime.stop())
+  await runtime.call('secret-set', { name: 'LEARNING_TEST', value: secretValue })
+  await finishTurn(runtime.ctx)
+  await until(() => runtime.learningState().cursors?.b2 === 11)
+  assert.deepEqual(runtime.learningState().proposals, {})
+})
+
+test('user corrections remain in long chat reviews after the text budget', async t => {
+  const runtime = await startRuntime({ replies: [noneReply], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  const lines = Array.from({ length: 30 }, (_, index) => ({
+    seq: 41 - index,
+    who: 'assistant',
+    text: `Bot: ${'x'.repeat(1_200)}`,
+  }))
+  lines.push({ seq: 10, who: 'user', text: 'User: Keep the correction even when the Bot writes a long answer.' })
+  runtime.rt.partLines = async function* () {
+    yield* lines
+  }
+  await finishTurn(runtime.ctx)
+  await runtime.rt.learningRun()
+  assert.match(runtime.requests[0].messages[0].content[0].text, /User: Keep the correction even when the Bot writes a long answer\./)
+})
+
+test('a failed chat read keeps that Bot pending while other Bots are reviewed', async t => {
+  const seed = JSON.parse(JSON.stringify(TEAM))
+  seed.bots.b3 = { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Coding', model: 'deepseek/v4', instructions: '', capabilities: [], createdAt: 3 }
+  const runtime = await startRuntime({ seed, replies: [noneReply], config: { learningTimes: { tickMs: 100_000 } } })
+  t.after(() => runtime.stop())
+  runtime.rt.partLines = async function* (sessionId) {
+    if (sessionId === 'b2') throw new Error('session read failed')
+    yield { seq: 11, who: 'user', text: 'User: Review this work' }
+  }
+  await finishTurn(runtime.ctx, { id: 'b2' })
+  await finishTurn(runtime.ctx, { id: 'b3' })
+  await until(() => runtime.learningState().pending?.b2?.length && runtime.learningState().pending?.b3?.length)
+
+  await runtime.rt.learningRun()
+
+  assert.deepEqual(runtime.learningState().pending.b2, ['b2'])
+  assert.equal(runtime.learningState().pending.b3, undefined)
+  assert.equal(runtime.learningState().cursors.b3, 11)
+  assert.equal(runtime.requests.length, 1)
 })
