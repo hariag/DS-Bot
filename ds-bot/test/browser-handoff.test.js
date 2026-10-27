@@ -9,7 +9,7 @@ import { mountBrowserPlugin } from '../src/host/browser/mount.js'
 import { createSession } from '../src/host/browser/session.js'
 import { toolDefs as refsTools } from '../src/host/browser/refs.js'
 import { toolDefs as scriptTools } from '../src/host/browser/script.js'
-import { toolDefs as taskTools } from '../src/host/browser/task.js'
+import { runTask, toolDefs as taskTools } from '../src/host/browser/task.js'
 import { REPLY_KIND } from '../src/host/constants.js'
 import { handoffReply, historyEntry, install as installParts, readReply, replyText } from '../src/host/parts.js'
 import { fakeContext } from './fake-ctx.js'
@@ -136,6 +136,7 @@ test('browser_task forwards its outer call origin to a nested handoff', async ()
 
   const result = await tools.get('browser_task').execute({ goal: 'Sign in' }, { agent: { id: 'b2' }, callId: 'outer-call' })
   assert.match(result.text, /Waiting for sign-in/)
+  assert.match(result.text, /Handoffs:\nwaiting/)
   assert.deepEqual(holds, [
     ['b2', { by: 'bot', reason: 'login', note: 'Sign in', callId: 'outer-call', sessionId: 'b2' }],
   ])
@@ -156,7 +157,7 @@ test('only a handoff raised in the Bot\'s own chat keeps its call and drops the 
   assert.deepEqual(handoffHold(rt, 'b2', { by: 'bot', reason: 'other', note: '' }), { by: 'bot', reason: 'other', note: '' })
 })
 
-test('a handoff outside the Bot\'s own chat says to ask there instead of waiting for a card', async (t) => {
+test('a handoff outside the Bot\'s own chat gives resume-first guidance, and browser_task returns it', async (t) => {
   const { rt, stop } = start()
   t.after(stop)
   await rt.load()
@@ -180,8 +181,28 @@ test('a handoff outside the Bot\'s own chat says to ask there instead of waiting
   const group = makeSession().handoff('login', 'Sign in', { callId: 'call-2', sessionId: 'room-session' })
   assert.match(group, /no handoff card in this conversation/)
   assert.match(group, /Tell the user here what you need them to do/)
-  assert.match(group, /browser_snapshot or call browser_resume/)
+  assert.match(group, /call browser_resume, then browser_snapshot/)
   assert.deepEqual(rt.browserChannel.holdOf('b2'), { by: 'bot', reason: 'login', note: 'Sign in' })
+
+  rt.browserChannel.setHold('b2', null)
+  let completions = 0
+  const task = await runTask({
+    session: makeSession(),
+    goal: 'Sign in',
+    origin: { callId: 'call-3', sessionId: 'room-session' },
+    complete: async () => {
+      completions += 1
+      if (completions === 1) {
+        return { choices: [{ message: { tool_calls: [{
+          id: 'inner-call',
+          function: { name: 'browser_handoff', arguments: JSON.stringify({ reason: 'login', note: 'Sign in' }) },
+        }] } }] }
+      }
+      return { choices: [{ message: { content: 'Nested answer' } }] }
+    },
+  })
+  assert.match(task.text, /Nested answer/)
+  assert.ok(task.text.includes(`Handoffs:\n${group}`))
 })
 
 test('the channel keeps a handoff\'s call on its hold', async (t) => {

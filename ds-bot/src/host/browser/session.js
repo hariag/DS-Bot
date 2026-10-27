@@ -708,7 +708,7 @@ export function createSession({ context, browser, page, botId, userDataDir, cook
       onHold?.({ by: 'bot', reason: kind, note: hold.note, ...origin })
       const recorded = getHold?.()
       const guidance = origin?.callId !== undefined && recorded && recorded.callId === undefined
-        ? 'There is no handoff card in this conversation. Tell the user here what you need them to do. After they reply, check with browser_snapshot or call browser_resume.'
+        ? 'There is no handoff card in this conversation. Tell the user here what you need them to do. After they reply, call browser_resume, then browser_snapshot to check the page.'
         : 'Call browser_resume when they have finished.'
       return `Waiting for the user (${kind}). ${hold.note || 'Ask them to take over.'} ${guidance}`
     },
