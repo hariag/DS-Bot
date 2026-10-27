@@ -144,12 +144,14 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-row-preview{font-size:13px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-unread{width:8px;height:8px;border-radius:50%;background:var(--bt-accent);flex:none;margin-right:2px;animation:bt-fade .13s cubic-bezier(.22,1,.36,1)}
 .bt-unread-wait{background:var(--bt-star)}
-/* Our own left column, portalled over the shell's collapsed sidebar: it starts
-   below the window's title strip and stays under the shell's title-bar switch
-   (z 30) and the popovers (z 60). */
-.bt-leftcol{position:fixed;left:0;top:var(--dsh-frame-top-clearance,0px);bottom:0;z-index:25;display:flex;background:var(--bt-sidebar);border-right:.5px solid var(--bt-line);box-sizing:border-box;padding:6px 12px;color:var(--bt-ink);font-family:var(--bt-font)}
+/* Our own left column, portalled over the shell's collapsed sidebar. It reaches
+   the window's top edge so the title band and the column share one fill (under
+   Mica the app styles DSH's sidebar the same way, via --bt-leftcol-fill there);
+   it stays under the shell's title-bar switch (z 30) and the popovers (z 60),
+   and the floating drawer keeps the opaque fill over the conversation. */
+.bt-leftcol{position:fixed;left:0;top:0;bottom:0;z-index:25;display:flex;--bt-lc-clear:var(--dsh-frame-top-clearance,var(--dsh-windows-titlebar-height,0px));background:var(--bt-leftcol-fill,var(--dsw-specific-sidebar-fill));border-right:.5px solid var(--bt-line);box-sizing:border-box;padding:calc(var(--bt-lc-clear) + 6px) 12px 6px;color:var(--bt-ink);font-family:var(--bt-font)}
 html[data-windows-titlebar] .bt-leftcol,html[data-platform=darwin] .bt-leftcol{border-right:none}
-.bt-leftcol[data-left=drawer]{box-shadow:8px 0 24px rgba(0,0,0,.14)}
+.bt-leftcol[data-left=drawer]{background:var(--dsw-specific-sidebar-fill);box-shadow:8px 0 24px rgba(0,0,0,.14)}
 .bt-leftcol>.bt-side{width:100%}
 .bt-leftcol-foot{display:flex;align-items:center;gap:9px;padding-top:8px;flex:none}
 .bt-rail{align-items:center;padding:0}
@@ -158,7 +160,7 @@ html[data-windows-titlebar] .bt-leftcol,html[data-platform=darwin] .bt-leftcol{b
 .bt-rail-sep{width:24px;height:1px;flex:none;background:var(--bt-line)}
 .bt-rail .bt-agent-ava{width:44px;height:44px}
 .bt-rail .bt-list{align-items:center;gap:4px}
-.bt-leftcol[data-left=rail]{padding:8px 16px}
+.bt-leftcol[data-left=rail]{padding:calc(var(--bt-lc-clear) + 8px) 16px 8px}
 .bt-leftcol-foot-rail{flex-direction:column;gap:6px}
 .bt-dot{position:absolute;top:4px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--bt-accent);box-shadow:0 0 0 1.5px var(--bt-sidebar)}
 .bt-dot-wait{background:var(--bt-star)}
@@ -568,6 +570,13 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
 html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
 html[data-windows-titlebar] :is(.bt-side-collapse,.bt-rail-expand),html[data-platform=darwin] :is(.bt-side-collapse,.bt-rail-expand){display:none}
+/* Under a Windows title bar our own switch replaces the shell's: the shell's
+   toggle expands the shell sidebar first, and pulling it back afterwards is a
+   visible flash of the shell's column. */
+html[data-windows-titlebar] [class*="_logoRow"]>[class*="_toggle"]{display:none!important}
+.bt-title-toggle{display:none;position:fixed;left:12px;top:calc((var(--dsh-windows-titlebar-height,0px) - 28px) / 2);width:28px;height:28px;z-index:30;-webkit-app-region:no-drag;align-items:center;justify-content:center;border:0;border-radius:6px;padding:0;background:transparent;color:var(--bt-ink);cursor:pointer;font-family:var(--bt-font)}
+html[data-windows-titlebar] .bt-title-toggle{display:inline-flex}
+.bt-title-toggle:hover{background:var(--bt-hover)}
 /* The footer ends in the Bot row: the whale's settings seat, then Connect plugins. Every
    other plugin's entry takes a whole row above it, in the shell's order, so none of them
    squeezes the Bot row. */

@@ -269,6 +269,19 @@ function LeftColumn({ mode, width, children }) {
   return createPortal(h('div', { className: 'bt-leftcol', 'data-left': mode, style: { width: `${width}px` } }, children), document.body)
 }
 
+// The shell's title-bar switch on Windows asks the shell to expand before our
+// sync pulls it back, a visible flash. Under a Windows title bar our own switch
+// replaces it and goes straight to the next state.
+function TitleToggle({ left, onToggle }) {
+  if (typeof document === 'undefined' || !document.documentElement.hasAttribute('data-windows-titlebar')) return null
+  const collapse = left === 'open' || left === 'drawer'
+  return createPortal(h('button', {
+    type: 'button', className: 'bt-title-toggle',
+    'aria-label': t(collapse ? 'Collapse sidebar' : 'Expand sidebar'),
+    title: t(collapse ? 'Collapse sidebar' : 'Expand sidebar'), onClick: onToggle,
+  }, h(SidebarIcon)), document.body)
+}
+
 export function TeamSidebar(props) {
   const { wide, useRoster, useUi, useSessions, actions } = props
   const listRef = useRef(null)
@@ -388,6 +401,11 @@ export function TeamSidebar(props) {
     actions.setSidebarPref?.('open')
     if (frameSnap.viewport < frameSnap.sidebarWidth + MIN_CHAT) actions.setLeftDrawer?.(true)
   }
+  const onTitleToggle = () => {
+    if (layout.left === 'open') { actions.setLeftDrawer?.(false); actions.setSidebarPref?.('rail') }
+    else if (layout.left === 'drawer') actions.setLeftDrawer?.(false)
+    else expandLeft()
+  }
   const top = wideContent
     ? h('div', { className: 'bt-side-top' },
         h('span', { className: 'bt-brand' }, h(BrandMark, { size: 22 }), h(BrandName)),
@@ -419,8 +437,9 @@ export function TeamSidebar(props) {
           ? h(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true })
           : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))),
     foot)
-  if (mode === 'inline') return content
-  return h(LeftColumn, { mode, width: ourWidth }, content)
+  return h(Fragment, null,
+    h(TitleToggle, { left: layout.left, onToggle: onTitleToggle }),
+    mode === 'inline' ? content : h(LeftColumn, { mode, width: ourWidth }, content))
 }
 
 // The update button at the sidebar's top right: a cloud while a newer DS Bot —

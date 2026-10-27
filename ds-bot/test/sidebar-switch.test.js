@@ -266,9 +266,10 @@ function rulesOf(css) {
     at = end
   }
 }
-const SHELL_PARTS = /_logoRow|_brand|_toggle|_newSession|_footArea|_collapsed|_topStrip|bt-side-collapse/
+const SHELL_PARTS = /_logoRow|_brand|_toggle|_newSession|_footArea|_collapsed|_topStrip|bt-side-collapse|bt-title-toggle/
 const rules = [...rulesOf(SHELL_CSS), ...rulesOf(SIDEBAR_CSS)].filter(rule => SHELL_PARTS.test(rule.selector))
 const hiding = rules.filter(rule => /display:none/.test(rule.body))
+const showing = rules.filter(rule => /display:inline-flex/.test(rule.body))
 
 // The shell sidebar's own markup (dsh-client-ui-sidebar SidebarRoot), reduced to what the
 // team view reshapes: the switch is in the logo row, except in a macOS desktop window,
@@ -281,6 +282,7 @@ function shell({ platform, collapsed }) {
       <div class="x_root${collapsed ? ' x_collapsed' : ''}">
         ${darwin ? `<div class="x_topStrip">${toggle}</div>` : ''}
         <div class="x_logoRow">${collapsed ? '' : '<button class="x_brand x_wide"></button>'}${darwin ? '' : toggle}</div>
+      <button class="bt-title-toggle"></button>
         <div class="x_newSession"></div>
         <div class="team">${collapsed ? '' : '<div class="bt-side-top"><button class="bt-round bt-side-collapse"></button></div>'}</div>
         <div class="x_footArea"><span class="bt-foot-account"></span></div>
@@ -289,11 +291,11 @@ function shell({ platform, collapsed }) {
   const { document } = new JSDOM(html).window
   const hidden = (node) => {
     for (let at = node; at && at.nodeType === 1; at = at.parentElement) {
-      if (hiding.some(rule => at.matches(rule.selector))) return true
+      if (hiding.some(rule => at.matches(rule.selector)) && !showing.some(rule => at.matches(rule.selector))) return true
     }
     return false
   }
-  const switches = [...document.querySelectorAll('.x_toggle, .bt-side-collapse')].filter(node => !hidden(node))
+  const switches = [...document.querySelectorAll('.x_toggle, .bt-side-collapse, .bt-title-toggle')].filter(node => !hidden(node))
   return { document, hidden, switches }
 }
 
@@ -303,9 +305,11 @@ for (const platform of ['web', 'windows', 'mac']) {
       const { document, hidden, switches } = shell({ platform, collapsed })
       assert.equal(switches.length, 1, `switches shown: ${switches.map(node => node.className).join(' | ') || 'none'}`)
       const [shown] = switches
-      // An open sidebar on the web has the team's own button; everywhere else the shell's
-      // switch stays where the shell puts it.
+      // An open sidebar on the web has the team's own button; under a Windows
+      // title bar our own switch replaces the shell's (which would flash the
+      // shell's column before we pull it back); elsewhere the shell's stays.
       assert.equal(shown.classList.contains('bt-side-collapse'), platform === 'web' && !collapsed)
+      assert.equal(shown.classList.contains('bt-title-toggle'), platform === 'windows')
       // What the team view replaces stays out of sight.
       assert.equal(hidden(document.querySelector('.x_newSession')), true)
       const brand = document.querySelector('.x_brand')
