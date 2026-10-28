@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,7 +7,8 @@ import { test } from 'node:test'
 import { readStartFrame, writeStartFrame } from '../src/start-frame.mjs'
 import {
   acceptsAct, centred, clampInto, clockMs, cubicBezier, detailsText, explainOf, failureReason, fallbackMs, GROWTH, GROWTH_EASING,
-  growthSteps, isStartPage, MAIN_SIZE, mainRect, START_ACTS, startSize, startSnapshot, startUrl,
+  growthSteps, isStartPage, MAIN_SIZE, mainRect, START_ACT, START_ACTS, START_STATE, startSize, startSnapshot, startUrl, StartWindow,
+  TEAM_VIEW_MS, WATCHDOG_MS,
 } from '../src/start-window.mjs'
 
 const AREA = { x: 0, y: 0, width: 1920, height: 1040 }
@@ -87,7 +89,6 @@ test('a failure gets one of the five reasons of the failure page', () => {
   assert.equal(failureReason(new Error('EPERM: operation not permitted, open \'x\'')), 'permission')
   assert.equal(failureReason(coded('ENOSPC', 'ENOSPC: no space left on device, write')), 'space')
   assert.equal(failureReason(new Error('There is not enough space on the disk.')), 'space')
-  assert.equal(failureReason(coded('ENOENT', 'spawn C:\\Program Files\\DeepSeek Bot\\DeepSeek Bot.exe ENOENT')), 'files')
   assert.equal(failureReason(new Error('The DSH Host stopped (exit 1):\nError: Cannot find module \'@deepseek-ai/dsh-base\'')), 'files')
   assert.equal(failureReason(new Error('The app could not load its own bundles:\nds-bot: missing')), 'files')
   assert.equal(failureReason(new Error('The DSH Host stopped (exit 1):\nError: EACCES: permission denied, open \'state.json\'')), 'permission')
@@ -96,6 +97,22 @@ test('a failure gets one of the five reasons of the failure page', () => {
   assert.equal(failureReason(new Error('DeepSeek Bot: no free port on 127.0.0.1')), 'other')
   assert.equal(failureReason('a string'), 'other')
   assert.equal(failureReason(undefined), 'other')
+})
+
+test('only a missing file of the app\'s own says that the install is incomplete', () => {
+  const program = join(tmpdir(), 'DeepSeek Bot')
+  const where = { program: [join(tmpdir(), 'electron'), program] }
+  const missing = (path, message) => Object.assign(new Error(message), { code: 'ENOENT', path })
+  const exe = join(program, 'DeepSeek Bot.exe')
+  assert.equal(failureReason(missing(exe, `spawn ${exe} ENOENT`), where), 'files')
+  assert.equal(failureReason(missing(exe, `spawn ${exe} ENOENT`)), 'other')
+  // A saved data folder on a drive that is gone.
+  const data = join(tmpdir(), 'gone', 'DeepSeek Bot', 'data', 'profiles', 'ds-bot')
+  assert.equal(failureReason(missing(data, `ENOENT: no such file or directory, mkdir '${data}'`), where), 'other')
+  // A Host that stopped: its error output names the missing file.
+  const bundle = join(program, 'resources', 'app.asar.unpacked', 'node_modules', 'x', 'index.js')
+  assert.equal(failureReason(new Error(`The DSH Host stopped (exit 1):\nError: ENOENT: no such file or directory, open '${bundle}'`), where), 'files')
+  assert.equal(failureReason(new Error(`The DSH Host stopped (exit 1):\nError: ENOENT: no such file or directory, open '${join(data, 'state.json')}'`), where), 'engine')
 })
 
 test('the main process takes only its own acts, each in its own views', () => {
@@ -147,7 +164,7 @@ test('the snapshot carries the phase, the stages done and the clock', () => {
   assert.deepEqual(booting, {
     v: 1, lang: 'zh', start: 'first', motion: 'normal', frame: 'band', view: 'boot', phase: 'data', done: [],
     clock: { ms: 6400, at: now, running: true, rate: 1 },
-    explain: { mode: 'new', nextStep: true, previewNotice: false }, celebrate: true,
+    explain: { mode: 'new', nextStep: true, previewNotice: true }, celebrate: true,
   })
   assert.equal(startSnapshot(state({ done: ['data'] }), now).phase, 'engine')
   const ready = startSnapshot(state({ view: 'handoff', done: ['team', 'data', 'engine'] }), now)
@@ -172,7 +189,8 @@ test('the snapshot carries the phase, the stages done and the clock', () => {
 })
 
 test('what the hint row can prepare for: a new team, a reinstall or an import', () => {
-  assert.deepEqual(explainOf(), { mode: 'new', nextStep: true, previewNotice: false })
+  // DSH shows its preview notice on a data folder without a team, which has no Session yet.
+  assert.deepEqual(explainOf(), { mode: 'new', nextStep: true, previewNotice: true })
   assert.deepEqual(explainOf({ team: { bots: 6, rooms: 2 } }), { mode: 'reinstall', bots: 6, groups: 2, nextStep: false, previewNotice: false })
   assert.deepEqual(explainOf({ offered: true }), { mode: 'import', nextStep: false, previewNotice: false })
   assert.deepEqual(explainOf({ offered: true, team: { bots: 1, rooms: 0 } }).mode, 'import')
@@ -214,4 +232,300 @@ test('every dialog belongs to a window', () => {
   })
   assert.deepEqual(loose, [])
   assert.ok(files.every(name => !readFileSync(new URL(name, src), 'utf8').includes('showErrorBox')))
+})
+
+// Just enough of Electron for StartWindow: windows that record what is done to them, and the
+// start page's act channel.
+function fakeElectron() {
+  const windows = []
+  let act
+  class Contents extends EventEmitter {
+    sent = []
+    reloads = 0
+    mainFrame = { url: '' }
+    send(channel, state) { if (channel === START_STATE) this.sent.push(state) }
+    setWindowOpenHandler() {}
+    toggleDevTools() {}
+    reload() { this.reloads += 1; this.emit('dom-ready') }
+  }
+  class Window extends EventEmitter {
+    webContents = new Contents()
+    calls = []
+    destroyed = false
+    minimized = false
+    focused = true
+    constructor({ x = 0, y = 0, width = 800, height = 600, show = true } = {}) {
+      super()
+      this.bounds = { x, y, width, height }
+      this.visible = show
+      windows.push(this)
+    }
+    loadURL(url) { this.webContents.mainFrame.url = url; return Promise.resolve() }
+    setContentBounds(rect) { this.bounds = { ...rect } }
+    setBounds(rect) { this.bounds = { ...rect }; this.calls.push('setBounds') }
+    getBounds() { return { ...this.bounds } }
+    getNormalBounds() { return { ...this.bounds } }
+    isDestroyed() { return this.destroyed }
+    destroy() { if (!this.destroyed) { this.destroyed = true; this.emit('closed') } }
+    isMinimized() { return this.minimized }
+    isFocused() { return this.focused }
+    restore() { this.minimized = false }
+    minimize() { this.minimized = true; this.calls.push('minimize') }
+    show() { this.visible = true; this.calls.push('show') }
+    showInactive() { this.visible = true; this.calls.push('showInactive') }
+    hide() { this.visible = false; this.calls.push('hide') }
+    focus() { this.calls.push('focus') }
+    flashFrame(on) { this.calls.push(`flash ${String(on)}`) }
+    setSkipTaskbar(skip) { this.calls.push(`skipTaskbar ${String(skip)}`) }
+    setTitleBarOverlay() {}
+    setBackgroundColor() {}
+    getMediaSourceId() { return 'window:1:0' }
+    moveAbove() {}
+  }
+  const display = { workArea: AREA }
+  const electron = {
+    BrowserWindow: Window,
+    ipcMain: { handle: (channel, handler) => { if (channel === START_ACT) act = handler } },
+    screen: { getCursorScreenPoint: () => ({ x: 10, y: 10 }), getDisplayNearestPoint: () => display, getDisplayMatching: () => display, getPrimaryDisplay: () => display },
+    shell: { openPath: async () => '' },
+    clipboard: { writeText() {} },
+    nativeTheme: Object.assign(new EventEmitter(), { shouldUseDarkColors: false }),
+    systemPreferences: { getAnimationSettings: () => ({ prefersReducedMotion: false }) },
+  }
+  return { electron, windows, act: (event, name, payload) => act(event, name, payload) }
+}
+
+function startWindow(t) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 })
+  t.mock.method(console, 'log', () => {})
+  const fake = fakeElectron()
+  const main = new fake.electron.BrowserWindow({ show: false })
+  const calls = { retry: 0, reload: 0, close: 0 }
+  const start = new StartWindow({
+    electron: fake.electron, page: join(tmpdir(), 'start', 'start.html'), preload: 'preload.cjs', icon: 'icon.ico', mica: false, devTools: false,
+    lang: () => 'en', motion: 'normal', version: '0.0.0', program: [], log: { dir: 'logs', tail: () => ['a log line'] },
+    mainWindow: () => main,
+    onRetry: () => { calls.retry += 1 }, onReload: () => { calls.reload += 1 }, onClose: () => { calls.close += 1 },
+  })
+  const win = () => fake.windows.at(-1)
+  const page = () => ({ sender: win().webContents, senderFrame: win().webContents.mainFrame })
+  return {
+    start, main, calls, win,
+    tick: (ms) => { t.mock.timers.tick(ms) },
+    state: () => win().webContents.sent.at(-1),
+    act: (name, payload, event = page()) => fake.act(event, name, payload),
+    other: () => new fake.electron.BrowserWindow(),
+  }
+}
+
+test('the start window takes acts only from its own page, each in its own view', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  const own = s.win()
+  const ownFrame = { sender: own.webContents, senderFrame: own.webContents.mainFrame }
+  const other = s.other()
+  assert.equal(s.act('openLogs', undefined, { sender: other.webContents, senderFrame: other.webContents.mainFrame }), false)
+  assert.equal(s.act('openLogs', undefined, { sender: own.webContents, senderFrame: { url: own.webContents.mainFrame.url } }), false)
+  const loaded = own.webContents.mainFrame.url
+  own.webContents.mainFrame.url = loaded.replace('first', 'later')
+  assert.equal(s.act('openLogs', undefined, ownFrame), false)
+  own.webContents.mainFrame.url = loaded
+  assert.equal(s.act('openLogs', undefined, ownFrame), true)
+  assert.equal(s.act('retry', undefined, ownFrame), false)
+  assert.equal(s.act('freshStart', undefined, ownFrame), false)
+  assert.equal(s.calls.retry, 0)
+})
+
+test('the 180 s question comes on the start\'s clock while the engine is not up', async (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  // A dialog stops the clock: the user's thinking time is not the engine's.
+  let answer
+  const asked = s.start.asking(new Promise((resolve) => { answer = resolve }))
+  s.tick(WATCHDOG_MS)
+  assert.equal(s.state().view, 'boot')
+  answer()
+  await asked
+  s.tick(WATCHDOG_MS - 1)
+  assert.equal(s.state().view, 'boot')
+  s.tick(1)
+  assert.equal(s.state().view, 'watchdog')
+  assert.equal(s.state().clock.running, false)
+  // 〔继续等待〕: another 180 s on the clock.
+  assert.equal(s.act('wait'), true)
+  assert.equal(s.state().view, 'boot')
+  s.tick(WATCHDOG_MS - 1)
+  assert.equal(s.state().view, 'boot')
+  s.tick(1)
+  assert.equal(s.state().view, 'watchdog')
+  // The engine comes up meanwhile: the question goes, and does not come back.
+  s.start.done('engine')
+  assert.equal(s.state().view, 'boot')
+  assert.deepEqual(s.state().done, ['data', 'engine'])
+  s.tick(2 * WATCHDOG_MS)
+  assert.equal(s.state().view, 'boot')
+})
+
+test('a retry after the engine was up guards the new engine, while the whale keeps its stop', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  s.start.done('engine')
+  s.start.teamLoading()
+  s.start.fail(new Error('The DSH Host stopped (exit 1)'))
+  assert.equal(s.state().view, 'failed')
+  assert.equal(s.state().failure.reason, 'engine')
+  assert.equal(s.act('retry'), true)
+  assert.equal(s.calls.retry, 1)
+  assert.deepEqual(s.state().done, ['data', 'engine'])
+  assert.equal(s.state().phase, 'team')
+  // The old team view cannot hand over before the new engine is up.
+  s.start.ready()
+  assert.equal(s.state().view, 'boot')
+  s.tick(WATCHDOG_MS)
+  assert.equal(s.state().view, 'watchdog')
+  assert.equal(s.act('retry'), true)
+  s.start.done('engine')
+  s.tick(2 * WATCHDOG_MS)
+  assert.equal(s.state().view, 'boot')
+  s.start.ready()
+  assert.equal(s.state().view, 'handoff')
+  // The first success after a retry celebrates.
+  assert.equal(s.state().celebrate, true)
+})
+
+test('the team view has 20 s to call ready(); a late ready() hands over without a celebration', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  s.start.done('engine')
+  s.start.teamLoading()
+  s.tick(TEAM_VIEW_MS - 1)
+  assert.equal(s.state().view, 'boot')
+  s.tick(1)
+  assert.equal(s.state().view, 'viewFailed')
+  assert.deepEqual(s.state().failure, { reason: 'other', log: ['a log line'] })
+  // 〔重新载入〕: the hidden team view loads again and has another 20 s.
+  assert.equal(s.act('reloadView'), true)
+  assert.equal(s.calls.reload, 1)
+  assert.equal(s.state().view, 'boot')
+  s.tick(TEAM_VIEW_MS)
+  assert.equal(s.state().view, 'viewFailed')
+  s.start.ready()
+  assert.equal(s.state().view, 'handoff')
+  assert.equal(s.state().celebrate, false)
+  assert.equal('failure' in s.state(), false)
+})
+
+for (const [kind, wait] of [['first', 2500], ['later', 800]]) {
+  test(`without handoffShow the team window shows by itself after ${String(wait)} ms on a ${kind} start`, async (t) => {
+    const s = startWindow(t)
+    s.start.open(kind)
+    s.start.done('data')
+    s.start.done('engine')
+    s.start.ready()
+    s.tick(wait - 1)
+    assert.equal(s.main.visible, false)
+    s.tick(1)
+    assert.equal(s.main.visible, true)
+    assert.deepEqual(s.main.calls.slice(-2), ['show', 'focus'])
+    assert.ok(s.win().calls.includes('skipTaskbar true'))
+    await s.start.teamShown
+    s.tick(300)
+    assert.equal(s.win().destroyed, true)
+    // Gone after the hand-off, the start window does not quit the app.
+    assert.equal(s.calls.close, 0)
+  })
+}
+
+test('after handoffShow the start window grows into the team window\'s rect, and the team window shows on it', (t) => {
+  const s = startWindow(t)
+  s.start.open('later')
+  s.start.done('data')
+  s.start.done('engine')
+  s.start.ready()
+  const from = s.win().getBounds()
+  assert.equal(s.act('handoffShow'), true)
+  const target = mainRect(from, AREA)
+  assert.deepEqual(s.main.bounds, target)
+  s.tick(GROWTH.delay - 1)
+  assert.deepEqual(s.win().bounds, from)
+  s.tick(1)
+  const widths = []
+  for (let step = 0; step < 40 && !s.main.visible; step += 1) {
+    s.tick(GROWTH.step)
+    widths.push(s.win().bounds.width)
+  }
+  assert.equal(s.main.visible, true)
+  assert.deepEqual(s.win().bounds, target)
+  assert.ok(widths.some(width => width > from.width && width < target.width), 'the start window jumps instead of growing')
+  // A second handoffShow does nothing.
+  assert.equal(s.act('handoffShow'), true)
+  assert.equal(s.main.calls.filter(call => call === 'show').length, 1)
+})
+
+for (const how of ['behind', 'minimized']) {
+  test(`the team window comes up ${how} when the start window is`, (t) => {
+    const s = startWindow(t)
+    s.start.open('later')
+    if (how === 'behind') s.win().focused = false
+    else s.win().minimized = true
+    s.start.done('data')
+    s.start.done('engine')
+    s.start.ready()
+    s.act('handoffShow')
+    for (let step = 0; step < 60 && !s.main.calls.includes('flash true'); step += 1) s.tick(GROWTH.step)
+    assert.deepEqual(s.main.calls.slice(-2), [how === 'behind' ? 'showInactive' : 'minimize', 'flash true'])
+    assert.equal(s.main.calls.includes('focus'), false)
+  })
+}
+
+test('closing the start window before the hand-off quits, and its timers go with it', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  const sent = s.win().webContents.sent.length
+  s.win().destroy()
+  assert.equal(s.calls.close, 1)
+  s.tick(WATCHDOG_MS + TEAM_VIEW_MS)
+  assert.equal(s.win().webContents.sent.length, sent)
+  assert.equal(s.start.owner(), undefined)
+})
+
+test('a failure during the hand-off draws the failure page on a fresh page', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  s.start.done('engine')
+  s.start.ready()
+  s.act('handoffShow')
+  s.tick(GROWTH.delay + GROWTH.step)
+  s.start.fail(new Error('The DSH Host stopped (exit 1)'))
+  assert.equal(s.state().view, 'failed')
+  assert.equal(s.win().webContents.reloads, 1)
+  // The growth is undone, and the team window stays hidden.
+  assert.deepEqual(s.win().bounds, centred(startSize(AREA), AREA))
+  s.tick(5000)
+  assert.equal(s.main.visible, false)
+  assert.equal(s.act('handoffShow'), false)
+})
+
+test('a failure after the hand-off opens a fresh start window over the hidden team window', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  s.start.done('engine')
+  s.start.ready()
+  s.tick(2500)
+  const handed = s.win()
+  assert.equal(s.main.visible, true)
+  s.start.fail(new Error('The DSH Host stopped (exit 1)'), 'later')
+  assert.equal(handed.destroyed, true)
+  assert.notEqual(s.win(), handed)
+  assert.equal(s.main.visible, false)
+  assert.equal(s.state().view, 'failed')
+  assert.equal(s.state().start, 'later')
+  assert.equal(s.start.owner(), s.win())
+  assert.equal(s.calls.close, 0)
 })

@@ -4,6 +4,7 @@
 // team window's rect, and the hidden team window shows on the same rect. The rect maths, the
 // growth, the snapshot and the checks are plain functions, so the tests run without Electron.
 import { pathToFileURL } from 'node:url'
+import { within } from './copy-tree.mjs'
 
 export const START_STATE = 'ds-bot:start-state'
 export const START_ACT = 'ds-bot:start-act'
@@ -141,16 +142,30 @@ export const fallbackMs = ({ start, celebrate }) => (start === 'first' || celebr
 const REASONS = [
   ['permission', /\b(?:EACCES|EPERM)\b|permission denied|operation not permitted|access is denied/iu],
   ['space', /\b(?:ENOSPC|EDQUOT)\b|no space left|not enough space|disk (?:is )?full/iu],
-  ['files', /\b(?:ENOENT|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND)\b|cannot find (?:module|package)|could not load its own bundles|not a valid Win32 application|0xC0000135|3221225781/iu],
+  ['files', /\b(?:MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND)\b|cannot find (?:module|package)|could not load its own bundles|not a valid Win32 application|0xC0000135|3221225781/iu],
   ['engine', /DSH Host stopped|engine's web server/iu],
 ]
 
-/** @returns {'permission' | 'space' | 'files' | 'engine' | 'other'} */
-export function failureReason(error) {
+// Only a missing file of the program's own says that the install is incomplete: a data folder
+// on a drive that is gone is missing too, and so is a workspace.
+function missingOwnFile(error, text, program) {
+  if (!/\bENOENT\b/u.test(text)) return false
+  const paths = [error?.path, ...[...text.matchAll(/ENOENT: [^,\n]*, \w+ '([^'\n]+)'/gu)].map(match => match[1])]
+  return paths.some(path => typeof path === 'string' && program.some(folder => within(path, folder)))
+}
+
+/**
+ * @param {{ program?: string[] }} where `program`: the folders of the app's own files
+ * @returns {'permission' | 'space' | 'files' | 'engine' | 'other'}
+ */
+export function failureReason(error, { program = [] } = {}) {
   const code = typeof error?.code === 'string' ? error.code : ''
   const message = error instanceof Error ? error.message : String(error ?? '')
   const text = `${code} ${message}`
-  return REASONS.find(([, pattern]) => pattern.test(text))?.[0] ?? 'other'
+  for (const [reason, pattern] of REASONS) {
+    if (pattern.test(text) || (reason === 'files' && missingOwnFile(error, text, program))) return reason
+  }
+  return 'other'
 }
 
 // The Main Bot that a kept team's sidebar shows first (ds-bot's channel.js: mainBotIds[0]; an
@@ -161,17 +176,17 @@ export function mainBotName(state) {
   return typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined
 }
 
-// What the hint row can say at the second stop. previewNotice: DSH shows its preview notice when
-// the Session is ready and the main view has no non-empty Session (windows-onboarding §3, the
-// row of the third stop); the main process cannot tell before the team view has loaded, so the
-// stop-2 hint stays.
+// What the hint row can prepare for. previewNotice: DSH shows its preview notice when the
+// Session is ready and the main view has no non-empty Session (windows-onboarding §3, the row of
+// the third stop), which a data folder without a team always has. A kept or copied team may have
+// read it already, and the main process cannot tell before the team view has loaded.
 export function explainOf({ offered = false, team } = {}) {
   if (offered) return { mode: 'import', nextStep: false, previewNotice: false }
   if (team !== undefined) {
     const name = mainBotName(team.team)
     return { mode: 'reinstall', bots: team.bots, groups: team.rooms, ...(name === undefined ? {} : { name }), nextStep: false, previewNotice: false }
   }
-  return { mode: 'new', nextStep: true, previewNotice: false }
+  return { mode: 'new', nextStep: true, previewNotice: true }
 }
 
 export const clockMs = (clock, now) => clock.base + (clock.running ? Math.max(0, now - clock.from) : 0)
@@ -217,20 +232,26 @@ export class StartWindow {
   #from
   #handing = false
   #revealed = false
+  // Whether the engine of this attempt is up; the stages done say where the whale is, which a
+  // retry never moves back.
+  #engineUp = false
+  #teamShown
+  #showTeam
 
   /**
    * @param {{
    *   electron: { BrowserWindow: any, ipcMain: any, screen: any, shell: any, clipboard: any, nativeTheme: any, systemPreferences: any },
    *   page: string, preload: string, icon: string, mica: boolean, devTools: boolean,
-   *   lang: () => 'zh' | 'en', motion: string, version: string,
+   *   lang: () => 'zh' | 'en', motion: string, version: string, program: string[],
    *   log: { dir: string, tail: (count: number) => string[] },
    *   mainWindow: () => any,
    *   onRetry: () => void, onReload: () => void, onClose: () => void,
-   * }} options `lang` is asked at each open; `onClose` runs when the user closes the start window
-   *   before the hand-off.
+   * }} options `lang` is asked at each open; `program` names the folders of the app's own files;
+   *   `onClose` runs when the user closes the start window before the hand-off.
    */
   constructor(options) {
     this.#o = options
+    this.#teamShown = new Promise((resolve) => { this.#showTeam = resolve })
     options.electron.ipcMain.handle(START_ACT, (event, name, payload) => this.#act(event, name, payload))
   }
 
@@ -238,6 +259,9 @@ export class StartWindow {
 
   /** Settles once the current window has painted its first frame (or has had time to). */
   get painted() { return this.#painted }
+
+  /** Settles once the team window has shown at a hand-off. */
+  get teamShown() { return this.#teamShown }
 
   /** Opens the window, unless one is open, with a fresh state for this kind of start. */
   open(kind) {
@@ -342,13 +366,16 @@ export class StartWindow {
     }
   }
 
-  /** The data folder or the engine is ready. */
+  /** The data folder or the engine is ready; the engine also again after a retry. */
   done(phase) {
-    if (!this.#open() || this.#state.done.includes(phase) || !['data', 'engine'].includes(phase)) return
+    if (!this.#open() || !['data', 'engine'].includes(phase)) return
+    const again = this.#state.done.includes(phase)
+    if (again && (phase !== 'engine' || this.#engineUp)) return
+    if (phase === 'engine') this.#engineUp = true
     note(`${phase} took ${String(Date.now() - this.#phaseAt)} ms`)
     this.#phaseAt = Date.now()
     // The engine came up while the 180 s question was open: the question goes.
-    this.#update({ done: [...this.#state.done, phase], ...(this.#state.view === 'watchdog' ? { view: 'boot' } : {}) })
+    this.#update({ ...(again ? {} : { done: [...this.#state.done, phase] }), ...(this.#state.view === 'watchdog' ? { view: 'boot' } : {}) })
   }
 
   /** The engine's page started loading in the hidden team window: it has 20 s to call ready(). */
@@ -363,7 +390,7 @@ export class StartWindow {
 
   /** dsBotApp.ready() from the team view: the hand-off starts. */
   ready() {
-    if (!this.#open() || !['boot', 'viewFailed'].includes(this.#state.view) || !this.#state.done.includes('engine')) return
+    if (!this.#open() || !['boot', 'viewFailed'].includes(this.#state.view) || !this.#engineUp) return
     this.#clear('teamView')
     const now = Date.now()
     note(`team took ${String(now - this.#phaseAt)} ms`)
@@ -383,6 +410,9 @@ export class StartWindow {
    */
   fail(error, kind = 'later') {
     const showing = this.#revealed
+    // The page's hand-off empties it for the growth and cannot be undone there: a fresh page
+    // draws the failure.
+    const emptied = !showing && this.#open() && this.#state.view === 'handoff'
     if (showing) {
       this.#destroy()
       const main = this.#o.mainWindow()
@@ -392,7 +422,8 @@ export class StartWindow {
     this.#cancelHandoff()
     this.#clear('teamView')
     this.#clear('fallback')
-    this.#update({ view: 'failed', failure: { reason: failureReason(error), log: this.#o.log.tail(FAILURE_LINES) } })
+    this.#update({ view: 'failed', failure: { reason: failureReason(error, { program: this.#o.program }), log: this.#o.log.tail(FAILURE_LINES) } })
+    if (emptied) this.#window.webContents.reload()
   }
 
   /** The team window's rect: centred on the start window, inside that display's work area. */
@@ -422,6 +453,7 @@ export class StartWindow {
     this.#clearTimers()
     this.#handing = false
     this.#revealed = false
+    this.#engineUp = false
     this.#watchAt = WATCHDOG_MS
     const now = Date.now()
     this.#phaseAt = now
@@ -457,8 +489,8 @@ export class StartWindow {
   // 180 s on the start's clock without the engine: the whale asks whether to try again.
   #armWatchdog() {
     this.#clear('watchdog')
-    const { start, view, clock, done } = this.#state
-    if (start === 'moving' || view !== 'boot' || !clock.running || done.includes('engine')) return
+    const { start, view, clock } = this.#state
+    if (start === 'moving' || view !== 'boot' || !clock.running || this.#engineUp) return
     this.#later('watchdog', this.#watchAt - clockMs(clock, Date.now()), () => {
       note(`no engine after ${String(Math.round(this.#watchAt / 1000))} s`)
       this.#update({ view: 'watchdog' })
@@ -484,9 +516,11 @@ export class StartWindow {
   }
 
   // The failed stage, or the engine after the 180 s question, starts again; the stages already
-  // done stay done, and the first success after this celebrates (§7).
+  // done stay done, and the first success after this celebrates (§7). The engine starts again
+  // in any case, so the 180 s question guards it again.
   #retry() {
     note(`retry from ${this.#state.view}`)
+    this.#engineUp = false
     this.#watchAt = WATCHDOG_MS
     this.#phaseAt = Date.now()
     this.#update({ view: 'boot', failure: undefined, celebrate: true, done: this.#state.done.filter(phase => phase !== 'team'), clock: { base: 0, from: Date.now(), running: true } })
@@ -556,6 +590,7 @@ export class StartWindow {
     const main = this.#o.mainWindow()
     if (main === undefined || main.isDestroyed()) return
     this.#revealed = true
+    this.#showTeam()
     this.#clear('fallback')
     this.#clear('grow')
     const win = this.#window

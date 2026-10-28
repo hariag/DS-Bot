@@ -76,7 +76,7 @@ const FADE_MS = 160
 const catchUp = resume ? performance.now() + 1000 : 0
 // key/text: the line chosen (on screen, or coming in once the old one has faded out); shown/at:
 // the line on screen and when it went up; last: the last line that really went up.
-const v = { key: '', text: '', shown: '', at: 0, timer: 0, swap: 0, last: '', cards: false, readyAt: 0, waiters: [] }
+const v = { key: '', text: '', shown: '', at: 0, timer: 0, swap: 0, renaming: false, last: '', cards: false, readyAt: 0, waiters: [] }
 const readyLine = () => (v.readyAt ? Promise.resolve(v.readyAt) : new Promise(resolve => v.waiters.push(resolve)))
 function voiceWant() {
   const view = s.view
@@ -106,9 +106,9 @@ function voiceWant() {
 }
 // The greeting names the Main Bot the user is about to meet: the team's own on a reinstall, the
 // default name for a new team. A team to import has no name yet (the answer decides which Main
-// Bot it is), and neither has a reinstall whose name could not be read. It stays one line
+// Bot it is), and neither has a reinstall whose name could not be read. It stays one key
 // (voice.hello) whichever words it takes: the main process may learn the team after the window
-// opens, and the greeting on screen then changes in place.
+// opens, and the greeting on screen then fades over to the new words as a new line.
 function greeting() {
   const e = s.explain ?? {}
   if (e.mode === 'import' || (e.mode === 'reinstall' && !e.name)) return say('voice.helloBack')
@@ -117,15 +117,19 @@ function greeting() {
 function speak() {
   clearTimeout(v.timer)
   if (!s) return
-  if (v.key === 'voice.hello' && v.shown === 'voice.hello' && !v.swap && greeting() !== v.text) {
-    v.text = greeting()
-    voiceText.textContent = v.text
-  }
   const [key, urgent] = voiceWant()
+  if (!urgent && v.key === 'voice.hello' && v.shown === 'voice.hello' && !v.swap && voiceEl.hasAttribute('data-on') && greeting() !== v.text) {
+    v.text = greeting()
+    delete voiceEl.dataset.on
+    // The new greeting has not been read yet: no other line takes its place while it fades in.
+    v.renaming = true
+    v.swap = setTimeout(() => { v.renaming = false; put(); speak() }, reduced() ? 120 : FADE_MS)
+    return
+  }
   const text = key === 'voice.hello' ? greeting() : key ? say(key) : ''
   if (key === v.key) { if (text !== v.text) { v.text = text; if (!v.swap) voiceText.textContent = text } return }
   // The old line is already fading out: the new choice simply takes its place.
-  if (v.swap) { v.key = key; v.text = text; return }
+  if (v.swap) { if (!v.renaming) { v.key = key; v.text = text } return }
   const hold = urgent ? 0 : key === 'voice.ready' ? READ_MS : HOLDS[v.shown] ?? HOLD_MS
   const left = v.shown ? v.at + hold - performance.now() : 0
   if (left > 0) { v.timer = setTimeout(speak, left); return }
