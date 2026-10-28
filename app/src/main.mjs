@@ -105,7 +105,8 @@ if (canonical !== undefined) {
   startWindow = new StartWindow({
     electron: { BrowserWindow, ipcMain, screen, shell, clipboard, nativeTheme, systemPreferences },
     page: join(here, 'start', 'start.html'), preload: join(here, 'preload.cjs'), icon: iconFile, mica, devTools: !app.isPackaged,
-    lang: app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en', motion: readStartFrame(frameFile).motion,
+    // On Windows the locale is known only once the app is ready.
+    lang: () => (app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'), motion: readStartFrame(frameFile).motion,
     version: app.getVersion(), log: logs, mainWindow: () => mainWindow,
     onRetry: () => { retry().catch(fail) },
     onReload: () => { mainWindow?.webContents.reload() },

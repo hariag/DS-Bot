@@ -222,11 +222,12 @@ export class StartWindow {
    * @param {{
    *   electron: { BrowserWindow: any, ipcMain: any, screen: any, shell: any, clipboard: any, nativeTheme: any, systemPreferences: any },
    *   page: string, preload: string, icon: string, mica: boolean, devTools: boolean,
-   *   lang: 'zh' | 'en', motion: string, version: string,
+   *   lang: () => 'zh' | 'en', motion: string, version: string,
    *   log: { dir: string, tail: (count: number) => string[] },
    *   mainWindow: () => any,
    *   onRetry: () => void, onReload: () => void, onClose: () => void,
-   * }} options `onClose` runs when the user closes the start window before the hand-off.
+   * }} options `lang` is asked at each open; `onClose` runs when the user closes the start window
+   *   before the hand-off.
    */
   constructor(options) {
     this.#o = options
@@ -421,7 +422,7 @@ export class StartWindow {
     const now = Date.now()
     this.#phaseAt = now
     this.#state = {
-      lang: this.#o.lang, start, motion: this.#o.motion, frame: process.platform === 'win32' ? 'band' : 'system',
+      lang: this.#o.lang(), start, motion: this.#o.motion, frame: process.platform === 'win32' ? 'band' : 'system',
       view: start === 'moving' ? 'moving' : 'boot',
       done: [], explain: this.#explain, celebrate: start === 'first',
       clock: { base: 0, from: now, running: true },
