@@ -223,6 +223,8 @@ export function install(rt) {
     await rt.applyPermission(member, id, room)
       .catch(error => rt.warn('ds-bot: permission for %s in %s not applied: %s', member.name, room.name, error))
     await rt.save()
+    // The Session was resolved before the group owned it, so its scoped tools land now.
+    await rt.resolveAgent(id)
     await rt.ensureCapabilities(id)
     return { id, brief: await rt.ownChatBrief(member) }
   }

@@ -738,8 +738,9 @@ export function install(rt) {
     }
   }
   // A new Bot, part, or group Session gets its Agent before ds-bot records it, so the
-  // list is only trimmed once ds-bot resolves that Agent again; meanwhile the guard
-  // refuses the question tool in any Bot Session, and a goal made there is blocked.
+  // recording path resolves it again once the session is known as a Bot's; meanwhile
+  // the guard refuses the question tool in any Bot Session, and a goal made there is
+  // blocked.
   ctx.tools.guard(exec => (exec.name === BLOCKING_QUESTION_TOOL && rt.isBotSession(exec.agent?.id)
     ? `Bots cannot use ${BLOCKING_QUESTION_TOOL}. Ask with ask_user in your own chat, or ask in your reply.`
     : undefined))
