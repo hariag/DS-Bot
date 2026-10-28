@@ -19079,7 +19079,7 @@ function LearningDock(props) {
   return (0, import_react46.createElement)(LearningProposals, { ...props, dock: true });
 }
 var LEARNING_CSS = `
-.bt-learning-stack{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.bt-learning-stack{display:flex;flex-direction:column;gap:4px}
 .bt-learning-body{display:flex;flex-direction:column;gap:8px}
 .bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
 .bt-learning-why{margin:0;font-size:12px;line-height:16px;color:var(--bt-ink-2)}
