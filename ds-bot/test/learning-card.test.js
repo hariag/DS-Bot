@@ -36,3 +36,23 @@ test('a skill update diff keeps unchanged lines and shows removals', () => {
     { kind: 'added', line: 'Run lint', number: 2 },
   ])
 })
+
+test('a large skill rewrite falls back to a block diff quickly', () => {
+  const before = Array.from({ length: 4000 }, (_, i) => `old ${i}`).join('\n')
+  const after = Array.from({ length: 4000 }, (_, i) => `new ${i}`).join('\n')
+  const started = Date.now()
+  const rows = lineDiff(before, after)
+  assert.ok(Date.now() - started < 1000)
+  assert.equal(rows.length, 8000)
+  assert.ok(rows.slice(0, 4000).every(row => row.kind === 'removed'))
+  assert.deepEqual(rows[4000], { kind: 'added', line: 'new 0', number: 1 })
+})
+
+test('a skill update keeps a long shared head and tail unchanged', () => {
+  const head = Array.from({ length: 3000 }, (_, i) => `head ${i}`)
+  const tail = Array.from({ length: 3000 }, (_, i) => `tail ${i}`)
+  const rows = lineDiff([...head, 'before', ...tail].join('\n'), [...head, 'after', ...tail].join('\n'))
+  assert.equal(rows.filter(row => row.kind === 'same').length, 6000)
+  assert.deepEqual(rows.slice(3000, 3002), [{ kind: 'removed', line: 'before' }, { kind: 'added', line: 'after', number: 3001 }])
+  assert.deepEqual(rows.at(-1), { kind: 'same', line: 'tail 2999', number: 6001 })
+})

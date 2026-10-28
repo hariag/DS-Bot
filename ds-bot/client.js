@@ -18979,31 +18979,45 @@ function fileLines(text) {
   const body = String(text ?? "").replace(/\n+$/, "");
   return body === "" ? [] : body.split("\n");
 }
+var DIFF_CELLS = 25e4;
 function lineDiff(before, after) {
   const a = fileLines(before);
   const b = fileLines(after);
-  const keep = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-  for (let i2 = a.length - 1; i2 >= 0; i2--) {
-    for (let j2 = b.length - 1; j2 >= 0; j2--) {
-      keep[i2][j2] = a[i2] === b[j2] ? keep[i2 + 1][j2 + 1] + 1 : Math.max(keep[i2 + 1][j2], keep[i2][j2 + 1]);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let tail = 0;
+  while (tail < a.length - start && tail < b.length - start && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const midA = a.slice(start, a.length - tail);
+  const midB = b.slice(start, b.length - tail);
+  const rows2 = b.slice(0, start).map((line, index) => ({ kind: "same", line, number: index + 1 }));
+  const added = (j) => ({ kind: "added", line: midB[j], number: start + j + 1 });
+  if (midA.length * midB.length > DIFF_CELLS) {
+    rows2.push(...midA.map((line) => ({ kind: "removed", line })), ...midB.map((_, j) => added(j)));
+  } else {
+    const keep = Array.from({ length: midA.length + 1 }, () => new Array(midB.length + 1).fill(0));
+    for (let i2 = midA.length - 1; i2 >= 0; i2--) {
+      for (let j2 = midB.length - 1; j2 >= 0; j2--) {
+        keep[i2][j2] = midA[i2] === midB[j2] ? keep[i2 + 1][j2 + 1] + 1 : Math.max(keep[i2 + 1][j2], keep[i2][j2 + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < midA.length || j < midB.length) {
+      if (i < midA.length && j < midB.length && midA[i] === midB[j]) {
+        rows2.push({ kind: "same", line: midB[j], number: start + j + 1 });
+        i++;
+        j++;
+      } else if (i < midA.length && (j === midB.length || keep[i + 1][j] >= keep[i][j + 1])) {
+        rows2.push({ kind: "removed", line: midA[i] });
+        i++;
+      } else {
+        rows2.push(added(j));
+        j++;
+      }
     }
   }
-  const rows2 = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      rows2.push({ kind: "same", line: b[j], number: j + 1 });
-      i++;
-      j++;
-    } else if (i < a.length && (j === b.length || keep[i + 1][j] >= keep[i][j + 1])) {
-      rows2.push({ kind: "removed", line: a[i] });
-      i++;
-    } else {
-      rows2.push({ kind: "added", line: b[j], number: j + 1 });
-      j++;
-    }
-  }
+  const offset = b.length - tail;
+  rows2.push(...b.slice(offset).map((line, index) => ({ kind: "same", line, number: offset + index + 1 })));
   return rows2;
 }
 
@@ -19030,18 +19044,19 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     });
   };
   const update = proposal.action === "update";
-  const rows2 = lineDiff(update ? proposal.previous?.content : "", proposal.content);
+  const rows2 = (0, import_react46.useMemo)(() => lineDiff(update ? proposal.previous?.content : "", proposal.content), [update, proposal.previous?.content, proposal.content]);
+  const oldDetail = update && typeof proposal.previous?.description === "string" && proposal.previous.description !== proposal.description ? proposal.previous.description : void 0;
   return (0, import_react46.createElement)(
     "section",
     { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
-    (0, import_react46.createElement)(ProposalHead, { titleId, title: proposal.name, kind: t(update ? "Skill update" : "New skill"), detail: proposal.description }),
+    (0, import_react46.createElement)(ProposalHead, { titleId, title: proposal.name, kind: t(update ? "Skill update" : "New skill"), detail: proposal.description, oldDetail }),
     (0, import_react46.createElement)(FileBox, { name: "SKILL.md", path: `skills/${proposal.name}`, state: update ? "Updated" : "Added", blocks: [rows2] }),
     proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
     error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
     (0, import_react46.createElement)(ProposalFoot, { busy, answer })
   );
 }
-function ProposalHead({ titleId, title, kind, detail }) {
+function ProposalHead({ titleId, title, kind, detail, oldDetail }) {
   return (0, import_react46.createElement)(
     "div",
     { className: "bt-q-head" },
@@ -19051,6 +19066,7 @@ function ProposalHead({ titleId, title, kind, detail }) {
       { className: "bt-q-text" },
       (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, title),
       (0, import_react46.createElement)("div", { className: "bt-q-detail" }, kind),
+      oldDetail ? (0, import_react46.createElement)("p", { className: "bt-learning-description bt-learning-old" }, (0, import_react46.createElement)("del", null, oldDetail)) : null,
       detail ? (0, import_react46.createElement)("p", { className: "bt-learning-description" }, detail) : null
     ),
     (0, import_react46.createElement)("span", { className: "bt-q-badge bt-learning-status" }, (0, import_react46.createElement)("span", { className: "bt-learning-dot", "aria-hidden": true }), t("Awaiting approval"))
@@ -19171,6 +19187,7 @@ var LEARNING_CSS = `
 .bt-learning-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2)}
 .bt-learning-icon svg{width:18px;height:18px}
 .bt-learning-description{margin:6px 0 0;font-size:13px;line-height:19px;color:var(--bt-ink)}
+.bt-learning-old{color:var(--bt-ink-3)}
 .bt-learning-status{display:inline-flex;align-items:center;gap:6px;border-style:solid;border-color:color-mix(in srgb,var(--bt-star) 35%,transparent);color:color-mix(in srgb,var(--bt-star) 80%,var(--bt-ink))}
 .bt-learning-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-star)}
 .bt-learning-file{border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--bt-ink) 2.5%,var(--bt-card));box-shadow:inset 0 0 0 1px var(--bt-q-rule)}

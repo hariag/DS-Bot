@@ -1,4 +1,4 @@
-import { createElement as h, useId, useRef, useState } from 'react'
+import { createElement as h, useId, useMemo, useRef, useState } from 'react'
 import { useTurnFacts } from './btw.js'
 import { lineDiff, proposalPlacement } from './learning-card-model.js'
 import { currentPart } from './text.js'
@@ -30,21 +30,23 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
       })
   }
   const update = proposal.action === 'update'
-  const rows = lineDiff(update ? proposal.previous?.content : '', proposal.content)
+  const rows = useMemo(() => lineDiff(update ? proposal.previous?.content : '', proposal.content), [update, proposal.previous?.content, proposal.content])
+  const oldDetail = update && typeof proposal.previous?.description === 'string' && proposal.previous.description !== proposal.description ? proposal.previous.description : undefined
   return h('section', { className: 'bt-q bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
-    h(ProposalHead, { titleId, title: proposal.name, kind: t(update ? 'Skill update' : 'New skill'), detail: proposal.description }),
+    h(ProposalHead, { titleId, title: proposal.name, kind: t(update ? 'Skill update' : 'New skill'), detail: proposal.description, oldDetail }),
     h(FileBox, { name: 'SKILL.md', path: `skills/${proposal.name}`, state: update ? 'Updated' : 'Added', blocks: [rows] }),
     proposal.why ? h('p', { className: 'bt-learning-why' }, proposal.why) : null,
     error ? h('div', { className: 'bt-learning-error', role: 'alert' }, error) : null,
     h(ProposalFoot, { busy, answer }))
 }
 
-function ProposalHead({ titleId, title, kind, detail }) {
+function ProposalHead({ titleId, title, kind, detail, oldDetail }) {
   return h('div', { className: 'bt-q-head' },
     h('span', { className: 'bt-learning-icon', 'aria-hidden': true }, h(MemoryIcon)),
     h('div', { className: 'bt-q-text' },
       h('p', { className: 'bt-q-title', id: titleId }, title),
       h('div', { className: 'bt-q-detail' }, kind),
+      oldDetail ? h('p', { className: 'bt-learning-description bt-learning-old' }, h('del', null, oldDetail)) : null,
       detail ? h('p', { className: 'bt-learning-description' }, detail) : null),
     h('span', { className: 'bt-q-badge bt-learning-status' }, h('span', { className: 'bt-learning-dot', 'aria-hidden': true }), t('Awaiting approval')))
 }
@@ -143,6 +145,7 @@ export const LEARNING_CSS = `
 .bt-learning-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2)}
 .bt-learning-icon svg{width:18px;height:18px}
 .bt-learning-description{margin:6px 0 0;font-size:13px;line-height:19px;color:var(--bt-ink)}
+.bt-learning-old{color:var(--bt-ink-3)}
 .bt-learning-status{display:inline-flex;align-items:center;gap:6px;border-style:solid;border-color:color-mix(in srgb,var(--bt-star) 35%,transparent);color:color-mix(in srgb,var(--bt-star) 80%,var(--bt-ink))}
 .bt-learning-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-star)}
 .bt-learning-file{border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--bt-ink) 2.5%,var(--bt-card));box-shadow:inset 0 0 0 1px var(--bt-q-rule)}
