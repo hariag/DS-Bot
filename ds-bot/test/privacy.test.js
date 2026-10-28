@@ -10,10 +10,11 @@ import { fakeApproval, fakeContext } from './fake-ctx.js'
 const P = 'd1a40000-1111-4222-8333-444444444444'
 
 // Chief (Main), Writer in the group Ops, and Diary, a Bot with a folder of its own.
-function seed({ diary, privateBot }) {
+function seed({ diary, privateBot, archives = [] }) {
   return {
     version: 1,
     mainBotIds: ['a'],
+    privateArchives: archives,
     workspaceId: 'w1',
     bots: {
       a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
@@ -30,7 +31,7 @@ function seed({ diary, privateBot }) {
   }
 }
 
-async function start({ services = {}, privateBot = true } = {}) {
+async function start({ services = {}, privateBot = true, archives } = {}) {
   // The native realpath, as fs/promises uses: on Windows the JS one keeps 8.3 short names.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-privacy-')))
   const dsh = join(root, 'dsh')
@@ -40,7 +41,7 @@ async function start({ services = {}, privateBot = true } = {}) {
   const diary = join(root, 'diary')
   for (const dir of [team, project, diary]) mkdirSync(dir, { recursive: true })
   writeFileSync(join(diary, 'notes.txt'), 'secret')
-  writeFileSync(join(home, 'state.json'), JSON.stringify(seed({ diary, privateBot })))
+  writeFileSync(join(home, 'state.json'), JSON.stringify(seed({ diary, privateBot, archives })))
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = dsh
 
@@ -557,6 +558,59 @@ test('the archived memory of a Bot whose protection is lifted opens; another arc
   await call('private-release', { id: ledger.id })
   assert.deepEqual(await run('read', memoryOf(ledger.id), reader), { ran: true })
   assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, reader), { ran: true })
+})
+
+test('an archive whose log row could not be written is still kept closed to a walk', async (t) => {
+  const { rt, ctx, run, home, root, state, stop } = await start({ privateBot: false })
+  t.after(stop)
+  let created = 0
+  ctx.sessionController.create = async () => ({ sessionId: `0000000${++created}-1111-4222-8333-444444444444` })
+  const ledgerDir = join(root, 'ledger')
+  mkdirSync(ledgerDir)
+  const ledger = await rt.createBot({ name: 'Ledger', workDir: ledgerDir })
+  await rt.updateBot(ledger.id, { private: true })
+  const reader = (await rt.createBot({ name: 'Reader' })).id
+  mkdirSync(join(home, 'memory', 'bots', ledger.id), { recursive: true })
+  writeFileSync(join(home, 'memory', 'bots', ledger.id, 'MEMORY.md'), 'books')
+  // A change log that cannot be read stops the archive's row, after the memory has moved.
+  mkdirSync(join(home, 'memory', 'journal.jsonl'), { recursive: true })
+  await rt.deleteBot(ledger.id)
+
+  const archiveRoot = join(home, 'memory', 'archive')
+  const [entry] = state().privateArchives
+  assert.ok(entry.archivePath?.startsWith(archiveRoot), 'the path of the archive is kept')
+  assert.equal(entry.archiving, undefined)
+  assert.equal(readFileSync(join(entry.archivePath, 'MEMORY.md'), 'utf8'), 'books')
+  const read = await run('read', { file_path: join(entry.archivePath, 'MEMORY.md') }, reader)
+  assert.equal(read.ran, false)
+  assert.match(read.error, /Ledger/)
+  assert.equal((await run('glob', { pattern: '**/*', path: archiveRoot }, reader)).ran, false)
+  assert.equal((await run('grep', { pattern: 'books', path: archiveRoot }, reader)).ran, false)
+})
+
+test('a walk of the archive stays closed while a private Bot\'s memory is still on its way there', async (t) => {
+  const GHOST = 'e2b60000-1111-4222-8333-444444444444'
+  const { call, run, home, stop } = await start({ privateBot: false, archives: [{ id: GHOST, name: 'Ghost', sessionIds: [], archiving: true }] })
+  t.after(stop)
+  const archiveRoot = join(home, 'memory', 'archive')
+  mkdirSync(join(archiveRoot, `${GHOST}-2026-10-28`), { recursive: true })
+  writeFileSync(join(archiveRoot, `${GHOST}-2026-10-28`, 'MEMORY.md'), 'ghost')
+
+  const walk = await run('glob', { pattern: '**/*', path: archiveRoot }, 'b')
+  assert.equal(walk.ran, false)
+  assert.match(walk.error, /Ghost/)
+  // Once the user lifts the protection there is nothing left to hide.
+  assert.equal((await call('private-release', { id: GHOST })).ok, true)
+  assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, 'b'), { ran: true })
+})
+
+test('a kept Bot whose memory never moved does not close the archive folder', async (t) => {
+  const GHOST = 'e2b60000-1111-4222-8333-444444444444'
+  const { run, home, stop } = await start({ privateBot: false, archives: [{ id: GHOST, name: 'Ghost', sessionIds: [] }] })
+  t.after(stop)
+  const archiveRoot = join(home, 'memory', 'archive')
+  mkdirSync(archiveRoot, { recursive: true })
+  assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, 'b'), { ran: true })
 })
 
 test('with no private Bot the tools run as they did', async (t) => {

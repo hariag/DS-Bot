@@ -111,7 +111,10 @@ export function install(rt) {
       const ownBot = rt.botOf(self)
       const ownIds = ownBot === undefined ? [] : sessionsOf(ownBot).map(fold)
       const ownRegions = ownBot === undefined ? [] : await regionsOf(ownBot)
-      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, memoryArchive, ...ownRegions].filter(Boolean)
+      // A walk of the archive stays closed while a private Bot's memory is on its way
+      // there: until the path is known, the walk cannot be told which folder to skip.
+      const moving = search && bots.some(bot => bot.archiving === true)
+      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, moving ? undefined : memoryArchive, ...ownRegions].filter(Boolean)
       const folders = (await Promise.all(open.map(spellings))).flat()
       const roots = (await Promise.all(dataRoots().map(spellings))).flat()
       for (const key of keys) {
