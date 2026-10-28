@@ -81,7 +81,7 @@ function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
     delete next[id]
     return next
   })
-  return h('div', { className: 'bt-learning-stack' }, cards.map(proposal => h('div', { className: 'bt-q-inline', key: proposal.id },
+  return h('div', { className: dock ? 'bt-learning-stack bt-learning-dock' : 'bt-learning-stack' }, cards.map(proposal => h('div', { className: 'bt-q-inline', key: proposal.id },
     h(ProposalCard, {
       proposal,
       initialError: failed[proposal.id]?.error ?? failedAnswers.get(proposal.id)?.error,
@@ -101,6 +101,7 @@ export function LearningDock(props) {
 
 export const LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
+.bt-learning-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;box-sizing:border-box}
 .bt-learning-card .bt-q-head{align-items:center;gap:12px}
 .bt-learning-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
 .bt-learning-badge svg{width:18px;height:18px}
