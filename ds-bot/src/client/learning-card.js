@@ -180,7 +180,7 @@ export const LEARNING_CSS = `
 .bt-learning-btn svg{width:15px;height:15px}
 .bt-learning-decline{background:transparent;box-shadow:inset 0 0 0 1px var(--bt-line-2);color:var(--bt-ink)}
 .bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
-.bt-learning-approve{padding-left:13px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
+.bt-learning-approve{padding-left:13px;background:var(--bt-accent);color:var(--bt-accent-ink)}
 .bt-learning-approve:hover:not(:disabled){opacity:.86}
 .bt-learning-btn:disabled{opacity:.45;cursor:default}
 .bt-learning-btn:active:not(:disabled){scale:.96}
