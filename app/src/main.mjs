@@ -21,7 +21,7 @@ import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './wi
 const IPC = {
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
-  ready: 'ds-bot:ready', focus: 'ds-bot:focus',
+  ready: 'ds-bot:ready', motion: 'ds-bot:motion',
   browserAcquire: 'ds-bot:browser-acquire', browserRelease: 'ds-bot:browser-release', browserForget: 'ds-bot:browser-forget',
   browserViewChanged: 'ds-bot:browser-view-changed', browserViewCreate: 'ds-bot:browser-view-create',
   browserViewSync: 'ds-bot:browser-view-sync', browserViewPlace: 'ds-bot:browser-view-place',
@@ -107,7 +107,7 @@ if (canonical !== undefined) {
     page: join(here, 'start', 'start.html'), preload: join(here, 'preload.cjs'), icon: iconFile, mica, devTools: !app.isPackaged,
     // On Windows the locale is known only once the app is ready.
     lang: () => (app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'), motion: readStartFrame(frameFile).motion,
-    version: app.getVersion(), log: logs, mainWindow: () => mainWindow,
+    version: app.getVersion(), program: [dirname(process.execPath), process.resourcesPath, app.getAppPath()], log: logs, mainWindow: () => mainWindow,
     onRetry: () => { retry().catch(fail) },
     onReload: () => { mainWindow?.webContents.reload() },
     // Closing the start window before the hand-off quits, as closing the team window does.
@@ -205,10 +205,13 @@ function run() {
   boot(mine).catch((error) => { if (mine === attempt) void fail(error) })
 }
 
-// The engine starts again after a failure or the 180 s question; the places stay.
+// The engine starts again after a failure or the 180 s question; the places stay. A first run's
+// copy goes on to its end first: an engine started beside it would run on a half-copied team.
 async function retry() {
   attempt += 1
   failed = false
+  await copying?.catch(() => {})
+  if (copyAbort.signal.aborted || stopping) return
   const old = host
   host = undefined
   await old?.stop().catch((error) => { console.error(error) })
@@ -233,7 +236,7 @@ async function boot(mine) {
   // Also the check that the data folder can be written.
   mkdirSync(profileDir(), { recursive: true })
   startWindow.done('data')
-  const engine = await startEngine()
+  const engine = await startEngine(mine)
   if (engine === undefined || mine !== attempt) return
   startWindow.done('engine')
   await mainCreated
@@ -251,12 +254,14 @@ const hostOutput = (stream, chunk) => {
 }
 
 function newHost() {
+  // A Host of an attempt that a retry has replaced no longer stands for the start.
+  const mine = attempt
   return new HostProcess({
     entry: join(here, 'host.mjs'),
     cwd: profileDir(),
     env: { ...process.env, DSH_HOME: places.dataDir, DS_BOT_PORT: String(port), DS_BOT_APP: '1', DS_BOT_USER_DSH_HOME: userDshHome(), ...(places.workspace ? { DS_BOT_WORKSPACE: places.workspace } : {}) },
     pnpm: pnpmEntry(),
-    onFailure: fail,
+    onFailure: (error) => { if (mine === attempt) void fail(error) },
     output: hostOutput,
   })
 }
@@ -268,16 +273,21 @@ function newCheck(home, list) {
   return new HostProcess({ entry: join(here, 'host.mjs'), cwd, env: { ...process.env, DSH_HOME: home, DS_BOT_CHECK: list }, pnpm: pnpmEntry(), onFailure: () => {}, output: hostOutput })
 }
 
-/** @returns {Promise<{ url: string } | undefined>} the Host's launch URL; none when the app quits during the copy */
-async function startEngine() {
+/**
+ * @returns {Promise<{ url: string } | undefined>} the Host's launch URL; none when the app quits
+ *   during the copy, or when a retry during the copy starts the engine itself
+ */
+async function startEngine(mine) {
   if (pendingImport !== undefined) {
     const where = { ...places, import: pendingImport }
     pendingImport = undefined
-    copying = copyTeam(where, copyAbort.signal)
+    // The copy's time is not the engine's: the start's clock stands still, and the 180 s
+    // question with it.
+    copying = startWindow.asking(copyTeam(where, copyAbort.signal))
     const copied = await copying
     copying = undefined
     if (copied === 'quit') app.exit(0)
-    if (copied !== undefined) return undefined
+    if (copied !== undefined || mine !== attempt) return undefined
   }
   // Not during the import, which a restart would cut short; before the Host, so that an
   // update can still come when this version's Host does not start.
@@ -306,7 +316,15 @@ function handleIpc() {
   const fixed = Boolean(process.env.DS_BOT_HOME)
   // The team view has mounted (ds-bot calls dsBotApp.ready()): the start window hands over.
   ipcMain.on(IPC.ready, (event) => { if (fromWindow(event)) startWindow.ready() })
-  ipcMain.on(IPC.focus, (event) => { if (fromWindow(event)) focusWindow() })
+  // The start window takes the app's theme and the Bot animation tier at the next start, before
+  // the team view has loaded; Mica and the caption buttons follow the theme at once.
+  ipcMain.on(IPC.nativeTheme, (event, source) => {
+    const value = nativeThemeSource(source)
+    if (!fromWindow(event) || value === undefined) return
+    nativeTheme.themeSource = value
+    writeStartFrame(frameFile, { themeSource: value })
+  })
+  ipcMain.on(IPC.motion, (event, tier) => { if (fromWindow(event)) writeStartFrame(frameFile, { motion: tier }) })
   ipcMain.handle(IPC.dataLocation, (event) => {
     assertWindow(event)
     return { path: places.dataDir, fixed }
@@ -425,14 +443,6 @@ function handleIpc() {
     // of the surface under them, which the page measures.
     ipcMain.on(IPC.caption, (event, color, symbolColor) => {
       if (fromWindow(event) && cssColor(color) && cssColor(symbolColor)) mainWindow.setTitleBarOverlay({ color, symbolColor })
-    })
-    // Mica and the caption buttons follow the app's theme, not only the system's; the start
-    // window takes it at the next start, before the team view has loaded.
-    ipcMain.on(IPC.nativeTheme, (event, source) => {
-      const value = nativeThemeSource(source)
-      if (!fromWindow(event) || value === undefined) return
-      nativeTheme.themeSource = value
-      writeStartFrame(frameFile, { themeSource: value })
     })
   }
 }
@@ -611,16 +621,19 @@ function startUpdates() {
   return undefined
 }
 
+// The update questions wait for the team window: the start window goes at the hand-off, and a
+// question on it would go with it. After a failed start, fail() takes the update over.
+const afterHandoff = async () => { await startWindow.teamShown; return !failed }
+
 async function askRestart(version) {
-  // After a failed start, fail() installs the update itself.
-  if (failed) return false
+  if (failed || !await afterHandoff()) return false
   const t = localeText(UPDATE_TEXT)
   const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: t.ready(version), detail: t.readyDetail, buttons: [t.restart, t.later], defaultId: 0, cancelId: 1, noLink: true })
   return response === 0
 }
 
 async function askDownload(version) {
-  if (failed) return false
+  if (failed || !await afterHandoff()) return false
   const t = localeText(UPDATE_TEXT)
   const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: t.available(version), detail: t.availableDetail, buttons: [t.download, t.later], defaultId: 0, cancelId: 1, noLink: true })
   return response === 0
@@ -721,8 +734,9 @@ function openOutside(url) {
 }
 
 // The start window shows the failure page and stays. A new version may fix what keeps this one
-// from starting: one that installs itself does so once it is downloaded, unless the user has
-// tried again meanwhile; a release page (macOS, a Linux deb) waits for the page's update row.
+// from starting; until the page has its update row, a box on it says what comes: the release
+// page opens (macOS, a Linux deb), or the version that installs itself does so once it is
+// downloaded, unless the user has tried again meanwhile.
 async function fail(error) {
   console.error(error)
   if (failed || stopping) return
@@ -731,8 +745,10 @@ async function fail(error) {
   startWindow.fail(error, startKind())
   const found = await Promise.race([updates?.latest() ?? null, sleep(UPDATE_CHECK_WAIT_MS).then(() => null)])
   if (!found || mine !== attempt) return
+  const t = localeText(UPDATE_TEXT)
+  await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: found.page ? t.onFailurePage(found.version) : t.onFailure(found.version) })
   if (found.page) {
-    console.log(`DeepSeek Bot: ${found.version} is out: ${found.page}`)
+    if (!process.env.DS_BOT_HOME) await shell.openExternal(found.page)
     return
   }
   if (await Promise.race([found.downloaded, sleep(UPDATE_DOWNLOAD_WAIT_MS).then(() => false)]) && failed && mine === attempt) await updates.install()

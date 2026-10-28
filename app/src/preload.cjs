@@ -20,7 +20,6 @@ if (startPage !== undefined) {
       ready = true
       ipcRenderer.send('ds-bot:ready')
     },
-    focus: () => { ipcRenderer.send('ds-bot:focus') },
     // DS Bot's settings show and move the app's data location through this.
     dataLocation: () => ipcRenderer.invoke('ds-bot:data-location'),
     moveData: (workspace) => ipcRenderer.invoke('ds-bot:move-data', typeof workspace === 'string' ? workspace : undefined),
@@ -31,6 +30,12 @@ if (startPage !== undefined) {
     // The app's own updater, for the About row's state and buttons.
     updates: updatesBridge(),
   })
+  // A preload runs before the document root exists.
+  const loaded = (run) => {
+    if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', run, { once: true })
+    else run()
+  }
+  loaded(reportLook)
   const caption = process.argv.find(value => value.startsWith('--ds-bot-caption='))
   if (caption !== undefined) {
     ipcRenderer.on('ds-bot:fullscreen', (_event, fullscreen) => {
@@ -39,11 +44,28 @@ if (startPage !== undefined) {
       if (fullscreen) root.dataset.fullscreen = 'true'
       else delete root.dataset.fullscreen
     })
-    const start = () => { frameless(caption.slice('--ds-bot-caption='.length), process.argv.includes('--ds-bot-mica')) }
-    // A preload runs before the document root exists.
-    if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', start, { once: true })
-    else start()
+    loaded(() => { frameless(caption.slice('--ds-bot-caption='.length), process.argv.includes('--ds-bot-mica')) })
   }
+}
+
+// The app's theme (DSH's) and the Bot animation tier (ds-bot's), which the start window takes
+// at the next start.
+function reportLook() {
+  const root = document.documentElement
+  const sent = {}
+  const send = (channel, value) => {
+    if (value === null || value === sent[channel]) return
+    sent[channel] = value
+    ipcRenderer.send(channel, value)
+  }
+  const report = () => {
+    send('ds-bot:native-theme', root.getAttribute('data-ds-theme-source'))
+    send('ds-bot:motion', document.body?.getAttribute('data-bt-motion') ?? null)
+  }
+  const observer = new MutationObserver(report)
+  observer.observe(root, { attributeFilter: ['data-ds-theme-source'] })
+  if (document.body !== null) observer.observe(document.body, { attributeFilter: ['data-bt-motion'] })
+  report()
 }
 
 // The main process sends the whole state on every change; a page that subscribes late, or again,
@@ -144,15 +166,6 @@ function frameless(height, mica) {
   // DSH keeps the dialog mask off the caption band, which then stays bright above a dimmed
   // page; here the band is part of the page, so the mask covers it too.
   root.style.setProperty('--dsh-frame-chrome-top', '0px')
-  let theme
-  const sendTheme = () => {
-    const value = root.getAttribute('data-ds-theme-source')
-    if (value === null || value === theme) return
-    theme = value
-    ipcRenderer.send('ds-bot:native-theme', value)
-  }
-  new MutationObserver(sendTheme).observe(root, { attributeFilter: ['data-ds-theme-source'] })
-  sendTheme()
   captionColors(mica)
 }
 
