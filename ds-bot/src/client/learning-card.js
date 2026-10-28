@@ -4,6 +4,7 @@ import { proposalPlacement } from './learning-card-model.js'
 import { currentPart } from './text.js'
 import { t } from './i18n.js'
 import { CheckIcon, MemoryIcon } from './icons.js'
+import { spring, SPRING_TAP } from './motion.js'
 
 const failedAnswers = new Map()
 
@@ -113,7 +114,7 @@ export const LEARNING_CSS = `
 .bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
 .bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,scale .12s ease}
+.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, 'scale')}}
 .bt-learning-btn svg{width:14px;height:14px}
 .bt-learning-decline{background:transparent;border:1px solid var(--bt-line-2);color:var(--bt-ink)}
 .bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
@@ -122,5 +123,6 @@ export const LEARNING_CSS = `
 .bt-learning-btn:disabled{opacity:.45;cursor:default}
 .bt-learning-btn:active:not(:disabled){scale:.97}
 .bt-learning-btn:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.bt-learning-btn{transition:background-color .12s ease,opacity .12s ease}.bt-learning-btn:active:not(:disabled){scale:none}}
 .bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 `
