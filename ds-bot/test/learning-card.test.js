@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { proposalPlacement } from '../src/client/learning-card-model.js'
+import { lineDiff, proposalPlacement } from '../src/client/learning-card-model.js'
 
 const turns = new Map([
   [1, { turn: 1, end: { time: 100 }, status: 'closed' }],
@@ -20,4 +20,19 @@ test('a proposal without an earlier closed turn falls back to the latest closed 
 test('a proposal uses the dock when there are no closed turns', () => {
   assert.deepEqual(proposalPlacement({ at: 150 }, new Map()), { kind: 'dock' })
   assert.deepEqual(proposalPlacement({ at: 150 }, new Map([[3, { turn: 3, status: 'open' }]])), { kind: 'dock' })
+})
+
+test('a new skill diff marks every line as added', () => {
+  assert.deepEqual(lineDiff('', 'a\nb\n'), [
+    { kind: 'added', line: 'a', number: 1 },
+    { kind: 'added', line: 'b', number: 2 },
+  ])
+})
+
+test('a skill update diff keeps unchanged lines and shows removals', () => {
+  assert.deepEqual(lineDiff('Check tests\nRequire approval', 'Check tests\nRun lint'), [
+    { kind: 'same', line: 'Check tests', number: 1 },
+    { kind: 'removed', line: 'Require approval' },
+    { kind: 'added', line: 'Run lint', number: 2 },
+  ])
 })

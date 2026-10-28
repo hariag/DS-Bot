@@ -120,7 +120,7 @@ var ZH = {
   "New skill": "新技能",
   "Awaiting approval": "等待批准",
   Added: "新增",
-  "Show all": "展开全部",
+  "Show all {count} lines": "展开全部 {count} 行",
   "Skill update": "技能更新",
   Approve: "批准",
   Decline: "拒绝",
@@ -18975,6 +18975,37 @@ function proposalPlacement(proposal, turns) {
   const turn = (before ?? latest)?.turn;
   return turn === void 0 ? { kind: "dock" } : { kind: "turn", turn };
 }
+function fileLines(text) {
+  const body = String(text ?? "").replace(/\n+$/, "");
+  return body === "" ? [] : body.split("\n");
+}
+function lineDiff(before, after) {
+  const a = fileLines(before);
+  const b = fileLines(after);
+  const keep = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i2 = a.length - 1; i2 >= 0; i2--) {
+    for (let j2 = b.length - 1; j2 >= 0; j2--) {
+      keep[i2][j2] = a[i2] === b[j2] ? keep[i2 + 1][j2 + 1] + 1 : Math.max(keep[i2 + 1][j2], keep[i2][j2 + 1]);
+    }
+  }
+  const rows2 = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      rows2.push({ kind: "same", line: b[j], number: j + 1 });
+      i++;
+      j++;
+    } else if (i < a.length && (j === b.length || keep[i + 1][j] >= keep[i][j + 1])) {
+      rows2.push({ kind: "removed", line: a[i] });
+      i++;
+    } else {
+      rows2.push({ kind: "added", line: b[j], number: j + 1 });
+      j++;
+    }
+  }
+  return rows2;
+}
 
 // src/client/learning-card.js
 var import_react46 = require("react");
@@ -18998,42 +19029,54 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
       setBusy(false);
     });
   };
-  const lines = String(proposal.content ?? "").replace(/\n+$/, "").split("\n");
-  const rows2 = lines.map((line, index) => ({ kind: "added", mark: String(index + 1), line }));
+  const update = proposal.action === "update";
+  const rows2 = lineDiff(update ? proposal.previous?.content : "", proposal.content);
   return (0, import_react46.createElement)(
     "section",
     { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
-    (0, import_react46.createElement)(
-      "div",
-      { className: "bt-learning-headtext" },
-      (0, import_react46.createElement)("span", { className: "bt-learning-status" }, t("Awaiting approval")),
-      (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, proposal.name),
-      (0, import_react46.createElement)("p", { className: "bt-learning-sub" }, t(proposal.action === "update" ? "Skill update" : "New skill")),
-      proposal.description ? (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description) : null
-    ),
-    (0, import_react46.createElement)(FileBox, {
-      name: "SKILL.md",
-      path: `skills/${proposal.name}`,
-      added: rows2.length,
-      removed: 0,
-      state: proposal.action === "update" ? "Updated" : "Added",
-      blocks: [rows2]
-    }),
+    (0, import_react46.createElement)(ProposalHead, { titleId, title: proposal.name, kind: t(update ? "Skill update" : "New skill"), detail: proposal.description }),
+    (0, import_react46.createElement)(FileBox, { name: "SKILL.md", path: `skills/${proposal.name}`, state: update ? "Updated" : "Added", blocks: [rows2] }),
     proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
     error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
+    (0, import_react46.createElement)(ProposalFoot, { busy, answer })
+  );
+}
+function ProposalHead({ titleId, title, kind, detail }) {
+  return (0, import_react46.createElement)(
+    "div",
+    { className: "bt-q-head" },
+    (0, import_react46.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react46.createElement)(MemoryIcon)),
     (0, import_react46.createElement)(
       "div",
-      { className: "bt-learning-actions" },
-      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) }, t("Approve")),
-      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline"))
+      { className: "bt-q-text" },
+      (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, title),
+      (0, import_react46.createElement)("div", { className: "bt-q-detail" }, kind),
+      detail ? (0, import_react46.createElement)("p", { className: "bt-learning-description" }, detail) : null
+    ),
+    (0, import_react46.createElement)("span", { className: "bt-q-badge bt-learning-status" }, (0, import_react46.createElement)("span", { className: "bt-learning-dot", "aria-hidden": true }), t("Awaiting approval"))
+  );
+}
+function ProposalFoot({ busy, answer }) {
+  return (0, import_react46.createElement)(
+    "div",
+    { className: "bt-q-foot bt-learning-foot" },
+    (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
+    (0, import_react46.createElement)(
+      "button",
+      { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) },
+      (0, import_react46.createElement)(CheckIcon),
+      t("Approve")
     )
   );
 }
 var COLLAPSE_ROWS = 8;
-function FileBox({ name, path, added, removed, state, blocks }) {
+var SIGNS = { added: "+", removed: "−", same: "" };
+function FileBox({ name, path, state, blocks }) {
   const [open, setOpen] = (0, import_react46.useState)(false);
-  const total = blocks.reduce((sum, rows2) => sum + rows2.length, 0);
-  const folds = total > COLLAPSE_ROWS;
+  const all = blocks.flat();
+  const added = all.filter((row) => row.kind === "added").length;
+  const removed = all.filter((row) => row.kind === "removed").length;
+  const folds = all.length > COLLAPSE_ROWS;
   const shut = folds && !open;
   return (0, import_react46.createElement)(
     "div",
@@ -19041,12 +19084,12 @@ function FileBox({ name, path, added, removed, state, blocks }) {
     (0, import_react46.createElement)(
       "div",
       { className: "bt-learning-filehead" },
-      (0, import_react46.createElement)("strong", null, name),
+      (0, import_react46.createElement)("span", { className: "bt-learning-name" }, name),
       path ? (0, import_react46.createElement)("span", { className: "bt-learning-path" }, path) : null,
       (0, import_react46.createElement)("span", { className: "bt-learning-spacer" }),
       added > 0 ? (0, import_react46.createElement)("span", { className: "bt-learning-plus" }, `+${added}`) : null,
       removed > 0 ? (0, import_react46.createElement)("span", { className: "bt-learning-minus" }, `−${removed}`) : null,
-      (0, import_react46.createElement)("span", { className: `bt-learning-state${state === "Added" ? " bt-learning-state-new" : ""}` }, t(state))
+      (0, import_react46.createElement)("span", { className: `bt-learning-state bt-learning-state-${state.toLowerCase()}` }, t(state))
     ),
     (0, import_react46.createElement)(
       "div",
@@ -19056,13 +19099,21 @@ function FileBox({ name, path, added, removed, state, blocks }) {
         ...rows2.map((row, rowIndex) => (0, import_react46.createElement)(
           "div",
           { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
-          (0, import_react46.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.mark),
+          (0, import_react46.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.number ?? ""),
+          (0, import_react46.createElement)("span", { className: "bt-learning-sign", "aria-hidden": true }, SIGNS[row.kind]),
           (0, import_react46.createElement)("span", { className: "bt-learning-text" }, row.line)
         ))
-      ]),
-      shut ? (0, import_react46.createElement)("div", { className: "bt-learning-fade" }) : null
+      ])
     ),
-    folds ? (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-more", "aria-expanded": open, onClick: () => setOpen(!open) }, t(open ? "Show less" : "Show all")) : null
+    folds ? (0, import_react46.createElement)(
+      "div",
+      { className: shut ? "bt-learning-morebar bt-learning-morebar-shut" : "bt-learning-morebar" },
+      (0, import_react46.createElement)(
+        "button",
+        { type: "button", className: "bt-learning-more", "aria-expanded": open, onClick: () => setOpen(!open) },
+        t(open ? "Show less" : "Show all {count} lines", { count: all.length })
+      )
+    ) : null
   );
 }
 function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
@@ -19116,42 +19167,48 @@ function LearningDock(props) {
 var LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
 .bt-learning-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;box-sizing:border-box}
-.bt-learning-card{gap:12px}
-.bt-learning-headtext{display:flex;flex-direction:column;gap:2px;min-width:0}
-.bt-learning-status{font-size:13px;line-height:18px;font-weight:500;color:var(--bt-star)}
-.bt-learning-card .bt-q-title{overflow-wrap:anywhere}
-.bt-learning-sub{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
-.bt-learning-description{margin:4px 0 0;font-size:13px;line-height:18px;color:var(--bt-ink)}
-.bt-learning-file{border:1px solid var(--bt-line-2);border-radius:10px;overflow:hidden;background:var(--bt-card)}
-.bt-learning-filehead{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px;border-bottom:1px solid var(--bt-line);font-size:13px;line-height:18px;color:var(--bt-ink)}
-.bt-learning-filehead strong{flex:none;font-weight:500}
+.bt-learning-card .bt-q-head{gap:12px}
+.bt-learning-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2)}
+.bt-learning-icon svg{width:18px;height:18px}
+.bt-learning-description{margin:6px 0 0;font-size:13px;line-height:19px;color:var(--bt-ink)}
+.bt-learning-status{display:inline-flex;align-items:center;gap:6px;border-style:solid;border-color:color-mix(in srgb,var(--bt-star) 35%,transparent);color:color-mix(in srgb,var(--bt-star) 80%,var(--bt-ink))}
+.bt-learning-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-star)}
+.bt-learning-file{border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--bt-ink) 2.5%,var(--bt-card));box-shadow:inset 0 0 0 1px var(--bt-q-rule)}
+.bt-learning-filehead{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px;box-shadow:inset 0 -1px 0 var(--bt-q-rule-2);font-size:12px;line-height:18px}
+.bt-learning-name{flex:none;font-weight:600;color:var(--bt-ink)}
 .bt-learning-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink-3)}
 .bt-learning-spacer{flex:1}
-.bt-learning-plus{flex:none;font-weight:600;color:var(--bt-green)}
-.bt-learning-minus{flex:none;font-weight:600;color:var(--bt-danger)}
-.bt-learning-state{flex:none;padding:1px 8px;border-radius:6px;font-size:12px;font-weight:500;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
-.bt-learning-state-new{background:color-mix(in srgb,var(--bt-green) 14%,transparent);color:var(--bt-green)}
-.bt-learning-code{position:relative;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:20px;color:var(--bt-ink)}
-.bt-learning-shut{max-height:180px;overflow:hidden}
-.bt-learning-row{display:grid;grid-template-columns:40px 1fr}
-.bt-learning-num{padding-right:10px;text-align:right;color:var(--bt-ink-3);user-select:none}
-.bt-learning-text{min-width:0;padding:0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 10%,transparent);box-shadow:inset 3px 0 0 var(--bt-green)}
-.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 8%,transparent);box-shadow:inset 3px 0 0 var(--bt-danger)}
-.bt-learning-gap{height:8px;background:var(--bt-hover)}
-.bt-learning-fade{position:absolute;left:0;right:0;bottom:0;height:56px;background:linear-gradient(transparent,var(--bt-card));pointer-events:none}
-.bt-learning-more{display:block;width:100%;padding:6px;border:0;border-top:1px solid var(--bt-line);background:transparent;font:inherit;font-size:12px;line-height:16px;color:var(--bt-ink-2);cursor:pointer}
-.bt-learning-more:hover{background:var(--bt-hover)}
-.bt-learning-more:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-learning-plus,.bt-learning-minus{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.bt-learning-plus{color:var(--bt-green)}
+.bt-learning-minus{color:var(--bt-danger)}
+.bt-learning-state{flex:none;height:20px;padding:0 8px;border-radius:999px;font-size:11px;line-height:20px;font-weight:500;background:var(--bt-hover);color:var(--bt-ink-2)}
+.bt-learning-state-added{background:color-mix(in srgb,var(--bt-green) 13%,transparent);color:color-mix(in srgb,var(--bt-green) 70%,var(--bt-ink))}
+.bt-learning-code{padding:6px 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:20px;color:var(--bt-ink)}
+.bt-learning-shut{max-height:172px;overflow:hidden}
+.bt-learning-row{display:grid;grid-template-columns:36px 16px 1fr}
+.bt-learning-num{padding-right:6px;text-align:right;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;user-select:none}
+.bt-learning-sign{text-align:center;user-select:none}
+.bt-learning-text{min-width:0;padding-right:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 9%,transparent)}
+.bt-learning-added .bt-learning-sign{color:var(--bt-green)}
+.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 7%,transparent)}
+.bt-learning-removed .bt-learning-sign{color:var(--bt-danger)}
+.bt-learning-removed .bt-learning-text{color:var(--bt-ink-2)}
+.bt-learning-gap{height:1px;margin:6px 12px;background:var(--bt-q-rule)}
+.bt-learning-morebar{display:flex;justify-content:center;padding:4px 0 8px}
+.bt-learning-morebar-shut{position:relative;margin-top:-36px;padding-top:28px;background:linear-gradient(transparent,color-mix(in srgb,var(--bt-ink) 2.5%,var(--bt-card)) 60%)}
+.bt-learning-more{height:24px;padding:0 10px;border:0;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 1px var(--bt-q-edge);font:inherit;font-size:12px;color:var(--bt-ink-2);cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.bt-learning-more:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-learning-more:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 .bt-learning-why{margin:0;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
-.bt-learning-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px}
-.bt-learning-btn{flex:none;display:inline-flex;align-items:center;height:32px;padding:0 16px;border-radius:8px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, "scale")}}
-.bt-learning-decline{background:transparent;border:1px solid var(--bt-line-2);color:var(--bt-ink)}
+.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 16px;border:0;border-radius:999px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, "scale")}}
+.bt-learning-btn svg{width:15px;height:15px}
+.bt-learning-decline{background:transparent;box-shadow:inset 0 0 0 1px var(--bt-line-2);color:var(--bt-ink)}
 .bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
-.bt-learning-approve{border:1px solid transparent;background:var(--bt-ink);color:var(--bt-card)}
-.bt-learning-approve:hover:not(:disabled){opacity:.88}
+.bt-learning-approve{padding-left:13px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
+.bt-learning-approve:hover:not(:disabled){opacity:.86}
 .bt-learning-btn:disabled{opacity:.45;cursor:default}
-.bt-learning-btn:active:not(:disabled){scale:.97}
+.bt-learning-btn:active:not(:disabled){scale:.96}
 .bt-learning-btn:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.bt-learning-btn{transition:background-color .12s ease,opacity .12s ease}.bt-learning-btn:active:not(:disabled){scale:none}}
 .bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}

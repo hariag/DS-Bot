@@ -86,7 +86,7 @@ const ZH = {
   'New skill': '新技能',
   'Awaiting approval': '等待批准',
   Added: '新增',
-  'Show all': '展开全部',
+  'Show all {count} lines': '展开全部 {count} 行',
   'Skill update': '技能更新',
   Approve: '批准',
   Decline: '拒绝',
