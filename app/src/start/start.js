@@ -94,6 +94,9 @@ function voiceWant() {
   if (view === 'boot' && !engineDone && ms >= 45000) return ['voice.slow45', false]
   if (view === 'boot' && !engineDone && ms >= 10000) return ['voice.slow10', false]
   if (st.active === 0) return ['voice.data', false]
+  // 「找到了」 comes once after 「先找个地方放东西」, also when the second stage turns active while
+  // the old line is still fading out: the second stage starts 250 ms after the first is done.
+  if (v.last === 'voice.data' && (st.at === 1 || st.legging)) return ['voice.found', false]
   if (st.active === 1) return ['voice.engine', false]
   // Between stages: 「找到了」 answers 「先找个地方放东西」 only if that was said; the greeting
   // stays until there is news, unless a card has already spoken.
