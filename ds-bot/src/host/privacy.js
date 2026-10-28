@@ -84,6 +84,10 @@ export function install(rt) {
 
   const teamFolder = () => rt.teamFolder() ?? resolve(rt.defaultTeamFolder())
   const teamMemory = join(rt.home, 'memory', 'team')
+  // The memory of deleted Bots and groups. What a private Bot left there is a region of
+  // its own (archivePath) and is checked first; the rest was never closed, and the
+  // memory of a Bot whose protection the user lifted is in it.
+  const memoryArchive = join(rt.home, 'memory', 'archive')
 
   // The private Bot that `path` belongs to, other than `self`; undefined when it is open.
   // `search` is for tools that walk a folder: a folder that holds a closed one is closed
@@ -107,7 +111,7 @@ export function install(rt) {
       const ownBot = rt.botOf(self)
       const ownIds = ownBot === undefined ? [] : sessionsOf(ownBot).map(fold)
       const ownRegions = ownBot === undefined ? [] : await regionsOf(ownBot)
-      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, ...ownRegions].filter(Boolean)
+      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, memoryArchive, ...ownRegions].filter(Boolean)
       const folders = (await Promise.all(open.map(spellings))).flat()
       const roots = (await Promise.all(dataRoots().map(spellings))).flat()
       for (const key of keys) {

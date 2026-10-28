@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { test } from 'node:test'
@@ -512,6 +512,51 @@ test('the user lifts what a deleted private Bot left closed, one Bot at a time',
   const again = await call('private-release', { id: P })
   assert.equal(again.ok, false)
   assert.match(again.error.message, /Nothing kept closed/)
+})
+
+test('the archived memory of a Bot whose protection is lifted opens; another archive stays closed', async (t) => {
+  const { rt, ctx, call, run, home, root, project, state, stop } = await start()
+  t.after(stop)
+  // Ids shaped like real Session ids: a one-letter id would match any path.
+  let created = 0
+  ctx.sessionController.create = async () => ({ sessionId: `0000000${++created}-1111-4222-8333-444444444444` })
+  const ledgerDir = join(root, 'ledger')
+  mkdirSync(ledgerDir)
+  const ledger = await rt.createBot({ name: 'Ledger', workDir: ledgerDir })
+  await rt.updateBot(ledger.id, { private: true })
+  const scratch = await rt.createBot({ name: 'Scratch', workDir: project })
+  const reader = (await rt.createBot({ name: 'Reader' })).id
+  for (const id of [P, ledger.id, scratch.id]) {
+    mkdirSync(join(home, 'memory', 'bots', id), { recursive: true })
+    writeFileSync(join(home, 'memory', 'bots', id, 'MEMORY.md'), `memory of ${id}`)
+  }
+  await rt.deleteBot(P)
+  await rt.deleteBot(ledger.id)
+  await rt.deleteBot(scratch.id)
+  const archives = Object.fromEntries(state().privateArchives.map(entry => [entry.id, entry.archivePath]))
+  const memoryOf = id => ({ file_path: join(archives[id], 'MEMORY.md') })
+  const archiveRoot = join(home, 'memory', 'archive')
+  const scratchRead = { file_path: join(archiveRoot, readdirSync(archiveRoot).find(name => name.startsWith(scratch.id)), 'MEMORY.md') }
+
+  // While both are kept, neither archive is read; the archive of a Bot that was never private is.
+  for (const id of [P, ledger.id]) {
+    const result = await run('read', memoryOf(id), reader)
+    assert.equal(result.ran, false, id)
+    assert.match(result.error, CLOSED)
+  }
+  assert.deepEqual(await run('read', scratchRead, reader), { ran: true })
+
+  await call('private-release', { id: P })
+  assert.deepEqual(await run('read', memoryOf(P), reader), { ran: true })
+  const kept = await run('read', memoryOf(ledger.id), reader)
+  assert.equal(kept.ran, false)
+  assert.match(kept.error, /Ledger/)
+  // A walk of the archive folder would reach the kept one, so it stays closed.
+  assert.equal((await run('glob', { pattern: '**/*', path: archiveRoot }, reader)).ran, false)
+
+  await call('private-release', { id: ledger.id })
+  assert.deepEqual(await run('read', memoryOf(ledger.id), reader), { ran: true })
+  assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, reader), { ran: true })
 })
 
 test('with no private Bot the tools run as they did', async (t) => {
