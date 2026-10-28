@@ -1,5 +1,5 @@
-export function proposalTurn(proposal, turns) {
-  if (!Number.isFinite(proposal?.at) || typeof turns?.values !== 'function') return undefined
+export function proposalPlacement(proposal, turns) {
+  if (!Number.isFinite(proposal?.at) || typeof turns?.values !== 'function') return { kind: 'dock' }
   let latest
   let before
   for (const location of turns.values()) {
@@ -9,5 +9,6 @@ export function proposalTurn(proposal, turns) {
     if (later(latest)) latest = location
     if (end <= proposal.at && later(before)) before = location
   }
-  return (before ?? latest)?.turn
+  const turn = (before ?? latest)?.turn
+  return turn === undefined ? { kind: 'dock' } : { kind: 'turn', turn }
 }
