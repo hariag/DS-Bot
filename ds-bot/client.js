@@ -18976,6 +18976,7 @@ function proposalPlacement(proposal, turns) {
 
 // src/client/learning-card.js
 var import_react46 = require("react");
+var failedAnswers = /* @__PURE__ */ new Map();
 function ProposalCard({ proposal, initialError = "", onFailure, onResolved, actions }) {
   const [busy, setBusy] = (0, import_react46.useState)(false);
   const [error, setError] = (0, import_react46.useState)(initialError);
@@ -19040,13 +19041,20 @@ function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
   for (const entry of Object.values(failed)) {
     if (entry.proposal.botId === bot.id && !proposals.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
   }
+  for (const entry of failedAnswers.values()) {
+    if (entry.proposal.botId === bot.id && !proposals.some((proposal) => proposal.id === entry.proposal.id) && !visible.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
+  }
   const cards = visible.filter((proposal) => {
     const placement = proposalPlacement(proposal, facts?.turns);
     return dock ? placement.kind === "dock" : placement.kind === "turn" && placement.turn === turn?.turn;
   });
   if (cards.length === 0) return null;
-  const onFailure = (proposal, error) => setFailed((current) => ({ ...current, [proposal.id]: { proposal, error } }));
+  const onFailure = (proposal, error) => {
+    failedAnswers.set(proposal.id, { proposal, error });
+    setFailed((current) => ({ ...current, [proposal.id]: { proposal, error } }));
+  };
   const onResolved = (id) => setFailed((current) => {
+    failedAnswers.delete(id);
     if (!(id in current)) return current;
     const next = { ...current };
     delete next[id];
@@ -19057,7 +19065,7 @@ function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
     { className: "bt-q-inline", key: proposal.id },
     (0, import_react46.createElement)(ProposalCard, {
       proposal,
-      initialError: failed[proposal.id]?.error,
+      initialError: failed[proposal.id]?.error ?? failedAnswers.get(proposal.id)?.error,
       onFailure,
       onResolved,
       actions
