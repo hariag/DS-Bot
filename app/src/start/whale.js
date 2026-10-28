@@ -195,7 +195,7 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
   // ---- loops ----
   const capture = () => ({ loop: cs(loop).transform, tail: cs(tail).transform, pair: cs(pair).transform, eyes: eyes.map(eye => cs(eye).transform) })
   // Every pose change starts here and then slides .whale-loop from where it is, lean included.
-  const stopLoop = () => { delete root.dataset.whale; delete root.dataset.tail; D.loop = ''; D.lean = false }
+  const stopLoop = () => { delete root.dataset.whale; delete root.dataset.tail; D.loop = ''; D.lean = false; clearTimeout(D.wander) }
   function slide(el, from, target, opts) {
     drop(el)
     if (from === 'none' && target === 'none') return null
@@ -234,6 +234,35 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
     D.loop = name
     D.loopAt = performance.now()
     if (D.slow === 1) calm()
+    if (name === 'working') wanderLater()
+  }
+  // While it works at the second stop, the whale glances left or right now and then (§3, the
+  // small reactions): every 5 to 9 s, a 600 ms look to one side at random, over the bob. Not in
+  // the quiet tier, with reduced motion or while thinking, and not while the eyes follow the
+  // pointer or a control, or look at the user.
+  // Only the second stop of a first start: later and moving starts, and the copying cards, use
+  // the working loop too.
+  const wandering = () => first && D.at === 1 && !D.card && playful() && D.loop === 'working' && D.slow < 2
+  function wanderLater() {
+    clearTimeout(D.wander)
+    if (!wandering()) return
+    D.wander = setTimeout(() => { wander(); wanderLater() }, 5000 + 4000 * rnd())
+  }
+  function wander() {
+    if (!wandering() || D.gazeHold || D.pet || D.poking || D.hop || D.handed || document.hidden) return
+    if (pointer || (focused && focused === document.activeElement)) return
+    const side = `translateX(${rnd() < 0.5 ? -14 : 14}%)`
+    D.wanderAnim = play(pair, kf([{ transform: 'none' }, { transform: side, offset: 0.25 }, { transform: side, offset: 0.7 }, { transform: 'none' }], 'ease-in-out'), { duration: 600, fill: 'none' })
+  }
+  // A look at the user takes the eyes back from a glance to the side first.
+  function unwander() {
+    const a = D.wanderAnim
+    if (!a) return
+    D.wanderAnim = null
+    if (a.playState !== 'running') return
+    const from = cs(pair).transform
+    a.cancel()
+    if (from !== 'none') slide(pair, from, 'none', { duration: 120, easing: 'ease-out' })
   }
   // Calmer, never faster (S6): every running whale animation at .85, no phase jump.
   function calm() {
@@ -245,6 +274,7 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
     if (!playful() || !poses.includes(D.pose) || D.gazeHold || now - D.glanceAt < 20000) return
     D.glanceAt = now
     D.gazeHold = true
+    unwander()
     setGaze(0, -0.3)
     for (const eye of eyes) play(eye, kf([{ transform: 'none' }, { transform: 'scaleY(.03)', offset: 1 / 3 }, { transform: 'scaleY(.03)', offset: 5 / 9 }, { transform: 'none' }], 'ease-in-out'), { duration: 360, fill: 'none' })
     await sleep(600)
