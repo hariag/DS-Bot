@@ -67,6 +67,6 @@
     "esbuild": "0.28.2"
   },
   "dependencies": {
-    "deep-view": "file:../../../DeepSeek Bot/deep-view"
+    "deep-view": "0.1.0"
   }
 }
