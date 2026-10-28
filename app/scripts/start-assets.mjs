@@ -5,8 +5,6 @@
 //   is st-eyes, the clips st-tail-cut and st-torso-cut; the fill stays var(--bt-ink-deepseek).
 // - start.css, between /* tokens */ markers: the DeepSeek theme's light and dark colors.
 // - start.css, between /* springs */ markers: motion.js's springs as linear() curves.
-// - ../page-card.css, between the same two markers: the same colors and springs, scoped to the
-//   card that the team window shows in place of a message box, so that the page's own are kept.
 // Usage: node scripts/start-assets.mjs [--check]   (--check exits 1 when a block is stale and
 // writes nothing)
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -21,8 +19,6 @@ const THEME_TOKENS = ['--bt-main', '--bt-card', '--bt-ink', '--bt-ink-2', '--bt-
 // The status colors are the same in both modes; the plugin's base sheet defines them.
 const BASE_TOKENS = ['--bt-green', '--bt-danger']
 const SPRINGS = ['shape', 'tap', 'pop', 'stretch', 'list']
-// The layer of the team window's card (preload.cjs).
-const CARD_SCOPE = '.dsb-card-layer'
 
 // Wraps the one self-closing element that starts with `start` in <g id>.
 function wrap(markup, id, start) {
@@ -50,12 +46,7 @@ function rig() {
   const mask = raw.slice(raw.indexOf('<mask'), raw.indexOf('</mask>') + 7)
     .replace('<g class="bt-gaze">', '<g id="gaze" class="bt-gaze">')
     .replace('<g class="bt-eyes" fill="#000">', '<g id="eye-pair" class="bt-eyes" fill="#000">')
-  // The start whale keeps the highlight layer and the stronger shade it was designed
-  // with; the runtime characters draw the body without them.
-  let layers = `<g fill-rule="evenodd"><path d="${whale.body}" fill="var(--bt-ink-deepseek)"/>`
-    + (whale.paints ?? []).map(([d, fill, opacity]) => `<path d="${d}" fill="${fill}" fill-opacity="${opacity}"/>`).join('')
-    + `<path d="${whale.shade}" fill="#000" fill-opacity=".14"/>`
-    + `<path d="${whale.light}" fill="#fff" fill-opacity=".16"/></g>`
+  let layers = group(raw, '<g fill-rule="evenodd">')
   layers = wrap(layers, 'w-body', `<path d="${whale.body}"`)
   layers = wrap(layers, 'w-belly', `<path d="${whale.paints[0][0]}"`)
   layers = wrap(layers, 'w-shade', `<path d="${whale.shade}"`)
@@ -80,28 +71,22 @@ function rig() {
 }
 
 const rules = css => [...css.matchAll(/\{([^}]*)\}/gu)].map(([, body]) => new Map(body.split(';').filter(Boolean).map(item => item.split(/:(.*)/su).slice(0, 2))))
-// The start page carries no skin variables, so a surface color that the app writes as
-// `var(--bt-skin-main, #fcfcfc)` is copied at its theme fallback here.
-const themeFallback = value => {
-  const wrapped = /^var\(\s*--[\w-]+\s*,\s*([\s\S]+)\)$/u.exec(value)
-  return wrapped === null ? value : wrapped[1].trim()
-}
 function pick(vars, names, from) {
   return names.map((name) => {
     if (!vars.has(name)) throw new Error(`${from} no longer sets ${name}`)
-    return `${name}:${themeFallback(vars.get(name))}`
+    return `${name}:${vars.get(name)}`
   }).join(';')
 }
 
-function tokens(scope = ':root') {
+function tokens() {
   const [light, dark] = rules(themeCss(allThemes().deepseek))
   const base = readFileSync(new URL('styles.js', client), 'utf8').match(/^body\{(--bt-[^}]*)\}$/mu)
   if (!base) throw new Error('styles.js: the base body rule was not found')
   const [ink, inkDark] = INKS.deepseek
   return [
     '/* Generated from the DeepSeek theme in ds-bot/src/client/themes.js, inks.js and styles.js by scripts/start-assets.mjs; do not edit. */',
-    `${scope}{color-scheme:light dark;${pick(light, THEME_TOKENS, 'themeCss')};--bt-ink-deepseek:${ink};${pick(rules(`{${base[1]}}`)[0], BASE_TOKENS, 'styles.js')}}`,
-    `@media (prefers-color-scheme:dark){${scope}{${pick(dark, THEME_TOKENS, 'themeCss')};--bt-ink-deepseek:${inkDark}}}`,
+    `:root{color-scheme:light dark;${pick(light, THEME_TOKENS, 'themeCss')};--bt-ink-deepseek:${ink};${pick(rules(`{${base[1]}}`)[0], BASE_TOKENS, 'styles.js')}}`,
+    `@media (prefers-color-scheme:dark){:root{${pick(dark, THEME_TOKENS, 'themeCss')};--bt-ink-deepseek:${inkDark}}}`,
   ]
 }
 
@@ -116,11 +101,11 @@ async function motion() {
   return import(`data:text/javascript,${encodeURIComponent(source.replace(imports[0], stub))}`)
 }
 
-async function springs(scope = ':root') {
+async function springs() {
   const curves = await motion()
   return [
     '/* Generated from ds-bot/src/client/motion.js by scripts/start-assets.mjs; do not edit. */',
-    `${scope} {`,
+    ':root {',
     ...SPRINGS.flatMap((name) => {
       const curve = curves[`SPRING_${name.toUpperCase()}`]
       if (!curve) throw new Error(`motion.js no longer exports SPRING_${name.toUpperCase()}`)
@@ -144,7 +129,6 @@ function between(text, open, close, block) {
 const files = {
   'start.html': html => between(html, '<!-- whale -->', '<!-- /whale -->', rig()),
   'start.css': async css => between(between(css, '/* tokens */', '/* /tokens */', tokens()), '/* springs */', '/* /springs */', await springs()),
-  '../page-card.css': async css => between(between(css, '/* tokens */', '/* /tokens */', tokens(CARD_SCOPE)), '/* springs */', '/* /springs */', await springs(CARD_SCOPE)),
 }
 const check = process.argv.includes('--check')
 const stale = []

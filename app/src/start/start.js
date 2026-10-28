@@ -1,43 +1,26 @@
 // The start page: binds window.dsBotStart and applies each full snapshot to the page (the
-// whale's line and the hint row, which speak only when the user is needed, the sheet and its
-// cards, focus and the live region). The whale, the ring of arcs that is the progress and the
-// hidden stage list belong to the director in whale.js. Text is set only through textContent
-// (and text nodes), never as markup.
-import { fill as fillIn, t } from './text.mjs'
-import { createDirector, reduced, reducedFx, play, spring, sleep, clamped } from './whale.js'
+// whale's line, the hint row and the clock, the sheet and its cards, focus and the live
+// region). The whale, its rings and the hidden stage list belong to the director in whale.js;
+// the whale's line follows where the director has the whale, not the snapshot alone. Text is
+// set only through textContent (and text nodes), never as markup.
+import { t } from './text.mjs'
+import { createDirector, reduced, play, spring, sleep, clamped } from './whale.js'
 
 const root = document.documentElement
 const asked = new URLSearchParams(location.search).get('start')
 const START = ['first', 'later', 'moving'].includes(asked) ? asked : 'first'
 const resume = performance.getEntriesByType('navigation')[0]?.type === 'reload'
-// The main process shows the window by itself after PAINT_WAIT_MS (3 s) and OPEN_MS.
-const HELD_MAX_MS = 3500
 const bridge = window.dsBotStart
 if (resume) root.dataset.resume = ''
 // The page shows nothing but the empty band (html:not([data-start])) without the preload's bridge.
 if (bridge) root.dataset.start = START
 const first = START === 'first'
 root.dataset.sheet = 'none'
-// The window shows see-through once this page has painted and turns opaque a moment later
-// (start-window.mjs OPEN_MS); the snapshot then says `shown`. Until then the whale's entrance
-// waits: its CSS animations hold their first frame (start.css html[data-held]) and the
-// director's clock has not started.
-let onScreen = () => {}
-const begin = bridge && !resume ? new Promise((resolve) => { onScreen = resolve }) : Promise.resolve()
-if (bridge && !resume) {
-  root.dataset.held = ''
-  setTimeout(release, HELD_MAX_MS)
-}
-function release() {
-  delete root.dataset.held
-  onScreen()
-}
 
 const $ = selector => document.querySelector(selector)
-const sheet = $('.sheet'), edge = $('.sheet-edge'), fill = $('.sheet-fill'), stage = $('.stage'), pond = $('.pond'), live = $('.live')
+const sheet = $('.sheet'), edge = $('.sheet-edge'), fill = $('.sheet-fill'), stage = $('.stage'), live = $('.live')
 const voiceEl = $('.voice'), voiceText = $('.voice>span')
-const captionText = $('.caption-text')
-const placeEl = $('.place'), placeText = $('.place-text')
+const captionText = $('.caption-text'), logs = $('.caption .btn'), elapsed = $('.elapsed')
 const CODE = new Set(['path', 'dataDir', 'workspace'])
 let lang = 'zh'
 let s = null
@@ -47,47 +30,29 @@ const say = (key, vars) => t(lang, key, vars)
 const sigs = new WeakMap()
 function render(el, vars = {}) {
   const key = el.dataset.t.replace(/\{(\w+)\}/gu, (all, name) => vars[name] ?? '')
-  // Odd parts are placeholders: {name}, or {name|one|many} for an English count.
-  const parts = say(key).split(/\{(\w+(?:\|[^}]*)?)\}/u)
-  const valueOf = (part) => {
-    const value = vars[part.split('|')[0]]
-    if (value === undefined || value === null) return ''
-    return part.includes('|') ? fillIn(`{${part}}`, vars) : String(value)
-  }
-  const sig = parts.map((part, i) => (i % 2 ? `\u0001${valueOf(part)}` : part)).join('')
+  const parts = say(key).split(/\{(\w+)\}/u)
+  const sig = parts.map((part, i) => (i % 2 ? `\u0001${vars[part] ?? ''}` : part)).join('')
   if (sigs.get(el) === sig) return
   sigs.set(el, sig)
   el.replaceChildren(...parts.map((part, i) => {
     if (i % 2 === 0) return part
-    const value = valueOf(part)
+    const value = String(vars[part] ?? '')
     return CODE.has(part) ? Object.assign(document.createElement('code'), { textContent: value }) : value
   }))
 }
 function renderStatic() {
   root.lang = lang === 'zh' ? 'zh-CN' : 'en'
-  for (const el of document.querySelectorAll('.track [data-t], .footrow [data-t], .caption [data-t]')) render(el)
-  $('.track').setAttribute('aria-label', say('status.track'))
-  for (const st of document.querySelectorAll('.station')) st.querySelector('.sr').textContent = say(`status.state.${st.dataset.state}`)
-  if (s) { fillBlock(shown); placeUI(s.place); timeUI() }
-}
-// Where the data goes, centred in the footer with a grey 〔换个位置…〕: on a first start (the main
-// process sends no place on a reinstall or once a copied team lives there), and on a later start
-// whose drive is down to a fifth of its room at the start. The drive and its free space on
-// Windows, the folder elsewhere.
-function placeUI(place) {
-  // The failure page has its own buttons; the 180 s question still lets the place change.
-  const on = START !== 'moving' && place !== null && typeof place === 'object' && !['failed', 'viewFailed'].includes(s?.view)
-  placeEl.hidden = !on
-  if (!on) return
-  const key = place.drive ? (place.free ? 'foot.place.drive' : 'foot.place.driveOnly') : place.free ? 'foot.place.path' : 'foot.place.pathOnly'
-  placeText.textContent = say(key, place)
+  for (const el of document.querySelectorAll('.track [data-t], .note[data-t], .caption [data-t]')) render(el)
+  $('.track').setAttribute('aria-label', say('track.label'))
+  for (const st of document.querySelectorAll('.station')) st.querySelector('.sr').textContent = say(`state.${st.dataset.state}`)
+  if (s) { fillBlock(shown); timeUI() }
 }
 function varsOf(snap) {
   const card = snap.card ?? {}
   const update = snap.update ?? {}
-  const vars = { ...card }
+  const vars = { ...snap.explain, ...card }
   if (snap.view === 'failed' || snap.view === 'viewFailed') vars.reason = snap.failure?.reason ?? 'other'
-  if ((card.kind === 'importFailed' || card.kind === 'moveFailed') && card.reason) vars.reason = say(`reason.copy.${card.reason}`)
+  if (card.kind === 'importFailed') vars.reason = say(`importFailed.${card.reason}`)
   if (card.kind === 'newerUpdating') vars.p = card.percent ?? 0
   if (update.version) Object.assign(vars, { version: update.version, p: update.percent ?? 0, a: update.received ?? 0, b: update.total ?? 0 })
   return vars
@@ -95,51 +60,125 @@ function varsOf(snap) {
 function announce(text) { if (text) live.textContent = text }
 
 // ---- the whale's line ----
-// One short line under the ring, and only when something went wrong: the 180 s question or a
-// failure. A slow start is told by the whale's pose alone. A card speaks with its own first line,
-// so the whale's line is empty while a card is up (the 180 s question is the exception: its card
-// holds only the buttons). A new line fades in once the old one has faded out.
-const VOICES = { failed: 'voice.failed', viewFailed: 'voice.viewFailed', watchdog: 'voice.watchdog' }
+// One short line at a time, under the waterline. It follows the whale: the stop it is at, the
+// stage shown active there, the leg it is swimming. A card speaks with its own first line, so
+// the whale's line is empty while a card is up (the 180 s question is the exception: its card
+// holds only the buttons). Each line stays long enough to read before the next replaces it;
+// lines skipped meanwhile are never shown late; the line is empty while the whale sinks to start
+// over in a new folder. A failure and the 180 s question come at once;
+// 「进去吧」 lets the line before it be read for READ_MS first, and the director starts the
+// celebration READY_MS (whale.js) after 「进去吧」 is up.
+const HOLDS = { 'voice.hello': 1500, 'voice.found': 700 }
+const HOLD_MS = 900
+const READ_MS = 400
 const FADE_MS = 160
-// key/text: the line chosen (on screen, or coming in once the old one has faded out).
-const v = { key: '', text: '', swap: 0 }
+// Lines put up while a reloaded page catches up are not held.
+const catchUp = resume ? performance.now() + 1000 : 0
+// key/text: the line chosen (on screen, or coming in once the old one has faded out); shown/at:
+// the line on screen and when it went up; last: the last line that really went up.
+const v = { key: '', text: '', shown: '', at: 0, timer: 0, swap: 0, last: '', cards: false, readyAt: 0, waiters: [] }
+const readyLine = () => (v.readyAt ? Promise.resolve(v.readyAt) : new Promise(resolve => v.waiters.push(resolve)))
 function voiceWant() {
-  return VOICES[s.view] ?? ''
+  const view = s.view
+  if (view === 'failed' || view === 'viewFailed') return [`title.${view}`, true]
+  if (view === 'watchdog') return ['voice.watchdog', true]
+  if (view === 'card') return ['', false]
+  if (!first) return [`title.${START}`, true]
+  if (view === 'handoff') return ['voice.ready', false]
+  const st = director.stage()
+  if (st.sinking) return ['', false]
+  if (st.ready) return ['voice.ready', false]
+  if (st.at >= 2 || (st.at === 1 && st.legging)) return ['voice.team', false]
+  const ms = bootMs()
+  const engineDone = (s.done ?? []).includes('engine')
+  if (view === 'boot' && !engineDone && ms >= 45000) return ['voice.slow45', false]
+  if (view === 'boot' && !engineDone && ms >= 10000) return ['voice.slow10', false]
+  if (st.active === 0) return ['voice.data', false]
+  if (st.active === 1) return ['voice.engine', false]
+  // Between stages: 「找到了」 answers 「先找个地方放东西」 only if that was said; the greeting
+  // stays until there is news, unless a card has already spoken.
+  if (['voice.data', 'voice.found'].includes(v.last) && (st.at === 1 || st.legging)) return ['voice.found', false]
+  if (!v.cards && (!v.last || v.last === 'voice.hello')) return ['voice.hello', false]
+  return [st.at === 0 ? 'voice.data' : 'voice.engine', false]
+}
+// The greeting names the Main Bot the user is about to meet: the team's own on a reinstall, the
+// default name for a new team. A team to import has no name yet (the answer decides which Main
+// Bot it is), and neither has a reinstall whose name could not be read. It stays one line
+// (voice.hello) whichever words it takes: the main process may learn the team after the window
+// opens, and the greeting on screen then changes in place.
+function greeting() {
+  const e = s.explain ?? {}
+  if (e.mode === 'import' || (e.mode === 'reinstall' && !e.name)) return say('voice.helloBack')
+  return e.name ? say('voice.helloName', { name: e.name }) : say('voice.hello')
 }
 function speak() {
+  clearTimeout(v.timer)
   if (!s) return
-  const key = voiceWant()
-  const text = key ? say(key) : ''
+  if (v.key === 'voice.hello' && v.shown === 'voice.hello' && !v.swap && greeting() !== v.text) {
+    v.text = greeting()
+    voiceText.textContent = v.text
+  }
+  const [key, urgent] = voiceWant()
+  const text = key === 'voice.hello' ? greeting() : key ? say(key) : ''
   if (key === v.key) { if (text !== v.text) { v.text = text; if (!v.swap) voiceText.textContent = text } return }
+  // The old line is already fading out: the new choice simply takes its place.
+  if (v.swap) { v.key = key; v.text = text; return }
+  const hold = urgent ? 0 : key === 'voice.ready' ? READ_MS : HOLDS[v.shown] ?? HOLD_MS
+  const left = v.shown ? v.at + hold - performance.now() : 0
+  if (left > 0) { v.timer = setTimeout(speak, left); return }
   v.key = key
   v.text = text
-  // The old line is already fading out: the new choice simply takes its place.
-  if (v.swap) return
-  if (!voiceEl.hasAttribute('data-on')) { put(); return }
+  if (!v.shown || !voiceEl.hasAttribute('data-on')) { put(); return }
   delete voiceEl.dataset.on
-  v.swap = setTimeout(put, root.dataset.effects === 'off' ? 0 : reduced() ? 120 : FADE_MS)
+  v.swap = setTimeout(put, reduced() ? 120 : FADE_MS)
 }
 function put() {
   v.swap = 0
+  v.shown = v.key
   voiceText.textContent = v.text
   voiceEl.toggleAttribute('data-on', Boolean(v.text))
-  if (v.key === 'voice.failed' || v.key === 'voice.viewFailed') announce(v.text)
+  v.at = performance.now() < catchUp ? -Infinity : performance.now()
+  if (!v.shown) return
+  v.last = v.shown
+  if (v.shown === 'title.failed' || v.shown === 'title.viewFailed') announce(v.text)
+  if (v.shown === 'voice.ready' && !v.readyAt) { v.readyAt = performance.now(); for (const resolve of v.waiters.splice(0)) resolve(v.readyAt) }
 }
 
-// ---- the hint row ----
-// Empty unless room runs short: a short drive's one-line note for the first 10 s. Nothing shows
-// while a card, the 180 s question or a failure is up.
+// ---- the hint row and the clock ----
+// The hint prepares the user for what comes next and is empty otherwise: the model to connect
+// at the second stop (the team carried over on a reinstall), DSH's preview notice on the way to
+// the last one; a short drive's one-line note for the first 10 s (as before). From 45 s the row
+// holds only 〔打开日志文件夹〕, since the whale's line says why. Later starts keep their decided
+// lines. Nothing shows while a card, the 180 s question or a failure is up.
 function hintWant() {
-  if (s.view !== 'boot' && s.view !== 'moving') return ['', {}]
-  return [s.hint && bootMs() < 10000 ? 'hint.space' : '', { ...s.hint }]
+  const view = s.view
+  const ms = bootMs()
+  const sec = Math.floor(ms / 1000)
+  if (!first) {
+    if (view !== 'boot' && view !== 'moving') return ['', {}, false]
+    if (ms >= 45000) return ['slow.45.later', {}, true]
+    if (ms >= 10000) return ['elapsed', { n: sec }, false]
+    return [s.hint ? 'hint.space' : '', { ...s.hint }, false]
+  }
+  if (view !== 'boot' && view !== 'handoff') return ['', {}, false]
+  const engineDone = (s.done ?? []).includes('engine')
+  if (view === 'boot' && !engineDone && ms >= 45000) return ['', {}, true]
+  const st = director.stage()
+  if (st.sinking) return ['', {}, false]
+  const e = s.explain ?? {}
+  const toTeam = view === 'handoff' || st.ready || st.at >= 2 || (st.at === 1 && st.legging)
+  if (toTeam && e.previewNotice) return ['hint.preview', {}, false]
+  if (s.hint && ms < 10000) return ['hint.space', { ...s.hint }, false]
+  if (st.at >= 1 && e.mode === 'reinstall') return ['hint.reinstall', e, false]
+  if (st.at >= 1 && e.nextStep !== false) return ['hint.model', {}, false]
+  return ['', {}, false]
 }
 let shimmerReady = false
 if (!first) setTimeout(() => { shimmerReady = true; if (s) shimmer() }, resume ? 0 : 1000)
-const shimmer = () => root.toggleAttribute('data-shimmer', root.dataset.effects !== 'reduced' && root.dataset.effects !== 'off' && shimmerReady && (s.view === 'boot' || s.view === 'moving'))
+const shimmer = () => root.toggleAttribute('data-shimmer', shimmerReady && (s.view === 'boot' || s.view === 'moving'))
 // The main process's boot clock: ms at the wall time `at`, paused while a card waits on the user.
 const bootMs = () => { const c = s?.clock; if (!c) return 0; return c.running ? c.ms + Math.max(0, Date.now() - c.at) : c.ms }
 let tick = 0
-// Runs on every snapshot and on each second of the boot clock: the 10 s and 45 s marks.
 function timeUI() {
   clearTimeout(tick)
   if (!s) return
@@ -147,15 +186,21 @@ function timeUI() {
   const sec = Math.floor(ms / 1000)
   const booting = s.view === 'boot' || s.view === 'moving'
   const engineDone = (s.done ?? []).includes('engine')
+  if (first) {
+    // The clock stays through 「进去吧」 and fades with the hint row when the celebration starts.
+    const shown = (booting || s.view === 'handoff') && ms >= 5000
+    root.toggleAttribute('data-elapsed', shown)
+    if (shown) elapsed.textContent = say('elapsed', { n: sec })
+  }
   hint()
   speak()
   if (booting) director.slow(first && engineDone ? 0 : ms >= 45000 ? 2 : ms >= 10000 ? 1 : 0)
   if (booting && s.clock?.running) tick = setTimeout(timeUI, (sec + 1) * 1000 - ms + 4)
 }
-const hint = () => { const [key, vars] = hintWant(); caption(key, vars) }
+const hint = () => { const [key, vars, withLogs] = hintWant(); caption(key, vars, withLogs) }
 let captionKey = ''
 let captionTimer = 0
-function caption(key, vars) {
+function caption(key, vars, withLogs) {
   const text = key ? say(key, vars) : ''
   if (key !== captionKey) {
     const had = captionKey
@@ -164,6 +209,8 @@ function caption(key, vars) {
     const show = () => { captionText.textContent = text; captionText.toggleAttribute('data-on', Boolean(key)) }
     if (had) { delete captionText.dataset.on; captionTimer = setTimeout(show, 160) } else show()
   } else if (key && captionText.textContent !== text) captionText.textContent = text
+  if (withLogs && logs.hidden) { logs.hidden = false; logs.dataset.on = '' }
+  if (!withLogs && !logs.hidden) { delete logs.dataset.on; setTimeout(() => { if (!logs.dataset.on) logs.hidden = true }, 160) }
 }
 
 // ---- the sheet: one surface that every card morphs in and out of ----
@@ -174,8 +221,7 @@ let sheetRun = 0
 function blockFor(snap) {
   if (snap.view === 'handoff') return shown
   if (snap.view === 'failed' || snap.view === 'viewFailed' || snap.view === 'watchdog') return snap.view
-  // The copy has no card: it is the ring's import arc (start-window §6).
-  if (snap.view === 'card') return snap.card?.kind === 'copying' ? '' : snap.card?.kind ?? ''
+  if (snap.view === 'card') return snap.card?.kind === 'stopCopy' ? 'copying' : snap.card?.kind ?? ''
   return ''
 }
 // The edge and fill layers are pre-sized to the sheet; only their clip-path moves, so a card
@@ -195,7 +241,7 @@ function morph(target, jump) {
     for (const a of layer.getAnimations()) a.cancel()
     layer.style.clipPath = clips[k]
     layer.style.opacity = vanish ? '0' : '1'
-    if (jump || root.dataset.effects === 'off') return
+    if (jump) return
     if (reduced()) { if (appear || vanish) play(layer, [{ opacity: fromOpacity }, { opacity: vanish ? 0 : 1 }], { duration: vanish ? 160 : 120, fill: 'none' }); return }
     const shape = spring('shape')
     // A collapse is clamped at zero height: overshooting past it would only empty the clip.
@@ -212,8 +258,8 @@ function resize() {
 const exits = new WeakMap()
 function leave(el, jump) {
   if (!el || el.hidden) return
-  if (jump || root.dataset.effects === 'off') { el.hidden = true; return }
-  const frames = reducedFx() ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 1, translate: '0 0', scale: '1', filter: 'none' }, { opacity: 0, translate: '0 6px', scale: '.975', filter: 'blur(3px)' }]
+  if (jump) { el.hidden = true; return }
+  const frames = reduced() ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 1, translate: '0 0', scale: '1', filter: 'none' }, { opacity: 0, translate: '0 6px', scale: '.975', filter: 'blur(3px)' }]
   const a = play(el, frames, { duration: 160, easing: 'ease-in' })
   exits.set(el, a)
   el.inert = true
@@ -228,21 +274,12 @@ function enter(el) {
   el.inert = false
   el.hidden = false
 }
-// The whale's line fades and veils in on CSS; shift() cancels only its scripted rise.
-const rises = el => el.getAnimations().filter(a => !(a instanceof CSSTransition) && !(a instanceof CSSAnimation))
-// The stage rises to make room for the sheet; the pond (the whale and its ring) shrinks and
-// rises with it on the same spring, so the ring ends above the card, and the whale's line rises
-// with them so that it stays under the ring (start.css html[data-up]).
 function shift(up, jump) {
   const from = getComputedStyle(stage).translate
-  const pondFrom = { scale: getComputedStyle(pond).scale, translate: getComputedStyle(pond).translate }
-  const voiceFrom = getComputedStyle(voiceEl).translate
-  for (const a of [...stage.getAnimations(), ...pond.getAnimations(), ...rises(voiceEl)]) a.cancel()
+  for (const a of stage.getAnimations()) a.cancel()
   root.toggleAttribute('data-up', up)
   if (jump || reduced()) return
-  play(stage, [{ translate: from }, { translate: up ? '0px 0px' : '0px 45px' }], { ...spring('shape'), fill: 'none' })
-  play(pond, [pondFrom, { scale: up ? '.62' : '1', translate: up ? '0px -60px' : '0px 0px' }], { ...spring('shape'), fill: 'none' })
-  play(voiceEl, [{ translate: voiceFrom }, { translate: up ? '0px -108px' : '0px 0px' }], { ...spring('shape'), fill: 'none' })
+  play(stage, [{ translate: from }, { translate: up ? '0px 0px' : '0px 80px' }], { ...spring('shape'), fill: 'none' })
 }
 async function showBlock(name, jump) {
   if (name === shown) return
@@ -251,10 +288,10 @@ async function showBlock(name, jump) {
   const wasCard = Boolean(shown)
   shown = name
   if (wasCard) leave(oldEl, jump)
-  if (!name && wasCard && s?.card?.kind === 'copying' && !jump && !reduced()) return flyIn(mine)
   const el = blockEl(name)
   if (name && el) {
     root.dataset.sheet = 'card'
+    v.cards = true
     if (!root.hasAttribute('data-up')) {
       shift(true, jump)
       if (!jump) { await sleep(70); if (mine !== sheetRun) return }
@@ -279,63 +316,6 @@ async function showBlock(name, jump) {
   }
 }
 
-// 〔复制过来〕, 〔继续复制〕 or a retry: the card does not fold away. Its surface shrinks to a drop
-// that turns the whale's blue and jumps up into the import's arc, which lights up as it lands and
-// then fills with the copy; the pond comes back down after it (start-window §6). Reduced motion
-// folds the card as usual and turns the arc on at once.
-const FLIGHT_MS = 520
-const ARRIVE = 0.8
-async function flyIn(mine) {
-  let land = () => {}
-  director.flight(new Promise((resolve) => { land = resolve }))
-  try {
-    const box = sheet.getBoundingClientRect()
-    const target = importPoint()
-    const cx = box.width / 2, cy = edgeH / 2
-    // The surface is leaving: a card that comes meanwhile morphs in from nothing.
-    edgeH = 0
-    await sleep(60)
-    if (mine !== sheetRun) return
-    const dot = (r, k) => `inset(${cy - r + k}px ${cx - r + k}px ${box.height - cy - r + k}px ${cx - r + k}px round ${r}px)`
-    const dx = target.x - (box.left + cx), dy = target.y - (box.top + cy)
-    const blue = 'var(--bt-ink-deepseek)'
-    // Shrink and rise, then the hop onto the arc; the arc lights as the drop arrives, under its fade.
-    const flights = [edge, fill].map((layer, k) => {
-      const from = getComputedStyle(layer)
-      const frames = [
-        { clipPath: from.clipPath, translate: '0px 0px', backgroundColor: from.backgroundColor, opacity: 1, easing: 'cubic-bezier(.3,.7,.4,1)' },
-        { clipPath: dot(6, k), translate: `${(dx * 0.25).toFixed(1)}px ${(dy * 0.7).toFixed(1)}px`, backgroundColor: blue, opacity: 1, offset: 0.45, easing: 'cubic-bezier(.4,0,.6,1)' },
-        { clipPath: dot(5, k), translate: `${dx.toFixed(1)}px ${dy.toFixed(1)}px`, backgroundColor: blue, opacity: 1, offset: ARRIVE },
-        { clipPath: dot(3, k), translate: `${dx.toFixed(1)}px ${dy.toFixed(1)}px`, backgroundColor: blue, opacity: 0 },
-      ]
-      for (const a of layer.getAnimations()) a.cancel()
-      return play(layer, frames, { duration: FLIGHT_MS, easing: 'linear' })
-    })
-    setTimeout(() => { if (mine === sheetRun) land() }, FLIGHT_MS * ARRIVE)
-    await Promise.all(flights.map(a => a.done))
-    if (mine !== sheetRun) return
-    land()
-    const bottom = sheet.clientHeight
-    ;[edge, fill].forEach((layer, k) => {
-      layer.style.clipPath = [`inset(0px 0px ${bottom}px 0px round 12px)`, `inset(1px 1px ${bottom + 1}px 1px round 11px)`][k]
-      layer.style.opacity = '0'
-    })
-    for (const a of flights) a.cancel()
-    root.dataset.sheet = 'none'
-    if (document.activeElement?.closest?.('.sheet')) document.activeElement.blur()
-    if (root.hasAttribute('data-up')) shift(false)
-  } finally {
-    land()
-  }
-}
-// Where the import's arc is, as the page shows it now (the pond may be shrunk): the middle of the
-// arc on a ring of four, else the gap after the data folder's arc that it grows out of.
-function importPoint() {
-  const ring = $('.ring')
-  const a = ((ring.dataset.n === '4' ? 135 : 120) * Math.PI) / 180
-  return new DOMPoint(110 + 106 * Math.sin(a), 110 - 106 * Math.cos(a)).matrixTransform(ring.getScreenCTM())
-}
-
 // What a new card says to a screen reader: its first line and its first visible sentence (the
 // 180 s card has only buttons; the whale's line asks its question).
 function cardWords(el, name) {
@@ -350,18 +330,12 @@ function fillBlock(name) {
   const el = blockEl(name)
   if (!el || !s) return
   const vars = varsOf(s)
-  // A card with variants shows the parts of its own (data-why) only; the others stay empty, so
-  // that a screen reader does not read them.
-  for (const node of el.querySelectorAll('[data-why]')) {
-    node.hidden = node.dataset.why !== s.card?.why
-    if (node.hidden && node.dataset.t) { node.textContent = ''; sigs.delete(node) }
-  }
-  for (const node of el.querySelectorAll('[data-t]')) if (!node.closest('.copied, [data-why][hidden]')) render(node, vars)
+  for (const node of el.querySelectorAll('[data-t]')) if (!node.closest('.steps, .copied')) render(node, vars)
   if (name === 'missing') missing(el)
   if (name === 'recommend' || name === 'rejected') recommend(el)
   if (name === 'import') importCard(el)
+  if (name === 'copying') copying(el)
   if (name === 'failed') failed(el)
-  if (name === 'moveFailed') el.querySelector('[data-old]').dataset.look = s.card?.why === 'copy' ? 'soft' : 'primary'
 }
 let missSeen = 0
 let missTimer = 0
@@ -429,6 +403,30 @@ function bar(el, fraction, keep) {
   el.style.scale = `${f} 1`
   if (!reduced()) play(el, [{ scale: from }, { scale: `${f} 1` }], { ...spring('list'), fill: 'none' })
 }
+let copyStep = 0
+function copying(el) {
+  const card = s.card
+  el.toggleAttribute('data-confirm', card.kind === 'stopCopy')
+  el.querySelector('.confirm').hidden = card.kind !== 'stopCopy'
+  el.style.setProperty('--step', String(Math.max(0, card.step - 1)))
+  ;[...el.querySelectorAll('.steps li')].forEach((li, k) => {
+    const n = k + 1
+    const state = n < card.step ? 'done' : n === card.step ? 'active' : 'pending'
+    const was = li.dataset.state
+    li.dataset.state = state
+    if (state === 'done' && was && was !== 'done') {
+      const check = li.querySelector('.check')
+      if (reduced()) play(check, [{ opacity: 0 }, { opacity: 1 }], { duration: 120, fill: 'none' })
+      else { play(check, [{ transform: 'scale(.4)' }, { transform: 'none' }], { ...spring('pop'), fill: 'none' }); play(check, [{ opacity: 0 }, { opacity: 1 }], { duration: 120, fill: 'none' }) }
+      director.nod()
+    }
+    render(li.querySelector('[data-t]'), card.steps?.[k] ?? {})
+  })
+  const fillEl = el.querySelector('.copy-steps .bar-fill')
+  if (card.step !== copyStep) { copyStep = card.step; bars.set(fillEl, 0); fillEl.style.scale = '0 1' }
+  bar(fillEl, card.fraction, true)
+  el.querySelector('.eta').textContent = card.eta === null || card.eta === undefined ? '' : card.eta < 1 ? say('eta.lt1') : say('eta.minutes', { n: card.eta })
+}
 // The recovery card. 〔换个位置…〕 and 〔用新的空白团队开始…〕 show only when the main process can
 // carry them out (failure.places).
 function failed(el) {
@@ -454,12 +452,12 @@ function toggleDetails(button) {
   setTimeout(() => {
     pre.textContent = (s.failure?.log ?? s.card?.log ?? []).slice(-200).join('\n')
     pre.parentElement.scrollTop = 1e6
-    card.querySelector('.card-scroll').scrollTop = button.offsetTop - 18
+    card.querySelector('.card-scroll').scrollTop = button.offsetTop - 14
   }, reduced() ? 0 : spring('shape').duration)
 }
 function copiedLabel(button) {
   button.classList.add('copied')
-  button.textContent = say('btn.copied')
+  button.textContent = say('copied')
   setTimeout(() => { button.classList.remove('copied'); sigs.delete(button); render(button) }, 1600)
 }
 
@@ -474,7 +472,7 @@ document.addEventListener('click', (event) => {
   if (name === 'toggleModels') return toggleModels(button)
   if (name === 'copyDetails') copiedLabel(button)
   if (name === 'importModel') toggleModels(button.closest('.card').querySelector('[data-act=toggleModels]'), false)
-  if (name === 'answer' || name === 'wait') director.nod()
+  if (name === 'answer' || name === 'wait' || name === 'keepCopying') director.nod()
   bridge?.act(name, value === undefined ? undefined : { value })
 })
 document.addEventListener('change', (event) => {
@@ -483,10 +481,13 @@ document.addEventListener('change', (event) => {
 })
 document.addEventListener('visibilitychange', () => root.toggleAttribute('data-hidden', document.hidden))
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => director.refresh())
-new MutationObserver(() => director.refresh()).observe(root, { attributes: true, attributeFilter: ['data-motion', 'data-effects'] })
+new MutationObserver(() => director.refresh()).observe(root, { attributes: true, attributeFilter: ['data-motion'] })
 
 // ---- snapshots ----
-const director = createDirector({ start: START, resume, begin, act: (name, detail) => bridge?.act(name, detail), label: say, announce })
+// The director reports every change of where the whale is (a stage shown active, a leg begun
+// or ended, a reset, 「进去吧」); the line and the hint follow.
+const onStage = () => { if (s) { hint(); speak() } }
+const director = createDirector({ start: START, resume, act: (name, detail) => bridge?.act(name, detail), label: say, announce, onStage, readyLine })
 let applied = false
 function apply(next) {
   const jump = !applied && resume
@@ -494,24 +495,16 @@ function apply(next) {
   if ((next.lang ?? 'zh') !== lang || !applied) { lang = next.lang ?? 'zh'; renderStatic() }
   const motion = next.motion ?? 'normal'
   if (root.dataset.motion !== motion) root.dataset.motion = motion
-  const effects = next.effects ?? 'full'
-  if (root.dataset.effects !== effects) root.dataset.effects = effects
-  // Linux draws a system title bar, so the page has no band of its own.
+  // macOS and Linux draw a system title bar, so the page has no band of its own.
   if (next.frame === 'system') root.dataset.frame = 'system'
   else delete root.dataset.frame
   root.dataset.view = next.view
   shimmer()
-  placeUI(next.place)
   const name = blockFor(next)
-  // The import card comes once the data folder's arc has filled (start-window §6).
-  if (name === 'import' && name !== shown && !jump) director.through(0).then(() => { if (blockFor(s) === 'import') showBlock('import', false) })
-  else if (name !== shown) showBlock(name, jump)
+  if (name !== shown) showBlock(name, jump)
   else { fillBlock(name); resize() }
   timeUI()
   director.update(next)
-  if (next.shown) release()
-  // The window shows once this first state is on screen (start-window.mjs 'painted').
-  if (!applied) requestAnimationFrame(() => requestAnimationFrame(() => { bridge?.act('painted') }))
   applied = true
 }
 renderStatic()
