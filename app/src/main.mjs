@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { canonicalExecPath } from './canonical-path.mjs'
 import { hostPort } from './host-port.mjs'
 import { captureStdio, LogFile } from './logs.mjs'
+import { currentRootOf, driveOf, formatBytes, freeSpace, isEmptyTree, pickFrom, placeOf, rootOf } from './place.mjs'
 import { readStartFrame, writeStartFrame } from './start-frame.mjs'
 import { explainOf, StartWindow } from './start-window.mjs'
 import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './window-frame.mjs'
@@ -40,6 +41,8 @@ const IMPORT_FILE_MAX = 32 * 1024 * 1024
 const MOVE_PROBLEMS = { drive: 'moveDrive', nested: 'moveNested', workspace: 'moveWorkspace', program: 'inProgram', notEmpty: 'moveNotEmpty' }
 const UPDATE_CHECK_WAIT_MS = 15_000
 const UPDATE_DOWNLOAD_WAIT_MS = 15 * 60_000
+// Under this, the start page notes the drive's free space for the first 10 s (onboarding §3).
+const SHORT_DRIVE_BYTES = 5e9
 
 const here = dirname(fileURLToPath(import.meta.url))
 // Drawn by scripts/icon.mjs. Windows takes the .ico for its several sizes.
@@ -51,7 +54,7 @@ const frameFile = join(app.getPath('userData'), 'start-frame.json')
 
 // Loaded once the start window is up (loadModules).
 let BotBrowserGuests, partitionOf, BotViews, isBotId, importFromBrowser, listSources, applyCookies, CookieImports, parseCookieFile
-let downloadSaver, chooseLocations, localeText, programFolder, saveLocations, teamIn, teamsAt, text, HostProcess
+let downloadSaver, chooseLocations, defaultPlaces, localeText, pickRoot, programFolder, saveLocations, teamIn, teamsAt, text, HostProcess
 let copySessions, findTeam, importTeam, teamInUse, userDshHome, copyData, moveProblem, CHECK_PROFILE, PROFILE
 let UPDATE_TEXT, watchReleases, watchUpdates, getDshRuntimeVersion, electronUpdater
 
@@ -73,6 +76,13 @@ let stopping = false
 let stopped = false
 let failed = false
 let places
+// Which of the places this start made, so that 「换个位置…」 can take them away again.
+let made = { dataDir: false, workspace: false, root: false }
+// The folder picker of 「换个位置…」 is open, and the root it proposed on the 「会放在…」 card.
+let picking = false
+let proposed
+// A retry or a start over is stopping the old engine: no second one starts meanwhile.
+let restarting = false
 // The first run's answer to the import; only the first boot copies.
 let pendingImport
 // Each boot of the engine; a retry starts a new one, and what an old one still reports is dropped.
@@ -112,6 +122,8 @@ if (canonical !== undefined) {
     onReload: () => { mainWindow?.webContents.reload() },
     // Closing the start window before the hand-off quits, as closing the team window does.
     onClose: () => { app.quit() },
+    onPick: () => { changePlace().catch(fail) },
+    onAnswer: (value) => { placeAnswer(value).catch(fail) },
   })
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => { app.quit() })
@@ -183,7 +195,7 @@ async function loadModules() {
   ;({ applyCookies, CookieImports } = cookies)
   ;({ parseCookieFile } = cookieFiles)
   ;({ downloadSaver } = downloads)
-  ;({ chooseLocations, localeText, programFolder, saveLocations, teamIn, teamsAt, text } = firstRun)
+  ;({ chooseLocations, defaultPlaces, localeText, pickRoot, programFolder, saveLocations, teamIn, teamsAt, text } = firstRun)
   ;({ HostProcess } = hostProcess)
   ;({ copySessions, findTeam, importTeam, teamInUse, userDshHome } = imports)
   ;({ copyData, moveProblem } = moves)
@@ -208,28 +220,48 @@ function run() {
 // The engine starts again after a failure or the 180 s question; the places stay. A first run's
 // copy goes on to its end first: an engine started beside it would run on a half-copied team.
 async function retry() {
-  attempt += 1
+  const mine = (attempt += 1)
   failed = false
-  await copying?.catch(() => {})
-  if (copyAbort.signal.aborted || stopping) return
-  const old = host
-  host = undefined
-  await old?.stop().catch((error) => { console.error(error) })
-  await prepare()
-  run()
+  proposed = undefined
+  restarting = true
+  try {
+    await copying?.catch(() => {})
+    if (copyAbort.signal.aborted || stopping || mine !== attempt) return
+    await stopOld()
+    if (stopping || mine !== attempt) return
+    await prepare()
+  } finally {
+    restarting = false
+  }
+  if (!stopping && mine === attempt) run()
 }
 
-// The data folder (with the first run's questions on a first start), the engine, then the team
+// The Host stays known while it stops, so that a quit meanwhile waits for it.
+async function stopOld(options) {
+  const old = host
+  if (old === undefined) return
+  await old.stop(options).catch((error) => { console.error(error) })
+  if (host === old) host = undefined
+}
+
+// The dialogs of the first run belong to the start window and stop its clock.
+const ui = () => ({ owner: () => startWindow.owner(), asking: answer => startWindow.asking(answer) })
+
+// The data folder (with the first run's question on a first start), the engine, then the team
 // view in the hidden team window.
 async function boot(mine) {
   if (places === undefined) {
     const first = startWindow.kind === 'first'
-    if (first) startWindow.explain(explainOf(teamsAt()))
+    if (first) {
+      const teams = teamsAt()
+      startWindow.explain(explainOf(teams))
+      // A reinstall goes on with its data where it is; a new or copied team can still move.
+      if (teams.team === undefined) tellPlace(defaultPlaces().dataDir)
+    }
     choosing = new AbortController()
-    const ui = { owner: () => startWindow.owner(), asking: answer => startWindow.asking(answer) }
-    const where = await chooseLocations(choosing.signal, ui).finally(() => { choosing = undefined })
+    const where = await chooseLocations(choosing.signal, ui()).finally(() => { choosing = undefined })
     if (where.quit) { app.exit(0); return }
-    places = { dataDir: where.dataDir, workspace: where.workspace }
+    setPlaces({ dataDir: where.dataDir, workspace: where.workspace })
     pendingImport = where.import
     if (first) startWindow.explain(explainOf({ offered: where.offered === true, team: teamIn(where.dataDir) }))
   }
@@ -244,6 +276,110 @@ async function boot(mine) {
   startWindow.teamLoading()
   // The launch URL trades its token for the Host's cookie and goes on to the page.
   void mainWindow.loadURL(engine.url).catch(() => {})
+}
+
+function setPlaces(next) {
+  places = next
+  const root = currentRootOf(places.dataDir, places.workspace)
+  made = { dataDir: !existsSync(places.dataDir), workspace: places.workspace !== undefined && !existsSync(places.workspace), root: root !== undefined && !existsSync(root) }
+}
+
+// The line on the start page that says where the data goes and how much room is there, and the
+// short drive's note for the first 10 s (start-window §2, §4).
+function tellPlace(dataDir) {
+  const free = freeSpace(dataDir)
+  startWindow.place(placeOf(dataDir, { free }))
+  const drive = driveOf(dataDir)
+  startWindow.hint(drive !== undefined && free !== undefined && free < SHORT_DRIVE_BYTES ? { drive, free: formatBytes(free) } : undefined)
+}
+
+// 「换个位置…」 on the start page and 〔重新选〕 on its cards: the system picker, then the root rule
+// (windows-onboarding §3, 一个位置). The root is used at once when it is the folder picked; a
+// layer the app added is confirmed on the 「会放在…」 card; a place that cannot be used says why.
+// A cancelled picker leaves things as they were: the line, or the card it came from. Not during
+// the first run's copy, whose team would be left behind.
+async function changePlace() {
+  if (startWindow.kind !== 'first' || places === undefined || choosing !== undefined || copying !== undefined || picking || restarting || stopping || failed) return
+  picking = true
+  try {
+    // One wait for the picker and what follows it: a team view that becomes ready meanwhile
+    // hands over only once the start knows where it goes on.
+    await startWindow.asking(pickAndPlace())
+  } finally {
+    picking = false
+  }
+}
+
+// A cancelled picker, or the place the data is in now, is no change: the line stays, and a card
+// that led here goes, since the start goes on where it was.
+async function pickAndPlace() {
+  const picked = await pickRoot(pickFrom(places.dataDir), copyAbort.signal, ui())
+  if (stopping || startWindow.owner() === undefined) return
+  const root = picked === undefined ? { same: true } : rootOf(picked, { dshHome: userDshHome(), program: app.isPackaged ? programFolder() : undefined, current: places })
+  if (root.same) {
+    proposed = undefined
+    startWindow.card(undefined)
+    return
+  }
+  if (root.reason !== undefined) {
+    console.log(`DeepSeek Bot: the place ${root.at} cannot be used (${root.reason})`)
+    proposed = undefined
+    startWindow.card({ kind: 'rejected', reason: root.reason, path: root.at })
+    return
+  }
+  if (root.added) {
+    proposed = root
+    startWindow.card({ kind: 'picked', path: root.root })
+    return
+  }
+  await startOver(root)
+}
+
+async function placeAnswer(value) {
+  if (value !== 'use' || proposed === undefined || picking || restarting) return
+  const root = proposed
+  proposed = undefined
+  await startOver(root)
+}
+
+// The start begins again in the root R (start-window §7): the whale sinks at once, the engine
+// that may be up on the default folder stops, what this start made there goes, and the boot runs
+// again. The places are saved at once: the import question has been answered by now.
+async function startOver(root) {
+  const mine = (attempt += 1)
+  failed = false
+  proposed = undefined
+  restarting = true
+  try {
+    // restart() also takes the card away, without letting a held hand-off of the old engine go;
+    // the line names the new place from here on. The Host on the old folder is ended at once:
+    // neither its boot nor an orderly shutdown of a folder about to go is of any use, and either
+    // would keep the whale under water for up to 10 s.
+    startWindow.restart()
+    tellPlace(root.dataDir)
+    await stopOld({ now: true })
+    if (stopping || mine !== attempt) return
+    await removeMade()
+    if (stopping || mine !== attempt) return
+    setPlaces({ dataDir: root.dataDir, workspace: root.workspace })
+    saveLocations(places)
+    console.log(`DeepSeek Bot: the data goes to ${places.dataDir}`)
+  } finally {
+    restarting = false
+  }
+  run()
+}
+
+// What this start made at the place it leaves: the data folder it created (the engine may have
+// put a blank team there), the team workspace while nothing has been written into it, and the
+// root above them once it is empty.
+async function removeMade() {
+  const gone = []
+  if (made.dataDir && existsSync(places.dataDir)) gone.push(places.dataDir)
+  if (made.workspace && existsSync(places.workspace) && isEmptyTree(places.workspace)) gone.push(places.workspace)
+  for (const folder of gone) await rm(folder, { recursive: true, force: true, maxRetries: 5 }).catch((error) => { console.error(error) })
+  const root = currentRootOf(places.dataDir, places.workspace)
+  if (made.root && root !== undefined && existsSync(root) && isEmptyTree(root)) await rm(root, { recursive: true, force: true, maxRetries: 5 }).catch((error) => { console.error(error) })
 }
 
 const profileDir = () => join(places.dataDir, 'profiles', PROFILE)
@@ -281,6 +417,8 @@ async function startEngine(mine) {
   if (pendingImport !== undefined) {
     const where = { ...places, import: pendingImport }
     pendingImport = undefined
+    // The team is about to live here; moving it is Settings' job (the data move).
+    startWindow.place(undefined)
     // The copy's time is not the engine's: the start's clock stands still, and the 180 s
     // question with it.
     copying = startWindow.asking(copyTeam(where, copyAbort.signal))

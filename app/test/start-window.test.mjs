@@ -116,8 +116,16 @@ test('only a missing file of the app\'s own says that the install is incomplete'
 })
 
 test('the main process takes only its own acts, each in its own views', () => {
-  assert.deepEqual([...START_ACTS].sort(), ['copyDetails', 'handoffDone', 'handoffShow', 'openLogs', 'reloadView', 'retry', 'wait'])
+  assert.deepEqual([...START_ACTS].sort(), ['answer', 'copyDetails', 'handoffDone', 'handoffShow', 'openLogs', 'pick', 'reloadView', 'retry', 'wait'])
   assert.equal(acceptsAct('handoffShow', 'handoff'), true)
+  // 「换个位置…」 while the start boots and 〔重新选〕 on its cards; a card's answer only on a card.
+  assert.equal(acceptsAct('pick', 'boot'), true)
+  assert.equal(acceptsAct('pick', 'card'), true)
+  assert.equal(acceptsAct('pick', 'watchdog'), true)
+  assert.equal(acceptsAct('pick', 'failed'), false)
+  assert.equal(acceptsAct('pick', 'viewFailed'), false)
+  assert.equal(acceptsAct('answer', 'card'), true)
+  assert.equal(acceptsAct('answer', 'boot'), false)
   assert.equal(acceptsAct('handoffShow', 'boot'), false)
   assert.equal(acceptsAct('handoffDone', 'handoff'), true)
   assert.equal(acceptsAct('retry', 'failed'), true)
@@ -133,7 +141,7 @@ test('the main process takes only its own acts, each in its own views', () => {
     assert.equal(acceptsAct('copyDetails', view), true)
   }
   // The cards of later pull requests, and names that are not acts at all.
-  for (const name of ['reload', 'toggleDetails', 'answer', 'pick', 'freshStart', 'installUpdate', 'manualDownload', 'stopCopy', 'keepCopying', 'importModel', 'importOption', '__proto__', 'constructor', 'toString', '']) {
+  for (const name of ['reload', 'toggleDetails', 'freshStart', 'installUpdate', 'manualDownload', 'stopCopy', 'keepCopying', 'importModel', 'importOption', '__proto__', 'constructor', 'toString', '']) {
     assert.equal(acceptsAct(name, 'failed'), false, name)
   }
   assert.equal(acceptsAct(undefined, 'failed'), false)
@@ -179,6 +187,9 @@ test('the snapshot carries the phase, the stages done and the clock', () => {
   assert.equal('card' in failed, false)
   assert.equal('hint' in failed, false)
   assert.deepEqual(startSnapshot(state({ hint: { drive: 'C', free: '1.2 GB' } }), now).hint, { drive: 'C', free: '1.2 GB' })
+  assert.equal('place' in startSnapshot(state(), now), false)
+  assert.deepEqual(startSnapshot(state({ place: { drive: 'C', free: '412 GB' } }), now).place, { drive: 'C', free: '412 GB' })
+  assert.deepEqual(startSnapshot(state({ view: 'card', card: { kind: 'picked', path: 'D:\\DeepSeek Bot' } }), now).card, { kind: 'picked', path: 'D:\\DeepSeek Bot' })
   // The page gets copies: it cannot change the main process's state.
   const source = state({ failure: { reason: 'other', log: ['x'] } })
   const sent = startSnapshot(source, now)
@@ -300,12 +311,13 @@ function startWindow(t) {
   t.mock.method(console, 'log', () => {})
   const fake = fakeElectron()
   const main = new fake.electron.BrowserWindow({ show: false })
-  const calls = { retry: 0, reload: 0, close: 0 }
+  const calls = { retry: 0, reload: 0, close: 0, pick: [], answer: [] }
   const start = new StartWindow({
     electron: fake.electron, page: join(tmpdir(), 'start', 'start.html'), preload: 'preload.cjs', icon: 'icon.ico', mica: false, devTools: false,
     lang: () => 'en', motion: 'normal', version: '0.0.0', program: [], log: { dir: 'logs', tail: () => ['a log line'] },
     mainWindow: () => main,
     onRetry: () => { calls.retry += 1 }, onReload: () => { calls.reload += 1 }, onClose: () => { calls.close += 1 },
+    onPick: (value) => { calls.pick.push(value) }, onAnswer: (value) => { calls.answer.push(value) },
   })
   const win = () => fake.windows.at(-1)
   const page = () => ({ sender: win().webContents, senderFrame: win().webContents.mainFrame })
@@ -528,4 +540,126 @@ test('a failure after the hand-off opens a fresh start window over the hidden te
   assert.equal(s.state().start, 'later')
   assert.equal(s.start.owner(), s.win())
   assert.equal(s.calls.close, 0)
+})
+
+test('the place line, its picker and its cards, and a start over in another folder', (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  assert.equal('place' in s.state(), false)
+  s.start.place({ drive: 'C', free: '412 GB' })
+  assert.deepEqual(s.state().place, { drive: 'C', free: '412 GB' })
+  // 「换个位置…」 from the line, with its detail; the picker's own wait is the main process's.
+  assert.equal(s.act('pick', { value: 'changePlace' }), true)
+  assert.deepEqual(s.calls.pick, ['changePlace'])
+  assert.equal(s.act('answer', { value: 'use' }), false)
+  // A layer the app added: the 「会放在…」 card waits for the answer, and the clock with it.
+  s.start.card({ kind: 'picked', path: 'D:\\DeepSeek Bot' })
+  assert.equal(s.state().view, 'card')
+  assert.deepEqual(s.state().card, { kind: 'picked', path: 'D:\\DeepSeek Bot' })
+  assert.equal(s.state().clock.running, false)
+  assert.equal(s.act('pick', undefined), true)
+  assert.deepEqual(s.calls.pick, ['changePlace', undefined])
+  assert.equal(s.act('answer', { value: 'use' }), true)
+  assert.equal(s.act('answer', 'use'), true)
+  assert.deepEqual(s.calls.answer, ['use', undefined])
+  s.start.card(undefined)
+  assert.equal(s.state().view, 'boot')
+  assert.equal('card' in s.state(), false)
+  assert.equal(s.state().clock.running, true)
+  // A rejected place names the reason and the path.
+  s.start.card({ kind: 'rejected', reason: 'onedrive', path: 'C:\\Users\\me\\OneDrive' })
+  assert.equal(s.state().card.reason, 'onedrive')
+  s.start.card(undefined)
+  // Under the 180 s question the place can still change; the question comes back after a card.
+  s.tick(180_000)
+  assert.equal(s.state().view, 'watchdog')
+  assert.equal(s.act('pick', { value: 'changePlace' }), true)
+  s.start.card({ kind: 'picked', path: 'D:\\DeepSeek Bot' })
+  assert.equal(s.state().view, 'card')
+  s.start.card(undefined)
+  s.tick(1)
+  assert.equal(s.state().view, 'watchdog')
+  // Starting over: the stages go back, the clock starts from 0, the engine is guarded again,
+  // and the place line stays for the new folder.
+  s.start.done('engine')
+  s.tick(30_000)
+  s.start.restart()
+  s.start.place({ drive: 'D', free: '412 GB' })
+  assert.equal(s.state().view, 'boot')
+  assert.deepEqual(s.state().done, [])
+  assert.equal(s.state().clock.ms, 0)
+  assert.equal(s.state().celebrate, true)
+  assert.deepEqual(s.state().place, { drive: 'D', free: '412 GB' })
+  s.start.done('data')
+  s.tick(180_000)
+  assert.equal(s.state().view, 'watchdog')
+  s.start.done('engine')
+  assert.equal(s.state().view, 'boot')
+  assert.deepEqual(s.state().done, ['data', 'engine'])
+  // No card after a failure: the failure page has its own buttons.
+  s.start.fail(new Error('The DSH Host stopped (exit 1)'))
+  s.start.card({ kind: 'picked', path: 'D:\\DeepSeek Bot' })
+  assert.equal(s.state().view, 'failed')
+  assert.equal(s.act('pick', { value: 'changePlace' }), false)
+})
+
+// The picker is open when the team view becomes ready: the window, the picker's owner, stays.
+test('the hand-off waits while the picker is open', async (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  s.start.done('data')
+  s.start.done('engine')
+  s.start.teamLoading()
+  let answer
+  const asked = s.start.asking(new Promise((resolve) => { answer = resolve }))
+  s.start.ready()
+  assert.equal(s.state().view, 'boot')
+  s.tick(2500)
+  assert.equal(s.main.visible, false)
+  answer()
+  await asked
+  assert.equal(s.state().view, 'handoff')
+})
+
+test('a card holds the hand-off the same way, and the ready is not lost when the card goes', (t) => {
+  const c = startWindow(t)
+  c.start.open('first')
+  c.start.done('data')
+  c.start.done('engine')
+  c.start.card({ kind: 'picked', path: 'D:\\DeepSeek Bot' })
+  c.start.ready()
+  assert.equal(c.state().view, 'card')
+  c.start.card(undefined)
+  assert.equal(c.state().view, 'handoff')
+})
+
+test('a start over in another folder drops the old engine\'s held ready', (t) => {
+  const o = startWindow(t)
+  o.start.open('first')
+  o.start.done('data')
+  o.start.done('engine')
+  o.start.card({ kind: 'picked', path: 'D:\\DeepSeek Bot' })
+  o.start.ready()
+  o.start.restart()
+  assert.equal(o.state().view, 'boot')
+  o.tick(3000)
+  assert.equal(o.state().view, 'boot')
+  o.start.done('data')
+  o.start.done('engine')
+  o.start.ready()
+  assert.equal(o.state().view, 'handoff')
+})
+
+test('the 20 s check\'s verdict waits for a card\'s answer instead of being lost', (t) => {
+  const v = startWindow(t)
+  v.start.open('first')
+  v.start.done('data')
+  v.start.done('engine')
+  v.start.teamLoading()
+  v.start.card({ kind: 'rejected', reason: 'onedrive', path: 'C:\\OneDrive' })
+  v.tick(20_000)
+  assert.equal(v.state().view, 'card')
+  v.start.card(undefined)
+  assert.equal(v.state().view, 'viewFailed')
 })

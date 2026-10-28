@@ -820,7 +820,7 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
     await entered
     if (want.view === 'handoff') return handoff()
     if (D.pose === 'enter') { D.pose = 'loop'; place(); armActive() }
-    if (want.station < D.checks) await resetRun()
+    if (D.over || want.station < D.checks) { D.over = false; await resetRun() }
     if (!failure() && ['down', 'lift', 'redo'].includes(D.pose)) await shakeOff()
     await runLegs(false)
     if (want.view === 'handoff') return handoff()
@@ -859,6 +859,9 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
       let station = 0
       if (first && done.includes('data')) station = done.includes('engine') ? 2 : 1
       const next = { station, view: s.view, phase: s.phase, done, card: s.card?.kind ?? '', missed: Boolean(s.card?.missedRetry), celebrate: Boolean(s.celebrate), update: s.update?.state ?? '' }
+      // Stages taken back mean a start in another folder: the whale starts over even when the
+      // next snapshot, a moment later, has the first stage done again.
+      if (D.started && station < want.station) D.over = true
       const changed = !D.started || ['station', 'view', 'phase', 'card', 'missed', 'update'].some(key => next[key] !== want[key])
       want = next
       D.started = true

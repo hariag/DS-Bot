@@ -37,6 +37,10 @@ const ACT_VIEWS = {
   retry: ['failed', 'watchdog'],
   wait: ['watchdog'],
   reloadView: ['viewFailed'],
+  // 「换个位置…」 on the page (also under the 180 s question), and the cards it leads to
+  // (「会放在…」, a place that cannot be used).
+  pick: ['boot', 'card', 'watchdog'],
+  answer: ['card'],
   openLogs: null,
   copyDetails: null,
 }
@@ -208,6 +212,8 @@ export function startSnapshot(state, now) {
     celebrate: state.celebrate,
   }
   if (state.hint !== undefined) snapshot.hint = { ...state.hint }
+  if (state.place !== undefined) snapshot.place = { ...state.place }
+  if (state.card !== undefined) snapshot.card = { ...state.card }
   if (state.failure !== undefined) snapshot.failure = { reason: state.failure.reason, log: [...state.failure.log] }
   return snapshot
 }
@@ -215,6 +221,8 @@ export function startSnapshot(state, now) {
 export const detailsText = ({ version, platform, arch, reason, lines }) => [`DeepSeek Bot ${version} (${platform} ${arch})`, `reason: ${reason}`, '', ...lines].join('\n')
 
 const note = message => { console.log(`DeepSeek Bot: start window: ${message}`) }
+// The page sends a button's detail as { value }; anything else counts as none.
+const valueOf = payload => (payload !== null && typeof payload === 'object' && typeof payload.value === 'string' ? payload.value.slice(0, 40) : undefined)
 
 export class StartWindow {
   #o
@@ -235,6 +243,11 @@ export class StartWindow {
   // Whether the engine of this attempt is up; the stages done say where the whale is, which a
   // retry never moves back.
   #engineUp = false
+  // What a dialog of the window (the folder picker) or a card keeps waiting: the hand-off, which
+  // would take the window and the dialog's owner away, and the 20 s check's verdict.
+  #readyHeld = false
+  #heldAt = 0
+  #viewLate = false
   #teamShown
   #showTeam
 
@@ -246,8 +259,11 @@ export class StartWindow {
    *   log: { dir: string, tail: (count: number) => string[] },
    *   mainWindow: () => any,
    *   onRetry: () => void, onReload: () => void, onClose: () => void,
+   *   onPick?: (value?: string) => void, onAnswer?: (value?: string) => void,
    * }} options `lang` is asked at each open; `program` names the folders of the app's own files;
-   *   `onClose` runs when the user closes the start window before the hand-off.
+   *   `onClose` runs when the user closes the start window before the hand-off; `onPick` when
+   *   the page asks for the folder picker ('changePlace' from its place line, nothing from a
+   *   card's 〔重新选〕), `onAnswer` with a card's answer ('use' for 〔继续〕 on 「会放在…」).
    */
   constructor(options) {
     this.#o = options
@@ -354,7 +370,53 @@ export class StartWindow {
     if (this.#open()) this.#update({ explain: this.#explain })
   }
 
-  /** The clock stands still while the user answers a dialog: thinking time is not the engine's. */
+  /**
+   * The line that says where the data goes, with 「换个位置…」 (start-window §2): the drive and its
+   * free space, or the folder. Undefined takes the line away.
+   * @param {{ drive?: string, path?: string, free?: string } | undefined} place
+   */
+  place(place) {
+    if (this.#open()) this.#update({ place: place === undefined ? undefined : { ...place } })
+  }
+
+  /** A short drive's one-line note for the first 10 s (§4), or none. */
+  hint(hint) {
+    if (this.#open()) this.#update({ hint: hint === undefined ? undefined : { ...hint } })
+  }
+
+  /**
+   * A card on the sheet while the start boots (the clock stands still), or none: back to the
+   * boot. Only the cards of a place: 「会放在…」 and a place that cannot be used.
+   * @param {{ kind: 'picked' | 'rejected', path: string, reason?: string } | undefined} card
+   */
+  card(card) {
+    if (!this.#open() || !['boot', 'card', 'watchdog'].includes(this.#state.view)) return
+    if (card === undefined && this.#state.view !== 'card') return
+    // Back in the boot, a 180 s question that the card replaced comes straight back.
+    this.#update(card === undefined ? { view: 'boot', card: undefined } : { view: 'card', card: { ...card } })
+    if (card === undefined) this.#resume()
+  }
+
+  /**
+   * The start begins again in another folder (§7): the stages go back to the start, the whale
+   * sinks and surfaces at the first stop, and the clock starts from 0. The first success after
+   * it celebrates, as after a retry.
+   */
+  restart() {
+    if (!this.#open()) return
+    note('starting over in another folder')
+    this.#engineUp = false
+    this.#holdsOff()
+    this.#watchAt = WATCHDOG_MS
+    this.#phaseAt = Date.now()
+    this.#clear('teamView')
+    this.#update({ view: 'boot', done: [], card: undefined, failure: undefined, celebrate: true, clock: { base: 0, from: Date.now(), running: true } })
+  }
+
+  /**
+   * The clock stands still while the user answers a dialog: thinking time is not the engine's.
+   * The hand-off and the 20 s check wait for the answer too (see ready()).
+   */
   async asking(promise) {
     this.#asks += 1
     this.#refresh()
@@ -363,7 +425,27 @@ export class StartWindow {
     } finally {
       this.#asks -= 1
       this.#refresh()
+      this.#resume()
     }
+  }
+
+  // What waited for the dialogs to close and the card to go.
+  #resume() {
+    if (this.#asks > 0 || !this.#open() || this.#state.view !== 'boot') return
+    if (this.#readyHeld) {
+      this.#readyHeld = false
+      note(`the hand-off waited ${String(Date.now() - this.#heldAt)} ms for the answer`)
+      this.ready()
+    } else if (this.#viewLate) {
+      this.#viewLate = false
+      this.#teamViewLate()
+    }
+  }
+
+  #holdsOff() {
+    if (this.#readyHeld) note(`the held hand-off is dropped after ${String(Date.now() - this.#heldAt)} ms: the start goes on elsewhere`)
+    this.#readyHeld = false
+    this.#viewLate = false
   }
 
   /** The data folder or the engine is ready; the engine also again after a retry. */
@@ -381,17 +463,34 @@ export class StartWindow {
   /** The engine's page started loading in the hidden team window: it has 20 s to call ready(). */
   teamLoading() {
     if (!this.#open()) return
-    this.#later('teamView', TEAM_VIEW_MS, () => {
-      if (this.#state.view !== 'boot') return
-      note(`the team view did not call ready() within ${String(TEAM_VIEW_MS / 1000)} s`)
-      this.#update({ view: 'viewFailed', failure: { reason: 'other', log: this.#o.log.tail(FAILURE_LINES) } })
-    })
+    this.#later('teamView', TEAM_VIEW_MS, () => { this.#teamViewLate() })
   }
 
-  /** dsBotApp.ready() from the team view: the hand-off starts. */
+  #teamViewLate() {
+    if (!['boot', 'card'].includes(this.#state.view)) return
+    // A dialog or a card is up: the verdict waits for the answer (#resume).
+    if (this.#asks > 0 || this.#state.view === 'card') { this.#viewLate = true; return }
+    note(`the team view did not call ready() within ${String(TEAM_VIEW_MS / 1000)} s`)
+    this.#update({ view: 'viewFailed', failure: { reason: 'other', log: this.#o.log.tail(FAILURE_LINES) } })
+  }
+
+  /**
+   * dsBotApp.ready() from the team view: the hand-off starts. While a dialog of the window or
+   * a card is up (the folder picker, 「会放在…」), it waits: the hand-off would take the window,
+   * and with it the dialog's owner, away while the user is still choosing where the data goes.
+   */
   ready() {
-    if (!this.#open() || !['boot', 'viewFailed'].includes(this.#state.view) || !this.#engineUp) return
+    if (!this.#open() || !['boot', 'card', 'viewFailed'].includes(this.#state.view) || !this.#engineUp) return
     this.#clear('teamView')
+    if (this.#asks > 0 || this.#state.view === 'card') {
+      if (!this.#readyHeld) {
+        note('the team view is ready; the hand-off waits for the answer')
+        this.#heldAt = Date.now()
+      }
+      this.#readyHeld = true
+      return
+    }
+    this.#readyHeld = false
     const now = Date.now()
     note(`team took ${String(now - this.#phaseAt)} ms`)
     this.#readyAt = now
@@ -420,6 +519,7 @@ export class StartWindow {
     }
     if (!this.#open()) this.open(showing || this.#state === undefined ? kind : this.#state.start)
     this.#cancelHandoff()
+    this.#holdsOff()
     this.#clear('teamView')
     this.#clear('fallback')
     this.#update({ view: 'failed', failure: { reason: failureReason(error, { program: this.#o.program }), log: this.#o.log.tail(FAILURE_LINES) } })
@@ -454,6 +554,7 @@ export class StartWindow {
     this.#handing = false
     this.#revealed = false
     this.#engineUp = false
+    this.#holdsOff()
     this.#watchAt = WATCHDOG_MS
     const now = Date.now()
     this.#phaseAt = now
@@ -462,7 +563,7 @@ export class StartWindow {
       view: start === 'moving' ? 'moving' : 'boot',
       done: [], explain: this.#explain, celebrate: start === 'first',
       clock: { base: 0, from: now, running: true },
-      hint: undefined, failure: undefined,
+      hint: undefined, place: undefined, card: undefined, failure: undefined,
     }
     this.#refresh()
   }
@@ -512,6 +613,8 @@ export class StartWindow {
     else if (name === 'reloadView') this.#reload()
     else if (name === 'openLogs') this.#openLogs()
     else if (name === 'copyDetails') this.#copyDetails()
+    else if (name === 'pick') this.#o.onPick?.(valueOf(payload))
+    else if (name === 'answer') this.#o.onAnswer?.(valueOf(payload))
     return true
   }
 
@@ -521,6 +624,7 @@ export class StartWindow {
   #retry() {
     note(`retry from ${this.#state.view}`)
     this.#engineUp = false
+    this.#holdsOff()
     this.#watchAt = WATCHDOG_MS
     this.#phaseAt = Date.now()
     this.#update({ view: 'boot', failure: undefined, celebrate: true, done: this.#state.done.filter(phase => phase !== 'team'), clock: { base: 0, from: Date.now(), running: true } })

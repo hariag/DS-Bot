@@ -72,13 +72,20 @@ export class HostProcess {
     this.#child.send(message)
   }
 
-  /** Ask the Host to shut down, then end it if it does not exit in time. */
-  async stop() {
+  /**
+   * Ask the Host to shut down, then end it if it does not exit in time. With `now`, it is ended
+   * at once instead: a start that goes on in another folder has no use for this Host's boot or
+   * for an orderly shutdown of its data, which goes away with it.
+   */
+  async stop({ now = false } = {}) {
     const child = this.#child
     if (child === undefined) return
     this.#stopping = true
-    if (child.connected) child.send({ type: 'shutdown' }, (error) => { if (error) console.error(error) })
-    if (!await settlesWithin(this.#exit, 10_000)) child.kill()
+    if (now) child.kill()
+    else {
+      if (child.connected) child.send({ type: 'shutdown' }, (error) => { if (error) console.error(error) })
+      if (!await settlesWithin(this.#exit, 10_000)) child.kill()
+    }
     if (!await settlesWithin(this.#exit, 5_000)) child.kill('SIGKILL')
     this.#child = undefined
   }

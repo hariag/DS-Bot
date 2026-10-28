@@ -21,6 +21,7 @@ const $ = selector => document.querySelector(selector)
 const sheet = $('.sheet'), edge = $('.sheet-edge'), fill = $('.sheet-fill'), stage = $('.stage'), live = $('.live')
 const voiceEl = $('.voice'), voiceText = $('.voice>span')
 const captionText = $('.caption-text'), logs = $('.caption .btn'), elapsed = $('.elapsed')
+const placeEl = $('.place'), placeText = $('.place-text')
 const CODE = new Set(['path', 'dataDir', 'workspace'])
 let lang = 'zh'
 let s = null
@@ -42,10 +43,21 @@ function render(el, vars = {}) {
 }
 function renderStatic() {
   root.lang = lang === 'zh' ? 'zh-CN' : 'en'
-  for (const el of document.querySelectorAll('.track [data-t], .note[data-t], .caption [data-t]')) render(el)
+  for (const el of document.querySelectorAll('.track [data-t], .footrow [data-t], .caption [data-t]')) render(el)
   $('.track').setAttribute('aria-label', say('track.label'))
   for (const st of document.querySelectorAll('.station')) st.querySelector('.sr').textContent = say(`state.${st.dataset.state}`)
-  if (s) { fillBlock(shown); timeUI() }
+  if (s) { fillBlock(shown); placeUI(s.place); timeUI() }
+}
+// Where the data goes, at the footer's right end with 「换个位置…」 (first starts; the main
+// process sends no place on a reinstall or once a copied team lives there). The drive and its
+// free space on Windows, the folder elsewhere.
+function placeUI(place) {
+  // The failure page has its own buttons; the 180 s question still lets the place change.
+  const on = first && place !== null && typeof place === 'object' && !['failed', 'viewFailed'].includes(s?.view)
+  placeEl.hidden = !on
+  if (!on) return
+  const key = place.drive ? (place.free ? 'place.drive' : 'place.driveOnly') : place.free ? 'place.path' : 'place.pathOnly'
+  placeText.textContent = say(key, place)
 }
 function varsOf(snap) {
   const card = snap.card ?? {}
@@ -86,7 +98,8 @@ function voiceWant() {
   if (!first) return [`title.${START}`, true]
   if (view === 'handoff') return ['voice.ready', false]
   const st = director.stage()
-  if (st.sinking) return ['', false]
+  // The whale is sinking to start over: the line goes with it, without the usual hold.
+  if (st.sinking) return ['', true]
   if (st.ready) return ['voice.ready', false]
   if (st.at >= 2 || (st.at === 1 && st.legging)) return ['voice.team', false]
   const ms = bootMs()
@@ -507,6 +520,7 @@ function apply(next) {
   else delete root.dataset.frame
   root.dataset.view = next.view
   shimmer()
+  placeUI(next.place)
   const name = blockFor(next)
   if (name !== shown) showBlock(name, jump)
   else { fillBlock(name); resize() }

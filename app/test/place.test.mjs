@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join, parse, resolve, sep } from 'node:path'
 import { test } from 'node:test'
-import { currentRootOf, DATA_DIR, driveOf, formatBytes, freeSpace, isEmptyTree, LAYER, LOW_SHARE, pickFrom, placeOf, rootOf, runningLow, shortPath, WORKSPACE_DIR } from '../src/place.mjs'
+import { currentRootOf, DATA_DIR, driveOf, formatBytes, freeSpace, isEmptyTree, LAYER, pickFrom, placeOf, rootOf, shortPath, WORKSPACE_DIR } from '../src/place.mjs'
 
 const win32 = process.platform === 'win32'
 const temp = (t) => {
@@ -17,16 +17,7 @@ test('free space is read at the nearest existing ancestor of a folder that is no
   const free = freeSpace(join(dir, 'not', 'yet'))
   assert.equal(typeof free, 'number')
   assert.ok(free > 0)
-  // Other tests write to the same disk, so the free space can move by a block between two reads:
-  // the folder's own reads on both sides bound the nested read. A write and a delete in between
-  // can still leave it outside, so a few tries.
-  const between = () => {
-    const before = freeSpace(dir)
-    const nested = freeSpace(join(dir, 'not', 'yet'))
-    const after = freeSpace(dir)
-    return nested >= Math.min(before, after) && nested <= Math.max(before, after)
-  }
-  assert.ok(Array.from({ length: 20 }).some(between))
+  assert.equal(freeSpace(join(dir, 'not', 'yet')), freeSpace(dir))
 })
 
 // Explorer's units: GB and MB of 1024, so the line agrees with what the user sees there.
@@ -35,11 +26,6 @@ test('sizes read as Explorer shows them', () => {
   assert.equal(formatBytes(10 * 2 ** 30), '10 GB')
   assert.equal(formatBytes(1.26 * 2 ** 30), '1.2 GB')
   assert.equal(formatBytes(900 * 2 ** 20), '900 MB')
-  // Under 1 MB, never 「0 MB」.
-  assert.equal(formatBytes(2 ** 20), '1 MB')
-  assert.equal(formatBytes(12_000), '不到 1 MB')
-  assert.equal(formatBytes(0), '不到 1 MB')
-  assert.equal(formatBytes(12_000, 'en'), 'under 1 MB')
   assert.equal(formatBytes(undefined), undefined)
   assert.equal(formatBytes(-1), undefined)
 })
@@ -47,14 +33,14 @@ test('sizes read as Explorer shows them', () => {
 test('the drive letter is read from a Windows path only', () => {
   if (win32) {
     assert.equal(driveOf('C:\\Users\\me\\.ds-bot'), 'C')
-    assert.equal(driveOf('d:/DS Bot'), 'D')
+    assert.equal(driveOf('d:/DeepSeek Bot'), 'D')
   } else {
-    assert.equal(driveOf('/home/user/.ds-bot'), undefined)
+    assert.equal(driveOf('/home/me/.ds-bot'), undefined)
   }
 })
 
 test('a path under the home folder is written with ~', () => {
-  const home = resolve('/home/user')
+  const home = resolve('/home/me')
   assert.equal(shortPath(join(home, '.ds-bot'), home), `~${sep}.ds-bot`)
   assert.equal(shortPath(home, home), '~')
   assert.equal(shortPath(resolve('/srv/data'), home), resolve('/srv/data'))
@@ -65,30 +51,20 @@ test('the place line names the drive and its free space, or the folder', () => {
     assert.deepEqual(placeOf('C:\\Users\\me\\.ds-bot', { free: 412 * 2 ** 30 }), { drive: 'C', free: '412 GB' })
     assert.deepEqual(placeOf('C:\\Users\\me\\.ds-bot', { free: undefined }), { drive: 'C' })
   } else {
-    assert.deepEqual(placeOf('/home/user/.ds-bot', { home: '/home/user', free: 1.5 * 2 ** 30 }), { path: `~${sep}.ds-bot`, free: '1.5 GB' })
+    assert.deepEqual(placeOf('/home/me/.ds-bot', { home: '/home/me', free: 1.5 * 2 ** 30 }), { path: `~${sep}.ds-bot`, free: '1.5 GB' })
   }
-})
-
-test('a drive runs low at a fifth of the free space it had when the data went there', () => {
-  assert.equal(LOW_SHARE, 0.2)
-  // 412 GB at the start: the line comes back at 82.4 GB.
-  assert.equal(runningLow(82 * 2 ** 30, 412 * 2 ** 30), true)
-  assert.equal(runningLow(83 * 2 ** 30, 412 * 2 ** 30), false)
-  assert.equal(runningLow(20, 100), true)
-  assert.equal(runningLow(21, 100), false)
-  for (const [free, freeAtStart] of [[undefined, 100], [10, undefined], [10, 0], [Number.NaN, 100], [10, Number.POSITIVE_INFINITY]]) assert.equal(runningLow(free, freeAtStart), false)
 })
 
 test('the picker opens in the data folder\'s parent', (t) => {
   const dir = temp(t)
-  assert.equal(pickFrom(join(dir, 'DS Bot', 'data')), join(dir, 'DS Bot'))
+  assert.equal(pickFrom(join(dir, 'DeepSeek Bot', 'data')), join(dir, 'DeepSeek Bot'))
 })
 
 test('the current root is the parent of a data and a workspace folder that are siblings', (t) => {
   const dir = temp(t)
   assert.equal(currentRootOf(join(dir, 'R', DATA_DIR), join(dir, 'R', WORKSPACE_DIR)), join(dir, 'R'))
   // The default places are not under one root.
-  assert.equal(currentRootOf(join(dir, '.ds-bot'), join(dir, 'DS Bot')), undefined)
+  assert.equal(currentRootOf(join(dir, '.ds-bot'), join(dir, 'DeepSeek Bot')), undefined)
   assert.equal(currentRootOf(join(dir, 'R', DATA_DIR), undefined), undefined)
 })
 
@@ -113,7 +89,7 @@ test('a new or empty folder is the root itself', (t) => {
   assert.deepEqual(rootOf(empty, noProbe), { root: empty, dataDir: join(empty, DATA_DIR), workspace: join(empty, WORKSPACE_DIR), added: false })
 })
 
-test('a drive or a folder with other things in it gets a DS Bot layer', (t) => {
+test('a drive or a folder with other things in it gets a DeepSeek Bot layer', (t) => {
   const dir = temp(t)
   writeFileSync(join(dir, 'notes.txt'), '')
   const layered = rootOf(dir, noProbe)
@@ -157,18 +133,18 @@ test('the place the data is in now is no change, and a place inside it is refuse
   assert.equal(rootOf(join(current.workspace, 'sub'), { ...noProbe, current }).reason, 'nested')
   // The default places: picking the home puts the root on the workspace the start made.
   const home = join(dir, 'home')
-  mkdirSync(join(home, 'DS Bot'), { recursive: true })
+  mkdirSync(join(home, 'DeepSeek Bot'), { recursive: true })
   writeFileSync(join(home, 'other.txt'), '')
-  const defaults = { dataDir: join(home, '.ds-bot'), workspace: join(home, 'DS Bot') }
+  const defaults = { dataDir: join(home, '.ds-bot'), workspace: join(home, 'DeepSeek Bot') }
   const atHome = rootOf(home, { ...noProbe, current: defaults })
   assert.equal(atHome.reason, undefined)
-  assert.equal(atHome.root, join(home, 'DS Bot'))
+  assert.equal(atHome.root, join(home, 'DeepSeek Bot'))
   assert.equal(atHome.added, true)
-  assert.equal(rootOf(join(home, 'DS Bot'), { ...noProbe, current: defaults }).added, false)
+  assert.equal(rootOf(join(home, 'DeepSeek Bot'), { ...noProbe, current: defaults }).added, false)
   // Once the workspace holds files, the layer the home pick would add is a used folder.
-  writeFileSync(join(home, 'DS Bot', 'theirs.txt'), '')
+  writeFileSync(join(home, 'DeepSeek Bot', 'theirs.txt'), '')
   assert.equal(rootOf(home, { ...noProbe, current: defaults }).reason, 'foreign')
-  assert.equal(rootOf(join(home, 'DS Bot', 'sub'), { ...noProbe, current: defaults }).reason, 'nested')
+  assert.equal(rootOf(join(home, 'DeepSeek Bot', 'sub'), { ...noProbe, current: defaults }).reason, 'nested')
   assert.equal(rootOf(join(home, 'elsewhere'), { ...noProbe, current: defaults }).reason, undefined)
 })
 

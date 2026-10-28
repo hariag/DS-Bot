@@ -1,20 +1,16 @@
-// The first start: where the app keeps its data and the Bots' files, and whether it copies the
-// Bot team of the user's own DSH. The answers are kept in the app's own data.
+// The first start: where the app keeps its data and the Bots' files (the default places, or the
+// one folder picked from the start page), and whether it copies the Bot team of the user's own
+// DSH. The answers are kept in the app's own data.
 import { app, dialog } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { findTeam, newerSessions, teamInUse, userDshHome, within } from './import.mjs'
+import { findTeam, newerSessions, teamInUse, userDshHome } from './import.mjs'
 import { installFolder } from './move-data.mjs'
 
 const TEXT = {
   en: {
-    welcome: 'Welcome to DeepSeek Bot',
-    places: (data, workspace) => `Data: ${data}\nTeam workspace: ${workspace}`,
-    start: 'Start', change: 'Change…',
-    pickData: 'Folder for DeepSeek Bot data', pickWorkspace: 'Folder for the team workspace',
-    dataInWorkspace: 'The data folder cannot be inside the team workspace.',
-    workspaceInData: 'The team workspace cannot be inside the data folder.',
+    pickRoot: 'Where DeepSeek Bot keeps its data',
     inDsh: home => `Choose a folder outside the DeepSeek Harness data (${home}).`,
     inProgram: 'Choose a folder outside the program folder: uninstalling removes it.',
     pickMove: 'New folder for DeepSeek Bot data',
@@ -37,12 +33,7 @@ const TEXT = {
     failed: message => `The team could not be copied: ${message}\n\nDeepSeek Bot starts with a new team. The team in DeepSeek Harness is unchanged.`,
   },
   zh: {
-    welcome: '欢迎使用 DeepSeek Bot',
-    places: (data, workspace) => `数据：${data}\n总工作区：${workspace}`,
-    start: '开始使用', change: '更改位置…',
-    pickData: '选择 DeepSeek Bot 的数据文件夹', pickWorkspace: '选择总工作区的文件夹',
-    dataInWorkspace: '数据文件夹不能放在总工作区里面。',
-    workspaceInData: '总工作区不能放在数据文件夹里面。',
+    pickRoot: '选择 DeepSeek Bot 放数据的位置',
     inDsh: home => `请选择 DeepSeek Harness 数据（${home}）以外的文件夹。`,
     inProgram: '请选择程序文件夹以外的位置：卸载时会删掉程序文件夹。',
     pickMove: '选择 DeepSeek Bot 数据的新文件夹',
@@ -84,25 +75,27 @@ async function ask(options, signal, ui) {
   return response
 }
 
-async function pick(title, current, signal, ui) {
-  const { canceled, filePaths } = await ui.asking(dialog.showOpenDialog(ui.owner(), { title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] }))
+async function pick(title, from, signal, ui) {
+  const { canceled, filePaths } = await ui.asking(dialog.showOpenDialog(ui.owner(), { title, defaultPath: existsSync(from) ? from : dirname(from), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] }))
   await new Promise(resolve => setImmediate(resolve))
   if (signal.aborted) throw new Quit()
-  return canceled ? current : filePaths[0]
+  return canceled ? undefined : filePaths[0]
 }
 
 export const programFolder = () => installFolder(app.getPath('exe'))
 
-function placeProblem(t, dataDir, workspace) {
-  const dsh = userDshHome()
-  const program = programFolder()
-  if (within(dataDir, workspace)) return t.dataInWorkspace
-  if (within(workspace, dataDir)) return t.workspaceInData
-  for (const path of [dataDir, workspace]) {
-    if (within(path, dsh) || within(dsh, path)) return t.inDsh(dsh)
-    if (app.isPackaged && within(path, program)) return t.inProgram
+/**
+ * The system picker of 「换个位置…」 on the start page: one folder, from which the root rule
+ * (place.mjs) makes the places. Undefined when the box was cancelled or the app is quitting.
+ * @param {string} from the folder the picker opens in
+ */
+export async function pickRoot(from, signal, ui) {
+  try {
+    return await pick(text().pickRoot, from, signal, ui)
+  } catch (error) {
+    if (error instanceof Quit) return undefined
+    throw error
   }
-  return undefined
 }
 
 /** The places a first start offers. */
@@ -161,9 +154,11 @@ export function saveLocations({ dataDir, workspace }) {
 }
 
 /**
- * Where the app keeps its data and the Bots' files, asked at the first start in dialogs that
- * belong to `ui.owner()`. A run on throwaway folders (DS_BOT_HOME, for development and tests)
- * asks nothing and copies nothing. `offered` says whether the first run offered to copy a team.
+ * Where the app keeps its data and the Bots' files: the saved places, or at the first start the
+ * default ones without a question (the start page says where the data goes and offers
+ * 「换个位置…」; windows-onboarding §3). The offer to copy a team is still a dialog that belongs
+ * to `ui.owner()`. A run on throwaway folders (DS_BOT_HOME, for development and tests) asks
+ * nothing and copies nothing. `offered` says whether the first run offered to copy a team.
  * @param {AbortSignal} signal
  * @param {{ owner: () => import('electron').BrowserWindow | undefined, asking: <T>(answer: Promise<T>) => Promise<T> }} ui
  * @returns {Promise<{ dataDir: string, workspace?: string, import?: { from: string, profile?: string }, offered?: boolean, quit?: true }>}
@@ -175,23 +170,10 @@ export async function chooseLocations(signal, ui) {
     const saved = JSON.parse(readFileSync(file, 'utf8'))
     return { dataDir: saved.dataDir, workspace: saved.workspace }
   }
-  const t = text()
-  let { dataDir, workspace } = defaultPlaces()
+  const { dataDir, workspace } = defaultPlaces()
   let offered
   try {
-    for (;;) {
-      const choice = await ask({ type: 'info', message: t.welcome, detail: t.places(dataDir, workspace), buttons: [t.start, t.change, t.quit], defaultId: 0, cancelId: 2 }, signal, ui)
-      if (choice === 2) return { quit: true }
-      if (choice === 1) {
-        dataDir = await pick(t.pickData, dataDir, signal, ui)
-        workspace = await pick(t.pickWorkspace, workspace, signal, ui)
-        continue
-      }
-      const problem = placeProblem(t, dataDir, workspace)
-      if (problem === undefined) break
-      await ask({ type: 'warning', message: problem, buttons: ['OK'] }, signal, ui)
-    }
-    const offer = await offerImport(t, dataDir, signal, ui)
+    const offer = await offerImport(text(), dataDir, signal, ui)
     if (offer.quit) return { quit: true }
     if (offer.import !== undefined) return { dataDir, workspace, import: offer.import, offered: true }
     offered = offer.offered

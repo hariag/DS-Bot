@@ -27,7 +27,7 @@ On macOS, Electron's default `userData` directory for `productName` "DeepSeek Bo
 
 ## First start and import
 
-At its first start the app asks, in system dialogs, for the data location (`~/.ds-bot` by default) and the team workspace (`~/DeepSeek Bot`), and keeps the answer in `locations.json` in its own data. Neither folder may be inside the other or inside the user's DSH data.
+At its first start the app uses the default data location (`~/.ds-bot`) and team workspace (`~/DeepSeek Bot`) without asking, and keeps them in `locations.json` in its own data. The start window says where the data goes and how much room the drive has, with 「换个位置…」: the system folder picker opens only on that click, and the one folder picked gives the root (`src/place.mjs`, the rule of the Windows onboarding note): the folder itself when it is new or empty, otherwise `DeepSeek Bot` inside it, as inside a drive; the data goes to `<root>/data` and the Bots' files to `<root>/workspace`. A root the app added is confirmed on a card; a place without write access, inside OneDrive, inside the user's DSH data or inside the program folder is refused with the reason. The start then begins again in the new folder, and the folders this start made at the default place go away. Once a team has been copied in, the line goes, and the data moves through Settings. The offer to copy a team is still a dialog. Neither folder may be inside the other or inside the user's DSH data.
 
 Both change later in DS Bot's Settings > General > Locations. The plugin moves the team workspace and tells the app, which writes it into `locations.json`. The app names the user's DSH data to the plugin (`DS_BOT_USER_DSH_HOME`), so that neither the team workspace nor a Bot's folder can be set there. The data location moves through the app (`src/move-data.mjs`): the new folder must be empty or new and apart from the old data, the team workspace, the user's DSH data and the program folder. The app stops the Host, copies the data (without the team's lock) into a staging folder beside the new one, renames it to the new folder once it is whole, writes `locations.json` and starts again. A failed or interrupted copy leaves the old location in use and removes the staging folder; the old folder always stays. A run on throwaway folders (`DS_BOT_HOME`) keeps its data location.
 
@@ -124,7 +124,8 @@ The script serves a releases list with one release of that version that has this
 | `src/profile.mjs` | The profiles: the app's own and the first-run check's, their bundles, and their creation and update |
 | `src/app-patch.mjs` | The app's own profile overlay (`profiles/app-onboarding.patch.yml`, passed through `patchFiles`): it turns off DSH Web's automatic credential step (`credentialOnboarding: false`), since models are set up in DS Bot's Models page and the Main Bot's key card |
 | `src/session-check.mjs` | Which chats the pinned DSH refuses because a newer DSH wrote them |
-| `src/first-run.mjs` | The first start's dialogs (the two folders and the offer to import) and the texts of the data move |
+| `src/first-run.mjs` | The first start's places (the defaults, the saved ones, the folder picker of 「换个位置…」), its offer to import, and the texts of the data move |
+| `src/place.mjs` | The place line of the start page (drive, free space) and the root rule of a picked folder |
 | `src/import.mjs` | The import of a Bot team from the user's DSH |
 | `src/move-data.mjs` | The move of the data location: which folders can take it, and the copy through a staging folder |
 | `src/updates.mjs` | The self-updates (Windows installer, Linux AppImage) and the release-page checks (macOS, Linux deb) |

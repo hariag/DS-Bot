@@ -92,7 +92,7 @@ test('every text key that the page uses exists', () => {
   const keys = Object.keys(TEXT.zh)
   const matching = pattern => keys.filter(key => new RegExp(`^${pattern.replaceAll('.', '\\.').replace(/\{\w+\}/gu, '\\w+')}$`, 'u').test(key))
   for (const [, key] of html.matchAll(/data-t(?:-label)?="([^"]+)"/gu)) assert.ok(matching(key).length > 0, `start.html: unknown text key ${key}`)
-  const literal = /^(?:voice|hint|title|say|card|import|copying|eta|sr|state|phase|slow|update|failed|newer|importFailed|track)\.[\w.]+$/u
+  const literal = /^(?:voice|hint|title|say|card|import|copying|eta|sr|state|phase|slow|update|failed|newer|importFailed|track|place)\.[\w.]+$/u
   for (const name of ['start.js', 'whale.js']) {
     const text = uncommented(code[name])
     const used = [
