@@ -225,6 +225,7 @@ export function install(rt) {
     await rt.save()
     // The Session was resolved before the group owned it, so its scoped tools land now.
     await rt.resolveAgent(id)
+      .catch(error => rt.warn('ds-bot: scoped tools for %s in %s not applied: %s', member.name, room.name, error))
     await rt.ensureCapabilities(id)
     return { id, brief: await rt.ownChatBrief(member) }
   }

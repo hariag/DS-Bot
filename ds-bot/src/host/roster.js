@@ -8,11 +8,6 @@ import { nameProblem } from '../shared/mentions.js'
 const BROWSER_GRANT_KINDS = new Set(['post', 'upload', 'download', 'delete', '*'])
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/
 
-const OWN_RULES = 'Where your instructions say otherwise, follow them.'
-const writeIn = language => `Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
-// The first Main Bot's greeting when the user wrote before it had a model that works.
-const AFTER_USER = 'You were just set up as the user\'s Main Bot. The user wrote to you before your model could answer; their message above has no answer yet. Answer it now, and say in one short sentence that you run their Bot team.'
-
 function cleanBrowserGrants(input) {
   if (input === null) return null
   if (!Array.isArray(input) || input.length > 50) throw new Error('Browser grants must be an array of at most 50 entries')
@@ -133,8 +128,7 @@ export function install(rt) {
   }
 
   // `pickModel` leaves the model to the user: the chat opens on a model card, and the
-  // greeting waits until a model is chosen. So does a Bot made when no model it can
-  // run on is served.
+  // greeting waits until a model is chosen. So does a Bot made when no model is served.
   async function createBot(options) {
     const cleanName = String(options.name ?? '').trim().slice(0, 40)
     const problem = nameProblem(cleanName)
@@ -156,8 +150,6 @@ export function install(rt) {
       : effort === null || effort === '' ? undefined
       : (await rt.resolveEffort(modelRef, effort)) ?? await rt.defaultEffort(modelRef)
     const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
-    const clash = dir === undefined ? undefined : await rt.privateClash(dir)
-    if (clash) throw new Error(`${dir} is in or around the folder of ${clash.name}, a private Bot, so ${cleanName} cannot work there`)
     const id = await createSession(cleanName, { dir })
     try {
       state.bots[id] = {
@@ -182,7 +174,7 @@ export function install(rt) {
       // The kickoff arrives as a user message, so it outranks the Bot's instructions
       // unless it gives way to them, and it names no tool those instructions may rule out.
       const kickoff = main
-        ? `You were just set up as the user's Main Bot. Greet the user in one or two short messages: say you will run their Bot team and that they can come to you for anything that needs a decision. Then ask in one short question what they want the team to help with first. ${writeIn(language)}`
+        ? `You were just set up as the user's Main Bot. Greet the user in one or two short messages: say you will run their Bot team and that they can come to you for anything that needs a decision. Then ask in one short question what they want the team to help with first. Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
         : original
           ? `The user just made you as a copy of ${original.name}: same job, fresh memory. Greet the user in one short message, then ask in one short question what this copy should focus on.`
           : creator
@@ -190,23 +182,25 @@ export function install(rt) {
             : brief
               ? `The user just created you and sent this first message:\n\n${brief}\n\nIntroduce yourself in one short line, then help with it.`
               : 'The user just created you. Greet the user in one short message, then ask in one short question what you should focus on.'
-      const opener = `${kickoff}\n${OWN_RULES}`
+      const opener = `${kickoff}\nWhere your instructions say otherwise, follow them.`
       const text = !main && language ? `${opener}\nWrite in ${language}.` : opener
       const bot = state.bots[id]
-      const greeting = { text, from: createdBy ?? null, ...(main ? { main: true } : {}) }
+      // The Bot is saved by now; a failure here must not archive it in the catch below.
+      const scopeTools = () => rt.resolveAgent(id)
+        .catch(error => rt.warn('ds-bot: scoped tools for %s not applied: %s', cleanName, error))
       if (modelRef === undefined) {
-        bot.kickoff = greeting
+        bot.kickoff = { text, from: createdBy ?? null, ...(main ? { main: true } : {}) }
         await rt.save()
         // The Session was resolved before the Bot existed, so its scoped tools land now.
-        await rt.resolveAgent(id)
+        await scopeTools()
         return bot
       }
       await rt.save()
-      await rt.resolveAgent(id)
+      await scopeTools()
       // The greeting runs on the Bot's own model, once its provider is registered.
       void rt.waitForModel(bot)
         .then(() => rt.applyModel(bot).catch(error => rt.warn('ds-bot: model for %s not applied: %s', cleanName, error)))
-        .then(() => sendKickoff(bot, greeting))
+        .then(() => sendKickoff(bot, { text, from: createdBy }))
       return bot
     } catch (error) {
       // The Bot's Session was already made: archive it instead of leaving an orphan.
@@ -222,65 +216,15 @@ export function install(rt) {
     }
   }
 
-  // Greetings sent, by Bot: one whose turn a key, a sign-in or a balance stops is held
-  // again (turns.js), to go out once the user has fixed that.
-  const sentKickoffs = new Map()
-  function sendKickoff(bot, greeting) {
-    sentKickoffs.set(bot.id, greeting)
-    const text = greeting.afterUser ? `${AFTER_USER} ${writeIn(rt.uiLanguage?.())}\n${OWN_RULES}` : greeting.text
-    void rt.deliver({ fromId: greeting.from ?? undefined, toId: bot.id, text, role: 'kickoff' })
+  function sendKickoff(bot, { text, from }) {
+    void rt.deliver({ fromId: from ?? undefined, toId: bot.id, text, role: 'kickoff' })
       .catch(error => rt.warn('ds-bot: kickoff failed: %s', error))
   }
 
-  // A held greeting goes out once its Bot has a model, on that model once its provider
-  // is registered. False while the Bot has none.
-  const releasing = new Set()
-  async function releaseKickoff(bot) {
-    const greeting = bot.kickoff
-    if (greeting === undefined || !bot.model) return false
-    delete bot.kickoff
-    releasing.add(bot.id)
-    await rt.save().catch((error) => { releasing.delete(bot.id); throw error })
-    const send = () => { releasing.delete(bot.id); sendKickoff(bot, greeting) }
-    void rt.waitForModel(bot).then(send, send)
-    return true
-  }
-
-  // A greeting on its way to a Bot: released and waiting for its model, or sent to its
-  // chat and not yet taken up by a turn there (resume.js notes what no turn took up).
-  const greetingOut = botId => releasing.has(botId)
-    || (rt.unreadOf?.(rt.chatOf(botId)) ?? []).some(args => args.role === 'kickoff')
-
-  function holdKickoffAgain(botId) {
+  // The user wrote first, so the held greeting would only interrupt.
+  function dropKickoff(botId) {
     const bot = rt.botOf(botId)
-    const greeting = sentKickoffs.get(botId)
-    sentKickoffs.delete(botId)
-    if (bot === undefined || greeting === undefined || bot.kickoff !== undefined) return
-    // "You are the Main Bot" must not go out after a demotion.
-    if (greeting.main && !rt.isMain(botId)) return
-    bot.kickoff = greeting
-    void rt.save().catch(() => {})
-  }
-
-  // The user wrote in a Bot's own chat, so a held greeting would only interrupt. The
-  // first Main Bot's stays while that Bot has no model it can run on, and a Bot that a
-  // key, a sign-in or a balance blocks has none: once it has one, it answers the message
-  // first, unless a turn answered it meanwhile (userAnswered). Read from the catalog as
-  // last listed, so it is marked before that turn can end.
-  function userWrote(botId) {
-    const bot = rt.botOf(botId)
-    const greeting = bot?.kickoff
-    if (greeting === undefined || greeting.afterUser) return
-    if (greeting.main && (bot.blocked !== undefined || !rt.isUsable(bot.model))) greeting.afterUser = true
-    else delete bot.kickoff
-    void rt.save().catch(() => {})
-  }
-
-  // A turn that answered the user in a Bot's own chat leaves nothing for a greeting held
-  // for that message to answer.
-  function userAnswered(botId) {
-    const bot = rt.botOf(botId)
-    if (bot?.kickoff?.afterUser !== true) return
+    if (bot?.kickoff === undefined) return
     delete bot.kickoff
     void rt.save().catch(() => {})
   }
@@ -288,7 +232,6 @@ export function install(rt) {
   async function duplicateBot(id) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
-    if (bot.private === true) throw new Error(`${bot.name} is private, so it cannot be copied`)
     const served = (await rt.catalog()).some(entry => entry.ref === bot.model)
     // A folder that went away since leaves the copy in the team workspace.
     const workDir = bot.workDir !== undefined && await rt.isFolder(bot.workDir) ? bot.workDir : undefined
@@ -308,22 +251,17 @@ export function install(rt) {
     })
   }
 
-  async function updateBot(id, patch, actorId) {
+  async function updateBot(id, patch, actorId, fromSessionId) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
     if (patch.browserGrants !== undefined && actorId !== undefined) {
       throw new Error(`Only the user can set what ${bot.name} may do in the browser`)
-    }
-    if (patch.private !== undefined && actorId !== undefined) {
-      throw new Error(`Only the user can make ${bot.name} private or open`)
     }
     const browserGrants = patch.browserGrants === undefined ? undefined : cleanBrowserGrants(patch.browserGrants)
     // Checked first, so a folder, model or level that does not pass leaves the rest
     // unchanged too.
     const moving = patch.workDir !== undefined
     const workDir = moving ? await rt.cleanWorkDir(patch.workDir ?? '') : undefined
-    const flag = patch.private === undefined ? undefined : patch.private === true
-    await rt.checkPrivacyChange(bot, { flag, moving, workDir })
     const modelRef = patch.model === undefined ? undefined
       : patch.model === null || patch.model === '' ? null
       : await rt.resolveModel(patch.model)
@@ -351,6 +289,8 @@ export function install(rt) {
       await ctx.sessionTitle.rename(agent.session, next)
       await followMemberNames(Object.values(state.rooms).filter(room => room.members.includes(id)))
     }
+    const roleBefore = bot.role
+    const instructionsBefore = bot.instructions
     if (patch.role !== undefined) bot.role = String(patch.role).trim().slice(0, 24)
     if (patch.instructions !== undefined) bot.instructions = String(patch.instructions).trim()
     let modelChanged = false
@@ -364,8 +304,6 @@ export function install(rt) {
       else delete bot.avatar
     }
     if (patch.model !== undefined) {
-      // A failure that blocked the Bot was its old model's (turns.js).
-      if ((modelRef ?? undefined) !== bot.model) delete bot.blocked
       if (modelRef === null) delete bot.model
       else bot.model = modelRef
       modelChanged = true
@@ -380,18 +318,37 @@ export function install(rt) {
       if (browserGrants === null) delete bot.browserGrants
       else bot.browserGrants = browserGrants
     }
-    if (flag === true) bot.private = true
-    else if (flag === false) delete bot.private
     const moved = moving && workDir !== bot.workDir
     if (moving) {
       if (workDir === undefined) delete bot.workDir
       else bot.workDir = workDir
     }
     await rt.save()
+    // The system prompt reads the live profile every turn, but a Session with
+    // several rounds behind it follows the old kickoff's pull until a message
+    // lands; notify the Bot's chat so the next turn honors the new profile.
+    const notes = []
+    if (bot.role !== roleBefore) notes.push(`Your role is now "${bot.role || '(none)'}"`)
+    if (bot.instructions !== instructionsBefore) notes.push(`Your instructions now read:\n${bot.instructions || '(none)'}`)
+    // A held greeting means the model pick is still open: the kickoff it later sends
+    // already reads the new profile, and a notice would start a turn before that.
+    // A Bot editing itself in its own chat just got the tool result in the turn
+    // that made the edit; a notice there would only buy it a second, unsolicited
+    // reply. The same edit made from a group Session reaches no own-chat turn, so
+    // the notice still goes out.
+    const selfEditInChat = actorId === bot.id && fromSessionId === rt.chatOf(bot.id)
+    if (notes.length > 0 && bot.kickoff === undefined && !selfEditInChat) {
+      void rt.deliver({ toId: bot.id, text: notes.join('\n'), role: 'update' })
+        .catch(error => rt.warn('ds-bot: profile update for %s not delivered: %s', bot.name, error?.message ?? error))
+    }
     if (modelChanged) await rt.applyModel(bot, { force: true })
     if (moved) void rt.followFolder(bot.id)
-    // A new model lifted what blocked the Bot; a new thinking level alone fixes nothing.
-    if (modelChanged && bot.blocked === undefined) await releaseKickoff(bot)
+    if (bot.model && bot.kickoff !== undefined) {
+      const held = bot.kickoff
+      delete bot.kickoff
+      await rt.save()
+      sendKickoff(bot, held)
+    }
     return bot
   }
 
@@ -441,7 +398,6 @@ export function install(rt) {
   function checkMembers(members) {
     if (members.length < 2) throw new Error('A group chat needs at least two Bots')
     if (members.length > ROOM_MAX_MEMBERS) throw new Error(`A group chat holds at most ${ROOM_MAX_MEMBERS} Bots`)
-    rt.checkNoPrivate(members)
   }
 
   // A Main Bot leads the groups it makes; a group the user makes is led by a Main Bot
@@ -547,8 +503,6 @@ export function install(rt) {
     planRoomChange(asked, patch, actorId)
     const moving = patch.workDir !== undefined
     const workDir = moving ? await rt.cleanWorkDir(patch.workDir ?? '') : undefined
-    const clash = workDir === undefined ? undefined : await rt.privateClash(workDir)
-    if (clash) throw new Error(`${workDir} is in or around the folder of ${clash.name}, a private Bot, so a group cannot work there`)
     // No await from here until every change is written.
     const room = rt.roomOf(id)
     if (room === undefined) throw new Error('Unknown group chat')
@@ -634,7 +588,6 @@ export function install(rt) {
   async function setMain(id, main, { primary = false, replace } = {}) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
-    if (main && bot.private === true) throw new Error(`${bot.name} is private, so it cannot be a Main Bot`)
     const others = state.mainBotIds.filter(other => other !== id)
     let next
     if (!main) {
@@ -669,14 +622,7 @@ export function install(rt) {
     const current = rt.chatOf(id)
     // Questions and exchange turns are kept per Session, so every part of the chat is cleared.
     const parts = new Set([id, current, ...(bot.segments ?? []).map(segment => segment.sessionId)])
-    const closedArchive = bot.private === true ? {
-      id: bot.id,
-      name: bot.name,
-      ...(bot.workDir === undefined ? {} : { workDir: bot.workDir }),
-      sessionIds: [...parts, ...rt.groupSessionsOf(id)],
-    } : undefined
     await rt.releaseBot(id, [...parts, ...rt.groupSessionsOf(id)])
-    if (closedArchive !== undefined) state.privateArchives = [...(state.privateArchives ?? []).filter(entry => entry.id !== id), closedArchive]
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]
@@ -694,8 +640,7 @@ export function install(rt) {
     }
     await followMemberNames(touched)
     await rt.forgetBotSecrets(id)
-    const archivePath = await archived
-    if (closedArchive !== undefined && archivePath !== undefined) closedArchive.archivePath = archivePath
+    await archived
     const failed = await saveForDelete()
     // Same as deleteRoom: stopActivity removes the Session's armed scheduled tasks.
     // Past parts are archived too: a part move can leave tasks on the old Session,
@@ -735,6 +680,6 @@ export function install(rt) {
   Object.assign(rt, {
     ensureWorkspace, keepTeamFolder, createSession, createBot, duplicateBot, updateBot, setFlags,
     roomBusy, autoRoomName, retitleRoom, createRoom, updateRoom, deleteRoom,
-    setMain, deleteBot, bootstrap, releaseKickoff, greetingOut, holdKickoffAgain, userWrote, userAnswered,
+    setMain, deleteBot, bootstrap, dropKickoff,
   })
 }
