@@ -275,6 +275,10 @@ export class StartWindow {
     this.#window = win
     this.#url = startUrl(this.#o.page, start)
     const contents = win.webContents
+    // The window shows at once; its page paints a little later (onboarding §3: within about 1 s).
+    const sinceLaunch = () => String(Math.round(process.uptime() * 1000))
+    note(`${start} start window shown ${sinceLaunch()} ms after launch`)
+    win.once('ready-to-show', () => { note(`the start page painted ${sinceLaunch()} ms after launch`) })
     this.#painted = new Promise((resolve) => {
       win.once('ready-to-show', resolve)
       contents.once('did-finish-load', resolve)
