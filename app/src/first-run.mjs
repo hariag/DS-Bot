@@ -25,8 +25,6 @@ const TEXT = {
     moveConfirm: to => `Move DeepSeek Bot's data to ${to}?`,
     moveDetail: from => `DeepSeek Bot copies its data there and starts again. ${from} stays as it is; you can delete it once everything works.`,
     move: 'Move and restart', cancel: 'Cancel',
-    moving: 'Copying DeepSeek Bot\'s data…',
-    starting: 'Starting DeepSeek Bot…',
     moveInUse: 'Another DeepSeek Harness is using this data, so it was not moved. Close it, then try again.',
     moveFailed: message => `The data could not be copied: ${message}\n\nDeepSeek Bot goes on with its data where it was.`,
     found: (bots, rooms) => `DeepSeek Harness has a Bot team: ${bots} Bot${bots === 1 ? '' : 's'}${rooms > 0 ? `, ${rooms} group${rooms === 1 ? '' : 's'}` : ''}. Copy it into DeepSeek Bot?`,
@@ -37,7 +35,6 @@ const TEXT = {
     quit: 'Quit', startEmpty: 'Start without the team',
     whichModels: 'Which model settings should DeepSeek Bot use?',
     failed: message => `The team could not be copied: ${message}\n\nDeepSeek Bot starts with a new team. The team in DeepSeek Harness is unchanged.`,
-    notStarted: 'DeepSeek Bot could not start.',
   },
   zh: {
     welcome: '欢迎使用 DeepSeek Bot',
@@ -56,8 +53,6 @@ const TEXT = {
     moveConfirm: to => `把 DeepSeek Bot 的数据移到 ${to} 吗？`,
     moveDetail: from => `DeepSeek Bot 会把数据复制过去，然后重新启动。${from} 会原样保留，确认一切正常后可以自己删掉。`,
     move: '移动并重启', cancel: '取消',
-    moving: '正在复制 DeepSeek Bot 的数据…',
-    starting: '正在启动 DeepSeek Bot…',
     moveInUse: '另一个 DeepSeek Harness 正在使用这份数据，所以没有移动。请先关掉它，再重试。',
     moveFailed: message => `数据没有复制成功：${message}\n\nDeepSeek Bot 会继续使用原来位置的数据。`,
     found: (bots, rooms) => `DeepSeek Harness 里有一个 Bot 团队：${bots} 个 Bot${rooms > 0 ? `、${rooms} 个群` : ''}。要复制到 DeepSeek Bot 吗？`,
@@ -68,7 +63,6 @@ const TEXT = {
     quit: '退出', startEmpty: '不带团队开始',
     whichModels: 'DeepSeek Bot 用哪一份模型设置？',
     failed: message => `团队没有复制成功：${message}\n\nDeepSeek Bot 会用一个新团队开始。DeepSeek Harness 里的团队没有变化。`,
-    notStarted: 'DeepSeek Bot 没能启动。',
   },
 }
 export const localeText = table => (app.getLocale().toLowerCase().startsWith('zh') ? table.zh : table.en)
@@ -80,16 +74,18 @@ const locationsFile = () => join(app.getPath('userData'), 'locations.json')
 // A quit request while a first-run dialog is open stops the first run right after that dialog.
 class Quit extends Error {}
 
-async function ask(options, signal) {
-  const { response } = await dialog.showMessageBox({ title: 'DeepSeek Bot', noLink: true, ...options, signal })
+// The dialogs belong to `ui.owner()` (the start window); `ui.asking` holds the start's clock while
+// the user answers.
+async function ask(options, signal, ui) {
+  const { response } = await ui.asking(dialog.showMessageBox(ui.owner(), { title: 'DeepSeek Bot', noLink: true, ...options, signal }))
   // A quit that arrived while a synchronous macOS box was open gets to run first.
   await new Promise(resolve => setImmediate(resolve))
   if (signal.aborted) throw new Quit()
   return response
 }
 
-async function pick(title, current, signal) {
-  const { canceled, filePaths } = await dialog.showOpenDialog({ title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
+async function pick(title, current, signal, ui) {
+  const { canceled, filePaths } = await ui.asking(dialog.showOpenDialog(ui.owner(), { title, defaultPath: existsSync(current) ? current : dirname(current), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] }))
   await new Promise(resolve => setImmediate(resolve))
   if (signal.aborted) throw new Quit()
   return canceled ? current : filePaths[0]
@@ -109,36 +105,50 @@ function placeProblem(t, dataDir, workspace) {
   return undefined
 }
 
-function hasTeam(dataDir) {
+/** The places a first start offers. */
+export const defaultPlaces = () => ({ dataDir: join(homedir(), '.ds-bot'), workspace: join(homedir(), 'DeepSeek Bot') })
+
+/** The Bot team in a data folder, if it has one. */
+export function teamIn(dataDir) {
   try {
-    return Object.keys(JSON.parse(readFileSync(join(dataDir, 'bot', 'state.json'), 'utf8')).bots ?? {}).length > 0
+    return findTeam(dataDir)
   } catch {
-    return false
+    return undefined
   }
 }
 
-async function offerImport(t, dataDir, signal) {
+/**
+ * What the start window can say before the first-run questions: the team that a reinstall keeps,
+ * or whether the user's own DSH has a team to offer.
+ */
+export function teamsAt(dataDir = defaultPlaces().dataDir) {
+  const team = teamIn(dataDir)
+  return { team, offered: team === undefined && teamIn(userDshHome()) !== undefined }
+}
+
+/** @returns {Promise<{ offered: boolean, import?: { from: string, profile?: string }, quit?: true }>} */
+async function offerImport(t, dataDir, signal, ui) {
   const from = userDshHome()
   let found
   try {
-    found = hasTeam(dataDir) ? undefined : findTeam(from)
+    found = teamIn(dataDir) === undefined ? findTeam(from) : undefined
   } catch (error) {
     console.error(error)
   }
-  if (found === undefined) return undefined
-  if (await ask({ type: 'question', message: t.found(found.bots, found.rooms), detail: t.foundDetail(from), buttons: [t.copy, t.skip], defaultId: 0, cancelId: 1 }, signal) === 1) return undefined
+  if (found === undefined) return { offered: false }
+  if (await ask({ type: 'question', message: t.found(found.bots, found.rooms), detail: t.foundDetail(from), buttons: [t.copy, t.skip], defaultId: 0, cancelId: 1 }, signal, ui) === 1) return { offered: true }
   while (teamInUse(from)) {
-    if (await ask({ type: 'warning', message: t.inUse, buttons: [t.retry, t.skip], defaultId: 0, cancelId: 1 }, signal) === 1) return undefined
+    if (await ask({ type: 'warning', message: t.inUse, buttons: [t.retry, t.skip], defaultId: 0, cancelId: 1 }, signal, ui) === 1) return { offered: true }
   }
   const newer = newerSessions(from, found.team)
   if (newer.length > 0) {
-    if (await ask({ type: 'warning', message: t.newer(newer.length), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 }, signal) === 0) return { quit: true }
-    return undefined
+    if (await ask({ type: 'warning', message: t.newer(newer.length), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0 }, signal, ui) === 0) return { offered: true, quit: true }
+    return { offered: true }
   }
   const { profiles } = found
   const profile = profiles.length < 2 ? profiles[0]?.name
-    : profiles[await ask({ type: 'question', message: t.whichModels, buttons: profiles.map(entry => PROFILE_NAMES[entry.name] ?? entry.name), defaultId: 0, cancelId: 0 }, signal)].name
-  return { from, profile }
+    : profiles[await ask({ type: 'question', message: t.whichModels, buttons: profiles.map(entry => PROFILE_NAMES[entry.name] ?? entry.name), defaultId: 0, cancelId: 0 }, signal, ui)].name
+  return { offered: true, import: { from, profile } }
 }
 
 /** Write the chosen places once the first run is finished; quitting before that asks again. */
@@ -151,11 +161,14 @@ export function saveLocations({ dataDir, workspace }) {
 }
 
 /**
- * Where the app keeps its data and the Bots' files, asked at the first start.
- * A run on throwaway folders (DS_BOT_HOME, for development and tests) asks nothing and copies nothing.
- * @returns {Promise<{ dataDir: string, workspace?: string, import?: { from: string, profile?: string }, quit?: true }>}
+ * Where the app keeps its data and the Bots' files, asked at the first start in dialogs that
+ * belong to `ui.owner()`. A run on throwaway folders (DS_BOT_HOME, for development and tests)
+ * asks nothing and copies nothing. `offered` says whether the first run offered to copy a team.
+ * @param {AbortSignal} signal
+ * @param {{ owner: () => import('electron').BrowserWindow | undefined, asking: <T>(answer: Promise<T>) => Promise<T> }} ui
+ * @returns {Promise<{ dataDir: string, workspace?: string, import?: { from: string, profile?: string }, offered?: boolean, quit?: true }>}
  */
-export async function chooseLocations(signal) {
+export async function chooseLocations(signal, ui) {
   if (process.env.DS_BOT_HOME) return { dataDir: process.env.DS_BOT_HOME, workspace: process.env.DS_BOT_WORKSPACE || undefined }
   const file = locationsFile()
   if (existsSync(file)) {
@@ -163,29 +176,30 @@ export async function chooseLocations(signal) {
     return { dataDir: saved.dataDir, workspace: saved.workspace }
   }
   const t = text()
-  let dataDir = join(homedir(), '.ds-bot')
-  let workspace = join(homedir(), 'DeepSeek Bot')
+  let { dataDir, workspace } = defaultPlaces()
+  let offered
   try {
     for (;;) {
-      const choice = await ask({ type: 'info', message: t.welcome, detail: t.places(dataDir, workspace), buttons: [t.start, t.change, t.quit], defaultId: 0, cancelId: 2 }, signal)
+      const choice = await ask({ type: 'info', message: t.welcome, detail: t.places(dataDir, workspace), buttons: [t.start, t.change, t.quit], defaultId: 0, cancelId: 2 }, signal, ui)
       if (choice === 2) return { quit: true }
       if (choice === 1) {
-        dataDir = await pick(t.pickData, dataDir, signal)
-        workspace = await pick(t.pickWorkspace, workspace, signal)
+        dataDir = await pick(t.pickData, dataDir, signal, ui)
+        workspace = await pick(t.pickWorkspace, workspace, signal, ui)
         continue
       }
       const problem = placeProblem(t, dataDir, workspace)
       if (problem === undefined) break
-      await ask({ type: 'warning', message: problem, buttons: ['OK'] }, signal)
+      await ask({ type: 'warning', message: problem, buttons: ['OK'] }, signal, ui)
     }
-    const imported = await offerImport(t, dataDir, signal)
-    if (imported?.quit) return { quit: true }
-    if (imported !== undefined) return { dataDir, workspace, import: imported }
+    const offer = await offerImport(t, dataDir, signal, ui)
+    if (offer.quit) return { quit: true }
+    if (offer.import !== undefined) return { dataDir, workspace, import: offer.import, offered: true }
+    offered = offer.offered
   } catch (error) {
     if (error instanceof Quit) return { quit: true }
     throw error
   }
   // There is nothing to copy, so the first run ends with the chosen places.
   saveLocations({ dataDir, workspace })
-  return { dataDir, workspace }
+  return { dataDir, workspace, offered }
 }

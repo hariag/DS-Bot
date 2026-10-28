@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { START_ACTS } from '../src/start-window.mjs'
 import { TEXT, t } from '../src/start/text.mjs'
 
 const dir = new URL('../src/start/', import.meta.url)
@@ -62,6 +63,8 @@ test('the page sends only the acts of the start window', () => {
     ...[...code['whale.js'].matchAll(/\bact\('(\w+)'\)/gu)].map(match => match[1]),
   ].filter(name => !local.has(name)))
   assert.deepEqual([...sent].sort(), ['answer', 'copyDetails', 'freshStart', 'handoffDone', 'handoffShow', 'importModel', 'importOption', 'installUpdate', 'keepCopying', 'manualDownload', 'openLogs', 'pick', 'reloadView', 'retry', 'stopCopy', 'wait'])
+  // Every act the main process takes is one that the page sends, under the same name.
+  for (const name of START_ACTS) assert.ok(sent.has(name), `the main process takes ${name}, which the page never sends`)
 })
 
 test('zh and en carry the same keys and the same placeholders', () => {

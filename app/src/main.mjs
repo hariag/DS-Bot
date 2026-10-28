@@ -1,34 +1,27 @@
-// Electron main process: one window for the Bot team, served by the app's own DSH Host.
-// The window loads the Host's loopback address as DSH Web does: DSH's sign-in sends the page's
-// origin as the address the browser comes back to, and accepts only a loopback one.
-import { app, BrowserWindow, WebContentsView, dialog, ipcMain, Menu, nativeTheme, session, shell } from 'electron'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+// Electron main process: a small start window while the app's own DSH Host boots, then one window
+// for the Bot team. The team window loads the Host's loopback address as DSH Web does: DSH's
+// sign-in sends the page's origin as the address the browser comes back to, and accepts only a
+// loopback one. It loads hidden and shows once the team view is ready (start-window.mjs). Only
+// what the start window needs is imported up front; the rest loads once it is up
+// (docs/plans/2026-10-26-start-window.md §11).
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, screen, session, shell, systemPreferences, WebContentsView } from 'electron'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { release } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
-import electronUpdater from 'electron-updater'
-import { BotBrowserGuests, partitionOf } from './bot-browser.mjs'
-import { BotViews, isBotId } from './bot-views.mjs'
-import { importFromBrowser, listSources } from './browser-sources.mjs'
-import { applyCookies, CookieImports } from './cookie-import.mjs'
-import { parseCookieFile } from './cookie-parse.mjs'
-import { downloadSaver } from './downloads.mjs'
 import { canonicalExecPath } from './canonical-path.mjs'
-import { chooseLocations, localeText, programFolder, saveLocations, text } from './first-run.mjs'
 import { hostPort } from './host-port.mjs'
-import { HostProcess } from './host-process.mjs'
-import { copySessions, findTeam, importTeam, teamInUse, userDshHome } from './import.mjs'
-import { copyData, moveProblem } from './move-data.mjs'
-import { CHECK_PROFILE, PROFILE } from './profile.mjs'
-import { UPDATE_TEXT, watchReleases, watchUpdates } from './updates.mjs'
+import { captureStdio, LogFile } from './logs.mjs'
+import { readStartFrame, writeStartFrame } from './start-frame.mjs'
+import { explainOf, StartWindow } from './start-window.mjs'
 import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './window-frame.mjs'
 
 const IPC = {
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
+  ready: 'ds-bot:ready', focus: 'ds-bot:focus',
   browserAcquire: 'ds-bot:browser-acquire', browserRelease: 'ds-bot:browser-release', browserForget: 'ds-bot:browser-forget',
   browserViewChanged: 'ds-bot:browser-view-changed', browserViewCreate: 'ds-bot:browser-view-create',
   browserViewSync: 'ds-bot:browser-view-sync', browserViewPlace: 'ds-bot:browser-view-place',
@@ -54,31 +47,46 @@ const iconFile = join(here, '..', 'assets', process.platform === 'win32' ? 'icon
 // Windows 11 draws Mica behind the page; mica.css lets it through the sidebar.
 const mica = micaAvailable(process.platform, release())
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
+const frameFile = join(app.getPath('userData'), 'start-frame.json')
+
+// Loaded once the start window is up (loadModules).
+let BotBrowserGuests, partitionOf, BotViews, isBotId, importFromBrowser, listSources, applyCookies, CookieImports, parseCookieFile
+let downloadSaver, chooseLocations, localeText, programFolder, saveLocations, teamIn, teamsAt, text, HostProcess
+let copySessions, findTeam, importTeam, teamInUse, userDshHome, copyData, moveProblem, CHECK_PROFILE, PROFILE
+let UPDATE_TEXT, watchReleases, watchUpdates, getDshRuntimeVersion, electronUpdater
 
 let mainWindow
+// Settles once the hidden team window exists.
+let mainCreated
+let startWindow
+let logs
+// Writers to the console that bypass the log: the Host's output goes into the log on its own.
+let rawOutput
 let host
 // The Host's loopback origin, which the window loads.
 let origin
+let port
 let hostStop
 let updates
+let updatesStarted = false
 let stopping = false
 let stopped = false
 let failed = false
 let places
+// The first run's answer to the import; only the first boot copies.
+let pendingImport
+// Each boot of the engine; a retry starts a new one, and what an old one still reports is dropped.
+let attempt = 0
 // Quitting while a first-run dialog is open stops the first run, and during the copy (of the
 // first run or of a data move) it waits for the copy to stop at a safe point, so that it leaves
 // no half team and no temporary copy.
 let choosing
 let copying
 const copyAbort = new AbortController()
-const browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
-const botViews = new BotViews({
-  window: () => mainWindow, WebContentsView, guests: browserGuests, origin: () => origin, devTools: !app.isPackaged,
-  statePath: join(app.getPath('userData'), 'bot-views.json'),
-  onChange: state => mainWindow?.webContents.send(IPC.browserViewChanged, state),
-})
-const cookieImports = new CookieImports()
-app.once('will-quit', () => botViews.dispose())
+let browserGuests
+let botViews
+let cookieImports
+app.once('will-quit', () => { botViews?.dispose() })
 
 // A packaged app started through an 8.3 short path or a junction restarts once on the
 // canonical path: the lock below and every path the Host sees then agree with the long
@@ -90,6 +98,20 @@ if (canonical !== undefined) {
 } else if (!app.requestSingleInstanceLock()) {
   app.exit(0)
 } else {
+  logs = new LogFile({ dir: join(app.getPath('userData'), 'logs') })
+  rawOutput = captureStdio(logs)
+  app.once('will-quit', () => { logs.flush() })
+  console.log(`DeepSeek Bot ${app.getVersion()} (${process.platform} ${process.arch}), Electron ${process.versions.electron}`)
+  startWindow = new StartWindow({
+    electron: { BrowserWindow, ipcMain, screen, shell, clipboard, nativeTheme, systemPreferences },
+    page: join(here, 'start', 'start.html'), preload: join(here, 'preload.cjs'), icon: iconFile, mica, devTools: !app.isPackaged,
+    lang: app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en', motion: readStartFrame(frameFile).motion,
+    version: app.getVersion(), log: logs, mainWindow: () => mainWindow,
+    onRetry: () => { retry().catch(fail) },
+    onReload: () => { mainWindow?.webContents.reload() },
+    // Closing the start window before the hand-off quits, as closing the team window does.
+    onClose: () => { app.quit() },
+  })
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => { app.quit() })
   app.on('before-quit', (event) => {
@@ -119,60 +141,171 @@ function stopHost() {
   return hostStop
 }
 
+// A throwaway run (DS_BOT_HOME) asks nothing and shows what a later start shows.
+const startKind = () => (process.env.DS_BOT_HOME || existsSync(join(app.getPath('userData'), 'locations.json')) ? 'later' : 'first')
+
 async function start() {
-  choosing = new AbortController()
-  const where = await chooseLocations(choosing.signal).finally(() => { choosing = undefined })
-  if (where.quit) { app.exit(0); return }
-  places = { dataDir: where.dataDir, workspace: where.workspace }
-  const port = await hostPort(join(app.getPath('userData'), 'host-port.json'))
-  origin = `http://127.0.0.1:${String(port)}`
-  const pnpm = join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
-  const profileDir = join(where.dataDir, 'profiles', PROFILE)
-  mkdirSync(profileDir, { recursive: true })
-  const newHost = () => new HostProcess({
-    entry: join(here, 'host.mjs'),
-    cwd: profileDir,
-    env: { ...process.env, DSH_HOME: where.dataDir, DS_BOT_PORT: String(port), DS_BOT_APP: '1', DS_BOT_USER_DSH_HOME: userDshHome(), DS_BOT_RUNTIME_DIR: app.isPackaged ? process.resourcesPath : join(here, '..', 'build', 'runtime'), ...(where.workspace ? { DS_BOT_WORKSPACE: where.workspace } : {}) },
-    pnpm,
-    onFailure: fail,
-  })
-  // A failed check is not a failed start: start() rejects, and the copy goes on unchecked.
-  const newCheck = (home, list) => {
-    const cwd = join(home, 'profiles', CHECK_PROFILE)
-    mkdirSync(cwd, { recursive: true })
-    return new HostProcess({ entry: join(here, 'host.mjs'), cwd, env: { ...process.env, DSH_HOME: home, DS_BOT_CHECK: list }, pnpm, onFailure: () => {} })
+  setMenu()
+  nativeTheme.themeSource = readStartFrame(frameFile).themeSource
+  // A packaged app has the icon in its bundle; Electron's own run shows Electron's.
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(iconFile)
+  await prepare()
+  run()
+}
+
+// What the boot needs; a retry after a failure here does what is still missing.
+async function prepare() {
+  // Before the windows: the team window's page is told the Host's origin.
+  if (port === undefined) {
+    port = await hostPort(join(app.getPath('userData'), 'host-port.json'))
+    origin = `http://127.0.0.1:${String(port)}`
   }
-  const ready = (async () => {
-    let copied
-    if (where.import) {
-      copying = copyTeam(where, newHost, newCheck, copyAbort.signal)
-      copied = await copying
-      copying = undefined
-    }
+  startWindow.open(startKind())
+  if (browserGuests === undefined) {
+    await loadModules()
+    handleIpc()
+  }
+  // The team window is made once the start window has painted, already on its final rect.
+  mainCreated ??= startWindow.painted.then(createWindow)
+}
+
+async function loadModules() {
+  const [browser, views, sources, cookies, cookieFiles, downloads, firstRun, hostProcess, imports, moves, profile, updatesModule, boot, updater] = await Promise.all([
+    import('./bot-browser.mjs'), import('./bot-views.mjs'), import('./browser-sources.mjs'), import('./cookie-import.mjs'),
+    import('./cookie-parse.mjs'), import('./downloads.mjs'), import('./first-run.mjs'), import('./host-process.mjs'),
+    import('./import.mjs'), import('./move-data.mjs'), import('./profile.mjs'), import('./updates.mjs'),
+    import('@deepseek-ai/dsh-app-boot'), import('electron-updater'),
+  ])
+  ;({ BotBrowserGuests, partitionOf } = browser)
+  ;({ BotViews, isBotId } = views)
+  ;({ importFromBrowser, listSources } = sources)
+  ;({ applyCookies, CookieImports } = cookies)
+  ;({ parseCookieFile } = cookieFiles)
+  ;({ downloadSaver } = downloads)
+  ;({ chooseLocations, localeText, programFolder, saveLocations, teamIn, teamsAt, text } = firstRun)
+  ;({ HostProcess } = hostProcess)
+  ;({ copySessions, findTeam, importTeam, teamInUse, userDshHome } = imports)
+  ;({ copyData, moveProblem } = moves)
+  ;({ CHECK_PROFILE, PROFILE } = profile)
+  ;({ UPDATE_TEXT, watchReleases, watchUpdates } = updatesModule)
+  ;({ getDshRuntimeVersion } = boot)
+  electronUpdater = updater.default
+  browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
+  botViews = new BotViews({
+    window: () => mainWindow, WebContentsView, guests: browserGuests, origin: () => origin, devTools: !app.isPackaged,
+    statePath: join(app.getPath('userData'), 'bot-views.json'),
+    onChange: state => mainWindow?.webContents.send(IPC.browserViewChanged, state),
+  })
+  cookieImports = new CookieImports()
+}
+
+function run() {
+  const mine = (attempt += 1)
+  boot(mine).catch((error) => { if (mine === attempt) void fail(error) })
+}
+
+// The engine starts again after a failure or the 180 s question; the places stay.
+async function retry() {
+  attempt += 1
+  failed = false
+  const old = host
+  host = undefined
+  await old?.stop().catch((error) => { console.error(error) })
+  await prepare()
+  run()
+}
+
+// The data folder (with the first run's questions on a first start), the engine, then the team
+// view in the hidden team window.
+async function boot(mine) {
+  if (places === undefined) {
+    const first = startWindow.kind === 'first'
+    if (first) startWindow.explain(explainOf(teamsAt()))
+    choosing = new AbortController()
+    const ui = { owner: () => startWindow.owner(), asking: answer => startWindow.asking(answer) }
+    const where = await chooseLocations(choosing.signal, ui).finally(() => { choosing = undefined })
+    if (where.quit) { app.exit(0); return }
+    places = { dataDir: where.dataDir, workspace: where.workspace }
+    pendingImport = where.import
+    if (first) startWindow.explain(explainOf({ offered: where.offered === true, team: teamIn(where.dataDir) }))
+  }
+  // Also the check that the data folder can be written.
+  mkdirSync(profileDir(), { recursive: true })
+  startWindow.done('data')
+  const engine = await startEngine()
+  if (engine === undefined || mine !== attempt) return
+  startWindow.done('engine')
+  await mainCreated
+  if (mine !== attempt || mainWindow === undefined) return
+  startWindow.teamLoading()
+  // The launch URL trades its token for the Host's cookie and goes on to the page.
+  void mainWindow.loadURL(engine.url).catch(() => {})
+}
+
+const profileDir = () => join(places.dataDir, 'profiles', PROFILE)
+const pnpmEntry = () => join(app.getAppPath(), 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
+const hostOutput = (stream, chunk) => {
+  logs.write('engine', chunk)
+  rawOutput[stream](chunk)
+}
+
+function newHost() {
+  return new HostProcess({
+    entry: join(here, 'host.mjs'),
+    cwd: profileDir(),
+    env: { ...process.env, DSH_HOME: places.dataDir, DS_BOT_PORT: String(port), DS_BOT_APP: '1', DS_BOT_USER_DSH_HOME: userDshHome(), ...(places.workspace ? { DS_BOT_WORKSPACE: places.workspace } : {}) },
+    pnpm: pnpmEntry(),
+    onFailure: fail,
+    output: hostOutput,
+  })
+}
+
+// A failed check is not a failed start: start() rejects, and the copy goes on unchecked.
+function newCheck(home, list) {
+  const cwd = join(home, 'profiles', CHECK_PROFILE)
+  mkdirSync(cwd, { recursive: true })
+  return new HostProcess({ entry: join(here, 'host.mjs'), cwd, env: { ...process.env, DSH_HOME: home, DS_BOT_CHECK: list }, pnpm: pnpmEntry(), onFailure: () => {}, output: hostOutput })
+}
+
+/** @returns {Promise<{ url: string } | undefined>} the Host's launch URL; none when the app quits during the copy */
+async function startEngine() {
+  if (pendingImport !== undefined) {
+    const where = { ...places, import: pendingImport }
+    pendingImport = undefined
+    copying = copyTeam(where, copyAbort.signal)
+    const copied = await copying
+    copying = undefined
     if (copied === 'quit') app.exit(0)
-    // The window may be waiting for the Host; it goes away with the app.
-    if (copied !== undefined) return new Promise(() => {})
-    // Not during the import, which a restart would cut short; before the Host, so that an
-    // update can still come when this version's Host does not start.
+    if (copied !== undefined) return undefined
+  }
+  // Not during the import, which a restart would cut short; before the Host, so that an
+  // update can still come when this version's Host does not start.
+  if (!updatesStarted) {
+    updatesStarted = true
     updates = startUpdates()
     updates?.subscribe((state) => { mainWindow?.webContents.send(IPC.appUpdateChanged, state) })
-    host = newHost()
-    host.onMessage(message => {
-      if (message?.type !== 'ds-bot:browser-endpoint' || typeof message.id !== 'string' || !isBotId(message.botId)) return
-      const downloadRoots = message.downloadRoots
-      if (!Array.isArray(downloadRoots) || downloadRoots.length > 4 || !Array.from(downloadRoots).every(root => typeof root === 'string' && isAbsolute(root))) {
-        host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' })
-        return
-      }
-      void botViews.endpoint(message.botId, { downloadRoots }).then(url => {
-        host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, url })
-      }).catch(() => host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' }))
-    })
-    return host.start()
-  })()
-  ready.catch(fail)
+  }
+  host = newHost()
+  host.onMessage(message => {
+    if (message?.type !== 'ds-bot:browser-endpoint' || typeof message.id !== 'string' || !isBotId(message.botId)) return
+    const downloadRoots = message.downloadRoots
+    if (!Array.isArray(downloadRoots) || downloadRoots.length > 4 || !Array.from(downloadRoots).every(root => typeof root === 'string' && isAbsolute(root))) {
+      host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' })
+      return
+    }
+    void botViews.endpoint(message.botId, { downloadRoots }).then(url => {
+      host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, url })
+    }).catch(() => host?.send({ type: 'ds-bot:browser-endpoint-response', id: message.id, error: 'Could not create the browser endpoint.' }))
+  })
+  return host.start()
+}
+
+function handleIpc() {
   // A throwaway run (DS_BOT_HOME) keeps its folders where it was told.
   const fixed = Boolean(process.env.DS_BOT_HOME)
+  // The team view has mounted (ds-bot calls dsBotApp.ready()): the start window hands over.
+  ipcMain.on(IPC.ready, (event) => { if (fromWindow(event)) startWindow.ready() })
+  ipcMain.on(IPC.focus, (event) => { if (fromWindow(event)) focusWindow() })
   ipcMain.handle(IPC.dataLocation, (event) => {
     assertWindow(event)
     return { path: places.dataDir, fixed }
@@ -259,8 +392,8 @@ async function start() {
     assertWindow(event)
     if (typeof id === 'string') cookieImports.drop(id)
   })
-  // The app's own update state, for the About row. `updates` exists once the ready block
-  // created it; before that (and in runs without an updater) the state is null.
+  // The app's own update state, for the About row. `updates` exists once the engine's first
+  // start created it; before that (and in runs without an updater) the state is null.
   ipcMain.handle(IPC.appUpdateState, (event) => {
     assertWindow(event)
     return updates?.state() ?? null
@@ -292,20 +425,20 @@ async function start() {
     ipcMain.on(IPC.caption, (event, color, symbolColor) => {
       if (fromWindow(event) && cssColor(color) && cssColor(symbolColor)) mainWindow.setTitleBarOverlay({ color, symbolColor })
     })
-    // Mica and the caption buttons follow the app's theme, not only the system's.
+    // Mica and the caption buttons follow the app's theme, not only the system's; the start
+    // window takes it at the next start, before the team view has loaded.
     ipcMain.on(IPC.nativeTheme, (event, source) => {
       const value = nativeThemeSource(source)
-      if (fromWindow(event) && value !== undefined) nativeTheme.themeSource = value
+      if (!fromWindow(event) || value === undefined) return
+      nativeTheme.themeSource = value
+      writeStartFrame(frameFile, { themeSource: value })
     })
   }
-
-  setMenu()
-  // A packaged app has the icon in its bundle; Electron's own run shows Electron's.
-  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(iconFile)
-  createWindow()
-  // The launch URL trades its token for the Host's cookie and goes on to the page.
-  void ready.then(({ url }) => mainWindow?.loadURL(url)).catch(() => {})
 }
+
+// The window that a dialog belongs to: the start window while it shows, then the team window.
+const owner = () => startWindow.owner() ?? mainWindow
+const setProgress = (value) => { owner()?.setProgressBar(value) }
 
 // The Host starts once on the new data location first: DSH then sets up its project list
 // without the copied Sessions' folders, so the old team's folders are not offered as projects.
@@ -313,12 +446,12 @@ async function start() {
 // records that this one refuses while the log format stays the same. Such a chat stops the
 // copy, as a newer log format does; 'quit' means the user updates DeepSeek Bot first, and
 // 'stopped' that the app quit during the copy.
-async function copyTeam(where, newHost, newCheck, signal) {
-  const unreadable = await checkTeam(where, newCheck, signal)
+async function copyTeam(where, signal) {
+  const unreadable = await checkTeam(where, signal)
   if (signal.aborted) return 'stopped'
   if (unreadable > 0) {
     const t = text()
-    const { response } = await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0, signal })
+    const { response } = await startWindow.asking(dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0, signal }))
     if (signal.aborted) return 'stopped'
     if (response === 0) return 'quit'
     saveLocations(where)
@@ -331,7 +464,7 @@ async function copyTeam(where, newHost, newCheck, signal) {
   try {
     await warm.start()
     if (signal.aborted) return 'stopped'
-    mainWindow?.setProgressBar(2)
+    setProgress(2)
     await warm.stop()
     host = undefined
     const summary = await importTeam({ ...where.import, to: where.dataDir, workspace: where.workspace, dsh: getDshRuntimeVersion(), signal })
@@ -339,18 +472,18 @@ async function copyTeam(where, newHost, newCheck, signal) {
   } catch (error) {
     if (signal.aborted) return 'stopped'
     console.error(error)
-    await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)), signal })
+    await startWindow.asking(dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)), signal }))
     if (signal.aborted) return 'stopped'
   } finally {
     signal.removeEventListener('abort', stopWarm)
-    mainWindow?.setProgressBar(-1)
+    setProgress(-1)
   }
   saveLocations(where)
   return undefined
 }
 
 // A copy of the chats in a DSH home of its own, so that nothing of the check stays in the data.
-async function checkTeam(where, newCheck, signal) {
+async function checkTeam(where, signal) {
   // A run that was killed can leave its temporary check home behind.
   for (const name of readdirSync(where.dataDir).filter(entry => /^\.import-check-\d+$/u.test(entry))) {
     await rm(join(where.dataDir, name), { recursive: true, force: true }).catch((error) => { console.error(error) })
@@ -360,7 +493,7 @@ async function checkTeam(where, newCheck, signal) {
     const found = findTeam(where.import.from)
     const ids = found === undefined ? [] : await copySessions(where.import.from, found.team, home, signal)
     if (ids.length === 0) return 0
-    mainWindow?.setProgressBar(2)
+    setProgress(2)
     const list = join(home, 'check.json')
     writeFileSync(list, JSON.stringify(ids))
     const check = newCheck(home, list)
@@ -379,7 +512,7 @@ async function checkTeam(where, newCheck, signal) {
     if (!signal.aborted) console.error('DeepSeek Bot: the chats were not checked before the copy:', error)
     return 0
   } finally {
-    mainWindow?.setProgressBar(-1)
+    setProgress(-1)
     await rm(home, { recursive: true, force: true, maxRetries: 5 }).catch((error) => { console.error(error) })
   }
 }
@@ -389,8 +522,7 @@ async function checkTeam(where, newCheck, signal) {
 async function moveData(workspace) {
   if (copying !== undefined || stopping || mainWindow === undefined) return false
   const t = text()
-  const owner = mainWindow
-  const { canceled, filePaths } = await dialog.showOpenDialog(owner, { title: t.pickMove, defaultPath: dirname(places.dataDir), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
+  const { canceled, filePaths } = await dialog.showOpenDialog(owner(), { title: t.pickMove, defaultPath: dirname(places.dataDir), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
   if (canceled || filePaths[0] === undefined) return false
   const to = resolve(filePaths[0])
   const dshHome = userDshHome()
@@ -399,18 +531,21 @@ async function moveData(workspace) {
     for (const current of new Set([workspace, places.workspace])) {
       const problem = moveProblem({ from: places.dataDir, to, workspace: current, dshHome, program: app.isPackaged ? programFolder() : undefined })
       if (problem === undefined) continue
-      await dialog.showMessageBox(owner, { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
+      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
       return true
     }
     return false
   }
   if (await refused()) return false
-  const { response } = await dialog.showMessageBox(owner, { type: 'question', title: 'DeepSeek Bot', noLink: true, message: t.moveConfirm(to), detail: t.moveDetail(places.dataDir), buttons: [t.move, t.cancel], defaultId: 0, cancelId: 1 })
+  const { response } = await dialog.showMessageBox(owner(), { type: 'question', title: 'DeepSeek Bot', noLink: true, message: t.moveConfirm(to), detail: t.moveDetail(places.dataDir), buttons: [t.move, t.cancel], defaultId: 0, cancelId: 1 })
   if (response !== 0 || stopping || await refused()) return false
   const signal = copyAbort.signal
   copying = (async () => {
-    // The settings go away first, so that nothing moves the team workspace from here on.
-    void mainWindow?.loadURL(notePage(t.moving))
+    // The settings go away first, so that nothing moves the team workspace from here on; the
+    // start window shows the move meanwhile.
+    void mainWindow?.loadURL('about:blank').catch(() => {})
+    mainWindow?.hide()
+    startWindow.open('moving')
     await stopHost()
     // The app may have heard of a team workspace change while the Host stopped.
     if (await refused()) {
@@ -419,11 +554,11 @@ async function moveData(workspace) {
     }
     // Another DSH on the same data would go on writing while the copy is made.
     if (teamInUse(places.dataDir)) {
-      await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: t.moveInUse })
+      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: t.moveInUse })
       app.relaunch()
       return
     }
-    mainWindow?.setProgressBar(2)
+    setProgress(2)
     try {
       await copyData(places.dataDir, to, signal)
       try {
@@ -436,9 +571,9 @@ async function moveData(workspace) {
     } catch (error) {
       if (signal.aborted) return
       console.error(error)
-      await dialog.showMessageBox({ type: 'warning', title: 'DeepSeek Bot', message: t.moveFailed(error instanceof Error ? error.message : String(error)) })
+      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: t.moveFailed(error instanceof Error ? error.message : String(error)) })
     } finally {
-      mainWindow?.setProgressBar(-1)
+      setProgress(-1)
     }
     app.relaunch()
   })()
@@ -447,9 +582,6 @@ async function moveData(workspace) {
   app.quit()
   return true
 }
-
-const notePage = message => `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
-<body style="margin:0;height:100vh;display:grid;place-items:center;font:14px system-ui,sans-serif;background:Canvas;color:CanvasText">${message.replace(/[&<>]/gu, char => `&#${String(char.charCodeAt(0))};`)}</body>`)}`
 
 // Windows and a Linux AppImage update themselves; macOS and a Linux deb ask to download the new
 // version. Throwaway runs check only a given feed and never ask.
@@ -482,26 +614,23 @@ async function askRestart(version) {
   // After a failed start, fail() installs the update itself.
   if (failed) return false
   const t = localeText(UPDATE_TEXT)
-  const options = { type: 'info', title: 'DeepSeek Bot', message: t.ready(version), detail: t.readyDetail, buttons: [t.restart, t.later], defaultId: 0, cancelId: 1, noLink: true }
-  const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+  const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: t.ready(version), detail: t.readyDetail, buttons: [t.restart, t.later], defaultId: 0, cancelId: 1, noLink: true })
   return response === 0
 }
 
 async function askDownload(version) {
   if (failed) return false
   const t = localeText(UPDATE_TEXT)
-  const options = { type: 'info', title: 'DeepSeek Bot', message: t.available(version), detail: t.availableDetail, buttons: [t.download, t.later], defaultId: 0, cancelId: 1, noLink: true }
-  const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+  const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: t.available(version), detail: t.availableDetail, buttons: [t.download, t.later], defaultId: 0, cancelId: 1, noLink: true })
   return response === 0
 }
 
+// Hidden, on the rect the start window grows into; the start window shows it at the hand-off.
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors
   const win32 = process.platform === 'win32'
   mainWindow = new BrowserWindow({
-    // The window never squeezes the chat: RAIL_WIDTH + MIN_CHAT from ds-bot's
-    // src/client/frame-layout.js is the avatar rail plus the smallest chat column.
-    width: 1320, height: 860, minWidth: 508, minHeight: 480,
+    ...startWindow.mainBounds(), minWidth: 720, minHeight: 480,
     title: 'DeepSeek Bot', show: false, icon: iconFile,
     backgroundColor: mica ? '#00000000' : dark ? '#1b1b1c' : '#ffffff',
     // Frameless as in DSH Desktop: the caption buttons overlay the page's band. They keep the
@@ -516,7 +645,7 @@ function createWindow() {
       additionalArguments: [`--ds-bot-origin=${origin}`, ...(win32 ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(mica ? ['--ds-bot-mica'] : [])] : [])],
     },
   })
-  mainWindow.once('ready-to-show', () => { mainWindow?.show() })
+  startWindow.placeMain(mainWindow)
   mainWindow.on('page-title-updated', (event) => { event.preventDefault() })
   mainWindow.on('closed', () => { mainWindow = undefined })
   browserGuests.bind(mainWindow)
@@ -534,8 +663,6 @@ function createWindow() {
     const css = readFileSync(join(here, 'mica.css'), 'utf8')
     contents.on('dom-ready', () => { void contents.insertCSS(css) })
   }
-  const fonts = readFileSync(join(here, 'fonts.css'), 'utf8')
-  contents.on('dom-ready', () => { void contents.insertCSS(fonts) })
   contents.setWindowOpenHandler(({ url }) => {
     // DSH's sign-in opens a blank window during the click and sends it to the sign-in page later.
     if (url === 'about:blank') return { action: 'allow', overrideBrowserWindowOptions: { show: false, webPreferences: { sandbox: true, webviewTag: false } } }
@@ -562,7 +689,6 @@ function createWindow() {
       if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) contents.toggleDevTools()
     })
   }
-  void mainWindow.loadURL(notePage(text().starting))
 }
 
 function setMenu() {
@@ -570,9 +696,10 @@ function setMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' }]))
 }
 
-// Also after a failed start: a second launch is how the user finds the window again.
+// The window that is showing: the start window until the hand-off (also after a failed start),
+// then the team window. A second launch is how the user finds it again.
 function focusWindow() {
-  if (mainWindow === undefined) return
+  if (startWindow.focus() || mainWindow === undefined) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -592,27 +719,20 @@ function openOutside(url) {
   if (/^https?:\/\//iu.test(url)) void shell.openExternal(url)
 }
 
-// A new version may fix what keeps this one from starting.
+// The start window shows the failure page and stays. A new version may fix what keeps this one
+// from starting: one that installs itself does so once it is downloaded, unless the user has
+// tried again meanwhile; a release page (macOS, a Linux deb) waits for the page's update row.
 async function fail(error) {
   console.error(error)
   if (failed || stopping) return
   failed = true
+  const mine = attempt
+  startWindow.fail(error, startKind())
   const found = await Promise.race([updates?.latest() ?? null, sleep(UPDATE_CHECK_WAIT_MS).then(() => null)])
-  const throwaway = Boolean(process.env.DS_BOT_HOME)
-  const t = localeText(UPDATE_TEXT)
-  const next = found ? `\n\n${found.page ? t.onFailurePage(found.version) : t.onFailure(found.version)}` : ''
-  dialog.showErrorBox('DeepSeek Bot', `${text().notStarted}\n\n${error instanceof Error ? error.message : String(error)}${next}`)
-  if (found?.page) {
-    if (!throwaway) await shell.openExternal(found.page)
-    app.quit()
+  if (!found || mine !== attempt) return
+  if (found.page) {
+    console.log(`DeepSeek Bot: ${found.version} is out: ${found.page}`)
     return
   }
-  if (found) {
-    mainWindow?.hide()
-    if (await Promise.race([found.downloaded, sleep(UPDATE_DOWNLOAD_WAIT_MS).then(() => false)])) {
-      await updates.install()
-      return
-    }
-  }
-  app.quit()
+  if (await Promise.race([found.downloaded, sleep(UPDATE_DOWNLOAD_WAIT_MS).then(() => false)]) && failed && mine === attempt) await updates.install()
 }

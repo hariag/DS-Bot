@@ -1,14 +1,27 @@
-// Gives the page that the app's Host serves the app's own bridge. On Windows it also marks the
-// page for the frameless window the way DSH Desktop's preload does
+// Gives the page that the app's Host serves the app's own bridge, and the app's start page its
+// own, smaller one; each window's arguments name the one page that gets it. On Windows it also
+// marks the Host's page for the frameless window the way DSH Desktop's preload does
 // (apps/desktop/src/preload-windows.ts, preload-platform.ts and preload-theme.ts; see NOTICE),
 // but without data-platform: that puts DSH's shortcuts on native menu input, which this
 // window does not have.
 const { contextBridge, ipcRenderer } = require('electron')
 
-const host = process.argv.find(value => value.startsWith('--ds-bot-origin='))?.slice('--ds-bot-origin='.length)
-if (host !== undefined && location.origin === host) {
-  // DS Bot's settings show and move the app's data location through this.
+const argument = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
+const startPage = argument('ds-bot-start')
+const host = argument('ds-bot-origin')
+if (startPage !== undefined) {
+  if (location.href.split(/[?#]/u)[0] === startPage) contextBridge.exposeInMainWorld('dsBotStart', startBridge())
+} else if (host !== undefined && location.origin === host) {
+  let ready = false
   contextBridge.exposeInMainWorld('dsBotApp', {
+    // The team view has mounted: the start window hands over to this one.
+    ready: () => {
+      if (ready) return
+      ready = true
+      ipcRenderer.send('ds-bot:ready')
+    },
+    focus: () => { ipcRenderer.send('ds-bot:focus') },
+    // DS Bot's settings show and move the app's data location through this.
     dataLocation: () => ipcRenderer.invoke('ds-bot:data-location'),
     moveData: (workspace) => ipcRenderer.invoke('ds-bot:move-data', typeof workspace === 'string' ? workspace : undefined),
     teamWorkspaceChanged: (path) => { ipcRenderer.send('ds-bot:team-workspace', String(path)) },
@@ -30,6 +43,29 @@ if (host !== undefined && location.origin === host) {
     // A preload runs before the document root exists.
     if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', start, { once: true })
     else start()
+  }
+}
+
+// The main process sends the whole state on every change; a page that subscribes late, or again,
+// gets the last one first.
+function startBridge() {
+  const listeners = new Set()
+  let last
+  const tell = (listener, state) => {
+    try { listener(state) } catch (error) { console.error('DeepSeek Bot: a start state listener failed', error) }
+  }
+  ipcRenderer.on('ds-bot:start-state', (_event, state) => {
+    last = state
+    for (const listener of [...listeners]) tell(listener, state)
+  })
+  return {
+    onState(listener) {
+      if (typeof listener !== 'function') return () => {}
+      listeners.add(listener)
+      if (last !== undefined) tell(listener, last)
+      return () => { listeners.delete(listener) }
+    },
+    act: (name, payload) => ipcRenderer.invoke('ds-bot:start-act', String(name), payload),
   }
 }
 
