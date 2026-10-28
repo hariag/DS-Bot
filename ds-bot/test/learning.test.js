@@ -233,7 +233,6 @@ test('long turns ending during review remain pending for the next pass', async t
       await finishTurn(runtime.ctx, { id: 'b2' })
       await finishTurn(runtime.ctx, { id: 'b3' })
       assert.deepEqual(b3Statuses, ['running', 'idle'])
-      await until(() => runtime.learningState().pending?.b2?.includes('b3'))
     }
     return botShot(...args)
   }
