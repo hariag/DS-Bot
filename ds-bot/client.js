@@ -118,10 +118,10 @@ var ZH = {
   "Headers (JSON)": "请求头（JSON）",
   "Skill instructions": "技能说明",
   "New skill": "新技能",
-  "Learned from recent work": "从最近的工作中学到",
-  "Nothing is saved until you approve.": "批准后才会保存。",
+  "Awaiting approval": "等待批准",
+  Added: "新增",
+  "Show all": "展开全部",
   "Skill update": "技能更新",
-  Preview: "预览",
   Approve: "批准",
   Decline: "拒绝",
   "Save changes": "保存更改",
@@ -18998,46 +18998,71 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
       setBusy(false);
     });
   };
+  const lines = String(proposal.content ?? "").replace(/\n+$/, "").split("\n");
+  const rows2 = lines.map((line, index) => ({ kind: "added", mark: String(index + 1), line }));
   return (0, import_react46.createElement)(
     "section",
     { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
     (0, import_react46.createElement)(
       "div",
-      { className: "bt-q-head" },
-      (0, import_react46.createElement)("span", { className: "bt-learning-badge", "aria-hidden": true }, (0, import_react46.createElement)(MemoryIcon)),
-      (0, import_react46.createElement)(
-        "div",
-        { className: "bt-q-text" },
-        (0, import_react46.createElement)("span", { className: "bt-learning-eyebrow" }, t("Learned from recent work")),
-        (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, t(proposal.action === "update" ? "Skill update" : "New skill")),
-        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", { className: "bt-learning-tag" }, proposal.name))
-      )
+      { className: "bt-learning-headtext" },
+      (0, import_react46.createElement)("span", { className: "bt-learning-status" }, t("Awaiting approval")),
+      (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, proposal.name),
+      (0, import_react46.createElement)("p", { className: "bt-learning-sub" }, t(proposal.action === "update" ? "Skill update" : "New skill")),
+      proposal.description ? (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description) : null
     ),
-    (0, import_react46.createElement)(
-      "div",
-      { className: "bt-learning-body" },
-      (0, import_react46.createElement)("p", { className: "bt-learning-description" }, proposal.description),
-      proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
-      (0, import_react46.createElement)(
-        "details",
-        { className: "bt-learning-preview" },
-        (0, import_react46.createElement)("summary", null, t("Preview")),
-        (0, import_react46.createElement)("pre", null, proposal.content)
-      )
-    ),
+    (0, import_react46.createElement)(FileBox, {
+      name: "SKILL.md",
+      path: `skills/${proposal.name}`,
+      added: rows2.length,
+      removed: 0,
+      state: proposal.action === "update" ? "Updated" : "Added",
+      blocks: [rows2]
+    }),
+    proposal.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why" }, proposal.why) : null,
     error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
     (0, import_react46.createElement)(
       "div",
-      { className: "bt-q-foot bt-learning-foot" },
-      (0, import_react46.createElement)("span", { className: "bt-learning-hint" }, t("Nothing is saved until you approve.")),
-      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
-      (0, import_react46.createElement)(
-        "button",
-        { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) },
-        (0, import_react46.createElement)(CheckIcon),
-        t("Approve")
-      )
+      { className: "bt-learning-actions" },
+      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) }, t("Approve")),
+      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline"))
     )
+  );
+}
+var COLLAPSE_ROWS = 8;
+function FileBox({ name, path, added, removed, state, blocks }) {
+  const [open, setOpen] = (0, import_react46.useState)(false);
+  const total = blocks.reduce((sum, rows2) => sum + rows2.length, 0);
+  const folds = total > COLLAPSE_ROWS;
+  const shut = folds && !open;
+  return (0, import_react46.createElement)(
+    "div",
+    { className: "bt-learning-file" },
+    (0, import_react46.createElement)(
+      "div",
+      { className: "bt-learning-filehead" },
+      (0, import_react46.createElement)("strong", null, name),
+      path ? (0, import_react46.createElement)("span", { className: "bt-learning-path" }, path) : null,
+      (0, import_react46.createElement)("span", { className: "bt-learning-spacer" }),
+      added > 0 ? (0, import_react46.createElement)("span", { className: "bt-learning-plus" }, `+${added}`) : null,
+      removed > 0 ? (0, import_react46.createElement)("span", { className: "bt-learning-minus" }, `−${removed}`) : null,
+      (0, import_react46.createElement)("span", { className: `bt-learning-state${state === "Added" ? " bt-learning-state-new" : ""}` }, t(state))
+    ),
+    (0, import_react46.createElement)(
+      "div",
+      { className: shut ? "bt-learning-code bt-learning-shut" : "bt-learning-code" },
+      blocks.map((rows2, blockIndex) => [
+        blockIndex > 0 ? (0, import_react46.createElement)("div", { className: "bt-learning-gap", key: `gap-${blockIndex}` }) : null,
+        ...rows2.map((row, rowIndex) => (0, import_react46.createElement)(
+          "div",
+          { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
+          (0, import_react46.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.mark),
+          (0, import_react46.createElement)("span", { className: "bt-learning-text" }, row.line)
+        ))
+      ]),
+      shut ? (0, import_react46.createElement)("div", { className: "bt-learning-fade" }) : null
+    ),
+    folds ? (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-more", "aria-expanded": open, onClick: () => setOpen(!open) }, t(open ? "Show less" : "Show all")) : null
   );
 }
 function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
@@ -19091,21 +19116,36 @@ function LearningDock(props) {
 var LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
 .bt-learning-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;box-sizing:border-box}
-.bt-learning-card .bt-q-head{align-items:center;gap:12px}
-.bt-learning-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
-.bt-learning-badge svg{width:18px;height:18px}
-.bt-learning-eyebrow{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;color:var(--bt-ink-3)}
-.bt-learning-tag{display:inline-block;margin-top:2px;padding:1px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:18px;overflow-wrap:anywhere}
-.bt-learning-body{display:flex;flex-direction:column;gap:8px}
-.bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
-.bt-learning-why{margin:0;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:17px;color:var(--bt-ink-2)}
-.bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
-.bt-learning-preview summary{width:fit-content;cursor:pointer}
-.bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
-.bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, "scale")}}
-.bt-learning-btn svg{width:14px;height:14px}
+.bt-learning-card{gap:12px}
+.bt-learning-headtext{display:flex;flex-direction:column;gap:2px;min-width:0}
+.bt-learning-status{font-size:13px;line-height:18px;font-weight:500;color:var(--bt-star)}
+.bt-learning-card .bt-q-title{overflow-wrap:anywhere}
+.bt-learning-sub{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
+.bt-learning-description{margin:4px 0 0;font-size:13px;line-height:18px;color:var(--bt-ink)}
+.bt-learning-file{border:1px solid var(--bt-line-2);border-radius:10px;overflow:hidden;background:var(--bt-card)}
+.bt-learning-filehead{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px;border-bottom:1px solid var(--bt-line);font-size:13px;line-height:18px;color:var(--bt-ink)}
+.bt-learning-filehead strong{flex:none;font-weight:500}
+.bt-learning-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink-3)}
+.bt-learning-spacer{flex:1}
+.bt-learning-plus{flex:none;font-weight:600;color:var(--bt-green)}
+.bt-learning-minus{flex:none;font-weight:600;color:var(--bt-danger)}
+.bt-learning-state{flex:none;padding:1px 8px;border-radius:6px;font-size:12px;font-weight:500;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
+.bt-learning-state-new{background:color-mix(in srgb,var(--bt-green) 14%,transparent);color:var(--bt-green)}
+.bt-learning-code{position:relative;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:20px;color:var(--bt-ink)}
+.bt-learning-shut{max-height:180px;overflow:hidden}
+.bt-learning-row{display:grid;grid-template-columns:40px 1fr}
+.bt-learning-num{padding-right:10px;text-align:right;color:var(--bt-ink-3);user-select:none}
+.bt-learning-text{min-width:0;padding:0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 10%,transparent);box-shadow:inset 3px 0 0 var(--bt-green)}
+.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 8%,transparent);box-shadow:inset 3px 0 0 var(--bt-danger)}
+.bt-learning-gap{height:8px;background:var(--bt-hover)}
+.bt-learning-fade{position:absolute;left:0;right:0;bottom:0;height:56px;background:linear-gradient(transparent,var(--bt-card));pointer-events:none}
+.bt-learning-more{display:block;width:100%;padding:6px;border:0;border-top:1px solid var(--bt-line);background:transparent;font:inherit;font-size:12px;line-height:16px;color:var(--bt-ink-2);cursor:pointer}
+.bt-learning-more:hover{background:var(--bt-hover)}
+.bt-learning-more:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-learning-why{margin:0;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-learning-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px}
+.bt-learning-btn{flex:none;display:inline-flex;align-items:center;height:32px;padding:0 16px;border-radius:8px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-learning-decline{background:transparent;border:1px solid var(--bt-line-2);color:var(--bt-ink)}
 .bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
 .bt-learning-approve{border:1px solid transparent;background:var(--bt-ink);color:var(--bt-card)}

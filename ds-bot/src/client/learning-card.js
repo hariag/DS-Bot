@@ -3,7 +3,6 @@ import { useTurnFacts } from './btw.js'
 import { proposalPlacement } from './learning-card-model.js'
 import { currentPart } from './text.js'
 import { t } from './i18n.js'
-import { CheckIcon, MemoryIcon } from './icons.js'
 import { spring, SPRING_TAP } from './motion.js'
 
 const failedAnswers = new Map()
@@ -29,25 +28,53 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
         setBusy(false)
       })
   }
+  const lines = String(proposal.content ?? '').replace(/\n+$/, '').split('\n')
+  const rows = lines.map((line, index) => ({ kind: 'added', mark: String(index + 1), line }))
   return h('section', { className: 'bt-q bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
-    h('div', { className: 'bt-q-head' },
-      h('span', { className: 'bt-learning-badge', 'aria-hidden': true }, h(MemoryIcon)),
-      h('div', { className: 'bt-q-text' },
-        h('span', { className: 'bt-learning-eyebrow' }, t('Learned from recent work')),
-        h('p', { className: 'bt-q-title', id: titleId }, t(proposal.action === 'update' ? 'Skill update' : 'New skill')),
-        h('div', { className: 'bt-q-detail' }, h('code', { className: 'bt-learning-tag' }, proposal.name)))),
-    h('div', { className: 'bt-learning-body' },
-      h('p', { className: 'bt-learning-description' }, proposal.description),
-      proposal.why ? h('p', { className: 'bt-learning-why' }, proposal.why) : null,
-      h('details', { className: 'bt-learning-preview' },
-        h('summary', null, t('Preview')),
-        h('pre', null, proposal.content))),
+    h('div', { className: 'bt-learning-headtext' },
+      h('span', { className: 'bt-learning-status' }, t('Awaiting approval')),
+      h('p', { className: 'bt-q-title', id: titleId }, proposal.name),
+      h('p', { className: 'bt-learning-sub' }, t(proposal.action === 'update' ? 'Skill update' : 'New skill')),
+      proposal.description ? h('p', { className: 'bt-learning-description' }, proposal.description) : null),
+    h(FileBox, {
+      name: 'SKILL.md',
+      path: `skills/${proposal.name}`,
+      added: rows.length,
+      removed: 0,
+      state: proposal.action === 'update' ? 'Updated' : 'Added',
+      blocks: [rows],
+    }),
+    proposal.why ? h('p', { className: 'bt-learning-why' }, proposal.why) : null,
     error ? h('div', { className: 'bt-learning-error', role: 'alert' }, error) : null,
-    h('div', { className: 'bt-q-foot bt-learning-foot' },
-      h('span', { className: 'bt-learning-hint' }, t('Nothing is saved until you approve.')),
-      h('button', { type: 'button', className: 'bt-learning-btn bt-learning-decline', disabled: busy, onClick: () => answer(false) }, t('Decline')),
-      h('button', { type: 'button', className: 'bt-learning-btn bt-learning-approve', disabled: busy, onClick: () => answer(true) },
-        h(CheckIcon), t('Approve'))))
+    h('div', { className: 'bt-learning-actions' },
+      h('button', { type: 'button', className: 'bt-learning-btn bt-learning-approve', disabled: busy, onClick: () => answer(true) }, t('Approve')),
+      h('button', { type: 'button', className: 'bt-learning-btn bt-learning-decline', disabled: busy, onClick: () => answer(false) }, t('Decline'))))
+}
+
+const COLLAPSE_ROWS = 8
+
+function FileBox({ name, path, added, removed, state, blocks }) {
+  const [open, setOpen] = useState(false)
+  const total = blocks.reduce((sum, rows) => sum + rows.length, 0)
+  const folds = total > COLLAPSE_ROWS
+  const shut = folds && !open
+  return h('div', { className: 'bt-learning-file' },
+    h('div', { className: 'bt-learning-filehead' },
+      h('strong', null, name),
+      path ? h('span', { className: 'bt-learning-path' }, path) : null,
+      h('span', { className: 'bt-learning-spacer' }),
+      added > 0 ? h('span', { className: 'bt-learning-plus' }, `+${added}`) : null,
+      removed > 0 ? h('span', { className: 'bt-learning-minus' }, `\u2212${removed}`) : null,
+      h('span', { className: `bt-learning-state${state === 'Added' ? ' bt-learning-state-new' : ''}` }, t(state))),
+    h('div', { className: shut ? 'bt-learning-code bt-learning-shut' : 'bt-learning-code' },
+      blocks.map((rows, blockIndex) => [
+        blockIndex > 0 ? h('div', { className: 'bt-learning-gap', key: `gap-${blockIndex}` }) : null,
+        ...rows.map((row, rowIndex) => h('div', { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
+          h('span', { className: 'bt-learning-num', 'aria-hidden': true }, row.mark),
+          h('span', { className: 'bt-learning-text' }, row.line))),
+      ]),
+      shut ? h('div', { className: 'bt-learning-fade' }) : null),
+    folds ? h('button', { type: 'button', className: 'bt-learning-more', 'aria-expanded': open, onClick: () => setOpen(!open) }, t(open ? 'Show less' : 'Show all')) : null)
 }
 
 function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
@@ -102,21 +129,36 @@ export function LearningDock(props) {
 export const LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
 .bt-learning-dock{width:100%;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;box-sizing:border-box}
-.bt-learning-card .bt-q-head{align-items:center;gap:12px}
-.bt-learning-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
-.bt-learning-badge svg{width:18px;height:18px}
-.bt-learning-eyebrow{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;color:var(--bt-ink-3)}
-.bt-learning-tag{display:inline-block;margin-top:2px;padding:1px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:18px;overflow-wrap:anywhere}
-.bt-learning-body{display:flex;flex-direction:column;gap:8px}
-.bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
-.bt-learning-why{margin:0;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:17px;color:var(--bt-ink-2)}
-.bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
-.bt-learning-preview summary{width:fit-content;cursor:pointer}
-.bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
-.bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, 'scale')}}
-.bt-learning-btn svg{width:14px;height:14px}
+.bt-learning-card{gap:12px}
+.bt-learning-headtext{display:flex;flex-direction:column;gap:2px;min-width:0}
+.bt-learning-status{font-size:13px;line-height:18px;font-weight:500;color:var(--bt-star)}
+.bt-learning-card .bt-q-title{overflow-wrap:anywhere}
+.bt-learning-sub{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
+.bt-learning-description{margin:4px 0 0;font-size:13px;line-height:18px;color:var(--bt-ink)}
+.bt-learning-file{border:1px solid var(--bt-line-2);border-radius:10px;overflow:hidden;background:var(--bt-card)}
+.bt-learning-filehead{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px;border-bottom:1px solid var(--bt-line);font-size:13px;line-height:18px;color:var(--bt-ink)}
+.bt-learning-filehead strong{flex:none;font-weight:500}
+.bt-learning-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink-3)}
+.bt-learning-spacer{flex:1}
+.bt-learning-plus{flex:none;font-weight:600;color:var(--bt-green)}
+.bt-learning-minus{flex:none;font-weight:600;color:var(--bt-danger)}
+.bt-learning-state{flex:none;padding:1px 8px;border-radius:6px;font-size:12px;font-weight:500;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
+.bt-learning-state-new{background:color-mix(in srgb,var(--bt-green) 14%,transparent);color:var(--bt-green)}
+.bt-learning-code{position:relative;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:20px;color:var(--bt-ink)}
+.bt-learning-shut{max-height:180px;overflow:hidden}
+.bt-learning-row{display:grid;grid-template-columns:40px 1fr}
+.bt-learning-num{padding-right:10px;text-align:right;color:var(--bt-ink-3);user-select:none}
+.bt-learning-text{min-width:0;padding:0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-added{background:color-mix(in srgb,var(--bt-green) 10%,transparent);box-shadow:inset 3px 0 0 var(--bt-green)}
+.bt-learning-removed{background:color-mix(in srgb,var(--bt-danger) 8%,transparent);box-shadow:inset 3px 0 0 var(--bt-danger)}
+.bt-learning-gap{height:8px;background:var(--bt-hover)}
+.bt-learning-fade{position:absolute;left:0;right:0;bottom:0;height:56px;background:linear-gradient(transparent,var(--bt-card));pointer-events:none}
+.bt-learning-more{display:block;width:100%;padding:6px;border:0;border-top:1px solid var(--bt-line);background:transparent;font:inherit;font-size:12px;line-height:16px;color:var(--bt-ink-2);cursor:pointer}
+.bt-learning-more:hover{background:var(--bt-hover)}
+.bt-learning-more:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-learning-why{margin:0;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-learning-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px}
+.bt-learning-btn{flex:none;display:inline-flex;align-items:center;height:32px;padding:0 16px;border-radius:8px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,${spring(SPRING_TAP, 'scale')}}
 .bt-learning-decline{background:transparent;border:1px solid var(--bt-line-2);color:var(--bt-ink)}
 .bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
 .bt-learning-approve{border:1px solid transparent;background:var(--bt-ink);color:var(--bt-card)}
