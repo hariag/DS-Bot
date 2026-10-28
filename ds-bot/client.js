@@ -118,6 +118,8 @@ var ZH = {
   "Headers (JSON)": "请求头（JSON）",
   "Skill instructions": "技能说明",
   "New skill": "新技能",
+  "Learned from recent work": "从最近的工作中学到",
+  "Nothing is saved until you approve.": "批准后才会保存。",
   "Skill update": "技能更新",
   Preview: "预览",
   Approve: "批准",
@@ -19002,11 +19004,13 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     (0, import_react46.createElement)(
       "div",
       { className: "bt-q-head" },
+      (0, import_react46.createElement)("span", { className: "bt-learning-badge", "aria-hidden": true }, (0, import_react46.createElement)(MemoryIcon)),
       (0, import_react46.createElement)(
         "div",
         { className: "bt-q-text" },
+        (0, import_react46.createElement)("span", { className: "bt-learning-eyebrow" }, t("Learned from recent work")),
         (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, t(proposal.action === "update" ? "Skill update" : "New skill")),
-        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", null, proposal.name))
+        (0, import_react46.createElement)("div", { className: "bt-q-detail" }, (0, import_react46.createElement)("code", { className: "bt-learning-tag" }, proposal.name))
       )
     ),
     (0, import_react46.createElement)(
@@ -19024,9 +19028,15 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
     (0, import_react46.createElement)(
       "div",
-      { className: "bt-q-foot" },
-      (0, import_react46.createElement)("button", { type: "button", className: "bt-q-btn", disabled: busy, onClick: () => answer(false) }, t("Decline")),
-      (0, import_react46.createElement)("button", { type: "button", className: "bt-q-submit", disabled: busy, onClick: () => answer(true) }, t("Approve"))
+      { className: "bt-q-foot bt-learning-foot" },
+      (0, import_react46.createElement)("span", { className: "bt-learning-hint" }, t("Nothing is saved until you approve.")),
+      (0, import_react46.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
+      (0, import_react46.createElement)(
+        "button",
+        { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) },
+        (0, import_react46.createElement)(CheckIcon),
+        t("Approve")
+      )
     )
   );
 }
@@ -19080,12 +19090,28 @@ function LearningDock(props) {
 }
 var LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
+.bt-learning-card .bt-q-head{align-items:center;gap:12px}
+.bt-learning-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
+.bt-learning-badge svg{width:18px;height:18px}
+.bt-learning-eyebrow{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.02em;color:var(--bt-ink-3)}
+.bt-learning-tag{display:inline-block;margin-top:2px;padding:1px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:18px;overflow-wrap:anywhere}
 .bt-learning-body{display:flex;flex-direction:column;gap:8px}
 .bt-learning-description{margin:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
-.bt-learning-why{margin:0;font-size:12px;line-height:16px;color:var(--bt-ink-2)}
+.bt-learning-why{margin:0;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:17px;color:var(--bt-ink-2)}
 .bt-learning-preview{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
 .bt-learning-preview summary{width:fit-content;cursor:pointer}
 .bt-learning-preview pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card);color:var(--bt-ink);font-family:ui-monospace,monospace;font-size:12px;line-height:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-learning-foot{align-items:center;padding-top:12px;border-top:1px solid var(--bt-q-rule)}
+.bt-learning-hint{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
+.bt-learning-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:background-color .12s ease,opacity .12s ease,scale .12s ease}
+.bt-learning-btn svg{width:14px;height:14px}
+.bt-learning-decline{background:transparent;border:1px solid var(--bt-line-2);color:var(--bt-ink)}
+.bt-learning-decline:hover:not(:disabled){background:var(--bt-hover)}
+.bt-learning-approve{border:1px solid transparent;background:var(--bt-ink);color:var(--bt-card)}
+.bt-learning-approve:hover:not(:disabled){opacity:.88}
+.bt-learning-btn:disabled{opacity:.45;cursor:default}
+.bt-learning-btn:active:not(:disabled){scale:.97}
+.bt-learning-btn:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 .bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 `;
 

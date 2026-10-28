@@ -84,6 +84,8 @@ const ZH = {
   'Headers (JSON)': '请求头（JSON）',
   'Skill instructions': '技能说明',
   'New skill': '新技能',
+  'Learned from recent work': '从最近的工作中学到',
+  'Nothing is saved until you approve.': '批准后才会保存。',
   'Skill update': '技能更新',
   Preview: '预览',
   Approve: '批准',
