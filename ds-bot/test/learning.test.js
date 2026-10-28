@@ -196,6 +196,62 @@ test('a none reply makes no proposal and advances the chat cursor', async t => {
   assert.deepEqual((await runtime.call('state')).value.learning ?? {}, {})
 })
 
+test('long turns ending during review remain pending for the next pass', async t => {
+  const history = { b2: [...ownChat], b3: [...ownChat] }
+  const runtime = await startRuntime({
+    history,
+    replies: [noneReply, noneReply],
+    config: { learningTimes: { tickMs: 100_000 } },
+  })
+  t.after(() => runtime.stop())
+  const load = runtime.rt.load
+  runtime.rt.load = async (...args) => {
+    const result = await load(...args)
+    runtime.rt.chatOwners.set('b3', 'b2')
+    return result
+  }
+  runtime.rt.chatOwners.set('b3', 'b2')
+  const b3Statuses = []
+  runtime.ctx.on('agent/status', ({ agent, status }) => {
+    if (agent?.id === 'b3') b3Statuses.push(status)
+  })
+  assert.equal(runtime.rt.chatOwners.get('b3'), 'b2')
+  assert.equal(runtime.rt.isBotSession('b3'), true)
+  await finishTurn(runtime.ctx)
+  await until(() => runtime.learningState().pending?.b2?.includes('b2'))
+
+  const botShot = runtime.rt.botShot
+  let endedDuringReview = false
+  runtime.rt.botShot = async (...args) => {
+    if (!endedDuringReview) {
+      endedDuringReview = true
+      addNextTurn(history)
+      history.b3.push(
+        { event: { seq: 12, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Please keep this new work too.' }] } } },
+        { event: { seq: 13, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The second chat has new work.' }] } } } },
+      )
+      await finishTurn(runtime.ctx, { id: 'b2' })
+      await finishTurn(runtime.ctx, { id: 'b3' })
+      assert.deepEqual(b3Statuses, ['running', 'idle'])
+      await until(() => runtime.learningState().pending?.b2?.includes('b3'))
+    }
+    return botShot(...args)
+  }
+
+  await runtime.rt.learningRun()
+
+  assert.deepEqual(runtime.learningState().pending.b2, ['b2', 'b3'])
+  assert.equal(runtime.learningState().cursors.b2, 11)
+
+  await runtime.rt.learningRun()
+
+  assert.equal(runtime.requests.length, 2)
+  const request = runtime.requests[1].messages[0].content[0].text
+  assert.match(request, /Please check the release process too\./)
+  assert.match(request, /Please keep this new work too\./)
+  assert.equal(runtime.learningState().pending.b2, undefined)
+})
+
 test('approval ownership survives a normal skill edit and remains learned on review', async t => {
   const history = { b2: [...ownChat] }
   const updateReply = JSON.stringify({

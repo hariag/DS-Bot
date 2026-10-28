@@ -175,6 +175,7 @@ export function install(rt) {
 
   // A turn in a Bot's own chat that ran long marks the chat for the next pass.
   const started = new Map()
+  const noted = new Map()
   let lastActivity = Date.now()
   ctx.on('agent/status', ({ agent, status }) => {
     const id = agent?.id
@@ -190,6 +191,7 @@ export function install(rt) {
     if (since === undefined || botId === undefined || Date.now() - since < settings.minTurnMs) return
     const pending = data().pending
     pending[botId] = [...new Set([...(pending[botId] ?? []), id])]
+    noted.set(id, (noted.get(id) ?? 0) + 1)
     void persist()
   })
 
@@ -280,13 +282,15 @@ export function install(rt) {
       const store = data()
       store.lastRun = Date.now()
       let made = 0
-      for (const [botId, sessions] of Object.entries(store.pending)) {
+      for (const [botId, pendingSessions] of Object.entries(store.pending)) {
         const bot = rt.botOf(botId)
         if (bot === undefined) {
           delete store.pending[botId]
           continue
         }
         if (waitingFor(botId).length > 0) continue
+        const sessions = [...pendingSessions]
+        const notedAtStart = new Map(sessions.map(sessionId => [sessionId, noted.get(sessionId)]))
         try {
           const read = []
           for (const sessionId of sessions) read.push({ sessionId, ...await linesSince(sessionId) })
@@ -297,7 +301,10 @@ export function install(rt) {
             made += 1
           }
           for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through
-          delete store.pending[botId]
+          const remaining = (store.pending[botId] ?? []).filter(sessionId =>
+            !notedAtStart.has(sessionId) || noted.get(sessionId) !== notedAtStart.get(sessionId))
+          if (remaining.length === 0) delete store.pending[botId]
+          else store.pending[botId] = remaining
         } catch (error) {
           rt.warn('ds-bot: the skill review of %s failed: %s', bot.name, error?.message ?? error)
           continue
