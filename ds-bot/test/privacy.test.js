@@ -245,6 +245,7 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
   await refused('read', { file_path: join(home, 'chat-index.sqlite') })
   await refused('read', { file_path: join(home, 'usage.sqlite') })
   await refused('read', { file_path: join(home, 'secrets.json') })
+  await refused('read', { file_path: join(home, 'learning', 'state.json') })
   await refused('read', { file_path: join(home, 'memory', 'pending.json') })
   await refused('glob', { pattern: '**/*', path: diary })
   await refused('glob', { pattern: '**/*.txt', path: root })

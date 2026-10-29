@@ -74,6 +74,7 @@ export function install(rt) {
     join(rt.home, 'usage.sqlite-wal'),
     join(rt.home, 'usage.sqlite-shm'),
     join(rt.home, 'inflight.json'),
+    join(rt.home, 'learning', 'state.json'),
     join(rt.home, 'ocr.json'),
     join(rt.home, 'secrets.json'),
     join(rt.home, 'memory', 'journal.jsonl'),
