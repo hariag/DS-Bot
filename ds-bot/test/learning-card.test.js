@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { lineDiff, proposalPlacement } from '../src/client/learning-card-model.js'
+import { editLines, lineDiff, proposalPlacement } from '../src/client/learning-card-model.js'
 
 const turns = new Map([
   [1, { turn: 1, end: { time: 100 }, status: 'closed' }],
@@ -55,4 +55,10 @@ test('a skill update keeps a long shared head and tail unchanged', () => {
   assert.equal(rows.filter(row => row.kind === 'same').length, 6000)
   assert.deepEqual(rows.slice(3000, 3002), [{ kind: 'removed', line: 'before' }, { kind: 'added', line: 'after', number: 3001 }])
   assert.deepEqual(rows.at(-1), { kind: 'same', line: 'tail 2999', number: 6001 })
+})
+
+test('AGENTS.md edit previews keep the blank lines the edit writes', () => {
+  assert.deepEqual(editLines('\n'), ['', ''])
+  assert.deepEqual(editLines('Rule\n\n'), ['Rule', '', ''])
+  assert.deepEqual(editLines(undefined), [])
 })

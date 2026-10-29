@@ -18,6 +18,10 @@ export function fileLines(text) {
   return body === '' ? [] : body.split('\n')
 }
 
+export function editLines(text) {
+  return typeof text === 'string' ? text.split(/\r?\n/) : []
+}
+
 const DIFF_CELLS = 250_000
 
 export function lineDiff(before, after) {

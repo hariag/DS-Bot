@@ -120,8 +120,10 @@ var ZH = {
   "New skill": "新技能",
   "Awaiting approval": "等待批准",
   Added: "新增",
+  Modified: "已修改",
   "Show all {count} lines": "展开全部 {count} 行",
   "Skill update": "技能更新",
+  "AGENTS.md update": "AGENTS.md 更新",
   Approve: "批准",
   Decline: "拒绝",
   "Save changes": "保存更改",
@@ -18990,6 +18992,9 @@ function fileLines(text) {
   const body = String(text ?? "").replace(/\n+$/, "");
   return body === "" ? [] : body.split("\n");
 }
+function editLines(text) {
+  return typeof text === "string" ? text.split(/\r?\n/) : [];
+}
 var DIFF_CELLS = 25e4;
 function lineDiff(before, after) {
   const a = fileLines(before);
@@ -19056,6 +19061,21 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
   };
   const update = proposal.action === "update";
   const rows2 = (0, import_react46.useMemo)(() => lineDiff(update ? proposal.previous?.content : "", proposal.content), [update, proposal.previous?.content, proposal.content]);
+  if (proposal.kind === "agents") {
+    const blocks = proposal.edits.map((edit) => [
+      ...(edit.op === "add" ? [] : editLines(edit.old)).map((line) => ({ kind: "removed", line })),
+      ...(edit.op === "remove" ? [] : editLines(edit.text)).map((line) => ({ kind: "added", line }))
+    ]);
+    return (0, import_react46.createElement)(
+      "section",
+      { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
+      (0, import_react46.createElement)(ProposalHead, { titleId, icon: PencilIcon, title: t("AGENTS.md update") }),
+      (0, import_react46.createElement)(FileBox, { name: "AGENTS.md", path: proposal.folder, state: proposal.exists === false ? "Added" : "Modified", blocks }),
+      proposal.edits.map((edit, index) => edit.why ? (0, import_react46.createElement)("p", { className: "bt-learning-why", key: index }, edit.why) : null),
+      error ? (0, import_react46.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
+      (0, import_react46.createElement)(ProposalFoot, { busy, answer })
+    );
+  }
   const oldDetail = update && typeof proposal.previous?.description === "string" && proposal.previous.description !== proposal.description ? proposal.previous.description : void 0;
   return (0, import_react46.createElement)(
     "section",
@@ -19067,16 +19087,16 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
     (0, import_react46.createElement)(ProposalFoot, { busy, answer })
   );
 }
-function ProposalHead({ titleId, title, kind, detail, oldDetail }) {
+function ProposalHead({ titleId, icon: icon2 = MemoryIcon, title, kind, detail, oldDetail }) {
   return (0, import_react46.createElement)(
     "div",
     { className: "bt-q-head" },
-    (0, import_react46.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react46.createElement)(MemoryIcon)),
+    (0, import_react46.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react46.createElement)(icon2)),
     (0, import_react46.createElement)(
       "div",
       { className: "bt-q-text" },
       (0, import_react46.createElement)("p", { className: "bt-q-title", id: titleId }, title),
-      (0, import_react46.createElement)("div", { className: "bt-q-detail" }, kind),
+      kind ? (0, import_react46.createElement)("div", { className: "bt-q-detail" }, kind) : null,
       oldDetail ? (0, import_react46.createElement)("p", { className: "bt-learning-description bt-learning-old" }, (0, import_react46.createElement)("del", null, oldDetail)) : null,
       detail ? (0, import_react46.createElement)("p", { className: "bt-learning-description" }, detail) : null
     ),
@@ -19128,7 +19148,7 @@ function FileBox({ name, path, state, blocks }) {
           { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
           (0, import_react46.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.number ?? ""),
           (0, import_react46.createElement)("span", { className: "bt-learning-sign", "aria-hidden": true }, SIGNS[row.kind]),
-          (0, import_react46.createElement)("span", { className: "bt-learning-text" }, row.line)
+          (0, import_react46.createElement)("span", { className: "bt-learning-text" }, row.line || " ")
         ))
       ])
     ),

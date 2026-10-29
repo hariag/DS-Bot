@@ -1,9 +1,9 @@
 import { createElement as h, useId, useMemo, useRef, useState } from 'react'
 import { useTurnFacts } from './btw.js'
-import { lineDiff, proposalPlacement } from './learning-card-model.js'
+import { editLines, lineDiff, proposalPlacement } from './learning-card-model.js'
 import { currentPart } from './text.js'
 import { t } from './i18n.js'
-import { CheckIcon, MemoryIcon } from './icons.js'
+import { CheckIcon, MemoryIcon, PencilIcon } from './icons.js'
 import { spring, SPRING_TAP } from './motion.js'
 
 const failedAnswers = new Map()
@@ -31,6 +31,18 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
   }
   const update = proposal.action === 'update'
   const rows = useMemo(() => lineDiff(update ? proposal.previous?.content : '', proposal.content), [update, proposal.previous?.content, proposal.content])
+  if (proposal.kind === 'agents') {
+    const blocks = proposal.edits.map(edit => [
+      ...(edit.op === 'add' ? [] : editLines(edit.old)).map(line => ({ kind: 'removed', line })),
+      ...(edit.op === 'remove' ? [] : editLines(edit.text)).map(line => ({ kind: 'added', line })),
+    ])
+    return h('section', { className: 'bt-q bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
+      h(ProposalHead, { titleId, icon: PencilIcon, title: t('AGENTS.md update') }),
+      h(FileBox, { name: 'AGENTS.md', path: proposal.folder, state: proposal.exists === false ? 'Added' : 'Modified', blocks }),
+      proposal.edits.map((edit, index) => edit.why ? h('p', { className: 'bt-learning-why', key: index }, edit.why) : null),
+      error ? h('div', { className: 'bt-learning-error', role: 'alert' }, error) : null,
+      h(ProposalFoot, { busy, answer }))
+  }
   const oldDetail = update && typeof proposal.previous?.description === 'string' && proposal.previous.description !== proposal.description ? proposal.previous.description : undefined
   return h('section', { className: 'bt-q bt-learning-card', role: 'group', 'aria-labelledby': titleId, 'aria-busy': busy },
     h(ProposalHead, { titleId, title: proposal.name, kind: t(update ? 'Skill update' : 'New skill'), detail: proposal.description, oldDetail }),
@@ -40,12 +52,12 @@ function ProposalCard({ proposal, initialError = '', onFailure, onResolved, acti
     h(ProposalFoot, { busy, answer }))
 }
 
-function ProposalHead({ titleId, title, kind, detail, oldDetail }) {
+function ProposalHead({ titleId, icon = MemoryIcon, title, kind, detail, oldDetail }) {
   return h('div', { className: 'bt-q-head' },
-    h('span', { className: 'bt-learning-icon', 'aria-hidden': true }, h(MemoryIcon)),
+    h('span', { className: 'bt-learning-icon', 'aria-hidden': true }, h(icon)),
     h('div', { className: 'bt-q-text' },
       h('p', { className: 'bt-q-title', id: titleId }, title),
-      h('div', { className: 'bt-q-detail' }, kind),
+      kind ? h('div', { className: 'bt-q-detail' }, kind) : null,
       oldDetail ? h('p', { className: 'bt-learning-description bt-learning-old' }, h('del', null, oldDetail)) : null,
       detail ? h('p', { className: 'bt-learning-description' }, detail) : null),
     h('span', { className: 'bt-q-badge bt-learning-status' }, h('span', { className: 'bt-learning-dot', 'aria-hidden': true }), t('Awaiting approval')))
@@ -82,7 +94,7 @@ function FileBox({ name, path, state, blocks }) {
         ...rows.map((row, rowIndex) => h('div', { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
           h('span', { className: 'bt-learning-num', 'aria-hidden': true }, row.number ?? ''),
           h('span', { className: 'bt-learning-sign', 'aria-hidden': true }, SIGNS[row.kind]),
-          h('span', { className: 'bt-learning-text' }, row.line))),
+          h('span', { className: 'bt-learning-text' }, row.line || '\u00a0'))),
       ])),
     folds ? h('div', { className: shut ? 'bt-learning-morebar bt-learning-morebar-shut' : 'bt-learning-morebar' },
       h('button', { type: 'button', className: 'bt-learning-more', 'aria-expanded': open, onClick: () => setOpen(!open) },
