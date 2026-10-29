@@ -26,6 +26,9 @@ const PHASES = ['data', 'engine', 'team']
 // An active station and a state loop each hold at least 400 ms; the margin covers the frame
 // on which the change is painted.
 const HOLD = 420
+// The greeting's fade-in (.16 s, start.css) and hold (1.5 s, start.js): the whale sets off from
+// the first stop no earlier.
+const GREET_MS = 1660
 // 「进去吧」 is on screen at least this long before the celebration starts; the page says when it
 // went up (readyLine), and the director waits for that at most READY_CAP.
 const READY_MS = 300
@@ -505,7 +508,13 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
     while (D.at < want.station) {
       const i = D.at
       if (!ran && !flush) {
-        const holdTo = Math.max(D.activeAt[i] ? D.activeAt[i] + HOLD : 0, D.loopAt ? D.loopAt + HOLD : 0)
+        // The whale greets before it sets off (§4): on a first start it leaves the first stop
+        // only once the greeting has been readable, in the next stage's loop meanwhile. The
+        // data stage is usually done before the page has painted, and the whale would
+        // otherwise be gone as it surfaced.
+        const greeted = first && i === 0 && !resume && want.view === 'boot' ? t0 + GREET_MS : 0
+        if (greeted > performance.now()) await phaseLoop()
+        const holdTo = Math.max(D.activeAt[i] ? D.activeAt[i] + HOLD : 0, D.loopAt ? D.loopAt + HOLD : 0, greeted)
         if (holdTo > performance.now()) await wait(holdTo - performance.now())
       }
       await leg(i, ran > 0 || flush, flush ? Math.min(420, Math.floor(600 / (want.station - i))) : 0)

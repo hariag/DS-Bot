@@ -106,7 +106,8 @@ function voiceWant() {
   const engineDone = (s.done ?? []).includes('engine')
   if (view === 'boot' && !engineDone && ms >= 45000) return ['voice.slow45', false]
   if (view === 'boot' && !engineDone && ms >= 10000) return ['voice.slow10', false]
-  if (st.active === 0) return ['voice.data', false]
+  // Not once the stage is done and the whale only waits for the greeting before it leaves.
+  if (st.active === 0 && !(s.done ?? []).includes('data')) return ['voice.data', false]
   // 「找到了」 comes once after 「先找个地方放东西」, also when the second stage turns active while
   // the old line is still fading out: the second stage starts 250 ms after the first is done.
   if (v.last === 'voice.data' && (st.at === 1 || st.legging)) return ['voice.found', false]
