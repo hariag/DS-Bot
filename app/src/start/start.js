@@ -3,7 +3,7 @@
 // region). The whale, its rings and the hidden stage list belong to the director in whale.js;
 // the whale's line follows where the director has the whale, not the snapshot alone. Text is
 // set only through textContent (and text nodes), never as markup.
-import { t } from './text.mjs'
+import { fill as fillIn, t } from './text.mjs'
 import { createDirector, reduced, play, spring, sleep, clamped } from './whale.js'
 
 const root = document.documentElement
@@ -31,21 +31,27 @@ const say = (key, vars) => t(lang, key, vars)
 const sigs = new WeakMap()
 function render(el, vars = {}) {
   const key = el.dataset.t.replace(/\{(\w+)\}/gu, (all, name) => vars[name] ?? '')
-  const parts = say(key).split(/\{(\w+)\}/u)
-  const sig = parts.map((part, i) => (i % 2 ? `\u0001${vars[part] ?? ''}` : part)).join('')
+  // Odd parts are placeholders: {name}, or {name|one|many} for an English count.
+  const parts = say(key).split(/\{(\w+(?:\|[^}]*)?)\}/u)
+  const valueOf = (part) => {
+    const value = vars[part.split('|')[0]]
+    if (value === undefined || value === null) return ''
+    return part.includes('|') ? fillIn(`{${part}}`, vars) : String(value)
+  }
+  const sig = parts.map((part, i) => (i % 2 ? `\u0001${valueOf(part)}` : part)).join('')
   if (sigs.get(el) === sig) return
   sigs.set(el, sig)
   el.replaceChildren(...parts.map((part, i) => {
     if (i % 2 === 0) return part
-    const value = String(vars[part] ?? '')
+    const value = valueOf(part)
     return CODE.has(part) ? Object.assign(document.createElement('code'), { textContent: value }) : value
   }))
 }
 function renderStatic() {
   root.lang = lang === 'zh' ? 'zh-CN' : 'en'
   for (const el of document.querySelectorAll('.track [data-t], .footrow [data-t], .caption [data-t]')) render(el)
-  $('.track').setAttribute('aria-label', say('track.label'))
-  for (const st of document.querySelectorAll('.station')) st.querySelector('.sr').textContent = say(`state.${st.dataset.state}`)
+  $('.track').setAttribute('aria-label', say('status.track'))
+  for (const st of document.querySelectorAll('.station')) st.querySelector('.sr').textContent = say(`status.state.${st.dataset.state}`)
   if (s) { fillBlock(shown); placeUI(s.place); timeUI() }
 }
 // Where the data goes, at the footer's right end with 「换个位置…」 (first starts; the main
@@ -56,7 +62,7 @@ function placeUI(place) {
   const on = first && place !== null && typeof place === 'object' && !['failed', 'viewFailed'].includes(s?.view)
   placeEl.hidden = !on
   if (!on) return
-  const key = place.drive ? (place.free ? 'place.drive' : 'place.driveOnly') : place.free ? 'place.path' : 'place.pathOnly'
+  const key = place.drive ? (place.free ? 'foot.place.drive' : 'foot.place.driveOnly') : place.free ? 'foot.place.path' : 'foot.place.pathOnly'
   placeText.textContent = say(key, place)
 }
 function varsOf(snap) {
@@ -64,7 +70,7 @@ function varsOf(snap) {
   const update = snap.update ?? {}
   const vars = { ...snap.explain, ...card }
   if (snap.view === 'failed' || snap.view === 'viewFailed') vars.reason = snap.failure?.reason ?? 'other'
-  if (card.kind === 'importFailed') vars.reason = say(`importFailed.${card.reason}`)
+  if (card.kind === 'importFailed') vars.reason = say(`reason.copy.${card.reason}`)
   if (card.kind === 'newerUpdating') vars.p = card.percent ?? 0
   if (update.version) Object.assign(vars, { version: update.version, p: update.percent ?? 0, a: update.received ?? 0, b: update.total ?? 0 })
   return vars
@@ -81,6 +87,8 @@ function announce(text) { if (text) live.textContent = text }
 // 「进去吧」 lets the line before it be read for READ_MS first, and the director starts the
 // celebration READY_MS (whale.js) after 「进去吧」 is up.
 const HOLDS = { 'voice.hello': 1500, 'voice.found': 700 }
+// The line of a later start, a data move and the two failure views.
+const VOICES = { later: 'voice.opening', moving: 'voice.moving', failed: 'voice.failed', viewFailed: 'voice.viewFailed' }
 const HOLD_MS = 900
 const READ_MS = 400
 const FADE_MS = 160
@@ -92,10 +100,10 @@ const v = { key: '', text: '', shown: '', at: 0, timer: 0, swap: 0, renaming: fa
 const readyLine = () => (v.readyAt ? Promise.resolve(v.readyAt) : new Promise(resolve => v.waiters.push(resolve)))
 function voiceWant() {
   const view = s.view
-  if (view === 'failed' || view === 'viewFailed') return [`title.${view}`, true]
+  if (view === 'failed' || view === 'viewFailed') return [VOICES[view], true]
   if (view === 'watchdog') return ['voice.watchdog', true]
   if (view === 'card') return ['', false]
-  if (!first) return [`title.${START}`, true]
+  if (!first) return [VOICES[START], true]
   if (view === 'handoff') return ['voice.ready', false]
   const st = director.stage()
   // The whale is sinking to start over: the line goes with it, without the usual hold.
@@ -161,7 +169,7 @@ function put() {
   v.at = performance.now() < catchUp ? -Infinity : performance.now()
   if (!v.shown) return
   v.last = v.shown
-  if (v.shown === 'title.failed' || v.shown === 'title.viewFailed') announce(v.text)
+  if (v.shown === 'voice.failed' || v.shown === 'voice.viewFailed') announce(v.text)
   if (v.shown === 'voice.ready' && !v.readyAt) { v.readyAt = performance.now(); for (const resolve of v.waiters.splice(0)) resolve(v.readyAt) }
 }
 
@@ -177,8 +185,8 @@ function hintWant() {
   const sec = Math.floor(ms / 1000)
   if (!first) {
     if (view !== 'boot' && view !== 'moving') return ['', {}, false]
-    if (ms >= 45000) return ['slow.45.later', {}, true]
-    if (ms >= 10000) return ['elapsed', { n: sec }, false]
+    if (ms >= 45000) return ['hint.slowLater', {}, true]
+    if (ms >= 10000) return ['status.elapsed', { n: sec }, false]
     return [s.hint ? 'hint.space' : '', { ...s.hint }, false]
   }
   if (view !== 'boot' && view !== 'handoff') return ['', {}, false]
@@ -211,7 +219,7 @@ function timeUI() {
     // The clock stays through 「进去吧」 and fades with the hint row when the celebration starts.
     const shown = (booting || s.view === 'handoff') && ms >= 5000
     root.toggleAttribute('data-elapsed', shown)
-    if (shown) elapsed.textContent = say('elapsed', { n: sec })
+    if (shown) elapsed.textContent = say('status.elapsed', { n: sec })
   }
   hint()
   speak()
@@ -446,7 +454,7 @@ function copying(el) {
   const fillEl = el.querySelector('.copy-steps .bar-fill')
   if (card.step !== copyStep) { copyStep = card.step; bars.set(fillEl, 0); fillEl.style.scale = '0 1' }
   bar(fillEl, card.fraction, true)
-  el.querySelector('.eta').textContent = card.eta === null || card.eta === undefined ? '' : card.eta < 1 ? say('eta.lt1') : say('eta.minutes', { n: card.eta })
+  el.querySelector('.eta').textContent = card.eta === null || card.eta === undefined ? '' : card.eta < 1 ? say('card.copying.etaSoon') : say('card.copying.eta', { n: card.eta })
 }
 // The recovery card. 〔换个位置…〕 and 〔用新的空白团队开始…〕 show only when the main process can
 // carry them out (failure.places).
@@ -478,7 +486,7 @@ function toggleDetails(button) {
 }
 function copiedLabel(button) {
   button.classList.add('copied')
-  button.textContent = say('copied')
+  button.textContent = say('btn.copied')
   setTimeout(() => { button.classList.remove('copied'); sigs.delete(button); render(button) }, 1600)
 }
 

@@ -144,7 +144,7 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
     const st = stations[i]
     if (!st || st.dataset.state === state) return
     st.dataset.state = state
-    st.querySelector('.sr').textContent = label(`state.${state}`)
+    st.querySelector('.sr').textContent = label(`status.state.${state}`)
     if (state === 'active') st.setAttribute('aria-current', 'step')
     else st.removeAttribute('aria-current')
   }
@@ -170,7 +170,7 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
     setStation(i, 'done')
     // The last stop gets no ring: the whale dives there.
     if (i < 2) leaveTrace(i)
-    announce(label('sr.done', { phase: label(`phase.${PHASES[i]}`) }))
+    announce(label('status.sr.done', { phase: label(`status.phase.${PHASES[i]}`) }))
     onCheck?.(i)
   }
   let activeTimer = 0
@@ -185,7 +185,7 @@ export function createDirector({ start, resume, act, label, announce, onCheck, o
       if (D.at !== i || stations[i].dataset.state !== 'pending' || failure() || (i < 2 && want.done.includes(PHASES[i]))) return
       setStation(i, 'active')
       D.activeAt[i] = performance.now()
-      announce(label('sr.active', { phase: label(`phase.${PHASES[i]}`) }))
+      announce(label('status.sr.active', { phase: label(`status.phase.${PHASES[i]}`) }))
       onActive?.(i)
       changed()
     }, instant ? 0 : delay)

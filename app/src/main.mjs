@@ -17,6 +17,7 @@ import { captureStdio, LogFile } from './logs.mjs'
 import { currentRootOf, driveOf, formatBytes, freeSpace, isEmptyTree, pickFrom, placeOf, rootOf } from './place.mjs'
 import { readStartFrame, writeStartFrame } from './start-frame.mjs'
 import { explainOf, StartWindow } from './start-window.mjs'
+import { langOf } from './start/text.mjs'
 import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './window-frame.mjs'
 
 const IPC = {
@@ -38,7 +39,7 @@ const IPC = {
 }
 // A cookie export larger than this is not a cookie export.
 const IMPORT_FILE_MAX = 32 * 1024 * 1024
-const MOVE_PROBLEMS = { drive: 'moveDrive', nested: 'moveNested', workspace: 'moveWorkspace', program: 'inProgram', notEmpty: 'moveNotEmpty' }
+const MOVE_PROBLEMS = { drive: 'dialog.move.drive', nested: 'dialog.move.nested', workspace: 'dialog.move.workspace', program: 'dialog.move.inProgram', notEmpty: 'dialog.move.notEmpty' }
 const UPDATE_CHECK_WAIT_MS = 15_000
 const UPDATE_DOWNLOAD_WAIT_MS = 15 * 60_000
 // Under this, the start page notes the drive's free space for the first 10 s (onboarding §3).
@@ -54,9 +55,9 @@ const frameFile = join(app.getPath('userData'), 'start-frame.json')
 
 // Loaded once the start window is up (loadModules).
 let BotBrowserGuests, partitionOf, BotViews, isBotId, importFromBrowser, listSources, applyCookies, CookieImports, parseCookieFile
-let downloadSaver, chooseLocations, defaultPlaces, localeText, pickRoot, programFolder, saveLocations, teamIn, teamsAt, text, HostProcess
+let downloadSaver, chooseLocations, defaultPlaces, pickRoot, programFolder, saveLocations, teamIn, teamsAt, tx, HostProcess
 let copySessions, findTeam, importTeam, teamInUse, userDshHome, copyData, moveProblem, CHECK_PROFILE, PROFILE
-let UPDATE_TEXT, watchReleases, watchUpdates, getDshRuntimeVersion, electronUpdater
+let watchReleases, watchUpdates, getDshRuntimeVersion, electronUpdater
 
 let mainWindow
 // Settles once the hidden team window exists.
@@ -116,7 +117,7 @@ if (canonical !== undefined) {
     electron: { BrowserWindow, ipcMain, screen, shell, clipboard, nativeTheme, systemPreferences },
     page: join(here, 'start', 'start.html'), preload: join(here, 'preload.cjs'), icon: iconFile, mica, devTools: !app.isPackaged,
     // On Windows the locale is known only once the app is ready.
-    lang: () => (app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'), motion: readStartFrame(frameFile).motion,
+    lang: () => langOf(app.getLocale()), motion: readStartFrame(frameFile).motion,
     version: app.getVersion(), program: [dirname(process.execPath), process.resourcesPath, app.getAppPath()], log: logs, mainWindow: () => mainWindow,
     onRetry: () => { retry().catch(fail) },
     onReload: () => { mainWindow?.webContents.reload() },
@@ -195,12 +196,12 @@ async function loadModules() {
   ;({ applyCookies, CookieImports } = cookies)
   ;({ parseCookieFile } = cookieFiles)
   ;({ downloadSaver } = downloads)
-  ;({ chooseLocations, defaultPlaces, localeText, pickRoot, programFolder, saveLocations, teamIn, teamsAt, text } = firstRun)
+  ;({ chooseLocations, defaultPlaces, pickRoot, programFolder, saveLocations, teamIn, teamsAt, tx } = firstRun)
   ;({ HostProcess } = hostProcess)
   ;({ copySessions, findTeam, importTeam, teamInUse, userDshHome } = imports)
   ;({ copyData, moveProblem } = moves)
   ;({ CHECK_PROFILE, PROFILE } = profile)
-  ;({ UPDATE_TEXT, watchReleases, watchUpdates } = updatesModule)
+  ;({ watchReleases, watchUpdates } = updatesModule)
   ;({ getDshRuntimeVersion } = boot)
   electronUpdater = updater.default
   browserGuests = new BotBrowserGuests({ session, origin: () => origin, devTools: !app.isPackaged })
@@ -599,8 +600,7 @@ async function copyTeam(where, signal) {
   const unreadable = await checkTeam(where, signal)
   if (signal.aborted) return 'stopped'
   if (unreadable > 0) {
-    const t = text()
-    const { response } = await startWindow.asking(dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', noLink: true, message: t.newer(unreadable), buttons: [t.quit, t.startEmpty], defaultId: 0, cancelId: 0, signal }))
+    const { response } = await startWindow.asking(dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', noLink: true, message: tx('dialog.import.newer', { n: unreadable }), buttons: [tx('btn.quit'), tx('btn.startWithout')], defaultId: 0, cancelId: 0, signal }))
     if (signal.aborted) return 'stopped'
     if (response === 0) return 'quit'
     saveLocations(where)
@@ -621,7 +621,7 @@ async function copyTeam(where, signal) {
   } catch (error) {
     if (signal.aborted) return 'stopped'
     console.error(error)
-    await startWindow.asking(dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: text().failed(error instanceof Error ? error.message : String(error)), signal }))
+    await startWindow.asking(dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: tx('dialog.import.failed', { message: error instanceof Error ? error.message : String(error) }), signal }))
     if (signal.aborted) return 'stopped'
   } finally {
     signal.removeEventListener('abort', stopWarm)
@@ -670,8 +670,7 @@ async function checkTeam(where, signal) {
 // folder; after a failed copy it starts again on the old one. The old folder stays.
 async function moveData(workspace) {
   if (copying !== undefined || stopping || mainWindow === undefined) return false
-  const t = text()
-  const { canceled, filePaths } = await dialog.showOpenDialog(owner(), { title: t.pickMove, defaultPath: dirname(places.dataDir), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
+  const { canceled, filePaths } = await dialog.showOpenDialog(owner(), { title: tx('dialog.pickMove'), defaultPath: dirname(places.dataDir), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] })
   if (canceled || filePaths[0] === undefined) return false
   const to = resolve(filePaths[0])
   const dshHome = userDshHome()
@@ -680,13 +679,13 @@ async function moveData(workspace) {
     for (const current of new Set([workspace, places.workspace])) {
       const problem = moveProblem({ from: places.dataDir, to, workspace: current, dshHome, program: app.isPackaged ? programFolder() : undefined })
       if (problem === undefined) continue
-      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? t.inDsh(dshHome) : t[MOVE_PROBLEMS[problem]], buttons: ['OK'] })
+      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: problem === 'dsh' ? tx('dialog.move.inDsh', { home: dshHome }) : tx(MOVE_PROBLEMS[problem]), buttons: [tx('btn.ok')] })
       return true
     }
     return false
   }
   if (await refused()) return false
-  const { response } = await dialog.showMessageBox(owner(), { type: 'question', title: 'DeepSeek Bot', noLink: true, message: t.moveConfirm(to), detail: t.moveDetail(places.dataDir), buttons: [t.move, t.cancel], defaultId: 0, cancelId: 1 })
+  const { response } = await dialog.showMessageBox(owner(), { type: 'question', title: 'DeepSeek Bot', noLink: true, message: tx('dialog.move.confirm', { to }), detail: tx('dialog.move.detail', { from: places.dataDir }), buttons: [tx('btn.move'), tx('btn.cancel')], defaultId: 0, cancelId: 1 })
   if (response !== 0 || stopping || await refused()) return false
   const signal = copyAbort.signal
   copying = (async () => {
@@ -703,7 +702,7 @@ async function moveData(workspace) {
     }
     // Another DSH on the same data would go on writing while the copy is made.
     if (teamInUse(places.dataDir)) {
-      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: t.moveInUse })
+      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: tx('dialog.move.inUse') })
       app.relaunch()
       return
     }
@@ -720,7 +719,7 @@ async function moveData(workspace) {
     } catch (error) {
       if (signal.aborted) return
       console.error(error)
-      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: t.moveFailed(error instanceof Error ? error.message : String(error)) })
+      await dialog.showMessageBox(owner(), { type: 'warning', title: 'DeepSeek Bot', message: tx('dialog.move.failed', { message: error instanceof Error ? error.message : String(error) }) })
     } finally {
       setProgress(-1)
     }
@@ -765,15 +764,13 @@ const afterHandoff = async () => { await startWindow.teamShown; return !failed }
 
 async function askRestart(version) {
   if (failed || !await afterHandoff()) return false
-  const t = localeText(UPDATE_TEXT)
-  const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: t.ready(version), detail: t.readyDetail, buttons: [t.restart, t.later], defaultId: 0, cancelId: 1, noLink: true })
+  const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: tx('dialog.update.ready', { version }), detail: tx('dialog.update.readyDetail'), buttons: [tx('btn.restart'), tx('btn.notNowRestart')], defaultId: 0, cancelId: 1, noLink: true })
   return response === 0
 }
 
 async function askDownload(version) {
   if (failed || !await afterHandoff()) return false
-  const t = localeText(UPDATE_TEXT)
-  const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: t.available(version), detail: t.availableDetail, buttons: [t.download, t.later], defaultId: 0, cancelId: 1, noLink: true })
+  const { response } = await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: tx('dialog.update.available', { version }), detail: tx('dialog.update.availableDetail'), buttons: [tx('btn.download'), tx('btn.notNowDownload')], defaultId: 0, cancelId: 1, noLink: true })
   return response === 0
 }
 
@@ -883,8 +880,7 @@ async function fail(error) {
   startWindow.fail(error, startKind())
   const found = await Promise.race([updates?.latest() ?? null, sleep(UPDATE_CHECK_WAIT_MS).then(() => null)])
   if (!found || mine !== attempt) return
-  const t = localeText(UPDATE_TEXT)
-  await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: found.page ? t.onFailurePage(found.version) : t.onFailure(found.version) })
+  await dialog.showMessageBox(owner(), { type: 'info', title: 'DeepSeek Bot', message: tx(found.page ? 'dialog.update.onFailurePage' : 'dialog.update.onFailure', { version: found.version }) })
   if (found.page) {
     if (!process.env.DS_BOT_HOME) await shell.openExternal(found.page)
     return
