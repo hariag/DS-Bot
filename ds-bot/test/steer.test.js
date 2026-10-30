@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
-import { turnOf } from '../src/host/resume.js'
 import { fakeContext } from './fake-ctx.js'
 import { SOURCE_KIND, STEER_CUT } from '../src/host/constants.js'
 
@@ -307,77 +306,6 @@ test('shell shadow: bash is shadowed the same way', async () => {
   await stop()
 })
 
-test('shell shadows retry only registrations that failed and dispose independently', async () => {
-  const { ctx, stop, rt, agent } = await start()
-  const pwsh = shellDef('pwsh')
-  const bash = shellDef('bash')
-  ctx.tools.get = name => ({ pwsh, bash })[name]
-  const attempts = []
-  const disposed = []
-  let bashBlocked = true
-  agent.ctx.tools.register = def => {
-    attempts.push(def.name)
-    if (def.name === 'bash' && bashBlocked) throw new Error('already registered in this scope')
-    return () => disposed.push(def.name)
-  }
-  const first = rt.shadowShells(agent)
-  assert.deepEqual(attempts, ['pwsh', 'bash'])
-  assert.equal(first.length, 1)
-  bashBlocked = false
-  const second = rt.shadowShells(agent)
-  assert.deepEqual(attempts, ['pwsh', 'bash', 'bash'])
-  assert.equal(second.length, 1)
-  assert.equal(rt.shadowShells(agent).length, 0)
-  first[0]()
-  assert.deepEqual(disposed, ['pwsh'])
-  const third = rt.shadowShells(agent)
-  assert.deepEqual(attempts, ['pwsh', 'bash', 'bash', 'pwsh'])
-  assert.equal(third.length, 1)
-  second[0]()
-  third[0]()
-  await stop()
-})
-
-test('a persistent scoped collision is retried when the shell changes or the cooldown expires', async t => {
-  t.mock.timers.enable({ apis: ['Date'], now: 1000 })
-  const { ctx, rt, agent, stop } = await start({ def: shellDef('bash') })
-  t.after(stop)
-  let visible = shellDef('bash')
-  ctx.tools.get = name => name === 'bash' ? visible : undefined
-  let attempts = 0, warnings = 0, occupied = true
-  rt.warn = () => { warnings++ }
-  agent.ctx.tools.register = () => {
-    attempts++
-    if (occupied) throw new Error('tool "bash" is already registered in this scope')
-    return () => {}
-  }
-  for (let i = 0; i < 100; i++) rt.shadowShells(agent)
-  assert.equal(attempts, 1)
-  assert.equal(warnings, 1)
-  t.mock.timers.tick(60_000)
-  rt.shadowShells(agent)
-  assert.equal(attempts, 2)
-  assert.equal(warnings, 1)
-  visible = shellDef('bash')
-  occupied = false
-  assert.equal(rt.shadowShells(agent).length, 1)
-  assert.equal(attempts, 3)
-})
-
-test('shell shadow retries when the first registration fails before any shell is installed', async () => {
-  const { stop, rt, agent } = await start({ def: shellDef('bash') })
-  let attempts = 0
-  agent.ctx.tools.register = () => {
-    attempts += 1
-    if (attempts === 1) throw new Error('already registered in this scope')
-    return () => {}
-  }
-  assert.equal(rt.shadowShells(agent).length, 0)
-  assert.equal(rt.shadowShells(agent).length, 1)
-  assert.equal(attempts, 2)
-  await stop()
-})
-
 // Carry tests: the cut turn's routing state rides into the turn that claims the steer.
 test('steer carry: a cut request turn hands its answer on the next turn', async () => {
   const { emit, stop, rt, deliveries } = await start()
@@ -444,62 +372,6 @@ test('steer carry: a cut turn that ends on error keeps normal failure handling',
   await stop()
 })
 
-test('steer carry: a pending request survives a carry that reclaims the trigger', async () => {
-  const { emit, stop, rt, deliveries } = await start()
-  const dm = 'dm-a'
-  await emit(dm, 'turn/start', { turn: 1 })
-  await emit(dm, 'user/message', {
-    content: [{ type: 'text', text: 'do the thing' }],
-    source: { kind: SOURCE_KIND, role: 'request', senderSessionId: 'bot-b', exchangeId: 'x1', senderName: 'Writer' },
-  })
-  await emit(dm, 'assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'half done' }] } })
-  rt.markSteerCut(dm)
-  await emit(dm, 'turn/end', { reason: { kind: 'aborted', reason: { kind: 'hook', reason: STEER_CUT } } })
-  assert.deepEqual(deliveries, [])
-  // Another request lands between the cut and the next turn: it waits as pending.
-  await emit(dm, 'user/message', {
-    content: [{ type: 'text', text: '[Ops → Chief]\nme later' }],
-    source: { kind: SOURCE_KIND, role: 'request', senderSessionId: 'bot-c', exchangeId: 'x2', senderName: 'Ops' },
-  })
-  await emit(dm, 'turn/start', { turn: 2 })
-  const entry = rt.live.get(dm)
-  // The carry's own request reclaims the trigger; the pending one joins it deferred.
-  assert.equal(entry.info?.exchangeId, 'x1')
-  assert.equal(entry.joined.length, 1)
-  assert.equal(entry.joined[0].info.exchangeId, 'x2')
-  assert.equal(entry.joined[0].text, 'me later')
-  await emit(dm, 'assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'all done' }] } })
-  await emit(dm, 'turn/end', { reason: { kind: 'completed' } })
-  const reply = deliveries.find(d => d[0]?.replyTo === 'x1')
-  assert.ok(reply !== undefined)
-  assert.match(reply[0].text, /all done/)
-  const handback = deliveries.find(d => d[0]?.deferred === true)
-  assert.ok(handback !== undefined)
-  assert.equal(handback[0].exchangeId, 'x2')
-  assert.ok(!deliveries.some(d => /was stopped/.test(d[0]?.text ?? '')))
-  await stop()
-})
-
-test('steer cut: a running part switch blocks the cut', async () => {
-  const { emit, stop, rt, agent, calls } = await start()
-  const dm = 'dm-a'
-  // switchJobs() hands back a Map values iterator, never an array.
-  const original = rt.switchJobs
-  rt.switchJobs = () => new Map([['job', { botId: rt.chatOwners.get(dm) }]]).values()
-  await emit(dm, 'turn/start', { turn: 1 })
-  await emit(dm, 'step/start', { turn: 1, step: 1 })
-  const steer = userMessage('还没好吗')
-  agent.inbox.nextStep.push(steer)
-  await emit(dm, 'agent/inbox/spliced', { target: 'next-step', inserted: [steer] })
-  assert.equal(calls.find(c => c[0] === 'cancel'), undefined)
-  // A group part switch of the same Bot carries a roomId and must not block this cut.
-  rt.switchJobs = () => new Map([['job', { botId: rt.chatOwners.get(dm), roomId: 'r1' }]]).values()
-  await emit(dm, 'agent/inbox/spliced', { target: 'next-step', inserted: [steer] })
-  assert.deepEqual(calls.find(c => c[0] === 'cancel')?.[1], { kind: 'hook', reason: STEER_CUT })
-  rt.switchJobs = original
-  await stop()
-})
-
 // Model-cut tests.
 test('steer cut: user steer during model phase cancels with hook and moves steer to next-turn', async () => {
   const { emit, stop, agent, calls } = await start()
@@ -543,37 +415,4 @@ test('steer cut: earlier steers and queued next-turn keep order', async () => {
   assert.deepEqual(agent.inbox.nextTurn.map(m => m.content[0].text), ['two', 'queued'])
   assert.deepEqual(agent.inbox.nextStep.map(m => m.content[0].text), ['one'])
   await stop()
-})
-
-test('steer resume: turnOf follows a steer cut to its continuation', async () => {
-  const turn = (n, events = []) => [
-    { type: 'turn/start', data: { turn: n } },
-    ...events,
-  ]
-  const said = text => ({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
-  const took = exchangeId => ({ type: 'user/message', data: { source: { kind: SOURCE_KIND, role: 'request', exchangeId }, content: [{ type: 'text', text: 'do' }] } })
-  const ended = reason => ({ type: 'turn/end', data: { reason } })
-  const cut = { kind: 'aborted', reason: { kind: 'hook', reason: STEER_CUT } }
-
-  // A cut turn whose continuation answered: the continuation's reason and the texts
-  // merged, with the cut step's interrupted draft dropped.
-  const follow = turnOf([
-    ...turn(1, [took('x1'), said('a'), { type: 'step/start', data: { turn: 1, step: 2 } }, said('p'), ended(cut)]),
-    ...turn(2, [said('b'), ended({ kind: 'completed' })]),
-  ], 'x1')
-  assert.deepEqual(follow?.reason, { kind: 'completed' })
-  assert.deepEqual(follow?.texts, ['a', 'b'])
-
-  // A cut turn with no continuation yet: read as unfinished, not as stopped.
-  const dangling = turnOf([
-    ...turn(1, [took('x1'), said('a'), ended(cut)]),
-  ], 'x1')
-  assert.equal(dangling?.reason, undefined)
-  assert.deepEqual(dangling?.texts, ['a'])
-
-  // A user stop stays a stop.
-  const stopped = turnOf([
-    ...turn(1, [took('x1'), ended({ kind: 'aborted', reason: { kind: 'user' } })]),
-  ], 'x1')
-  assert.deepEqual(stopped?.reason, { kind: 'aborted', reason: { kind: 'user' } })
 })

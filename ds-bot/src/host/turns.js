@@ -2,7 +2,7 @@
 // triggered, the waiters and inboxes of group rounds, and routing a finished turn's reply.
 //
 // Turn tracking: which turns were triggered by another Bot, and what they said.
-import { HANDOFF_ACK, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND } from './constants.js'
+import { HANDOFF_ACK, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { absoluteLinks } from './links.js'
 import { textOf } from './text.js'
 import { reminderText } from './schedules.js'
@@ -409,9 +409,23 @@ export function install(rt) {
         entry.joined = []
         entry.later = []
         entry.steeredAt = undefined
+        entry.carried = false
         if (entry.pending !== undefined) {
           claimTrigger(id, entry, entry.pending)
           entry.pending = undefined
+        }
+        if (entry.carry !== undefined) {
+          const carry = entry.carry
+          entry.carry = undefined
+          entry.texts = carry.texts
+          entry.shown = carry.shown
+          entry.answers = carry.answers
+          entry.joined = carry.joined
+          entry.later = carry.later
+          entry.opened = true
+          entry.carried = true
+          if (carry.info !== undefined) claimTrigger(id, entry, carry.info)
+          entry.joined = carry.joined
         }
         break
       case 'user/message': {
@@ -540,6 +554,15 @@ export function install(rt) {
       }
       case 'turn/end': {
         setActivity(id, undefined)
+        // A steer cut leaves the turn's routing state for the fresh turn that
+        // claims the steer: nothing is answered or delivered for the cut one.
+        const cut = entry.cut
+        entry.cut = undefined
+        const steerCut = cut !== undefined && event.data?.reason?.kind === 'aborted'
+          && event.data.reason.reason?.kind === 'hook' && event.data.reason.reason.reason === STEER_CUT
+        if (steerCut) {
+          entry.carry = { info: entry.info, joined: entry.joined ?? [], later: entry.later ?? [], texts: entry.texts.slice(0, cut.texts), shown: entry.shown, answers: entry.answers }
+        }
         const info = entry.info
         const joined = entry.joined ?? []
         // What the group already saw of the turn is not posted again.
@@ -563,6 +586,7 @@ export function install(rt) {
         entry.lastCalled = undefined
         const later = entry.later ?? []
         entry.later = []
+        if (steerCut) break
         for (const result of later) {
           void rt.deliver({
             fromId: result.info.senderSessionId,
@@ -672,5 +696,10 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, releaseBot })
+  const markSteerCut = (id) => {
+    const entry = live.get(id)
+    if (entry?.turn !== undefined) entry.cut = { texts: entry.texts.length }
+  }
+
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, releaseBot, markSteerCut })
 }

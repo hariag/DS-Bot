@@ -10,7 +10,6 @@ import { STEER_CUT } from './constants.js'
 
 const SHELL_TOOLS = ['pwsh', 'bash']
 const STEER_GRACE_MS = 1000
-const SHADOW_RETRY_MS = 60_000
 
 export function install(rt) {
   const ctx = rt.ctx
@@ -33,17 +32,6 @@ export function install(rt) {
     if (entry === undefined) state.set(id, entry = { phase: 'boundary', jobsByCall: new Map(), jobWaiters: new Map(), steerWaiters: new Set(), killedJobs: new Set(), cutting: false })
     return entry
   }
-  // Background jobs still running for a Session. A reply that announces work while
-  // this is empty and no subagent runs is marked in the group view (#977).
-  rt.runningJobs = (sessionId) => {
-    if (jobs === undefined || sessionId === undefined) return []
-    try {
-      return jobs.list(sessionId).filter(job => job.status === 'running' || job.status === 'stopping')
-    } catch {
-      return undefined
-    }
-  }
-
   const isUserSteer = (event) => event?.data?.target === 'next-step'
     && (event.data.inserted ?? []).some(message => message?.source?.kind === 'user')
   const wake = (set, value) => { const waiters = [...set]; set.clear(); for (const fn of waiters) fn(value) }
@@ -54,7 +42,7 @@ export function install(rt) {
     const entry = rt.live.get(id)
     const agent = liveAgent(id)
     if (!privateOf(id) || rt.readOnly?.() !== undefined || entry === undefined || agent === undefined) return
-    if ([...(rt.switchJobs?.() ?? [])].some(job => job?.botId === rt.chatOwners.get(id) && job.roomId === undefined)) return
+    if ((rt.switchJobs?.() ?? []).some?.(job => job?.botId === rt.chatOwners.get(id))) return
     const track = stateOf(id)
     if (track.phase !== 'model' || track.cutting) return
     if (entry.turn === undefined || (entry.calls?.size ?? 0) > 0 || agent.status !== 'running') return
@@ -128,12 +116,12 @@ export function install(rt) {
     })
   }
 
-  // A failed registration must be retried without registering an already installed
-  // shadow again. Different shell tools can succeed or fail independently.
-  const shadowed = new WeakMap()
-  const collisions = new WeakMap()
+  const shadowed = new WeakSet()
   const formatWarned = new Set()
-  const shadowShell = (agent, name, def) => {
+  const shadowShell = (agent, name) => {
+    if (typeof ctx.tools?.get !== 'function') return
+    const def = ctx.tools.get(name, agent)
+    if (def === undefined) return
     const promoted = (def.output?.schema?.oneOf ?? []).find(variant => variant?.properties?.kind?.const === 'promoted')
     if (typeof def.output?.render !== 'function'
       || promoted?.properties?.cwd === undefined || promoted?.properties?.jobId === undefined
@@ -144,7 +132,8 @@ export function install(rt) {
       }
       return
     }
-    const lift = agent.ctx.tools.register({
+    shadowed.add(agent)
+    agent.ctx.tools.register({
       ...def,
       execute: async (args, exec) => {
         const native = def.execute(args, exec)
@@ -205,41 +194,17 @@ export function install(rt) {
         return { kind: 'promoted', cwd, jobId, timeoutMs: Date.now() - startedAt, output: renderJobRead(read) }
       },
     })
-    const names = shadowed.get(agent) ?? new Set()
-    names.add(name)
-    shadowed.set(agent, names)
-    // tools.js keeps this with the Session's scope; unmarking lets a later
-    // scope register the shadow again.
-    return () => { names.delete(name); lift?.() }
   }
   rt.shadowShells = (agent) => {
     if (agent === undefined || !rt.isBotSession(agent.session?.id)) return
-    if (typeof agent.ctx?.tools?.register !== 'function') return
-    const disposers = []
+    if (shadowed.has(agent) || typeof agent.ctx?.tools?.register !== 'function') return
     for (const name of SHELL_TOOLS) {
-      if (shadowed.get(agent)?.has(name)) continue
-      const blocked = collisions.get(agent)?.get(name)
-      let def
       try {
-        def = ctx.tools?.get?.(name, agent)
-        if (blocked && blocked.def !== def) collisions.get(agent).delete(name)
-        if (!def || (blocked?.def === def && Date.now() < blocked.retryAt)) continue
-        const lift = shadowShell(agent, name, def)
-        collisions.get(agent)?.delete(name)
-        if (typeof lift === 'function') disposers.push(lift)
+        shadowShell(agent, name)
       } catch (error) {
-        // Prompt assembly runs frequently. Keep using the scoped shell while
-        // it owns this name; the same definition may later become inherited.
-        if (def && error?.message === `tool "${name}" is already registered in this scope`) {
-          const byName = collisions.get(agent) ?? new Map()
-          byName.set(name, { def, retryAt: Date.now() + SHADOW_RETRY_MS })
-          collisions.set(agent, byName)
-          if (blocked?.def === def) continue
-        }
         rt.warn('ds-bot: shadowing %s failed: %s', name, error)
       }
     }
-    return disposers
   }
 
   ctx.on('session/event', (session, event) => {
