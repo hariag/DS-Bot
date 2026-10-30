@@ -33,9 +33,9 @@ test('the home folder becomes %USERPROFILE% in every spelling', () => {
   assert.equal(windows('cwd C:\\Users\\测试 用户'), 'cwd %USERPROFILE%')
   // Another user whose name starts the same way is not this one.
   assert.equal(windows('C:\\Users\\测试 用户2\\x'), 'C:\\Users\\测试 用户2\\x')
-  const posix = redactor({ home: '/home/calx', platform: 'linux' })
-  assert.equal(posix('/home/calx/.ds-bot and file:///home/calx'), '~/.ds-bot and file://~')
-  assert.equal(posix('/home/calxy/x /HOME/calx'), '/home/calxy/x /HOME/calx')
+  const posix = redactor({ home: '/home/Alice', platform: 'linux' })
+  assert.equal(posix('/home/Alice/.ds-bot and file:///home/Alice'), '~/.ds-bot and file://~')
+  assert.equal(posix('/home/Alicey/x /HOME/Alice'), '/home/Alicey/x /HOME/Alice')
   assert.equal(redactor({ home: '/', platform: 'linux' })('/usr/bin'), '/usr/bin')
 })
 

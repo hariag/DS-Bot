@@ -149,9 +149,11 @@ test('the main process takes only its own acts, each in its own views', () => {
 })
 
 test('acts come only from the start page that was loaded', () => {
-  const page = 'C:\\Program Files\\DeepSeek Bot\\resources\\app.asar\\src\\start\\start.html'
+  // A Windows path is a file URL only on Windows.
+  const win32 = process.platform === 'win32'
+  const page = win32 ? 'C:\\Program Files\\DeepSeek Bot\\resources\\app.asar\\src\\start\\start.html' : '/opt/DeepSeek Bot/resources/app.asar/src/start/start.html'
   const loaded = startUrl(page, 'first')
-  assert.equal(loaded, 'file:///C:/Program%20Files/DeepSeek%20Bot/resources/app.asar/src/start/start.html?start=first')
+  assert.equal(loaded, win32 ? 'file:///C:/Program%20Files/DeepSeek%20Bot/resources/app.asar/src/start/start.html?start=first' : 'file:///opt/DeepSeek%20Bot/resources/app.asar/src/start/start.html?start=first')
   assert.equal(isStartPage(loaded, loaded), true)
   assert.equal(isStartPage(`${loaded}#x`, loaded), false)
   assert.equal(isStartPage(loaded.replace('first', 'later'), loaded), false)

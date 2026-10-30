@@ -35,12 +35,12 @@ test('the drive letter is read from a Windows path only', () => {
     assert.equal(driveOf('C:\\Users\\me\\.ds-bot'), 'C')
     assert.equal(driveOf('d:/DeepSeek Bot'), 'D')
   } else {
-    assert.equal(driveOf('/home/me/.ds-bot'), undefined)
+    assert.equal(driveOf('/home/user/.ds-bot'), undefined)
   }
 })
 
 test('a path under the home folder is written with ~', () => {
-  const home = resolve('/home/me')
+  const home = resolve('/home/user')
   assert.equal(shortPath(join(home, '.ds-bot'), home), `~${sep}.ds-bot`)
   assert.equal(shortPath(home, home), '~')
   assert.equal(shortPath(resolve('/srv/data'), home), resolve('/srv/data'))
@@ -51,7 +51,7 @@ test('the place line names the drive and its free space, or the folder', () => {
     assert.deepEqual(placeOf('C:\\Users\\me\\.ds-bot', { free: 412 * 2 ** 30 }), { drive: 'C', free: '412 GB' })
     assert.deepEqual(placeOf('C:\\Users\\me\\.ds-bot', { free: undefined }), { drive: 'C' })
   } else {
-    assert.deepEqual(placeOf('/home/me/.ds-bot', { home: '/home/me', free: 1.5 * 2 ** 30 }), { path: `~${sep}.ds-bot`, free: '1.5 GB' })
+    assert.deepEqual(placeOf('/home/user/.ds-bot', { home: '/home/user', free: 1.5 * 2 ** 30 }), { path: `~${sep}.ds-bot`, free: '1.5 GB' })
   }
 })
 

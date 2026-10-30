@@ -34,6 +34,10 @@ export const startApp = async ({ packaged = true } = {}) => {
   // The app is a packaged one, so that it has an updater. The flag comes after the start,
   // because a packaged app starts on the canonical path of its own.
   state.packaged = packaged
+  // A Linux build updates itself only from inside an AppImage; outside one the app asks about
+  // the newest GitHub release, which a test must never fetch. The faked electron-updater
+  // answers for the AppImage, as it does on Windows.
+  if (process.platform === 'linux') process.env.APPIMAGE ??= '/tmp/deepseek-bot.AppImage'
   return { home, workspace }
 }
 
