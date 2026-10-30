@@ -372,6 +372,58 @@ test('steer carry: a cut turn that ends on error keeps normal failure handling',
   await stop()
 })
 
+test('steer carry: a pending request survives a carry that reclaims the trigger', async () => {
+  const { emit, stop, rt, deliveries } = await start()
+  const dm = 'dm-a'
+  await emit(dm, 'turn/start', { turn: 1 })
+  await emit(dm, 'user/message', {
+    content: [{ type: 'text', text: 'do the thing' }],
+    source: { kind: SOURCE_KIND, role: 'request', senderSessionId: 'bot-b', exchangeId: 'x1', senderName: 'Writer' },
+  })
+  await emit(dm, 'assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'half done' }] } })
+  rt.markSteerCut(dm)
+  await emit(dm, 'turn/end', { reason: { kind: 'aborted', reason: { kind: 'hook', reason: STEER_CUT } } })
+  assert.deepEqual(deliveries, [])
+  // Another request lands between the cut and the next turn: it waits as pending.
+  await emit(dm, 'user/message', {
+    content: [{ type: 'text', text: '[Ops → Chief]\nme later' }],
+    source: { kind: SOURCE_KIND, role: 'request', senderSessionId: 'bot-c', exchangeId: 'x2', senderName: 'Ops' },
+  })
+  await emit(dm, 'turn/start', { turn: 2 })
+  const entry = rt.live.get(dm)
+  // The carry's own request reclaims the trigger; the pending one joins it deferred.
+  assert.equal(entry.info?.exchangeId, 'x1')
+  assert.equal(entry.joined.length, 1)
+  assert.equal(entry.joined[0].info.exchangeId, 'x2')
+  assert.equal(entry.joined[0].text, 'me later')
+  await emit(dm, 'assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'all done' }] } })
+  await emit(dm, 'turn/end', { reason: { kind: 'completed' } })
+  const reply = deliveries.find(d => d[0]?.replyTo === 'x1')
+  assert.ok(reply !== undefined)
+  assert.match(reply[0].text, /all done/)
+  const handback = deliveries.find(d => d[0]?.deferred === true)
+  assert.ok(handback !== undefined)
+  assert.equal(handback[0].exchangeId, 'x2')
+  assert.ok(!deliveries.some(d => /was stopped/.test(d[0]?.text ?? '')))
+  await stop()
+})
+
+test('steer cut: a running part switch blocks the cut', async () => {
+  const { emit, stop, rt, agent, calls } = await start()
+  const dm = 'dm-a'
+  // switchJobs() hands back a Map values iterator, never an array.
+  const original = rt.switchJobs
+  rt.switchJobs = () => new Map([['job', { botId: rt.chatOwners.get(dm) }]]).values()
+  await emit(dm, 'turn/start', { turn: 1 })
+  await emit(dm, 'step/start', { turn: 1, step: 1 })
+  const steer = userMessage('还没好吗')
+  agent.inbox.nextStep.push(steer)
+  await emit(dm, 'agent/inbox/spliced', { target: 'next-step', inserted: [steer] })
+  assert.equal(calls.find(c => c[0] === 'cancel'), undefined)
+  rt.switchJobs = original
+  await stop()
+})
+
 // Model-cut tests.
 test('steer cut: user steer during model phase cancels with hook and moves steer to next-turn', async () => {
   const { emit, stop, agent, calls } = await start()

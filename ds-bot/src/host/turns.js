@@ -89,7 +89,7 @@ export function install(rt) {
     })
   }
 
-  /** @type {Map<string, {turn?:number, pending?:any, info?:any, texts:string[], opened?:boolean, joined?:{info:any, from:number}[]}>} */
+  /** @type {Map<string, {turn?:number, pending?:any, pendingText?:string, info?:any, texts:string[], opened?:boolean, joined?:{info:any, from:number}[]}>} */
   const live = new Map()
   /** @type {Map<string, {sessionId:string, resolve:(text:string|null)=>void, fail:(failure:any)=>void, touch:()=>void, approval:()=>void}>} member turn waiters keyed by exchange id */
   const roomWaiters = new Map()
@@ -410,9 +410,14 @@ export function install(rt) {
         entry.later = []
         entry.steeredAt = undefined
         entry.carried = false
+        let claimedPending
+        let claimedPendingText
         if (entry.pending !== undefined) {
-          claimTrigger(id, entry, entry.pending)
+          claimedPending = entry.pending
+          claimedPendingText = entry.pendingText
+          claimTrigger(id, entry, claimedPending)
           entry.pending = undefined
+          entry.pendingText = undefined
         }
         if (entry.carry !== undefined) {
           const carry = entry.carry
@@ -426,6 +431,13 @@ export function install(rt) {
           entry.carried = true
           if (carry.info !== undefined) claimTrigger(id, entry, carry.info)
           entry.joined = carry.joined
+          // A request the carry displaced as this turn's trigger keeps its deferred
+          // place, the same as a request that joins a running turn.
+          if (carry.info !== undefined && claimedPending !== undefined
+            && claimedPending.exchangeId !== carry.info.exchangeId
+            && (expectsReply(claimedPending) || claimedPending.role === 'room') && !answersUser(claimedPending)) {
+            entry.joined = [...carry.joined, { info: claimedPending, text: claimedPendingText }]
+          }
         }
         break
       case 'user/message': {
@@ -482,7 +494,10 @@ export function install(rt) {
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
         } else if (source?.kind === SOURCE_KIND) {
-          if (entry.turn === undefined) entry.pending = source
+          if (entry.turn === undefined) {
+            entry.pending = source
+            entry.pendingText = textOf(event.data.content).replace(/^\[(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, '')
+          }
           else if (!opened) claimTrigger(id, entry, source)
           else if (source.work !== undefined && source.work !== rt.workOf?.(entry.info) && !expectsReply(source)) {
             // A result for other work than this turn's informs it, and comes back in a
