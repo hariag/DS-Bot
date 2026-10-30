@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND } from './constants.js'
+import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { answerSender, failureLine, turnFailure } from './turns.js'
 import { textOf } from './text.js'
 
@@ -56,11 +56,24 @@ export function turnsOf(events) {
   return turns
 }
 
-// The last turn that took up an exchange: what it said and how it ended.
+// The last turn that took up an exchange: what it said and how it ended. A turn cut
+// by a user steer keeps going in the turn that starts right after it, so the reason
+// that counts is the continuation's.
 export function turnOf(events, exchangeId) {
   const turns = turnsOf(events)
+  const steerCut = turn => turn?.reason?.kind === 'aborted'
+    && turn.reason.reason?.kind === 'hook'
+    && turn.reason.reason?.reason === STEER_CUT
   for (let at = turns.length - 1; at >= 0; at -= 1) {
-    if (turns[at].took.some(source => source.exchangeId === exchangeId)) return turns[at]
+    if (!turns[at].took.some(source => source.exchangeId === exchangeId)) continue
+    let found = turns[at]
+    let next = at + 1
+    while (steerCut(found) && next < turns.length) {
+      const follow = turns[next]
+      found = { ...follow, took: [...found.took, ...follow.took], texts: [...found.texts, ...follow.texts] }
+      next += 1
+    }
+    return steerCut(found) ? { ...found, reason: undefined } : found
   }
   return undefined
 }

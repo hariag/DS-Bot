@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
+import { turnOf } from '../src/host/resume.js'
 import { fakeContext } from './fake-ctx.js'
 import { SOURCE_KIND, STEER_CUT } from '../src/host/constants.js'
 
@@ -467,4 +468,36 @@ test('steer cut: earlier steers and queued next-turn keep order', async () => {
   assert.deepEqual(agent.inbox.nextTurn.map(m => m.content[0].text), ['two', 'queued'])
   assert.deepEqual(agent.inbox.nextStep.map(m => m.content[0].text), ['one'])
   await stop()
+})
+
+test('steer resume: turnOf follows a steer cut to its continuation', async () => {
+  const turn = (n, events = []) => [
+    { type: 'turn/start', data: { turn: n } },
+    ...events,
+  ]
+  const said = text => ({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
+  const took = exchangeId => ({ type: 'user/message', data: { source: { kind: SOURCE_KIND, role: 'request', exchangeId }, content: [{ type: 'text', text: 'do' }] } })
+  const ended = reason => ({ type: 'turn/end', data: { reason } })
+  const cut = { kind: 'aborted', reason: { kind: 'hook', reason: STEER_CUT } }
+
+  // A cut turn whose continuation answered: the continuation's reason and the texts merged.
+  const follow = turnOf([
+    ...turn(1, [took('x1'), said('a'), ended(cut)]),
+    ...turn(2, [said('b'), ended({ kind: 'completed' })]),
+  ], 'x1')
+  assert.deepEqual(follow?.reason, { kind: 'completed' })
+  assert.deepEqual(follow?.texts, ['a', 'b'])
+
+  // A cut turn with no continuation yet: read as unfinished, not as stopped.
+  const dangling = turnOf([
+    ...turn(1, [took('x1'), said('a'), ended(cut)]),
+  ], 'x1')
+  assert.equal(dangling?.reason, undefined)
+  assert.deepEqual(dangling?.texts, ['a'])
+
+  // A user stop stays a stop.
+  const stopped = turnOf([
+    ...turn(1, [took('x1'), ended({ kind: 'aborted', reason: { kind: 'user' } })]),
+  ], 'x1')
+  assert.deepEqual(stopped?.reason, { kind: 'aborted', reason: { kind: 'user' } })
 })
