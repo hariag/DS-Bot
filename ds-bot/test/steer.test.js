@@ -421,6 +421,10 @@ test('steer cut: a running part switch blocks the cut', async () => {
   agent.inbox.nextStep.push(steer)
   await emit(dm, 'agent/inbox/spliced', { target: 'next-step', inserted: [steer] })
   assert.equal(calls.find(c => c[0] === 'cancel'), undefined)
+  // A group part switch of the same Bot carries a roomId and must not block this cut.
+  rt.switchJobs = () => new Map([['job', { botId: rt.chatOwners.get(dm), roomId: 'r1' }]]).values()
+  await emit(dm, 'agent/inbox/spliced', { target: 'next-step', inserted: [steer] })
+  assert.deepEqual(calls.find(c => c[0] === 'cancel')?.[1], { kind: 'hook', reason: STEER_CUT })
   rt.switchJobs = original
   await stop()
 })
@@ -480,9 +484,10 @@ test('steer resume: turnOf follows a steer cut to its continuation', async () =>
   const ended = reason => ({ type: 'turn/end', data: { reason } })
   const cut = { kind: 'aborted', reason: { kind: 'hook', reason: STEER_CUT } }
 
-  // A cut turn whose continuation answered: the continuation's reason and the texts merged.
+  // A cut turn whose continuation answered: the continuation's reason and the texts
+  // merged, with the cut step's interrupted draft dropped.
   const follow = turnOf([
-    ...turn(1, [took('x1'), said('a'), ended(cut)]),
+    ...turn(1, [took('x1'), said('a'), { type: 'step/start', data: { turn: 1, step: 2 } }, said('p'), ended(cut)]),
     ...turn(2, [said('b'), ended({ kind: 'completed' })]),
   ], 'x1')
   assert.deepEqual(follow?.reason, { kind: 'completed' })

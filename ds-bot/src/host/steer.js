@@ -42,7 +42,7 @@ export function install(rt) {
     const entry = rt.live.get(id)
     const agent = liveAgent(id)
     if (!privateOf(id) || rt.readOnly?.() !== undefined || entry === undefined || agent === undefined) return
-    if ([...(rt.switchJobs?.() ?? [])].some(job => job?.botId === rt.chatOwners.get(id))) return
+    if ([...(rt.switchJobs?.() ?? [])].some(job => job?.botId === rt.chatOwners.get(id) && job.roomId === undefined)) return
     const track = stateOf(id)
     if (track.phase !== 'model' || track.cutting) return
     if (entry.turn === undefined || (entry.calls?.size ?? 0) > 0 || agent.status !== 'running') return

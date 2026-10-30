@@ -41,6 +41,10 @@ export function turnsOf(events) {
       continue
     }
     if (current === undefined) continue
+    if (event.type === 'step/start') {
+      current.stepFrom = current.texts.length
+      continue
+    }
     if (event.type === 'user/message') {
       const source = event.data?.source
       if (source?.exchangeId !== undefined) current.took.push(source)
@@ -68,12 +72,17 @@ export function turnOf(events, exchangeId) {
     if (!turns[at].took.some(source => source.exchangeId === exchangeId)) continue
     let found = turns[at]
     let next = at + 1
+    // A steer cut lands inside a step's model call, so the cut turn's last step left
+    // an interrupted draft: texts before the last step/start stay, the rest is a
+    // fragment the continuation replaces.
+    const finished = turn => turn.texts.slice(0, turn.stepFrom ?? turn.texts.length)
     while (steerCut(found) && next < turns.length) {
       const follow = turns[next]
-      found = { ...follow, took: [...found.took, ...follow.took], texts: [...found.texts, ...follow.texts] }
+      const kept = finished(found)
+      found = { ...follow, took: [...found.took, ...follow.took], texts: [...kept, ...follow.texts], stepFrom: kept.length + (follow.stepFrom ?? follow.texts.length) }
       next += 1
     }
-    return steerCut(found) ? { ...found, reason: undefined } : found
+    return steerCut(found) ? { ...found, texts: finished(found), reason: undefined } : found
   }
   return undefined
 }
