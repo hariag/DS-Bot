@@ -275,6 +275,8 @@ var ZH = {
   "Who answers": "谁来回答",
   "Choose an admin first": "先选一个管理员",
   "@mentions always pick who answers.": "@提及总是指定由谁回答。",
+  "Pause Bot relays after": "Bot 接力几次后暂停",
+  "Counted since your last message in this group.": "从你在群里的上一条消息算起。",
   Notice: "群公告",
   "Shared instructions every member reads before speaking…": "每位成员发言前都会读到的共同说明…",
   "Group notice": "群公告",
@@ -653,6 +655,7 @@ var ZH = {
   "{name} did not answer or call anyone; call a member with @Name": "{name} 没有回答，也没有叫谁；用 @名字 叫一个成员来回答",
   "The group replies could not be shown": "群里的回复显示不出来",
   "Paused after {count} Bot relays. Waiting: {names}": "Bot 之间已接力 {count} 次，先停下了。还在等：{names}",
+  "Continue": "继续",
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
@@ -1686,7 +1689,8 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     setPrefs: (prefs) => after(call2("set-prefs", prefs)),
     setMain: (id, main = true, options = {}) => after(call2("set-main", { id, main, ...options })),
     updateRoom: (id, patch) => after(call2("update-room", { id, ...patch })),
-    send: (sessionId, text) => after(call2("send", { sessionId: partFor(sessionId), text })),
+    continueRoom: (roomId) => after(call2("room-continue", { roomId })),
+    send: (sessionId, text, attachments) => after(call2("send", { sessionId: partFor(sessionId), text, ...attachments?.length ? { attachments } : {} })),
     answerQuestion: (sessionId, questionId, answer) => after(call2("answer-question", { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
     answerView: (sessionId, viewId, action, values) => after(call2("view-reply", { sessionId: partFor(sessionId), viewId, action, values })),
@@ -3343,10 +3347,6 @@ body[data-bt-layout=flat] .bt-think{max-width:calc(var(--bt-flat-w) * 100%)}
 [data-step-process]>[data-step-process-body]{display:block!important;content-visibility:visible!important;max-height:none!important;overflow:visible!important;mask-image:none!important;scrollbar-gutter:auto!important}
 :is([data-step-process],[data-turn-process-hidden])[hidden]{content-visibility:visible!important}
 [class*="_flowItem"]:has(> [data-slot="conversation.chat.node"]:empty){display:none!important}
-/* A turn's process seat is a flow child of its own, not a flowItem: an empty one
-   (a hidden exchange turn, a turn whose calls draw nothing) still kept its
-   margin, stacking a blank band per hidden call. */
-[data-step-process]:not(:has([data-slot="conversation.chat.node"] :not([hidden]))){display:none!important}
 [class*="_header"]:has(.bt-head){border-bottom-color:transparent!important;box-shadow:none!important}
 /* The transcript runs under a floating header pill. */
 header[class*="_header"]:has(.bt-head){position:absolute!important;top:0;left:0;right:0;z-index:8;display:flex!important;padding:10px 0 0!important;background:transparent!important;pointer-events:none;justify-content:center}
@@ -3528,7 +3528,6 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-open-new .bt-time-sep{height:16px;margin:32px 0 2px}
 .bt-earlier{display:flex;flex-direction:column;gap:6px}
 .bt-earlier-top{display:flex;justify-content:center;align-items:center;height:34px;flex:none}
-.bt-earlier-top:empty{display:none}
 .bt-earlier-top .bt-soft{height:28px;font-size:12px;padding:0 12px}
 .bt-urow{display:flex;justify-content:flex-end}
 .bt-ububble{max-width:calc(var(--bt-msg-w) * 100%);background:var(--bt-user);color:var(--bt-user-ink);border-radius:18px;padding:7px 12px;font-size:14px;line-height:24px;box-sizing:border-box;overflow-wrap:anywhere;text-wrap:pretty;text-autospace:normal}
@@ -8534,7 +8533,7 @@ function scanReplies(text, start, replies) {
   }
 }
 function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
-  const [live, setLive] = (0, import_react16.useState)({ replies: [], speaking: [] });
+  const [live, setLive] = (0, import_react16.useState)({ replies: [], speaking: null });
   (0, import_react16.useEffect)(() => {
     if (done) return void 0;
     let stop = false;
@@ -8547,7 +8546,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       const key = entry ? JSON.stringify([entry.replies, entry.speaking]) : "";
       if (entry && key !== seen) {
         seen = key;
-        setLive({ replies: entry.replies ?? [], speaking: [entry.speaking ?? []].flat() });
+        setLive({ replies: entry.replies ?? [], speaking: entry.speaking ?? null });
       }
       timer = setTimeout(tick, document.hidden ? 5e3 : 1e3);
     };
@@ -8564,11 +8563,9 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     replies = parsed.replies.length ? parsed.replies : live.replies;
     broken = parsed.broken;
   }
-  const pending = done ? [] : live.speaking;
-  const doing = JSON.parse(useWork?.((work) => JSON.stringify(pending.map((id) => {
-    const tool = work.bots?.[id]?.tool;
-    return tool ? [tool, workPhrase(work.bots[id])] : [];
-  }))) ?? "[]");
+  const pending = done || !live.speaking ? [] : [live.speaking];
+  const speakerTool = useWork?.((work) => work.bots?.[live.speaking]?.tool) ?? void 0;
+  const speakerDoing = useWork?.((work) => work.bots?.[live.speaking]?.tool ? workPhrase(work.bots[live.speaking]) : void 0) ?? void 0;
   if (replies.length === 0 && pending.length === 0) {
     return broken ? (0, import_react16.createElement)("div", { className: "bt-group-replies" }, (0, import_react16.createElement)("div", { className: "bt-event" }, t("The group replies could not be shown"))) : null;
   }
@@ -8614,7 +8611,8 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return (0, import_react16.createElement)(
           "div",
           { key: `paused-${index}`, className: "bt-event" },
-          t("Paused after {count} Bot relays. Waiting: {names}", { count: reply.count, names: (reply.names ?? []).join(t(" and ")) })
+          (0, import_react16.createElement)("span", null, t("Paused after {count} Bot relays. Waiting: {names}", { count: reply.count, names: (reply.names ?? []).join(t(" and ")) })),
+          room2?.paused?.length > 0 ? (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => actions.continueRoom(sessionId) }, t("Continue")) : null
         );
       }
       if (reply.kind === "resumed") {
@@ -8635,9 +8633,6 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
           )
         );
       }
-      if (reply.kind === "folder") {
-        return (0, import_react16.createElement)("div", { key: `folder-${index}`, className: "bt-event" }, reply.text);
-      }
       if (reply.kind === "stopped") {
         return (0, import_react16.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("You stopped {name}'s work", { name: bot.name }));
       }
@@ -8646,15 +8641,14 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       return (0, import_react16.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration });
     }),
-    pending.map((id, at) => {
+    pending.map((id) => {
       const bot = roster.byId[id];
       if (!bot) return null;
-      const [tool, phrase] = doing[at] ?? [];
       return (0, import_react16.createElement)(
         "div",
         { key: `pending-${id}`, className: "bt-activity" },
-        (0, import_react16.createElement)(BotMark, { bot, size: 22, state: tool ? toolState(tool) : "thinking" }),
-        (0, import_react16.createElement)(Shimmer, null, phrase ? `${bot.name} · ${phrase}…` : t("{name} is typing…", { name: bot.name }))
+        (0, import_react16.createElement)(BotMark, { bot, size: 22, state: speakerTool ? toolState(speakerTool) : "thinking" }),
+        (0, import_react16.createElement)(Shimmer, null, speakerDoing ? `${bot.name} · ${speakerDoing}…` : t("{name} is typing…", { name: bot.name }))
       );
     })
   );
@@ -10541,6 +10535,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
   const [shown, leaving] = useLinger(open, 120);
   const button = (0, import_react20.useRef)(null);
   const menu = (0, import_react20.useRef)(null);
+  const ownInput = (0, import_react20.useRef)(null);
   const tick = useViewport();
   (0, import_react20.useEffect)(() => {
     if (!open) return void 0;
@@ -10562,17 +10557,16 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
   }, [open]);
   const target = roster.byId?.[sessionId]?.id ?? roster.roomsById?.[sessionId]?.id;
   if (sessionId === void 0 || target === void 0) return null;
-  const fileInput = () => button.current?.closest("[data-composer-card]")?.querySelector("input[type=file]");
-  const toggle = () => {
-    if (open) {
-      setOpen(null);
-      return;
-    }
-    setOpen({ files: Boolean(fileInput()) });
-  };
+  const fileInput = () => button.current?.closest("[data-composer-card]")?.querySelector("input[type=file]:not([data-bot-files]):not(:disabled)") ?? ownInput.current;
+  const toggle = () => setOpen(open ? null : {});
   const attach = () => {
     setOpen(null);
     fileInput()?.click();
+  };
+  const onPick = (event) => {
+    const picked = event.target.files === null ? [] : [...event.target.files];
+    event.target.value = "";
+    if (picked.length > 0) void actions.attachFiles?.(sessionId, picked, inputActions);
   };
   const schedule = () => {
     setOpen(null);
@@ -10591,6 +10585,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
   return (0, import_react20.createElement)(
     import_react20.Fragment,
     null,
+    (0, import_react20.createElement)("input", { ref: ownInput, "data-bot-files": "", type: "file", multiple: true, hidden: true, onChange: onPick }),
     (0, import_react20.createElement)("button", {
       ref: button,
       type: "button",
@@ -10612,7 +10607,7 @@ function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
         style: place ?? {},
         "data-leaving": leaving || void 0
       },
-      shown.files ? (0, import_react20.createElement)("button", { type: "button", role: "menuitem", onClick: attach }, (0, import_react20.createElement)(PaperclipIcon), (0, import_react20.createElement)("span", { className: "bt-menu-label" }, t("Add files"))) : null,
+      (0, import_react20.createElement)("button", { type: "button", role: "menuitem", onClick: attach }, (0, import_react20.createElement)(PaperclipIcon), (0, import_react20.createElement)("span", { className: "bt-menu-label" }, t("Add files"))),
       canReference ? (0, import_react20.createElement)("button", { type: "button", role: "menuitem", onMouseDown: keepComposerFocus, onClick: reference }, (0, import_react20.createElement)(ChatsIcon), (0, import_react20.createElement)("span", { className: "bt-menu-label" }, t("Reference a chat"))) : null,
       (0, import_react20.createElement)("button", { type: "button", role: "menuitem", onClick: schedule }, (0, import_react20.createElement)(ClockIcon), (0, import_react20.createElement)("span", { className: "bt-menu-label" }, t("Scheduled task")))
     ), document.body) : null
@@ -13495,6 +13490,7 @@ label.bt-bs-row{cursor:text}
 .bt-bs-input:hover{background:var(--bt-hover)}
 .bt-bs-input:focus{background:var(--bt-main);border-color:var(--bt-line-2);text-align:left}
 .bt-bs-input::placeholder{color:var(--bt-ink-3)}
+.bt-bs-input.bt-bs-num{flex:0 0 72px;min-width:0}
 .bt-bs-stack{flex-direction:column;align-items:stretch;gap:8px}
 .bt-bs-area{flex:none;width:auto;min-height:112px;height:auto;margin:0 -6px -4px;padding:8px;line-height:19px;text-align:left;resize:vertical;background:var(--bt-hover)}
 .bt-bs-area:hover{background:var(--bt-active)}
@@ -14355,6 +14351,44 @@ function roomSubtitle(room2, roster) {
   const admin = roster.byId[room2.admin];
   return [t("{count} members", { count: room2.members.length }), admin ? t("Admin {name}", { name: admin.name }) : t("No admin")].join(" · ");
 }
+function RelayLimitRow({ room: room2, update }) {
+  const [draft, setDraft] = (0, import_react36.useState)(room2.relayLimit ?? "");
+  (0, import_react36.useEffect)(() => setDraft(room2.relayLimit ?? ""), [room2.relayLimit]);
+  const save = () => {
+    const text = String(draft).trim();
+    if (text === "") {
+      if (room2.relayLimit !== void 0) update({ relayLimit: null });
+      return;
+    }
+    const limit = Number(text);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200 || limit === room2.relayLimit) {
+      setDraft(room2.relayLimit ?? "");
+      return;
+    }
+    update({ relayLimit: limit });
+  };
+  return (0, import_react36.createElement)(
+    Row,
+    { label: t("Pause Bot relays after"), hint: t("Counted since your last message in this group.") },
+    (0, import_react36.createElement)("input", {
+      className: "bt-bs-input bt-bs-num",
+      type: "number",
+      min: 1,
+      max: 200,
+      placeholder: String(room2.relayLimitDefault ?? ""),
+      value: draft,
+      "aria-label": t("Pause Bot relays after"),
+      onChange: (event) => setDraft(event.target.value),
+      onBlur: save,
+      onKeyDown: (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }
+    })
+  );
+}
 function GroupPermission({ room: room2, catalog, update }) {
   if (!catalog?.options?.length) return null;
   const shared2 = room2.permission !== void 0;
@@ -14446,7 +14480,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted 
           }
         }, t(label)))),
         (0, import_react36.createElement)("span", { key: mode, className: "bt-set-hint bt-veil" }, `${t(modeHint)} ${t("@mentions always pick who answers.")}`)
-      )
+      ),
+      (0, import_react36.createElement)(RelayLimitRow, { room: room2, update })
     ),
     (0, import_react36.createElement)(
       Card2,
@@ -17053,7 +17088,7 @@ function memberWork(room2, work = NO_WORK) {
   return room2.members.map((id) => {
     const approvals = (work.approvals ?? []).filter((entry) => entry.botId === id);
     const local = here.find((entry) => entry.botId === id);
-    const doing = local ? { ...local, roomId: room2.id } : void 0;
+    const doing = local ? { ...local, roomId: room2.id } : work.bots?.[id];
     return { id, approvals, doing, here: local !== void 0, state: approvals.length > 0 ? "ask" : doing ? "work" : "idle" };
   });
 }
@@ -17182,10 +17217,11 @@ function ApprovalCard({ approval, bot, actions }) {
     )
   );
 }
-function MemberState({ entry, bot }) {
+function MemberState({ entry, bot, room: room2, roster }) {
   if (entry?.state === "ask") return stateLine("bt-member-state bt-mw-ask", entry.approvals[0].at, t("Waiting for your approval"));
   if (entry?.state !== "work") return bot.role ? stateLine("bt-member-state", void 0, bot.role) : null;
-  return stateLine("bt-member-state", entry.doing.since, (0, import_react46.createElement)(Shimmer, null, `${workPhrase(entry.doing)}…`));
+  const where = entry.doing.roomId === room2.id ? "" : entry.doing.roomId ? t("in {name}", { name: roster.roomsById[entry.doing.roomId]?.name ?? t("a group chat") }) : t("in its own chat");
+  return stateLine("bt-member-state", entry.doing.since, (0, import_react46.createElement)(Shimmer, null, `${workPhrase(entry.doing)}…`), where ? ` ${where}` : "");
 }
 function StopMemberWork({ entry, bot, room: room2, actions }) {
   const [stopping, setStopping] = (0, import_react46.useState)(false);
@@ -21000,6 +21036,16 @@ function apply(ctx) {
     return () => fiber.dispose();
   };
   actions.canReferenceChat = () => atMenu !== null;
+  actions.attachFiles = (sessionId, files, inputActions) => {
+    const conversation = ctx.conversation;
+    if (conversation === void 0 || typeof inputActions?.addAttachments !== "function") return false;
+    const drafts = conversation.createDrafts(sessionId, files);
+    if (!inputActions.addAttachments(drafts.map((draft) => draft.id))) {
+      conversation.releaseDraftAttachments(drafts);
+      return false;
+    }
+    return true;
+  };
   actions.referenceChat = (sessionId, span) => {
     const controller = atMenu?.controllerOf(sessionId);
     if (controller === void 0 || span === void 0) return;
