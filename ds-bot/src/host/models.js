@@ -5,43 +5,22 @@ import { normalize, splitRef } from './text.js'
 
 const CATALOG_TTL_MS = 10_000
 const ROUTE_WAIT_MS = 30_000
-// The DeepSeek account's sign-in grant (dsh-deepseek-account-platform).
-const ACCOUNT_RECORD = 'deepseek-account-platform/default'
 
 export function install(rt) {
   const { ctx, state } = rt
 
   let modelsSynced = null
   let catalogCache = { at: 0, value: [] }
+  // Routes DSH serves that cannot answer a request at all — a hosted loop engine
+  // publishes one so its Sessions can be prompted. Once one refuses with
+  // HOSTED_ENGINE_ROUTE it is remembered, and nothing chooses it again this run.
+  const refused = new Set()
+  const answerable = entries => (refused.size === 0 ? entries : entries.filter(entry => !refused.has(entry.ref)))
   // A model's thinking levels, resolved once and kept for a short while: they change
   // only with the provider, which also drops the catalog cache.
   const reasoningCache = new Map()
-  const dropCatalog = () => { catalogCache = { at: 0, value: [] } }
-  // A key set or a sign-in may be the user's fix for a Bot's failed turn (turns.js); a
-  // key removed or a sign-out is not. A provider that registers or changes fixes
-  // nothing by itself: providers register late at every start.
-  ctx.on?.('llm/adapters-updated', () => { dropCatalog(); reasoningCache.clear() })
-  ctx.on?.('credentials/reference-updated', async (ref) => {
-    dropCatalog()
-    if (await inPlace(credentials => credentials.describe(ref))) rt.unblockBots?.({ ref })
-  })
-  // A sign-in writes the account's record. A sign-out removes it, and so does a token
-  // the provider refused, while the turn that failed on it still runs. Other plugins'
-  // records (an OAuth token refresh) say nothing about the account.
-  ctx.on?.('credentials/record-updated', async (key) => {
-    dropCatalog()
-    if (String(key) !== ACCOUNT_RECORD) return
-    if (await inPlace(credentials => credentials.describeRecord(key))) rt.unblockBots?.({ signedIn: true })
-  })
-  ctx.on?.('settings/document-updated', dropCatalog)
-
-  // Whether a credential is there after a change. One that cannot be read counts as
-  // there, so a fix is not missed.
-  async function inPlace(describe) {
-    const credentials = ctx.get?.('credentials')
-    if (credentials === undefined) return true
-    try { return (await describe(credentials))?.configured !== false } catch { return true }
-  }
+  ctx.on?.('llm/adapters-updated', () => { catalogCache = { at: 0, value: [] }; reasoningCache.clear() })
+  for (const name of ['credentials/reference-updated', 'settings/document-updated']) ctx.on?.(name, () => { catalogCache = { at: 0, value: [] } })
 
   // The thinking levels a model serves: `{efforts: [{id, name, description?}],
   // defaultEffort?}`, or undefined when it has none or the provider cannot say.
@@ -62,7 +41,7 @@ export function install(rt) {
   // that is about to be used asks for a `fresh` one. Entries for models a Bot uses
   // also carry their `reasoning`, so the picker can offer thinking levels.
   async function catalog({ fresh = false } = {}) {
-    if (!fresh && Date.now() - catalogCache.at < CATALOG_TTL_MS && catalogCache.value.length > 0) return catalogCache.value
+    if (!fresh && Date.now() - catalogCache.at < CATALOG_TTL_MS && catalogCache.value.length > 0) return answerable(catalogCache.value)
     const entries = []
     for (const provider of ctx.llm.listProviders()) {
       let models = []
@@ -82,33 +61,27 @@ export function install(rt) {
     // turn on them fails.
     const missing = await rt.missingKeys?.([...new Set(entries.map(entry => entry.provider))]) ?? new Set()
     for (const entry of entries) if (missing.has(entry.provider)) entry.needsKey = true
-    // A key can arrive without an event (an environment variable at the next start), so
-    // a provider listed with its key again lifts what its missing key blocked.
-    rt.unblockBots?.({ keyed: new Set(entries.filter(entry => !entry.needsKey).map(entry => entry.provider)) })
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
     await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
       const reasoning = await reasoningOf(entry.ref)
       if (reasoning !== undefined) entry.reasoning = reasoning
     }))
     catalogCache = { at: Date.now(), value: entries }
-    return entries
+    return answerable(entries)
   }
 
-  // The profile default model of DSH as set, served or not.
+  // The profile default model of DSH as set, served or not, and able to answer.
   const defaultRef = () => {
     const selection = ctx.get?.('agentDefaultModel')?.currentSelection?.()
-    return selection?.provider && selection?.model ? `${selection.provider}/${selection.model}` : undefined
+    if (!selection?.provider || !selection?.model) return undefined
+    const ref = `${selection.provider}/${selection.model}`
+    return refused.has(ref) ? undefined : ref
   }
-  // A model whose provider has no key fails every turn, so no Bot is given one unasked.
-  const usableOf = entries => entries.filter(entry => entry.needsKey !== true)
-  // By the catalog as last listed, without waiting for a fresh one.
-  const isUsable = ref => usableOf(catalogCache.value).some(entry => entry.ref === ref)
-  // The profile default model of DSH, when it is served and usable; else the first
-  // usable model; else none.
+  // The profile default model of DSH, when it is served; else the first served model.
   function pickDefault(entries) {
-    const usable = usableOf(entries)
     const ref = defaultRef()
-    return usable.find(entry => entry.ref === ref)?.ref ?? usable[0]?.ref
+    const list = answerable(entries)
+    return list.find(entry => entry.ref === ref)?.ref ?? list[0]?.ref
   }
   const defaultModel = async () => pickDefault(await catalog())
 
@@ -128,13 +101,12 @@ export function install(rt) {
   }
 
   // A Bot with no model yet waits for the user to pick one and changes nothing. A
-  // model that is no longer served falls back to the last one it ran on, then the
-  // default; a fallback is never one that needs a key.
+  // model that is no longer served falls back to the last one it ran on, then the default.
   async function desiredModel(bot) {
     if (!bot.model) return undefined
     const entries = await catalog()
-    if (entries.some(entry => entry.ref === bot.model)) return bot.model
-    return usableOf(entries).some(entry => entry.ref === bot.appliedModel) ? bot.appliedModel : pickDefault(entries)
+    const served = new Set(entries.map(entry => entry.ref))
+    return [bot.model, bot.appliedModel].find(ref => ref && served.has(ref)) ?? pickDefault(entries)
   }
 
   // The thinking level a Bot asked for, when the model it runs on serves it; else the
@@ -157,6 +129,15 @@ export function install(rt) {
     const named = efforts.filter(effort => normalize(effort.id) === key || normalize(effort.name) === key)
     if (named.length === 1) return named[0].id
     throw new Error(`Thinking level ${wanted} is not available for ${ref}. Available: ${efforts.map(effort => effort.name).join(', ')}`)
+  }
+
+  // The profile default model's thinking level, when the model a Bot starts on
+  // serves it. A level the model does not know is ignored, like an inherited
+  // `bot.effort` — the model's own default applies instead.
+  async function defaultEffort(ref) {
+    const wanted = ctx.get?.('agentDefaultModel')?.currentSelection?.()?.reasoningEffort
+    if (ref === undefined || wanted === undefined) return undefined
+    return resolveEffort(ref, wanted).catch(() => undefined)
   }
 
   // DSH's selectModel also saves the selection as the profile default model, in the
@@ -235,9 +216,28 @@ export function install(rt) {
     }
   }
 
+  // A route that refused a request for not being a model endpoint: it stays out of
+  // the catalog from now on, the Bots pinned to it move to what they would be given
+  // today, and the Bot whose turn failed re-selects — its group Session may carry
+  // another Bot's route, so `force` re-selects even when its record looks applied.
+  async function routeRefused(ref, bot) {
+    if (!refused.has(ref)) {
+      refused.add(ref)
+      rt.warn('ds-bot: %s is not a model endpoint, so it is not chosen again', ref)
+      const entries = await catalog()
+      for (const other of Object.values(state.bots)) {
+        if (other.model === ref) other.model = pickDefault(entries)
+        if (other.appliedModel === ref) delete other.appliedModel
+      }
+      await rt.save()
+    }
+    if (bot !== undefined) await applyModel(bot, { force: true })
+  }
+
   Object.assign(rt, {
-    catalog, cachedCatalog: () => catalogCache.value, cachedDefault: () => pickDefault(catalogCache.value),
-    defaultRef, defaultModel, isUsable, resolveModel, desiredModel, reasoningOf, resolveEffort, desiredEffort,
-    selectSessionModel, applyModel, waitForModel, syncModels, dropCatalog,
+    catalog, cachedCatalog: () => answerable(catalogCache.value), cachedDefault: () => pickDefault(catalogCache.value),
+    defaultRef, defaultModel, defaultEffort, resolveModel, desiredModel, reasoningOf, resolveEffort, desiredEffort,
+    selectSessionModel, applyModel, waitForModel, syncModels, routeRefused,
+    dropCatalog: () => { catalogCache = { at: 0, value: [] } },
   })
 }
