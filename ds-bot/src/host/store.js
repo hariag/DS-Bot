@@ -1,8 +1,8 @@
 // Store: the saved team (state.json), its migrations, the lock that keeps a second dsh
 // host on the same data from writing it, and the indexes that map a Session to the Bot
 // or group chat it belongs to.
-import { copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdirSync, statSync } from 'node:fs'
+import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, TEXT_KEPT } from './constants.js'
 import { replaceFile } from './files.js'
@@ -63,12 +63,10 @@ export function install(rt) {
     return `The Bot team in ${home} is open in another dsh (Web or Desktop, ${where}). This window shows the team but cannot change it; close the other one and reload.`
   }
 
-  // Synchronous on purpose: the saved team and the session indexes built from it
-  // exist before the first tool or shell env call can resolve a Session.
-  const readFileState = () => {
+  const readFileState = async () => {
     let contents
     try {
-      contents = readFileSync(statePath, 'utf8')
+      contents = await readFile(statePath, 'utf8')
     } catch (error) {
       seen = stamp()
       if (error?.code === 'ENOENT') {
@@ -86,7 +84,7 @@ export function install(rt) {
     } catch (error) {
       const backup = `${statePath}.broken-${Date.now()}`
       try {
-        copyFileSync(statePath, backup)
+        await copyFile(statePath, backup)
         stuck = undefined
         warn('ds-bot: unreadable state %s: %s; backed up as %s', statePath, error, backup)
       } catch (copyError) {
@@ -178,15 +176,13 @@ export function install(rt) {
       delete room.botRounds
       migrated = true
     }
-    // LEGACY: the late-round limit went with the round caps, and the relay limit that
-    // followed it went too. Calls it parked stay until the group's next round runs them.
+    // LEGACY: the late-round limit went with the round caps; a group counts relays to
+    // its pause now.
     for (const room of Object.values(state.rooms)) {
-      if (['lateRounds', 'quietNoticed', 'quietShown', 'relays', 'relayLimit'].every(key => room[key] === undefined)) continue
+      if (room.lateRounds === undefined && room.quietNoticed === undefined && room.quietShown === undefined) continue
       delete room.lateRounds
       delete room.quietNoticed
       delete room.quietShown
-      delete room.relays
-      delete room.relayLimit
       migrated = true
     }
     // Groups from before group settings existed reply in turn, led by a Main Bot member.
@@ -195,6 +191,16 @@ export function install(rt) {
       if (room.admin === undefined) room.admin = room.members.find(id => state.mainBotIds.includes(id)) ?? null
       if (!ROOM_MODES.includes(room.mode)) room.mode = 'everyone'
       room.notice ??= ''
+      migrated = true
+    }
+    // A Bot deleted while a group was made or changed could stay listed in it, even as its
+    // admin; it leaves the group now.
+    for (const room of Object.values(state.rooms)) {
+      const members = room.members.filter(id => state.bots[id])
+      const admin = members.includes(room.admin) ? room.admin : null
+      if (members.length === room.members.length && admin === room.admin) continue
+      room.members = members
+      room.admin = admin
       migrated = true
     }
     // Teams from before #206 kept every long message whole in this file, written whole on
@@ -224,7 +230,7 @@ export function install(rt) {
   const load = () => loaded ??= (async () => {
     claimLock()
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
-    const { migrated, stale } = adopt(readFileState())
+    const { migrated, stale } = adopt(await readFileState())
     if (holder !== undefined) return
     if (migrated && stuck === undefined) {
       // A failed write must not poison `loaded`: the migrated state stays in
@@ -248,25 +254,40 @@ export function install(rt) {
       if (holder === undefined) {
         warn('ds-bot: the other dsh has closed; this one now saves the Bot team')
         warnedReadOnly = false
-        adopt(readFileState())
+        adopt(await readFileState())
         return
       }
     } else if (!lockBroken && !lock.owns()) {
       // A cached "writer" is stale once the lock file no longer names this host:
       // another dsh may have taken it over, or the file may just be gone. Re-claim
       // and re-check instead of trusting the flag.
+      const previous = lock.read()
       claimLock()
       if (lockBroken) return
       if (holder === undefined) {
-        // The lock was free: still the writer, but the file may carry changes
-        // written while no host held it.
         warnedReadOnly = false
-        adopt(readFileState())
+        // A lock file another dsh left behind means the team changed hands, so its
+        // file is adopted. Without one the state should still be what this host
+        // last wrote; a file that changed anyway came from outside, so it is kept
+        // as a copy and this host keeps its own state.
+        if (previous !== undefined) {
+          adopt(await readFileState())
+          return
+        }
+        if (stamp() !== seen) {
+          const backup = `${statePath}.edited-${Date.now()}`
+          try {
+            await copyFile(statePath, backup)
+            warn('ds-bot: %s changed while no host held the team and its lock was gone; the change was not adopted, the file is kept as %s', statePath, backup)
+          } catch (error) {
+            warn('ds-bot: %s changed while no host held the team and its lock was gone; the change was not adopted and keeping a copy failed: %s', statePath, error)
+          }
+        }
         return
       }
       warn('ds-bot: %s', readOnly())
     }
-    if ((stuck !== undefined || holder !== undefined) && stamp() !== seen) adopt(readFileState())
+    if ((stuck !== undefined || holder !== undefined) && stamp() !== seen) adopt(await readFileState())
   }
 
   const warnReadOnly = () => {
@@ -289,11 +310,11 @@ export function install(rt) {
     return warnReadOnly()
   }
 
-  const save = () => {
-    if (stopped) return writing
+  const save = ({ required = false } = {}) => {
+    if (stopped) return required ? Promise.reject(new Error('The Bot team cannot be saved after this host stopped.')) : writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
-    if (!writable()) return writing
+    if (!writable()) return required ? Promise.reject(new Error(`This host cannot save the Bot team: ${readOnly()}`)) : writing
     state.revision += 1
     state.exchanges = state.exchanges.slice(-MAX_EXCHANGES)
     const snapshot = JSON.stringify(state)
@@ -378,7 +399,6 @@ export function install(rt) {
   const isBotSession = id => chatOwners.has(id) || groupOwners.has(id)
   const groupSessionsOf = botId => Object.values(state.rooms).map(room => room.sessions?.[botId]).filter(Boolean)
   const dropGroupSession = (room, botId) => {
-    if (room.memberDirs !== undefined) delete room.memberDirs[botId]
     const sessionId = room.sessions?.[botId]
     if (sessionId === undefined) return
     delete room.sessions[botId]
@@ -391,11 +411,21 @@ export function install(rt) {
     // that no longer has it.
     void ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true }).catch(() => {})
   }
+  // A group Session DSH can no longer open is set aside; the member's earlier parts in
+  // the group stay, and its next turn there starts a new Session.
+  const retireGroupSession = (room, botId) => {
+    const sessionId = room.sessions?.[botId]
+    if (sessionId === undefined) return
+    delete room.sessions[botId]
+    groupOwners.delete(sessionId)
+    rt.cancelApprovals?.(sessionId)
+    void ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true }).catch(() => {})
+  }
   const findBot = (ref) => {
     if (ref === undefined) return undefined
     const byId = own(state.bots, ref)
     if (byId) return byId
-    const wanted = normalize(unquote(ref)).replace(/^@/, '')
+    const wanted = normalize(ref).replace(/^@/, '')
     return Object.values(state.bots).find(bot => normalize(bot.name) === wanted)
   }
   // Every group chat whose id or name matches; callers refuse an ambiguous name.
@@ -412,6 +442,6 @@ export function install(rt) {
     state, load, save, refresh, readOnly, own,
     botOf, roomOf, isMain, chatOf, selfOf, isBotSession,
     chatOwners, groupOwners, pastOwners,
-    groupSessionsOf, dropGroupSession, findBot, findRooms, isAdminOf,
+    groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })
 }
