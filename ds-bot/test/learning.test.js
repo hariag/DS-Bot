@@ -37,7 +37,6 @@ const createReply = JSON.stringify({
 })
 const noneReply = JSON.stringify({ action: 'none', reason: 'This work taught nothing reusable.' })
 
-let rt
 function start({ replies = [], config = {}, history = {}, seed = TEAM, learningSeed = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-learning-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(JSON.parse(JSON.stringify(seed))))
@@ -93,7 +92,7 @@ function start({ replies = [], config = {}, history = {}, seed = TEAM, learningS
     ...config,
     learningTimes: { minTurnMs: 0, idleMs: 0, intervalMs: 0, tickMs: 10, ...config.learningTimes },
   }
-  rt = createRuntime(ctx, { home, ...settings })
+  const rt = createRuntime(ctx, { home, ...settings })
   const call = async (endpoint, payload = {}) => {
     const response = await route.fetch(new Request('http://localhost/api/bot', {
       method: 'POST',
@@ -458,6 +457,32 @@ test('folders without a project marker, DSH data folders, and agentsMd:false are
   }
 })
 
+test('a disposed learning pass cannot overwrite the next host state with a late model reply', async t => {
+  for (const kind of ['skill', 'agents']) await t.test(kind, async t => {
+    let finishModel
+    const reply = new Promise(resolve => { finishModel = resolve })
+    const folder = kind === 'agents' ? projectFolder(t) : undefined
+    const seed = folder ? { ...TEAM, bots: { ...TEAM.bots, b2: { ...TEAM.bots.b2, workDir: folder } } } : TEAM
+    const runtime = await startRuntime({ seed, replies: kind === 'agents' ? [noneReply, reply] : [reply], config: { learningTimes: { tickMs: 100_000 } } })
+    t.after(() => runtime.stop())
+    await finishTurn(runtime.ctx)
+    await until(() => runtime.learningState().pending?.b2?.includes('b2'))
+    const pass = runtime.rt.learningRun()
+    const calls = kind === 'agents' ? 2 : 1
+    await until(() => runtime.requests.length === calls)
+    await runtime.ctx.dispose()
+
+    const next = { pending: { m1: ['m1'] }, proposals: { next: { id: 'next', botId: 'm1', name: 'next-host-skill' } } }
+    writeFileSync(runtime.learningPath, JSON.stringify(next))
+    finishModel(kind === 'agents' ? agentsEdit : createReply)
+    await pass
+    assert.deepEqual(runtime.learningState(), next)
+    assert.deepEqual(runtime.rt.learningView(), {})
+    assert.equal(await runtime.rt.learningRun(), 0)
+    assert.equal(runtime.requests.length, calls)
+  })
+})
+
 test('parseJson accepts fenced and unfenced objects and ignores garbage', () => {
   assert.deepEqual(parseJson('```json\n{"action":"none"}\n```'), { action: 'none' })
   assert.deepEqual(parseJson('Answer: {"action":"none"}'), { action: 'none' })
@@ -542,22 +567,22 @@ test('long turns ending during review remain pending for the next pass', async t
     config: { learningTimes: { tickMs: 100_000 } },
   })
   t.after(() => runtime.stop())
-  // Every load and save rebuilds the owner maps from the roster, and the startup model sync
-  // saves while the test runs: b3 is put back after each of them.
-  const owned = () => { runtime.rt.chatOwners.set('b3', 'b2') }
+  // chatOwners is a derived index: load() and save() rebuild it from the saved
+  // team, so the extra Session standing in for a second chat of b2 goes back on
+  // after each rebuild.
   const load = runtime.rt.load
   runtime.rt.load = async (...args) => {
     const result = await load(...args)
-    owned()
+    runtime.rt.chatOwners.set('b3', 'b2')
     return result
   }
   const save = runtime.rt.save
   runtime.rt.save = (...args) => {
     const result = save(...args)
-    owned()
+    runtime.rt.chatOwners.set('b3', 'b2')
     return result
   }
-  owned()
+  runtime.rt.chatOwners.set('b3', 'b2')
   const b3Statuses = []
   runtime.ctx.on('agent/status', ({ agent, status }) => {
     if (agent?.id === 'b3') b3Statuses.push(status)
