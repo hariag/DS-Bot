@@ -1,8 +1,16 @@
-// Runs the Host in Electron's Node mode and owns its lifetime.
+// Runs the Host in plain Node on Linux, Electron's Node mode elsewhere, and owns its lifetime.
 // Follows DeepSeek Harness apps/desktop/src/host-process.ts (MIT); see NOTICE.
 import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 
 const STDERR_TAIL_CHARS = 8 * 1024
+
+// Electron on Linux leaks system glib symbols into sharp's bundled libvips.
+export function hostExecutable(runtimeDir, platform = process.platform) {
+  return platform === 'linux'
+    ? join(runtimeDir, 'primary-runtime', 'dependencies', 'node', 'bin', 'node')
+    : process.execPath
+}
 
 // The web server prints its launch URL, and the launch token in it opens the Host.
 const redact = (text) => text.replace(/([?&]token=)[^&\s]+/gu, '$1<hidden>')
@@ -14,6 +22,7 @@ const settlesWithin = (promise, ms) => new Promise((resolve) => {
 
 export class HostProcess {
   #options
+  #platform
   #child
   #ready
   #exit
@@ -23,11 +32,10 @@ export class HostProcess {
   #messageListeners = new Set()
 
   /**
-   * @param {{ entry: string, cwd: string, env: NodeJS.ProcessEnv, pnpm: string, onFailure: (error: Error) => void, output?: (stream: 'stdout' | 'stderr', text: string) => void }} options
-   *   `onFailure` receives the first unexpected failure, also after the Host was ready. `output`
-   *   takes the Host's output with the launch token hidden; by default it goes to this process's.
+   * @param {{ entry: string, cwd: string, env: NodeJS.ProcessEnv, pnpm: string, onFailure: (error: Error) => void }} options
+   *   `onFailure` receives the first unexpected failure, also after the Host was ready.
    */
-  constructor(options) { this.#options = options }
+  constructor(options, platform = process.platform) { this.#options = options; this.#platform = platform }
 
   /**
    * @returns {Promise<{ url: string, injections: unknown[] } | { unreadable: string[] }>} the Host's launch URL
@@ -35,16 +43,16 @@ export class HostProcess {
    */
   start() {
     this.#ready ??= new Promise((resolve, reject) => {
-      const { entry, cwd, env, pnpm, output = (stream, text) => { process[stream].write(text) } } = this.#options
-      const child = spawn(process.execPath, ['--expose-internals', entry, pnpm], {
+      const { entry, cwd, env, pnpm } = this.#options
+      const child = spawn(hostExecutable(env.DS_BOT_RUNTIME_DIR, this.#platform), ['--expose-internals', entry, pnpm], {
         cwd, env: { ...env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       })
       this.#child = child
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
-      child.stdout.on('data', (chunk) => { output('stdout', redact(chunk)) })
+      child.stdout.on('data', (chunk) => { process.stdout.write(redact(chunk)) })
       child.stderr.on('data', (chunk) => {
-        output('stderr', redact(chunk))
+        process.stderr.write(redact(chunk))
         this.#stderr = (this.#stderr + chunk).slice(-STDERR_TAIL_CHARS)
       })
       child.on('message', (message) => {
@@ -72,20 +80,13 @@ export class HostProcess {
     this.#child.send(message)
   }
 
-  /**
-   * Ask the Host to shut down, then end it if it does not exit in time. With `now`, it is ended
-   * at once instead: a start that goes on in another folder has no use for this Host's boot or
-   * for an orderly shutdown of its data, which goes away with it.
-   */
-  async stop({ now = false } = {}) {
+  /** Ask the Host to shut down, then end it if it does not exit in time. */
+  async stop() {
     const child = this.#child
     if (child === undefined) return
     this.#stopping = true
-    if (now) child.kill()
-    else {
-      if (child.connected) child.send({ type: 'shutdown' }, (error) => { if (error) console.error(error) })
-      if (!await settlesWithin(this.#exit, 10_000)) child.kill()
-    }
+    if (child.connected) child.send({ type: 'shutdown' }, (error) => { if (error) console.error(error) })
+    if (!await settlesWithin(this.#exit, 10_000)) child.kill()
     if (!await settlesWithin(this.#exit, 5_000)) child.kill('SIGKILL')
     this.#child = undefined
   }

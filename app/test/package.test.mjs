@@ -22,6 +22,13 @@ test('the app is packed as plain files, not into an asar archive', () => {
   assert.equal(config.asar, false)
 })
 
+test('Linux leaves the Host and its dependencies readable by plain Node', () => {
+  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
+  assert.equal(config.linux.asar, false)
+  assert.notEqual(config.mac.asar, false)
+  assert.notEqual(config.win.asar, false)
+})
+
 // A release is tagged with the version of ds-bot, and the installed apps compare their own
 // version with the one in the release's latest.yml.
 test('the app has the version of ds-bot', () => {
