@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { ChatsIcon, ClockIcon, GoalIcon, MicIcon, PaperclipIcon, PeopleIcon, PlusIcon, WaveIcon } from './icons.js'
 import { canSetGoal } from './goal.js'
 import { BotMark } from './mark.js'
-import { useLinger, useViewport, viewBottom } from './motion.js'
+import { stepMenuFocus, useLinger, useViewport, viewBottom } from './motion.js'
 import { t } from './i18n.js'
 
 // -------------------------------------------------------------------------
@@ -117,7 +117,10 @@ export function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {
   useEffect(() => {
     if (!open) return undefined
     const onDown = (event) => { if (![button.current, menu.current].some(node => node?.contains(event.target))) setOpen(null) }
-    const onKey = (event) => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(null) } }
+    const onKey = (event) => {
+      if (stepMenuFocus(menu.current, event)) return
+      if (event.key === 'Escape') { event.stopPropagation(); setOpen(null) }
+    }
     window.addEventListener('mousedown', onDown, true)
     window.addEventListener('keydown', onKey, true)
     return () => { window.removeEventListener('mousedown', onDown, true); window.removeEventListener('keydown', onKey, true) }
