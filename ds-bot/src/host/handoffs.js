@@ -95,10 +95,12 @@ export function install(rt) {
   const workOf = info => (info === undefined ? undefined
     : info.role === 'request' && info.audience !== 'user' ? info.exchangeId : info.work)
 
-  // `parent`: the work the sender was doing when it sent this one.
-  function openWork(id, { from, to, parent, fromRoom, room, name }) {
+  // `parent`: the work the sender was doing when it sent this one. `child`: the
+  // session id of the subagent a run of this work belongs to — the run, not the
+  // child, is the sub-work, so a child that is continued hands up a result per run.
+  function openWork(id, { from, to, parent, fromRoom, room, name, child }) {
     const above = parent === undefined ? undefined : works()[parent]
-    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), open: [], results: [], at: Date.now() }
+    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), open: [], results: [], at: Date.now() }
     if (above !== undefined) above.open.push(id)
     save()
   }
@@ -115,7 +117,7 @@ export function install(rt) {
     if (above !== undefined) {
       // The whole result goes into a file of its own before the team file names it.
       const file = keepResult(id, text)
-      above.results.push({ id, name, text: headOf(text, TEXT_KEPT), ...(text.length > TEXT_KEPT ? { length: text.length } : {}), ...(file ? { file } : {}) })
+      above.results.push({ id, name, text: headOf(text, TEXT_KEPT), ...(work.child ? { child: work.child } : {}), ...(text.length > TEXT_KEPT ? { length: text.length } : {}), ...(file ? { file } : {}), at: Date.now() })
       whole.set(id, text)
     }
     for (const result of work.results ?? []) whole.delete(result.id)
@@ -126,21 +128,37 @@ export function install(rt) {
     }).catch(() => {})
     return above === undefined ? undefined : work.parent
   }
-  // The work a delegated subagent's child hangs under, or hung under once it was
-  // settled: then only the result it left there names it.
-  const subWorkParent = id => works()[id]?.parent ?? Object.keys(works()).find(workId => works()[workId].results?.some(result => result.id === id))
-  // A subagent's settlement is handed back like a teammate's reply: the child's
-  // closing text joins the results of the work it hung under.
-  function settleSubWork(id, text) {
-    const work = works()[id]
+  // The subagent run a settlement notice names. The notice carries only the
+  // child's id, and a child's runs end one after another, so it is the earliest
+  // settled run of that child not read yet, else a run of it still out.
+  const subWorkRun = (id) => {
+    let settled
+    let live
+    for (const [workId, work] of Object.entries(works())) {
+      for (const openId of work.open) {
+        const result = work.results?.find(result => result.id === openId)
+        if ((result?.child ?? works()[openId]?.child ?? openId) !== id) continue
+        if (result === undefined) live ??= { id: openId, parent: workId }
+        else if (settled === undefined || (result.at ?? 0) < settled.at) settled = { id: openId, parent: workId, at: result.at ?? 0 }
+      }
+    }
+    return settled ?? live
+  }
+  // A settled run is handed back like a teammate's reply: its closing text joins
+  // the results of the work it hung under. `id` is the run's id, `child` the
+  // child's, which named the sub-work before runs did.
+  function settleSubWork(id, text, child) {
+    const key = works()[id] !== undefined ? id : child
+    const work = works()[key]
     if (work === undefined) return undefined
     const { parent } = work
-    closeWork(id, work.name ?? 'subagent', text)
+    closeWork(key, work.name ?? 'subagent', text)
     return parent
   }
   // A fast child can settle before its tool result identifies the call that made it.
   const nameSubWork = (id, name) => {
-    const work = works()[id] ?? Object.values(works()).flatMap(work => work.results ?? []).find(result => result.id === id)
+    const work = Object.entries(works()).find(([key, work]) => (work.child ?? key) === id)?.[1]
+      ?? Object.values(works()).flatMap(work => work.results ?? []).find(result => (result.child ?? result.id) === id)
     if (work === undefined || work.name === name) return
     work.name = name
     save()
@@ -166,6 +184,29 @@ export function install(rt) {
     save()
   }
 
+  // A delivery the restart delayed is marked, so the answer that comes back for
+  // the work says the request only arrived then.
+  function lateWork(id) {
+    const work = works()[id]
+    if (work === undefined || work.late === true) return
+    work.late = true
+    save()
+  }
+
+  // The reply carrying a result never reached the asker: the failure reaches it
+  // as an input instead (turns.js), which ends the wait when it is read like any
+  // reply. The result kept with the work it was for is marked, so the answer
+  // that goes up names it.
+  function answerMissed(id) {
+    for (const work of Object.values(works())) {
+      if (!work.open.includes(id)) continue
+      const result = (work.results ?? []).find(item => item.id === id)
+      if (result !== undefined) result.failed = true
+      save()
+      return
+    }
+  }
+
   const owns = (botId, workId) => workId !== undefined && works()[workId]?.to === botId
   const waits = workId => (works()[workId]?.open.length ?? 0) > 0
   function hold(workId, text) {
@@ -186,10 +227,13 @@ export function install(rt) {
     const results = (work?.results ?? []).map(result => {
       const { text, whole } = resultText(result)
       const cut = whole ? '' : `\n[cut; ${result.length} characters in all, the rest was not kept]`
+      if (result.failed === true) return `${result.name} could not send its reply to you; what it had answered:\n${text}${cut}`
       return `${result.name}:\n${text}${cut}`
     })
-    if (results.length === 0) return said || `${botName} finished without a reply.`
-    return [said || `${botName} finished and wrote nothing more.`, `[Handed back to ${botName} for this work]`, ...results].join('\n\n')
+    const body = results.length === 0 ? said || `${botName} finished without a reply.`
+      : [said || `${botName} finished and wrote nothing more.`, `[Handed back to ${botName} for this work]`, ...results].join('\n\n')
+    // The request reached its target only after a restart; the answer says so.
+    return work?.late === true ? `[This request reached ${botName} only after DeepSeek Harness restarted.]\n\n${body}` : body
   }
 
   // The Bots waiting for the result of these works: whoever asked for each, and on up.
@@ -282,5 +326,5 @@ export function install(rt) {
     return lines.join('; ')
   }
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkParent, nameSubWork })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork })
 }
