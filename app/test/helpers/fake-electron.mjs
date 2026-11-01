@@ -13,7 +13,7 @@ export const paths = {
   root,
   userData: join(root, 'userData'),
   downloads: join(root, 'downloads'),
-  exe: join(root, 'DS Bot.exe'),
+  exe: join(root, 'DeepSeek Bot.exe'),
   // The folder of the app itself: the Host's pnpm lives in it.
   appPath: join(root, 'app'),
 }
@@ -74,6 +74,18 @@ export class FakeWindow extends EventEmitter {
   setMinimumSize() {}
   moveTop() {}
   getBounds() { return { x: 0, y: 0, width: 800, height: 600 } }
+  // What the start window asks of a window: its rect, its growth into the team window's rect
+  // and the hand-off, at which the team window shows behind it.
+  getNormalBounds() { return this.getBounds() }
+  setBounds() {}
+  setContentBounds() {}
+  setBackgroundColor() {}
+  setSkipTaskbar() {}
+  isFocused() { return false }
+  showInactive() { this.visible = true; this.shown += 1; this.emit('show') }
+  moveAbove() {}
+  getMediaSourceId() { return 'window:1:0' }
+  flashFrame() {}
   async loadURL(url) {
     this.url = url
     this.loaded.push(url)
@@ -100,26 +112,26 @@ class FakeWebContents extends EventEmitter {
     this.mainFrame = {}
     this.isDestroyed = () => this.win.destroyed
     this.getURL = () => this.win.url
-    this.getTitle = () => 'DS Bot'
-    this.send = () => {}
+    this.getTitle = () => 'DeepSeek Bot'
+    this.sent = []
+    this.send = (...args) => { this.sent.push(args) }
     this.setWindowOpenHandler = () => {}
     this.insertCSS = async () => {}
     this.toggleDevTools = () => {}
     this.loadURL = async url => { await this.win.loadURL(url) }
+    this.reload = () => {}
   }
 }
 
 class FakeApp extends EventEmitter {
   constructor() {
     super()
-    this.name = 'DS Bot'
+    this.name = 'DeepSeek Bot'
     this.getVersion = () => '0.2.2'
     this.getLocale = () => 'en-US'
     this.getPath = (name) => paths[name] ?? join(root, String(name))
     this.getAppPath = () => paths.appPath
     this.setPath = (name, value) => { state.paths[name] = value }
-    this.setName = (name) => { this.name = name }
-    this.setAppUserModelId = (id) => { state.appId = id }
     // The app starts a tick later, so that a test has its say before the app begins.
     this.whenReady = () => new Promise((done) => { setImmediate(done) })
     this.requestSingleInstanceLock = () => true
@@ -130,7 +142,10 @@ class FakeApp extends EventEmitter {
       let prevented = false
       this.emit('before-quit', { preventDefault: () => { prevented = true } })
       state.quitPrevented = prevented
-      if (!prevented) this.emit('will-quit')
+      if (prevented) return
+      this.emit('will-quit')
+      // The windows go with the app, and their timers with them.
+      for (const win of state.windows) if (!win.destroyed) win.destroy()
     }
     this.show = () => { state.appShown = (state.appShown ?? 0) + 1 }
     this.hide = () => { state.appHidden = (state.appHidden ?? 0) + 1 }
@@ -181,7 +196,20 @@ export const nativeImage = {
   }),
 }
 
-export const nativeTheme = { shouldUseDarkColors: false, themeSource: 'system' }
+export const nativeTheme = Object.assign(new EventEmitter(), { shouldUseDarkColors: false, themeSource: 'system' })
+
+// One display, where the start window opens and the team window grows to.
+const display = { workArea: { x: 0, y: 0, width: 1920, height: 1040 } }
+export const screen = {
+  getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+  getDisplayNearestPoint: () => display,
+  getDisplayMatching: () => display,
+  getPrimaryDisplay: () => display,
+}
+
+export const systemPreferences = { getAnimationSettings: () => ({ prefersReducedMotion: true }) }
+
+export const clipboard = { writeText: () => {} }
 
 export const powerMonitor = new EventEmitter()
 
@@ -223,4 +251,5 @@ export const dialog = {
 
 export const shell = {
   openExternal: async (url) => { state.opened = (state.opened ?? []).concat(url) },
+  openPath: async () => '',
 }
