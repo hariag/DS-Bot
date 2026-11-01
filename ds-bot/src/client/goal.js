@@ -5,7 +5,6 @@ import { CheckIcon, ChevronDownIcon } from './icons.js'
 import { useEscape } from './overlay-hooks.js'
 import { SPRING_SHAPE, spring, useMorph } from './motion.js'
 import { t } from './i18n.js'
-import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
 
 // -------------------------------------------------------------------------
 // Group goal: the header island is the goal's status screen. One surface wraps
@@ -25,36 +24,25 @@ export const hasGoalAdmin = (room, roster) => room !== undefined
 export const canSetGoal = (room, roster) => hasGoalAdmin(room, roster)
   && room.goal?.status !== 'active' && room.goal?.status !== 'paused'
 
+const stageRef = (n, count) => t('Stage {n}/{count}', { n, count })
+
 // What the island and panel draw, as plain data: goal + live room work in, the
-// capsule number, the bar's label, the stage segments, the faces and the
-// panel's stage rows out.
+// bar's label, the stage segments, the faces and the panel's stage rows out.
 export function goalView(goal, { roster = {}, roomWork = [] } = {}) {
   if (goal === null || goal === undefined) return null
   const stages = goal.stages ?? []
   const count = stages.length
   const at = goal.current
   const current = RUNNING.has(goal.status) ? stages[at] : undefined
-  const currentTasks = Array.isArray(current?.tasks) ? current.tasks : []
-  const checking = currentTasks.length > 0 && currentTasks.every(task => REPORTED.has(task.status))
-  const automaticIdle = goal.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
-    && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
-  // The capsule counts the stage the goal is at, not the stages done.
-  const number = goal.status === 'drafting' ? undefined
-    : goal.status === 'stopped' ? stages.filter(stage => stage.status === 'passed').length
-      : current !== undefined ? at + 1
-        : count
+  const checking = current !== undefined && (current.tasks ?? []).every(task => REPORTED.has(task.status))
   const barLabel =
     goal.status === 'drafting' ? t('Aligning the goal with you')
       : goal.status === 'stopped' ? t('Stopped')
-        : goal.status === 'complete' ? t('Goal reached')
-          : goal.status === 'paused' ? (current ? t('Paused · {title}', { title: current.title }) : t('Paused'))
-            : goal.idle === true && !automaticIdle ? (current ? t('Waiting for you · {title}', { title: current.title }) : t('Waiting for you'))
-              : goal.reviewAttempt?.terminalFailure ? t('Inspection failed before any administrator tool ran')
-              : ['uncertain', 'cancelled-uncertain'].includes(goal.reviewAttempt?.state) ? t('Periodic review needs attention')
-                : automaticIdle ? (current ? t('Periodic review pending · {title}', { title: current.title }) : t('Periodic review pending'))
-              : current === undefined ? t('Final check')
-                : checking ? t('Results reported · stage review pending: {title}', { title: current.title })
-                  : current.title
+        : goal.status === 'complete' ? `${t('Goal reached')} · ${count}/${count}`
+          : goal.status === 'paused' ? (current ? `${t('Paused')} · ${stageRef(at + 1, count)}` : t('Paused'))
+            : goal.idle === true ? (current ? `${t('Waiting for you')} · ${stageRef(at + 1, count)}` : t('Waiting for you'))
+              : current ? t('Stage {n}/{count} · {title}', { n: at + 1, count, title: current.title })
+                : t('Final check')
   const segments = stages.map((stage, i) => (stage.status === 'passed' ? 'done'
     : i === at && goal.status === 'paused' ? 'paused'
       : i === at && goal.status === 'active' ? (checking ? 'checking' : 'current')
@@ -74,17 +62,18 @@ export function goalView(goal, { roster = {}, roomWork = [] } = {}) {
     title: stage.title,
     acceptance: stage.acceptance,
     status: stage.status,
-    kind: stage.status === 'passed' ? 'passed'
-      : i === at && RUNNING.has(goal.status) ? 'current'
+    chip: stage.status === 'passed' ? 'passed'
+      : i === at && RUNNING.has(goal.status) ? (checking && goal.status === 'active' ? 'checking' : 'current')
         : 'upcoming',
-    tasks: (stage.tasks ?? []).map(task => ({ bot: roster.byId?.[task.botId], task: task.task, status: task.status, ...(task.statusUpdatedAt !== undefined ? { statusUpdatedAt: task.statusUpdatedAt } : {}), ...(typeof task.note === 'string' && task.note !== '' ? { note: task.note, noteStatus: task.noteStatus, noteAt: task.noteAt, statusVersion: task.statusVersion, noteStatusVersion: task.noteStatusVersion } : {}) })),
+    tasks: (stage.tasks ?? []).map(task => ({ bot: roster.byId?.[task.botId], task: task.task, status: task.status, note: task.note })),
     evidence: stage.evidence,
     reworks: stage.reworks ?? 0,
     feedback: stage.feedback,
   }))
   return {
-    status: goal.status, idle: goal.idle === true, automaticIdle, title: goal.title ?? '',
-    number, count, segments, barLabel, faces, stages: stageViews,
+    status: goal.status, idle: goal.idle === true, title: goal.title ?? '',
+    done: stages.filter(stage => stage.status === 'passed').length, count,
+    segments, barLabel, faces, stages: stageViews,
   }
 }
 
@@ -135,146 +124,100 @@ function GoalBar({ view, open, room, actions }) {
     h('span', { className: 'bt-goal-chev', 'aria-hidden': true }, h(ChevronDownIcon)))
 }
 
-// Reported is a response, not an accepted result; always name the recorded status.
-function taskStatusText(status) {
-  switch (status) {
-    case 'pending': return t('Task pending')
-    case 'working': return t('Task working')
-    case 'reported': return t('Task reported')
-    case 'done': return t('Task marked done')
-    default: return t('Task status unknown')
-  }
-}
-
-// Render the source's absolute timestamp in UTC, without assuming that the
-// browser's local timezone matches the host. A future browser time is unknown.
-function goalTime(value) {
-  if (!validGoalTime(value)) return undefined
-  const date = new Date(value)
-  return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('Z', ' UTC') : undefined
-}
-
-// A note may survive several status changes, including a return to an earlier
-// status. Versions distinguish that from a note written in this status.
-function taskNoteText(task) {
-  const context = goalNoteContext(task)
-  if (context.kind === 'conflict') return t('Note · time conflict; verify')
-  if (context.kind === 'historical') return t('Note · earlier status')
-  if (context.kind === 'current') return t('Note · recorded in this status')
-  return t('Note · context unknown')
-}
+const STAGE_CHIP = { passed: 'Passed', current: 'Current', checking: 'Checking', upcoming: 'Upcoming' }
+const TASK_CHIP = { pending: 'Not started', working: 'Working', reported: 'Reported', done: 'Done' }
 
 function TaskRow({ task, working }) {
   const live = working.has(task.bot?.id) || task.status === 'working'
-  const noteTime = goalTime(task.noteAt)
-  const statusTime = goalTime(task.statusUpdatedAt)
-  return h('div', { className: 'bt-goal-task', 'data-task': task.status === 'pending' ? 'pending' : undefined },
-    h('span', { className: 'bt-goal-tav' },
-      task.bot ? h(BotAvatar, { bot: task.bot, size: 20, state: live ? 'working' : 'idle' }) : null,
-      task.status === 'done' ? h('span', { className: 'bt-goal-tdone', 'aria-hidden': true }, h(CheckIcon)) : null),
-    h('span', { className: 'bt-goal-ttext' },
-      h('span', { className: 'bt-goal-tname', style: task.bot ? { color: inkText(colorOf(task.bot)) } : undefined }, task.bot?.name ?? t('a Bot')),
-      ' ', task.task,
-      h('span', { className: 'bt-goal-tstatus' }, taskStatusText(task.status)),
-      h('span', { className: 'bt-goal-tstatus-time' }, statusTime === undefined ? t('Status change time unknown') : t('Status changed: {time}', { time: statusTime })),
-      task.note ? h('span', { className: 'bt-goal-tnote' },
-        h('span', { className: 'bt-goal-tnote-label' }, taskNoteText(task)),
-        ' · ', h('span', { className: 'bt-goal-tnote-time' }, noteTime === undefined ? t('Recorded time unknown') : t('Recorded: {time}', { time: noteTime })),
-        ': ', task.note) : null))
+  return h('div', { className: 'bt-goal-task' },
+    task.bot ? h(BotAvatar, { bot: task.bot, size: 20, state: live ? 'working' : 'idle' }) : null,
+    h('span', { className: 'bt-goal-task-body' },
+      h('span', { className: 'bt-goal-task-line' },
+        h('span', { className: 'bt-goal-task-name', style: task.bot ? { color: inkText(colorOf(task.bot)) } : undefined }, task.bot?.name ?? t('a Bot'))),
+      h('span', { className: 'bt-goal-task-text' }, task.task),
+      task.note ? h('span', { className: 'bt-goal-task-note' }, task.note) : null),
+    h('span', { className: 'bt-goal-chip', 'data-chip': task.status }, t(TASK_CHIP[task.status] ?? 'Not started')))
+}
+
+function GoalStage({ stage, open, working, onToggle }) {
+  return h('div', { className: 'bt-goal-stage' },
+    h('button', { type: 'button', className: 'bt-goal-sh', 'aria-expanded': open, onClick: onToggle },
+      h('span', { className: 'bt-goal-sg', 'data-sg': stage.chip === 'checking' ? 'current' : stage.chip, 'aria-hidden': true }),
+      h('span', { className: 'bt-goal-st' }, t('Stage {n} · {title}', { n: stage.n, title: stage.title })),
+      h('span', { className: 'bt-goal-chip', 'data-chip': stage.chip }, t(STAGE_CHIP[stage.chip])),
+      stage.reworks > 0 ? h('span', { className: 'bt-goal-chip', 'data-chip': 'rework' }, t('Sent back ×{n}', { n: stage.reworks })) : null),
+    open ? h('div', { className: 'bt-goal-sbody' },
+      stage.acceptance ? h('div', { className: 'bt-goal-line' }, h('span', { className: 'bt-goal-sub' }, t('Done when')), stage.acceptance) : null,
+      stage.evidence !== undefined && stage.status === 'passed'
+        ? h('div', { className: 'bt-goal-evi' }, stage.evidence) : null,
+      stage.feedback ? h('div', { className: 'bt-goal-line' }, h('span', { className: 'bt-goal-sub' }, t('Sent back ×{n}', { n: stage.reworks })), stage.feedback) : null,
+      stage.tasks.map((task, i) => h(TaskRow, { key: i, task, working }))) : null)
 }
 
 const STOP_ARM_MS = 3000
 
-// The open pod focuses one stage: a stepper across the top, the selected
-// stage's checks and tasks under it, and a bottom row with the rest.
-function GoalPanel({ goal, view, room, roster, actions, working, openReview }) {
-  const at = RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1
-  const [selected, setSelected] = useState(at)
-  const [checks, setChecks] = useState(false)
+// The open pod: the whole plan — objective, checks, rules, stages with their
+// tasks — plus the controls the bar hides.
+function GoalPanel({ goal, view, room, roster, actions, working }) {
+  const [expanded, setExpanded] = useState(goal.current)
   const [armed, setArmed] = useState(false)
-  // The selected stage follows the goal's current one as stages pass.
-  useEffect(() => setSelected(RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1), [view.status, goal.current])
+  // The open stage follows the goal's current one as stages pass.
+  useEffect(() => setExpanded(goal.current), [goal.current])
   useEffect(() => {
     if (!armed) return undefined
     const timer = setTimeout(() => setArmed(false), STOP_ARM_MS)
     return () => clearTimeout(timer)
   }, [armed])
-  // Nodes too narrow for their number (14px, or 17px for two digits) drop it so the stepper still fits.
-  const stepper = useRef(null)
-  useEffect(() => {
-    const box = stepper.current
-    if (box === null || typeof ResizeObserver !== 'function') return undefined
-    const min = view.stages.length >= 10 ? 17 : 14
-    const measure = () => box.querySelectorAll('.bt-goal-step').forEach(node => node.classList.toggle('bt-goal-mini', node.clientWidth < min))
-    const observer = new ResizeObserver(measure)
-    observer.observe(box)
-    measure()
-    return () => observer.disconnect()
-  }, [view.stages.length])
   const control = action => void Promise.resolve(actions.goalControl(room.id, goal.id, action))
     .catch(error => actions.reportError(error, 'goal'))
-  const stage = selected >= 0 ? view.stages[selected] : undefined
+  const admin = roster.byId?.[room.admin]?.name ?? t('a Bot')
+  const live = view.status === 'active' || view.status === 'paused'
+  const statusChip = view.status === 'drafting' ? t('Drafting')
+    : view.status === 'paused' ? t('Paused')
+      : view.status === 'complete' ? t('Goal reached')
+        : view.status === 'stopped' ? t('Stopped')
+          : view.idle ? t('Waiting for you') : t('Active')
   const sec = (key, label, ...body) => h('div', { key, className: 'bt-goal-sec' },
     h('div', { className: 'bt-goal-sub' }, label), ...body.map((line, i) => h('div', { key: i, className: 'bt-goal-text' }, line)))
-  const hasChecks = goal.objective !== undefined || goal.acceptance !== undefined || goal.constraints?.length > 0
-  const admin = roster.byId?.[room.admin]?.name ?? t('a Bot')
-  const stopWork = () => void Promise.resolve(actions.stopRoomWork(room.id)).catch(error => actions.reportError(error, 'stop'))
-  const reviewIssue = goal.reviewAttempt && ['uncertain', 'cancelled-uncertain', 'admitting'].includes(goal.reviewAttempt.state)
   return h('div', { className: 'bt-goal-panel', role: 'region', 'aria-label': view.title },
-    h('div', { className: 'bt-goal-body' },
-    view.status === 'drafting' ? null : h('div', { ref: stepper, className: 'bt-goal-steps', role: 'group', 'aria-label': t('Stages') },
-      view.stages.map((stageView, i) => h('button', {
-        key: stageView.n, type: 'button',
-        className: 'bt-goal-step', 'data-step': stageView.kind === 'current' && (view.status === 'paused' || view.idle === true) ? 'waiting' : stageView.kind,
-        'data-sel': i === selected || undefined,
-        title: t('Stage {n}: {title}', { n: stageView.n, title: stageView.title }),
-        'aria-label': t('Stage {n}: {title}', { n: stageView.n, title: stageView.title }),
-        'aria-current': i === at ? 'step' : undefined,
-        onClick: () => setSelected(i),
-      }, h('span', { className: 'bt-goal-node' }, stageView.status === 'passed' ? h(CheckIcon) : stageView.n)))),
-    h('div', { key: `s${selected}`, className: 'bt-goal-bstage' },
-      view.status === 'drafting' ? (goal.brief ? h('div', { className: 'bt-goal-btext' }, goal.brief) : null)
-        : stage === undefined
-          ? h(Fragment, null,
-            goal.summary ? h('div', { className: 'bt-goal-btext' }, goal.summary) : null,
-            goal.evidence ? h('div', { className: 'bt-goal-evi' }, goal.evidence) : null,
-            view.status === 'stopped' && goal.reason ? h('div', { className: 'bt-goal-evi' }, goal.reason) : null)
-          : h(Fragment, null,
-            h('div', { className: 'bt-goal-bline' },
-              h('span', { className: 'bt-goal-btitle' }, stage.title),
-              selected !== at && at >= 0 ? h('button', { type: 'button', className: 'bt-goal-back', onClick: () => setSelected(at) }, t('Back to current stage')) : null),
-            stage.acceptance ? h('div', { className: 'bt-goal-line' }, t('Done when: {text}', { text: stage.acceptance })) : null,
-            selected === at && stage.reworks > 0 && stage.feedback
-              ? h('div', { className: 'bt-goal-rw' }, stage.reworks > 1
-                ? t('Sent back {n} times by {admin}. Last time: {feedback}', { n: stage.reworks, admin, feedback: stage.feedback })
-                : t('Sent back by {admin}: {feedback}', { admin, feedback: stage.feedback })) : null,
-            stage.evidence !== undefined && stage.status === 'passed' ? h('div', { className: 'bt-goal-evi' }, t('Evidence: {text}', { text: stage.evidence })) : null,
-            stage.tasks.length > 0 ? h('div', { className: 'bt-goal-tasks' }, stage.tasks.map((task, i) => h(TaskRow, { key: i, task, working }))) : null)),
-    checks && hasChecks ? h('div', { className: 'bt-goal-ckbody' },
-      goal.objective ? sec('objective', t('Objective'), goal.objective) : null,
-      goal.acceptance ? sec('acceptance', t('Done when'), goal.acceptance) : null,
-      goal.constraints?.length > 0 ? sec('rules', t('Rules'), h('ul', { className: 'bt-goal-rules' },
-        goal.constraints.map((rule, i) => h('li', { key: i }, rule)))) : null) : null),
-    reviewIssue ? h('div', { className: 'bt-goal-sec' },
-      h('div', { className: 'bt-goal-text' }, goal.reviewAttempt.terminalFailure ? t('The original inspection has been verified. Future inspections will wait until pending group work has cleared.') : t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
-      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: typeof openReview !== 'function', onClick: openReview }, t('Open review workspace'))) : null,
-    h('div', { className: 'bt-goal-foot' },
-      hasChecks ? h('button', {
-        type: 'button', className: 'bt-goal-checks', 'aria-expanded': checks, onClick: () => setChecks(!checks),
-      }, h('span', { className: 'bt-goal-mchev', 'aria-hidden': true }, h(ChevronDownIcon)), t('Goal and checks')) : h('span'),
-      h('span', { className: 'bt-goal-facts' },
-        view.status === 'paused' && working.size > 0 ? h('button', { type: 'button', className: 'bt-goal-back', onClick: stopWork }, t('Stop current work too')) : null,
+    h('div', { className: 'bt-goal-head' },
+      h('div', { className: 'bt-goal-title' }, view.title),
+      h('span', { className: 'bt-goal-chip', 'data-chip': view.status }, statusChip),
+      h('div', { className: 'bt-goal-acts' },
         view.status === 'active' ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('pause') }, t('Pause')) : null,
-        view.status === 'active' && view.idle && !view.automaticIdle ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('resume') }, t('Resume')) : null,
         view.status === 'paused' ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('resume') }, t('Resume')) : null,
-        view.status === 'active' || view.status === 'paused' ? h('button', {
+        live ? h('button', {
           type: 'button', className: 'bt-soft bt-soft-sm bt-goal-danger', 'data-armed': armed || undefined,
           onClick: () => (armed ? control('stop') : setArmed(true)),
         }, armed ? t('Stop the goal?') : t('Stop')) : null,
         view.status === 'complete' || view.status === 'stopped'
           ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('clear') }, t('Clear')) : null,
         view.status === 'drafting'
-          ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('clear') }, t('Cancel')) : null)))
+          ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('clear') }, t('Cancel')) : null)),
+    h('div', { className: 'bt-goal-body' },
+      view.status === 'drafting' ? h('div', { key: 'draft', className: 'bt-goal-sec' },
+        h('div', { className: 'bt-goal-text' }, t('{admin} is aligning the goal with you in the chat.', { admin })),
+        goal.brief ? h('div', { className: 'bt-goal-text' }, goal.brief) : null) : null,
+      goal.objective ? sec('objective', t('Objective'), goal.objective) : null,
+      goal.acceptance ? sec('acceptance', t('Done when'), goal.acceptance) : null,
+      goal.constraints?.length > 0 ? sec('rules', t('Rules'), h('ul', { className: 'bt-goal-rules' },
+        goal.constraints.map((rule, i) => h('li', { key: i }, rule)))) : null,
+      view.stages.length > 0 ? h('div', { key: 'stages', className: 'bt-goal-stages' },
+        view.stages.map((stage, i) => h(GoalStage, {
+          key: stage.n, stage, open: expanded === i, working,
+          onToggle: () => setExpanded(expanded === i ? -1 : i),
+        }))) : null,
+      view.status === 'paused' ? h('div', { key: 'paused', className: 'bt-goal-sec' },
+        h('div', { className: 'bt-goal-text' }, t('Paused. Write in the group to correct the direction; the admin updates the goal.')),
+        working.size > 0 ? h('button', {
+          type: 'button', className: 'bt-soft bt-soft-sm',
+          onClick: () => void Promise.resolve(actions.stopRoomWork(room.id)).catch(error => actions.reportError(error, 'stop')),
+        }, t('Stop current work too')) : null) : null,
+      view.idle === true && view.status === 'active' ? h('div', { key: 'idle', className: 'bt-goal-text' }, t('{admin} is waiting for you.', { admin })) : null,
+      view.status === 'complete' ? h(Fragment, { key: 'done' },
+        goal.summary ? sec('summary', t('Summary'), goal.summary) : null,
+        goal.evidence ? sec('evidence', t('Evidence'), goal.evidence) : null) : null,
+      view.status === 'stopped' && goal.reason ? h('div', { key: 'reason', className: 'bt-goal-text' }, goal.reason) : null))
 }
 
 // The pod while the user writes the brief: the message goes to the admin, who
@@ -318,7 +261,7 @@ function GoalCompose({ room, roster, actions }) {
 
 // The surface that wraps the pill: pod with the bar (or the draft form) while
 // closed, the panel while open. The pod hangs off the header over the transcript.
-export function GoalIsland({ room, goal, view, open, composing, roomWork, roster, actions, pill, openReview }) {
+export function GoalIsland({ room, goal, view, open, composing, roomWork, roster, actions, pill }) {
   const island = useRef(null)
   useMorph(island, open)
   const working = new Set((roomWork ?? []).map(entry => entry.botId))
@@ -336,16 +279,16 @@ export function GoalIsland({ room, goal, view, open, composing, roomWork, roster
       : view === null ? null
         : h(Fragment, null,
           h(GoalBar, { view, open, room, actions }),
-          open ? h(GoalPanel, { goal, view, room, roster, actions, working, openReview }) : null)))
+          open ? h(GoalPanel, { goal, view, room, roster, actions, working }) : null)))
 }
 
 export const GOAL_CSS = `
 /* One surface: the pill's own background, border and shadow. The pill row is
    40px, the pod bar 30px; the surface reshapes on SPRING_SHAPE. */
-.bt-island{position:relative;z-index:6;align-self:flex-start;display:flex;flex-direction:column;pointer-events:auto;width:min(380px,calc(100% - 120px));background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border:.5px solid var(--bt-glass-rim);border-radius:20px;box-shadow:var(--bt-glass-shadow);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;box-sizing:border-box;transition:${spring(SPRING_SHAPE, 'width', 'border-radius')}}
+.bt-island{position:relative;z-index:6;align-self:flex-start;display:flex;flex-direction:column;pointer-events:auto;width:min(380px,calc(100% - 120px));background:var(--bt-main);border:.5px solid var(--bt-line-2);border-radius:20px;box-shadow:var(--bt-float);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;box-sizing:border-box;transition:${spring(SPRING_SHAPE, 'width', 'border-radius')}}
 .bt-island[data-open]{width:min(560px,calc(100% - 48px));border-radius:18px}
 .bt-island[data-morph]{overflow:hidden}
-.bt-island .bt-pill{width:100%;max-width:none;background:none;-webkit-backdrop-filter:none;backdrop-filter:none;border:0;box-shadow:none;border-radius:20px 20px 0 0}
+.bt-island .bt-pill{width:100%;max-width:none;background:none;border:0;box-shadow:none;border-radius:20px 20px 0 0}
 .bt-island[data-open] .bt-pill{border-radius:18px 18px 0 0}
 .bt-island .bt-pill:hover{background:var(--bt-hover)}
 .bt-island .bt-pill:active{transform:none}
@@ -388,57 +331,42 @@ export const GOAL_CSS = `
 .bt-goal-chev{flex:none;display:inline-flex;color:var(--bt-ink-3)}
 .bt-goal-chev svg{width:14px;height:14px;transition:${spring(SPRING_SHAPE, 'transform')}}
 .bt-goal-bar[aria-expanded=true] .bt-goal-chev svg{transform:rotate(180deg)}
-/* The bar's extras hand off to the open panel and give their room to the label. */
-.bt-island[data-open] .bt-goal-segs,.bt-island[data-open] .bt-goal-faces{display:none}
-.bt-island[data-open] .bt-goal-chev{margin-left:auto}
-.bt-goal-panel{display:flex;flex-direction:column;max-height:min(62vh,520px);overflow:hidden;border-radius:0 0 18px 18px;animation:bt-veil-in .22s ease-out backwards}
-.bt-goal-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden}
-/* The stepper: one shrinking node per stage on a hairline. */
-.bt-goal-steps{display:flex;align-items:center;gap:6px;padding:10px 14px 0}
-.bt-goal-step{position:relative;flex:0 1 20px;min-width:8px;height:20px;display:flex;align-items:center;justify-content:center;border:0;background:none;cursor:pointer;padding:0}
-.bt-goal-step::before{content:"";position:absolute;left:-3px;right:-3px;top:50%;height:1px;background:var(--bt-line-2)}
-.bt-goal-step:first-child::before{left:50%}
-.bt-goal-step:last-child::before{right:50%}
-.bt-goal-node{position:relative;z-index:1;box-sizing:border-box;width:min(20px,100%);aspect-ratio:1;border-radius:50%;display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--bt-main);border:1.5px solid var(--bt-line-2);color:var(--bt-ink-3);font-size:10px;line-height:1;font-variant-numeric:tabular-nums}
-.bt-goal-node>svg{flex:none;width:min(12px,70%);height:auto}
-.bt-goal-step[data-step=passed]>.bt-goal-node{background:var(--bt-green);border-color:var(--bt-green);color:var(--bt-main)}
-.bt-goal-step[data-step=current]>.bt-goal-node{border-color:var(--bt-accent);color:var(--bt-accent);font-weight:600}
-.bt-goal-step[data-step=waiting]>.bt-goal-node{border-color:var(--bt-star);color:var(--bt-star);font-weight:600}
-.bt-goal-step[data-sel]:not([aria-current])>.bt-goal-node{box-shadow:0 0 0 1.5px var(--bt-ink)}
-.bt-goal-step.bt-goal-mini .bt-goal-node{font-size:0}
-.bt-goal-step.bt-goal-mini .bt-goal-node>svg{display:none}
-/* The selected stage below the stepper. */
-.bt-goal-bstage{display:flex;flex-direction:column;padding:4px 14px 14px;font-size:13px;line-height:18px;animation:bt-veil-in .22s ease-out backwards}
-.bt-goal-bline{display:flex;align-items:baseline;gap:8px}
-.bt-goal-btitle{flex:1 1 auto;font-weight:600}
-.bt-goal-back{flex:none;border:0;background:none;padding:0;font:inherit;font-size:12px;line-height:16px;color:var(--bt-accent);cursor:pointer}
-.bt-goal-btext{overflow-wrap:anywhere}
-.bt-goal-line{margin-top:2px;min-width:0;font-size:12px;line-height:18px;color:var(--bt-ink-2);overflow-wrap:anywhere}
+.bt-goal-panel{display:flex;flex-direction:column;max-height:min(62vh,520px);overflow-y:auto;overflow-x:hidden;border-radius:0 0 18px 18px;animation:bt-veil-in .22s ease-out backwards}
+.bt-goal-head{display:flex;align-items:flex-start;gap:8px;padding:12px 14px 0}
+.bt-goal-title{flex:0 1 auto;min-width:0;font-size:15px;line-height:20px;font-weight:600;overflow-wrap:anywhere}
+.bt-goal-acts{display:flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+.bt-goal-acts .bt-icon-btn{margin:-4px -6px -4px 0}
+.bt-goal-body{display:flex;flex-direction:column;gap:10px;padding:10px 14px 14px;font-size:13px;line-height:18px;color:var(--bt-ink)}
 .bt-goal-sec{display:flex;flex-direction:column;gap:4px;min-width:0}
-.bt-goal-sub{flex:none;font-size:12px;line-height:16px;font-weight:600;color:var(--bt-ink-2)}
-.bt-goal-rw{margin-top:8px;border-radius:8px;padding:6px 10px;background:color-mix(in srgb,var(--bt-star) 10%,transparent);font-size:12px;line-height:18px;color:var(--bt-ink);overflow-wrap:anywhere}
+.bt-goal-sub{font-size:12px;line-height:16px;font-weight:600;color:var(--bt-ink-2)}
 .bt-goal-text{overflow-wrap:anywhere}
 .bt-goal-rules{margin:0;padding-left:18px}
-.bt-goal-evi{margin-top:8px;font-size:12px;line-height:18px;color:var(--bt-ink-2);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.bt-goal-tasks{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.bt-goal-line{display:flex;gap:6px;min-width:0;overflow-wrap:anywhere}
+.bt-goal-line .bt-goal-sub{flex:none}
+.bt-goal-evi{font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.bt-goal-stages{display:flex;flex-direction:column;gap:6px}
+.bt-goal-stage{border:1px solid var(--bt-line);border-radius:10px;overflow:hidden}
+.bt-goal-sh{display:flex;align-items:center;gap:8px;width:100%;min-width:0;box-sizing:border-box;padding:8px 10px;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:18px;cursor:pointer;text-align:left;transition:background-color .12s ease}
+.bt-goal-sh:hover{background:var(--bt-hover)}
+.bt-goal-sh[aria-expanded=true]{border-bottom:.5px solid var(--bt-line)}
+.bt-goal-sg{flex:none;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:var(--bt-ink-3)}
+.bt-goal-sg::before{content:"○";font-size:12px;line-height:1}
+.bt-goal-sg[data-sg=passed]::before{content:"✓";color:var(--bt-green)}
+.bt-goal-sg[data-sg=current]::before{content:"●";color:var(--bt-accent);font-size:9px}
+.bt-goal-st{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-goal-chip{flex:none;max-width:120px;font-size:11px;line-height:15px;padding:1px 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-tag-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-goal-chip[data-chip=current],.bt-goal-chip[data-chip=checking]{background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent)}
+.bt-goal-chip[data-chip=passed],.bt-goal-chip[data-chip=done]{background:color-mix(in srgb,var(--bt-green) 14%,transparent);color:var(--bt-green)}
+.bt-goal-chip[data-chip=rework]{background:color-mix(in srgb,var(--bt-star) 14%,transparent);color:var(--bt-ink-2)}
+.bt-goal-sbody{display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px}
 .bt-goal-task{display:flex;align-items:flex-start;gap:8px;min-width:0}
-.bt-goal-task[data-task=pending] .bt-goal-tav{opacity:.55}
-.bt-goal-tav{position:relative;flex:none;display:inline-flex;margin-top:1px}
-.bt-goal-tdone{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;background:var(--bt-green);color:var(--bt-main);display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px var(--bt-main)}
-.bt-goal-tdone svg{width:9px;height:9px}
-.bt-goal-ttext{flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
-.bt-goal-tname{font-weight:500}
-.bt-goal-tstatus,.bt-goal-tstatus-time,.bt-goal-tnote{display:block;color:var(--bt-ink-2);font-size:12px;line-height:17px}
-.bt-goal-tnote{white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-goal-ckbody{display:flex;flex-direction:column;gap:10px;padding:0 14px 10px;font-size:13px;line-height:18px;text-align:left}
-/* The bottom row: disclosure on the left, controls on the right. */
-.bt-goal-foot{display:flex;align-items:center;gap:8px;height:40px;flex:none;padding:0 8px 0 14px;border-top:.5px solid var(--bt-line)}
-.bt-goal-checks{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:4px 6px;margin-left:-6px;border-radius:6px;font:inherit;font-size:12px;line-height:16px;color:var(--bt-ink-2);cursor:pointer}
-.bt-goal-checks:hover{background:var(--bt-hover)}
-.bt-goal-mchev{display:inline-flex;width:14px;height:14px;color:var(--bt-ink-3)}
-.bt-goal-mchev svg{width:14px;height:14px;transition:${spring(SPRING_SHAPE, 'transform')}}
-.bt-goal-checks[aria-expanded=true] .bt-goal-mchev svg{transform:rotate(180deg)}
-.bt-goal-facts{display:flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+.bt-goal-task .bt-mark{margin-top:1px}
+.bt-goal-task-body{flex:0 1 auto;min-width:0;display:flex;flex-direction:column}
+.bt-goal-task-line{display:flex;min-width:0}
+.bt-goal-task-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-goal-task-text{overflow-wrap:anywhere}
+.bt-goal-task-note{font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow-wrap:anywhere}
+.bt-goal-task>.bt-goal-chip{margin-left:auto}
 .bt-goal-danger{color:var(--bt-danger)}
 .bt-goal-danger[data-armed]{background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 .bt-goal-compose{display:flex;flex-direction:column;gap:8px;padding:12px 14px}

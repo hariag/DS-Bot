@@ -39,6 +39,7 @@
 | [DSH 让步总账](2026-10-13-dsh-concessions.md) | 因 DSH 本身的限制而做的妥协，以及桌面应用之后怎么处理。判断「是 DS Bot 的 bug 还是 DSH 的限制」先看这里 |
 | [角色与权限](2026-10-07-roles-and-permissions.md) | 用户、Main Bot、群管理员、普通 Bot 各能做什么；Bot 的权限预设和群的统一权限 |
 | [群聊](2026-10-07-group-chat.md) | 谁来回答、按顺序发言、@ 提及、轮数上限、干活中的进度和迟到的回复、审批 |
+| [群聊 Goal](2026-11-01-group-goal.md) | 管理员先对齐再写 Goal；分阶段派给成员、每阶段带证据验收；每轮带 Goal 账本防跑偏；空闲时自动推进；暂停、纠偏、终止；会话头胶囊和吊舱显示进度与分工 |
 | [浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md) | 每个 Bot 的浏览器和 `read_browser`、`auto` 联网搜索、密钥卡和替换规则、GitHub 连接器 |
 | [浏览器插件](2026-10-21-browser-plugins.md) | 全团队一个浏览器后端，每个 Bot 一份 profile；`refs` / `script` / `task` |
 | [上下文与记忆](2026-10-09-context-and-memory.md) | 对话分段、上下文管家（压缩还是换段）、交接包、`read_own_chat`；记忆的存放、格式、权限、整理和冻结 |

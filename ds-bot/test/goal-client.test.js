@@ -38,13 +38,6 @@ const { TriggerCell } = cells
 const plain = value => JSON.parse(JSON.stringify(value))
 const hook = value => select => select(value)
 
-const all = (node, cls, out = []) => {
-  if (node === null || node === undefined || typeof node !== 'object') return out
-  if (typeof node.type === 'function') return all(node.type(node.props), cls, out)
-  if ((node.props?.className ?? '').split(' ').includes(cls)) out.push(node)
-  for (const child of node.children ?? []) all(child, cls, out)
-  return out
-}
 const find = (node, cls) => {
   if (node === null || node === undefined || typeof node !== 'object') return null
   if (typeof node.type === 'function') return find(node.type(node.props), cls)
@@ -85,13 +78,13 @@ const running = (over = {}) => ({
 test('goalView reads an active goal into bar label, segments, faces and stage rows', () => {
   const view = goalView(running(), { roster: team(), roomWork: [{ botId: 'c', since: 1 }] })
   assert.equal(view.status, 'active')
-  assert.equal(view.barLabel, 'Second')
-  assert.equal(view.number, 2)
+  assert.equal(view.barLabel, 'Stage 2/4 · Second')
+  assert.equal(view.done, 1)
   assert.equal(view.count, 4)
   assert.deepEqual(view.segments, ['done', 'current', 'todo', 'todo'])
   // c is reported pending but at work in this room, so its face animates.
   assert.deepEqual(plain(view.faces.map(face => [face.bot.name, face.working])), [['Flint', true], ['Prism', true]])
-  assert.equal(view.stages[1].kind, 'current')
+  assert.equal(view.stages[1].chip, 'current')
   assert.equal(view.stages[1].reworks, 1)
   assert.equal(view.stages[1].feedback, 'tighten the scope')
   assert.equal(view.stages[0].evidence, 'first evidence')
@@ -104,30 +97,15 @@ test('goalView covers every status the bar can hold', () => {
   const checking = running({ stages: stages({ status: 'active', tasks: [{ botId: 'b', task: 'do b', status: 'reported' }, { botId: 'c', task: 'do c', status: 'done' }] }) })
   const checkingView = goalView(checking, { roster })
   assert.deepEqual(checkingView.segments, ['done', 'checking', 'todo', 'todo'])
-  assert.equal(checkingView.stages[1].kind, 'current')
-  assert.equal(checkingView.barLabel, 'Results reported · stage review pending: Second')
-  const emptyStage = goalView(running({ stages: stages({ status: 'active', tasks: [] }) }), { roster })
-  assert.equal(emptyStage.barLabel, 'Second')
-  assert.equal(emptyStage.segments[1], 'current')
+  assert.equal(checkingView.stages[1].chip, 'checking')
   const passed = running({ stages: stages().map(stage => ({ ...stage, status: 'passed' })), current: 4 })
-  const passedView = goalView(passed, { roster })
-  assert.equal(passedView.barLabel, 'Final check')
-  assert.equal(passedView.number, 4)
-  const idleView = goalView(running({ idle: true }), { roster })
-  assert.equal(idleView.barLabel, 'Waiting for you · Second')
-  assert.equal(goalView(running({ idle: true, idleReason: 'admin-pass', idleRevision: 7, revision: 7 }), { roster }).barLabel, 'Periodic review pending · Second')
-  assert.equal(goalView(running({ idle: true, idleReason: 'admin-pass', idleRevision: 7, revision: 8 }), { roster }).barLabel, 'Waiting for you · Second')
-  assert.equal(goalView(running({ reviewAttempt: { state: 'uncertain' } }), { roster }).barLabel, 'Periodic review needs attention')
+  assert.equal(goalView(passed, { roster }).barLabel, 'Final check')
+  assert.equal(goalView(running({ idle: true }), { roster }).barLabel, 'Waiting for you · Stage 2/4')
   const paused = goalView(running({ status: 'paused' }), { roster })
-  assert.equal(paused.barLabel, 'Paused · Second')
-  assert.equal(paused.number, 2)
+  assert.equal(paused.barLabel, 'Paused · Stage 2/4')
   assert.deepEqual(paused.segments, ['done', 'paused', 'todo', 'todo'])
   const complete = goalView(running({ status: 'complete', stages: stages().map(stage => ({ ...stage, status: 'passed' })), current: 4 }), { roster })
-  assert.equal(complete.barLabel, 'Goal reached')
-  assert.equal(complete.number, 4)
-  const stoppedView = goalView(running({ status: 'stopped' }), { roster })
-  assert.equal(stoppedView.number, 1)
-  assert.equal(goalView(running({ status: 'drafting', stages: [], current: -1 }), { roster }).number, undefined)
+  assert.equal(complete.barLabel, 'Goal reached · 4/4')
   assert.deepEqual(complete.segments, ['done', 'done', 'done', 'done'])
   const stopped = goalView(running({ status: 'stopped' }), { roster })
   assert.equal(stopped.barLabel, 'Stopped')
@@ -162,44 +140,11 @@ test('the goal entry is only offered to a group whose admin is a member and whos
   assert.equal(canSetGoal({ ...room, goal: running({ status: 'stopped' }) }, roster), true)
 })
 
-const renderHeader = (roster, ui = {}, work = {}, actions = {}, sessionId = 'r1') => HeaderPill({
-  sessionId,
+const renderHeader = (roster, ui = {}, work = {}, actions = {}) => HeaderPill({
+  sessionId: 'r1',
   useRoster: hook(roster), useSessions: hook({ byId: {} }), useSessionStatus: hook(new Map()),
   useSession: hook({}), useActivity: hook({}), useMemoryNews: hook({}), useTurnClock: hook({}),
   useUi: hook(ui), useLive: hook({}), useWork: hook(work), actions,
-})
-
-// A group whose own Session moved to a new part: `room.id` stays the first Session's
-// id while `room.sessionId` is the fresh part, and both find the room (sources.js).
-const movedTeam = (goalValue) => {
-  const roster = team(goalValue)
-  const room = { ...roster.roomsById.r1, sessionId: 'r1-part2' }
-  return { ...roster, roomsById: { r1: room, 'r1-part2': room } }
-}
-
-test('a group whose Session moved still opens the goal draft keyed by the room', () => {
-  const node = renderHeader(movedTeam(), { goalCompose: 'r1', goalOpen: 'r1' }, {}, {}, 'r1-part2')
-  const island = find(node, 'bt-island')
-  assert.ok(island)
-  assert.equal(island.props['data-goal'], 'compose')
-  assert.ok(find(island, 'bt-goal-input'))
-})
-
-test('a group whose Session moved opens an existing goal panel keyed by the room', () => {
-  const node = renderHeader(movedTeam(running()), { goalOpen: 'r1' }, {}, {}, 'r1-part2')
-  assert.ok(find(node, 'bt-goal-panel'))
-})
-
-test('goal state opened for one group does not open another group after a move', () => {
-  const roster = movedTeam(running())
-  const other = { id: 'r2', sessionId: 'r2', name: 'Design', members: ['a', 'b'], admin: 'a', goal: running({ id: 'g2' }) }
-  roster.roomsById.r2 = other
-  const moved = renderHeader(roster, { goalOpen: 'r1' }, {}, {}, 'r1-part2')
-  assert.ok(find(moved, 'bt-goal-panel'))
-  const elsewhere = renderHeader(roster, { goalOpen: 'r1', goalCompose: 'r1' }, {}, {}, 'r2')
-  // r2 has a goal of its own, so the closed island is there; r1's panel and draft are not.
-  assert.equal(find(elsewhere, 'bt-goal-panel'), null)
-  assert.equal(find(elsewhere, 'bt-goal-input'), null)
 })
 
 test('a group without a goal renders today\'s pill with no island', () => {
@@ -218,185 +163,32 @@ test('an active goal wraps the pill in the island: title, count and the stage ba
   assert.equal(island.props['data-goal'], 'active')
   assert.equal(find(island, 'bt-pill-swap') !== null, true)
   assert.equal(text(find(island, 'bt-pill-title')), 'Ship it')
-  assert.equal(text(find(island, 'bt-pill-count')), '2/4')
+  assert.equal(text(find(island, 'bt-pill-count')), '1/4')
   const bar = find(island, 'bt-goal-bar')
   assert.ok(bar)
-  assert.equal(text(bar).includes('Second'), true)
+  assert.equal(text(bar).includes('Stage 2/4 · Second'), true)
   assert.equal(find(island, 'bt-goal-panel'), null)
 })
 
-test('the open island draws a stepper, the current stage and the goal controls, no chips', () => {
+test('the open island draws the panel with stages, task rows and the goal controls', () => {
   const node = renderHeader(team(running()), { goalOpen: 'r1' })
   const panel = find(node, 'bt-goal-panel')
   assert.ok(panel)
-  assert.equal(find(panel, 'bt-goal-chip'), null)
-  assert.equal(all(panel, 'bt-goal-step').length, 4)
   const content = text(panel)
   assert.equal(content.includes('Pause'), true)
   assert.equal(content.includes('Stop'), true)
-  // The title line anchors the selected stage even when it is the current one.
-  assert.equal(text(find(panel, 'bt-goal-btitle')), 'Second')
-  assert.equal(find(panel, 'bt-goal-back'), null)
-  assert.equal(content.includes('Sent back by Chief: tighten the scope'), true)
+  assert.equal(content.includes('Stage 2 · Second'), true)
+  assert.equal(content.includes('Sent back ×1'), true)
+  assert.equal(content.includes('tighten the scope'), true)
   assert.equal(content.includes('do b'), true)
-  assert.equal(content.includes('Done when: a2'), true)
-  assert.equal(content.includes('Goal and checks'), true)
-})
-
-test('an uncertain review opens its separate workspace rather than approving in the goal panel', () => {
-  let closed = 0, submitted = 0
-  const node = renderHeader(team(running({ reviewAttempt: { id: 'review-1', state: 'uncertain', at: 1 } })), { goalOpen: 'r1' }, {}, {
-    closeGoal: () => { closed += 1 }, goalReviewResolve: () => { submitted += 1 },
-  })
-  const panel = find(node, 'bt-goal-panel')
-  assert.match(text(panel), /unknown outcome/)
-  assert.doesNotMatch(text(panel), /What did you verify|Resume periodic reviews/)
-  const button = all(panel, 'bt-soft').find(item => text(item) === 'Open review workspace')
-  assert.equal(button.props.disabled, false)
-  button.props.onClick()
-  assert.equal(closed, 1)
-  assert.equal(submitted, 0, 'opening the workspace must not authorize recovery')
-})
-
-test('a passed stage shows its evidence and the rework line grows with the count', () => {
-  const node = renderHeader(team(running({ stages: stages({ reworks: 2, feedback: 'too wide' }) })), { goalOpen: 'r1' })
-  const panel = find(node, 'bt-goal-panel')
-  assert.equal(text(panel).includes('Sent back 2 times by Chief. Last time: too wide'), true)
-  // Stage 1 is passed: selecting it shows its evidence as a run of text.
-  const original = react.useState
-  react.useState = initial => [initial === 1 ? 0 : initial, () => {}]
-  try {
-    const passed = find(renderHeader(team(running()), { goalOpen: 'r1' }), 'bt-goal-panel')
-    assert.equal(text(find(passed, 'bt-goal-btitle')), 'First')
-    assert.equal(text(passed).includes('Evidence: first evidence'), true)
-    assert.equal(text(passed).includes('Back to current stage'), true)
-  } finally { react.useState = original }
-})
-
-test('a stage other than the current one gets a title line and a way back', () => {
-  // The realm's useState is inert, so the selection hook is seeded to stage 3
-  // while the goal's current stays at 1 — the panel renders the non-current case.
-  const original = react.useState
-  react.useState = initial => [initial === 1 ? 2 : initial, () => {}]
-  try {
-    const node = renderHeader(team(running()), { goalOpen: 'r1' })
-    const panel = find(node, 'bt-goal-panel')
-    assert.equal(text(find(panel, 'bt-goal-btitle')), 'Third')
-    assert.equal(text(find(panel, 'bt-goal-back')), 'Back to current stage')
-    const rows = all(panel, 'bt-goal-task')
-    assert.equal(rows.length, 1)
-    assert.equal(rows[0].props['data-task'], 'pending')
-  } finally { react.useState = original }
-})
-
-test('task rows distinguish reported from done and show notes without interpreting markup', () => {
-  const node = renderHeader(team(running({ stages: stages({ status: 'active', tasks: [
-    { botId: 'b', task: 'do b', status: 'working' },
-    { botId: 'c', task: 'do c', status: 'reported', note: '<b>waiting</b>\nfor independent review' },
-    { botId: 'd', task: 'do d', status: 'pending', note: '' },
-    { botId: 'a', task: 'do a', status: 'done', note: 'evidence: report.md' },
-    { botId: 'a', task: 'legacy task', note: 5 },
-  ] }) })), { goalOpen: 'r1' })
-  const rows = all(find(node, 'bt-goal-panel'), 'bt-goal-task')
-  assert.equal(rows.length, 5)
-  assert.equal(rows[0].props['data-task'], undefined)
-  assert.equal(find(rows[0], 'bt-goal-tdone'), null)
-  assert.equal(text(find(rows[0], 'bt-goal-tstatus')), 'Task working')
-  assert.equal(find(rows[1], 'bt-goal-tdone'), null)
-  assert.equal(text(find(rows[1], 'bt-goal-tstatus')), 'Task reported')
-  assert.equal(text(find(rows[1], 'bt-goal-tnote')), 'Note · context unknown · Recorded time unknown: <b>waiting</b>\nfor independent review')
-  assert.equal(rows[2].props['data-task'], 'pending')
-  assert.equal(text(find(rows[2], 'bt-goal-tstatus')), 'Task pending')
-  assert.equal(find(rows[2], 'bt-goal-tnote'), null)
-  assert.ok(find(rows[3], 'bt-goal-tdone'))
-  assert.equal(text(find(rows[3], 'bt-goal-tstatus')), 'Task marked done')
-  assert.equal(text(find(rows[3], 'bt-goal-tnote')), 'Note · context unknown · Recorded time unknown: evidence: report.md')
-  assert.equal(text(find(rows[4], 'bt-goal-tstatus')), 'Task status unknown')
-  assert.equal(find(rows[4], 'bt-goal-tnote'), null)
-})
-
-test('long notes stay available as text and do not change the recorded status', () => {
-  const note = `${'x'.repeat(5000)}\nblocked`
-  const node = renderHeader(team(running({ stages: stages({ tasks: [{ botId: 'b', task: 'long', status: 'pending', note }] }) })), { goalOpen: 'r1' })
-  const row = find(find(node, 'bt-goal-panel'), 'bt-goal-task')
-  assert.equal(text(find(row, 'bt-goal-tnote')), `Note · context unknown · Recorded time unknown: ${note}`)
-  assert.equal(text(find(row, 'bt-goal-tstatus')), 'Task pending')
-})
-
-test('notes use status versions to distinguish historical and unknown notes', () => {
-  const stamp = Date.now() - 1000
-  const tasks = [
-    { botId: 'a', task: 'current', status: 'working', note: 'a', noteStatus: 'working', noteAt: stamp, statusVersion: 4, noteStatusVersion: 4 },
-    { botId: 'b', task: 'cycled', status: 'working', note: 'b', noteStatus: 'working', noteAt: stamp, statusVersion: 4, noteStatusVersion: 1 },
-    { botId: 'c', task: 'old', status: 'reported', note: 'c', noteStatus: 'working', noteAt: stamp, statusVersion: 4, noteStatusVersion: 3 },
-    { botId: 'd', task: 'legacy', status: 'working', note: 'd', noteStatus: 'working', noteAt: stamp },
-    { botId: 'a', task: 'future', status: 'working', note: 'e', noteStatus: 'working', noteAt: Date.now() + 3600000, statusVersion: 2, noteStatusVersion: 2 },
-    { botId: 'b', task: 'bad version', status: 'working', note: 'f', noteStatus: 'working', noteAt: stamp, statusVersion: 2, noteStatusVersion: 3 },
-    { botId: 'c', task: 'bad status', status: 'reported', note: 'g', noteStatus: 'working', noteAt: stamp, statusVersion: 2, noteStatusVersion: 2 },
-    { botId: 'd', task: 'unknown enum', status: 'not-a-status', note: 'h', noteStatus: 'not-a-status', noteAt: stamp, statusVersion: 2, noteStatusVersion: 2 },
-    { botId: 'a', task: 'invalid time', status: 'working', note: 'i', noteStatus: 'working', noteAt: -1, statusVersion: 2, noteStatusVersion: 2 },
-  ]
-  const node = renderHeader(team(running({ stages: stages({ tasks }) })), { goalOpen: 'r1' })
-  const rows = all(find(node, 'bt-goal-panel'), 'bt-goal-task')
-  assert.deepEqual(rows.map(row => text(find(row, 'bt-goal-tnote-label'))), [
-    'Note · recorded in this status', 'Note · earlier status', 'Note · earlier status', 'Note · context unknown', 'Note · context unknown', 'Note · context unknown', 'Note · context unknown', 'Note · context unknown', 'Note · context unknown',
-  ])
-  const utc = new Date(stamp).toISOString().replace('T', ' ').replace('Z', ' UTC')
-  assert.equal(text(find(rows[0], 'bt-goal-tnote-time')), `Recorded: ${utc}`)
-  assert.equal(text(find(rows[3], 'bt-goal-tnote-time')), `Recorded: ${utc}`) // legacy version, known timestamp
-  assert.equal(text(find(rows[4], 'bt-goal-tnote-time')), 'Recorded time unknown')
-  assert.equal(text(find(rows[8], 'bt-goal-tnote-time')), 'Recorded time unknown')
-})
-
-test('task note labels expose timestamp conflicts and unknown status-change times', () => {
-  const tasks = [
-    { botId: 'a', task: 'conflict', status: 'working', note: 'a', noteStatus: 'pending', noteAt: 2_000, statusUpdatedAt: 1_000, statusVersion: 3, noteStatusVersion: 2 },
-    { botId: 'b', task: 'same millisecond', status: 'working', note: 'b', noteStatus: 'pending', noteAt: 1_000, statusUpdatedAt: 1_000, statusVersion: 3, noteStatusVersion: 2 },
-    { botId: 'c', task: 'missing status time', status: 'working', note: 'c', noteStatus: 'working', noteAt: 2_000, statusVersion: 3, noteStatusVersion: 3 },
-    { botId: 'd', task: 'future status time', status: 'working', note: 'd', noteStatus: 'working', noteAt: 2_000, statusUpdatedAt: 9_000_000_000_000_000, statusVersion: 3, noteStatusVersion: 3 },
-  ]
-  const node = renderHeader(team(running({ stages: stages({ tasks }) })), { goalOpen: 'r1' })
-  const rows = all(find(node, 'bt-goal-panel'), 'bt-goal-task')
-  assert.equal(text(find(rows[0], 'bt-goal-tnote-label')), 'Note · time conflict; verify')
-  assert.equal(text(find(rows[1], 'bt-goal-tnote-label')), 'Note · earlier status')
-  assert.equal(text(find(rows[2], 'bt-goal-tstatus-time')), 'Status change time unknown')
-  assert.equal(text(find(rows[3], 'bt-goal-tnote-label')), 'Note · context unknown')
-})
-
-test('tasks without notes still show a valid status-change time or an explicit unknown', () => {
-  const tasks = [
-    { botId: 'a', task: 'working', status: 'working', statusUpdatedAt: 2_000 },
-    { botId: 'b', task: 'reported', status: 'reported', statusUpdatedAt: 3_000 },
-    { botId: 'c', task: 'legacy', status: 'pending' },
-    { botId: 'd', task: 'invalid', status: 'done', statusUpdatedAt: 'yesterday' },
-    { botId: 'a', task: 'future', status: 'pending', statusUpdatedAt: 9_000_000_000_000_000 },
-  ]
-  const node = renderHeader(team(running({ stages: stages({ tasks }) })), { goalOpen: 'r1' })
-  const rows = all(find(node, 'bt-goal-panel'), 'bt-goal-task')
-  assert.equal(text(find(rows[0], 'bt-goal-tstatus-time')), 'Status changed: 1970-01-01 00:00:02.000 UTC')
-  assert.equal(text(find(rows[1], 'bt-goal-tstatus-time')), 'Status changed: 1970-01-01 00:00:03.000 UTC')
-  for (const row of rows.slice(2)) assert.equal(text(find(row, 'bt-goal-tstatus-time')), 'Status change time unknown')
-  for (const row of rows) assert.equal(find(row, 'bt-goal-tnote'), null)
-})
-
-test('the bottom row offers the right controls per goal state', () => {
-  const panel = state => find(renderHeader(team(running(state)), { goalOpen: 'r1' }), 'bt-goal-panel')
-  const active = text(panel({}))
-  assert.equal(active.includes('Pause'), true)
-  assert.equal(active.includes('Resume'), false)
-  const complete = text(panel({ status: 'complete', stages: stages().map(stage => ({ ...stage, status: 'passed' })), current: 4, summary: 'all done', evidence: 'ev' }))
-  assert.equal(complete.includes('Clear'), true)
-  assert.equal(complete.includes('all done'), true)
-  assert.equal(complete.includes('Pause'), false)
-  const drafting = text(panel({ status: 'drafting', stages: [], current: -1, brief: 'ship v2' }))
-  assert.equal(drafting.includes('Cancel'), true)
-  assert.equal(drafting.includes('ship v2'), true)
-  assert.equal(all(panel({ status: 'drafting', stages: [], current: -1 }), 'bt-goal-step').length, 0)
+  assert.equal(content.includes('Working'), true)
+  assert.equal(content.includes('Done when'), true)
 })
 
 test('a paused goal offers Resume in the panel and a stopped one Clear', () => {
   const paused = find(renderHeader(team(running({ status: 'paused' })), { goalOpen: 'r1' }), 'bt-goal-panel')
   assert.equal(text(paused).includes('Resume'), true)
+  assert.equal(text(paused).includes('Paused. Write in the group'), true)
   assert.equal(text(paused).includes('Stop current work too'), false)
   const stopped = find(renderHeader(team(running({ status: 'stopped' })), { goalOpen: 'r1' }), 'bt-goal-panel')
   assert.equal(text(stopped).includes('Clear'), true)
@@ -427,7 +219,7 @@ test('a goal turn trigger draws nothing', () => {
     sessionId: 'r1', useRoster: hook(roster), useSessions: hook({ byId: {} }),
     useTurnClock: hook({}), useUi: hook({ visits: {} }), actions: {},
   })
-  assert.equal(node?.type?.name, 'CellEmpty')
+  assert.equal(node, null)
 })
 
 // A component node by name, evaluating function components on the way down.
