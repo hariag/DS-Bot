@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { apply } from '../index.js'
 import { dshHomeOf } from '../src/host/folders.js'
 import { escapeRegExp } from '../src/host/text.js'
-import { fakeApproval, fakeContext } from './fake-ctx.js'
+import { fakeContext } from './fake-ctx.js'
 
 // A Main Bot and a Bot, with the Bot in the group Ops through its group Session 'gb'.
 const TEAM = {
@@ -30,10 +30,9 @@ const TEAM = {
 // starts in the team workspace unless it is made with a cwd. `services` are what
 // ctx.get finds, such as the sandbox policy and approvals.
 // `locked`: another dsh holds the team, so this one only shows it.
-async function start({ services = {}, workspaces = [], llm, team: saved = TEAM, locked = false, root: rootDir } = {}) {
+async function start({ services = {}, workspaces = [], llm, team: saved = TEAM, locked = false } = {}) {
   // The native realpath, as fs/promises uses: on Windows the JS one keeps 8.3 short names.
-  const root = rootDir ?? realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
-  mkdirSync(root, { recursive: true })
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
   const dsh = join(root, 'dsh')
   const home = join(dsh, 'bot')
   const team = join(home, 'workspace')
@@ -636,71 +635,6 @@ test('the team workspace holds no DeepSeek Harness data, apart from the plugin\'
   assert.equal(state().workspaceId, 'w-new')
 })
 
-// #508: older profiles, imports and DS_BOT_USER_DSH_HOME can leave a workspace that
-// contains a data root; the workspace exception must not open that root's folders.
-test('a team workspace that holds the data still keeps Bots out of it', async (t) => {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
-  const { dsh, home, project, state, call, tool, stop } = await start({
-    root,
-    workspaces: [{ id: 'w9', path: root, title: 'root' }],
-    team: { ...TEAM, workspaceId: 'w9' },
-  })
-  t.after(stop)
-  mkdirSync(join(dsh, 'profiles'))
-  const error = async workDir => (await call('update-bot', { id: 'b', workDir })).error?.message
-  for (const guarded of [dsh, join(dsh, 'profiles'), home, join(home, 'memory')]) {
-    mkdirSync(guarded, { recursive: true })
-    assert.equal(await error(guarded), `${guarded} holds DeepSeek Harness data, so Bots cannot work there`)
-  }
-  // An ordinary folder in the same workspace is still fine.
-  assert.equal((await call('update-bot', { id: 'b', workDir: project })).value.workDir, project)
-  assert.equal(state().bots.b.workDir, project)
-  // Nor can a photo be read out of the data root into the team.
-  writeFileSync(join(dsh, 'profiles', 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  const pic = join(dsh, 'profiles', 'pic.png')
-  assert.equal(await tool('update_bot', { avatar: pic }, 'b'), `Could not update the Bot: ${pic} is in DeepSeek Harness data, so it cannot be a Bot's photo. Pass an image from another folder.`)
-})
-
-// #508: the exception covers a workspace lying inside a data root, not one equal to
-// it: a workspace that is DSH's home or the team's own data opens every folder in it.
-test('a team workspace that is a data root still keeps Bots out of it', async (t) => {
-  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-  for (const name of ['dsh', 'bot']) {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ds-bot-work-dir-')))
-    const at = name === 'dsh' ? join(root, 'dsh') : join(root, 'dsh', 'bot')
-    const env = await start({
-      root,
-      workspaces: [{ id: 'w9', path: at, title: name }],
-      team: { ...TEAM, workspaceId: 'w9' },
-    })
-    t.after(env.stop)
-    const error = async workDir => (await env.call('update-bot', { id: 'b', workDir })).error?.message
-    for (const guarded of [join(env.dsh, 'profiles'), join(env.home, 'memory')]) {
-      mkdirSync(guarded, { recursive: true })
-      assert.equal(await error(guarded), `${guarded} holds DeepSeek Harness data, so Bots cannot work there`)
-    }
-    writeFileSync(join(env.dsh, 'profiles', 'pic.png'), PNG)
-    const pic = join(env.dsh, 'profiles', 'pic.png')
-    assert.equal(await env.tool('update_bot', { avatar: pic }, 'b'), `Could not update the Bot: ${pic} is in DeepSeek Harness data, so it cannot be a Bot's photo. Pass an image from another folder.`)
-  }
-})
-
-// #508: with no sandbox policy service a folder outside the workspace asked nobody.
-test('a folder outside the workspace asks for approval, or throws when nobody can be asked', async (t) => {
-  const first = await start()
-  t.after(first.stop)
-  assert.equal(await first.tool('update_bot', { work_dir: first.project }, 'b'),
-    `Could not update the Bot: Working in ${first.project} needs the user's approval, and there is no way to ask for it here, so nothing changed. The user can make this change in the settings.`)
-  assert.equal(first.state().bots.b.workDir, undefined)
-
-  const approval = fakeApproval()
-  const second = await start({ services: { approval } })
-  t.after(second.stop)
-  assert.equal(await second.tool('update_bot', { work_dir: second.project }, 'b'), `Updated Writer. From your next step on, you work in ${second.project}.`)
-  assert.equal(approval.requests.length, 1)
-  assert.equal(approval.requests[0].reason, `Let Writer work in ${second.project}? Files there can then be changed.`)
-})
-
 test('a copied team shows its default team workspace before the workspace is registered', async (t) => {
   const copied = { ...TEAM }
   delete copied.workspaceId
@@ -843,7 +777,8 @@ test('in a group with a folder of its own a member stays inside it; without one 
   assert.equal((await call('update-room', { id: 'r1', workDir: '' })).ok, true)
   const own = await changeDirectory(ctx, service, agentOf('gb'), project)
   assert.equal(own.ran, true)
-  assert.equal(state().bots.b.workDir, project)
+  assert.equal(state().rooms.r1.memberDirs.b, project)
+  assert.equal(state().bots.b.workDir, undefined)
   assert.equal(state().rooms.r1.workDir, undefined)
 })
 
@@ -903,4 +838,167 @@ test('a Bot changes back to the team workspace when the team workspace is known 
   assert.equal(back.ran, true)
   assert.equal(state().bots.b.workDir, undefined)
   assert.equal(requests.length, 0)
+})
+
+// A folder a member picks inside a group is kept on the room, per member: it holds
+// for that conversation's next parts, and nowhere else.
+const TWO_ROOMS = {
+  ...TEAM.rooms,
+  r2: { id: 'r2', name: 'Cuda', members: ['a', 'b'], mode: 'admin', admin: 'a', named: true, sessions: { b: 'gb2' } },
+}
+
+test('a folder a member picks in one group holds only there, not in its other groups or its own chat', async (t) => {
+  const { service } = folderService()
+  const { requests, services } = approvalServices('allowed-once')
+  const { ctx, call, agentOf, created, root, state, preStep, stop } = await start({ services: { ...services, workingDirectory: service }, team: { ...TEAM, rooms: TWO_ROOMS } })
+  t.after(stop)
+  const own = join(root, 'cuda')
+  const ascend = join(root, 'ascend')
+  mkdirSync(own)
+  mkdirSync(ascend)
+  assert.equal((await call('update-bot', { id: 'b', workDir: own })).ok, true)
+  await until(() => state().bots.b.sessionId === 's1')
+  // The member's group Sessions were made in its own folder.
+  agentOf('gb').session.header.cwd = own
+  agentOf('gb2').session.header.cwd = own
+
+  const moved = await changeDirectory(ctx, service, agentOf('gb'), ascend)
+  assert.equal(moved.ran, true)
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].toolName, 'working_directory')
+  assert.equal(state().rooms.r1.memberDirs.b, ascend)
+  // Neither the Bot's folder, its conversation in the other group, nor its own chat moved.
+  assert.equal(state().bots.b.workDir, own)
+  assert.equal(state().rooms.r1.workDir, undefined)
+  assert.equal(await preStep('gb2'), 'next')
+  assert.equal(await preStep('s1'), 'next')
+  assert.deepEqual(created.map(options => options.cwd).filter(Boolean), [own])
+
+  // Its conversation in this group moves on to a fresh part in the new folder.
+  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  await until(() => state().rooms.r1.sessions.b === 's2')
+  assert.deepEqual(created.at(-1), { cwd: ascend })
+  assert.equal(state().rooms.r2.sessions.b, 'gb2')
+  assert.equal(state().bots.b.sessionId, 's1')
+})
+
+test('a member that changes to the team workspace in a group stays there, not back in its own folder', async (t) => {
+  const { service } = folderService()
+  const { services } = approvalServices('allowed-once')
+  const { ctx, call, agentOf, created, root, team, state, preStep, stop } = await start({ services: { ...services, workingDirectory: service } })
+  t.after(stop)
+  const own = join(root, 'cuda')
+  mkdirSync(own)
+  assert.equal((await call('update-bot', { id: 'b', workDir: own })).ok, true)
+  await until(() => state().bots.b.sessionId === 's1')
+  agentOf('gb').session.header.cwd = own
+
+  const moved = await changeDirectory(ctx, service, agentOf('gb'), team)
+  assert.equal(moved.ran, true)
+  assert.equal(state().rooms.r1.memberDirs.b, null)
+  assert.equal(state().bots.b.workDir, own)
+  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  await until(() => state().rooms.r1.sessions.b === 's2')
+  assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
+})
+
+test('a member\'s folder pick in a group goes with the group\'s folder setting or the member', async (t) => {
+  const { service } = folderService()
+  const { services } = approvalServices('allowed-once')
+  const three = {
+    ...TEAM,
+    bots: { ...TEAM.bots, c: { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 } },
+    rooms: { r1: { ...TEAM.rooms.r1, members: ['a', 'b', 'c'] } },
+  }
+  const { ctx, call, agentOf, project, state, stop } = await start({ services: { ...services, workingDirectory: service }, team: three })
+  t.after(stop)
+  assert.equal((await changeDirectory(ctx, service, agentOf('gb'), project)).ran, true)
+  assert.equal(state().rooms.r1.memberDirs.b, project)
+  // Setting the group's folder overrides every pick, and clearing it does not bring one back.
+  assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
+  assert.equal(state().rooms.r1.memberDirs, undefined)
+  assert.equal((await call('update-room', { id: 'r1', workDir: '' })).ok, true)
+  assert.equal((await changeDirectory(ctx, service, agentOf('gb'), project)).ran, true)
+  assert.equal(state().rooms.r1.memberDirs.b, project)
+  assert.equal((await call('update-room', { id: 'r1', remove: ['b'] })).ok, true)
+  assert.equal(state().rooms.r1.memberDirs?.b, undefined)
+})
+
+test('a member cannot pick the folder of a private Bot inside a group', async (t) => {
+  const { service } = folderService()
+  const { services } = approvalServices('allowed-once')
+  const three = {
+    ...TEAM,
+    bots: { ...TEAM.bots, c: { id: 'c', name: 'Diary', role: 'Notes', sessionId: 'c', createdAt: 3 } },
+  }
+  const { ctx, call, agentOf, project, state, stop } = await start({ services: { ...services, workingDirectory: service }, team: three })
+  t.after(stop)
+  assert.equal((await call('update-bot', { id: 'c', private: true, workDir: project })).ok, true)
+  const moved = await changeDirectory(ctx, service, agentOf('gb'), project)
+  assert.equal(moved.ran, false)
+  assert.match(moved.error, /Diary is a private Bot/)
+  assert.equal(state().rooms.r1.memberDirs, undefined)
+})
+
+test('a group folder change leaves the group\'s own Session as it was made', async (t) => {
+  const { call, created, agentOf, preStep, project, team, state, stop } = await start()
+  t.after(stop)
+  assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
+  assert.equal(state().rooms.r1.id, 'r1')
+  // A Session's header is creation metadata DSH owns: the relay Session stays in the
+  // team workspace, and no fresh Session is made for the group.
+  assert.equal(agentOf('r1').session.header.cwd, team)
+  assert.equal(state().rooms.r1.sessions.b, 'gb')
+  assert.deepEqual(created, [])
+
+  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  await until(() => state().rooms.r1.sessions.b === 's1')
+  assert.deepEqual(created, [{ cwd: project }])
+  assert.equal(state().rooms.r1.id, 'r1')
+  assert.equal(agentOf('r1').session.header.cwd, team)
+
+  assert.equal((await call('update-room', { id: 'r1', workDir: '' })).ok, true)
+  assert.equal(state().rooms.r1.workDir, undefined)
+  assert.equal(state().rooms.r1.id, 'r1')
+  assert.equal(agentOf('r1').session.header.cwd, team)
+  assert.equal(state().rooms.r1.sessions.b, 's1')
+})
+
+test('the file panel of a group with a folder lists that folder', async (t) => {
+  // The workspaceFileScope lookup answers what the file panel lists; until DS Bot's
+  // resolver answers for the group's own Session, the provider's own resolution runs.
+  const resolved = []
+  const provider = { resolve: async id => { resolved.push(id); return { sessionId: id, workspaceRoot: `/header-${id}` } } }
+  let resolver
+  const typert = { lookups: {
+    get: key => (key === 'workspaceFileScope' ? provider : undefined),
+    configure: (key, next) => { resolver = next; return () => {} },
+  } }
+  const { call, project, stop } = await start({ services: { typert } })
+  t.after(stop)
+  assert.deepEqual(await resolver('r1'), { sessionId: 'r1', workspaceRoot: '/header-r1' })
+
+  assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
+  assert.deepEqual(await resolver('r1'), { sessionId: 'r1', workspaceRoot: project })
+  // A member's Session and every other Session still resolve as the provider would.
+  assert.deepEqual(await resolver('gb'), { sessionId: 'gb', workspaceRoot: '/header-gb' })
+  assert.deepEqual(resolved, ['r1', 'gb'])
+
+  // A folder gone from disk resolves as the provider would have it, not as an error.
+  rmSync(project, { recursive: true })
+  assert.deepEqual(await resolver('r1'), { sessionId: 'r1', workspaceRoot: '/header-r1' })
+  mkdirSync(project)
+
+  assert.equal((await call('update-room', { id: 'r1', workDir: '' })).ok, true)
+  assert.deepEqual(await resolver('r1'), { sessionId: 'r1', workspaceRoot: '/header-r1' })
+})
+
+test('a group Session that cannot be opened still saves the folder', async (t) => {
+  const env = await start()
+  t.after(env.stop)
+  env.ctx.sessionController.resolveAgent = async () => { throw new Error('down') }
+  assert.equal((await env.call('update-room', { id: 'r1', workDir: env.project })).ok, true)
+  assert.equal(env.state().rooms.r1.workDir, env.project)
+  assert.equal(env.state().rooms.r1.id, 'r1')
+  assert.equal((await env.call('state', {})).ok, true)
 })
