@@ -1,6 +1,6 @@
 import { Image, StyleSheet, Text, View } from 'react-native'
 import { SvgXml } from 'react-native-svg'
-import { characterMarkup, lookOf, MAIN_LOOK, MASK_ID, shapeOf } from '../../../ds-bot/src/client/characters.js'
+import { characterMarkup, lookOf, MASK_ID, shapeOf } from '../../../ds-bot/src/client/characters.js'
 import { INKS } from '../../../ds-bot/src/client/inks.js'
 import type { Bot, Room } from '../connection.ts'
 import { MainStarIcon } from './icons.tsx'
@@ -9,13 +9,6 @@ import { MainStarIcon } from './icons.tsx'
 // (ds-bot/src/client/characters.js). CSS ink variables resolve to the mode's color.
 
 let serial = 0
-
-// A character color as paint, for swatches and a member's name in a group.
-export const COLOR_PAINT: Record<string, string> = {
-  black: '#3c4048', brown: '#8d6e57', red: '#e5484d', orange: '#f76b15', yellow: '#d4a017',
-  green: '#30a46c', cyan: '#12a5b4', blue: '#4f7df3', violet: '#7d5aff', magenta: '#d3458b', gray: '#8b8f98',
-  aurora: '#5cc8a0',
-}
 
 export function botSvg(bot: unknown, dark: boolean): string {
   const look = lookOf(bot)
@@ -27,33 +20,16 @@ export function botSvg(bot: unknown, dark: boolean): string {
   return svg.replace(/var\(--bt-ink-(\w+)\)/g, (_match, name: string) => (inks[name] ?? inks.gray)[dark ? 1 : 0])
 }
 
-const lookSvg = (look: { shape: string; color: string; image?: string }, dark: boolean): string => {
-  const box = shapeOf(look.shape).size
-  const id = `pm${serial += 1}`
-  const inner = characterMarkup(look.shape, look.color).replaceAll(MASK_ID, id)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${box} ${box}">${inner}</svg>`
-  const inks = INKS as Record<string, string[]>
-  return svg.replace(/var\(--bt-ink-(\w+)\)/g, (_match, name: string) => (inks[name] ?? inks.gray)[dark ? 1 : 0])
-}
-
-export function Mark({ look, dark, size = 24 }: { look: { shape: string; color: string; image?: string }; dark: boolean; size?: number }) {
+export function BotMark({ bot, dark, size = 36 }: { bot: unknown; dark: boolean; size?: number }) {
+  const look = lookOf(bot)
   if (typeof look.image === 'string' && look.image.startsWith('data:')) {
     return <Image source={{ uri: look.image }} style={{ width: size, height: size, borderRadius: size / 2 }} />
   }
   return (
     <View style={{ width: size, height: size }}>
-      <SvgXml xml={lookSvg(look, dark)} width={size} height={size} />
+      <SvgXml xml={botSvg(bot, dark)} width={size} height={size} />
     </View>
   )
-}
-
-export function BotMark({ bot, dark, size = 36 }: { bot: unknown; dark: boolean; size?: number }) {
-  return <Mark look={lookOf(bot)} dark={dark} size={size} />
-}
-
-// The "You" avatar of the desktop sidebar's footer (YouAvatar): the whale mark.
-export function YouMark({ dark, size = 24 }: { dark: boolean; size?: number }) {
-  return <Mark look={MAIN_LOOK} dark={dark} size={size} />
 }
 
 // Status badges per ui-standard 8.2, scaled to the row's 44px avatar: a working
@@ -103,21 +79,6 @@ export function RoomAvatar({ room, bots, dark, size = 44, ring }: { room: Room; 
   const members = (room.members ?? []).map(id => byId.get(id)).filter((bot): bot is Bot => bot !== undefined)
   if (members.length === 0) {
     return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: ring }} />
-  }
-  // Below ~32px a cluster reads as a crop; the members line up overlapped like
-  // the desktop's bt-stack instead.
-  if (size <= 32 && members.length > 1) {
-    const overlap = size * 0.35
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        {members.slice(0, 3).map((bot, index) => (
-          <View key={bot.id} style={{ marginLeft: index === 0 ? 0 : -overlap, zIndex: members.length - index }}>
-            <BotMark bot={bot} dark={dark} size={size} />
-          </View>
-        ))}
-        {members.length > 3 ? <Text style={{ fontSize: Math.max(9, Math.round(size * 0.4)), color: "#888", marginLeft: -overlap * 0.4 }}>{`+${members.length - 3}`}</Text> : null}
-      </View>
-    )
   }
   const seats = clusterSeats(Math.min(members.length, 4), size)
   const overflow = members.length > 4 ? members.length - 3 : 0
