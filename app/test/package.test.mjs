@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { join, resolve } from 'node:path'
+import { FileMatcher, getNodeModuleFileMatcher } from 'app-builder-lib/out/fileMatcher.js'
 import { parse } from 'yaml'
 
 // npm installs the peers that the DSH packages ask for, but electron-builder packs only the
@@ -14,12 +16,42 @@ test('every package that the app runs on is a dependency, not only a peer', () =
   assert.deepEqual(peerOnly, [], `add these to "dependencies" in app/package.json: ${peerOnly.join(' ')}`)
 })
 
-// The LibreOffice kit finds its engine next to its own files and starts it. From an asar archive
-// that path lies inside the archive, which Electron cannot start a program from, and every file
-// preview fails (#679).
-test('the app is packed as plain files, not into an asar archive', () => {
+test('sharp native modules and versioned libvips libraries are unpacked together', () => {
   const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
-  assert.equal(config.asar, false)
+  const root = resolve('app-fixture')
+  const filter = new FileMatcher(root, root, value => value, config.asarUnpack).createFilter()
+  const stat = { isDirectory: () => false }
+  for (const file of [
+    '@img/sharp-linux-x64/lib/sharp-linux-x64-0.35.5.node',
+    '@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.18.7',
+    '@img/sharp-linux-arm64/lib/sharp-linux-arm64.node',
+    '@img/sharp-libvips-linux-arm64/lib/libvips-cpp.so.8.18.7',
+    '@img/sharp-libvips-linuxmusl-x64/lib/libvips-cpp.so.8.18.7',
+    '@img/sharp-libvips-darwin-arm64/lib/libvips-cpp.8.18.7.dylib',
+    '@img/sharp-win32-x64/lib/libvips-42.dll',
+    'pnpm/bin/pnpm.cjs',
+  ]) assert.equal(filter(join(root, 'node_modules', file), stat), true, file)
+  assert.equal(filter(join(root, 'node_modules/yaml/dist/index.js'), stat), false)
+})
+
+// The kit resolves its engine package and starts the program in it. Electron cannot start a
+// program by a path inside the asar, so every file preview failed (#679).
+test('the LibreOffice engine ships as plain files beside the asar, the kit inside it', () => {
+  const config = parse(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
+  const root = resolve('app-fixture')
+  const stat = { isDirectory: () => false }
+  const modules = getNodeModuleFileMatcher(root, root, value => value, {}, { config, debugLogger: { isEnabled: false } }).createFilter()
+  const packed = file => modules(join(root, 'node_modules', file), { ...stat, moduleFullFilePath: join('node_modules', file) })
+  for (const engine of ['win32-x64', 'win32-arm64', 'darwin-arm64', 'darwin-x64', 'wasm']) {
+    assert.equal(packed(`@deepseek-ai/libreoffice-kit-${engine}/package.json`), false, engine)
+  }
+  assert.equal(packed('@deepseek-ai/libreoffice-kit/lib/index.js'), true)
+  assert.equal(packed('yaml/dist/index.js'), true)
+
+  const beside = config.extraResources.find(set => set.to === 'node_modules/@deepseek-ai')
+  const extra = new FileMatcher(join(root, beside.from), beside.to, value => value, beside.filter).createFilter()
+  assert.equal(extra(join(root, beside.from, 'libreoffice-kit-win32-x64/bin/libreoffice-kit.exe'), stat), true)
+  assert.equal(extra(join(root, beside.from, 'libreoffice-kit/lib/index.js'), stat), false)
 })
 
 test('Linux leaves the Host and its dependencies readable by plain Node', () => {
