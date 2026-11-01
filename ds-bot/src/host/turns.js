@@ -545,6 +545,7 @@ export function install(rt) {
   })
   ctx.on?.('subagent/end', (info) => {
     noteSubagentEnd(info?.id)
+    if (rt.groupOwners.has(info?.id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(info.id).roomId)).catch(error => rt.warn('ds-bot: goal settle failed: %s', error))
   })
 
   ctx.on('session/event', (session, event) => {
@@ -639,7 +640,10 @@ export function install(rt) {
       case 'user/message': {
         const source = event.data?.source
         if (source?.kind === 'subagent-settled' || source?.kind === 'agent-message') {
-          if (typeof source.senderSessionId === 'string') noteSubagentEnd(source.senderSessionId)
+          if (typeof source.senderSessionId === 'string') {
+            noteSubagentEnd(source.senderSessionId)
+            if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle failed: %s', error))
+          }
           if (stoppedSubagentParents.has(id) || (typeof source.senderSessionId === 'string' && stoppedSubagents.has(source.senderSessionId))) {
             entry.suppressedSubagent = true
             void rt.resolveAgent(id).then(agent => agent?.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })).catch(() => {})
@@ -965,6 +969,7 @@ export function install(rt) {
             deferred: true,
           }).catch(error => rt.warn('ds-bot: deferred request delivery failed: %s', error))
         }
+        if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', id, error))
         break
       }
     }
