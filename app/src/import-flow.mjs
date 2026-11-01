@@ -10,14 +10,6 @@ export const SPARE_BYTES = 500e6
 const CARD_EVERY_MS = 200
 // The rate is not told before the copy has run this long.
 const ETA_AFTER_MS = 3000
-// The share of the ring's import arc that the check of the chats fills; the copy fills the rest.
-const CHECK_SHARE = 0.15
-
-/** How far the import arc is filled at a step of the copy (start-window §6). */
-export function arcShare(step, fraction) {
-  const f = Math.max(0, Math.min(1, fraction || 0))
-  return step <= 1 ? CHECK_SHARE * f : step === 2 ? CHECK_SHARE + (1 - CHECK_SHARE) * f : 1
-}
 
 /**
  * The model settings an import offers, best first: those of DSH Desktop, then DSH Web, then the
@@ -104,8 +96,10 @@ export class ImportFlow {
   // The check of the chats, started while the card is up (stale once a holder came meanwhile).
   #check
   #checkAbort
-  // The copying card as it stands.
+  // The copy under way, its stop, and the copying card as it stands.
+  #copyAbort
   #copyCard
+  #confirming = false
   #shownAt = 0
   #timer
   #lastStep = 0
@@ -129,7 +123,7 @@ export class ImportFlow {
       kind: 'import', bots: offer.bots, groups: offer.rooms, sessions: offer.sessions, path: offer.from,
       names: offer.names.slice(0, 3).join(this.#io.lang === 'en' ? ', ' : '、'),
       bare: size === undefined ? 'Bare' : '',
-      ...(size === undefined ? {} : { chats: formatBytes(size.chats, this.#io.lang), work: formatBytes(size.work, this.#io.lang), total: formatBytes(size.total, this.#io.lang) }),
+      ...(size === undefined ? {} : { chats: formatBytes(size.chats), work: formatBytes(size.work), total: formatBytes(size.total) }),
       model: model?.label ?? '', models: this.#models.length > 1 ? this.#models : [],
       options: { ...this.#options },
     }
@@ -146,6 +140,13 @@ export class ImportFlow {
     } else if (name === 'importOption' && value !== null && typeof value === 'object' && ['regen', 'skipWork'].includes(value.option)) {
       this.#options = { ...this.#options, [value.option]: value.value === true }
       this.#io.show(this.card())
+    } else if (name === 'stopCopy' && this.#copyAbort !== undefined) {
+      if (value === 'confirm') { this.#copyAbort.abort(); return }
+      this.#confirming = true
+      this.#showCopy(true)
+    } else if (name === 'keepCopying' && this.#copyAbort !== undefined) {
+      this.#confirming = false
+      this.#showCopy(true)
     }
   }
 
@@ -180,8 +181,7 @@ export class ImportFlow {
     if (size === undefined || free === undefined) return undefined
     const need = size.total + SPARE_BYTES
     if (free >= need) return undefined
-    const text = bytes => formatBytes(bytes, this.#io.lang)
-    return { need: text(need), free: text(free), short: text(need - free), drive: drive ?? '' }
+    return { need: formatBytes(need), free: formatBytes(free), short: formatBytes(need - free), drive: drive ?? '' }
   }
 
   // The chats are checked while the card is up, unless DSH holds the team: a check of chats that
@@ -220,20 +220,24 @@ export class ImportFlow {
   async #copyLoop() {
     const io = this.#io
     for (;;) {
-      const signal = io.signal
+      this.#copyAbort = new AbortController()
+      this.#confirming = false
+      const stop = this.#copyAbort.signal
+      const signal = AbortSignal.any([stop, io.signal])
       try {
         const unreadable = await this.#checked(signal)
         if (typeof unreadable === 'object') return unreadable
         if (unreadable > 0) {
+          this.#copyAbort = undefined
           const next = await io.ask({ kind: 'newer', n: unreadable })
           return next === 'startWithout' ? { outcome: 'skipped', newer: true } : { outcome: 'gone' }
         }
         const size = copySize(this.#sizes, this.#options)
         const total = size?.total ?? 0
-        const of = size === undefined ? '…' : formatBytes(total, io.lang)
+        const of = size === undefined ? '…' : formatBytes(total)
         const checkedStep = this.#copyCard?.steps?.[0] ?? {}
         let eta = null
-        this.#setCopy({ step: 2, steps: [checkedStep, { a: formatBytes(0, io.lang), b: of }, {}], fraction: 0, eta: null })
+        this.#setCopy({ step: 2, steps: [checkedStep, { a: formatBytes(0), b: of }, {}], fraction: 0, eta: null })
         await io.warmed()
         signal.throwIfAborted()
         const started = this.#now()
@@ -242,14 +246,19 @@ export class ImportFlow {
           onProgress: (bytes) => {
             const done = total > 0 ? Math.min(bytes, total) : bytes
             eta = etaMinutes(eta, { done, total, elapsedMs: this.#now() - started })
-            this.#setCopy({ step: 2, steps: [checkedStep, { a: formatBytes(done, io.lang), b: of }, {}], fraction: total > 0 ? done / total : 0, eta })
+            this.#setCopy({ step: 2, steps: [checkedStep, { a: formatBytes(done), b: of }, {}], fraction: total > 0 ? done / total : 0, eta })
           },
         })
+        this.#copyAbort = undefined
+        this.#confirming = false
         this.#setCopy({ step: 3, steps: [checkedStep, { ...this.#copyCard.steps[1], a: of === '…' ? this.#copyCard.steps[1].a : of }, {}], fraction: 0, eta: null }, true)
         return { outcome: 'copied', summary }
       } catch (error) {
-        // A quit or another start: the copy stopped at a safe point and nothing of it stays.
+        this.#copyAbort = undefined
+        this.#confirming = false
         if (io.signal.aborted) return { outcome: 'gone' }
+        // 〔停止复制〕: nothing of the copy stays, and the start goes on with a new team.
+        if (stop.aborted) return { outcome: 'skipped' }
         const message = error instanceof Error ? error.message : String(error)
         const next = await io.ask({ kind: 'importFailed', reason: io.reasonOf(error), log: message.split('\n') })
         if (next !== 'retry') return { outcome: next === 'startWithout' ? 'skipped' : 'gone' }
@@ -297,7 +306,7 @@ export class ImportFlow {
       const { steps, step, fraction } = this.#copyCard
       this.#lastStep = step
       this.#io.progress?.(Math.min(1, (step - 1 + Math.max(0, Math.min(1, fraction))) / 3))
-      this.#io.show({ ...this.#copyCard, kind: 'copying', steps: steps.map(entry => ({ ...entry })), arc: arcShare(step, fraction) })
+      this.#io.show({ ...this.#copyCard, kind: this.#confirming ? 'stopCopy' : 'copying', steps: steps.map(entry => ({ ...entry })) })
     }
     const due = this.#shownAt + CARD_EVERY_MS - this.#now()
     if (now || due <= 0 || this.#lastStep !== card.step) {

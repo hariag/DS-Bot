@@ -2,7 +2,7 @@
 // and what the copy does with the answers. The disk, the engine and the window are test doubles.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { arcShare, copySize, defaultOptions, etaMinutes, ImportFlow, modelChoices } from '../src/import-flow.mjs'
+import { copySize, defaultOptions, etaMinutes, ImportFlow, modelChoices } from '../src/import-flow.mjs'
 
 const GB = 2 ** 30
 const tick = () => new Promise((resolve) => { setImmediate(resolve) })
@@ -15,7 +15,7 @@ function harness({ inUse = () => false, free = 100 * GB, check = async () => 0, 
   let respond
   const io = {
     offer: {
-      from: '/home/user/.dsh', bots: 6, rooms: 2, names: ['Chief', 'Writer', 'Coder', 'Tester'], sessions: 3,
+      from: '/home/u/.dsh', bots: 6, rooms: 2, names: ['Chief', 'Writer', 'Coder', 'Tester'], sessions: 3,
       sizes: sizes ?? { sessions: 3, chats: 1.2 * GB, work: 3.4 * GB, regen: 0.4 * GB },
       profiles: profiles ?? [{ name: 'web', rows: [{ id: 'llm-deepseek' }] }, { name: 'desktop', rows: [{ id: 'agent-default-model', config: { model: 'deepseek/v4' } }] }],
     },
@@ -33,7 +33,7 @@ function harness({ inUse = () => false, free = 100 * GB, check = async () => 0, 
     until: async (check, signal) => { while (!signal.aborted && !check()) await tick() },
     check: async (signal, onProgress) => { onProgress(3, 3); return check(signal) },
     warmed: async () => {},
-    copy: copy ?? (async ({ onProgress }) => { onProgress(2.6 * GB); return { bots: 6, sessions: 3, from: '/home/user/.dsh' } }),
+    copy: copy ?? (async ({ onProgress }) => { onProgress(2.6 * GB); return { bots: 6, sessions: 3, from: '/home/u/.dsh' } }),
     reasonOf: () => 'other',
     lang: 'zh',
     signal: new AbortController().signal,
@@ -78,7 +78,7 @@ test('the import card says what it found, what the copy takes and which model se
   await tick()
   const card = cards[0]
   assert.equal(card.kind, 'import')
-  assert.deepEqual([card.bots, card.groups, card.sessions, card.path], [6, 2, 3, '/home/user/.dsh'])
+  assert.deepEqual([card.bots, card.groups, card.sessions, card.path], [6, 2, 3, '/home/u/.dsh'])
   assert.equal(card.names, 'Chief、Writer、Coder')
   assert.deepEqual([card.chats, card.work, card.total, card.bare], ['1.2 GB', '3.0 GB', '4.2 GB', ''])
   assert.equal(card.model, 'DSH Desktop · deepseek/v4')
@@ -190,47 +190,30 @@ test('the copying card counts the checked chats, then the bytes, then starts the
   assert.equal(copying.at(-1).step, 3)
   assert.equal(copying.at(-1).steps[1].b, '4.2 GB')
   assert.ok(copying.some(card => card.step === 2), 'the copy shows its own step')
-  // The ring's import arc fills with it and never goes back.
-  const arcs = copying.map(card => card.arc)
-  assert.deepEqual(arcs.slice(1).filter((arc, k) => arc < arcs[k]), [])
-  assert.equal(arcs.at(-1), 1)
 })
 
-test("the check of the chats fills the import arc's first 15 %, the copy the rest", () => {
-  assert.equal(arcShare(1, 0), 0)
-  assert.equal(arcShare(1, 1), 0.15)
-  assert.equal(arcShare(2, 0), 0.15)
-  assert.equal(arcShare(2, 0.5), 0.575)
-  assert.equal(arcShare(2, 2), 1)
-  assert.equal(arcShare(3, 0), 1)
-})
-
-// The copy has no stop button (the user's decision, start-window §6): a quit, or closing the
-// window, stops it at a safe point, and nothing of it stays.
-test('a quit during the copy stops it and leaves no team', async () => {
+test('〔停止复制〕 asks on the card, 〔继续复制〕 goes back, and the confirmed stop leaves no team', async () => {
   let release
   let stopped = false
-  const quit = new AbortController()
   const { io, shown, answer } = harness({
     copy: ({ signal }) => new Promise((resolve, reject) => {
       release = () => { resolve({ bots: 6, sessions: 3 }) }
       signal.addEventListener('abort', () => { stopped = true; reject(new Error('stopped')) })
     }),
   })
-  io.signal = quit.signal
   const flow = new ImportFlow(io)
   const run = flow.run()
   await tick()
   answer('copy')
   while (release === undefined) await tick()
+  flow.act('stopCopy')
+  assert.equal(shown.at(-1).kind, 'stopCopy')
+  flow.act('keepCopying')
   assert.equal(shown.at(-1).kind, 'copying')
-  // The acts of the stop that the page no longer has change nothing.
+  flow.act('stopCopy')
   flow.act('stopCopy', 'confirm')
-  await tick()
-  assert.equal(stopped, false)
-  quit.abort()
-  assert.deepEqual(await run, { outcome: 'gone' })
-  assert.equal(stopped, true, 'the copy was told to stop')
+  assert.deepEqual(await run, { outcome: 'skipped' })
+  assert.equal(stopped, true)
 })
 
 test('chats newer than this DSH reads say so, and the start goes on without the team', async () => {

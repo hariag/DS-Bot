@@ -7,8 +7,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
-import { hostExecutable } from '../src/host-process.mjs'
 import { app, paths, state } from './helpers/fake-electron.mjs'
 import { hold, state as hostState } from './helpers/fake-host-process.mjs'
 import { handOff, messageBoxes, startAct, startState, startWindows, waitFor, window } from './helpers/app-harness.mjs'
@@ -40,8 +38,6 @@ test('the first start offers the DSH team on the import card, copies it on cards
   await import('../src/main.mjs')
   await waitFor(() => startState()?.card?.kind === 'import', 'offer the team on the import card')
   const offer = startState().card
-  // The ring has three arcs while the card asks; the copy brings a fourth (checked below).
-  assert.deepEqual(startState().phases, ['data', 'engine', 'team'])
   assert.deepEqual([offer.bots, offer.groups, offer.sessions, offer.names], [2, 0, 2, 'Chief, Writer'])
   assert.equal(offer.path, dsh)
   assert.equal(existsSync(join(paths.userData, 'locations.json')), false, 'the places wait for the answer')
@@ -61,17 +57,11 @@ test('the first start offers the DSH team on the import card, copies it on cards
   const steps = cards().filter(card => card.kind === 'copying').map(card => card.step)
   assert.ok(steps.includes(1) && steps.includes(2) && steps.at(-1) === 3, `the copy shows its three steps (${steps.join(',')})`)
   assert.equal(startState().card, undefined, 'the copying card goes once the team\'s engine is up')
-  assert.deepEqual(startState().done, ['data', 'import', 'engine'], 'the import\'s stage is done, and the engine\'s again')
-  assert.ok(existsSync(join(home, 'DS Bot', 'draft.md')), 'the work files came along')
-  assert.equal(existsSync(join(home, 'DS Bot', 'node_modules')), false, 'the regenerable folders did not')
+  assert.ok(existsSync(join(home, 'DeepSeek Bot', 'draft.md')), 'the work files came along')
+  assert.equal(existsSync(join(home, 'DeepSeek Bot', 'node_modules')), false, 'the regenerable folders did not')
   assert.equal(JSON.parse(readFileSync(join(paths.userData, 'locations.json'), 'utf8')).dataDir, join(home, '.ds-bot'))
   assert.deepEqual(messageBoxes(), [], 'no message box on the way')
   assert.equal(hostState.starts, 3, 'the warm engine, the chats\' check and the team\'s engine')
-  // On Linux the check's Host runs from the runtime folder, as the team's does.
-  const runtime = fileURLToPath(new URL('../build/runtime', import.meta.url))
-  const check = hostState.envs.find(env => env.DS_BOT_CHECK)
-  assert.equal(check.DS_BOT_RUNTIME_DIR, runtime)
-  assert.equal(hostExecutable(check.DS_BOT_RUNTIME_DIR, 'linux'), join(runtime, 'primary-runtime', 'dependencies', 'node', 'bin', 'node'))
   await handOff()
   app.quit()
   await waitFor(() => state.tray?.destroyed === true, 'end the app')
