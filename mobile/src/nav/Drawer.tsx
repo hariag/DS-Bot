@@ -1,10 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { BackHandler, Pressable, StyleSheet, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, { runOnJS, useAnimatedStyle, useReducedMotion, useSharedValue, withSpring } from 'react-native-reanimated'
-import { ErrorBoundary } from '../ui/error-boundary.tsx'
 import { SPRING_SHAPE } from '../ui/tokens.ts'
-import { t } from '../ui/i18n.ts'
 
 const DrawerCtx = createContext({ open: () => {}, close: () => {} })
 export const useDrawer = () => useContext(DrawerCtx)
@@ -12,16 +10,12 @@ export const useDrawer = () => useContext(DrawerCtx)
 // The desktop sidebar as a left drawer: edge pan or the header button opens it,
 // a pan on the panel or a tap on the scrim closes it, and the hardware back
 // button closes it first.
-export function Drawer({ width, edgeWidth = 24, edgeEnabled = true, content, children }: { width: number; edgeWidth?: number; edgeEnabled?: boolean; content: ReactNode; children: ReactNode }) {
+export function Drawer({ width, edgeWidth = 24, content, children }: { width: number; edgeWidth?: number; content: ReactNode; children: ReactNode }) {
   const reduced = useReducedMotion()
   const x = useSharedValue(-width)
   const [shown, setShown] = useState(false)
 
-  useEffect(() => {
-    if (!shown) x.value = -width
-  }, [width, shown, x])
-
-  const snapTo = useCallback((to: number) => {
+  const snapTo = (to: number) => {
     const opening = to === 0
     if (opening) setShown(true)
     if (reduced) {
@@ -33,10 +27,9 @@ export function Drawer({ width, edgeWidth = 24, edgeEnabled = true, content, chi
         if (finished && !opening) runOnJS(setShown)(false)
       })
     }
-  }, [reduced, x])
-
-  const open = useCallback(() => snapTo(0), [snapTo])
-  const close = useCallback(() => snapTo(-width), [snapTo, width])
+  }
+  const open = () => snapTo(0)
+  const close = () => snapTo(-width)
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -44,44 +37,38 @@ export function Drawer({ width, edgeWidth = 24, edgeEnabled = true, content, chi
       return false
     })
     return () => sub.remove()
-  }, [close, width, x])
+  })
 
-  const edgePan = useMemo(() => Gesture.Pan()
-    .enabled(!shown && edgeEnabled)
+  const clampX = (v: number) => Math.min(0, Math.max(-width, v))
+  const edgePan = Gesture.Pan()
     .activeOffsetX(8)
     .failOffsetY([-12, 12])
-    .onUpdate(e => { x.value = Math.min(0, Math.max(-width, -width + Math.max(0, e.translationX))) })
-    .onEnd(e => { runOnJS(snapTo)(e.velocityX > 350 || x.value > -width / 2 ? 0 : -width) }),
-  [shown, edgeEnabled, width, snapTo, x])
-
-  const drawerPan = useMemo(() => Gesture.Pan()
-    .enabled(shown)
+    .onUpdate(e => { x.value = clampX(-width + Math.max(0, e.translationX)) })
+    .onEnd(e => { runOnJS(snapTo)(e.velocityX > 350 || x.value > -width / 2 ? 0 : -width) })
+  const drawerPan = Gesture.Pan()
     .activeOffsetX(-8)
     .failOffsetY([-12, 12])
-    .onUpdate(e => { x.value = Math.min(0, Math.max(-width, e.translationX)) })
-    .onEnd(e => { runOnJS(snapTo)(e.velocityX < -350 || x.value < -width / 2 ? -width : 0) }),
-  [shown, width, snapTo, x])
+    .onUpdate(e => { x.value = clampX(e.translationX) })
+    .onEnd(e => { runOnJS(snapTo)(e.velocityX < -350 || x.value < -width / 2 ? -width : 0) })
 
   const scrimStyle = useAnimatedStyle(() => ({ opacity: (x.value + width) / width }))
   const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }))
-  const ctxValue = useMemo(() => ({ open, close }), [open, close])
 
   return (
-    <DrawerCtx.Provider value={ctxValue}>
+    <DrawerCtx.Provider value={{ open, close }}>
       <View style={{ flex: 1 }}>
         {children}
-        {/* Keep the edge GestureDetector permanently mounted so opening the drawer by tap never detaches an active native Fabric view mid-frame. */}
-        <GestureDetector gesture={edgePan}>
-          <View pointerEvents={!shown && edgeEnabled ? 'auto' : 'none'} style={[styles.edge, { width: edgeWidth }]} />
-        </GestureDetector>
+        {!shown ? (
+          <GestureDetector gesture={edgePan}>
+            <View style={[styles.edge, { width: edgeWidth }]} />
+          </GestureDetector>
+        ) : null}
         <View pointerEvents={shown ? 'auto' : 'none'} style={StyleSheet.absoluteFill}>
           <Animated.View style={[styles.scrim, scrimStyle]}>
-            <Pressable style={{ flex: 1 }} onPress={close} accessibilityLabel={t('Close team list')} />
+            <Pressable style={{ flex: 1 }} onPress={close} accessibilityLabel="Close team list" />
           </Animated.View>
           <GestureDetector gesture={drawerPan}>
-            <Animated.View style={[styles.panel, { width }, panelStyle]}>
-              <ErrorBoundary>{content}</ErrorBoundary>
-            </Animated.View>
+            <Animated.View style={[styles.panel, { width }, panelStyle]}>{content}</Animated.View>
           </GestureDetector>
         </View>
       </View>
