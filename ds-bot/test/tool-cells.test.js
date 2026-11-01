@@ -9,7 +9,8 @@ import { build } from 'esbuild'
 const { outputFiles } = await build({
   stdin: {
     contents: [
-      "export { ToolCell, TriggerCell, callTree, stackReplies, Bubbles } from './src/client/cells.js'",
+      "export { ToolCell, TriggerCell, callTree } from './src/client/cells.js'",
+      "export { stackReplies } from './src/shared/group-replies.js'",
       "export { QuestionDock } from './src/client/questions.js'",
       "export { SecretDock } from './src/client/secret-card.js'",
       "export { countCards } from './src/client/sources.js'",
@@ -36,9 +37,6 @@ const react = {
   useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
 }
 const timers = new Set()
-// The markdown the host's renderer is given, and what DS Bot's copy controls write.
-const markdownTexts = []
-const copiedTexts = []
 const module = { exports: {} }
 runInNewContext(outputFiles[0].text, {
   module, exports: module.exports,
@@ -48,16 +46,11 @@ runInNewContext(outputFiles[0].text, {
   require: (name) => {
     if (name === 'react') return react
     if (name === 'react-dom') return { createPortal: node => node }
-    if (name === '@deepseek-ai/dsh-client-ui-primitives') {
-      return {
-        MarkdownText: ({ text }) => { markdownTexts.push(text); return text },
-        writeClipboard: text => { copiedTexts.push(text); return Promise.resolve(true) },
-      }
-    }
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: ({ text }) => text }
     throw new Error(`Unexpected platform module ${name}`)
   },
 })
-const { ToolCell, TriggerCell, callTree, stackReplies, Bubbles, QuestionDock, SecretDock, countCards, ViewMenuList, WidgetView } = module.exports
+const { ToolCell, TriggerCell, callTree, stackReplies, QuestionDock, SecretDock, countCards, ViewMenuList, WidgetView } = module.exports
 
 // Runs the effects collected since the last render; returns the cleanups.
 const mount = () => {
@@ -162,29 +155,14 @@ test('a user message inside a group relay shows its time', () => {
   assert.deepEqual(times.map(node => node.props.title), [`Today ${clockOf(today)}`])
 })
 
-// A group paused at its relay limit shows the wait, with a Continue button while
-// the room still parks calls — which calls room-continue with the group's id.
-test('a paused group shows the wait, and Continue releases it while calls are parked', () => {
+// LEGACY: a round from when groups paused at a relay limit still shows the pause,
+// with nothing to press.
+test('an old paused round shows the pause as a plain line', () => {
   const replies = [{ kind: 'paused', names: ['Writer', 'Coder'], count: 6, time: at(0, 14, 5) }]
-  const relay = call('group_relay', 'direct', { content: { replies } })
-
-  // Nothing parked on the room: the line stands alone, with no button.
-  const plain = show(relay, { sessionId: 'room' })
-  const events = findAll(plain, node => node.props?.className === 'bt-event').map(text)
+  const out = show(call('group_relay', 'direct', { content: { replies } }), { sessionId: 'room' })
+  const events = findAll(out, node => node.props?.className === 'bt-event').map(text)
   assert.deepEqual(events, ['Paused after 6 Bot relays. Waiting: Writer and Coder'])
-  assert.equal(find(plain, node => node.type === 'button' && text(node) === 'Continue'), undefined)
-
-  const parked = { ...room, paused: [{ id: 'writer', name: 'Writer' }] }
-  const clicked = []
-  const live = show(relay, {
-    sessionId: 'room',
-    roster: team({ rooms: [parked], roomsById: { room: parked } }),
-    actions: { continueRoom: id => clicked.push(id) },
-  })
-  const button = find(live, node => node.type === 'button' && text(node) === 'Continue')
-  assert.ok(button, 'the Continue button is drawn while the room parks calls')
-  button.props.onClick()
-  assert.deepEqual(clicked, ['room'])
+  assert.equal(find(out, node => node.type === 'button'), undefined)
 })
 
 // The admin was alone with the user's message and passed: the round shows the
@@ -649,7 +627,7 @@ test('a PTC group relay shows its replies from the sub-call, live and after relo
   const headless = { ...finished, name: '', call: null }
   assert.equal(shown(headless, { sessionId: 'room' }), reloaded)
 
-  const progress = [{ callId: 'other', replies: [{ botId: 'chief', text: 'Not this round.' }] }, { callId: 'call-1-1:ptc:1', replies: replies.slice(0, 1), speaking: 'chief' }]
+  const progress = [{ callId: 'other', replies: [{ botId: 'chief', text: 'Not this round.' }] }, { callId: 'call-1-1:ptc:1', replies: replies.slice(0, 1), speaking: ['chief'] }]
   const asked = []
   const actions = { roomProgress: async (id) => { asked.push(id); return progress } }
   const running = program([call('group_relay', 'call-1-1:ptc:1', { running: true })], { running: true })
@@ -662,7 +640,7 @@ test('a PTC group relay shows its replies from the sub-call, live and after relo
   stop()
   timers.clear()
   assert.deepEqual(asked, ['room'])
-  assert.deepEqual(JSON.parse(JSON.stringify(sets)), [{ replies: replies.slice(0, 1), speaking: 'chief' }])
+  assert.deepEqual(JSON.parse(JSON.stringify(sets)), [{ replies: replies.slice(0, 1), speaking: ['chief'] }])
 })
 
 // #105: the secret and question cards of a PTC program showed nowhere.
@@ -860,37 +838,4 @@ test('a view works its formulas out, draws a chart, and keeps html in a sandboxe
   assert.match(frame.props.srcDoc, /Content-Security-Policy" content="default-src 'none'/)
   assert.ok(frame.props.srcDoc.indexOf('Content-Security-Policy') < frame.props.srcDoc.indexOf('<b>hi</b>'), 'the policy comes before the markup')
   assert.equal(frame.props.title, 'A greeting')
-})
-
-// #718: a folded message's cut code block is drawn by DS Bot, so no copy control
-// exists that holds only the part shown; DS Bot's own is bound to the whole
-// block, and a short block keeps the host's normal rendering and copy.
-test('a folded code block leaves no copy of only its shown part', async () => {
-  const inner = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n')
-  const bubble = (texts) => expand(Bubbles({
-    texts, roster: team(), selfId: chief.id, sessionId: chief.id, actions: {},
-    useUi: select => select({ reactions: {} }),
-  }))
-  const copyOf = node => findAll(node, item => item.type === 'button' && typeof item.props?.className === 'string' && item.props.className.includes('bt-fold-copy'))
-
-  markdownTexts.length = 0
-  copiedTexts.length = 0
-  const out = bubble([`Here:\n\`\`\`js\n${inner}\n\`\`\``])
-  // The markdown the host renders holds no fence, so it can draw no copy of the part.
-  assert.ok(markdownTexts.length > 0 && markdownTexts.every(given => !given.includes('```')))
-  // DS Bot draws the part the preview keeps, and its copy holds the whole block.
-  assert.equal(text(find(out, item => item.type === 'pre')), 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8')
-  const [copy] = copyOf(out)
-  assert.equal(copyOf(out).length, 1)
-  copy.props.onClick()
-  await Promise.resolve()
-  assert.deepEqual(copiedTexts, [inner])
-
-  // A short block goes to the host whole, with the host's own copy and none of ours.
-  markdownTexts.length = 0
-  copiedTexts.length = 0
-  const short = bubble(['```js\none\n```'])
-  assert.ok(markdownTexts.some(given => given.includes('```js')))
-  assert.equal(copyOf(short).length, 0)
-  effects = []
 })
