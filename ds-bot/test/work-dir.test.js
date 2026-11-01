@@ -952,7 +952,7 @@ test('a folder a member picks in one group holds only there, not in its other gr
   assert.deepEqual(created.map(options => options.cwd).filter(Boolean), [own])
 
   // Its conversation in this group moves on to a fresh part in the new folder.
-  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  assert.deepEqual(await preStep('gb'), { kind: 'enter', messages: [] })
   await until(() => state().rooms.r1.sessions.b === 's2')
   assert.deepEqual(created.at(-1), { cwd: ascend })
   assert.equal(state().rooms.r2.sessions.b, 'gb2')
@@ -974,7 +974,7 @@ test('a member that changes to the team workspace in a group stays there, not ba
   assert.equal(moved.ran, true)
   assert.equal(state().rooms.r1.memberDirs.b, null)
   assert.equal(state().bots.b.workDir, own)
-  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  assert.deepEqual(await preStep('gb'), { kind: 'enter', messages: [] })
   await until(() => state().rooms.r1.sessions.b === 's2')
   assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
 })
