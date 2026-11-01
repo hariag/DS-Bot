@@ -2562,6 +2562,11 @@ html[data-bt-collapsing] [class*="_frame"]:has(>[class*="_sidebarCol"]){transiti
    edge need room beside the 56px rows, or the list scrolls sideways. */
 .bt-leftcol[data-left=rail]{padding:calc(var(--bt-lc-clear) + 8px) 0 8px}
 .bt-leftcol-foot-rail{flex-direction:column;gap:6px}
+/* A drag that crosses the rail's snap line rides the spring to its target: the
+   content is pinned at the target size so only the column's edge moves. */
+.bt-leftcol[data-folding]{overflow:hidden;transition:width ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
+.bt-leftcol[data-folding]>.bt-side{flex:none;width:calc(var(--bt-lc-w) - 24px)}
+.bt-leftcol[data-left=rail][data-folding]>.bt-side{width:var(--bt-lc-w);margin-inline:auto}
 .bt-dot{position:absolute;top:4px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--bt-accent);box-shadow:0 0 0 1.5px var(--bt-sidebar)}
 .bt-dot-wait{background:var(--bt-star)}
 .bt-side-foot{display:flex;padding-top:8px}
@@ -2757,8 +2762,6 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-exchange .bt-dialog-log{max-width:none;margin:0;padding:39px max(16px,calc((100% - 960px)/2)) 116px;scrollbar-width:thin}
 .bt-exchange .bt-tools{display:none}
 .bt-fold{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:4px;white-space:normal}
-.bt-fold-code{position:relative}
-.bt-fold-code>.bt-tool{position:absolute;right:6px;bottom:6px}
 .bt-fold-note{font-size:12px;line-height:16px;color:var(--bt-ink-3)}
 [data-folded] .bt-fold-body{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 40px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 40px),transparent)}
 .bt-ubody .bt-fold .bt-more,.bt-ububble .bt-fold .bt-more,.bt-ubody .bt-fold-note,.bt-ububble .bt-fold-note{color:inherit;opacity:.7}
@@ -7286,11 +7289,6 @@ var ALWAYS = { chars: -1, lines: 0 };
 var PREVIEW_LINES = 10;
 var PREVIEW_CHARS = 600;
 var FENCE = /^ {0,3}(`{3,}|~{3,})/;
-var CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/;
-var closes = (line, open) => {
-  const marker = CLOSE.exec(line)?.[1];
-  return marker !== void 0 && marker[0] === open[0] && marker.length >= open.length;
-};
 function cutAt(text, end) {
   const code = text.charCodeAt(end - 1);
   return text.slice(0, code >= 55296 && code <= 56319 ? end - 1 : end);
@@ -7302,30 +7300,7 @@ function moreLines(text, max) {
   }
   return false;
 }
-function openedFence(lines) {
-  let open = null;
-  let openLine = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    const marker = FENCE.exec(lines[i])?.[1];
-    if (marker === void 0) continue;
-    if (open === null) {
-      open = marker;
-      openLine = i;
-    } else if (closes(lines[i], open)) open = null;
-  }
-  return open === null ? null : { marker: open, line: openLine };
-}
-function blockCode(body, fenceLine, open) {
-  const lines = body.split("\n");
-  const indent = /^ */.exec(lines[fenceLine])[0].length;
-  const code = [];
-  for (let i = fenceLine + 1; i < lines.length; i += 1) {
-    if (closes(lines[i], open)) break;
-    code.push(lines[i].replace(new RegExp(`^ {0,${indent}}`), ""));
-  }
-  return code.join("\n");
-}
-function foldView(text, limit = FOLD_AT, markdown = true) {
+function foldPreview(text, limit = FOLD_AT, markdown = true) {
   if (text.length <= limit.chars && !moreLines(text, limit.lines)) return null;
   const body = text.replace(/^(\s*\n)+/, "");
   if (body.trim() === "") return null;
@@ -7335,29 +7310,44 @@ function foldView(text, limit = FOLD_AT, markdown = true) {
     head = cutAt(head, cut > 0 ? cut : PREVIEW_CHARS);
   }
   if (head.trim() === "") head = cutAt(body, PREVIEW_CHARS);
-  if (!markdown) return { head };
-  let opened = openedFence(head.split("\n"));
-  if (opened !== null && head.split("\n").slice(opened.line + 1).join("").trim() === "") {
-    head = cutAt(body, PREVIEW_CHARS);
-    opened = openedFence(head.split("\n"));
+  if (!markdown) return head;
+  let open = null;
+  let openLine = -1;
+  let lines = head.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const marker = FENCE.exec(lines[i])?.[1];
+    if (marker === void 0) continue;
+    if (open === null) {
+      open = marker;
+      openLine = i;
+    } else if (marker[0] === open[0] && marker.length >= open.length) open = null;
   }
-  if (opened === null) return { head };
-  const lines = head.split("\n");
-  lines[opened.line] = opened.marker;
-  return { head: `${lines.join("\n")}
-${opened.marker}`, code: blockCode(body, opened.line, opened.marker) };
-}
-function foldPreview(text, limit = FOLD_AT, markdown = true) {
-  return foldView(text, limit, markdown)?.head ?? null;
+  if (open !== null && lines.slice(openLine + 1).join("").trim() === "") {
+    head = cutAt(body, PREVIEW_CHARS);
+    lines = head.split("\n");
+    open = null;
+    openLine = -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      const marker = FENCE.exec(lines[i])?.[1];
+      if (marker === void 0) continue;
+      if (open === null) {
+        open = marker;
+        openLine = i;
+      } else if (marker[0] === open[0] && marker.length >= open.length) open = null;
+    }
+  }
+  if (open === null) return head;
+  lines[openLine] = open;
+  return `${lines.join("\n")}
+${open}`;
 }
 var stripLongNote = (text) => text.replace(/^\[A long message: \d+ characters\.[^\]\n]*\]\n/, "");
 function useFold(text, { limit = FOLD_AT, whole, live = false, markdown = true } = {}) {
   const [open, setOpen] = (0, import_react14.useState)(false);
   const [read, setRead] = (0, import_react14.useState)();
   const cut = whole !== void 0 && whole.length > text.length;
-  const view = (0, import_react14.useMemo)(() => live ? null : foldView(text, cut ? ALWAYS : limit, markdown), [text, live, limit, markdown, cut]);
-  if (view === null) return { shown: text, control: null };
-  const code = cut ? void 0 : view.code;
+  const preview = (0, import_react14.useMemo)(() => live ? null : foldPreview(text, cut ? ALWAYS : limit, markdown), [text, live, limit, markdown, cut]);
+  if (preview === null) return { shown: text, control: null };
   const count = (cut ? whole.length : text.length).toLocaleString();
   if (!open) {
     const show2 = async () => {
@@ -7366,7 +7356,7 @@ function useFold(text, { limit = FOLD_AT, whole, live = false, markdown = true }
       setRead("loading");
       setRead(await whole.load() ?? { whole: false });
     };
-    return { shown: view.head, folded: true, code, control: (0, import_react14.createElement)("span", { className: "bt-fold" }, (0, import_react14.createElement)("button", { type: "button", className: "bt-more", onClick: show2 }, t("Show all · {count} characters", { count }))) };
+    return { shown: preview, folded: true, control: (0, import_react14.createElement)("span", { className: "bt-fold" }, (0, import_react14.createElement)("button", { type: "button", className: "bt-more", onClick: show2 }, t("Show all · {count} characters", { count }))) };
   }
   const loaded = typeof read?.text === "string" ? read : void 0;
   const note = !cut || read === void 0 || read === "loading" || loaded?.whole ? null : loaded !== void 0 && loaded.text.length > text.length ? t("Showing the first {count} characters", { count: loaded.text.length.toLocaleString() }) : t("Only the start of this message is kept here");
@@ -7730,22 +7720,8 @@ function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId,
     })
   );
 }
-function FoldCodeCopy({ code, actions }) {
-  const [copied, setCopied] = (0, import_react16.useState)(false);
-  const copy2 = () => {
-    void (0, import_dsh_client_ui_primitives.writeClipboard)(code).then((ok) => {
-      if (!ok) {
-        actions?.reportError?.(new Error("Could not copy the code block"), "copy");
-        return;
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1e3);
-    }, () => actions?.reportError?.(new Error("Could not copy the code block"), "copy"));
-  };
-  return (0, import_react16.createElement)("button", { type: "button", className: "bt-tool bt-fold-copy", "aria-label": copied ? t("Copied") : t("Copy"), title: copied ? t("Copied") : t("Copy"), onClick: copy2 }, copied ? (0, import_react16.createElement)(CheckIcon) : (0, import_react16.createElement)(CopyIcon));
-}
 function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole }) {
-  const { shown, folded, control, code } = useFold(text, { limit: fold, whole, live });
+  const { shown, folded, control } = useFold(text, { limit: fold, whole, live });
   const key = msgKey ? `${msgKey}:${index}` : void 0;
   const body = (0, import_react16.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels3(), variant: "compact", fileMentions: mentions });
   const row = (0, import_react16.useRef)(null);
@@ -7755,7 +7731,6 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
     if (!noHover() || event.target instanceof Element && event.target.closest("a,button,input,textarea,select,pre,code,[role=button],[role=link]")) return;
     setToolsOpen((value) => !value);
   };
-  const area = code === void 0 ? body : (0, import_react16.createElement)("div", { className: "bt-fold-code" }, body, (0, import_react16.createElement)(FoldCodeCopy, { code, actions }));
   return (0, import_react16.createElement)(
     "div",
     { ref: row, className: "bt-msg", onClick: tapTools },
@@ -7766,7 +7741,7 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
       (0, import_react16.createElement)(
         "div",
         { className: "bt-bubble", "data-folded": folded || void 0 },
-        control ? (0, import_react16.createElement)("div", { className: "bt-fold-body" }, area) : area,
+        control ? (0, import_react16.createElement)("div", { className: "bt-fold-body" }, body) : body,
         control
       ),
       live ? null : (0, import_react16.createElement)(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t("Bot"), sessionId, react: key ? (emoji) => actions.toggleReaction(msgKey, index, emoji) : void 0, actions, open: toolsOpen })
@@ -8130,14 +8105,13 @@ var scrollParent = (node) => {
   }
   return null;
 };
-function EarlierUser({ row, actions }) {
-  const { shown, folded, control, code } = useFold(row.text ?? "");
+function EarlierUser({ row }) {
+  const { shown, folded, control } = useFold(row.text ?? "");
   const body = row.text ? (0, import_react16.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: shown, labels: mdLabels3(), variant: "compact" }) : null;
-  const area = code === void 0 ? body : (0, import_react16.createElement)("div", { className: "bt-fold-code" }, body, (0, import_react16.createElement)(FoldCodeCopy, { code, actions }));
   return (0, import_react16.createElement)("div", { className: "bt-urow" }, (0, import_react16.createElement)(
     "div",
     { className: "bt-ububble", "data-folded": folded || void 0 },
-    control ? (0, import_react16.createElement)("div", { className: "bt-fold-body" }, area) : area,
+    control ? (0, import_react16.createElement)("div", { className: "bt-fold-body" }, body) : body,
     control,
     row.images ? (0, import_react16.createElement)("span", { className: "bt-uimages" }, row.images === 1 ? t("1 image") : t("{count} images", { count: row.images })) : null
   ));
@@ -8244,7 +8218,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
     case "divider":
       return (0, import_react16.createElement)(PartLine, { key, time: row.time });
     case "user":
-      return (0, import_react16.createElement)(EarlierUser, { key, row, actions });
+      return (0, import_react16.createElement)(EarlierUser, { key, row });
     case "answer":
       return (0, import_react16.createElement)(AnsweredReply, { key, node: { data: row } });
     // A display-only view replays from the blueprint the host kept on the call.
@@ -9584,37 +9558,88 @@ function TeamSidebar(props) {
   (0, import_react18.useEffect)(() => () => {
     if (typeof document !== "undefined") chatRoom.setLeft(null);
   }, []);
+  const settleTimer = (0, import_react18.useRef)(0);
+  const springTimer = (0, import_react18.useRef)(0);
   const startDrag = (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
+    clearTimeout(settleTimer.current);
+    clearTimeout(springTimer.current);
     const grip = event.currentTarget;
+    const column = grip.parentElement;
+    delete column.dataset.folding;
     grip.setPointerCapture?.(event.pointerId);
     chatRoom.hold(true);
+    const columns2 = chatRoom.columns();
+    for (const col of columns2) col.style.setProperty("transition", "none", "important");
+    const offLeft = frameSnap.collapsedWidth ?? 0;
     let last = null;
+    let liveLeft = mode;
     let done = false;
-    const onMove = (move) => {
-      last = dragColumn(move.clientX, window.innerWidth);
-      setDrag(last);
+    const write = (at) => {
+      const width = at.left === "rail" ? RAIL_WIDTH : at.width;
+      column.style.width = `${width}px`;
+      column.style.setProperty("--bt-lc-w", `${width}px`);
+      const push = Math.max(0, (at.left === "open" ? width : RAIL_WIDTH) - offLeft);
+      for (const col of columns2) col.style.setProperty("margin-left", `${push}px`, "important");
+    };
+    let springUntil = 0;
+    const springOff = () => {
+      springUntil = 0;
+      delete column.dataset.folding;
+      for (const col of columns2) col.style.setProperty("transition", "none", "important");
+    };
+    const springOn = () => {
+      column.dataset.folding = "";
+      for (const col of columns2) col.style.setProperty("transition", `margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}`, "important");
+      springUntil = performance.now() + SPRING_SHAPE.duration;
+      clearTimeout(springTimer.current);
+      springTimer.current = setTimeout(springOff, SPRING_SHAPE.duration);
+    };
+    const track = (x) => {
+      last = dragColumn(x, window.innerWidth);
+      if (last.left !== liveLeft) {
+        liveLeft = last.left;
+        if (!reducedMotion()) springOn();
+        setDrag(last);
+      }
+      write(last);
+    };
+    const onMove = (move) => track(move.clientX);
+    const finish = () => {
+      clearTimeout(springTimer.current);
+      if (column.isConnected && last !== null) chatRoom.setLeft(Math.max(0, (last.left === "open" ? last.width : RAIL_WIDTH) - offLeft));
+      for (const col of columns2) {
+        col.style.removeProperty("margin-left");
+        col.style.removeProperty("transition");
+      }
+      column.style.removeProperty("--bt-lc-w");
+      delete column.dataset.folding;
+      chatRoom.hold(false);
     };
     const ends = ["pointerup", "pointercancel", "lostpointercapture"];
     const onEnd = (end) => {
       if (done) return;
       done = true;
-      if (end.type === "pointerup") last = dragColumn(end.clientX, window.innerWidth);
+      if (end.type === "pointerup") track(end.clientX);
       grip.removeEventListener("pointermove", onMove);
       for (const name of ends) grip.removeEventListener(name, onEnd);
       setDrag(null);
-      chatRoom.hold(false);
-      if (last === null) return;
+      if (last === null) {
+        finish();
+        return;
+      }
       actions.setPanelYield?.(false);
       if (last.left === "rail") {
         actions.setLeftDrawer?.(false);
         actions.setSidebarPref?.("rail");
-        return;
+      } else {
+        actions.setSidebarWidth?.(last.width);
+        actions.setSidebarPref?.("open");
+        actions.setLeftDrawer?.(last.left === "drawer");
       }
-      actions.setSidebarWidth?.(last.width);
-      actions.setSidebarPref?.("open");
-      actions.setLeftDrawer?.(last.left === "drawer");
+      if (springUntil === 0) finish();
+      else settleTimer.current = setTimeout(finish, Math.max(0, springUntil - performance.now()) + 60);
     };
     grip.addEventListener("pointermove", onMove);
     for (const name of ends) grip.addEventListener(name, onEnd);
