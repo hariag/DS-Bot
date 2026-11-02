@@ -9,26 +9,16 @@ issue: 464
 
 `journal.jsonl` (and a private Bot's own log) already keeps every memory change with
 the line before and after, but nothing reads it for undo: a wrong remember, replace,
-or forget is permanent unless the files are edited by hand. This adds a restore —
-`memory-restore` on the `api/bot` channel — that applies the inverse of one journal
-row, and the Change history page in the memory dialog that lists those rows with an
-Undo button each (`memory-history`).
+or forget is permanent unless the files are edited by hand. This adds a narrow,
+API-only restore — `memory-restore` on the `api/bot` channel — that applies the
+inverse of one journal row. A panel History view can come later; this is the part
+that makes the log actionable.
 
 ## Shape
 
-- `memory-history` takes the same owner params as `memory-view` (`{botId}` or
-  `{roomId}`) plus an optional `before` row id for paging, and returns
-  `{ rows, more }`, newest first, 50 rows a page. A Bot's panel reads its own
-  scope and the team's — the shared log, or the Bot's own log when it is
-  private (`journalFor` resolves both) — a group's panel reads its group scope.
-  Each row carries `{ id, time, op, scope, text, by, restored }`; `restored`
-  marks rows some later row already undid. `archive` rows are skipped.
-- `memory-restore` takes the same owner params plus `id`, the journal row to
-  undo. A row outside the owner's scopes, or one already restored, is refused.
-  On success it returns the fresh memory view, as `memory-forget` does.
-- The dialog's ⋯ menu gets "Change history" after "All entries": a page with a
-  back button, one row per change (the change line, `time · by`, and Undo or a
-  muted Undone), a Load more button while `more` is set.
+- Request: `{ line, botId? }`. `line` is the 1-based line of the change log;
+  `botId` picks a private Bot's own log (`bots/<id>/journal.jsonl`), everything
+  else is in the shared log — the same routing `journalFor` uses for writes.
 - One row is undone with its inverse op, and only while what it reads still reads
   as the row left it:
   - `add` → the recorded `after` line is taken back out, verbatim. A topic left
@@ -53,6 +43,6 @@ Undo button each (`memory-history`).
 ## Deliberately out of scope
 
 - No version tree, no git, no multi-step undo. One row, one inverse.
-- The history page lists and undoes single changes only; multi-step undo stays
-  out.
+- No UI. The endpoint is for the host channel now; a History view in the memory
+  panel is the follow-up that consumes it.
 - `archive` is a different, folder-level path and stays irreversible here.
