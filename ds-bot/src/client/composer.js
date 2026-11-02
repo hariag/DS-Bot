@@ -5,7 +5,7 @@ import { canSetGoal } from './goal.js'
 import { BotMark } from './mark.js'
 import { stepMenuFocus, useLinger, useViewport, viewBottom } from './motion.js'
 import { t } from './i18n.js'
-import { insertComposerNewline } from './enter-key.js'
+import { insertComposerNewline, sendsOnEnter } from './enter-key.js'
 
 // -------------------------------------------------------------------------
 // Composer: dictation mic and the voice-chat button. The shell's send
@@ -56,7 +56,7 @@ export function useDictation(onText) {
 }
 
 export function ComposerVoice({ sessionId, inputActions, actions, useUi, useRoster }) {
-  const enterToSend = useRoster(state => state.prefs?.enterToSend !== false)
+  const enterToSend = useRoster(state => sendsOnEnter(state.prefs))
   const composerRoot = useRef(null)
   useEffect(() => {
     const root = composerRoot.current?.closest('[data-composer-card]')
