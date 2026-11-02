@@ -505,8 +505,6 @@ var ZH = {
   "Bubble width": "气泡宽度",
   "Text width": "正文宽度",
   "Show thinking": "显示思考过程",
-  "Enter sends message": "回车发送消息",
-  "When off, Enter inserts a new line. Use the send button to send.": "关闭后，回车换行，点击发送按钮发送。",
   "Bots · {count}": "Bot · {count}",
   "First in the sidebar. Pick another Bot to hand it the role; {name} then stops being a Main Bot.": "排在侧栏最上面。选另一个 Bot 就会把主 Bot 交给它，{name} 随之不再是主 Bot。",
   "Choose a Bot…": "选择一个 Bot…",
@@ -3057,18 +3055,23 @@ html:not([data-windows-titlebar]) [class*="_footArea"],:not([class*="_collapsed"
 .bt-msg-line>.bt-bubble{max-width:none;min-width:0}
 /* The same bubble width as beside an avatar column: the share of (100% - 30px), plus the 30px. */
 .bt-astack[data-lead]>.bt-msg{max-width:min(calc(var(--bt-msg-w) * (100% - 30px) + 30px),calc(100% - 52px))}
-.bt-tools{position:absolute;top:50%;left:100%;margin-left:6px;transform:translateY(-50%);display:flex;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
+.bt-tools{position:absolute;bottom:0;z-index:0;left:100%;margin-left:6px;display:flex;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
 /* The hover bridge spans only the 6px gap (plus a little overlap) between the
    bubble's edge and the toolbar: wider, it sits over the bubble's tail and
-   blocks text selection and link clicks there. */
+   blocks text selection and link clicks there. Its z-index:-1 only stays under
+   the toolbar, not under the full-width .bt-astack, because z-index:0 above
+   gives the toolbar its own stacking context. */
 .bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:10px;z-index:-1}
 .bt-msg:hover>.bt-msg-line>.bt-tools,.bt-msg:focus-within>.bt-msg-line>.bt-tools,.bt-tools[data-open]{opacity:1;visibility:visible}
 /* The flat layout: a Bot's text has no bubble and takes its own share of the column
-   (the whole of it unless set). The toolbar floats over the message's top right. */
+   (the whole of it unless set). The toolbar floats over the message's bottom right. */
 body[data-bt-layout=flat] .bt-astack{align-items:stretch;gap:10px}
 body[data-bt-layout=flat] .bt-msg,body[data-bt-layout=flat] .bt-astack[data-lead]>.bt-msg{align-items:stretch;max-width:calc(var(--bt-flat-w) * 100%)}
 body[data-bt-layout=flat] .bt-bubble{background:none;padding:0;border-radius:0}
-body[data-bt-layout=flat] .bt-tools{top:-14px;right:0;left:auto;margin-left:0;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+body[data-bt-layout=flat] .bt-tools{bottom:-14px;right:0;left:auto;margin-left:0;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+/* With reactions below, the toolbar stays inside the message row instead of
+   covering their top edge when the hover shows it. */
+body[data-bt-layout=flat] .bt-msg:has(>.bt-reacts) .bt-tools{bottom:0}
 body[data-bt-layout=flat] .bt-tools::after{display:none}
 .bt-tool{width:24px;height:24px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .bt-tool:hover,.bt-tool[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
@@ -10687,21 +10690,6 @@ function NewMessagePills({ sessionId, useSessions, useUi, useTurnClock }) {
   );
 }
 
-// src/client/enter-key.js
-var sendsOnEnter = (prefs) => prefs?.enterToSend !== false;
-function insertComposerNewline(event, inputActions) {
-  if (event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.keyCode === 229 || event.getModifierState?.("AltGraph")) return false;
-  const target = event.target;
-  if (typeof target?.closest !== "function" || !target.closest('[data-composer-card] [role="textbox"]')) return false;
-  if (target.closest("[data-composer-composing]")) return false;
-  if (target.ownerDocument?.querySelector('[role="listbox"]')) return false;
-  if (typeof inputActions?.captureInsertion !== "function" || typeof inputActions?.insertText !== "function") return false;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  inputActions.insertText("\n", inputActions.captureInsertion());
-  return true;
-}
-
 // src/client/composer.js
 var import_react21 = require("react");
 var import_react_dom5 = require("react-dom");
@@ -10762,16 +10750,7 @@ function useDictation(onText) {
   const stop = () => recognition.current?.stop();
   return { listening, note, start, stop };
 }
-function ComposerVoice({ sessionId, inputActions, actions, useUi, useRoster }) {
-  const enterToSend = useRoster((state) => sendsOnEnter(state.prefs));
-  const composerRoot = (0, import_react21.useRef)(null);
-  (0, import_react21.useEffect)(() => {
-    const root = composerRoot.current?.closest("[data-composer-card]");
-    if (enterToSend || !inputActions || !root) return void 0;
-    const onKey = (event) => insertComposerNewline(event, inputActions);
-    root.addEventListener("keydown", onKey, true);
-    return () => root.removeEventListener("keydown", onKey, true);
-  }, [enterToSend, inputActions]);
+function ComposerVoice({ sessionId, inputActions, actions, useUi }) {
   const dictation = useDictation((text, final) => {
     if (final && inputActions) inputActions.insertText(text, inputActions.captureInsertion());
   });
@@ -10807,7 +10786,6 @@ function ComposerVoice({ sessionId, inputActions, actions, useUi, useRoster }) {
       onClick: () => dictation.listening ? dictation.stop() : dictation.start()
     }, (0, import_react21.createElement)(MicIcon)),
     (0, import_react21.createElement)("button", {
-      ref: composerRoot,
       type: "button",
       className: "bt-voice",
       "aria-label": t("Start voice chat"),
@@ -14246,7 +14224,7 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
             "aria-label": placeholder,
             onChange: (event) => setMessage(event.target.value),
             onKeyDown: (event) => {
-              if (event.key === "Enter" && sendsOnEnter(roster.prefs) && !event.shiftKey && !event.nativeEvent.isComposing) {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 sendMessage();
               }
@@ -17055,15 +17033,6 @@ function GeneralPage({ roster, actions, run: run2 }) {
       layoutOf(prefs) === "flat" ? (0, import_react45.createElement)(SetRow, { label: t("Text width") }, (0, import_react45.createElement)(WidthSlider, { label: t("Text width"), value: flatWidthOf(prefs), save: (flatWidth) => run2(actions.setPrefs({ flatWidth })) })) : null,
       (0, import_react45.createElement)(SetRow, { label: t("Bubble width") }, (0, import_react45.createElement)(WidthSlider, { label: t("Bubble width"), value: widthOf(prefs), save: (width) => run2(actions.setPrefs({ width })) })),
       (0, import_react45.createElement)(SetRow, { label: t("Show thinking") }, (0, import_react45.createElement)(Switch, { label: t("Show thinking"), on: thinkingShown(prefs), onChange: (thinking) => run2(actions.setPrefs({ thinking })) }))
-    ),
-    (0, import_react45.createElement)(
-      SetSection,
-      { key: "input", title: t("Input") },
-      (0, import_react45.createElement)(
-        SetRow,
-        { label: t("Enter sends message"), hint: t("When off, Enter inserts a new line. Use the send button to send.") },
-        (0, import_react45.createElement)(Switch, { label: t("Enter sends message"), on: prefs.enterToSend !== false, onChange: (enterToSend) => run2(actions.setPrefs({ enterToSend })) })
-      )
     ),
     actions.setSurface ? (0, import_react45.createElement)(
       SetSection,
@@ -20650,15 +20619,8 @@ function listedOpener({ list, open, refresh, current }) {
 var inject = ["sessions", "uiWorkspace", "uiConversation", "slots", "theme", "layout"];
 function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get("locale")), "ds-bot: interface copy");
+  const roster = createSource(EMPTY_ROSTER);
   migrateStorage();
-  const PREFS_KEY = STORAGE.prefs;
-  let savedPrefs = {};
-  try {
-    savedPrefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") ?? {};
-  } catch {
-    savedPrefs = {};
-  }
-  const roster = createSource({ ...EMPTY_ROSTER, prefs: savedPrefs });
   const unreadStore = sharedMap(STORAGE.unread);
   const reactionStore = sharedMap(STORAGE.reactions);
   const seenStore = sharedMap(STORAGE.seen);
@@ -20725,6 +20687,13 @@ function apply(ctx) {
       state[id]?.at === entry.at ? state[id] : { ...entry, seen: opening ? 0 : Date.now() }
     ])));
   };
+  const PREFS_KEY = STORAGE.prefs;
+  let savedPrefs = {};
+  try {
+    savedPrefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") ?? {};
+  } catch {
+    savedPrefs = {};
+  }
   const writeUnread = (id, value) => {
     const unread = unreadStore.update((marks) => setUnread(marks, id, value), ui2.getSnapshot().unread);
     ui2.set((state) => JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread });
@@ -20953,7 +20922,7 @@ function apply(ctx) {
       if (typeof release === "function") release();
       if (snapshot.ready) {
         try {
-          localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, layout: prefs.layout, width: prefs.width, flatWidth: prefs.flatWidth, thinking: prefs.thinking, enterToSend: prefs.enterToSend }));
+          localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, layout: prefs.layout, width: prefs.width, flatWidth: prefs.flatWidth, thinking: prefs.thinking }));
         } catch {
         }
       }
