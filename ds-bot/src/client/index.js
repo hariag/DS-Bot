@@ -15,7 +15,7 @@ import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { BtwDock, BtwTurnTail } from './btw.js'
 import { SIDE_CSS, sideSource } from './side-chat.js'
-import { VOICE_BUNDLE } from './speech.js'
+import { VOICE_BUNDLE, closingReplyText, requestPreparation } from './speech.js'
 import { sameVersion } from './dsh-offer.js'
 import { QuestionCard, QuestionDock } from './questions.js'
 import { AnsweredReply, WidgetDock, WIDGET_CSS } from './widget-cell.js'
@@ -43,7 +43,6 @@ import { RIGHTBAR_ATTRIBUTES, columnOpened, createSwitchWindow, drawerOpened, ri
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
-import { GOAL_CSS } from './goal.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
 import { listedOpener } from './open-listed.js'
@@ -61,7 +60,7 @@ export function apply(ctx) {
   let seenAt = seenStore.read()
   // `details` is the panel's subject (a Session id); `view` picks details or the
   // subject Bot's browser inside it.
-  const ui = createSource({ details: null, view: 'details', renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null })
+  const ui = createSource({ details: null, view: 'details', renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false })
   // The left column's kept preference, and the frame geometry the layout rules
   // in frame-layout.js read: the window and the shell's collapsed track come from
   // installFrameWatch, the open column's width is the user's own.
@@ -118,6 +117,9 @@ export function apply(ctx) {
   // Per Bot, the turn it runs and its tool; and the approvals waiting for the user.
   const work = createSource({ bots: {}, approvals: [] })
   let workKey = ''
+  // The version of the live fields this window last got; while it still names the
+  // host's answer, the poll leaves those fields out.
+  let liveKey
   // Per Session, what its transcript has in flight (running tools, a streaming reply).
   const live = createSource({})
   // Per Session, the ask_user and request_secret calls its transcript draws; the
@@ -156,14 +158,19 @@ export function apply(ctx) {
   const pull = async () => {
     const order = ++pulls
     const known = roster.getSnapshot()
-    const value = await call('state', { since: known.revision, models: known.modelsKey ?? '', locale: language() })
+    const value = await call('state', { since: known.revision, models: known.modelsKey ?? '', live: liveKey, locale: language() })
     if (order < applied) return
     applied = order
-    const nextActivity = JSON.stringify(value.activity ?? {})
-    if (nextActivity !== activityKey) { activityKey = nextActivity; activity.set(value.activity ?? {}) }
-    const nextWork = JSON.stringify(value.work ?? null)
-    if (nextWork !== workKey) { workKey = nextWork; work.set(value.work ?? { bots: {}, approvals: [] }) }
-    noteMemoryNews(value.memoryNews ?? {})
+    if (value.liveKey !== undefined) liveKey = value.liveKey
+    if (value.activity !== undefined) {
+      const nextActivity = JSON.stringify(value.activity)
+      if (nextActivity !== activityKey) { activityKey = nextActivity; activity.set(value.activity) }
+    }
+    if (value.work !== undefined) {
+      const nextWork = JSON.stringify(value.work)
+      if (nextWork !== workKey) { workKey = nextWork; work.set(value.work) }
+    }
+    if (value.memoryNews !== undefined) noteMemoryNews(value.memoryNews)
     const current = roster.getSnapshot()
     // Connector and capability states change without a new revision.
     const live = {}
@@ -356,7 +363,7 @@ export function apply(ctx) {
       releaseTokens = ctx.theme.overrideTokens('ds-bot', shellTokens(themes[id]))
       if (typeof release === 'function') release()
       if (snapshot.ready) {
-        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, layout: prefs.layout, width: prefs.width, flatWidth: prefs.flatWidth, thinking: prefs.thinking, enterToSend: prefs.enterToSend })) } catch { /* storage unavailable */ }
+        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, layout: prefs.layout, width: prefs.width, flatWidth: prefs.flatWidth, thinking: prefs.thinking, defaultBotModel: prefs.defaultBotModel })) } catch { /* storage unavailable */ }
       }
     }
     render()
@@ -654,9 +661,27 @@ export function apply(ctx) {
   // DSH's own settings: models, providers, keys and its plugins.
   actions.openHarnessSettings = openHarnessSettings
   actions.openHarnessOnboarding = openHarnessOnboarding
-  actions.voiceSetup = () => {
+  // With the plugin manager mounted, setup is its bundle page (the model's size
+  // and download notes live there). Where it is not mounted — the desktop app's
+  // profile has no plugin manager — the speech Remote prepares the provider
+  // itself, and the voice pane follows its progress.
+  actions.voiceSetup = (providerId) => {
     const navigation = ctx.get('pluginNavigation')
-    return navigation ? () => navigation.openBundle(VOICE_BUNDLE) : null
+    if (navigation !== undefined) return { navigate: () => navigation.openBundle(VOICE_BUNDLE) }
+    const speech = ctx.get('remote.speech')
+    return speech === undefined || providerId === undefined ? null : { prepare: () => requestPreparation(speech, providerId) }
+  }
+  // The full text the voice chat reads aloud: the turn's closing Assistant
+  // message, not the turn outline's bounded preview. undefined while the chat
+  // view has not materialized the turn; null when the Session is not bound.
+  actions.closingReply = (sessionId, turn) => {
+    try {
+      const binding = ctx.sessions.binding(sessionId)
+      if (binding === undefined) return null
+      return closingReplyText(ctx.uiConversation.binding(binding).target('chat').getSnapshot(), turn)
+    } catch {
+      return null
+    }
   }
   actions.seatAccount = on => ui.set(state => (state.accountSeated === on ? state : { ...state, accountSeated: on }))
   // The install runs on the host; the check loop follows it every two seconds.
@@ -885,7 +910,6 @@ export function apply(ctx) {
     () => installCompiledStyles(FEEDBACK_CSS, 'feedback'),
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
-    () => installCompiledStyles(GOAL_CSS, 'goal'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
     () => installCompiledStyles(WIDGET_CSS, 'widgets'),
     () => installCompiledStyles(HANDOFF_CSS, 'handoff'),
