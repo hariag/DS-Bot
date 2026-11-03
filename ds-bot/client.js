@@ -53,6 +53,17 @@ var ZH = {
   "New chat": "新对话",
   "Back to chat": "返回对话",
   "New…": "新建",
+  "New section": "新建分组",
+  "Rename section": "重命名分组",
+  "Section color": "分组颜色",
+  "Move section up": "上移分组",
+  "Move section down": "下移分组",
+  "Ungroup section": "解散分组",
+  "Remove from section": "移出分组",
+  "Move to new section…": "移至新分组…",
+  "Add to {name}": "添加到 {name}",
+  "Add existing": "添加已有对话",
+  None: "无",
   "Collapse sidebar": "收起侧边栏",
   "Expand sidebar": "展开侧边栏",
   "Resize sidebar": "调整侧边栏宽度",
@@ -109,7 +120,6 @@ var ZH = {
   "Add capability": "添加能力",
   "No capabilities saved": "还没有保存能力",
   Type: "类型",
-  Description: "说明",
   "MCP server": "MCP 服务",
   Skill: "技能",
   Pack: "能力包",
@@ -698,6 +708,7 @@ var ZH = {
   "{name} did not answer or call anyone; call a member with @Name": "{name} 没有回答，也没有叫谁；用 @名字 叫一个成员来回答",
   "The group replies could not be shown": "群里的回复显示不出来",
   "Paused after {count} Bot relays. Waiting: {names}": "Bot 之间已接力 {count} 次，先停下了。还在等：{names}",
+  "{names} went back and forth {count} times without progress and paused. Write here to go on": "{names} 来回 {count} 次没有进展，先停下了。你发言后继续",
   "{name} paused for your approval": "{name} 停下来等你批准",
   "{name} started on it": "{name} 开始做了",
   "You stopped {name}'s work": "你停下了 {name} 的工作",
@@ -1231,6 +1242,8 @@ var HOST_ERRORS = [
   [/^"(.+)" calls everyone in a group, so it cannot be a Bot name$/, "「$1」在群里表示所有人，不能用作 Bot 名字"],
   [/^"(.+)" stands for the user in a chat, so it cannot be a Bot name$/, "「$1」在对话里表示用户本人，不能用作 Bot 名字"],
   [/^Another group chat is already called "(.+)"$/, "已经有叫「$1」的群聊了"],
+  [/^Another section is already called "(.+)"$/, "已经有叫「$1」的分组了"],
+  [/^Enter a section name$/, "请输入分组名称"],
   [/^A group chat holds at most (\d+) Bots$/, "一个群聊最多 $1 个 Bot"],
   [/^Reply mode must be one of (.+)$/, "回复模式只能是 $1"],
   [/^Only the user, a Main Bot, or the admin of "(.+)" can change it$/, "只有你、主 Bot 或「$1」的管理员可以修改"],
@@ -1635,7 +1648,7 @@ function createSource(initial) {
     }
   };
 }
-var EMPTY_ROSTER = { revision: -1, mainBotId: null, mainBotIds: [], bots: [], rooms: [], agents: [], exchangeTurns: {}, questions: {}, btwCards: {}, sideChats: {}, learning: {}, secrets: [], capabilities: [], capabilityStatuses: {}, secretRequests: {}, models: [], defaultModel: null, modelsKey: null, prefs: {}, byId: {}, roomsById: {}, agentsById: {}, agentOf: {}, ready: false };
+var EMPTY_ROSTER = { revision: -1, mainBotId: null, mainBotIds: [], bots: [], rooms: [], agents: [], sections: [], exchangeTurns: {}, questions: {}, btwCards: {}, sideChats: {}, learning: {}, secrets: [], capabilities: [], capabilityStatuses: {}, secretRequests: {}, models: [], defaultModel: null, modelsKey: null, prefs: {}, byId: {}, roomsById: {}, agentsById: {}, agentOf: {}, ready: false };
 var isMainOf = (roster, id) => id !== void 0 && (roster.mainBotIds ?? []).includes(id);
 function indexRoster(value) {
   const byId = {};
@@ -1652,7 +1665,7 @@ function indexRoster(value) {
     agentsById[agent.id] = agent;
     for (const sessionId of agent.sessions ?? []) agentOf[sessionId] = agent.id;
   }
-  return { ...value, agents: value.agents ?? [], byId, roomsById, agentsById, agentOf, ready: true };
+  return { ...value, agents: value.agents ?? [], sections: value.sections ?? [], byId, roomsById, agentsById, agentOf, ready: true };
 }
 function isAgentSession(roster, cache, sessionId) {
   if (sessionId === void 0 || sessionId === null || sessionId === "") return false;
@@ -1681,8 +1694,8 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     ui2.set((state) => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null }));
   };
   return {
-    openNewChat: (mode) => {
-      ui2.set((state) => ({ ...state, newChat: mode, menu: null, palette: null }));
+    openNewChat: (mode, sectionId = null) => {
+      ui2.set((state) => ({ ...state, newChat: mode, newChatSection: sectionId ?? null, menu: null, palette: null }));
     },
     openPalette: (query = "") => {
       ui2.set((state) => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null }));
@@ -1767,15 +1780,20 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     quote: (sessionId, text) => ui2.set((state) => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
     clearQuote: (token) => ui2.set((state) => state.quote?.token === token ? { ...state, quote: null } : state),
     setFlags: (id, flags) => after(call2("set-flags", { id, ...flags })),
+    saveSection: (payload) => after(call2("section-save", payload)),
+    reorderSections: (ids) => after(call2("section-order", { ids })),
+    deleteSection: (id) => after(call2("section-delete", { id })),
+    beginSectionRename: (id) => ui2.set((state) => ({ ...state, renameSection: id })),
+    endSectionRename: () => ui2.set((state) => state.renameSection ? { ...state, renameSection: null } : state),
     deleteRoom: (id) => after(call2("delete-room", { id })),
     openMenu: (menu) => {
-      ui2.set((state) => ({ ...state, menu, palette: null }));
+      ui2.set((state) => ({ ...state, menu }));
     },
     closeMenu: () => {
       ui2.set((state) => state.menu ? { ...state, menu: null } : state);
     },
     closeOverlay: () => {
-      ui2.set((state) => ({ ...state, newChat: null, exchange: null, details: state.newChat || state.exchange ? state.details : null }));
+      ui2.set((state) => ({ ...state, newChat: null, newChatSection: null, exchange: null, details: state.newChat || state.exchange ? state.details : null }));
     },
     createBot: (payload) => after(call2("create-bot", payload)),
     // The avatar library: photos the user imported once, kept by the host.
@@ -2341,21 +2359,20 @@ var SPRING_STRETCH = springEasing(320, 20);
 var SPRING_POP = springEasing(500, 22);
 var SPRING_LEAD = springEasing(784, 48.2);
 var SPRING_TRAIL = springEasing(289, 29.2);
-var SPRING_GLIDE = springEasing(1e3, 63);
 var QUICK_EDGES = { lead: springEasing(900, 51), trail: springEasing(400, 34) };
 var spring = (curve, ...properties) => properties.map((property) => `${property} ${curve.duration}ms ${curve.easing}`).join(",");
 function liveSprings(apply2) {
   const values = /* @__PURE__ */ new Map();
-  const current = {};
   let frame = 0;
   let last = 0;
+  const read = () => Object.fromEntries([...values].map(([key, value]) => [key, value.x]));
   const step = (now) => {
     const dt = Math.min(0.5, Math.max(1e-3, (now - last) / 1e3));
     last = now;
     const steps = Math.ceil(dt * 240);
     const h52 = dt / steps;
     let moving = false;
-    for (const [key, value] of values) {
+    for (const value of values.values()) {
       for (let index = 0; index < steps; index += 1) {
         value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h52;
         value.x += value.v * h52;
@@ -2364,31 +2381,23 @@ function liveSprings(apply2) {
         value.x = value.to;
         value.v = 0;
       } else moving = true;
-      current[key] = value.x;
     }
-    apply2(current);
+    apply2(read());
     frame = moving ? requestAnimationFrame(step) : 0;
   };
   return {
-    target: () => {
-      if (!values.size) return null;
-      const out = {};
-      for (const [key, value] of values) out[key] = value.to;
-      return out;
-    },
+    target: () => values.size ? Object.fromEntries([...values].map(([key, value]) => [key, value.to])) : null,
     set(targets, curves, jump) {
       for (const [key, to] of Object.entries(targets)) {
         const value = values.get(key);
         const { stiffness: k, damping: c } = curves[key];
-        if (!value || jump) {
-          values.set(key, { x: to, v: 0, to, k, c });
-          current[key] = to;
-        } else Object.assign(value, { to, k, c });
+        if (!value || jump) values.set(key, { x: to, v: 0, to, k, c });
+        else Object.assign(value, { to, k, c });
       }
       if (jump) {
         cancelAnimationFrame(frame);
         frame = 0;
-        apply2(current);
+        apply2(read());
         return;
       }
       if (!frame) {
@@ -2533,17 +2542,6 @@ function useLinger(value, ms) {
     return () => clearTimeout(timer);
   }, [value]);
   return [value || kept, !value && Boolean(kept)];
-}
-function stepMenuFocus(menu, event) {
-  if (!menu || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return false;
-  const items = Array.from(menu.querySelectorAll('button[role^="menuitem"]:not(:disabled)'));
-  if (items.length === 0) return false;
-  event.preventDefault();
-  event.stopPropagation();
-  const current = items.indexOf(document.activeElement);
-  const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : event.key === "ArrowDown" ? (current + 1) % items.length : current <= 0 ? items.length - 1 : current - 1;
-  items[next]?.focus();
-  return true;
 }
 
 // src/client/styles.js
@@ -2871,7 +2869,7 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-admin-star{flex:none;display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;corner-shape:round;background:color-mix(in srgb,var(--bt-star) 82%,var(--bt-sidebar));vertical-align:-1px}
 .bt-to-star{display:inline-flex;margin-right:-2px;animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing}}
 .bt-to .bt-to-create{flex:none;height:28px;padding:0 12px;font-size:13px;animation:bt-q-submit-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out}
-.bt-drop{position:absolute;top:48px;left:32px;width:min(550px,calc(100% - 64px));display:flex;flex-direction:column;padding:6px;max-height:min(420px,60vh);overflow-y:auto;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:.5px solid var(--bt-glass-rim);border-radius:12px;box-shadow:var(--bt-glass-shadow);box-sizing:border-box;z-index:1;transform-origin:24px 0;animation:bt-pop-drop ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .14s ease-out}
+.bt-drop{position:absolute;top:48px;left:32px;width:min(550px,calc(100% - 64px));display:flex;flex-direction:column;padding:6px;max-height:min(420px,60vh);overflow-y:auto;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 6px 20px -4px rgba(0,0,0,.12);box-sizing:border-box;z-index:1;transform-origin:24px 0;animation:bt-pop-drop ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .14s ease-out}
 .bt-option{display:flex;align-items:center;gap:10px;border:0;background:none;border-radius:8px;padding:7px 8px;min-height:36px;box-sizing:border-box;font-size:13px;line-height:18px;color:var(--bt-ink);cursor:pointer;text-align:left;width:100%}
 .bt-option[aria-selected=true]{background:var(--bt-active)}
 .bt-drop-list>.bt-option:not([aria-selected=true]):hover{background:var(--bt-hover)}
@@ -2972,10 +2970,10 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-drawer-name-input{font-size:17px;line-height:24px;text-align:center;border:.5px solid var(--bt-line-2);border-radius:6px;padding:0 6px;background:var(--bt-main);color:var(--bt-ink);outline:none;font-weight:500}
 .bt-drawer-role{font-size:12px;line-height:16px;color:var(--bt-ink-3);margin-top:6px;text-align:center}
 .bt-tabs{position:relative;display:flex;justify-content:center;gap:2px;margin:16px 16px 0}
-.bt-tab{position:relative;z-index:1;border:0;background:none;border-radius:999px;padding:4px 8px;font-size:13px;line-height:20px;color:var(--bt-ink-2);cursor:pointer;white-space:nowrap}
+.bt-tab{position:relative;z-index:1;border:0;background:none;border-radius:9999px;padding:4px 8px;font-size:13px;line-height:20px;color:var(--bt-ink-2);cursor:pointer;white-space:nowrap}
 .bt-tab:hover{color:var(--bt-ink)}
 .bt-tab[aria-selected=true]{background:var(--bt-hover);color:var(--bt-ink)}
-.bt-tabs>.bt-thumb{top:0;bottom:0;border-radius:999px;background:var(--bt-hover)}
+.bt-tabs>.bt-thumb{top:0;bottom:0;border-radius:9999px;background:var(--bt-hover)}
 .bt-tabs[data-glide] .bt-tab[aria-selected=true]{background:transparent}
 .bt-drawer-body{flex:1;overflow-y:auto;padding:20px 16px 16px;font-size:13px;line-height:18px;display:flex;flex-direction:column;gap:16px}
 .bt-empty{text-align:center;color:var(--bt-ink-3);font-size:13px;line-height:18px;padding:8px 12px}
@@ -3005,7 +3003,6 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-avatar-trigger{position:relative;width:64px;height:64px;border:0;border-radius:50%;background:none;cursor:pointer;padding:0}
 .bt-avatar-pencil{position:absolute;right:-2px;bottom:-2px;width:22px;height:22px;border-radius:50%;background:var(--bt-main);border:1px solid var(--bt-line-2);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.12)}
 .bt-avedit{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:288px;box-sizing:border-box;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:.5px solid var(--bt-glass-rim);border-radius:16px;box-shadow:var(--bt-glass-shadow),0 16px 40px rgba(0,0,0,.16);padding:12px;z-index:70;display:flex;flex-direction:column;gap:12px;color:var(--bt-ink);transform-origin:top center;animation:bt-pop-drop ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out}
-.bt-avedit[data-leaving]{animation:bt-pop-out .12s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
 .bt-bs .bt-avedit{transform-origin:32px 0}
 .bt-avedit-top{display:flex;align-items:center;justify-content:space-between}
 .bt-avedit-tabs{position:relative;display:flex;gap:2px;background:var(--bt-hover);border-radius:999px;padding:2px}
@@ -3085,9 +3082,7 @@ body[data-ds-dark-theme] .bt-scrim{background:rgba(0,0,0,.5)}
 .bt-settings-close{position:absolute;top:12px;right:12px;width:32px;height:32px;border-radius:50%;border:0;background:var(--bt-hover);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
 .bt-settings-close:hover{background:var(--bt-active);color:var(--bt-ink)}
 .bt-settings-form{display:flex;flex-direction:column;gap:16px}
-.bt-set-section{display:flex;flex-direction:column;gap:10px}
-.bt-set-section>h3{font-size:13px;line-height:18px;font-weight:600;margin:0 0 -2px;padding:0 4px}
-.bt-browser-settings{display:flex;flex-direction:column;gap:20px}
+.bt-set-section h3{font-size:13px;line-height:18px;font-weight:600;margin:0 0 8px;padding:0 4px}
 .bt-set-card{border:1px solid var(--bt-line);border-radius:12px;background:var(--bt-card);display:flex;flex-direction:column}
 .bt-set-card>*+*{border-top:.5px solid var(--bt-line)}
 .bt-set-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:18px;text-align:left;width:100%;box-sizing:border-box;border-radius:0}
@@ -3262,7 +3257,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-menu-hint{flex:none;color:var(--bt-ink-3);font-size:12px;font-variant-numeric:tabular-nums}
 .bt-palette-layer{position:fixed;inset:var(--dsh-frame-chrome-top,0px) 0 0;z-index:70;pointer-events:auto;font-family:var(--bt-font)}
 .bt-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.46);animation:bt-fade .22s ease-out}
-.bt-palette{position:absolute;top:50%;left:50%;width:min(560px,92vw);transform:translate(-50%,-50%);display:flex;flex-direction:column;border-radius:16px;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(28px) saturate(180%);backdrop-filter:blur(28px) saturate(180%);border:.5px solid var(--bt-glass-rim);box-shadow:var(--bt-glass-shadow);overflow:hidden;color:var(--bt-ink);animation:bt-palette-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
+.bt-palette{position:absolute;top:50%;left:50%;width:min(560px,92vw);transform:translate(-50%,-50%);display:flex;flex-direction:column;border-radius:12px;background:var(--bt-main);border:1px solid var(--bt-line-2);box-shadow:0 24px 48px -12px rgba(0,0,0,.25);overflow:hidden;color:var(--bt-ink);animation:bt-palette-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .2s ease-out}
 .bt-palette-layer[data-leaving]{pointer-events:none}
 .bt-palette-layer[data-leaving] .bt-backdrop{opacity:0;transition:opacity .16s ease-in}
 .bt-palette-layer[data-leaving] .bt-palette{animation:bt-dialog-sink .16s cubic-bezier(.4,0,1,1) forwards}
@@ -3316,10 +3311,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-pick[aria-pressed=true]{border-color:var(--bt-line-2);background:var(--bt-hover)}
 .bt-pick>span:last-child:not(.bt-mark){max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-pick:hover .bt-mark[data-state=idle] .bt-eye{animation:bt-blink .5s linear 1}
-.bt-select{width:100%;height:34px;box-sizing:border-box;border-radius:8px;border:1px solid var(--bt-line);background:var(--bt-card);color:var(--bt-ink);padding:0 8px;font:inherit;font-size:13px;outline:none}
-:is(.bt-input,.bt-select,.bt-textarea):focus-visible{border-color:var(--bt-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 22%,transparent)}
-:is(.bt-round,.bt-icon-btn,.bt-soft,.bt-send,.bt-mini,.bt-pill,.bt-plus,.bt-mic,.bt-voice,.bt-account,.bt-title-toggle,.bt-settings-close,.bt-avatar-trigger,.bt-shape,.bt-color,.bt-swatch,.bt-pick,.bt-more,.bt-mem-row,.bt-mem-send):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
-:is(.bt-row,.bt-tile,.bt-tab,.bt-avedit-tab,.bt-settings-item,.bt-menu button,.bt-option,.bt-palette-row,button.bt-set-row):focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-select{width:100%;height:34px;box-sizing:border-box;border-radius:8px;border:1px solid var(--bt-line);background:var(--bt-card);color:var(--bt-ink);padding:0 8px;font:inherit;font-size:13px}
 .bt-note{font-size:12px;line-height:16px;color:var(--bt-ink-2);margin-top:6px}
 .bt-swatch-sep{width:1px;height:22px;background:var(--bt-line-2);margin:0 2px}
 .bt-swatch-custom{position:relative;overflow:hidden;background:conic-gradient(#ff3e51,#ffaf38,#00c972,#1cc3b0,#2a92fe,#a97efe,#ff5eb1,#ff3e51);box-sizing:border-box}
@@ -3860,7 +3852,7 @@ var botState = (running, activity, alert) => running ? STATES.includes(activity)
 var toolState = (name) => /^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
   (0, import_react2.useEffect)(() => {
-    if (!enabled || reducedMotion()) return void 0;
+    if (!enabled) return void 0;
     let frame = 0;
     let point = null;
     const place = () => {
@@ -3873,7 +3865,6 @@ function useGaze(ref, enabled) {
       node.style.setProperty("--bt-gy", clamp((point.y - box.top - box.height / 2) / 160).toFixed(2));
     };
     const onMove = (event) => {
-      if (document.body?.dataset.btMotion === "quiet") return;
       point = { x: event.clientX, y: event.clientY };
       if (!frame) frame = requestAnimationFrame(place);
     };
@@ -7936,7 +7927,7 @@ var SECRET_CSS = `
 .bt-secret-who{position:relative;flex:none;display:inline-flex}
 .bt-secret-lock{position:absolute;right:-5px;bottom:-4px;width:16px;height:16px;border-radius:50%;background:var(--bt-main);color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px var(--bt-bubble)}
 .bt-secret-lock svg{width:11px;height:11px}
-.bt-secret-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:16px;padding:1px 6px;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink)}
+.bt-secret-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:16px;padding:1px 6px;border-radius:5px;background:var(--bt-hover);color:var(--bt-ink)}
 .bt-secret-body{display:flex;flex-direction:column;gap:8px}
 .bt-secret-field{align-items:center;min-height:36px}
 .bt-secret-input{flex:1;width:100%;min-width:0;margin:0;padding:0;border:0;outline:none;background:transparent;color:var(--bt-ink);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;line-height:20px;letter-spacing:.04em}
@@ -7957,7 +7948,7 @@ var SECRET_CSS = `
 @keyframes bt-secret-in{from{opacity:0;transform:translateY(-2px)}}
 .bt-secret-saved{display:flex;align-items:center;gap:6px;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
 .bt-secret-note{font-size:12px;line-height:17px;color:var(--bt-ink-3)}
-.bt-secret-note code,.bt-secret-about code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
+.bt-secret-note code,.bt-secret-about code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
 .bt-secret-warn{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;font-size:12px;line-height:16px;color:#b25e09;background:color-mix(in srgb,#f59e0b 12%,transparent)}
 .bt-secret-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 .bt-secret .bt-q-btn:disabled{opacity:.5;cursor:default}
@@ -9415,11 +9406,7 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
     );
   }
   if (reply.kind === "paused") {
-    return (0, import_react19.createElement)(
-      "div",
-      { className: "bt-event" },
-      t("Paused after {count} Bot relays. Waiting: {names}", { count: reply.count, names: (reply.names ?? []).join(t(" and ")) })
-    );
+    return (0, import_react19.createElement)("div", { className: "bt-event" }, reply.idle ? t("{names} went back and forth {count} times without progress and paused. Write here to go on", { count: reply.count, names: [bot.name, ...reply.names ?? []].join(t(" and ")) }) : t("Paused after {count} Bot relays. Waiting: {names}", { count: reply.count, names: (reply.names ?? []).join(t(" and ")) }));
   }
   if (reply.kind === "resumed") {
     return (0, import_react19.createElement)("div", { className: "bt-event" }, t("{name} was cut off by a restart and picked its work back up", { name: bot.name }));
@@ -10080,10 +10067,8 @@ var nameIfCut = (event) => {
   else row.removeAttribute("title");
 };
 var useApproval = (useWork, match) => useWork ? useWork((work) => (work.approvals ?? []).some(match)) : false;
-var useGroupWork = (useWork, pick2) => {
-  const raw = useWork ? useWork((work) => JSON.stringify(pick2(work.rooms ?? {}))) : "[]";
-  return (0, import_react21.useMemo)(() => JSON.parse(raw), [raw]);
-};
+var useGroupWork = (useWork, pick2) => useWork ? useWork((work) => JSON.stringify(pick2(work.rooms ?? {}))) : "[]";
+var workKeys = (text) => JSON.parse(text);
 var doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching });
 var workLine = (lead, doing, more) => (0, import_react21.createElement)(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ""}`);
 var doingLine = (doing) => (0, import_react21.createElement)(Shimmer, null, `${workPhrase(doing)}…`);
@@ -10091,7 +10076,7 @@ var waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits?.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
   return names.length === 0 ? "" : t("Waiting for {names}", { names: names.join(t(" and ")) });
 };
-function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked }) {
+function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked, onDragStart }) {
   const id = bot.id;
   const part = currentPart(bot);
   const preview = useSessions((list) => previewOf(list, part, roster.exchangeTurns[part]));
@@ -10104,13 +10089,12 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const approval = useApproval(useWork, (entry) => entry.botId === id);
   const alert = roster.questions?.[part] !== void 0 || approval;
   const doing = useActivity((map) => map[id]);
-  const groups = useGroupWork(useWork, (rooms) => Object.entries(rooms).flatMap(([roomId, entries2]) => entries2.filter((entry) => entry.botId === id).map((entry) => ({ id: roomId, ...doingOf(entry) }))));
+  const groups = workKeys(useGroupWork(useWork, (rooms) => Object.entries(rooms).flatMap(([roomId, entries2]) => entries2.filter((entry) => entry.botId === id).map((entry) => ({ id: roomId, ...doingOf(entry) })))));
   const away = !running && groups.length > 0;
   const state = botState(running || away, doing, alert);
   const runningLine = running && doing ? doingLine(doing) : null;
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t("a group chat"), groups[0], groups.length - 1) : null;
-  const waitsRaw = useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null";
-  const waits = (0, import_react21.useMemo)(() => JSON.parse(waitsRaw), [waitsRaw]);
+  const waits = workKeys(useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null");
   const waitsFor = state === "waiting" ? waitingFor(roster, waits) : "";
   if (bot.hidden && !active && !main) return null;
   const onContextMenu = (event) => {
@@ -10146,6 +10130,8 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       "aria-current": active ? "page" : void 0,
       "data-bot-id": id,
       title: wide ? void 0 : bot.name,
+      draggable: wide && !tile && onDragStart ? true : void 0,
+      onDragStart: wide && !tile && onDragStart ? (event) => onDragStart(event, id) : void 0,
       onMouseEnter: wide ? nameIfCut : void 0,
       onClick: () => actions.openSession(id),
       onContextMenu
@@ -10161,7 +10147,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     wide && unread && !active ? (0, import_react21.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : !wide && !active && (alert || unread) ? (0, import_react21.createElement)("span", { className: `bt-dot${alert ? " bt-dot-wait" : ""}`, "aria-hidden": true }) : null
   );
 }
-function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
+function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked, onDragStart }) {
   const id = room2.id;
   const sessionId = room2.sessionId ?? id;
   const fallback = useSessions((list) => previewOf(list, sessionId));
@@ -10170,7 +10156,7 @@ function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, 
   const unread = useSessionStatus((map) => map.get(sessionId)?.completionUnread === true) || marked && !active;
   useMarkedUnread(id, active, marked, actions);
   const approval = useApproval(useWork, (entry) => entry.roomId === id);
-  const members = useGroupWork(useWork, (rooms) => (rooms[id] ?? []).filter((entry) => entry.botId !== void 0).map((entry) => ({ id: entry.botId, ...doingOf(entry) })));
+  const members = workKeys(useGroupWork(useWork, (rooms) => (rooms[id] ?? []).filter((entry) => entry.botId !== void 0).map((entry) => ({ id: entry.botId, ...doingOf(entry) }))));
   const first = roster.byId[members[0]?.id];
   const workingLine = first ? workLine(first.name, members[0], members.length - 1) : null;
   if (room2.hidden && !active) return null;
@@ -10185,6 +10171,8 @@ function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, 
       "aria-current": active ? "page" : void 0,
       "data-room-id": id,
       title: wide ? void 0 : room2.name,
+      draggable: wide && onDragStart ? true : void 0,
+      onDragStart: wide && onDragStart ? (event) => onDragStart(event, id) : void 0,
       onMouseEnter: wide ? nameIfCut : void 0,
       onClick: () => actions.openSession(id),
       onContextMenu: (event) => {
@@ -10260,7 +10248,7 @@ function AgentSessionRow({ session, agent, actions, renaming, index }) {
     (0, import_react21.createElement)("span", { className: "bt-agent-sub-time" }, session.at > 0 ? relativeShort(session.at) : "")
   );
 }
-function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, marked }) {
+function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, marked, onDragStart }) {
   const info = useSessions((list) => JSON.stringify(agent.sessions.map((id) => {
     const row = list.byId[id];
     return {
@@ -10277,15 +10265,13 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
     running: map.get(id)?.running === true,
     unread: map.get(id)?.completionUnread === true
   }))));
-  const sessions = (0, import_react21.useMemo)(() => {
-    const statuses = Object.fromEntries(JSON.parse(statusInfo).map((entry) => [entry.id, entry]));
-    return JSON.parse(info).map((session) => ({
-      ...session,
-      running: statuses[session.id]?.running ?? session.running,
-      unread: statuses[session.id]?.unread ?? false,
-      title: session.title === "" ? t("New session") : session.title
-    }));
-  }, [info, statusInfo]);
+  const statuses = Object.fromEntries(JSON.parse(statusInfo).map((entry) => [entry.id, entry]));
+  const sessions = JSON.parse(info).map((session) => ({
+    ...session,
+    running: statuses[session.id]?.running ?? session.running,
+    unread: statuses[session.id]?.unread ?? false,
+    title: session.title === "" ? t("New session") : session.title
+  }));
   const renaming = useUi((value) => value.renameAgent);
   const active = sessions.some((session) => session.active);
   const running = sessions.some((session) => session.running);
@@ -10306,6 +10292,8 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
         "aria-current": active ? "page" : void 0,
         "data-agent-id": agent.id,
         title: wide ? void 0 : "DSH Agent",
+        draggable: wide && onDragStart ? true : void 0,
+        onDragStart: wide && onDragStart ? (event) => onDragStart(event, agent.id) : void 0,
         onClick: () => actions.openAgent(agent.id),
         onContextMenu: (event) => {
           event.preventDefault();
@@ -10347,6 +10335,216 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
     )
   );
 }
+var GLIDE = springEasing(1e3, 63);
+function renderSidebarEntry(entry, rowProps, markedUnread, onDragStart) {
+  return entry.kind === "bot" ? (0, import_react21.createElement)(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true, onDragStart }) : entry.kind === "room" ? (0, import_react21.createElement)(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true, onDragStart }) : (0, import_react21.createElement)(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true, onDragStart });
+}
+function SectionBlock({ section, entries: entries2, rowProps, markedUnread, renaming, dropTarget, onDragStart, onDragOverSec, onDropSec }) {
+  const { roster, actions, useSessions, useSessionStatus, useWork, wide } = rowProps;
+  const input = (0, import_react21.useRef)(null);
+  (0, import_react21.useLayoutEffect)(() => {
+    if (!renaming) return;
+    input.current?.focus();
+    input.current?.select();
+  }, [renaming]);
+  const visibleEntries = entries2.filter((entry) => !entry.item.hidden || entry.kind === "bot" && isMainOf(roster, entry.item.id));
+  const botsInSec = (0, import_react21.useMemo)(() => {
+    const seen = /* @__PURE__ */ new Set();
+    const list = [];
+    for (const entry of visibleEntries) {
+      if (entry.kind === "bot") {
+        if (!seen.has(entry.item.id)) {
+          seen.add(entry.item.id);
+          list.push(entry.item);
+        }
+      } else if (entry.kind === "room") {
+        for (const memberId of entry.item.members ?? []) {
+          const bot = roster.byId[memberId];
+          if (bot && !seen.has(bot.id)) {
+            seen.add(bot.id);
+            list.push(bot);
+          }
+        }
+      }
+    }
+    return list;
+  }, [visibleEntries, roster.byId]);
+  const sessionIds = (0, import_react21.useMemo)(() => entries2.flatMap((entry) => entry.kind === "bot" ? [currentPart(entry.item)] : entry.kind === "room" ? [entry.item.sessionId ?? entry.item.id] : entry.item.sessions ?? []), [entries2]);
+  const activeSession = useSessions((list) => sessionIds.find((id) => (list.byId[id]?.retainedBy?.mainView ?? 0) > 0) ?? "");
+  const activeEntry = (0, import_react21.useMemo)(() => {
+    if (activeSession === "") return void 0;
+    return entries2.find((entry) => entry.kind === "bot" ? currentPart(entry.item) === activeSession : entry.kind === "room" ? (entry.item.sessionId ?? entry.item.id) === activeSession : (entry.item.sessions ?? []).includes(activeSession));
+  }, [entries2, activeSession]);
+  const statusBits = useSessionStatus((map) => JSON.stringify(sessionIds.map((id) => [
+    id,
+    map.get(id)?.running === true ? 1 : 0,
+    map.get(id)?.completionUnread === true || map.get(id)?.pendingInteraction !== void 0 ? 1 : 0
+  ])));
+  const workBits = useWork ? useWork((work) => {
+    const botIds = new Set(entries2.filter((e) => e.kind === "bot").map((e) => e.item.id));
+    const roomIds = new Set(entries2.filter((e) => e.kind === "room").map((e) => e.item.id));
+    const approval = (work.approvals ?? []).some((a) => botIds.has(a.botId) || roomIds.has(a.roomId));
+    const roomWorking = Object.entries(work.rooms ?? {}).some(([rId, list]) => roomIds.has(rId) && list.some((e) => e.botId !== void 0) || list.some((e) => botIds.has(e.botId)));
+    return `${approval ? 1 : 0}|${roomWorking ? 1 : 0}`;
+  }) : "0|0";
+  const parsedStatuses = JSON.parse(statusBits);
+  const [hasApproval, hasRoomWork] = workBits.split("|").map((v) => v === "1");
+  const hasQuestion = entries2.some((entry) => entry.kind === "bot" && roster.questions?.[currentPart(entry.item)] !== void 0);
+  const hasAlert = hasQuestion || hasApproval;
+  const hasWorking = hasRoomWork || parsedStatuses.some(([, run2]) => run2 === 1);
+  const hasUnread = parsedStatuses.some(([id, , unread]) => unread === 1 && id !== activeSession) || entries2.some((entry) => markedUnread[entry.item.id] === true && entry !== activeEntry);
+  const statusKind = hasAlert ? "alert" : hasWorking ? "working" : hasUnread ? "unread" : null;
+  const toggle = () => {
+    void Promise.resolve(actions.saveSection({ id: section.id, collapsed: !section.collapsed })).catch((error) => actions.reportError(error, "section"));
+  };
+  const openSecMenu = (kind, x, y) => actions.openMenu({ kind, id: section.id, x, y });
+  if (!wide) {
+    if (section.collapsed) {
+      const folderRoom = { id: section.id, name: section.name, members: botsInSec.map((bot) => bot.id) };
+      return (0, import_react21.createElement)(
+        "div",
+        { className: "bt-rail-sec", "data-sec-id": section.id },
+        (0, import_react21.createElement)(
+          "div",
+          { className: "bt-rail-sec-div", title: section.name, onClick: toggle },
+          (0, import_react21.createElement)("span", { className: "bt-rail-sec-pill", style: section.color ? { background: inkFill(section.color) } : void 0 })
+        ),
+        (0, import_react21.createElement)(
+          "button",
+          {
+            type: "button",
+            className: "bt-rail-folder",
+            "aria-label": section.name,
+            title: `${section.name} (${visibleEntries.length})`,
+            "aria-current": activeEntry ? "page" : void 0,
+            onClick: toggle,
+            onContextMenu: (event) => {
+              event.preventDefault();
+              openSecMenu("section", event.clientX, event.clientY);
+            }
+          },
+          botsInSec.length > 0 ? (0, import_react21.createElement)(RoomAvatar, { room: folderRoom, roster, size: 38 }) : (0, import_react21.createElement)(FolderIcon),
+          statusKind ? (0, import_react21.createElement)("span", { className: `bt-dot${statusKind === "alert" ? " bt-dot-wait" : ""}`, style: statusKind === "working" ? { background: "var(--bt-green)" } : void 0, "aria-hidden": true }) : null
+        )
+      );
+    }
+    return (0, import_react21.createElement)(
+      import_react21.Fragment,
+      null,
+      (0, import_react21.createElement)(
+        "div",
+        { className: "bt-rail-sec-div", "data-sec-id": section.id, title: section.name, onClick: toggle },
+        (0, import_react21.createElement)("span", { className: "bt-rail-sec-pill", style: section.color ? { background: inkFill(section.color) } : void 0 })
+      ),
+      entries2.map((entry) => renderSidebarEntry(entry, rowProps, markedUnread))
+    );
+  }
+  const commitRename = (keep) => {
+    const value = input.current?.value ?? "";
+    actions.endSectionRename();
+    if (!keep || value.trim() === "" || value.trim() === section.name) return;
+    void Promise.resolve(actions.saveSection({ id: section.id, name: value.trim() })).catch((error) => actions.reportError(error, "section-rename"));
+  };
+  return (0, import_react21.createElement)(
+    "div",
+    {
+      className: "bt-sec",
+      "data-sec-id": section.id,
+      "data-collapsed": section.collapsed ? "true" : "false",
+      "data-drop": dropTarget === section.id ? "true" : void 0,
+      onDragOver: onDragOverSec ? (event) => onDragOverSec(event, section.id) : void 0,
+      onDrop: onDropSec ? (event) => onDropSec(event, section.id) : void 0
+    },
+    renaming ? (0, import_react21.createElement)(
+      "div",
+      { className: "bt-sec-edit" },
+      (0, import_react21.createElement)("input", {
+        ref: input,
+        defaultValue: section.name,
+        maxLength: 32,
+        "aria-label": t("Rename section"),
+        onKeyDown: (event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") commitRename(true);
+          else if (event.key === "Escape") commitRename(false);
+        },
+        onBlur: () => commitRename(true)
+      })
+    ) : (0, import_react21.createElement)(
+      "div",
+      { className: "bt-sec-head-wrap" },
+      (0, import_react21.createElement)(
+        "button",
+        {
+          type: "button",
+          className: "bt-sec-head",
+          "aria-expanded": !section.collapsed,
+          onClick: toggle,
+          onDoubleClick: (event) => {
+            event.stopPropagation();
+            actions.beginSectionRename(section.id);
+          },
+          onContextMenu: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openSecMenu("section", event.clientX, event.clientY);
+          }
+        },
+        (0, import_react21.createElement)("span", { className: "bt-sec-chev", "aria-hidden": true }, (0, import_react21.createElement)(ChevronRightIcon)),
+        section.color ? (0, import_react21.createElement)("span", { className: "bt-sec-dot", style: { background: inkFill(section.color) }, "aria-hidden": true }) : null,
+        (0, import_react21.createElement)("span", { className: "bt-sec-title" }, section.name),
+        (0, import_react21.createElement)("span", { className: `bt-sec-count${!section.collapsed ? " bt-sec-count-hide" : ""}` }, visibleEntries.length),
+        (0, import_react21.createElement)(
+          "span",
+          { className: "bt-sec-tail" },
+          section.collapsed && botsInSec.length > 0 ? (0, import_react21.createElement)(
+            "span",
+            { className: "bt-sec-pile", "aria-hidden": true },
+            botsInSec.slice(0, 3).map((bot) => (0, import_react21.createElement)("span", { key: bot.id, className: "bt-sec-pile-item" }, (0, import_react21.createElement)(BotMark, { bot, size: 18 }))),
+            botsInSec.length > 3 ? (0, import_react21.createElement)("span", { className: "bt-sec-pile-more" }, `+${botsInSec.length - 3}`) : null
+          ) : null,
+          section.collapsed && statusKind ? (0, import_react21.createElement)("span", { className: "bt-sec-status", "data-kind": statusKind, "aria-hidden": true }, statusKind === "alert" ? "?" : null) : null
+        )
+      ),
+      (0, import_react21.createElement)(
+        "span",
+        { className: "bt-sec-acts" },
+        (0, import_react21.createElement)("button", {
+          type: "button",
+          className: "bt-sec-act",
+          "aria-label": t("Add to {name}", { name: section.name }),
+          title: t("Add to {name}", { name: section.name }),
+          onClick: (event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            openSecMenu("section-add", rect.left, rect.bottom + 4);
+          }
+        }, (0, import_react21.createElement)(PlusIcon)),
+        (0, import_react21.createElement)("button", {
+          type: "button",
+          className: "bt-sec-act",
+          "aria-label": t("{name} actions", { name: section.name }),
+          title: t("{name} actions", { name: section.name }),
+          onClick: (event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            openSecMenu("section", rect.left, rect.bottom + 4);
+          }
+        }, (0, import_react21.createElement)(DotsIcon))
+      )
+    ),
+    (0, import_react21.createElement)(
+      "div",
+      { className: "bt-sec-body" },
+      (0, import_react21.createElement)(
+        "div",
+        { className: "bt-sec-body-in" },
+        entries2.map((entry) => renderSidebarEntry(entry, rowProps, markedUnread, onDragStart))
+      )
+    ),
+    section.collapsed && activeEntry ? (0, import_react21.createElement)("div", { className: "bt-sec-peek" }, renderSidebarEntry(activeEntry, rowProps, markedUnread, onDragStart)) : null
+  );
+}
 function useListGlide(listRef, layout, key) {
   const tops = (0, import_react21.useRef)({ layout, map: /* @__PURE__ */ new Map() });
   (0, import_react21.useLayoutEffect)(() => {
@@ -10354,13 +10552,13 @@ function useListGlide(listRef, layout, key) {
     if (!list) return;
     const next = /* @__PURE__ */ new Map();
     const still = reducedMotion() || tops.current.layout !== layout;
-    for (const row of list.querySelectorAll("[data-bot-id],[data-room-id],[data-agent-id]")) {
-      const id = row.dataset.botId ?? row.dataset.roomId ?? row.dataset.agentId;
+    for (const row of list.querySelectorAll("[data-bot-id],[data-room-id],[data-agent-id],[data-sec-id]")) {
+      const id = row.dataset.secId ? `sec:${row.dataset.secId}` : row.dataset.botId ?? row.dataset.roomId ?? row.dataset.agentId;
       const top = row.offsetTop;
       next.set(id, top);
       const before = tops.current.map.get(id);
       if (!still && before !== void 0 && Math.abs(before - top) > 0.5) {
-        row.animate([{ transform: `translateY(${before - top}px)` }, { transform: "none" }], SPRING_GLIDE);
+        row.animate([{ transform: `translateY(${before - top}px)` }, { transform: "none" }], GLIDE);
       }
     }
     tops.current = { layout, map: next };
@@ -10396,11 +10594,7 @@ function TeamSidebar(props) {
   const listRef = (0, import_react21.useRef)(null);
   const roster = useRoster((value) => value);
   const markedUnread = useUi((value) => value.unread);
-  const leftDrawer = useUi((value) => value.leftDrawer === true);
-  const details = useUi((value) => value.details ?? null);
-  const view = useUi((value) => value.view ?? "details");
-  const panelYield = useUi((value) => value.panelYield === true);
-  const bootFailed = useUi((value) => value.bootFailed === true);
+  const uiNow = useUi((value) => value);
   props.useRegistry((value) => value);
   const frameSnap = props.useFrame ? props.useFrame((value) => value) : { viewport: typeof window === "undefined" ? 0 : window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0 };
   const pref = props.useSidebarPref ? props.useSidebarPref((value) => value) : "open";
@@ -10408,8 +10602,8 @@ function TeamSidebar(props) {
     viewport: frameSnap.viewport,
     sidebarWidth: frameSnap.sidebarWidth,
     pref,
-    drawer: leftDrawer,
-    panel: details ? { view, yielded: panelYield } : null
+    drawer: uiNow.leftDrawer === true,
+    panel: uiNow.details ? { view: uiNow.view, yielded: uiNow.panelYield === true } : null
   });
   const [drag, setDrag] = (0, import_react21.useState)(null);
   const mode = drag?.left ?? layout.left;
@@ -10431,10 +10625,49 @@ function TeamSidebar(props) {
     ];
     return entries2.sort((a, b) => Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at);
   }, [roster, updated]);
+  const sections = roster.sections ?? [];
+  const sectionSet = (0, import_react21.useMemo)(() => new Set(sections.map((sec) => sec.id)), [sections]);
+  const ungrouped = (0, import_react21.useMemo)(
+    () => order.filter((entry) => !entry.item.sectionId || !sectionSet.has(entry.item.sectionId)),
+    [order, sectionSet]
+  );
   const main = roster.byId[roster.mainBotId];
-  useListGlide(listRef, wideContent, order.map((entry) => entry.item.id).join(","));
+  const glideKey = (0, import_react21.useMemo)(
+    () => `${sections.map((s) => `${s.id}:${s.collapsed ? 1 : 0}`).join(",")}|${order.map((entry) => `${entry.item.id}:${entry.item.sectionId ?? ""}`).join(",")}`,
+    [sections, order]
+  );
+  useListGlide(listRef, wideContent, glideKey);
   useLandOnMainBot(roster, useSessions, actions);
   useReportReady(roster.ready, roster);
+  const [dragId, setDragId] = (0, import_react21.useState)(null);
+  const [dropTarget, setDropTarget] = (0, import_react21.useState)(null);
+  const onDragStart = (event, id) => {
+    setDragId(id);
+    event.dataTransfer?.setData?.("text/plain", id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  };
+  const onDragOverSec = (event, secId) => {
+    if (!dragId) return;
+    event.preventDefault();
+    if (dropTarget !== secId) setDropTarget(secId);
+  };
+  const onDropSec = (event, secId) => {
+    event.preventDefault();
+    const id = dragId;
+    setDragId(null);
+    setDropTarget(null);
+    if (!id) return;
+    void Promise.resolve(actions.setFlags(id, { sectionId: secId })).catch((error) => actions.reportError(error, "section"));
+    if (secId && sections.find((s) => s.id === secId)?.collapsed) {
+      void Promise.resolve(actions.saveSection({ id: secId, collapsed: false })).catch(() => {
+      });
+    }
+  };
+  const createNewSection = () => {
+    void Promise.resolve(actions.saveSection({})).then((sec) => {
+      if (sec?.id) actions.beginSectionRename(sec.id);
+    }).catch((error) => actions.reportError(error, "section"));
+  };
   const openWidth = drag?.width ?? frameSnap.sidebarWidth;
   const ourWidth = shown === "rail" ? RAIL_WIDTH : openWidth;
   const pushed = mode === "open" ? openWidth : mode === "hidden" ? 0 : RAIL_WIDTH;
@@ -10598,7 +10831,7 @@ function TeamSidebar(props) {
   }, [mode]);
   const navigate = (open, id) => {
     const result = open(id);
-    if (leftDrawer) actions.setLeftDrawer?.(false);
+    if (uiNow.leftDrawer === true) actions.setLeftDrawer?.(false);
     return result;
   };
   const rowActions = {
@@ -10635,6 +10868,7 @@ function TeamSidebar(props) {
     { className: "bt-side-top" },
     (0, import_react21.createElement)("span", { className: "bt-brand" }, (0, import_react21.createElement)(BrandName)),
     (0, import_react21.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
+    (0, import_react21.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New section"), title: t("New section"), onClick: createNewSection }, (0, import_react21.createElement)(FolderIcon)),
     (0, import_react21.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("Search"), title: t("Search"), onClick: () => actions.openPalette() }, (0, import_react21.createElement)(SearchIcon)),
     (0, import_react21.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react21.createElement)(PlusIcon)),
     (0, import_react21.createElement)("button", { type: "button", className: "bt-round bt-side-collapse", "aria-label": t("Collapse sidebar"), title: t("Collapse sidebar"), onClick: onToggle }, (0, import_react21.createElement)(SidebarIcon))
@@ -10643,7 +10877,7 @@ function TeamSidebar(props) {
     { className: "bt-rail-top" },
     (0, import_react21.createElement)(UpdateButton, { useUpdate: props.useUpdate, actions }),
     (0, import_react21.createElement)("button", { type: "button", className: "bt-round bt-side-collapse", "aria-label": t("Collapse sidebar"), title: t("Collapse sidebar"), onClick: onToggle }, (0, import_react21.createElement)(SidebarIcon)),
-    main ? (0, import_react21.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react21.createElement)("div", { className: "bt-hint" }, bootFailed ? bootHint() : t("Setting up your Main Bot…")),
+    main ? (0, import_react21.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react21.createElement)("div", { className: "bt-hint" }, uiNow.bootFailed ? bootHint() : t("Setting up your Main Bot…")),
     (0, import_react21.createElement)("span", { className: "bt-rail-sep", "aria-hidden": true })
   );
   const foot = wideContent ? (0, import_react21.createElement)("div", { className: "bt-leftcol-foot" }, (0, import_react21.createElement)(AccountLauncher, { seat: false, actions })) : (0, import_react21.createElement)(
@@ -10659,9 +10893,38 @@ function TeamSidebar(props) {
     wideContent && roster.readOnly ? (0, import_react21.createElement)("div", { className: "bt-hint bt-read-only", role: "status" }, hostText(roster.readOnly)) : null,
     (0, import_react21.createElement)(
       "div",
-      { ref: listRef, className: "bt-list", role: "region", "aria-label": t("Bot list") },
-      wideContent ? main ? (0, import_react21.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react21.createElement)("div", { className: "bt-hint" }, bootFailed ? bootHint() : t("Setting up your Main Bot…")) : null,
-      order.map((entry) => entry.kind === "bot" ? (0, import_react21.createElement)(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true }) : entry.kind === "room" ? (0, import_react21.createElement)(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true }) : (0, import_react21.createElement)(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))
+      {
+        ref: listRef,
+        className: "bt-list",
+        role: "region",
+        "aria-label": t("Bot list"),
+        onDragEnd: () => {
+          setDragId(null);
+          setDropTarget(null);
+        },
+        onDragLeave: (event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget(null);
+        }
+      },
+      wideContent ? main ? (0, import_react21.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react21.createElement)("div", { className: "bt-hint" }, uiNow.bootFailed ? bootHint() : t("Setting up your Main Bot…")) : null,
+      sections.length > 0 && wideContent ? (0, import_react21.createElement)("div", {
+        className: "bt-sec-ungrouped",
+        "data-drop": dropTarget === "__none__" ? "true" : void 0,
+        onDragOver: (event) => onDragOverSec(event, "__none__"),
+        onDrop: (event) => onDropSec(event, null)
+      }, ungrouped.map((entry) => renderSidebarEntry(entry, rowProps, markedUnread, onDragStart))) : ungrouped.map((entry) => renderSidebarEntry(entry, rowProps, markedUnread, onDragStart)),
+      sections.map((section) => (0, import_react21.createElement)(SectionBlock, {
+        key: section.id,
+        section,
+        entries: order.filter((entry) => entry.item.sectionId === section.id),
+        rowProps,
+        markedUnread,
+        renaming: uiNow.renameSection === section.id,
+        dropTarget,
+        onDragStart,
+        onDragOverSec,
+        onDropSec
+      }))
     ),
     foot
   );
@@ -10675,7 +10938,6 @@ function TeamSidebar(props) {
 function UpdateButton({ useUpdate, actions }) {
   const update = useUpdate((value) => value);
   const [open, setOpen] = (0, import_react21.useState)(false);
-  const [shown, leaving] = useLinger(open, 120);
   const [box, setBox] = (0, import_react21.useState)(null);
   const [error, setError] = (0, import_react21.useState)("");
   const [dshError, setDshError] = (0, import_react21.useState)("");
@@ -10739,9 +11001,9 @@ function UpdateButton({ useUpdate, actions }) {
       "aria-expanded": open,
       onClick: toggle
     }, (0, import_react21.createElement)(CloudDownloadIcon, { done: phase === "installed" || phase === "updated" }), phase === "failed" || dshPhase === "failed" ? (0, import_react21.createElement)("span", { className: "bt-update-dot", "aria-hidden": true }) : null),
-    shown && box ? (0, import_react_dom3.createPortal)((0, import_react21.createElement)(
+    open && box ? (0, import_react_dom3.createPortal)((0, import_react21.createElement)(
       "div",
-      { className: "bt-update-pop", role: "dialog", "aria-label": update?.available || phase !== "idle" ? t("DS Bot update") : t("DSH update"), style: box, "data-leaving": leaving || void 0 },
+      { className: "bt-update-pop", role: "dialog", "aria-label": update?.available || phase !== "idle" ? t("DS Bot update") : t("DSH update"), style: box },
       update?.available || phase !== "idle" ? (0, import_react21.createElement)(
         import_react21.Fragment,
         null,
@@ -10873,7 +11135,6 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
   }, [seat]);
   const [box, setBox] = (0, import_react21.useState)(null);
   const button = (0, import_react21.useRef)(null);
-  const menuRef = (0, import_react21.useRef)(null);
   (0, import_react21.useEffect)(() => {
     if (settingsOpen) setOpen(false);
   }, [settingsOpen]);
@@ -10898,7 +11159,6 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
       setOpen(false);
     };
     const onKey = (event) => {
-      if (stepMenuFocus(menuRef.current, event)) return;
       if (event.key === "Escape") {
         event.stopPropagation();
         setOpen(false);
@@ -10992,7 +11252,7 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
     ),
     open && box ? (0, import_react_dom3.createPortal)((0, import_react21.createElement)(
       "div",
-      { ref: menuRef, className: "bt-menu bt-menu-up bt-account-menu", role: "menu", "aria-label": t("Account"), style: box },
+      { className: "bt-menu bt-menu-up bt-account-menu", role: "menu", "aria-label": t("Account"), style: box },
       confirm !== null ? (0, import_react21.createElement)(
         "div",
         { className: "bt-confirm", role: "alertdialog", "aria-label": accountT("signOut") },
@@ -11029,29 +11289,74 @@ function useReportReady(drawn, roster) {
     if (!drawn || readyReported) return;
     readyReported = true;
     void Promise.resolve().then(() => {
-      const ready = globalThis.dsBotApp?.ready;
-      if (typeof ready !== "function") return void 0;
+      const app = globalThis.dsBotApp;
+      if (typeof app?.ready !== "function") return void 0;
       let place;
       try {
         place = mainAvatarPlace(roster);
       } catch {
         place = void 0;
       }
-      return place === void 0 ? ready() : ready(place);
+      if (place === void 0) return app.ready();
+      const mainId = roster.mainBotId;
+      app.onHandoff?.((from) => {
+        try {
+          glideOnto(mainMarkOf(mainId), from);
+        } catch (error) {
+          quietly("handoff")(error);
+        }
+      });
+      return app.ready(place);
     }).catch(quietly("app ready"));
   }, [drawn]);
+}
+function mainMarkOf(id) {
+  if (typeof document === "undefined") return null;
+  const key = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : id;
+  return document.querySelector(`.bt-side [data-bot-id="${key}"] .bt-mark`);
 }
 function mainAvatarPlace(roster) {
   const main = roster?.byId?.[roster.mainBotId];
   if (main === void 0 || main.avatar?.image || typeof document === "undefined") return void 0;
   const look = lookOf(main);
   if (look.shape !== MAIN_LOOK.shape || look.color !== MAIN_LOOK.color) return void 0;
-  const id = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(main.id) : main.id;
-  const mark = document.querySelector(`.bt-side [data-bot-id="${id}"] .bt-mark`);
+  const mark = mainMarkOf(main.id);
   if (!mark || mark.checkVisibility?.({ visibilityProperty: true }) === false) return void 0;
   const box = mark.getBoundingClientRect();
   const view = document.documentElement;
   return { x: box.left, y: box.top, width: box.width, height: box.height, viewportWidth: globalThis.innerWidth ?? view.clientWidth, viewportHeight: globalThis.innerHeight ?? view.clientHeight };
+}
+var GLIDE_MS = 460;
+function glideOnto(mark, from) {
+  if (!mark || reducedMotion()) return;
+  const box = mark.getBoundingClientRect();
+  if (!box.width) return;
+  const outer = document.createElement("div");
+  const inner = document.createElement("div");
+  const copy2 = mark.cloneNode(true);
+  copy2.removeAttribute("data-live");
+  Object.assign(outer.style, { position: "fixed", left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, zIndex: "2147483647", pointerEvents: "none" });
+  Object.assign(inner.style, { width: "100%", height: "100%", transformOrigin: "0 0" });
+  Object.assign(copy2.style, { width: "100%", height: "100%" });
+  copy2.style.setProperty("--bt-ink-deepseek", getComputedStyle(mark).getPropertyValue("--bt-ink-deepseek"));
+  inner.append(copy2);
+  outer.append(inner);
+  outer.setAttribute("aria-hidden", "true");
+  document.body.append(outer);
+  mark.style.opacity = "0";
+  const timing = { delay: Math.max(0, Number(from.hold) || 0), duration: GLIDE_MS, fill: "both" };
+  outer.animate([{ transform: `translateX(${from.x - box.left}px)` }, { transform: "none" }], { ...timing, easing: "cubic-bezier(.45,0,.25,1)" });
+  const glide = inner.animate([{ transform: `translateY(${from.y - box.top}px) scale(${from.size / box.width})` }, { transform: "none" }], { ...timing, easing: "cubic-bezier(.2,.65,.3,1)" });
+  let landed = false;
+  const land = () => {
+    if (landed) return;
+    landed = true;
+    outer.remove();
+    mark.style.opacity = "";
+    mark.animate([{ transform: "scale(1.08, .92)" }, { transform: "none" }], { duration: SPRING_POP.duration, easing: SPRING_POP.easing });
+  };
+  glide.finished.then(land, land);
+  setTimeout(land, timing.delay + GLIDE_MS + 500);
 }
 function useLandOnMainBot(roster, useSessions, actions) {
   const mainView = useSessions((list) => {
@@ -11146,14 +11451,13 @@ var SIDEBAR_CSS = `
 .bt-update[data-phase=installing] .bt-cloud-arrow{animation:bt-cloud-drop 1.1s cubic-bezier(.45,0,.55,1) infinite}
 @keyframes bt-cloud-drop{0%{transform:translateY(-3px);opacity:0}35%{opacity:1}70%{transform:translateY(1px);opacity:1}100%{transform:translateY(2px);opacity:0}}
 .bt-update-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:#E5484D;box-shadow:0 0 0 1.5px var(--bt-sidebar)}
-.bt-update-pop{position:fixed;z-index:60;width:280px;padding:14px 14px 12px;border-radius:16px;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:.5px solid var(--bt-glass-rim);box-shadow:var(--bt-glass-shadow);color:var(--bt-ink);box-sizing:border-box;transform-origin:top left;font-family:var(--bt-font);animation:bt-update-pop ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
-.bt-update-pop[data-leaving]{animation:bt-pop-out .12s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+.bt-update-pop{position:fixed;z-index:60;width:280px;padding:14px 14px 12px;border-radius:14px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 10px 20px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);color:var(--bt-ink);box-sizing:border-box;transform-origin:top left;font-family:var(--bt-font);animation:bt-update-pop ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 @keyframes bt-update-pop{from{opacity:0;transform:scale(.96);filter:blur(4px)}}
 .bt-update-title{font-size:14px;line-height:20px;font-weight:600}
-.bt-update-text{margin-top:2px;font-size:12px;line-height:18px;color:var(--bt-ink-2)}
+.bt-update-text{margin-top:2px;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
 .bt-update-error{margin-top:8px;font-size:12px;line-height:17px;color:var(--bt-danger);overflow-wrap:anywhere;max-height:90px;overflow:auto}
 .bt-update-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:12px}
-.bt-update-notes{margin-right:auto;font-size:12px;color:var(--bt-ink-2);text-decoration:none}
+.bt-update-notes{margin-right:auto;font-size:12.5px;color:var(--bt-ink-2);text-decoration:none}
 .bt-update-notes:hover{color:var(--bt-ink);text-decoration:underline}
 .bt-update-go{height:30px;padding:0 14px;border:0;border-radius:999px;background:var(--bt-accent,#4D6BFE);color:var(--bt-accent-ink,#fff);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .12s ease,transform .12s ease}
 .bt-update-go:hover:not(:disabled){opacity:.9}
@@ -11184,6 +11488,71 @@ var SIDEBAR_CSS = `
 .bt-agent-sub[data-open] .bt-agent-sub-row{animation:bt-agent-row-in .24s ease both;animation-delay:calc(var(--i, 0)*30ms)}
 @keyframes bt-agent-row-in{from{opacity:0;filter:blur(4px)}to{opacity:1;filter:blur(0)}}
 @media (prefers-reduced-motion:reduce){.bt-agent-sub{transition:none}.bt-agent-sub .bt-agent-sub-row{animation:none}}
+
+/* Sidebar sections: collapsible header with a 3D character pile and live status when
+   folded, active conversation peek, drag-and-drop highlight, and 88px rail cluster. */
+.bt-sec-ungrouped{display:flex;flex-direction:column;gap:3px;border-radius:10px;transition:background-color .14s ease,box-shadow .14s ease}
+.bt-sec-ungrouped[data-drop=true]{background:color-mix(in srgb,var(--bt-accent) 9%,transparent);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--bt-accent) 65%,transparent)}
+.bt-sec{display:flex;flex-direction:column;margin-top:6px;border-radius:12px;transition:background-color .14s ease,box-shadow .14s ease}
+.bt-sec[data-drop=true]{background:color-mix(in srgb,var(--bt-accent) 9%,transparent);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--bt-accent) 65%,transparent)}
+.bt-sec-head-wrap{position:relative;display:flex;align-items:center}
+.bt-sec-head{display:flex;align-items:center;gap:6px;height:30px;padding:0 8px 0 6px;border:0;border-radius:8px;background:transparent;color:var(--bt-ink-2);font-family:var(--bt-font);font-size:12px;line-height:16px;font-weight:600;cursor:pointer;width:100%;text-align:left;transition:background-color .12s ease,color .12s ease}
+.bt-sec-head-wrap:hover .bt-sec-head{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-sec-head:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-sec-chev{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex:none;color:var(--bt-ink-3);transition:transform ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},color .12s ease}
+.bt-sec-head-wrap:hover .bt-sec-chev{color:var(--bt-ink-2)}
+.bt-sec[data-collapsed=false] .bt-sec-chev{transform:rotate(90deg)}
+.bt-sec-chev svg{width:12px;height:12px}
+.bt-sec-dot{width:6px;height:6px;border-radius:50%;corner-shape:round;flex:none}
+.bt-sec-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto}
+.bt-sec-count{font-size:11px;line-height:16px;font-weight:500;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;flex:none}
+.bt-sec-head-wrap:hover .bt-sec-count-hide{display:none}
+.bt-sec-tail{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none}
+.bt-sec-head-wrap:hover .bt-sec-tail{padding-right:44px}
+.bt-sec-pile{display:inline-flex;align-items:center;animation:bt-sec-pile-in ${SPRING_POP.duration}ms ${SPRING_POP.easing}}
+@keyframes bt-sec-pile-in{from{opacity:0;transform:translateX(6px) scale(.82)}to{opacity:1;transform:none}}
+.bt-sec-pile-item{display:inline-flex;border-radius:50%;corner-shape:round;background:var(--bt-sidebar);box-shadow:0 0 0 1.5px var(--bt-sidebar)}
+.bt-sec-pile-item+.bt-sec-pile-item{margin-left:-5px}
+.bt-sec-pile-more{font-size:11px;line-height:16px;font-weight:600;color:var(--bt-ink-3);margin-left:3px;font-variant-numeric:tabular-nums}
+.bt-sec-status{width:8px;height:8px;border-radius:50%;corner-shape:round;flex:none}
+.bt-sec-status[data-kind=working]{background:var(--bt-green);box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-green) 22%,transparent)}
+.bt-sec-status[data-kind=alert]{width:12px;height:12px;background:var(--bt-accent);color:var(--bt-accent-ink);font-size:8.5px;line-height:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.bt-sec-status[data-kind=unread]{background:var(--bt-accent)}
+.bt-sec-acts{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:none;align-items:center;gap:2px}
+.bt-sec-head-wrap:hover .bt-sec-acts,.bt-sec-acts:focus-within{display:inline-flex}
+.bt-sec-act{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--bt-ink-3);cursor:pointer;transition:background-color .12s ease,color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
+.bt-sec-act:hover{background:var(--bt-active);color:var(--bt-ink)}
+.bt-sec-act:active{transform:scale(.9)}
+.bt-sec-act:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-sec-act svg{width:13px;height:13px}
+.bt-sec-edit{display:flex;align-items:center;height:30px;padding:0 4px}
+.bt-sec-edit input{width:100%;height:24px;padding:0 8px;border:0;border-radius:6px;background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:12px;line-height:16px;font-weight:600;outline:none;box-shadow:inset 0 0 0 1.5px var(--bt-accent)}
+.bt-sec-body{display:grid;grid-template-rows:1fr;transition:grid-template-rows ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
+.bt-sec[data-collapsed=true] .bt-sec-body{grid-template-rows:0fr}
+.bt-sec-body-in{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:3px;position:relative}
+.bt-sec[data-collapsed=false] .bt-sec-body-in{padding-top:2px}
+.bt-sec[data-collapsed=false]:hover .bt-sec-body-in::before{content:'';position:absolute;left:10px;top:6px;bottom:6px;width:1.5px;border-radius:999px;background:var(--bt-line-2);opacity:.55;pointer-events:none}
+.bt-sec-peek{margin-top:2px}
+.bt-rail-sec{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%}
+.bt-rail-sec-div{display:flex;align-items:center;justify-content:center;width:100%;padding:5px 0 2px;cursor:pointer}
+.bt-rail-sec-pill{width:22px;height:3px;border-radius:999px;background:var(--bt-line-2);transition:width .14s ease,background-color .14s ease}
+.bt-rail-sec-div:hover .bt-rail-sec-pill{width:30px;background:var(--bt-ink-3)}
+.bt-rail-folder{position:relative;display:flex;align-items:center;justify-content:center;width:56px;height:56px;padding:0;border:0;border-radius:16px;background:color-mix(in srgb,var(--bt-ink) 5%,transparent);color:var(--bt-ink-2);box-shadow:inset 0 0 0 .5px var(--bt-line-2);cursor:pointer;transition:background-color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
+.bt-rail-folder:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-rail-folder:active{transform:scale(.95)}
+.bt-rail-folder:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-rail-folder[aria-current=page]{background:var(--bt-active);box-shadow:inset 0 0 0 1.5px var(--bt-accent)}
+.bt-menu-sub-head{padding:4px 8px 2px;font-size:11px;line-height:16px;font-weight:600;color:var(--bt-ink-3);user-select:none}
+.bt-menu-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}
+.bt-menu-hint{margin-left:auto;font-size:11px;line-height:16px;color:var(--bt-ink-3);flex:none}
+.bt-menu-check{margin-left:auto;color:var(--bt-accent);display:inline-flex;flex:none}
+.bt-menu-colors{display:flex;align-items:center;gap:6px;padding:4px 8px 6px}
+.bt-menu-color-dot{width:16px;height:16px;border-radius:50%;corner-shape:round;border:0;padding:0;cursor:pointer;box-shadow:inset 0 0 0 1px var(--bt-line-2)}
+.bt-menu-color-dot[aria-pressed=true]{outline:2px solid var(--bt-ink);outline-offset:1.5px}
+.bt-menu-color-dot:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
+.bt-sec-add-menu{max-width:260px}
+.bt-sec-add-list{display:flex;flex-direction:column;gap:2px;max-height:240px;overflow-y:auto}
+@media (prefers-reduced-motion:reduce){.bt-sec-body,.bt-sec-chev,.bt-sec-act,.bt-rail-folder{transition:none}.bt-sec-pile{animation:none}}
 `;
 
 // src/client/header.js
@@ -11600,7 +11969,6 @@ function ComposerPlus({ sessionId, inputActions, useInput, useRoster, actions })
       if (![button.current, menu.current].some((node) => node?.contains(event.target))) setOpen(null);
     };
     const onKey = (event) => {
-      if (stepMenuFocus(menu.current, event)) return;
       if (event.key === "Escape") {
         event.stopPropagation();
         setOpen(null);
@@ -12093,11 +12461,9 @@ var SIDE_CSS = `
 .bt-side-input:focus{border-color:var(--bt-accent)}
 .bt-side-input:disabled{opacity:.6}
 .bt-pmenu{position:relative;display:inline-flex;flex:none}
-.bt-pmenu-pop{position:absolute;top:calc(100% + 6px);right:0;z-index:6;min-width:172px;padding:6px;border-radius:12px;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:.5px solid var(--bt-glass-rim);box-shadow:var(--bt-glass-shadow);display:flex;flex-direction:column;gap:2px;transform-origin:top right;animation:bt-pop-drop .18s cubic-bezier(.16,1,.3,1),bt-fade .14s ease-out}
-.bt-pmenu-pop[data-leaving]{animation:bt-pop-out .12s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+.bt-pmenu-pop{position:absolute;top:calc(100% + 6px);right:0;z-index:6;min-width:172px;padding:6px;border-radius:12px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 10px 32px -8px rgba(0,0,0,.14),0 2px 8px rgba(0,0,0,.06);display:flex;flex-direction:column;gap:2px;animation:bt-bcard-in .18s cubic-bezier(.16,1,.3,1) both}
 .bt-pmenu-item{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:7px 10px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:12px;line-height:17px;text-align:left;cursor:pointer}
 .bt-pmenu-item:hover{background:var(--bt-hover)}
-.bt-pmenu-item:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-pmenu-item svg{flex:none;width:15px;height:15px;color:var(--bt-ink-3)}
 .bt-pmenu-sep{height:.5px;flex:none;margin:4px 8px;background:var(--bt-line-2)}
 `;
@@ -12430,116 +12796,24 @@ function effortRows(reasoning) {
     ...reasoning.efforts.map((effort) => ({ effort: effort.id, label: effort.name }))
   ];
 }
-function effortStops(reasoning) {
-  const efforts = reasoning?.efforts ?? [];
-  if (efforts.length === 0) return [];
-  const hasDefault = efforts.some((effort) => effort.id === reasoning.defaultEffort);
-  return hasDefault ? efforts.map((effort) => ({ effort: effort.id, label: effort.name })) : [{ effort: void 0, label: t("Default") }, ...efforts.map((effort) => ({ effort: effort.id, label: effort.name }))];
-}
-function EffortBar({ reasoning, current, onPick }) {
-  const stops = effortStops(reasoning);
-  const track = (0, import_react25.useRef)(null);
-  const [picked, setPicked] = (0, import_react25.useState)(current);
-  (0, import_react25.useEffect)(() => {
-    setPicked(current);
-  }, [current]);
-  if (stops.length === 0) return null;
-  const hasDefault = (reasoning?.efforts ?? []).some((effort) => effort.id === reasoning?.defaultEffort);
-  const activeEffort = picked ?? (hasDefault ? reasoning.defaultEffort : void 0);
-  const activeIndex = Math.max(0, stops.findIndex((stop) => (stop.effort ?? null) === (activeEffort ?? null)));
-  const active = stops[activeIndex];
-  const ratio = stops.length <= 1 ? 1 : activeIndex / (stops.length - 1);
-  const choose = (effort) => {
-    setPicked(effort);
-    if ((effort ?? null) !== (picked ?? null)) onPick(effort);
-  };
-  const pickAt = (clientX) => {
-    const rect = track.current?.getBoundingClientRect();
-    if (!rect || stops.length <= 1) {
-      if (stops[0]) choose(stops[0].effort);
-      return;
-    }
-    const span = Math.max(1, rect.width - 14);
-    const clamped = Math.max(0, Math.min(1, (clientX - rect.left - 7) / span));
-    const next = stops[Math.round(clamped * (stops.length - 1))];
-    if (next) choose(next.effort);
-  };
-  const onPointerDown = (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    try {
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-    } catch {
-    }
-    pickAt(event.clientX);
-  };
-  const onPointerMove = (event) => {
-    if (event.buttons !== 1 && !event.currentTarget.hasPointerCapture?.(event.pointerId)) return;
-    pickAt(event.clientX);
-  };
-  const onKeyDown = (event) => {
-    if (!["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? stops.length - 1 : event.key === "ArrowLeft" || event.key === "ArrowDown" ? Math.max(0, activeIndex - 1) : Math.min(stops.length - 1, activeIndex + 1);
-    const next = stops[nextIndex];
-    if (next) choose(next.effort);
-  };
+function EffortRows({ reasoning, current, onPick }) {
   return (0, import_react25.createElement)(
-    "div",
-    { className: "bt-effort-bar", role: "group", "aria-label": t("Thinking level") },
-    (0, import_react25.createElement)(
-      "div",
-      { className: "bt-effort-head" },
-      (0, import_react25.createElement)("span", { className: "bt-effort-label" }, t("Thinking level")),
-      (0, import_react25.createElement)(
-        "span",
-        { className: "bt-effort-meta" },
-        picked !== void 0 && hasDefault ? (0, import_react25.createElement)("button", {
-          type: "button",
-          className: "bt-effort-reset",
-          "aria-label": t("Default"),
-          title: t("Default"),
-          onClick: () => choose(void 0)
-        }, t("Default")) : hasDefault ? (0, import_react25.createElement)("span", { className: "bt-effort-tag" }, t("Default")) : null,
-        (0, import_react25.createElement)("span", { className: "bt-effort-val" }, active.label)
-      )
-    ),
-    (0, import_react25.createElement)(
-      "div",
+    import_react25.Fragment,
+    null,
+    (0, import_react25.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
+    (0, import_react25.createElement)("div", { className: "bt-model-group", role: "presentation" }, t("Thinking level")),
+    effortRows(reasoning).map((row) => (0, import_react25.createElement)(
+      "button",
       {
-        ref: track,
-        className: "bt-effort-track",
-        role: "slider",
-        tabIndex: 0,
-        "aria-label": t("Thinking level"),
-        "aria-valuemin": 0,
-        "aria-valuemax": stops.length - 1,
-        "aria-valuenow": activeIndex,
-        "aria-valuetext": active.label,
-        style: { "--bt-effort-p": ratio },
-        onPointerDown,
-        onPointerMove,
-        onKeyDown
+        key: row.effort ?? "default",
+        type: "button",
+        role: "menuitemradio",
+        "aria-checked": (row.effort ?? null) === (current ?? null),
+        onClick: () => onPick(row.effort)
       },
-      (0, import_react25.createElement)(
-        "span",
-        { className: "bt-effort-rail", "aria-hidden": true },
-        (0, import_react25.createElement)("span", { className: "bt-effort-fill" })
-      ),
-      stops.map((stop, index) => {
-        const stopRatio = stops.length <= 1 ? 1 : index / (stops.length - 1);
-        return (0, import_react25.createElement)("span", {
-          key: stop.effort ?? "default",
-          className: "bt-effort-dot",
-          "data-filled": index <= activeIndex || void 0,
-          style: { "--bt-dot-p": stopRatio },
-          title: stop.label,
-          "aria-hidden": true
-        });
-      }),
-      (0, import_react25.createElement)("span", { className: "bt-effort-knob", "aria-hidden": true })
-    )
+      (0, import_react25.createElement)("span", { className: "bt-menu-label" }, row.label),
+      (0, import_react25.createElement)("span", { className: "bt-model-tick", "aria-hidden": true }, (row.effort ?? null) === (current ?? null) ? (0, import_react25.createElement)(CheckIcon) : null)
+    ))
   );
 }
 function ModelRows({ roster, current, onPick }) {
@@ -12582,7 +12856,6 @@ function useAnchoredMenu() {
       close();
     };
     const onKey = (event) => {
-      if (stepMenuFocus(menu.current, event)) return;
       if (event.key === "Escape") {
         event.stopPropagation();
         close();
@@ -12635,12 +12908,12 @@ function ModelMenu({ bot, roster, actions, run: run2, wide = false, onPick, onPi
     else if (ref !== current || !bot.model) void run2(actions.updateBot(bot.id, { model: ref }));
   };
   const pickEffort = (effort) => {
+    close();
     if (onPickEffort) onPickEffort(effort);
     else if (effort !== bot.effort) void run2(actions.updateBot(bot.id, { effort: effort ?? null }));
   };
   const models = roster.models ?? [];
   const manage = manageModels(actions);
-  const hasEfforts = withEfforts && effortStops(reasoning).length > 0;
   return (0, import_react25.createElement)(
     import_react25.Fragment,
     null,
@@ -12668,21 +12941,13 @@ function ModelMenu({ bot, roster, actions, run: run2, wide = false, onPick, onPi
     shownPlace ? (0, import_react_dom6.createPortal)((0, import_react25.createElement)(
       "div",
       { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== void 0 ? " bt-menu-up" : ""}`, role: "menu", "aria-label": t("Model for {name}", { name: bot.name }), style: shownPlace, "data-leaving": leaving || void 0 },
-      (0, import_react25.createElement)(
-        "div",
-        { className: "bt-model-scroll" },
-        models.length > 0 ? (0, import_react25.createElement)(ModelRows, { roster, current, onPick: pick2 }) : (0, import_react25.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet."))
-      ),
-      hasEfforts || manage ? (0, import_react25.createElement)(
-        "div",
-        { className: "bt-model-foot" },
-        hasEfforts ? (0, import_react25.createElement)(EffortBar, { reasoning, current: picked, onPick: pickEffort }) : null,
-        hasEfforts && manage ? (0, import_react25.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
-        manage ? (0, import_react25.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
-          close();
-          manage();
-        } }, (0, import_react25.createElement)(SlidersIcon), (0, import_react25.createElement)("span", { className: "bt-menu-label" }, t("Models and providers…"))) : null
-      ) : null
+      models.length > 0 ? (0, import_react25.createElement)(ModelRows, { roster, current, onPick: pick2 }) : (0, import_react25.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
+      withEfforts && effortRows(reasoning).length > 0 ? (0, import_react25.createElement)(EffortRows, { reasoning, current: picked, onPick: pickEffort }) : null,
+      manage ? (0, import_react25.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
+      manage ? (0, import_react25.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
+        close();
+        manage();
+      } }, (0, import_react25.createElement)(SlidersIcon), (0, import_react25.createElement)("span", { className: "bt-menu-label" }, t("Models and providers…"))) : null
     ), document.body) : null
   );
 }
@@ -12831,26 +13096,6 @@ var MODEL_CSS = `
 .bt-model-caret{flex:none;color:var(--bt-ink-3);transition:${spring(SPRING_SHAPE, "transform")}}
 .bt-model-trigger[aria-expanded=true] .bt-model-caret{transform:rotate(180deg)}
 .bt-model-menu{overflow-y:auto;scrollbar-width:thin}
-.bt-model-menu:not(.bt-folder-menu){padding:0;overflow:hidden;display:flex;flex-direction:column;gap:0}
-.bt-model-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain;padding:6px;display:flex;flex-direction:column;gap:2px}
-.bt-model-foot{flex:none;display:flex;flex-direction:column;gap:2px;padding:4px 6px 6px;border-top:.5px solid var(--bt-line-2)}
-.bt-effort-bar{display:flex;flex-direction:column;gap:4px;padding:4px 8px 3px}
-.bt-effort-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:16px}
-.bt-effort-label{font-size:11px;line-height:14px;font-weight:500;color:var(--bt-ink-3)}
-.bt-effort-meta{display:inline-flex;align-items:center;gap:6px;min-width:0}
-.bt-effort-tag,.bt-menu button.bt-effort-reset{font-size:11px;line-height:14px;color:var(--bt-ink-3)}
-.bt-menu button.bt-effort-reset{width:auto;min-height:0;padding:1px 5px;border:0;border-radius:4px;background:var(--bt-hover);cursor:pointer;transition:background-color .12s ease,color .12s ease}
-.bt-menu button.bt-effort-reset:hover{background:var(--bt-active);color:var(--bt-ink)}
-.bt-menu button.bt-effort-reset:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
-.bt-effort-val{font-size:12px;line-height:16px;font-weight:500;color:var(--bt-ink);white-space:nowrap}
-.bt-effort-track{position:relative;height:18px;display:flex;align-items:center;cursor:pointer;user-select:none;touch-action:none}
-.bt-effort-track:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px;border-radius:999px}
-.bt-effort-rail{position:absolute;left:7px;right:7px;height:4px;border-radius:999px;background:var(--bt-active);overflow:hidden}
-.bt-effort-fill{position:absolute;left:0;top:0;bottom:0;width:calc(100% * var(--bt-effort-p,0));border-radius:999px;background:var(--bt-accent);transition:${spring(SPRING_TAP, "width")}}
-.bt-effort-dot{position:absolute;top:50%;left:calc(7px + (100% - 14px) * var(--bt-dot-p,0));width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:var(--bt-line-2);box-shadow:0 0 0 2px var(--bt-main);pointer-events:none;transition:background-color .12s ease}
-.bt-effort-dot[data-filled]{background:var(--bt-accent)}
-.bt-effort-knob{position:absolute;top:50%;left:calc(7px + (100% - 14px) * var(--bt-effort-p,0));width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--bt-card);box-shadow:inset 0 0 0 2px var(--bt-accent),0 1px 3px rgba(0,0,0,.18);pointer-events:none;transition:${spring(SPRING_TAP, "left")},${spring(SPRING_TAP, "scale")}}
-.bt-effort-track:hover .bt-effort-knob{scale:1.12}
 .bt-model-group{flex:none;padding:8px 8px 2px;font-size:11px;line-height:14px;font-weight:500;color:var(--bt-ink-3);text-transform:none}
 .bt-model-group:first-child{padding-top:2px}
 .bt-model-tick{flex:none;width:16px;height:16px;display:inline-flex;color:var(--bt-ink-2)}
@@ -12883,7 +13128,7 @@ var MODEL_CSS = `
 @keyframes bt-model-in{from{opacity:0;transform:translateY(6px)}}
 .bt-model-spin{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--bt-line-2);border-top-color:var(--bt-ink-2);animation:bt-model-spin .7s linear infinite}
 @keyframes bt-model-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.bt-model-dock{animation:none}.bt-model-spin{animation-duration:2s}.bt-model-caret,.bt-effort-fill,.bt-effort-knob{transition:none}.bt-model-tick svg{animation:none}}
+@media (prefers-reduced-motion:reduce){.bt-model-dock{animation:none}.bt-model-spin{animation-duration:2s}.bt-model-caret{transition:none}.bt-model-tick svg{animation:none}}
 `;
 
 // src/client/turn-error.js
@@ -13897,47 +14142,47 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
   const available = items.filter((item) => item.name !== draft.name && ["mcp", "skill"].includes(item.kind));
   return (0, import_react30.createElement)(
     "form",
-    { className: "bt-set-card bt-task-form", onSubmit: submit },
+    { className: "bt-connector-form", onSubmit: submit },
     (0, import_react30.createElement)(Field, { label: "Name", value: draft.name, disabled: draft.originalName !== void 0, onChange: (value) => set("name", value), placeholder: "my-tool" }),
     (0, import_react30.createElement)(
       "label",
-      { className: "bt-set-row bt-bs-row" },
+      { className: "bt-set-row bt-bs-row bt-bs-stack" },
       (0, import_react30.createElement)("span", { className: "bt-set-copy" }, (0, import_react30.createElement)("span", { className: "bt-bs-label" }, t("Type"))),
       (0, import_react30.createElement)(
         "select",
-        { className: "bt-select bt-task-bot", value: draft.kind, disabled: draft.originalName !== void 0, onChange: (event) => set("kind", event.target.value) },
+        { className: "bt-input", value: draft.kind, disabled: draft.originalName !== void 0, onChange: (event) => set("kind", event.target.value) },
         ["mcp", "skill", "pack"].map((kind) => (0, import_react30.createElement)("option", { key: kind, value: kind }, t(kind === "mcp" ? "MCP server" : kind === "skill" ? "Skill" : "Pack")))
       )
     ),
     (0, import_react30.createElement)(Field, { label: "Description", value: draft.description, onChange: (value) => set("description", value) }),
     draft.kind === "mcp" ? (0, import_react30.createElement)(
       "label",
-      { className: "bt-set-row bt-bs-row" },
+      { className: "bt-set-row bt-bs-row bt-bs-stack" },
       (0, import_react30.createElement)("span", { className: "bt-set-copy" }, (0, import_react30.createElement)("span", { className: "bt-bs-label" }, t("Connection"))),
       (0, import_react30.createElement)(
         "select",
-        { className: "bt-select bt-task-bot", value: draft.transport, onChange: (event) => set("transport", event.target.value) },
+        { className: "bt-input", value: draft.transport, onChange: (event) => set("transport", event.target.value) },
         (0, import_react30.createElement)("option", { value: "stdio" }, t("Local command")),
         (0, import_react30.createElement)("option", { value: "streamable-http" }, t("HTTP server"))
       )
     ) : null,
     draft.kind === "mcp" && draft.transport === "stdio" ? (0, import_react30.createElement)(
-      import_react30.Fragment,
+      "div",
       null,
       (0, import_react30.createElement)(Field, { label: "Command", value: draft.command, onChange: (value) => set("command", value) }),
       (0, import_react30.createElement)(Field, { label: "Arguments (one per line)", value: draft.argsText, onChange: (value) => set("argsText", value), multiline: true }),
       (0, import_react30.createElement)(Field, { label: "Environment (JSON)", value: draft.envText, onChange: (value) => set("envText", value), multiline: true, placeholder: t('{"API_KEY": "$DSH_SECRET_MY_KEY"}') })
     ) : null,
     draft.kind === "mcp" && draft.transport === "streamable-http" ? (0, import_react30.createElement)(
-      import_react30.Fragment,
+      "div",
       null,
       (0, import_react30.createElement)(Field, { label: "URL", value: draft.url, onChange: (value) => set("url", value) }),
       (0, import_react30.createElement)(Field, { label: "Headers (JSON)", value: draft.headersText, onChange: (value) => set("headersText", value), multiline: true, placeholder: t('{"API_KEY": "$DSH_SECRET_MY_KEY"}') })
     ) : null,
     draft.kind === "skill" ? (0, import_react30.createElement)(Field, { label: "Skill instructions", value: draft.content, onChange: (value) => set("content", value), multiline: true }) : null,
     draft.kind === "pack" ? (0, import_react30.createElement)(
-      import_react30.Fragment,
-      null,
+      "div",
+      { className: "bt-set-card" },
       available.length === 0 ? (0, import_react30.createElement)("div", { className: "bt-set-row" }, (0, import_react30.createElement)("span", { className: "bt-set-hint" }, t("Save an MCP server or skill first."))) : available.map((item) => (0, import_react30.createElement)(
         "label",
         { key: item.name, className: "bt-set-row bt-bs-row" },
@@ -13945,12 +14190,12 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
         (0, import_react30.createElement)("input", { type: "checkbox", checked: draft.items.includes(item.name), onChange: (event) => set("items", event.target.checked ? [...draft.items, item.name] : draft.items.filter((name) => name !== item.name)) })
       ))
     ) : null,
-    error ? (0, import_react30.createElement)("div", { className: "bt-set-row" }, (0, import_react30.createElement)("span", { className: "bt-danger bt-set-hint", role: "alert" }, error)) : null,
+    error ? (0, import_react30.createElement)("div", { className: "bt-connector-error", role: "alert" }, error) : null,
     (0, import_react30.createElement)(
       "div",
-      { className: "bt-set-row bt-task-foot" },
+      { className: "bt-connector-form-row" },
       (0, import_react30.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: onClose }, t("Cancel")),
-      (0, import_react30.createElement)("button", { type: "submit", className: "bt-send bt-soft-sm" }, draft.originalName ? t("Save changes") : t("Add capability"))
+      (0, import_react30.createElement)("button", { type: "submit", className: "bt-soft bt-soft-sm" }, draft.originalName ? t("Save changes") : t("Add capability"))
     )
   );
 }
@@ -14010,11 +14255,12 @@ function CapabilitiesPage({ roster, actions, run: run2 }) {
     "section",
     { className: "bt-set-section" },
     (0, import_react30.createElement)("h3", null, t("Shared capabilities")),
-    draft ? (0, import_react30.createElement)(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : (0, import_react30.createElement)(
+    (0, import_react30.createElement)(
       "div",
       { className: "bt-actions" },
       (0, import_react30.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: startNew }, t("Add capability"))
     ),
+    draft ? (0, import_react30.createElement)(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
     (0, import_react30.createElement)(
       "div",
       { className: "bt-set-card bt-connectors-card" },
@@ -14564,7 +14810,6 @@ function MemoryDialog({ owner, actions, leaving = false }) {
       setMenu(false);
     };
     const onKey = (event) => {
-      if (stepMenuFocus(menuRef.current, event)) return;
       if (event.key === "Escape") {
         event.stopPropagation();
         setMenu(false);
@@ -14809,7 +15054,7 @@ function CharacterGrid({ look, hasPhoto = false, onShape, onColor }) {
     }, (0, import_react33.createElement)("span", { style: { background: paintCss(color) } }))))
   );
 }
-function AvatarEditor({ bot, actions, run: run2, onClose, leaving = false }) {
+function AvatarEditor({ bot, actions, run: run2, onClose }) {
   const look = lookOf(bot);
   const [tab, setTab] = (0, import_react33.useState)(look.image ? "upload" : "bot");
   const [over, setOver] = (0, import_react33.useState)(false);
@@ -14852,7 +15097,7 @@ function AvatarEditor({ bot, actions, run: run2, onClose, leaving = false }) {
   const glide = useGlide(tab);
   return (0, import_react33.createElement)(
     "div",
-    { ref, className: "bt-avedit", role: "dialog", "aria-label": t("Avatar editor"), "data-leaving": leaving || void 0 },
+    { ref, className: "bt-avedit", role: "dialog", "aria-label": t("Avatar editor") },
     (0, import_react33.createElement)(
       "div",
       { className: "bt-avedit-top" },
@@ -14929,7 +15174,6 @@ function MemoryCard({ bot, actions }) {
 }
 function BotSettingsForm({ bot, roster, actions, run: run2 }) {
   const [editing, setEditing] = (0, import_react33.useState)(false);
-  const [editorShown, editorLeaving] = useLinger(editing, 120);
   const [confirming, setConfirming] = (0, import_react33.useState)(false);
   const closeEditor = (0, import_react33.useCallback)(() => setEditing(false), []);
   (0, import_react33.useEffect)(() => {
@@ -14967,7 +15211,7 @@ function BotSettingsForm({ bot, roster, actions, run: run2 }) {
           (0, import_react33.createElement)(BotMark, { bot, size: 64, live: true }),
           (0, import_react33.createElement)("span", { className: "bt-avatar-pencil", "aria-hidden": true }, (0, import_react33.createElement)(PencilIcon))
         ),
-        editorShown ? (0, import_react33.createElement)(AvatarEditor, { bot, actions, run: run2, onClose: closeEditor, leaving: editorLeaving }) : null
+        editing ? (0, import_react33.createElement)(AvatarEditor, { bot, actions, run: run2, onClose: closeEditor }) : null
       ),
       (0, import_react33.createElement)(
         "div",
@@ -15122,11 +15366,12 @@ function startModel(roster) {
   const usable = (roster.models ?? []).filter((model) => model.needsKey !== true);
   return (usable.find((model) => model.ref === roster.prefs?.defaultBotModel) ?? usable.find((model) => model.ref === roster.defaultModel) ?? usable[0])?.ref ?? "";
 }
-function createPayload({ name, look, image, model, effort, brief }) {
+function createPayload({ name, look, image, model, effort, brief, sectionId }) {
   const payload = { name, color: look.color, avatar: image ? { shape: look.shape, image } : { shape: look.shape } };
   if (model) payload.model = model;
   if (effort !== void 0) payload.effort = effort;
   if (brief) payload.brief = brief;
+  if (sectionId) payload.sectionId = sectionId;
   return payload;
 }
 
@@ -15162,7 +15407,7 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
     setError("");
     setBusy(true);
     try {
-      const bot = await actions.createBot(createPayload({ name: finalName, look, image, model, effort, brief }));
+      const bot = await actions.createBot(createPayload({ name: finalName, look, image, model, effort, brief, sectionId: start?.sectionId }));
       onCreated(bot);
     } catch (failure) {
       setError(failure?.message ?? String(failure));
@@ -15283,7 +15528,7 @@ function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCr
 
 // src/client/new-chat.js
 var import_react35 = require("react");
-function NewChat({ mode, roster, actions }) {
+function NewChat({ mode, sectionId = null, roster, actions }) {
   const [query, setQuery] = (0, import_react35.useState)("");
   const [picked, setPicked] = (0, import_react35.useState)([]);
   const [group, setGroup] = (0, import_react35.useState)(mode === "group");
@@ -15292,7 +15537,7 @@ function NewChat({ mode, roster, actions }) {
   const [busy, setBusy] = (0, import_react35.useState)(false);
   const [error, setError] = (0, import_react35.useState)("");
   const [cursor, setCursor] = (0, import_react35.useState)(0);
-  const [draft, setDraft] = (0, import_react35.useState)(mode === "create" ? { name: "", fromList: false } : null);
+  const [draft, setDraft] = (0, import_react35.useState)(mode === "create" ? { name: "", fromList: false, sectionId } : null);
   const inputRef = (0, import_react35.useRef)(null);
   const close = () => actions.closeOverlay();
   useEscape(close);
@@ -15335,7 +15580,9 @@ function NewChat({ mode, roster, actions }) {
       pick2(bot);
       return;
     }
-    if (bot.hidden) await actions.setFlags(bot.id, { hidden: false });
+    if (bot.hidden || sectionId && bot.sectionId !== sectionId) {
+      await actions.setFlags(bot.id, { ...bot.hidden ? { hidden: false } : {}, ...sectionId ? { sectionId } : {} });
+    }
     if (message.trim()) await actions.send(bot.id, message.trim());
     actions.openSession(bot.id);
     close();
@@ -15343,7 +15590,7 @@ function NewChat({ mode, roster, actions }) {
   const createBot = () => {
     if (busy) return;
     setError("");
-    setDraft({ name: query.trim() !== "" && !exact ? query.trim() : "", fromList: true });
+    setDraft({ name: query.trim() !== "" && !exact ? query.trim() : "", fromList: true, sectionId });
   };
   const created = (bot) => {
     close();
@@ -15353,7 +15600,7 @@ function NewChat({ mode, roster, actions }) {
   const makeGroup = async () => {
     if (admin === null || picked.length === 0) return;
     const text = message.trim();
-    const room2 = await actions.createRoom([admin, ...picked], { admin, ...text ? {} : { greet: true } });
+    const room2 = await actions.createRoom([admin, ...picked], { admin, ...sectionId ? { sectionId } : {}, ...text ? {} : { greet: true } });
     if (text) await actions.send(room2.id, text);
     actions.openSession(room2.id);
     close();
@@ -15367,12 +15614,13 @@ function NewChat({ mode, roster, actions }) {
     }
     if (text === "" || picked.length === 0) return;
     if (picked.length === 1) {
+      if (sectionId) await actions.setFlags(picked[0], { sectionId });
       await actions.send(picked[0], text);
       actions.openSession(picked[0]);
       close();
       return;
     }
-    const room2 = await actions.createRoom(picked);
+    const room2 = await actions.createRoom(picked, sectionId ? { sectionId } : {});
     await actions.send(room2.id, text);
     actions.openSession(room2.id);
     close();
@@ -17174,7 +17422,7 @@ var USAGE_CSS = `
 .bt-us-pick-months{display:flex;flex-wrap:wrap;gap:8px 28px}
 .bt-us-month{width:252px;animation:bt-us-fade .22s ease}
 .bt-us-month-head{position:relative;display:flex;align-items:center;justify-content:center;height:28px;margin-bottom:4px;font-size:13px;line-height:18px;font-weight:600}
-.bt-us-month-nav{position:absolute;top:0;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease}
+.bt-us-month-nav{position:absolute;top:0;width:28px;height:28px;padding:0;border:0;border-radius:9px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease}
 .bt-us-month-nav[data-side=left]{left:0}
 .bt-us-month-nav[data-side=right]{right:0}
 .bt-us-month-nav:hover:not(:disabled){background:var(--bt-hover);color:var(--bt-ink)}
@@ -17528,7 +17776,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
           Row3,
           { label: t("Site") },
           (0, import_react43.createElement)("input", {
-            className: "bt-input bt-browser-site",
+            className: "bt-select bt-browser-site",
             type: "text",
             value: site,
             placeholder: t("example.com — leave empty for all sites"),
@@ -17573,7 +17821,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
           { className: "bt-browser-form-foot" },
           (0, import_react43.createElement)("button", {
             type: "submit",
-            className: "bt-soft bt-soft-sm",
+            className: "bt-soft",
             disabled: busy || !selectedBot || kinds.length === 0
           }, busy ? t("Saving…") : t("Add"))
         )
@@ -18197,7 +18445,7 @@ function FormActions({ onCancel, onAdd, ready }) {
   );
 }
 var PROVIDERS_CSS = `
-.bt-provider-id{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--bt-ink-3)}
+.bt-provider-id{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;color:var(--bt-ink-3)}
 .bt-provider .bt-set-hint[data-error]{color:var(--bt-danger)}
 .bt-provider-state{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap}
 .bt-provider-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--bt-ink-3)}
@@ -18218,7 +18466,7 @@ var PROVIDERS_CSS = `
 .bt-provider-models-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 /* Room for the pills' focus rings inside the scroll box; the margin keeps them in line with the fields. */
 .bt-provider-found{max-height:180px;overflow-y:auto;scrollbar-width:thin;padding:3px;margin:-3px}
-.bt-provider-found code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
+.bt-provider-found code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
 .bt-provider-found .bt-secret-bot{padding:0 10px}
 @media (prefers-reduced-motion:reduce){.bt-provider-add{animation:none}}
 `;
@@ -18227,7 +18475,7 @@ var PROVIDERS_CSS = `
 var import_react47 = require("react");
 var capitalize2 = (word) => word[0].toUpperCase() + word.slice(1);
 var SETTINGS_PAGES = [["general", "General"], ["models", "Models"], ["bots", "Bots"], ["groups", "Group chats"], ["connectors", "Connectors"], ["capabilities", "Capabilities"], ["browser", "Browser"], ["schedules", "Scheduled tasks"], ["usage", "Usage"], ["secrets", "Secrets"], ["feedback", "Feedback"], ["about", "About DS Bot"]];
-var PAGE_ICONS = { ...SETTINGS_ICONS, models: SlidersIcon, connectors: ConnectorIcon, capabilities: PlugIcon, browser: GlobeIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon };
+var PAGE_ICONS = { ...SETTINGS_ICONS, models: SlidersIcon, connectors: ConnectorIcon, capabilities: PlugIcon, browser: ConnectorIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon };
 function SetSection({ title, className = "", children }) {
   return (0, import_react47.createElement)("section", { className: `bt-set-section ${className}`.trim() }, (0, import_react47.createElement)("h3", null, title), (0, import_react47.createElement)("div", { className: "bt-set-card" }, children));
 }
@@ -18636,23 +18884,34 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false 
 
 // src/client/context-menu.js
 var import_react48 = require("react");
+var SECTION_COLORS = ["blue", "orange", "green", "violet", "rose"];
+function sectionMoveItems(entry, roster, actions) {
+  const sections = roster.sections ?? [];
+  return [
+    ...sections.map((sec) => [
+      sec.name,
+      FolderIcon,
+      () => actions.setFlags(entry.id, { sectionId: entry.sectionId === sec.id ? null : sec.id }),
+      false,
+      entry.sectionId === sec.id
+    ]),
+    entry.sectionId ? [t("Remove from section"), FolderIcon, () => actions.setFlags(entry.id, { sectionId: null })] : null,
+    [t("Move to new section…"), PlusIcon, async () => {
+      const sec = await actions.saveSection({ items: [entry.id] });
+      if (sec?.id) actions.beginSectionRename(sec.id);
+    }]
+  ].filter(Boolean);
+}
 function ContextMenu({ menu, roster, actions, leaving = false }) {
   useEscape(() => actions.closeMenu());
-  const ref = (0, import_react48.useRef)(null);
   (0, import_react48.useEffect)(() => {
     const onDown = (event) => {
       if (!(event.target instanceof Element) || !event.target.closest(".bt-menu")) actions.closeMenu();
     };
-    const onKey = (event) => {
-      stepMenuFocus(ref.current, event);
-    };
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey, true);
-    };
+    return () => window.removeEventListener("mousedown", onDown);
   }, []);
+  const ref = (0, import_react48.useRef)(null);
   const [place, setPlace] = (0, import_react48.useState)({ left: menu.x, top: menu.y });
   const tick = useViewport();
   (0, import_react48.useLayoutEffect)(() => {
@@ -18661,6 +18920,7 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
     setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, viewBottom() - box.height - 8)) });
   }, [menu.x, menu.y, tick]);
   if (menu.kind === "agent" || menu.kind === "agent-session") return (0, import_react48.createElement)(AgentMenu, { menu, roster, actions, leaving });
+  if (menu.kind === "section" || menu.kind === "section-add") return (0, import_react48.createElement)(SectionMenu, { menu, roster, actions, leaving });
   const bot = roster.byId[menu.id];
   const room2 = roster.roomsById[menu.id];
   const entry = bot ?? room2;
@@ -18673,6 +18933,7 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
       isTile ? null : [entry.pinned ? t("Unpin") : t("Pin"), PinIcon, () => actions.setFlags(menu.id, { pinned: !entry.pinned })],
       [t("Mark as Unread"), UnreadIcon, () => actions.markUnread(menu.id)]
     ],
+    isTile ? [] : sectionMoveItems(entry, roster, actions),
     [
       bot ? [t("Rename Bot"), PencilIcon, () => actions.renameBot(bot.id)] : null,
       bot ? [t("Edit Bot"), GearIcon, () => actions.openSettings("bots", bot.id)] : null,
@@ -18698,7 +18959,7 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
       import_react48.Fragment,
       { key: index },
       index > 0 ? (0, import_react48.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
-      group.map(([label, Icon, run2, danger]) => (0, import_react48.createElement)("button", {
+      group.map(([label, Icon, run2, danger, checked]) => (0, import_react48.createElement)("button", {
         key: label,
         type: "button",
         role: "menuitem",
@@ -18707,19 +18968,158 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
           actions.closeMenu();
           void Promise.resolve(run2()).catch((error) => actions.reportError(error, "menu"));
         }
-      }, (0, import_react48.createElement)(Icon), label))
+      }, (0, import_react48.createElement)(Icon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, label), checked ? (0, import_react48.createElement)("span", { className: "bt-menu-check" }, (0, import_react48.createElement)(CheckIcon)) : null))
     ))
+  );
+}
+function SectionMenu({ menu, roster, actions, leaving }) {
+  const ref = (0, import_react48.useRef)(null);
+  const [place, setPlace] = (0, import_react48.useState)({ left: menu.x, top: menu.y });
+  const tick = useViewport();
+  (0, import_react48.useLayoutEffect)(() => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return;
+    setPlace({ left: Math.max(8, Math.min(menu.x, window.innerWidth - box.width - 8)), top: Math.max(8, Math.min(menu.y, viewBottom() - box.height - 8)) });
+  }, [menu.x, menu.y, tick]);
+  const sections = roster.sections ?? [];
+  const index = sections.findIndex((sec2) => sec2.id === menu.id);
+  const sec = sections[index];
+  if (sec === void 0) return null;
+  if (menu.kind === "section-add") {
+    const candidates = [
+      ...roster.bots.filter((bot) => bot.id !== roster.mainBotId && !bot.hidden).map((bot) => ({ kind: "bot", item: bot })),
+      ...roster.rooms.filter((room2) => !room2.hidden).map((room2) => ({ kind: "room", item: room2 }))
+    ];
+    return (0, import_react48.createElement)(
+      "div",
+      { ref, className: "bt-menu bt-sec-add-menu", role: "menu", "aria-label": t("Add to {name}", { name: sec.name }), style: place, "data-leaving": leaving || void 0 },
+      (0, import_react48.createElement)("button", {
+        type: "button",
+        role: "menuitem",
+        onClick: () => {
+          actions.closeMenu();
+          actions.openNewChat("create", sec.id);
+        }
+      }, (0, import_react48.createElement)(PlusIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Create new Bot"))),
+      (0, import_react48.createElement)("button", {
+        type: "button",
+        role: "menuitem",
+        onClick: () => {
+          actions.closeMenu();
+          actions.openNewChat("group", sec.id);
+        }
+      }, (0, import_react48.createElement)(PeopleIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Create group chat"))),
+      candidates.length > 0 ? (0, import_react48.createElement)(
+        import_react48.Fragment,
+        null,
+        (0, import_react48.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
+        (0, import_react48.createElement)("div", { className: "bt-menu-sub-head" }, t("Add existing")),
+        (0, import_react48.createElement)(
+          "div",
+          { className: "bt-sec-add-list" },
+          candidates.map(({ kind, item }) => {
+            const inside = item.sectionId === sec.id;
+            const otherSec = item.sectionId && !inside ? sections.find((s) => s.id === item.sectionId)?.name : void 0;
+            return (0, import_react48.createElement)(
+              "button",
+              {
+                key: item.id,
+                type: "button",
+                role: "menuitem",
+                onClick: () => {
+                  actions.closeMenu();
+                  void Promise.resolve(actions.setFlags(item.id, { sectionId: inside ? null : sec.id })).catch((error) => actions.reportError(error, "menu"));
+                }
+              },
+              kind === "room" ? (0, import_react48.createElement)(RoomAvatar, { room: item, roster, size: 18 }) : (0, import_react48.createElement)(BotMark, { bot: item, size: 18 }),
+              (0, import_react48.createElement)("span", { className: "bt-menu-label" }, item.name),
+              inside ? (0, import_react48.createElement)("span", { className: "bt-menu-check" }, (0, import_react48.createElement)(CheckIcon)) : otherSec ? (0, import_react48.createElement)("span", { className: "bt-menu-hint" }, otherSec) : null
+            );
+          })
+        )
+      ) : null
+    );
+  }
+  const move = (delta) => {
+    const next = sections.map((entry) => entry.id);
+    const target = index + delta;
+    if (target < 0 || target >= next.length) return;
+    const [picked] = next.splice(index, 1);
+    next.splice(target, 0, picked);
+    void Promise.resolve(actions.reorderSections(next)).catch((error) => actions.reportError(error, "menu"));
+  };
+  return (0, import_react48.createElement)(
+    "div",
+    { ref, className: "bt-menu", role: "menu", "aria-label": t("{name} actions", { name: sec.name }), style: place, "data-leaving": leaving || void 0 },
+    (0, import_react48.createElement)("button", {
+      type: "button",
+      role: "menuitem",
+      onClick: () => {
+        actions.closeMenu();
+        actions.beginSectionRename(sec.id);
+      }
+    }, (0, import_react48.createElement)(PencilIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Rename section"))),
+    (0, import_react48.createElement)("button", {
+      type: "button",
+      role: "menuitem",
+      onClick: () => {
+        actions.closeMenu();
+        actions.openNewChat("create", sec.id);
+      }
+    }, (0, import_react48.createElement)(PlusIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Create new Bot"))),
+    (0, import_react48.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
+    (0, import_react48.createElement)("div", { className: "bt-menu-sub-head" }, t("Section color")),
+    (0, import_react48.createElement)(
+      "div",
+      { className: "bt-menu-colors" },
+      (0, import_react48.createElement)("button", {
+        type: "button",
+        className: "bt-menu-color-dot",
+        "aria-label": t("None"),
+        title: t("None"),
+        "aria-pressed": !sec.color,
+        style: { background: "var(--bt-hover)" },
+        onClick: () => {
+          actions.closeMenu();
+          void Promise.resolve(actions.saveSection({ id: sec.id, color: null })).catch((error) => actions.reportError(error, "menu"));
+        }
+      }),
+      SECTION_COLORS.map((color) => (0, import_react48.createElement)("button", {
+        key: color,
+        type: "button",
+        className: "bt-menu-color-dot",
+        "aria-label": t(color[0].toUpperCase() + color.slice(1)),
+        title: t(color[0].toUpperCase() + color.slice(1)),
+        "aria-pressed": sec.color === color,
+        style: { background: inkFill(color) },
+        onClick: () => {
+          actions.closeMenu();
+          void Promise.resolve(actions.saveSection({ id: sec.id, color })).catch((error) => actions.reportError(error, "menu"));
+        }
+      }))
+    ),
+    index > 0 ? (0, import_react48.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
+      actions.closeMenu();
+      move(-1);
+    } }, (0, import_react48.createElement)(FolderIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Move section up"))) : null,
+    index < sections.length - 1 ? (0, import_react48.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
+      actions.closeMenu();
+      move(1);
+    } }, (0, import_react48.createElement)(FolderIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Move section down"))) : null,
+    (0, import_react48.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
+    (0, import_react48.createElement)("button", {
+      type: "button",
+      role: "menuitem",
+      className: "bt-danger",
+      onClick: () => {
+        actions.closeMenu();
+        void Promise.resolve(actions.deleteSection(sec.id)).catch((error) => actions.reportError(error, "menu"));
+      }
+    }, (0, import_react48.createElement)(TrashIcon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, t("Ungroup section")))
   );
 }
 function AgentMenu({ menu, roster, actions, leaving }) {
   const ref = (0, import_react48.useRef)(null);
-  (0, import_react48.useEffect)(() => {
-    const onKey = (event) => {
-      stepMenuFocus(ref.current, event);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
   const [place, setPlace] = (0, import_react48.useState)({ left: menu.x, top: menu.y });
   const tick = useViewport();
   (0, import_react48.useLayoutEffect)(() => {
@@ -18733,10 +19133,11 @@ function AgentMenu({ menu, roster, actions, leaving }) {
     [
       [agent.pinned ? t("Unpin") : t("Pin"), PinIcon, () => actions.setFlags(agent.id, { pinned: !agent.pinned })]
     ],
+    sectionMoveItems(agent, roster, actions),
     [
       [t("Remove DSH Agent"), TrashIcon, () => actions.removeAgent(agent.id), true]
     ]
-  ] : [
+  ].filter((group) => group.length > 0) : [
     [
       [t("Rename"), PencilIcon, () => actions.beginAgentRename(menu.id)]
     ],
@@ -18751,7 +19152,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
       import_react48.Fragment,
       { key: index },
       index > 0 ? (0, import_react48.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
-      group.map(([label, Icon, run2, danger]) => (0, import_react48.createElement)("button", {
+      group.map(([label, Icon, run2, danger, checked]) => (0, import_react48.createElement)("button", {
         key: label,
         type: "button",
         role: "menuitem",
@@ -18760,7 +19161,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
           actions.closeMenu();
           void Promise.resolve(run2()).catch((error) => console.warn("[ds-bot]", error));
         }
-      }, (0, import_react48.createElement)(Icon), label))
+      }, (0, import_react48.createElement)(Icon), (0, import_react48.createElement)("span", { className: "bt-menu-label" }, label), checked ? (0, import_react48.createElement)("span", { className: "bt-menu-check" }, (0, import_react48.createElement)(CheckIcon)) : null))
     ))
   );
 }
@@ -18977,7 +19378,7 @@ body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
 .bt-member-time{flex:none;margin-left:.3em;font-variant-numeric:tabular-nums}
 .bt-member-state.bt-mw-ask{color:#b7791f}
 body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
-.bt-member-stop{flex:none;height:26px;padding:0 11px;border:0;border-radius:999px;background:var(--bt-main);box-shadow:inset 0 0 0 .5px var(--bt-line-2);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
+.bt-member-stop{flex:none;height:26px;padding:0 11px;border:0;border-radius:13px;background:var(--bt-main);box-shadow:inset 0 0 0 .5px var(--bt-line-2);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-member-stop:hover{background:var(--bt-active);color:var(--bt-ink)}
 .bt-member-stop:active:not(:disabled){scale:.94}
 .bt-member-stop:disabled{opacity:.5;cursor:default}
@@ -19413,6 +19814,8 @@ var MIN_WIDTH = 360;
 var READ_FLASH_MS = 2400;
 var EMPTY_PAGE = { url: "", title: "", favicon: null, loading: false, canGoBack: false, canGoForward: false, error: null, excerpt: "" };
 var EMPTY_TABS2 = { ids: [], active: null };
+var SPRING_LEAD2 = springEasing(576, 39.4);
+var SPRING_TRAIL2 = springEasing(144, 19.7);
 var icon = (paths) => function BrowserIcon() {
   return (0, import_react51.createElement)(
     "svg",
@@ -19451,7 +19854,6 @@ var reducedMotion2 = () => typeof matchMedia === "function" && matchMedia("(pref
 var tabLabel = (page) => page.title || shortAddress(page.url) || t("New tab");
 function PanelMenu({ items, className, "aria-label": label }) {
   const [open, setOpen] = (0, import_react51.useState)(false);
-  const [shown, leaving] = useLinger(open, 120);
   const wrap = (0, import_react51.useRef)(null);
   (0, import_react51.useEffect)(() => {
     if (!open) return void 0;
@@ -19459,7 +19861,6 @@ function PanelMenu({ items, className, "aria-label": label }) {
       if (wrap.current && !wrap.current.contains(event.target)) setOpen(false);
     };
     const onKey = (event) => {
-      if (stepMenuFocus(wrap.current, event)) return;
       if (event.key !== "Escape") return;
       event.stopPropagation();
       setOpen(false);
@@ -19484,9 +19885,9 @@ function PanelMenu({ items, className, "aria-label": label }) {
       "aria-expanded": open,
       onClick: () => setOpen((value) => !value)
     }, (0, import_react51.createElement)(DotsIcon)),
-    shown ? (0, import_react51.createElement)(
+    open ? (0, import_react51.createElement)(
       "div",
-      { className: "bt-pmenu-pop", role: "menu", "data-leaving": leaving || void 0 },
+      { className: "bt-pmenu-pop", role: "menu" },
       items.map((item, index) => item.sep ? (0, import_react51.createElement)("span", { key: `sep-${index}`, className: "bt-pmenu-sep", role: "separator" }) : (0, import_react51.createElement)("button", {
         key: item.key,
         type: "button",
@@ -19553,8 +19954,8 @@ function PanelStrip({ bot, subject, view, ids, active, sides, side, canBrowse, r
     if (from === null || from.left === to.left && from.right === to.right || reducedMotion2()) return void 0;
     const ahead = to.left > from.left ? "right" : "left";
     const behind = ahead === "right" ? "left" : "right";
-    const lead = capsule.animate([{ [ahead]: `${from[ahead]}px` }, { [ahead]: `${to[ahead]}px` }], { duration: SPRING_LEAD.duration, easing: SPRING_LEAD.easing });
-    const trail = capsule.animate([{ [behind]: `${from[behind]}px` }, { [behind]: `${to[behind]}px` }], { duration: SPRING_TRAIL.duration, easing: SPRING_TRAIL.easing });
+    const lead = capsule.animate([{ [ahead]: `${from[ahead]}px` }, { [ahead]: `${to[ahead]}px` }], { duration: SPRING_LEAD2.duration, easing: SPRING_LEAD2.easing });
+    const trail = capsule.animate([{ [behind]: `${from[behind]}px` }, { [behind]: `${to[behind]}px` }], { duration: SPRING_TRAIL2.duration, easing: SPRING_TRAIL2.easing });
     return () => {
       lead.cancel();
       trail.cancel();
@@ -20305,7 +20706,7 @@ var BROWSER_CSS = `
 .bt-ptabs-in>.bt-ptab-bot{position:sticky;left:0;z-index:2;background:var(--bt-main)}
 .bt-ptabs-in>.bt-ptab-bot[aria-selected=true]{background:transparent}
 .bt-ptabs-in::-webkit-scrollbar{display:none}
-.bt-ptab{position:relative;z-index:1;display:inline-flex;align-items:center;gap:6px;height:32px;max-width:180px;padding:0 8px;flex:none;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;transition:color .12s ease}
+.bt-ptab{position:relative;z-index:1;display:inline-flex;align-items:center;gap:6px;height:32px;max-width:180px;padding:0 8px;flex:none;border:0;border-radius:9px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap;transition:color .12s ease}
 .bt-ptab:hover{color:var(--bt-ink)}
 .bt-ptab[aria-selected=true]{color:var(--bt-ink)}
 .bt-ptab-bot{padding:0 7px}
@@ -20319,10 +20720,10 @@ var BROWSER_CSS = `
 .bt-ptab-x{flex:none;width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:var(--bt-ink-3);opacity:0;pointer-events:none;transition:opacity .12s ease,background-color .12s ease}
 .bt-ptab:hover .bt-ptab-x,.bt-ptab[aria-selected=true] .bt-ptab-x{opacity:1;pointer-events:auto}
 .bt-ptab-x:hover{background:var(--bt-active);color:var(--bt-ink)}
-.bt-ptab-new{position:relative;z-index:1;flex:none;width:28px;height:32px;border:0;border-radius:8px;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.bt-ptab-new{position:relative;z-index:1;flex:none;width:28px;height:32px;border:0;border-radius:9px;background:none;color:var(--bt-ink-3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .bt-ptab-new:hover{color:var(--bt-ink)}
 .bt-ptab-new svg{width:15px;height:15px}
-.bt-ptab-ind{position:absolute;top:4px;bottom:4px;border-radius:8px;background:var(--bt-hover);opacity:0;pointer-events:none;z-index:0;transition:opacity .15s ease}
+.bt-ptab-ind{position:absolute;top:4px;bottom:4px;border-radius:9px;background:var(--bt-hover);opacity:0;pointer-events:none;z-index:0;transition:opacity .15s ease}
 .bt-ptab-close{flex:none;margin-left:2px}
 .bt-panel-ghost{position:absolute;top:calc(44px + var(--bt-caption-band,0px));right:0;bottom:0;overflow:hidden;pointer-events:none;z-index:2}
 .bt-panel-ghost>.bt-panel-view{position:absolute;inset:0}
@@ -20370,18 +20771,18 @@ var BROWSER_CSS = `
 .bt-bcard-row{display:flex;align-items:center;gap:7px;padding:8px 10px;min-width:0}
 .bt-bcard-fav{width:14px;height:14px;flex:none;border-radius:3px;color:var(--bt-ink-3)}
 .bt-bcard-row svg.bt-bcard-fav{width:14px;height:14px}
-.bt-bcard-title{flex:1;min-width:0;font-size:12px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink)}
+.bt-bcard-title{flex:1;min-width:0;font-size:12.5px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink)}
 .bt-bcard-host{flex:none;font-size:11px;line-height:15px;color:var(--bt-ink-3);max-width:38%;overflow:hidden;text-overflow:ellipsis}
-.bt-bcard-x{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:6px;background:color-mix(in srgb,var(--bt-main) 88%,transparent);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .12s ease;backdrop-filter:blur(4px)}
+.bt-bcard-x{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:7px;background:color-mix(in srgb,var(--bt-main) 88%,transparent);color:var(--bt-ink-2);display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .12s ease;backdrop-filter:blur(4px)}
 .bt-bcard:hover .bt-bcard-x{opacity:1;pointer-events:auto}
-.bt-bcard-new{display:flex;align-items:center;justify-content:center;gap:6px;height:40px;border:.5px dashed var(--bt-line-2);border-radius:12px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;cursor:pointer}
+.bt-bcard-new{display:flex;align-items:center;justify-content:center;gap:6px;height:40px;border:.5px dashed var(--bt-line-2);border-radius:12px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12.5px;cursor:pointer}
 .bt-bcard-new:hover{color:var(--bt-ink);border-color:var(--bt-ink-3)}
 .bt-bcard-new svg{width:14px;height:14px}
 .bt-browser-empty-mark{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
 /* Cookie imports */
-.bt-import-menu{position:absolute;top:6px;right:6px;z-index:6;width:236px;padding:6px;border-radius:16px;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:.5px solid var(--bt-glass-rim);box-shadow:var(--bt-glass-shadow);transform-origin:top right;animation:bt-pop-drop .18s cubic-bezier(.16,1,.3,1),bt-fade .14s ease-out}
+.bt-import-menu{position:absolute;top:6px;right:6px;z-index:6;width:236px;padding:6px;border-radius:16px;background:var(--bt-main);border:.5px solid var(--bt-line-2);box-shadow:0 10px 32px -8px rgba(0,0,0,.14),0 2px 8px rgba(0,0,0,.06);animation:bt-bcard-in .18s cubic-bezier(.16,1,.3,1) both}
 .bt-import-menu-title{padding:6px 10px 8px;font-size:11px;font-weight:500;letter-spacing:.02em;color:var(--bt-ink-3)}
-.bt-import-item{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:8px 10px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.bt-import-item{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:8px 10px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
 .bt-import-item:hover{background:var(--bt-hover)}
 .bt-import-item:disabled{opacity:.5;cursor:default}
 .bt-import-item-icon{flex:none;color:var(--bt-ink-3)}
@@ -20397,8 +20798,8 @@ var BROWSER_CSS = `
 .bt-import-list{max-height:180px;overflow:auto;border:.5px solid var(--bt-line);border-radius:10px;padding:4px 10px}
 .bt-import-line{display:flex;align-items:baseline;gap:8px;padding:4px 0;min-width:0}
 .bt-import-line-name{flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--bt-ink)}
-.bt-import-line-count{flex:1;min-width:0;text-align:right;font-size:11px;color:var(--bt-ink-3);white-space:nowrap}
-.bt-import-line-reason{flex:1;min-width:0;font-size:11px;line-height:16px;color:var(--bt-ink-3);overflow-wrap:anywhere}
+.bt-import-line-count{flex:1;min-width:0;text-align:right;font-size:11.5px;color:var(--bt-ink-3);white-space:nowrap}
+.bt-import-line-reason{flex:1;min-width:0;font-size:11.5px;line-height:16px;color:var(--bt-ink-3);overflow-wrap:anywhere}
 .bt-import-note{font-size:12px;line-height:17px;color:var(--bt-ink-3)}
 .bt-import-warns{font-size:12px;color:var(--bt-ink-3)}
 .bt-import-warns summary{cursor:pointer;padding:2px 0}
@@ -20472,7 +20873,7 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     import_react52.Fragment,
     null,
     pane ? (0, import_react_dom9.createPortal)((0, import_react52.createElement)(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === "overlay", roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
-    ui2.newChat ? (0, import_react_dom9.createPortal)((0, import_react52.createElement)(NewChat, { key: ui2.newChat, mode: ui2.newChat, roster, actions }), document.body) : null,
+    ui2.newChat ? (0, import_react_dom9.createPortal)((0, import_react52.createElement)(NewChat, { key: `${ui2.newChat}:${ui2.newChatSection ?? ""}`, mode: ui2.newChat, sectionId: ui2.newChatSection ?? null, roster, actions }), document.body) : null,
     ui2.palette ? (0, import_react_dom9.createPortal)((0, import_react52.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
     ui2.exchange ? (0, import_react_dom9.createPortal)((0, import_react52.createElement)(ExchangeDialog, { pair: ui2.exchange, roster, actions }), document.body) : null,
     ui2.voice ? (0, import_react_dom9.createPortal)((0, import_react52.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, roster, actions, useSessions, useSessionStatus }), document.body) : null,
