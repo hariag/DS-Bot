@@ -19,9 +19,8 @@ const encode = (data, opcode = 0x81) => {
 }
 
 // onSocket(socket) runs per connection; socket.send(text) / socket.close() and
-// socket.on('message'|'close'). checkUpgrade(req) may refuse a handshake by
-// returning an HTTP status. Returns { server, url, sockets } once listening.
-export function fakeWsServer({ onSocket, onRequest, checkUpgrade } = {}) {
+// socket.on('message'|'close'). Returns { server, url, sockets } once listening.
+export function fakeWsServer({ onSocket, onRequest } = {}) {
   const sockets = []
   const pending = onRequest ?? (() => undefined)
   const server = createServer((req, res) => {
@@ -31,17 +30,12 @@ export function fakeWsServer({ onSocket, onRequest, checkUpgrade } = {}) {
     res.end(JSON.stringify(answer))
   })
   server.on('upgrade', (req, socket) => {
-    const refusal = checkUpgrade?.(req)
-    if (typeof refusal === 'number') {
-      socket.end(`HTTP/1.1 ${refusal} Upgrade Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
-      return
-    }
     const key = req.headers['sec-websocket-key'] ?? randomBytes(16).toString('base64')
     const accept = createHash('sha1').update(key + GUID).digest('base64')
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
     const ws = {
-      send: data => socket.write(encode(data, Buffer.isBuffer(data) ? 0x82 : 0x81)),
-      close: () => {
+      send: text => socket.write(encode(text)),
+      close: (code = 1000) => {
         try { socket.write(encode('', 0x88)) } catch { /* down */ }
         try { socket.destroy() } catch { /* down */ }
       },
@@ -80,10 +74,9 @@ export function fakeWsServer({ onSocket, onRequest, checkUpgrade } = {}) {
         if (opcode === 9) { socket.write(encode('', 0x8a)); continue }
         pieces.push(payload)
         if (!fin) continue
-        const joined = Buffer.concat(pieces)
+        const text = Buffer.concat(pieces).toString('utf8')
         pieces.length = 0
-        const body = opcode === 2 ? joined : joined.toString('utf8')
-        for (const fn of ws.listeners.message) fn(body)
+        for (const fn of ws.listeners.message) fn(text)
       }
     })
     socket.on('close', () => { for (const fn of ws.listeners.close) fn() })
