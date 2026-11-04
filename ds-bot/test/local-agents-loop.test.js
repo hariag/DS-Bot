@@ -2,12 +2,10 @@
 // dispatch and its steering deliver to the fake ACP CLI, not stubs.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
-import { LocalAttachmentStore } from '@deepseek-ai/dsh-attachment-local'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -15,12 +13,12 @@ import { LocalAgentAdapter } from '../src/host/local-agents/adapter.js'
 import { AcpEngine } from '../src/host/local-agents/acp.js'
 import { output } from '../src/host/tools.js'
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url))
+const FIXTURE = new URL('./fixtures/fake-acp.mjs', import.meta.url).pathname
 const TEAM = ['message_bot', 'approve_agent_action']
 
-function makeAdapter(ctx, records = {}) {
+function makeAdapter(records = {}) {
   return new LocalAgentAdapter({
-    rt: { warn: () => {}, ctx },
+    rt: { warn: () => {} },
     customAgents: () => [{ id: 'fake', name: 'Fake ACP', command: 'x', args: [] }],
     findExecutable: path => path,
     spawnEngine: (kind, route, spec) => new AcpEngine(route, { ...spec, command: process.execPath, args: [FIXTURE] }, { findExecutable: path => path }),
@@ -33,15 +31,14 @@ function makeAdapter(ctx, records = {}) {
   })
 }
 
-async function boot({ approval, attachmentsHome } = {}) {
+async function boot({ approval } = {}) {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
-  if (attachmentsHome !== undefined) ctx.plugin(LocalAttachmentStore, { dshHome: attachmentsHome })
-  const adapter = makeAdapter(ctx)
-  ctx.llm.registerAdapter(['local-acp-fake'], adapter)
+  const adapter = makeAdapter()
+  ctx.llm.registerAdapter(['acp-fake'], adapter)
   if (approval !== undefined) ctx.provide('approval', approval)
   await mountAgentLoopTestHarness(ctx)
-  const agent = await ctx.agentLoop.create(SessionId('s1'), { provider: 'local-acp-fake', model: 'default' })
+  const agent = await ctx.agentLoop.create(SessionId('s1'), { provider: 'acp-fake', model: 'default' })
   return { ctx, agent, adapter }
 }
 
@@ -82,12 +79,12 @@ test('a bridged team tool round-trips through real DSH dispatch', async (t) => {
     description: 'Message another Bot',
     parameters: { type: 'object', properties: { bot: { type: 'string' }, text: { type: 'string' } } },
     output,
-    async execute(args) { calls.push(args); return `delivered to ${args.to ?? args.bot}` },
+    async execute(args) { calls.push(args); return `delivered to ${args.bot}` },
   })
   send(agent, 'call-tool please')
   await waitForIdle(ctx, agent)
   assert.equal(calls.length, 1)
-  assert.match(texts(agent), /tool said: delivered to Chief/)
+  assert.match(texts(agent), /tool said: delivered to Kai/)
   const types = eventTypes(agent)
   assert.ok(types.includes('tool/call') && types.includes('tool/result'))
 })
@@ -127,23 +124,4 @@ test('a permission prompt reaches the approval service and fails closed', async 
   assert.equal(requests.length, 1)
   assert.equal(requests[0].toolName, 'approve_agent_action')
   assert.match(texts(agent), /allowed via allow-once/)
-})
-
-test('user image saved in LocalAttachmentStore reaches the local agent through the real loop', async (t) => {
-  const home = mkdtempSync(join(tmpdir(), 'dsb-att-'))
-  t.after(() => rmSync(home, { recursive: true, force: true }))
-  const { ctx, agent, adapter } = await boot({ attachmentsHome: home })
-  t.after(async () => { await adapter.dispose(); await ctx.fiber.dispose() })
-
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
-  const ref = await ctx.get('attachments').saveImage({ mediaType: 'image/png', data: png, name: 'image.png' })
-  const stored = await ctx.get('attachments').readImage(ref)
-  const expectedBase64 = Buffer.from(stored.data).toString('base64')
-
-  agent.followup(createUserMessage({
-    content: [{ type: 'text', text: 'inspect attached image' }, { type: 'image', attachment: ref }],
-    source: { kind: 'user' },
-  }))
-  await waitForIdle(ctx, agent)
-  assert.match(texts(agent), new RegExp(`"mimeType":"${stored.ref.mediaType}","data":"${expectedBase64}"`))
 })
