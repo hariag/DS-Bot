@@ -31,9 +31,10 @@ function sectionMoveItems(entry, roster, actions) {
 export function ContextMenu({ menu, roster, actions, leaving = false }) {
   useEscape(() => actions.closeMenu())
   const ref = useRef(null)
+  const trigger = useRef(typeof document === 'undefined' ? null : document.activeElement)
   useEffect(() => {
     const onDown = (event) => { if (!(event.target instanceof Element) || !event.target.closest('.bt-menu')) actions.closeMenu() }
-    const onKey = (event) => { stepMenuFocus(ref.current, event) }
+    const onKey = (event) => { stepMenuFocus(ref.current, event, trigger.current) }
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey, true)
     return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true) }
@@ -172,8 +173,9 @@ function SectionMenu({ menu, roster, actions, leaving }) {
 // Menus for the DSH Agent row and its Sessions; none of the Bot entries apply.
 function AgentMenu({ menu, roster, actions, leaving }) {
   const ref = useRef(null)
+  const trigger = useRef(typeof document === 'undefined' ? null : document.activeElement)
   useEffect(() => {
-    const onKey = (event) => { stepMenuFocus(ref.current, event) }
+    const onKey = (event) => { stepMenuFocus(ref.current, event, trigger.current) }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
