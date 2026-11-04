@@ -14,7 +14,7 @@ export const IM_PLATFORMS = [
   },
   {
     id: 'weixin',
-    name: 'WeChat',
+    name: '微信',
     fields: [],
     buttons: false,
     groups: false,
@@ -22,9 +22,9 @@ export const IM_PLATFORMS = [
   },
   {
     id: 'feishu',
-    name: 'Feishu / Lark',
+    name: '飞书 / Lark',
     fields: [
-      { key: 'domain', label: 'Edition', options: [['feishu', 'Feishu'], ['lark', 'Lark']] },
+      { key: 'domain', label: 'Domain', options: [['feishu', '飞书'], ['lark', 'Lark']] },
       { key: 'appId', label: 'App ID' },
       { key: 'appSecret', label: 'App Secret', secret: true },
     ],
@@ -33,7 +33,7 @@ export const IM_PLATFORMS = [
   },
   {
     id: 'dingtalk',
-    name: 'DingTalk',
+    name: '钉钉',
     fields: [
       { key: 'clientId', label: 'Client ID' },
       { key: 'clientSecret', label: 'Client Secret', secret: true },
@@ -43,7 +43,7 @@ export const IM_PLATFORMS = [
   },
   {
     id: 'wecom',
-    name: 'WeCom',
+    name: '企业微信',
     fields: [
       { key: 'botId', label: 'Bot ID' },
       { key: 'secret', label: 'Secret', secret: true },
@@ -81,6 +81,3 @@ export const IM_PLATFORMS = [
 ]
 
 export const imPlatform = id => IM_PLATFORMS.find(platform => platform.id === id)
-
-// The platform a user message came in over: IM messages carry im:<platform>:<uuid> as their requestId.
-export const viaOf = source => (typeof source?.rpcId === 'string' && source.rpcId.startsWith('im:') ? source.rpcId.split(':')[1] : undefined)
