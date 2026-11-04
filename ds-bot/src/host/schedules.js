@@ -39,6 +39,17 @@ function requestOf(record) {
   return null
 }
 
+// DSH 0.2.2 keeps tasks Host-wide, each with a delivery target, and changes them through
+// edit(); DSH 0.2.1 keeps them by Session. Both are served.
+const hostWide = service => typeof service.edit === 'function'
+// The existing Session a task delivers to; a task that opens new Sessions has none.
+const sessionOf = entry => entry.target === undefined ? entry.sessionId : entry.target.kind === 'session' ? entry.target.sessionId : undefined
+const TIMING_KINDS = { at: 'at', every_seconds: 'every', daily: 'daily', weekly: 'weekly' }
+const timingOf = (selector) => {
+  const [key] = Object.keys(selector)
+  return { kind: TIMING_KINDS[key], [key]: selector[key] }
+}
+
 // The settings form's timing as a create request selector.
 function selectorOf(when) {
   const zone = typeof when?.timeZone === 'string' && when.timeZone !== '' ? when.timeZone : 'UTC'
@@ -96,13 +107,15 @@ export function install(rt) {
     const now = Date.now()
     const tasks = []
     for (const entry of await service.catalog()) {
-      const owner = ownerOf(entry.sessionId)
+      const sessionId = sessionOf(entry)
+      const owner = sessionId === undefined ? undefined : ownerOf(sessionId)
       if (!known(owner)) continue
       // The state DSH derives for its own view: a task past its next firing reads
-      // overdue; an inactive one is finished. DSH 0.2.1's catalog() carries the
-      // status but not this state, so it is derived the same way here.
-      const state = entry.status === 'active' ? (now >= Date.parse(entry.scheduledAt) ? 'overdue' : 'scheduled') : 'finished'
-      tasks.push({ ...entry, ...owner, state })
+      // overdue; a paused one stays paused; any other is finished. catalog() carries
+      // the status but not this state, so it is derived the same way here.
+      const state = entry.status === 'active' ? (now >= Date.parse(entry.scheduledAt) ? 'overdue' : 'scheduled')
+        : entry.status === 'paused' ? 'paused' : 'finished'
+      tasks.push({ ...entry, sessionId, ...owner, state })
     }
     return { available: true, tasks }
   }
@@ -119,57 +132,53 @@ export function install(rt) {
       if (title === '') throw invalid('Give the task a name')
       if (title.length > MAX_TITLE) throw invalid(`Keep the name under ${MAX_TITLE} characters`)
       if (prompt === '') throw invalid('Say what the Bot should do')
-      await service.create(bot ? rt.chatOf(bot.id) : rt.sessionOfRoom(room), { title, prompt, ...selectorOf(body.when) })
+      const sessionId = bot ? rt.chatOf(bot.id) : rt.sessionOfRoom(room)
+      const selector = selectorOf(body.when)
+      if (hostWide(service)) await service.create({ title, prompt, timing: timingOf(selector), target: { kind: 'session', sessionId } })
+      else await service.create(sessionId, { title, prompt, ...selector })
       return schedulesView()
     },
     async 'schedule-delete'(body) {
       if (service === null) throw invalid('Automation tasks are off in DSH')
       if (ownerOf(body.sessionId) === undefined) throw invalid('No such task')
-      await service.delete({ sessionId: body.sessionId, id: body.id })
+      if (hostWide(service)) {
+        // Ids are Host-wide here, so the task must still deliver to the team Session named.
+        const entry = (await service.catalog()).find(task => task.id === body.id)
+        if (entry === undefined || sessionOf(entry) !== body.sessionId) throw invalid('No such task')
+        await service.edit({ id: body.id, action: 'delete' })
+      } else {
+        await service.delete({ sessionId: body.sessionId, id: body.id })
+      }
       return schedulesView()
     },
-  }
-
-  // Removes one task and says whether it is gone. The service refuses a task it
-  // does not own instead of failing, so a refusal is a removal that did not happen.
-  async function remove(sessionId, id) {
-    try {
-      const result = await service.delete({ sessionId, id })
-      if (result?.deleted === true) return { removed: true }
-      return { removed: false, reason: result?.code ?? 'the service refused the removal' }
-    } catch (error) {
-      return { removed: false, reason: error?.message ?? error }
-    }
   }
 
   // A fresh part takes over the earlier part's active tasks: each is created again on
   // the fresh Session before the old one goes, so a failure leaves it where it was.
   async function moveSchedules(fromId, toId) {
     if (service === null) return
-    let records
-    try {
-      records = await service.list({ sessionId: fromId })
-    } catch (error) {
-      rt.warn('ds-bot: tasks of %s not moved: %s', fromId, error?.message ?? error)
+    // A Host-wide task changes its target in place and keeps its next firing; a
+    // paused one moves too, so it resumes in the Bot's current part.
+    if (hostWide(service)) {
+      for (const entry of await service.catalog()) {
+        if (entry.status === 'ended' || sessionOf(entry) !== fromId) continue
+        await service.edit({ id: entry.id, action: 'update', patch: { target: { kind: 'session', sessionId: toId } } })
+      }
       return
     }
+    const records = await service.list({ sessionId: fromId })
     for (const record of records) {
       const request = requestOf(record)
       if (request === null || (request.at !== undefined && Date.parse(request.at) <= Date.now())) continue
-      let created
+      // A failed read or copy must prevent stopActivity from deleting an unmoved
+      // task. Equal requests can be separate tasks; copy each source record.
+      await service.create(toId, request)
       try {
-        created = await service.create(toId, request)
+        await service.delete({ sessionId: fromId, id: record.id })
       } catch (error) {
-        rt.warn('ds-bot: task %s stayed with the earlier part: %s', record.title, error?.message ?? error)
-        continue
+        // The copy is safe; archiving the earlier part will remove its old task.
+        rt.warn('ds-bot: earlier copy of task %s not removed: %s', record.title, error?.message ?? error)
       }
-      const old = await remove(fromId, record.id)
-      if (old.removed) continue
-      // The earlier part still holds the task, so the fresh copy has to go: two armed
-      // copies of one task would fire twice.
-      const fresh = await remove(toId, created.id)
-      if (fresh.removed) rt.warn('ds-bot: task %s stayed with the earlier part: %s', record.title, old.reason)
-      else rt.warn('ds-bot: task %s left in two parts: %s', record.title, fresh.reason)
     }
   }
 

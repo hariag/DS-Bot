@@ -21,26 +21,26 @@ const TEAM = {
   questions: {},
 }
 
-// The record DSH stores, so a task that is moved can be read back.
-function stored(id, request) {
-  const base = { id, title: request.title, prompt: request.prompt, scheduledAt: '2030-01-01T01:00:00.000Z' }
-  if (request.every_seconds !== undefined) return { ...base, kind: 'every', everySeconds: request.every_seconds, timing: request.every_seconds }
-  if (request.daily !== undefined) return { ...base, kind: 'daily', time: request.daily.time, timeZone: request.daily.time_zone, timing: request.daily }
-  if (request.weekly !== undefined) return { ...base, kind: 'weekly', time: request.weekly.time, timeZone: request.weekly.time_zone, weekdays: request.weekly.weekdays, timing: request.weekly }
-  return { ...base, kind: 'at', timing: request.at }
-}
-
-// An in-memory stand-in for DSH's schedule service. `broken` tells it how a removal
-// fails on a Session: 'throw' for a failed write, 'refuse' for the not-found result
-// the service returns instead of failing.
-function scheduleService({ broken = {} } = {}) {
+// An in-memory stand-in for DSH's schedule service.
+function scheduleService() {
   const tasks = new Map()
   let next = 1
   return {
     tasks,
     async create(sessionId, request) {
       const id = `schedule-${next++}`
-      const record = stored(id, request)
+      const kind = { every_seconds: 'every' }[Object.keys(request).find(key => !['title', 'prompt'].includes(key))]
+        ?? Object.keys(request).find(key => !['title', 'prompt'].includes(key))
+      const record = {
+        id, kind, title: request.title, prompt: request.prompt,
+        timing: request[Object.keys(request).find(key => !['title', 'prompt'].includes(key))],
+        scheduledAt: request.at ?? '2030-01-01T01:00:00.000Z',
+        everySeconds: request.every_seconds,
+        time: request.daily?.time ?? request.weekly?.time,
+        timeZone: request.daily?.time_zone ?? request.weekly?.time_zone ?? request.cron?.time_zone,
+        weekdays: request.weekly?.weekdays,
+        expression: request.cron?.expression,
+      }
       tasks.set(id, { sessionId, record })
       return record
     },
@@ -50,12 +50,35 @@ function scheduleService({ broken = {} } = {}) {
         .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.id.localeCompare(b.id))
     },
     async delete({ sessionId, id }) {
-      const failure = broken[sessionId]
-      if (failure === 'throw') throw new Error('the schedule store refused the removal')
-      if (failure === 'refuse') return { id, deleted: false, code: 'schedule_not_found' }
       if (tasks.get(id)?.sessionId !== sessionId) return { id, deleted: false, code: 'schedule_not_found' }
       tasks.delete(id)
       return { id, deleted: true }
+    },
+  }
+}
+
+// The Host-wide service of DSH 0.2.2: each task has a delivery target and changes through edit().
+function hostSchedule() {
+  const tasks = new Map()
+  let next = 1
+  const edits = []
+  return {
+    tasks,
+    edits,
+    async create({ title, prompt, timing, target }) {
+      const id = `schedule-${next++}`
+      const [selector] = Object.keys(timing).filter(key => key !== 'kind')
+      tasks.set(id, { record: { id, kind: timing.kind, title, prompt, scheduledAt: timing.at ?? '2030-01-01T01:00:00.000Z' }, timing: timing[selector], target, status: 'active' })
+      return { id }
+    },
+    async catalog() {
+      return [...tasks.values()].map(task => ({ ...task.record, target: task.target, status: task.status }))
+    },
+    async edit(request) {
+      edits.push(request)
+      if (request.action === 'delete') tasks.delete(request.id)
+      else Object.assign(tasks.get(request.id), request.patch)
+      return { id: request.id }
     },
   }
 }
@@ -68,7 +91,7 @@ function setup(services = {}) {
   ctx.connection.fetch.register = (route) => { ctx.route = route; return register(route) }
   const rt = createRuntime(ctx, { home })
   const call = async (endpoint, payload) => (await ctx.route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
-  return { ctx, home, rt, call }
+  return { ctx, home, call, rt }
 }
 
 test('without the schedule service the page says so and creating is refused', async (t) => {
@@ -142,59 +165,60 @@ test('a due reminder reaches a group as its prompts', () => {
   assert.equal(reminderText('plain text'), 'plain text')
 })
 
-// #511: a Bot's chat moves on to a fresh part, and its task moves with it. The
-// earlier part of a Bot's chat is 'w1' and the fresh one is 'w2'.
-async function moveSetup(broken = {}) {
-  const schedule = scheduleService({ broken })
+// Fei2411/DS-Bot#814: DSH 0.2.2 keeps tasks Host-wide with a delivery target.
+test('on DSH 0.2.2 tasks target the Bot’s current part, list by target, delete by id and move in place', async (t) => {
+  const schedule = hostSchedule()
+  const { ctx, home, call, rt } = setup({ schedule })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const made = await call('schedule-create', { target: 'w1', title: 'Briefing', prompt: 'Sum up the day', when: { kind: 'daily', time: '09:00', timeZone: 'Asia/Shanghai' } })
+  assert.equal(made.ok, true, JSON.stringify(made))
+  const [created] = [...schedule.tasks.values()]
+  assert.deepEqual(created.target, { kind: 'session', sessionId: 'w2' })
+  assert.equal(created.record.kind, 'daily')
+  assert.deepEqual(created.timing, { time: '09:00:00', time_zone: 'Asia/Shanghai' })
+  await call('schedule-create', { target: 'm1', title: 'Ping', prompt: 'Check', when: { kind: 'every', minutes: 30 } })
+  assert.deepEqual([...schedule.tasks.values()].at(-1).timing, 1800)
+
+  schedule.tasks.set('schedule-paused', { record: { id: 'schedule-paused', kind: 'rrule', title: 'Held', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'session', sessionId: 'w2' }, status: 'paused' })
+  schedule.tasks.set('schedule-ended', { record: { id: 'schedule-ended', kind: 'at', title: 'Done', prompt: 'x', scheduledAt: '2020-01-01T00:00:00.000Z' }, target: { kind: 'session', sessionId: 'w2' }, status: 'ended' })
+  schedule.tasks.set('schedule-new', { record: { id: 'schedule-new', kind: 'at', title: 'Elsewhere', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'new_once' }, status: 'active' })
+  const listed = (await call('schedules', {})).value
+  assert.deepEqual(listed.tasks.map(task => [task.title, task.botId, task.sessionId, task.state]), [
+    ['Briefing', 'w1', 'w2', 'scheduled'], ['Ping', 'm1', 'm1', 'scheduled'], ['Held', 'w1', 'w2', 'paused'], ['Done', 'w1', 'w2', 'finished'],
+  ])
+
+  await rt.moveSchedules('w2', 's9')
+  assert.deepEqual(schedule.edits.map(edit => [edit.id, edit.patch?.target?.sessionId]), [['schedule-1', 's9'], ['schedule-paused', 's9']])
+  assert.deepEqual(schedule.tasks.get('schedule-ended').target, { kind: 'session', sessionId: 'w2' })
+
+  assert.match((await call('schedule-delete', { sessionId: 'w2', id: 'schedule-1' })).error.message, /No such task/)
+  assert.match((await call('schedule-delete', { sessionId: 'm1', id: 'schedule-new' })).error.message, /No such task/)
+  const removed = await call('schedule-delete', { sessionId: 'm1', id: 'schedule-2' })
+  assert.equal(removed.ok, true, JSON.stringify(removed))
+  assert.equal(schedule.tasks.has('schedule-2'), false)
+  assert.deepEqual(schedule.edits.at(-1), { id: 'schedule-2', action: 'delete' })
+})
+
+test('a failed task move can resume without losing identical remaining tasks', async (t) => {
+  const schedule = scheduleService()
   const { ctx, home, rt } = setup({ schedule })
-  await schedule.create('w1', { title: 'Standup', prompt: 'Where are we?', every_seconds: 3600 })
-  const warnings = []
-  rt.warn = (...args) => warnings.push(args)
-  return { schedule, ctx, home, rt, warnings }
-}
-
-test('a task that moves goes to the fresh part alone', async (t) => {
-  const { schedule, ctx, home, rt, warnings } = await moveSetup()
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  await rt.moveSchedules('w1', 'w2')
-  const armed = [...schedule.tasks.values()]
-  assert.equal(armed.length, 1, JSON.stringify(armed))
-  assert.equal(armed[0].sessionId, 'w2')
-  assert.equal(armed[0].record.title, 'Standup')
-  assert.deepEqual(warnings, [])
-})
+  await schedule.create('w2', { title: 'Ping', prompt: 'Check', every_seconds: 3600 })
+  await schedule.create('w2', { title: 'Ping', prompt: 'Check', every_seconds: 3600 })
 
-test('a task whose removal fails stays with the earlier part alone', async (t) => {
-  const { schedule, ctx, home, rt, warnings } = await moveSetup({ w1: 'throw' })
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  await rt.moveSchedules('w1', 'w2')
-  const armed = [...schedule.tasks.values()]
-  assert.equal(armed.length, 1, JSON.stringify(armed))
-  assert.equal(armed[0].sessionId, 'w1')
-  assert.equal(armed[0].record.title, 'Standup')
-  assert.equal(warnings.length, 1)
-  assert.match(warnings[0][0], /stayed with the earlier part/)
-})
+  const create = schedule.create
+  let attempts = 0
+  schedule.create = async (...args) => {
+    if (++attempts === 2) throw new Error('down')
+    return create(...args)
+  }
+  await assert.rejects(rt.moveSchedules('w2', 's9'), /down/)
+  const on = id => [...schedule.tasks.values()].filter(task => task.sessionId === id)
+  assert.equal(on('s9').length, 1)
+  assert.equal(on('w2').length, 1)
 
-test('a task the service refuses to remove stays with the earlier part alone', async (t) => {
-  const { schedule, ctx, home, rt, warnings } = await moveSetup({ w1: 'refuse' })
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  await rt.moveSchedules('w1', 'w2')
-  const armed = [...schedule.tasks.values()]
-  assert.equal(armed.length, 1, JSON.stringify(armed))
-  assert.equal(armed[0].sessionId, 'w1')
-  assert.equal(armed[0].record.title, 'Standup')
-  assert.equal(warnings.length, 1)
-  assert.match(warnings[0][0], /stayed with the earlier part/)
-})
-
-test('a task that cannot be rolled back is reported as left in two parts', async (t) => {
-  const { schedule, ctx, home, rt, warnings } = await moveSetup({ w1: 'throw', w2: 'throw' })
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  await rt.moveSchedules('w1', 'w2')
-  const armed = [...schedule.tasks.values()]
-  assert.equal(armed.length, 2, JSON.stringify(armed))
-  assert.deepEqual(armed.map(task => task.sessionId).sort(), ['w1', 'w2'])
-  assert.equal(warnings.length, 1)
-  assert.match(warnings[0][0], /left in two parts/)
+  schedule.create = create
+  await rt.moveSchedules('w2', 's9')
+  assert.equal(on('s9').length, 2)
+  assert.equal(on('w2').length, 0)
 })
