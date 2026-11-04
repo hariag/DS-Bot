@@ -58,7 +58,7 @@ export class JsonRpcPeer {
       }
       const onAbort = () => call.reject(signal.reason ?? new Error('aborted'))
       this.pending.set(id, call)
-      if (timeout > 0) timer = setTimeout(() => { if (this.pending.delete(id)) call.reject(new Error(`${method} timed out`)) }, timeout)
+      if (timeout !== undefined) timer = setTimeout(() => { if (this.pending.delete(id)) call.reject(new Error(`${method} timed out`)) }, timeout)
       if (signal !== undefined) signal.addEventListener('abort', onAbort, { once: true })
       try {
         this.write({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) })
@@ -76,9 +76,6 @@ export class JsonRpcPeer {
 
 // Feeds stdout into a peer line by line; resolves when the process ends.
 export function wireProcess(child, peer) {
-  // A write that meets a process on its way out fails with EPIPE. Its exit already
-  // ends what waits on it; an unheard stream error would take DS Bot down.
-  child.stdin.on('error', () => {})
   let rest = ''
   child.stdout.setEncoding('utf8')
   child.stdout.on('data', (chunk) => {
