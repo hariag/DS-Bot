@@ -17,8 +17,10 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
   const openSideChat = (sessionId, chatId) => {
     ui.set(state => ({ ...state, details: sessionId, view: 'side', side: chatId ?? null, renaming: false, tab: null, panelYield: yieldTo(state, 'side') }))
   }
+  // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
+  const openSettings = (page = 'general', id = null) => { ui.set(state => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null })) }
   return {
-    openNewChat: (mode, sectionId = null) => { ui.set(state => ({ ...state, newChat: mode, newChatSection: sectionId ?? null, menu: null, palette: null })) },
+    openNewChat: (mode) => { ui.set(state => ({ ...state, newChat: mode, menu: null, palette: null })) },
     openPalette: (query = '') => { ui.set(state => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null })) },
     // The token keeps a late exit timer from closing a palette opened again since.
     closePalette: (token) => { ui.set(state => (state.palette && (token === undefined || state.palette.token === token) ? { ...state, palette: null } : state)) },
@@ -50,8 +52,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     showDetails: (id, tab = null) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: false, tab, panelYield: yieldTo(state, 'details') })) },
     // Opening the conversation would move focus to its composer and blur the name field.
     renameBot: (id) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: true, tab: null, panelYield: yieldTo(state, 'details') })) },
-    // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
-    openSettings: (page = 'general', id = null) => { ui.set(state => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null })) },
+    openSettings,
+    // DS Bot's own Models page: the providers DSH serves, their keys and models.
+    openModels: () => openSettings('models'),
     closeSettings: () => { ui.set(state => (state.settings ? { ...state, settings: null } : state)) },
     openMemory: (id) => { ui.set(state => ({ ...state, memory: id, menu: null, palette: null })) },
     closeMemory: () => { ui.set(state => (state.memory ? { ...state, memory: null } : state)) },
@@ -81,15 +84,10 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     quote: (sessionId, text) => ui.set(state => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
     clearQuote: token => ui.set(state => (state.quote?.token === token ? { ...state, quote: null } : state)),
     setFlags: (id, flags) => after(call('set-flags', { id, ...flags })),
-    saveSection: payload => after(call('section-save', payload)),
-    reorderSections: ids => after(call('section-order', { ids })),
-    deleteSection: id => after(call('section-delete', { id })),
-    beginSectionRename: id => ui.set(state => ({ ...state, renameSection: id })),
-    endSectionRename: () => ui.set(state => (state.renameSection ? { ...state, renameSection: null } : state)),
     deleteRoom: id => after(call('delete-room', { id })),
     openMenu: (menu) => { ui.set(state => ({ ...state, menu, palette: null })) },
     closeMenu: () => { ui.set(state => (state.menu ? { ...state, menu: null } : state)) },
-    closeOverlay: () => { ui.set(state => ({ ...state, newChat: null, newChatSection: null, exchange: null, details: state.newChat || state.exchange ? state.details : null })) },
+    closeOverlay: () => { ui.set(state => ({ ...state, newChat: null, exchange: null, details: state.newChat || state.exchange ? state.details : null })) },
     createBot: payload => after(call('create-bot', payload)),
     // The avatar library: photos the user imported once, kept by the host.
     avatarLibrary: (options = {}) => call('avatar-library', options),
@@ -99,6 +97,14 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
     refreshModels: () => after(call('models')).catch(() => {}),
     efforts: ref => call('efforts', { ref }),
+    // Model providers and their API keys; DSH keeps them, and a key only travels to the host.
+    providers: () => call('providers'),
+    setProviderKey: (provider, value) => after(call('provider-key', { provider, value })),
+    addProvider: body => after(call('provider-add', body)),
+    providerModels: body => call('provider-models', body),
+    removeProvider: provider => after(call('provider-remove', { provider })),
+    // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
+    resume: botId => after(call('resume', { botId })),
     folders: () => call('folders'),
     folderPick: () => call('folder-pick'),
     folderList: path => call('folder-list', { path: path ?? '' }),
@@ -109,7 +115,6 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     setPrefs: prefs => after(call('set-prefs', prefs)),
     setMain: (id, main = true, options = {}) => after(call('set-main', { id, main, ...options })),
     updateRoom: (id, patch) => after(call('update-room', { id, ...patch })),
-    continueRoom: roomId => after(call('room-continue', { roomId })),
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
@@ -133,16 +138,22 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     secretCancel: requestId => after(call('secret-cancel', { requestId })),
     secretUpdate: (name, { scope, purpose } = {}) => after(call('secret-update', { name, scope, purpose })),
     secretDelete: name => after(call('secret-delete', { name })),
-    connectorConnect: (id, token) => after(call('connector-connect', { id, token })),
+    connectorConnect: (id, payload = {}) => after(call('connector-connect', { id, ...payload })),
     connectorDisconnect: id => after(call('connector-disconnect', { id })),
     connectorRetry: id => after(call('connector-retry', { id })),
-    imAdd: payload => after(call('im-add', payload)),
-    imUpdate: (id, patch) => after(call('im-update', { id, ...patch })),
-    imRemove: id => after(call('im-remove', { id })),
-    imPair: (id, senderId, allow) => after(call('im-pair', { id, senderId, allow })),
-    imUnpair: (id, senderId) => after(call('im-unpair', { id, senderId })),
-    imChat: (id, body) => after(call('im-chat', { id, ...body })),
-    imRetry: id => after(call('im-retry', { id })),
+    connectorSignInCode: (id, input) => after(call('connector-sign-in-code', { id, input })),
+    connectorCancel: id => after(call('connector-cancel', { id })),
+    connectorClient: (id, clientId, clientSecret) => after(call('connector-client', { id, clientId, clientSecret })),
+    connectorSet: (id, patch) => after(call('connector-set', { id, ...patch })),
+    connectorAdd: spec => after(call('connector-add', spec)),
+    connectorRemove: id => after(call('connector-remove', { id })),
+    connectorImportScan: () => call('connector-import-scan', {}),
+    connectorImport: items => after(call('connector-import', { items })),
+    connectorRequestCancel: requestId => after(call('connector-request-cancel', { requestId })),
+    mailAccountAdd: payload => after(call('mail-account-add', payload)),
+    mailAccountRemove: id => after(call('mail-account-remove', { id })),
+    mailSendAnswer: (requestId, choice) => after(call('mail-send-answer', { requestId, choice })),
+    mailSignInCode: payload => after(call('mail-sign-in-code', payload)),
     saveCapability: capability => after(call('capability-save', capability)),
     deleteCapability: name => after(call('capability-delete', { name })),
     approveCapability: name => after(call('capability-approve', { name })),
