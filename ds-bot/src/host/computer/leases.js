@@ -5,7 +5,10 @@
 const IDLE_MS = 60_000
 
 export function createLeases({ idleMs = IDLE_MS, now = Date.now, onChange = () => {} } = {}) {
-  /** @type {Map<string, {botId:string, sessionId:string, since:number, last:number, timer:any}>} `app:<key>`|foreground -> lease */
+  /** @type {Map<string, {botId:string, sessionId:string, since:number, last:number, timer:any}>} appKey -> lease */
+  const apps = new Map()
+  /** @type {{botId:string, sessionId:string, since:number, last:number, timer:any}|undefined} */
+  let foreground
   const leases = new Map()
 
   const drop = (key) => {
