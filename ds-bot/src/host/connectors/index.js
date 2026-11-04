@@ -85,8 +85,7 @@ export function install(rt) {
 
   const credentialOf = (id) => {
     const entry = entryFor(id)
-    if (entry === undefined) return undefined
-    if (entry.auth.kind === 'none' || entry.auth.kind === 'custom') return {}
+    if (entry === undefined || entry.auth.kind === 'none') return entry?.auth.kind === 'none' && entry.custom === undefined ? {} : {}
     if (entry.auth.kind === 'oauth') {
       const token = rt.secretValue(tokenSecretOf(id))
       return token === undefined ? undefined : { Authorization: `Bearer ${token}` }
@@ -270,17 +269,11 @@ export function install(rt) {
   // The loopback server for the browser flow: fixed port first, else a random one.
   async function loopback(ready) {
     const listener = createServer((req, res) => {
-      req.on('error', () => res.destroy())
-      res.on('error', () => req.destroy())
-      let url
-      try { url = new URL(req.url ?? '/', 'http://127.0.0.1') } catch { res.writeHead(400); res.end(); return }
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
       if (url.pathname !== '/callback') { res.writeHead(404); res.end(); return }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end('<!doctype html><title>Signed in</title><p style="font-family:sans-serif;margin:3em;text-align:center">Signed in — you can close this tab and go back to DS Bot.</p>')
-      void ready({ code: url.searchParams.get('code'), state: url.searchParams.get('state'), iss: url.searchParams.get('iss'), error: url.searchParams.get('error'), errorDescription: url.searchParams.get('error_description') }).catch(error => rt.warn('ds-bot: connector sign-in callback failed: %s', reason(error)))
-    })
-    listener.on('error', error => {
-      if (listener.listening) rt.warn('ds-bot: connector sign-in listener failed: %s', error?.code ?? 'error')
+      void ready({ code: url.searchParams.get('code'), state: url.searchParams.get('state'), iss: url.searchParams.get('iss'), error: url.searchParams.get('error'), errorDescription: url.searchParams.get('error_description') })
     })
     const listen = port => new Promise((resolve, reject) => {
       const onError = error => { listener.off('listening', onOk); reject(error) }
@@ -300,38 +293,28 @@ export function install(rt) {
   }
 
   async function startBrowserFlow(id, entry, pending) {
-    const bound = pending.listener === undefined
-      ? await loopback(({ code, state, iss, error, errorDescription }) => completeBrowser(id, { code, state, iss, error, errorDescription }))
-      : pending
-    const { listener, fixed, redirectUri } = bound
-    pendings.set(id, { ...pending, listener, fixed, redirectUri })
-    try {
-      const saved = state.connectors?.[id]
-      const persist = async (client) => {
-        const { clientSecret, ...rest } = client
-        if (clientSecret !== undefined) await writeSecret(clientSecretOf(id), clientSecret, `${entry.name} connector`)
-        await saveState(id, { client: rest })
-      }
-      const resolved = await oauth.resolveClient(entry, pending.discovery, redirectUri, fixed, saved?.client ? { ...saved.client, clientSecret: rt.secretValue(clientSecretOf(id)) } : undefined, { persist })
-      if (resolved === null) {
-        statuses.set(id, { state: 'needs-client' })
-        return
-      }
-      // Refresh needs to know which client signed in; DCR already persisted its result.
-      if (resolved.via !== 'dcr') await saveState(id, { client: { via: resolved.via, clientId: resolved.clientInformation.client_id } })
-      const stateParam = randomBytes(16).toString('base64url')
-      const { url, codeVerifier } = await oauth.beginBrowser(pending.discovery, resolved.clientInformation, redirectUri, { state: stateParam })
-      pendings.set(id, {
-        ...pending, kind: 'browser', listener, fixed, redirectUri, codeVerifier, expectedState: stateParam,
-        clientInformation: resolved.clientInformation,
-        row: { kind: 'browser', url },
-        timer: setTimeout(() => void expire(id), SIGN_IN_TIMEOUT_MS),
-      })
-      statuses.set(id, { state: 'connecting' })
-    } catch (error) {
-      await endPending(id, { state: 'error', error: reason(error) })
-      throw error
+    const { listener, fixed, redirectUri } = await loopback(({ code, state, iss, error, errorDescription }) => completeBrowser(id, { code, state, iss, error, errorDescription }))
+    const saved = state.connectors?.[id]
+    const persist = async (client) => {
+      const { clientSecret, ...rest } = client
+      if (clientSecret !== undefined) await writeSecret(clientSecretOf(id), clientSecret, `${entry.name} connector`)
+      await saveState(id, { client: rest })
     }
+    const resolved = await oauth.resolveClient(entry, pending.discovery, redirectUri, fixed, saved?.client ? { ...saved.client, clientSecret: rt.secretValue(clientSecretOf(id)) } : undefined, { persist })
+    if (resolved === null) {
+      pendings.set(id, { ...pending, listener, redirectUri })
+      statuses.set(id, { state: 'needs-client' })
+      return
+    }
+    const stateParam = randomBytes(16).toString('base64url')
+    const { url, codeVerifier } = await oauth.beginBrowser(pending.discovery, resolved.clientInformation, redirectUri, { state: stateParam })
+    pendings.set(id, {
+      ...pending, kind: 'browser', listener, redirectUri, codeVerifier, expectedState: stateParam,
+      clientInformation: resolved.clientInformation,
+      row: { kind: 'browser', url },
+      timer: setTimeout(() => void expire(id), SIGN_IN_TIMEOUT_MS),
+    })
+    statuses.set(id, { state: 'connecting' })
   }
 
   async function expire(id) {
@@ -424,49 +407,26 @@ export function install(rt) {
         return false
       }
       const refresh = rt.secretValue(refreshSecretOf(id))
-      let path = saved?.client?.via ?? 'inferred'
-      if (refresh === undefined || saved?.oauth === undefined) {
-        statuses.set(id, { state: 'needs-sign-in' })
-        rt.warn('ds-bot: connector %s token refresh failed (client: %s; missing refresh token or OAuth metadata)', id, path)
-        return false
-      }
+      if (refresh === undefined || saved?.oauth === undefined) { statuses.set(id, { state: 'needs-sign-in' }); return false }
       try {
         const discovery = await oauth.rediscover(saved.oauth)
-        // Refresh with the client that signed in: catalog → the current catalog id,
-        // CIMD → the published document id, DCR/manual → the stored id (+ secret).
-        // Rows signed in before clients were persisted have no `client`: fall back to
-        // CIMD when the AS supports it, otherwise ask the user to sign in again.
-        const via = saved.client?.via
-        const clientId = via === 'catalog' ? entryFor(id)?.auth?.client?.id
-          : via === 'cimd' ? oauth.CIMD_CLIENT_ID
-          : saved.client?.clientId ?? (discovery.metadata?.client_id_metadata_document_supported === true ? oauth.CIMD_CLIENT_ID : undefined)
-        const clientVia = via ?? (saved.client?.clientId ? 'manual' : 'cimd')
-        if (via === undefined && clientId !== undefined) path = `inferred/${clientVia}`
-        if (clientId === undefined) {
-          statuses.set(id, { state: 'needs-sign-in' })
-          rt.warn('ds-bot: connector %s token refresh failed (client: %s; no OAuth client)', id, path)
-          return false
-        }
-        const secret = rt.secretValue(clientSecretOf(id))
-        const client = { client_id: clientId, ...(secret !== undefined ? { client_secret: secret } : {}) }
+        const client = saved.client?.clientId !== undefined
+          ? { client_id: saved.client.clientId, ...(rt.secretValue(clientSecretOf(id)) !== undefined ? { client_secret: rt.secretValue(clientSecretOf(id)) } : {}) }
+          : undefined
+        if (client === undefined) { statuses.set(id, { state: 'needs-client' }); return false }
         const tokens = await oauth.refreshTokens(discovery, client, refresh, { scope: saved.oauth.scope })
-        const purpose = `${entryFor(id)?.name ?? id} connector`
-        await writeSecret(tokenSecretOf(id), tokens.access_token, purpose)
+        const entry = entryFor(id)
+        await writeSecret(tokenSecretOf(id), tokens.access_token, `${entry.name} connector`)
         if (typeof tokens.refresh_token === 'string' && tokens.refresh_token !== '' && tokens.refresh_token !== refresh) {
           // Rotation: the old refresh token stays if this write fails.
-          await writeSecret(refreshSecretOf(id), tokens.refresh_token, purpose).catch(() => {})
+          await writeSecret(refreshSecretOf(id), tokens.refresh_token, `${entry.name} connector`).catch(() => {})
         }
-        await saveState(id, {
-          client: { ...saved.client, via: clientVia, clientId },
-          tokenExpiresAt: Number.isFinite(tokens.expires_in) ? Date.now() + tokens.expires_in * 1000 : undefined,
-        })
+        await saveState(id, { tokenExpiresAt: Number.isFinite(tokens.expires_in) ? Date.now() + tokens.expires_in * 1000 : undefined })
         statuses.delete(id)
-        rt.warn('ds-bot: connector %s token refresh succeeded (client: %s)', id, path)
         return true
       } catch (error) {
         if (oauth.invalidGrant(error)) statuses.set(id, { state: 'needs-sign-in', error: 'Sign in again' })
         else statuses.set(id, { state: 'error', error: reason(error) })
-        rt.warn('ds-bot: connector %s token refresh failed (client: %s; %s)', id, path, oauth.invalidGrant(error) ? 'invalid_grant' : 'refresh error')
         return false
       }
     })().finally(() => refreshes.delete(id))
@@ -537,8 +497,7 @@ export function install(rt) {
       const bot = rt.botOf(rt.selfOf(agentId))
       if (bot === undefined) return 'Only Bots on the team can use request_connector.'
       const connected = id === 'mail' ? mailHasAccounts() : hasCredential(id)
-      const signIn = statuses.get(id)?.state === 'needs-sign-in'
-      if (connected && !signIn && !offFor(id).includes(bot.id)) return `${entry.name} is already connected; use its tools (mcp__${id}__*).`
+      if (connected && !offFor(id).includes(bot.id)) return `${entry.name} is already connected; use its tools (mcp__${id}__*).`
       if (offFor(id).includes(bot.id)) return `${entry.name} is turned off for you. The user can turn it on in your details.`
       if (rt.groupOwners.has(agentId)) return 'Connector cards only work in your own chat. Tell the group you will ask the user in your own chat, and call request_connector there.'
       if (!rt.chatOwners.has(agentId)) return 'Connector cards only work in your current own chat.'
@@ -552,7 +511,6 @@ export function install(rt) {
         ...(exec.callId ? { callId: exec.callId } : {}),
         sessionId: agentId,
         connectorId: id,
-        name: entry.name,
         purpose: String(args.purpose ?? '').trim().slice(0, 300),
         status: 'pending',
         askedAt: now,
@@ -833,6 +791,8 @@ export function install(rt) {
     if (endpoint.startsWith('mail-')) return mailApi.endpoint(endpoint, body)
     return endpoints[endpoint](body ?? {})
   }
+
+  ctx.on('tools/change', () => { rt.reapplyToolMasks?.() })
 
   ctx.effect(() => {
     stopped = false

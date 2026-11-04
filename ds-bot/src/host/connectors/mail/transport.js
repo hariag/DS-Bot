@@ -1,77 +1,29 @@
 // Mail transports. `connectAccount(account, deps)` returns one account session
 // behind a small interface the tools and tests share; tests inject fakes
 // through rt.config.mail.connect.
-import { Socket } from 'node:net'
+import { simpleParser } from 'mailparser'
 import { IMAP_ID } from './presets.js'
 
 // IMAP + SMTP (imapflow + nodemailer). One live IMAP connection per account is
 // kept by the caller (QQ throttles frequent logins); on a dropped connection the
 // caller reconnects once.
-export const imapOptions = (account, deps = {}) => ({
-  host: account.imap.host, port: account.imap.port, secure: account.imap.secure !== false,
-  auth: { user: account.address, pass: deps.password },
-  // RFC 2971: 163/126 refuse logins without the client identity.
-  id: IMAP_ID,
-  logger: false,
-  socketTimeout: 60_000,
-})
-
 export async function connectImap(account, deps = {}) {
-  const { ImapFlow } = deps.modules ?? await import('imapflow')
-  const nodemailer = deps.modules?.nodemailer ?? await import('nodemailer')
-  const imap = new ImapFlow(imapOptions(account, deps))
-  let gone = false
-  let smtp
-  const sockets = new Set()
-  const retire = () => {
-    if (gone) return
-    gone = true
-    imap.close()
-    for (const socket of sockets) socket.destroy()
-    smtp?.close()
-    deps.onGone?.()
-  }
-  imap.on('error', retire)
-  imap.on('close', retire)
-  smtp = nodemailer.createTransport({
+  const { ImapFlow } = await import('imapflow')
+  const nodemailer = await import('nodemailer')
+  const imap = new ImapFlow({
+    host: account.imap.host, port: account.imap.port, secure: account.imap.secure !== false,
+    auth: { user: account.address, pass: deps.password },
+    id: IMAP_ID,
+    logger: false,
+    socketTimeout: 60_000,
+  })
+  const smtp = nodemailer.createTransport({
     host: account.smtp.host, port: account.smtp.port, secure: account.smtp.secure === true,
     requireTLS: account.smtp.starttls === true,
     auth: { user: account.address, pass: deps.password },
-    // Nodemailer's close() does not cancel a non-pooled verify(). Own its sockets
-    // through the transport hook so an IMAP failure also cancels that login.
-    getSocket(options, done) {
-      if (gone) { done(new Error('The mail connection is closed')); return }
-      const socket = new Socket()
-      sockets.add(socket)
-      let answered = false
-      const fail = error => { if (!answered) { answered = true; done(error) } }
-      socket.once('error', fail)
-      socket.on('error', retire)
-      socket.once('close', () => {
-        sockets.delete(socket)
-        fail(new Error('The SMTP connection closed'))
-      })
-      // Preserve Nodemailer's documented default connection timeout.
-      socket.setTimeout(options.connectionTimeout ?? 120_000, () => socket.destroy(new Error('SMTP connection timeout')))
-      socket.connect({ host: options.host, port: options.port }, () => {
-        if (answered) return
-        answered = true
-        socket.setTimeout(0)
-        done(null, { connection: socket })
-      })
-    },
   })
-  smtp.on('error', retire)
-  try {
-    await Promise.all([
-      imap.connect().then(() => { if (gone) imap.close() }),
-      smtp.verify().then(() => { if (gone) smtp.close() }),
-    ])
-    if (gone) throw new Error('The mail connection closed during verification')
-  } catch (error) {
-    retire()
-    throw error
-  }
+  await imap.connect()
+  await smtp.verify()
 
   const folders = async () => {
     const list = await imap.list()
@@ -101,8 +53,6 @@ export async function connectImap(account, deps = {}) {
     try {
       const message = await imap.fetchOne(uid, { source: true, envelope: true, bodyStructure: true }, { uid: true })
       if (message === false) throw new Error('No such message')
-      // Keep optional mail decoding out of plugin activation.
-      const { simpleParser } = await import('mailparser')
       const parsed = await simpleParser(message.source)
       return {
         uid, folder,
@@ -122,8 +72,7 @@ export async function connectImap(account, deps = {}) {
 
   return {
     kind: 'imap',
-    get usable() { return !gone && imap.usable },
-    async close() { try { if (!gone) await imap.logout() } catch { /* dropped */ } finally { retire() } },
+    async close() { try { await imap.logout() } catch { /* dropped */ } },
     async search({ folder = 'INBOX', from, to, subject, text, since, before, unread, limit = 20 }) {
       const query = {}
       if (from) query.from = from
@@ -202,7 +151,7 @@ export async function connectImap(account, deps = {}) {
 const strip = ({ _parsed, ...message }) => message
 
 const compose = async (from, { to, cc, bcc, subject, text }) => {
-  const MailComposer = (await import('nodemailer/lib/mail-composer')).default
+  const MailComposer = (await import('nodemailer/lib/mail-composer.js')).default
   return await new MailComposer({ from, to, cc, bcc, subject, text }).compile().build()
 }
 
@@ -219,7 +168,7 @@ export function connectGmail(account, deps = {}) {
     if (!response.ok) throw new Error(`Gmail answered ${response.status}`)
     return response.json().catch(() => ({}))
   }
-  const header = (list, name) => list?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? ''
+  const header = (list, name) => list?.find(h => h.name.toLowerCase() === name)?.value ?? ''
   const decode = data => data === undefined ? '' : Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
   const walk = (part, out = { text: '', attachments: [] }) => {
     if (part === undefined) return out
@@ -291,7 +240,7 @@ export function connectGmail(account, deps = {}) {
 }
 
 const gmailRaw = async (from, { to, cc, bcc, subject, text, inReplyTo, references }) => {
-  const MailComposer = (await import('nodemailer/lib/mail-composer')).default
+  const MailComposer = (await import('nodemailer/lib/mail-composer.js')).default
   const raw = await new MailComposer({ from, to, cc, bcc, subject, text, ...(inReplyTo ? { inReplyTo, references: references ?? [inReplyTo] } : {}) }).compile().build()
   return raw.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }

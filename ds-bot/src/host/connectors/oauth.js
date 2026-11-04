@@ -65,14 +65,8 @@ export async function resolveClient(entry, discovery, redirectUri, fixedPort, st
   if (stored?.clientId) {
     const expired = Number.isFinite(stored.secretExpiresAt) && stored.secretExpiresAt * 1000 <= Date.now()
     const uriMissing = Array.isArray(stored.redirectUris) && !stored.redirectUris.includes(redirectUri)
-    // A stored CIMD client still needs the fixed port its document names.
-    const usable = !expired && !uriMissing && (stored.via !== 'cimd' || fixedPort)
-    // A confidential client signs the token request with its secret, whether it was
-    // registered (DCR) or typed in by hand: without it the AS answers bad_client_secret.
-    // A CIMD client is public, so a secret left behind by an earlier DCR client must not
-    // travel with it.
-    const secret = stored.via !== 'cimd' && stored.clientSecret ? { client_secret: stored.clientSecret } : {}
-    if (usable) return { via: stored.via, clientInformation: { client_id: stored.clientId, ...secret } }
+    if (!expired && !uriMissing && stored.via !== 'dcr') return { via: stored.via, clientInformation: { client_id: stored.clientId } }
+    if (!expired && !uriMissing && stored.via === 'dcr') return { via: 'dcr', clientInformation: { client_id: stored.clientId, ...(stored.clientSecret ? { client_secret: stored.clientSecret } : {}) } }
   }
   const metadata = discovery.metadata
   if (metadata?.client_id_metadata_document_supported === true && fixedPort) {
@@ -86,17 +80,7 @@ export async function resolveClient(entry, discovery, redirectUri, fixedPort, st
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
     }
-    let full
-    try {
-      full = await registerClient(discovery.authorizationServerUrl, { metadata, clientMetadata, scope: discovery.scope, fetchFn: timed(request) })
-    } catch (error) {
-      // An authorization server may refuse RFC 7591 registration outright (Figma
-      // does). The row then asks for the client ID of an app the user registered,
-      // instead of ending the sign-in on the server's rejection; a network failure
-      // still surfaces, because that is not a client we can work around.
-      if (typeof error?.status !== 'number') throw error
-      return null
-    }
+    const full = await registerClient(discovery.authorizationServerUrl, { metadata, clientMetadata, scope: discovery.scope, fetchFn: timed(request) })
     const info = {
       via: 'dcr',
       clientId: full.client_id,
@@ -137,10 +121,10 @@ export async function exchange(discovery, clientInformation, { code, codeVerifie
 }
 
 const invalidGrant = (error) => {
-  for (const field of [error?.error, error?.code, error?.name]) {
-    if (typeof field === 'string' && /invalid_grant/i.test(field)) return true
-  }
-  return /invalid_grant/i.test(String(error?.message ?? error))
+  const code = error?.error ?? error?.code
+  if (code === 'invalid_grant') return true
+  const text = String(error?.message ?? error)
+  return /invalid_grant/.test(text)
 }
 export { invalidGrant }
 

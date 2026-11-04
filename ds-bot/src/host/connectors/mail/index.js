@@ -3,8 +3,7 @@
 // send card, and the mail-* endpoints. Transports come from transport.js;
 // rt.config.mail.connect injects fakes in tests.
 import { randomUUID } from 'node:crypto'
-import { basename, join, resolve, sep } from 'node:path'
-import { realpathSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { PRESETS, presetOf, mailSecretName } from './presets.js'
 import { connectImap, connectGmail } from './transport.js'
@@ -14,36 +13,9 @@ import { refreshTokens, invalidGrant, discover, beginBrowser, exchange } from '.
 const GOOGLE_SCOPES = 'openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.modify'
 const MAX_REQUESTS = 20
 
-function parseAddresses(raw) {
-  const out = []
-  for (const part of String(raw ?? '').split(/[,;]+/)) {
-    const text = part.trim()
-    if (text === '') continue
-    const angle = text.match(/<([^<>\s@]+@[^<>\s@]+)>/i)
-    const addr = (angle ? angle[1] : text).trim().toLowerCase()
-    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr) && !out.includes(addr)) out.push(addr)
-  }
-  return out
-}
-
-function allAddressesAllowed(to, cc, bcc, allowed) {
-  const set = new Set((Array.isArray(allowed) ? allowed : []).map(a => String(a).toLowerCase()))
-  if (set.size === 0) return false
-  const parts = [to, cc, bcc].flatMap(raw => String(raw ?? '').split(/[,;]+/)).map(s => s.trim()).filter(Boolean)
-  if (parts.length === 0) return false
-  for (const part of parts) {
-    const angle = part.match(/<([^<>\s@]+@[^<>\s@]+)>/i)
-    const addr = (angle ? angle[1] : part).trim().toLowerCase()
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr) || !set.has(addr)) return false
-  }
-  return true
-}
-
 export function install(rt, host) {
   const { state } = rt
   const sessions = new Map()
-  const connecting = new Map()
-  const adding = new Map()
 
   const accounts = () => state.connectors?.mail?.accounts ?? {}
   const accountList = () => Object.values(accounts())
@@ -51,7 +23,7 @@ export function install(rt, host) {
   const accountOf = (ref) => {
     const list = accountList()
     if (ref === undefined || ref === '') return list.length === 1 ? list[0] : undefined
-    return list.find(account => account.address.toLowerCase() === String(ref).toLowerCase() || account.id === ref)
+    return list.find(account => account.address === String(ref).toLowerCase() || account.id === ref)
   }
 
   const googleClient = () => ({
@@ -60,26 +32,10 @@ export function install(rt, host) {
   })
   const googleReady = () => Boolean(googleClient().id && googleClient().secret)
 
-  async function openImap(account, password) {
-    const factory = rt.config.mail?.connect ?? connectImap
-    let session
-    session = await factory(account, { password, onGone: () => {
-      if (sessions.get(account.id) === session) sessions.delete(account.id)
-    } })
-    if (session.usable === false) throw new Error('The mail connection closed during verification')
-    sessions.set(account.id, session)
-    return session
-  }
-
   async function connect(account) {
     const key = account.id
     const live = sessions.get(key)
-    if (live !== undefined && live.usable !== false) return live
-    if (live !== undefined) {
-      sessions.delete(key)
-      await live.close?.()
-    }
-    if (connecting.has(key)) return connecting.get(key)
+    if (live !== undefined) return live
     const make = async () => {
       if (account.auth === 'google') {
         const token = () => rt.secretValue(mailSecretName(account.address, 'TOKEN'))
@@ -89,13 +45,17 @@ export function install(rt, host) {
       }
       const password = rt.secretValue(mailSecretName(account.address, 'PASSWORD'))
       if (password === undefined) throw new Error(`The password for ${account.address} is not saved`)
-      return openImap(account, password)
+      const factory = rt.config.mail?.connect ?? connectImap
+      const session = await factory(account, { password })
+      sessions.set(key, session)
+      return session
     }
-    const pending = make()
-    connecting.set(key, pending)
     try {
-      return await pending
-    } finally { connecting.delete(key) }
+      return await make()
+    } catch (error) {
+      sessions.delete(key)
+      throw error
+    }
   }
 
   // Gmail tokens refresh through the same OAuth rules as connectors.
@@ -115,18 +75,14 @@ export function install(rt, host) {
       if (typeof tokens.refresh_token === 'string' && tokens.refresh_token !== '') {
         await host.secrets.writeSecret(mailSecretName(account.address, 'REFRESH'), tokens.refresh_token, `Mailbox ${account.address}`).catch(() => {})
       }
-      rt.warn('ds-bot: connector mail token refresh succeeded (client: manual/Google)')
       return true
     } catch (error) {
       if (invalidGrant(error)) account.error = 'Sign in again'
-      rt.warn('ds-bot: connector mail token refresh failed (client: manual/Google; %s)', invalidGrant(error) ? 'invalid_grant' : 'refresh error')
       return false
     }
   }
 
-  const workDir = (exec) => {
-    try { return rt.sessionFolder?.(exec.agent?.session ?? exec.agent) } catch { return undefined }
-  }
+  const workDir = (exec) => rt.sessionFolder?.(exec.agent?.session ?? exec.agent)
 
   const toolExec = async (exec, args, run) => {
     await rt.load()
@@ -181,19 +137,12 @@ export function install(rt, host) {
           const saved = []
           if (args.save_attachments === true) {
             const dir = workDir(exec)
-            const taken = new Set()
-            const safe = (raw) => {
-              let name = basename(String(raw ?? '')).replace(/[\0-\x1f\\]/g, '_').replace(/^\.+/, '') || 'attachment'
-              while (taken.has(name)) name = `_${name}`
-              taken.add(name)
-              return name
-            }
             for (const message of messages) {
               for (const attachment of message.attachments ?? []) {
                 if (dir === undefined) break
-                const name = safe(attachment.filename)
-                await session.saveAttachment({ uid: message.uid, folder: message.folder, filename: attachment.filename, to: join(dir, name) })
-                saved.push(name)
+                const target = join(dir, attachment.filename)
+                await session.saveAttachment({ uid: message.uid, folder: message.folder, filename: attachment.filename, to: target })
+                saved.push(attachment.filename)
               }
             }
           }
@@ -245,15 +194,6 @@ export function install(rt, host) {
         if (!rt.chatOwners.has(exec.agent?.id)) return 'Send cards only work in your current own chat.'
         const readOnly = rt.readOnly()
         if (readOnly !== undefined) return `No card can be shown now. ${readOnly}`
-        const dir = workDir(exec)
-        const bad = (args.attachments ?? []).map(String).filter(name => name !== '').filter((name) => {
-          if (dir === undefined) return true
-          try {
-            const inside = realpathSync(resolve(dir, name))
-            return inside !== realpathSync(dir) && !inside.startsWith(realpathSync(dir) + sep)
-          } catch { return true }
-        })
-        if (bad.length > 0) return `Attachments must be files in your working folder: ${bad.join(', ')} is not.`
         const list = (state.mailRequests ??= {})[bot.id] ??= []
         const request = {
           id: randomUUID(),
@@ -262,28 +202,10 @@ export function install(rt, host) {
           account: account.id,
           to: String(args.to ?? ''), cc: String(args.cc ?? ''), bcc: String(args.bcc ?? ''),
           subject: String(args.subject ?? ''), body: String(args.body ?? ''),
-          attachments: (Array.isArray(args.attachments) ? args.attachments : []).map(String).filter(name => name !== ''),
-          dir,
-          attachmentDetails: (Array.isArray(args.attachments) ? args.attachments : []).map(String).filter(name => name !== '').map((name) => {
-            try { return { name, size: statSync(join(dir, name)).size } } catch { return { name } }
-          }),
+          attachments: (Array.isArray(args.attachments) ? args.attachments : []).map(String),
+          dir: workDir(exec),
           replyTo: args.reply_to ? String(args.reply_to) : undefined,
           status: 'pending', askedAt: Date.now(),
-        }
-        const skipDraft = !bot.private && (
-          (state.connectors?.mail?.noDraftFor ?? []).includes(bot.id)
-          || allAddressesAllowed(request.to, request.cc, request.bcc, state.connectors?.mail?.allowedRecipients)
-        )
-        if (skipDraft) {
-          const session = await connect(account)
-          const attachments = (request.attachments ?? []).map(name => ({ filename: name, path: realpathSync(resolve(dir ?? '', name)) }))
-          await session.send({ to: request.to, cc: request.cc || undefined, bcc: request.bcc || undefined, subject: request.subject, text: request.body, attachments, ...(request.replyTo ? { inReplyTo: request.replyTo } : {}) })
-          request.status = 'sent'
-          request.settledAt = Date.now()
-          list.push(request)
-          while (list.length > MAX_REQUESTS) { const at = list.findIndex(entry => entry.status !== 'pending'); list.splice(at === -1 ? 0 : at, 1) }
-          await rt.save()
-          return `Sent "${request.subject}" to ${request.to} from ${account.address}.`
         }
         for (const old of list) if (old.status === 'pending') { old.status = 'canceled'; old.settledAt = Date.now() }
         list.push(request)
@@ -329,95 +251,44 @@ export function install(rt, host) {
     await rt.deliver({ toId: botId, role: 'mail', text }).catch(error => rt.warn('ds-bot: mail note to %s failed: %s', botId, error))
   }
 
-  const applyRules = (patch) => {
-    const mail = state.connectors?.mail ?? {}
-    let allowed = [...(mail.allowedRecipients ?? [])]
-    let noDraft = [...(mail.noDraftFor ?? [])]
-    const addAddrs = (raw) => {
-      for (const addr of parseAddresses(Array.isArray(raw) ? raw.join(', ') : raw)) {
-        if (!allowed.includes(addr)) allowed.push(addr)
-      }
-    }
-    const dropAddrs = (raw) => {
-      const drop = new Set(parseAddresses(Array.isArray(raw) ? raw.join(', ') : raw))
-      allowed = allowed.filter(addr => !drop.has(addr))
-    }
-    if (patch.mode === 'allow-recipient') {
-      addAddrs(patch.recipients ?? patch.address ?? '')
-      if (typeof patch.botId === 'string') noDraft = noDraft.filter(id => id !== patch.botId)
-    } else if (patch.mode === 'no-draft') {
-      if (typeof patch.botId === 'string' && rt.botOf(patch.botId) && !noDraft.includes(patch.botId)) noDraft.push(patch.botId)
-    } else if (patch.mode === 'require-approval') {
-      if (typeof patch.botId === 'string') noDraft = noDraft.filter(id => id !== patch.botId)
-      if (patch.recipients || patch.address) dropAddrs(patch.recipients ?? patch.address)
-    }
-    if (patch.addRecipient) addAddrs(patch.addRecipient)
-    if (patch.removeRecipient) dropAddrs(patch.removeRecipient)
-    if (typeof patch.botId === 'string' && typeof patch.noDraft === 'boolean') {
-      noDraft = patch.noDraft
-        ? (rt.botOf(patch.botId) && !noDraft.includes(patch.botId) ? [...noDraft, patch.botId] : noDraft)
-        : noDraft.filter(id => id !== patch.botId)
-    }
-    state.connectors = {
-      ...(state.connectors ?? {}),
-      mail: { ...mail, allowedRecipients: allowed, noDraftFor: noDraft },
-    }
-  }
-
   const endpoints = {
     async 'mail-account-add'(body) {
       const address = String(body.address ?? '').trim().toLowerCase()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('Enter an email address')
       if (body.google === true) {
         if (!googleReady()) throw new Error('Google sign-in is not available in this build')
-        if (address !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('Enter an email address')
         return beginGoogle(address)
       }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('Enter an email address')
-      if (adding.has(address)) return adding.get(address)
-      const pending = (async () => {
-        const password = String(body.password ?? '').trim()
-        if (password === '') throw new Error('Enter the authorization code or app password')
-        const preset = presetOf(address)
-        const provider = typeof body.provider === 'string' ? body.provider : preset?.id ?? 'other'
-        const chosen = PRESETS.find(p => p.id === provider)
-        const imap = chosen && provider !== 'other' ? chosen.imap : { host: String(body.imapHost ?? '').trim(), port: Number(body.imapPort) || 993, secure: body.imapTls !== false }
-        const smtp = chosen && provider !== 'other' ? chosen.smtp : { host: String(body.smtpHost ?? '').trim(), port: Number(body.smtpPort) || 465, secure: body.smtpTls !== false }
-        if (imap.host === '' || smtp.host === '') throw new Error('Enter the IMAP and SMTP hosts')
-        const existing = accountOf(address)
-        const id = existing?.id ?? `m${randomUUID().slice(0, 8)}`
-        const account = { ...existing, id, address, provider, auth: 'password', imap, smtp, createdAt: existing?.createdAt ?? Date.now() }
-        delete account.error
-        // Log in once before saving, so a bad password never lands in state.
-        const old = sessions.get(id)
-        let session
-        try {
-          session = await openImap(account, password)
-        } catch (error) {
-          throw new Error(mailError(error))
-        }
-        await old?.close?.().catch(() => {})
-        try {
-          await host.secrets.writeSecret(mailSecretName(address, 'PASSWORD'), password, `Mailbox ${address}`)
-          state.connectors = { ...(state.connectors ?? {}), mail: { ...state.connectors?.mail, accounts: { ...accounts(), [id]: account } } }
-          await rt.save()
-        } catch (error) {
-          if (sessions.get(id) === session) sessions.delete(id)
-          await session.close?.()
-          throw error
-        }
-        syncTools()
-        return mailView()
-      })()
-      adding.set(address, pending)
-      try { return await pending } finally { adding.delete(address) }
+      const password = String(body.password ?? '').trim()
+      if (password === '') throw new Error('Enter the app password')
+      const preset = presetOf(address)
+      const provider = typeof body.provider === 'string' ? body.provider : preset?.id ?? 'other'
+      const chosen = PRESETS.find(p => p.id === provider)
+      const imap = chosen && provider !== 'other' ? chosen.imap : { host: String(body.imapHost ?? '').trim(), port: Number(body.imapPort) || 993, secure: body.imapTls !== false }
+      const smtp = chosen && provider !== 'other' ? chosen.smtp : { host: String(body.smtpHost ?? '').trim(), port: Number(body.smtpPort) || 465, secure: body.smtpTls !== false }
+      if (imap.host === '' || smtp.host === '') throw new Error('Enter the IMAP and SMTP hosts')
+      const id = `m${randomUUID().slice(0, 8)}`
+      const account = { id, address, provider, auth: 'password', imap, smtp, createdAt: Date.now() }
+      // Log in once before saving, so a bad password never lands in state.
+      const factory = rt.config.mail?.connect ?? connectImap
+      let session
+      try {
+        session = await factory(account, { password })
+      } catch (error) {
+        throw new Error(mailError(error))
+      }
+      state.connectors = { ...(state.connectors ?? {}), mail: { ...state.connectors?.mail, accounts: { ...accounts(), [id]: account } } }
+      await host.secrets.writeSecret(mailSecretName(address, 'PASSWORD'), password, `Mailbox ${address}`)
+      await rt.save()
+      sessions.set(id, session)
+      syncTools()
+      return mailView()
     },
     async 'mail-account-remove'(body) {
       const account = accountOf(body.id ?? body.address)
       if (account === undefined) throw new Error('No such account')
       await rt.loadSecrets()
-      // Secrets are per address; a duplicate row from before adds were merged still needs them.
-      const shared = accountList().some(other => other.id !== account.id && other.address === account.address)
-      if (!shared) for (const suffix of ['PASSWORD', 'TOKEN', 'REFRESH']) {
+      for (const suffix of ['PASSWORD', 'TOKEN', 'REFRESH']) {
         const name = mailSecretName(account.address, suffix)
         if (rt.secretValue(name) !== undefined) await rt.secretEndpoint('secret-delete', { name }).catch(() => {})
       }
@@ -428,13 +299,7 @@ export function install(rt, host) {
       const session = sessions.get(account.id)
       sessions.delete(account.id)
       await session?.close?.().catch(() => {})
-      dropGooglePending(account.address)
       syncTools()
-      return mailView()
-    },
-    async 'mail-rule-set'(body) {
-      applyRules(body ?? {})
-      await rt.save()
       return mailView()
     },
     async 'mail-send-answer'(body) {
@@ -447,16 +312,6 @@ export function install(rt, host) {
       })()
       if (found === undefined || found.request.status !== 'pending') throw new Error('This card was already answered')
       const { botId, request } = found
-      if (body.fields && typeof body.fields === 'object' && !Array.isArray(body.fields)) {
-        if (typeof body.fields.to === 'string' && body.fields.to.trim() !== '') request.to = body.fields.to.trim()
-        if (typeof body.fields.cc === 'string') request.cc = body.fields.cc.trim()
-        if (typeof body.fields.bcc === 'string') request.bcc = body.fields.bcc.trim()
-        if (typeof body.fields.subject === 'string') request.subject = body.fields.subject.trim()
-        if (typeof body.fields.body === 'string') request.body = body.fields.body
-      }
-      if (typeof body.rule === 'string') {
-        applyRules({ mode: body.rule, botId, recipients: [request.to, request.cc, request.bcc].filter(Boolean).join(', ') })
-      }
       if (body.choice !== 'send') {
         request.status = 'canceled'; request.settledAt = Date.now()
         await rt.save()
@@ -472,11 +327,7 @@ export function install(rt, host) {
       }
       try {
         const session = await connect(account)
-        const attachments = (request.attachments ?? []).map((name) => {
-          const inside = realpathSync(resolve(request.dir ?? '', name))
-          if (request.dir === undefined || inside !== realpathSync(request.dir) && !inside.startsWith(realpathSync(request.dir) + sep)) throw new Error(`Attachment ${name} is outside the working folder`)
-          return { filename: name, path: inside }
-        })
+        const attachments = (request.attachments ?? []).map(name => ({ filename: name, path: join(request.dir ?? '', name) }))
         await session.send({ to: request.to, cc: request.cc || undefined, bcc: request.bcc || undefined, subject: request.subject, text: request.body, attachments, ...(request.replyTo ? { inReplyTo: request.replyTo } : {}) })
         request.status = 'sent'; request.settledAt = Date.now()
         await rt.save()
@@ -497,44 +348,23 @@ export function install(rt, host) {
   // --- Google sign-in ------------------------------------------------------
 
   const googlePendings = new Map()
-  const dropGooglePending = key => {
-    const pending = googlePendings.get(key)
-    if (pending === undefined) return
-    googlePendings.delete(key)
-    pending.listener?.close()
-  }
   async function beginGoogle(address) {
     const client = googleClient()
     const discovery = await discover('https://accounts.google.com', { originFallback: true, fetch: rt.config.mail?.fetch ?? fetch })
-    dropGooglePending(address)
-    const pending = { discovery, address: address || undefined, key: address }
+    const pending = { discovery, address }
     googlePendings.set(address, pending)
     const { createServer } = await import('node:http')
     const listener = createServer((req, res) => {
-      req.on('error', () => res.destroy())
-      res.on('error', () => req.destroy())
-      let url
-      try { url = new URL(req.url ?? '/', 'http://127.0.0.1') } catch { res.writeHead(400); res.end(); return }
-      if (url.pathname !== '/callback') { res.writeHead(404); res.end(); return }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      if (!url.searchParams.get('code')) {
-        res.end('<p style="font-family:sans-serif">Google sign-in did not finish — go back to DS Bot and try again.</p>')
-        rt.warn('ds-bot: mail Google sign-in failed: %s', url.searchParams.get('error') ?? 'no code')
-        return
-      }
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+      res.writeHead(200, { 'content-type': 'text/html' })
       res.end('<p style="font-family:sans-serif">Signed in — you can close this tab.</p>')
-      void googleCode({ address, input: url.toString() }).catch(error => rt.warn('ds-bot: mail Google sign-in failed: %s', host.reason(error)))
-    })
-    listener.on('error', error => {
-      if (listener.listening) rt.warn('ds-bot: mail Google sign-in listener failed: %s', error?.code ?? 'error')
+      void googleCode({ address, input: url.toString() })
     })
     await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve) })
     pending.listener = listener
     pending.redirectUri = `http://127.0.0.1:${listener.address().port}/callback`
-    const state = randomUUID()
-    const { url, codeVerifier } = await beginBrowser(discovery, { client_id: client.id, client_secret: client.secret }, pending.redirectUri, { state, scope: GOOGLE_SCOPES })
+    const { url, codeVerifier } = await beginBrowser(discovery, { client_id: client.id, client_secret: client.secret }, pending.redirectUri, { state: randomUUID(), scope: GOOGLE_SCOPES })
     pending.codeVerifier = codeVerifier
-    pending.state = state
     pending.url = url
     return mailView()
   }
@@ -546,10 +376,6 @@ export function install(rt, host) {
     const url = /^https?:/i.test(input) ? new URL(input) : undefined
     const code = url ? url.searchParams.get('code') : input
     if (!code) throw new Error('The address has no code')
-    const given = url?.searchParams.get('state')
-    if (given !== null && pending.state !== undefined && given !== pending.state) throw new Error('The sign-in answer is not for this attempt')
-    googlePendings.delete(pending.key ?? pending.address)
-    pending.listener?.close()
     const client = googleClient()
     const tokens = await exchange(pending.discovery, { client_id: client.id, client_secret: client.secret }, { code, codeVerifier: pending.codeVerifier, redirectUri: pending.redirectUri, iss: url?.searchParams.get('iss') ?? undefined }, { fetch: rt.config.mail?.fetch })
     const email = pending.address || await googleEmail(tokens.access_token)
@@ -559,6 +385,8 @@ export function install(rt, host) {
     await host.secrets.writeSecret(mailSecretName(email, 'TOKEN'), tokens.access_token, `Mailbox ${email}`)
     if (typeof tokens.refresh_token === 'string') await host.secrets.writeSecret(mailSecretName(email, 'REFRESH'), tokens.refresh_token, `Mailbox ${email}`)
     await rt.save()
+    pending.listener?.close()
+    googlePendings.delete(pending.address)
     syncTools()
     return mailView()
   }
@@ -576,8 +404,6 @@ export function install(rt, host) {
       ...(account.error ? { error: account.error } : {}),
     })),
     google: googleReady(),
-    allowedRecipients: state.connectors?.mail?.allowedRecipients ?? [],
-    noDraftFor: state.connectors?.mail?.noDraftFor ?? [],
     ...(googlePendings.size > 0 ? { pending: [...googlePendings.values()].map(p => ({ kind: 'browser', url: p.url, address: p.address })) } : {}),
   })
 
@@ -606,8 +432,6 @@ export function install(rt, host) {
 function mailError(error) {
   const text = String(error?.responseText ?? error?.message ?? error)
   if (/Unsafe Login/i.test(text)) return 'The mail service refused the login (Unsafe Login). Enable IMAP/SMTP in the mailbox settings and use its authorization code, not the account password.'
-  if (error?.authenticationFailed === true || /Login fail|authentication|invalid credentials|535|534/i.test(text)) return 'The password was refused. Use the mailbox app password or authorization code, not the account password.'
-  const unreachable = /\b(?:ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ECONNRESET|ENOTFOUND|EAI_AGAIN)\b\s*(\S+)?/.exec(text)
-  if (unreachable) return unreachable[1] ? `Could not reach the mail server at ${unreachable[1]}. Check the server address.` : 'Could not reach the mail server. Check the server address.'
+  if (/authentication|invalid credentials|535|534/i.test(text)) return 'The password was refused. Use the mailbox app password or authorization code, not the account password.'
   return text.slice(0, 300)
 }
