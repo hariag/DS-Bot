@@ -41,18 +41,18 @@ export function install(rt) {
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
-    // `waiting`: the Bot holds its greeting until the user picks its model.
-    bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => {
-      const tail = rt.chatTail(rt.chatOf(bot.id))
-      return { ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId), ...(kickoff ? { waiting: true } : {}), ...(tail ? { lastAt: tail.lastAt, preview: tail.preview } : {}) }
-    }),
+    // `waiting`: the Bot holds its greeting until the user picks its model or fixes
+    // what failed it. `blocked`: the facts of a failure only the user can fix (turns.js).
+    bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => ({
+      ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId), ...(kickoff ? { waiting: true } : {}),
+    })),
     // `sessionId` is the group's own Session's current part, `ownParts` its earlier
     // ones; `parts` the members' hidden group Sessions and their earlier segments,
     // for usage.
     rooms: Object.values(state.rooms).map(({ log, seen, paused, sessions, segments, parts: ownParts, ...room }) => {
       const parts = [...Object.values(sessions ?? {}), ...Object.values(segments ?? {}).flat().map(segment => segment.sessionId), ...(ownParts ?? []).map(segment => segment.sessionId)]
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
-      return { ...room, sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      return { ...room, sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -62,16 +62,11 @@ export function install(rt) {
     // Aside answers of each Bot's current part, newest first. Not part of the
     // model-visible history; earlier parts send their cards on their own pages.
     btwCards: rt.btwView?.() ?? {},
-    // Browser holds (handoffs and takeovers) per Bot, so the phone can show
-    // the same cards the desktop toolbar shows.
-    browserHolds: rt.browserChannel?.holdSnapshot?.() ?? {},
     // Each Bot's side chats, in creation order. The answers never join the
     // model-visible history; the side panel reads them here.
     sideChats: rt.sideView?.() ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
-    // Sidebar sections that group Bots, group chats and the DSH Agent by workflow.
-    sections: state.sections ?? [],
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),
@@ -88,6 +83,8 @@ export function install(rt) {
     memory: rt.memoryEnabled !== false,
     // Set while another dsh host holds the team (store.js): why this one cannot change it.
     readOnly: rt.readOnly() ?? null,
+    // IM connections (settings → IM): one per chat-app bot the user added.
+    im: rt.imView?.() ?? { connections: [], platforms: [] },
   })
   // What changes without a new revision, sent with every state answer. `learning`:
   // each Bot's pending skill proposals. `memoryNews`:
@@ -103,7 +100,7 @@ export function install(rt) {
     learning: rt.learningView(),
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
-    phone: rt.phoneView(),
+    imStatus: rt.imStatusView?.() ?? {},
   })
   // The live fields' sources are spread across the host with no single change
   // counter, so the serialized answer itself is the detector: a poll whose `live`
@@ -121,7 +118,7 @@ export function install(rt) {
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'browser-frame', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image'])
+  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -189,9 +186,7 @@ export function install(rt) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }
-          // A phone asks for photos by reference and fetches each once (`avatar`).
-          const out = { ...view(), liveKey: answer.key, ...answer.value }
-          return ok(body.avatars === 'ref' ? rt.slimAvatars(out) : out)
+          return ok({ ...view(), liveKey: answer.key, ...answer.value })
         }
         case 'models':
           await rt.catalog({ fresh: true })
@@ -250,7 +245,7 @@ export function install(rt) {
           return ok(await rt.earlierPage(String(body.sessionId ?? ''), body.cursor ?? undefined))
         case 'chat':
           await rt.load()
-          return ok(await rt.chatPage(String(body.botId ?? ''), body.cursor ?? undefined, body.steps === true))
+          return ok(await rt.chatPage(String(body.botId ?? ''), body.cursor ?? undefined))
         // DSH's own whole-log figures for the current part of a Bot's chat, the ones its
         // status bar shows; a window without that bar shows them in the Bot's details.
         case 'run-stats': {
@@ -272,12 +267,20 @@ export function install(rt) {
         }
         case 'create-bot': {
           await rt.bootstrap()
-          const bot = await rt.createBot({ name: body.name, role: body.role, color: body.color, instructions: body.instructions, brief: body.brief, avatar: body.avatar, model: body.model, effort: body.effort, workDir: body.workDir, section: body.section, sectionId: body.sectionId })
+          const bot = await rt.createBot({ name: body.name, role: body.role, color: body.color, instructions: body.instructions, brief: body.brief, avatar: body.avatar, model: body.model, effort: body.effort, workDir: body.workDir })
           return ok(bot)
         }
         case 'update-bot':
           await rt.load()
           return ok(await rt.updateBot(body.id, body))
+        // The repair card's Retry, once the user fixed what failed the Bot's turn.
+        case 'resume': {
+          await rt.load()
+          const bot = rt.botOf(String(body.botId ?? ''))
+          if (bot === undefined) return fail('Unknown Bot', 'bot/not-found')
+          await rt.resumeBot(bot)
+          return ok(true)
+        }
         // The avatar library: photos the user imported once, kept beside the team.
         case 'avatar-library':
           await rt.load()
@@ -305,7 +308,7 @@ export function install(rt) {
           return ok(view())
         case 'create-room': {
           await rt.load()
-          const room = await rt.createRoom({ members: Array.isArray(body.members) ? body.members : [], name: body.name, section: body.section, sectionId: body.sectionId, ...(typeof body.admin === 'string' ? { admin: body.admin } : {}) })
+          const room = await rt.createRoom({ members: Array.isArray(body.members) ? body.members : [], name: body.name, ...(typeof body.admin === 'string' ? { admin: body.admin } : {}) })
           if (body.greet === true) await rt.greetRoom(room.id).catch(error => rt.warn('ds-bot: greeting in %s failed: %s', room.name, error))
           return ok(room)
         }
@@ -321,8 +324,6 @@ export function install(rt) {
             remove: Array.isArray(body.remove) ? body.remove : undefined,
             workDir: body.workDir,
             permission: body.permission,
-            section: body.section,
-            sectionId: body.sectionId,
           })
           return ok({ room: view().rooms.find(entry => entry.id === room.id), changes })
         }
@@ -358,17 +359,6 @@ export function install(rt) {
         case 'set-flags':
           await rt.load()
           return ok(await rt.setFlags(body.id, body))
-        case 'section-save':
-          await rt.load()
-          return ok(await rt.saveSection(body))
-        case 'section-order':
-          await rt.load()
-          await rt.reorderSections(body.ids)
-          return ok(view())
-        case 'section-delete':
-          await rt.load()
-          await rt.deleteSection(body.id)
-          return ok(view())
         case 'delete-room':
           await rt.load()
           await rt.deleteRoom(body.id)
@@ -376,12 +366,26 @@ export function install(rt) {
         case 'approval-answer':
           rt.answerApproval(body.id, body.choice)
           return ok(true)
-        case 'stop-member-work':
-          return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
-        case 'stop-room-work':
-          return ok(await rt.stopRoomWork(String(body.roomId ?? '')))
-        case 'stop-chat':
-          return ok(await rt.stopChat(String(body.botId ?? '')))
+        case 'stop-member-work': {
+          const stopped = await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? ''))
+          rt.goalUserStopped?.(String(body.roomId ?? ''))
+          return ok(stopped)
+        }
+        case 'stop-room-work': {
+          const stopped = await rt.stopRoomWork(String(body.roomId ?? ''))
+          rt.goalUserStopped?.(String(body.roomId ?? ''))
+          return ok(stopped)
+        }
+        case 'goal-draft': {
+          await rt.load()
+          const result = await rt.goalDraft(String(body.roomId ?? ''), body.text)
+          return result.error !== undefined ? fail(result.error, result.code ?? 'bot/refused') : ok(view())
+        }
+        case 'goal-control': {
+          await rt.load()
+          const result = await rt.goalControl(String(body.roomId ?? ''), body)
+          return result.error !== undefined ? fail(result.error, result.code ?? 'bot/refused') : ok(view())
+        }
         case 'dismiss-question':
           await rt.load()
           if (rt.own(state.questions, body.sessionId) !== undefined) {
@@ -408,11 +412,6 @@ export function install(rt) {
         case 'connector-retry':
           await rt.load()
           return ok(await rt.connectorEndpoint(endpoint, body))
-        case 'phone-set':
-        case 'phone-pair':
-        case 'phone-pair-cancel':
-        case 'phone-remove':
-          return ok(await rt.phoneEndpoint(endpoint, body))
         case 'capability-save':
         case 'capability-delete':
         case 'capability-approve':
@@ -434,39 +433,10 @@ export function install(rt) {
         case 'learning-answer':
           await rt.load()
           return ok(await rt.learningEndpoint(endpoint, body))
-        // The mobile API (mobile.js).
-        case 'hello':
-        case 'notices':
-        case 'avatar':
-        case 'room-chat':
-        case 'image':
-        case 'usage-summary':
-        case 'memory-edit':
-        case 'memory-add':
-          await rt.load()
-          return ok(await rt.mobileEndpoint(endpoint, body))
         case 'answer-question': {
           if (typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           await rt.load()
-          const past = rt.pastOwners.get(body.sessionId)
-          const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
-          const question = rt.own(state.questions, sessionId)
-          if (question === undefined || question.id !== body.questionId) return fail('This question is no longer open', 'bot/stale')
-          const reply = questionReply(question, body.answer)
-          if (reply === undefined) return fail('Nothing to send', 'bot/invalid')
-          // Claim the question before queueing so a second answer is refused.
-          delete state.questions[sessionId]
-          try {
-            await rt.ensureCapabilities(sessionId)
-            const agent = await rt.resolveAgent(sessionId)
-            agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
-            await ctx.sessions.flush(agent.session)
-          } catch (error) {
-            state.questions[sessionId] ??= question
-            throw error
-          }
-          await rt.save()
-          return ok(true)
+          return ok(await rt.answerQuestion(body.sessionId, body.questionId, body.answer))
         }
         case 'view-reply': {
           if (typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
@@ -497,21 +467,7 @@ export function install(rt) {
           const text = String(body.text ?? '').trim()
           if (text === '' || typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           await rt.load()
-          // A Bot id, a group chat's id, or an earlier part of either means the
-          // current part.
-          const past = rt.pastOwners.get(body.sessionId)
-          const room = rt.roomOf(body.sessionId)
-          const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId)
-            : room !== undefined ? rt.sessionOfRoom(room)
-              : past?.roomId === undefined && past !== undefined ? rt.chatOf(past.botId)
-                : past !== undefined ? rt.sessionOfRoom(rt.roomOf(past.roomId)) : body.sessionId
-          await rt.ensureCapabilities(sessionId)
-          await ctx.sessionController.prompt({
-            requestId: randomUUID(),
-            sessionId,
-            mode: 'queue',
-            content: [{ type: 'text', text }],
-          }, AbortSignal.timeout(30_000))
+          await rt.sendUser({ sessionId: body.sessionId, content: [{ type: 'text', text }] })
           return ok(true)
         }
         case 'btw-delete': {
@@ -554,12 +510,6 @@ export function install(rt) {
           return ok(rt.dshUpdateStart?.())
         case 'repo-stars':
           return ok(await rt.repoStars())
-        case 'browser-frame': {
-          if (rt.browserFrame === undefined && rt.browserChannel === undefined) return fail('Bot browsers are off on this host', 'bot/browser-off')
-          const frame = typeof rt.browserFrame === 'function' ? await rt.browserFrame(String(body.botId ?? '')) : undefined
-          if (frame === undefined) return fail('This Bot has no open browser', 'bot/not-found')
-          return ok(frame)
-        }
         // The Desktop window's long poll for read_browser, and its answers.
         case 'browser-wait': {
           if (rt.browserChannel === undefined) return fail('Bot browsers are off on this host', 'bot/browser-off')
@@ -626,6 +576,17 @@ export function install(rt) {
           rt.browserChannel?.setHold(botId, { by: 'user', reason: 'stopped', note: 'The user is controlling this browser.' })
           return ok(true)
         }
+        case 'im-add':
+        case 'im-update':
+        case 'im-remove':
+        case 'im-pair':
+        case 'im-unpair':
+        case 'im-chat':
+        case 'im-retry':
+        case 'im-login-start':
+        case 'im-login-wait':
+          await rt.load()
+          return ok(await rt.imEndpoint(endpoint, body))
         case 'diagnostics':
           await rt.load()
           return ok(await rt.diagnostics.report(body))
@@ -645,7 +606,50 @@ export function install(rt) {
     }
   }
 
-  rt.phoneServe(handle)
+  // How a user message reaches a Session: a Bot id, a group chat's id, or an earlier
+  // part of either resolves to its current part. `content` is the prompt blocks DSH
+  // takes (text, image, file receipts); `requestId` lands on the message's source.
+  async function sendUser({ sessionId: ref, content, requestId = randomUUID() }) {
+    const past = rt.pastOwners.get(ref)
+    const room = rt.roomOf(ref)
+    const sessionId = rt.botOf(ref) ? rt.chatOf(ref)
+      : room !== undefined ? rt.sessionOfRoom(room)
+        : past?.roomId === undefined && past !== undefined ? rt.chatOf(past.botId)
+          : past !== undefined ? rt.sessionOfRoom(rt.roomOf(past.roomId)) : ref
+    await rt.ensureCapabilities(sessionId)
+    await ctx.sessionController.prompt({
+      requestId,
+      sessionId,
+      mode: 'queue',
+      content,
+    }, AbortSignal.timeout(30_000))
+  }
+
+  // The user's answer to an ask_user card, from the web or an IM chat. A Bot id or an
+  // earlier part of its own chat means the current one.
+  async function answerQuestion(sessionRef, questionId, answer) {
+    const past = rt.pastOwners.get(sessionRef)
+    const sessionId = rt.botOf(sessionRef) ? rt.chatOf(sessionRef) : past && past.roomId === undefined ? rt.chatOf(past.botId) : sessionRef
+    const question = rt.own(state.questions, sessionId)
+    if (question === undefined || question.id !== questionId) throw Object.assign(new Error('This question is no longer open'), { code: 'bot/stale' })
+    const reply = questionReply(question, answer)
+    if (reply === undefined) throw Object.assign(new Error('Nothing to send'), { code: 'bot/invalid' })
+    // Claim the question before queueing so a second answer is refused.
+    delete state.questions[sessionId]
+    try {
+      await rt.ensureCapabilities(sessionId)
+      const agent = await rt.resolveAgent(sessionId)
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
+      await ctx.sessions.flush(agent.session)
+    } catch (error) {
+      state.questions[sessionId] ??= question
+      throw error
+    }
+    await rt.save()
+    return true
+  }
+
+  Object.assign(rt, { sendUser, answerQuestion })
 
   // An exact Fetch route on the shared /api channel; the browser authenticates with its session cookie.
   ctx.effect(() => ctx.connection.fetch.register({

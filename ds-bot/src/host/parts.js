@@ -907,9 +907,13 @@ export function install(rt) {
     }
     if (job.moved) {
       rt.renewMemory(agent.id)
-      // The task move started inside the switch; stopping the earlier part while it
-      // still runs would drop the tasks it has not copied yet.
-      await job.movedSchedules
+      try {
+        await rt.moveSchedules(agent.id, currentOf(job))
+      } catch (error) {
+        // Keep the restart marker: stopping this part would delete unmoved tasks.
+        job.kept = true
+        throw error
+      }
       await ctx.workspaceRegistry.archiveSession(agent.id, { stopActivity: true })
         .catch(error => rt.warn('ds-bot: earlier part %s not archived: %s', agent.id, error))
     }
@@ -1019,7 +1023,6 @@ export function install(rt) {
     const now = await freshRoute(bot, session)
     if (now !== undefined && (now.ref !== picked?.ref || now.effort !== picked?.effort)) await selectRoute({ name }, freshId, now)
     if (job.failed !== undefined) rescued.set(freshId, job.bare ? 'bare' : 'carried')
-    job.movedSchedules = rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
     // Then what the old part held: the stopped turn's input, then whatever waited. It
@@ -1371,9 +1374,10 @@ export function install(rt) {
       const source = event.data?.source
       if (source?.kind === 'user') {
         const content = Array.isArray(event.data.content) ? event.data.content : []
-        const imageRefs = content.filter(block => block?.type === 'image' && block.attachment !== undefined)
-          .map(block => ({ attachmentId: block.attachment.attachmentId, mime: block.attachment.mime ?? block.attachment.mimeType, name: block.attachment.name }))
-        stamp(event, { kind: 'user', text: textOf(content), ...(imageRefs.length > 0 ? { images: imageRefs.length, imageRefs } : {}), time: event.time })
+        const images = content.filter(block => block?.type === 'image').length
+        // A message that came in over IM carries im:<platform>:<uuid> as its requestId.
+        const via = typeof source.rpcId === 'string' && source.rpcId.startsWith('im:') ? source.rpcId.split(':')[1] : undefined
+        stamp(event, { kind: 'user', text: textOf(content), ...(images > 0 ? { images } : {}), ...(via ? { via } : {}), time: event.time })
       } else if (source?.kind === REPLY_KIND) {
         const text = textOf(event.data.content)
         const reply = readReply(text)
@@ -1400,8 +1404,9 @@ export function install(rt) {
     return items
   }
 
-  async function partPage(parts, index, cursor, steps = false) {
+  async function partPage(parts, index, cursor) {
     const part = parts[index]
+    const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
     // An archived earlier part may have no live agent left; its stored events
     // still page fine, so resolve failure only drops the live-session cap.
     const agent = await rt.resolveAgent(part.sessionId).catch(() => undefined)
@@ -1410,19 +1415,19 @@ export function install(rt) {
       ...(agent ? { throughSeq: Number(agent.session.seq) - 1 } : {}),
       ...(Number.isInteger(cursor?.beforeSeq) ? { beforeSeq: cursor.beforeSeq } : {}),
       maxMessages: EARLIER_PAGE,
-    }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
+    }, signal)
     const events = page.records.map(record => record.event)
     let seedTurn
     if (agent === undefined) {
       // Without the live session's projection, rows on a page that does not
       // hold its own turn/start would lose their turn; walk back for it.
       let before = events[0]?.seq
-      for (let depth = 0; Number.isInteger(before) && depth < 5 && seedTurn === undefined; depth += 1) {
+      while (Number.isInteger(before) && seedTurn === undefined) {
         const back = await ctx.sessionController.page({
           address: { kind: 'session', sessionId: part.sessionId },
           beforeSeq: before,
           maxMessages: EARLIER_PAGE,
-        }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
+        }, signal)
         const starts = back.records.map(record => record.event).filter(event => event.type === 'turn/start')
         if (starts.length > 0) {
           const last = starts.at(-1).data?.turn
@@ -1437,7 +1442,6 @@ export function install(rt) {
     const more = page.hasMore && events.length > 0
     // The line above a part's first message marks where it began.
     if (!more && index > 0) items.unshift({ kind: 'divider', time: part.startedAt })
-    if (steps === true) await applySteps(items, events, part.sessionId)
     return { items, cursor: more ? { part: index, beforeSeq: events[0].seq } : index > 0 ? { part: index - 1 } : null }
   }
 
@@ -1459,115 +1463,13 @@ export function install(rt) {
 
   // A Bot's whole own chat, newest page first: the current part, then the earlier
   // ones, for a window that draws the conversation itself.
-  // The same short labels the client gives a tool (cells.js cannot be loaded
-  // here; keep the two tables in step).
-  const TOOL_PHRASES = [
-    [/web_?search|search_?web/i, 'Searching online'],
-    [/fetch|browse|browser|web/i, 'Reading a page'],
-    [/shell|bash|pwsh|powershell|exec|command|terminal/i, 'Running shell commands'],
-    [/^(read|view|cat)\b|read_/i, 'Opening a file'],
-    [/grep|glob|list_dir|^ls$|find|search/i, 'Looking through files'],
-    [/write|edit|patch|apply|replace/i, 'Writing changes'],
-    [/image|photo|draw/i, 'Working on an image'],
-  ]
-  const STEP_LABELS = {
-    list_secrets: 'Checking the keys', ask_user_question: 'Waiting for your answer',
-    message_bot: 'Asking another Bot', stop_bot: 'Stopping another Bot',
-    create_bot: 'Creating a Bot', update_bot: 'Updating a Bot',
-    create_group: 'Creating a group', update_group: 'Updating the group',
-    delete_group: 'Deleting the group', post_to_group: 'Posting in the group',
-    list_bots: 'Checking the team', read_group_chat: 'Reading a group chat',
-    read_own_chat: 'Looking back through the chat',
-    remember: 'Saving to memory', forget: 'Updating memory', recall: 'Checking memory',
-  }
-  const toolLabel = name => STEP_LABELS[name] ?? TOOL_PHRASES.find(([pattern]) => pattern.test(name))?.[1]
-
-  // Per-turn folds of a page's tool calls, for `chat`/`room-chat` with
-  // `steps: true`. Interactive calls stay out: they show as cards, not steps.
-  function stepsItems(events, partId) {
-    const hidden = new Set(state.exchangeTurns[partId] ?? [])
-    const byTurn = new Map()
-    let turn
-    for (const event of events) {
-      if (event.type === 'turn/start') {
-        if (typeof event.data?.turn === 'number' && Number.isInteger(event.data.turn)) turn = event.data.turn
-        continue
-      }
-      if (turn === undefined || hidden.has(turn)) continue
-      if (event.type === 'tool/call') {
-        const name = event.data?.name
-        if (typeof name !== 'string' || name === 'ask_user' || name === 'request_secret' || name === 'group_relay') continue
-        const list = byTurn.get(turn) ?? byTurn.set(turn, []).get(turn)
-        list.push({ callId: event.data?.callId ?? null, name, label: toolLabel(name) ?? null })
-        continue
-      }
-      if (event.type === 'tool/result') {
-        const callId = event.data?.message?.toolCallId
-        const entry = byTurn.get(turn)?.find(tool => tool.callId === callId)
-        if (entry !== undefined && typeof event.data?.message?.ok === 'boolean') entry.ok = event.data.message.ok
-      }
-    }
-    for (const tools of byTurn.values()) for (const tool of tools) delete tool.callId
-    return byTurn
-  }
-
-  // Places a page's `steps` items after the last row of each turn and fills in
-  // `ms` from the turn's thinking time when the stream has it.
-  async function applySteps(items, events, sessionId) {
-    const byTurn = stepsItems(events, sessionId)
-    for (const [turn, tools] of byTurn) {
-      const item = { kind: 'steps', turn, tools, time: items.filter(it => it.turn === turn).at(-1)?.time ?? events.at(-1)?.time }
-      const ms = await rt.thinkingOf(sessionId, turn).catch(() => undefined)
-      if (typeof ms === 'number' && ms > 0) item.ms = ms
-      const at = items.reduce((last, it, index) => it.turn === turn ? index : last, -1)
-      items.splice(at < 0 ? items.length : at + 1, 0, item)
-    }
-    return items
-  }
-
-  // The newest line of a Bot's own-chat part, for the list row's order and
-  // preview. Read once per part, then kept by session/event.
-  const PREVIEWABLE = new Set(['bot', 'user', 'answer', 'post', 'view'])
-  const tails = new Map()
-  const previewText = item => String(item.text ?? item.title ?? item.texts?.join(' ') ?? '').replace(/\s+/g, ' ').trim()
-  const applyTail = (sessionId, item) => tails.set(sessionId, { lastAt: item.time ?? 0, preview: previewText(item) })
-  const fillTail = async sessionId => {
-    // Newest page back until a row shows; chats almost always have it on page one.
-    try {
-      let beforeSeq
-      for (let pages = 0; pages < 10; pages += 1) {
-        const page = await ctx.sessionController.page({
-          address: { kind: 'session', sessionId },
-          ...(beforeSeq !== undefined ? { beforeSeq } : {}),
-          maxMessages: EARLIER_PAGE,
-        }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
-        const events = page.records.map(record => record.event)
-        const last = [...displayItems(sessionId, events)].reverse().find(item => PREVIEWABLE.has(item.kind))
-        if (last !== undefined) { applyTail(sessionId, last); return }
-        if (!page.hasMore || events.length === 0) break
-        beforeSeq = events[0]?.seq
-      }
-      tails.set(sessionId, { lastAt: 0, preview: '' })
-    } catch { tails.set(sessionId, { lastAt: 0, preview: '' }) }
-  }
-  rt.chatTail = sessionId => {
-    if (!tails.has(sessionId)) { tails.set(sessionId, null); void fillTail(sessionId); return undefined }
-    return tails.get(sessionId) ?? undefined
-  }
-  ctx.on('session/event', (session, event) => {
-    if (!tails.has(session.id)) return
-    try {
-      for (const item of displayItems(session.id, [event], session)) if (PREVIEWABLE.has(item.kind)) applyTail(session.id, item)
-    } catch { /* a tail miss must never take out the other listeners */ }
-  })
-
-  async function chatPage(botId, cursor, steps = false) {
+  async function chatPage(botId, cursor) {
     const parts = partsOf(botId)
     if (parts.length === 0) throw Object.assign(new Error('Unknown Bot'), { code: 'bot/not-found' })
     const index = Number.isInteger(cursor?.part) ? cursor.part : parts.length - 1
     if (index < 0 || index >= parts.length) return { sessionId: parts.at(-1).sessionId, items: [], cursor: null }
-    return { sessionId: parts.at(-1).sessionId, ...(await partPage(parts, index, cursor, steps)) }
+    return { sessionId: parts.at(-1).sessionId, ...(await partPage(parts, index, cursor)) }
   }
 
-  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, applySteps, followFolder, heldBack, switchJobs: () => switches.values() })
+  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, followFolder, heldBack, switchJobs: () => switches.values() })
 }

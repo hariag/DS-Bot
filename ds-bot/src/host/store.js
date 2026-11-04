@@ -4,7 +4,7 @@
 import { copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, SECTION_COLORS, SECTION_NAME_MAX, TEXT_KEPT } from './constants.js'
+import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, TEXT_KEPT } from './constants.js'
 import { replaceFile } from './files.js'
 import { homeLock } from './home-lock.js'
 import { currentColor, headOf, normalize, unquote } from './text.js'
@@ -18,8 +18,8 @@ export const own = (table, key) => (table != null && Object.hasOwn(table, key) ?
 export function install(rt) {
   const { ctx, home, statePath } = rt
 
-  /** @type {{version:1, workspaceId?:string, mainBotIds:string[], bots:Record<string,any>, privateArchives:any[], rooms:Record<string,any>, agents:Record<string,any>, sections:any[], capabilities:{items:Record<string,any>}, exchanges:any[], exchangeTurns:Record<string,number[]>, revision:number}} */
-  const state = { version: 1, mainBotIds: [], bots: {}, privateArchives: [], rooms: {}, agents: {}, sections: [], capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, requests: {}, questions: {}, views: {}, prefs: {}, switching: {}, revision: 0 }
+  /** @type {{version:1, workspaceId?:string, mainBotIds:string[], bots:Record<string,any>, privateArchives:any[], rooms:Record<string,any>, agents:Record<string,any>, capabilities:{items:Record<string,any>}, exchanges:any[], exchangeTurns:Record<string,number[]>, revision:number}} */
+  const state = { version: 1, mainBotIds: [], bots: {}, privateArchives: [], rooms: {}, agents: {}, capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, requests: {}, questions: {}, views: {}, prefs: {}, switching: {}, revision: 0 }
   let loaded = null
   let writing = Promise.resolve()
   const { warn } = rt
@@ -150,24 +150,6 @@ export function install(rt) {
     }
     state.mainBotIds = state.mainBotIds.filter(id => state.bots[id])
     if (!Array.isArray(state.privateArchives)) state.privateArchives = []
-    if (!Array.isArray(state.sections)) state.sections = []
-    else {
-      const seen = new Set()
-      state.sections = state.sections
-        .filter(sec => sec && typeof sec === 'object' && typeof sec.id === 'string' && sec.id !== '' && typeof sec.name === 'string' && sec.name.trim() !== '' && !seen.has(sec.id) && seen.add(sec.id))
-        .map(sec => ({
-          id: sec.id,
-          name: sec.name.trim().slice(0, SECTION_NAME_MAX),
-          ...(sec.collapsed === true ? { collapsed: true } : {}),
-          ...(SECTION_COLORS.includes(sec.color) ? { color: sec.color } : {}),
-        }))
-    }
-    const sectionIds = new Set(state.sections.map(sec => sec.id))
-    for (const entry of [...Object.values(state.bots), ...Object.values(state.rooms), ...Object.values(state.agents)]) {
-      if (entry.sectionId !== undefined && (typeof entry.sectionId !== 'string' || !sectionIds.has(entry.sectionId) || entry.id === state.mainBotIds[0])) {
-        delete entry.sectionId
-      }
-    }
     // Teams from before the whale was stored at setup: their first Bot, while still a
     // Main Bot, gets it once wherever it has no look of its own. After that the whale is
     // an ordinary look the user can change, and it never passes to another Bot.
@@ -200,13 +182,15 @@ export function install(rt) {
       delete room.botRounds
       migrated = true
     }
-    // LEGACY: the late-round limit went with the round caps; a group counts relays to
-    // its pause now.
+    // LEGACY: the late-round limit went with the round caps, and the relay limit that
+    // followed it went too. Calls it parked stay until the group's next round runs them.
     for (const room of Object.values(state.rooms)) {
-      if (room.lateRounds === undefined && room.quietNoticed === undefined && room.quietShown === undefined) continue
+      if (['lateRounds', 'quietNoticed', 'quietShown', 'relays', 'relayLimit'].every(key => room[key] === undefined)) continue
       delete room.lateRounds
       delete room.quietNoticed
       delete room.quietShown
+      delete room.relays
+      delete room.relayLimit
       migrated = true
     }
     // Groups from before group settings existed reply in turn, led by a Main Bot member.
@@ -400,7 +384,9 @@ export function install(rt) {
         await replaceFile(temp, statePath, ensureLock)
         seen = stamp()
         rt.capabilitiesStateSaved?.()
-        rt.stateSaved?.()
+        for (const listener of savedListeners) {
+          try { listener() } catch (error) { warn('ds-bot: saved listener failed: %s', error) }
+        }
       } catch (error) {
         await unlink(temp).catch(() => {})
         throw error
@@ -419,7 +405,11 @@ export function install(rt) {
   }, 'ds-bot: state lock')
 
   const botOf = id => (id === undefined ? undefined : own(state.bots, id))
-  const roomOf = id => (id === undefined ? undefined : own(state.rooms, id))
+  // A group's own Session moves on to a fresh part when the group's folder no longer
+  // matches the one it was made in (parts.js), like a Bot's own chat: `room.id` stays
+  // the first Session's id and `room.sessionId` the current one, so the group keeps
+  // one identity while its Session moves. `roomOwners` maps the current Session.
+  const roomOf = id => (id === undefined ? undefined : own(state.rooms, id) ?? own(state.rooms, roomOwners.get(id)))
   const isMain = id => id !== undefined && state.mainBotIds.includes(id)
 
   // Group Sessions. A member speaks in each group from a hidden Session of its own,
@@ -428,26 +418,35 @@ export function install(rt) {
   // member's private context. Created on the member's first turn in the group.
   //
   // Segments. A long conversation moves to a fresh Session at a context line (see
-  // parts.js). A Bot's id is the Session id of its first own-chat segment and
-  // never changes; `bot.sessionId` is the current one. Earlier segments, of the own
-  // chat (`bot.segments`) and of each group Session (`room.segments[botId]`), are
+  // parts.js), and a group's own Session to a fresh part when the group's folder
+  // changes. A Bot's id is the Session id of its first own-chat segment and never
+  // changes; `bot.sessionId` is the current one, and `room.sessionId` the group's.
+  // Earlier segments, of the own chat (`bot.segments`), of each group Session
+  // (`room.segments[botId]`) and of the group's own Session (`room.parts`), are
   // archived and stay readable.
   /** @type {Map<string, string>} */
   const chatOwners = new Map()
   /** @type {Map<string, {botId:string, roomId:string}>} */
   const groupOwners = new Map()
-  /** @type {Map<string, {botId:string, roomId?:string}>} */
+  /** @type {Map<string, string>} */
+  const roomOwners = new Map()
+  /** @type {Map<string, {botId?:string, roomId?:string}>} */
   const pastOwners = new Map()
   const chatOf = botId => botOf(botId)?.sessionId ?? botId
+  const sessionOfRoom = room => (room === undefined ? undefined : room.sessionId ?? room.id)
   const indexSessions = () => {
     chatOwners.clear()
     groupOwners.clear()
+    roomOwners.clear()
     pastOwners.clear()
     for (const bot of Object.values(state.bots)) {
       for (const segment of bot.segments ?? []) pastOwners.set(segment.sessionId, { botId: bot.id })
       chatOwners.set(chatOf(bot.id), bot.id)
     }
     for (const room of Object.values(state.rooms)) {
+      const sessionId = sessionOfRoom(room)
+      if (sessionId !== undefined) roomOwners.set(sessionId, room.id)
+      for (const segment of room.parts ?? []) pastOwners.set(segment.sessionId, { roomId: room.id })
       for (const [botId, segments] of Object.entries(room.segments ?? {})) {
         for (const segment of segments) pastOwners.set(segment.sessionId, { botId, roomId: room.id })
       }
@@ -466,6 +465,7 @@ export function install(rt) {
   const isBotSession = id => chatOwners.has(id) || groupOwners.has(id)
   const groupSessionsOf = botId => Object.values(state.rooms).map(room => room.sessions?.[botId]).filter(Boolean)
   const dropGroupSession = (room, botId) => {
+    if (room.memberDirs !== undefined) delete room.memberDirs[botId]
     const sessionId = room.sessions?.[botId]
     if (sessionId === undefined) return
     delete room.sessions[botId]
@@ -505,10 +505,16 @@ export function install(rt) {
   }
   const isAdminOf = (room, id) => id !== undefined && room.admin === id
 
+  const savedListeners = new Set()
+  const onSaved = (listener) => {
+    savedListeners.add(listener)
+    return () => savedListeners.delete(listener)
+  }
+
   Object.assign(rt, {
-    state, load, save, refresh, readOnly, own,
-    botOf, roomOf, isMain, chatOf, selfOf, isBotSession,
-    chatOwners, groupOwners, pastOwners,
+    state, load, save, refresh, readOnly, own, onSaved,
+    botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession,
+    chatOwners, groupOwners, roomOwners, pastOwners,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })
 }
