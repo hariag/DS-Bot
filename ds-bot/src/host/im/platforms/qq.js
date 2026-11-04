@@ -4,9 +4,7 @@
 // msg_id with an incrementing msg_seq; outside the reply window the platform
 // refuses and the reason is permanent. No buttons — the core numbers choices.
 // Wire details ported from @tencent-connect/qqbot-nodejs (MIT, see NOTICE).
-import { chunkMarkdown, toPlain } from '../format.js'
-import { toQqMarkdown } from '../qq-markdown.js'
-import { retryDelay, retryWait } from './retry.js'
+import { chunkMarkdown } from '../format.js'
 
 const API = 'https://api.sgroup.qq.com'
 const TOKEN_API = 'https://bots.qq.com'
@@ -15,7 +13,7 @@ const TEXT_LIMIT = 2000
 const INTENTS = 1 << 25
 
 const apiBase = env => String(env.config?.api ?? API).replace(/\/+$/, '')
-const tokenBase = env => String(env.config?.token ?? TOKEN_API)
+const tokenBase = env => String(env.config?.token ?? apiBase(env))
 
 const getToken = async (fields, env) => {
   const response = await env.fetch(`${tokenBase(env)}/app/getAppAccessToken`, {
@@ -24,12 +22,7 @@ const getToken = async (fields, env) => {
     body: JSON.stringify({ appId: String(fields.appId ?? '').trim(), clientSecret: String(fields.appSecret ?? '').trim() }),
   })
   const body = await response.json().catch(() => ({}))
-  if (body.access_token === undefined) {
-    const error = new Error(body.error_reason ?? body.error ?? 'QQ refused these credentials')
-    // A refusal is not fixed by trying again; a server or network failure is.
-    error.permanent = response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)
-    throw error
-  }
+  if (body.access_token === undefined) throw new Error(body.error_reason ?? body.error ?? 'QQ refused these credentials')
   return { token: body.access_token, expiresAt: Date.now() + Math.max(10, Number(body.expires_in ?? 7200) - 300) * 1000 }
 }
 
@@ -114,21 +107,12 @@ export default {
       })
     }
 
-    let openFailures = 0
     const open = (resume) => {
       const gen = generation
       try {
         socket = new env.WebSocket(gatewayUrl)
-        openFailures = 0
       } catch (error) {
-        // A socket that cannot be built yet is retried like a dropped one; the
-        // connection is not over (#1119).
-        if (stopped || generation !== gen) return
-        handlers.onStatus({ state: 'retrying', error: `QQ could not open a socket: ${error?.message ?? error}` })
-        clearTimeout(reconnectTimer)
-        reconnectTimer = setTimeout(() => { if (!stopped) open(resume) }, retryDelay(openFailures))
-        reconnectTimer.unref?.()
-        openFailures += 1
+        handlers.onStatus({ state: 'error', error: `QQ could not open a socket: ${error?.message ?? error}` })
         return
       }
       socket.addEventListener('message', (event) => {
@@ -165,36 +149,16 @@ export default {
 
     let gatewayUrl
     handlers.onStatus({ state: 'connecting' })
-    // The token and gateway are fetched until they arrive: a start before the network
-    // is up must connect once it is (#1119). A refused credential stops instead.
     void (async () => {
-      let attempt = 0
-      while (!stopped) {
-        try {
-          const got = await getToken(fields, env)
-          token = got.token
-          expiresAt = got.expiresAt
-          const gateway = await api(env, token, '/gateway', { method: 'GET' })
-          if (!gateway?.url) {
-            // A 200 that names no gateway is the platform refusing this app, the
-            // same as DingTalk's missing endpoint and Feishu's missing URL;
-            // retrying would send the same refusal again.
-            const refused = new Error(String(gateway?.message ?? gateway?.error ?? 'QQ refused the gateway'))
-            refused.permanent = true
-            throw refused
-          }
-          gatewayUrl = gateway.url
-          break
-        } catch (error) {
-          if (stopped) return
-          if (error?.permanent === true) {
-            handlers.onStatus({ state: 'error', error: error.message })
-            return
-          }
-          handlers.onStatus({ state: 'retrying', error: error.message })
-          await retryWait(retryDelay(attempt))
-          attempt += 1
-        }
+      try {
+        const got = await getToken(fields, env)
+        token = got.token
+        expiresAt = got.expiresAt
+        const gateway = await api(env, token, '/gateway', { method: 'GET' })
+        gatewayUrl = gateway?.url
+      } catch (error) {
+        handlers.onStatus({ state: 'error', error: error.message })
+        return
       }
       if (stopped) return
       refresh()
@@ -203,29 +167,17 @@ export default {
 
     return {
       send: async (chat, { text }) => {
-        const chunks = chunkMarkdown(toQqMarkdown(String(text ?? '')), TEXT_LIMIT)
+        const chunks = chunkMarkdown(String(text ?? ''), TEXT_LIMIT)
         const msgId = lastMsgId.get(chat.key)
         const base = chat.kind === 'direct' ? `/v2/users/${chat.key}/messages` : `/v2/groups/${chat.key}/messages`
         let messageId
         for (const chunk of chunks) {
           const seq = (msgSeq.get(msgId) ?? 0) + 1
           msgSeq.set(msgId, seq)
-          const reply = msgId ? { msg_id: msgId, msg_seq: seq } : {}
-          let sent
-          try {
-            sent = await api(env, token, base, {
-              method: 'POST',
-              body: { markdown: { content: chunk }, msg_type: 2, ...reply },
-            })
-          } catch (error) {
-            // 40034090 is the platform refusing the markdown itself (no permission
-            // for it). Any other refusal is about this reply and is not retried.
-            if (Number(error?.bizCode) !== 40034090) throw error
-            sent = await api(env, token, base, {
-              method: 'POST',
-              body: { content: toPlain(chunk), msg_type: 0, ...reply },
-            })
-          }
+          const sent = await api(env, token, base, {
+            method: 'POST',
+            body: { content: chunk, msg_type: 0, ...(msgId ? { msg_id: msgId, msg_seq: seq } : {}) },
+          })
           messageId = String(sent?.id ?? messageId ?? '')
         }
         return { messageId }
@@ -253,7 +205,6 @@ async function api(env, token, path, { method = 'GET', body } = {}) {
     const reason = json.message ?? json.error ?? `QQ answered ${response.status}`
     const error = new Error(String(reason))
     error.status = response.status
-    error.bizCode = json.code ?? json.err_code
     // A refusal outside the reply window or over quota is permanent; 4xx other
     // than auth problems too. 5xx and timeouts retry.
     error.permanent = response.status >= 400 && response.status < 500 && response.status !== 429
