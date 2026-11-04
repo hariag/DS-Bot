@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { Session } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
+import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { mountBrowserPlugin } from '../src/host/browser/mount.js'
 import { toolDefs as refsTools } from '../src/host/browser/refs.js'
 
@@ -11,6 +13,7 @@ test('browser handoff and resume return valid DSH outputs and clear the Bot hold
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeExecutor)
   t.after(async () => ctx.fiber.dispose())
 
   let hold = null
@@ -89,6 +92,7 @@ test('a screenshot degrades to text when no attachments service is mounted', asy
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeExecutor)
   t.after(async () => ctx.fiber.dispose())
 
   const plugin = inner => {
@@ -120,10 +124,49 @@ test('a screenshot degrades to text when no attachments service is mounted', asy
   ])
 })
 
+test('a stored browser screenshot is repaired before the next step and survives reload', async t => {
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeExecutor)
+  t.after(async () => ctx.fiber.dispose())
+  const session = Session.create('old-browser-chat')
+  const call = session.append('tool/call', { turn: 1, step: 1, callId: 'shot', name: 'browser_screenshot', arguments: '{}' })
+  session.append('tool/result', {
+    turn: 1, step: 1,
+    message: createToolResultMessage({
+      callId: 'shot', isError: false,
+      content: [{ type: 'text', text: 'Old screenshot' }, { type: 'image', data: 'AAAA', mediaType: 'image/jpeg', offloaded: true }],
+    }),
+  }, { surfaceOp: 'append', sourceEventSeqs: [call.seq] })
+  const ref = { attachmentId: 'sha256:abcd', mediaType: 'image/jpeg', bytes: 3, width: 1, height: 1 }
+  let flushed
+  const plugin = inner => {
+    inner.provide('attachments', { saveImage: async () => ref })
+    inner.provide('sessions', { flush: async value => { flushed = value.snapshotEvents() } })
+    mountBrowserPlugin(inner, {
+      toolDefs: refsTools, defineTool, keyOf: async () => 'bot-1', profileRoot: '/tmp/browser-profiles', headless: true,
+    })
+  }
+  plugin.inject = ['tools']
+  await ctx.plugin(plugin)
+  const step = () => ctx.waterfall('agent/pre-step', { agent: { id: 'bot-1', session } }, async () => 'next')
+  await step()
+  assert.ok(flushed, 'the repair is durable before the model sees it')
+  const restored = Session.create('old-browser-chat', flushed)
+  assert.deepEqual(restored.deriveMessages()[0].content, [
+    { type: 'text', text: 'Old screenshot' }, { type: 'image', attachment: ref, offloaded: true },
+  ])
+  const afterRepair = session.seq
+  await step()
+  assert.equal(session.seq, afterRepair, 'a repaired result is not rewritten again')
+})
+
 test('browser tools refuse every operation while a user hold is active', async t => {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeExecutor)
   t.after(async () => ctx.fiber.dispose())
   const hold = { by: 'user', reason: 'stopped', note: 'The user is controlling this browser.' }
   const plugin = inner => {
@@ -167,6 +210,7 @@ test('browser endpoint connection uses the execution Bot identity, not tool argu
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeExecutor)
   t.after(async () => ctx.fiber.dispose())
   let connected
   const plugin = inner => {
@@ -202,6 +246,7 @@ test('a channel user hold closes the cached Playwright session and give-back rec
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeExecutor)
   t.after(async () => ctx.fiber.dispose())
   let hold = null
   let notifyHold
