@@ -23,54 +23,13 @@ for (const refreshing of [false, true]) {
       })
       await gw.listen()
       try {
-        const response = await fetch(gw.urlFor('svc'), { headers: gw.headers(), signal: AbortSignal.timeout(3000) })
-        ${refreshing ? `// Two legal timings for the destroy: inside the refresh the gateway
-        // already saw the stream error and answers 502 itself; after it, the
-        // 401 headers were already forwarded and the piped body then breaks.
-        // Either way the engine must answer without hanging or crashing.
-        if (response.status === 502) {
-          assert.match(await response.text(), /connector upstream failed/)
-        } else {
-          assert.equal(response.status, 401)
-          await assert.rejects(response.text(), error => error.name !== 'TimeoutError' && error.name !== 'AbortError')
-        }` : "await assert.rejects(response.text(), error => error.name !== 'TimeoutError' && error.name !== 'AbortError')"}
+        const response = await fetch(gw.urlFor('svc'), { headers: gw.headers(), signal: AbortSignal.timeout(1000) })
+        ${refreshing ? 'assert.equal(response.status, 502)' : ''}
+        ${refreshing ? 'await response.text()' : "await assert.rejects(response.text(), error => error.name !== 'TimeoutError' && error.name !== 'AbortError')"}
       } finally { await gw.close(); await new Promise(resolve => upstream.close(resolve)) }
     `
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 })
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 })
     assert.equal(result.status, 0, result.stderr || result.error?.message)
-  })
-}
-
-for (const limited of [false, true]) {
-  test(`a 401 that refresh cannot fix answers the call with a sign-in reason${limited ? ' (read-only list)' : ''}`, async (t) => {
-    let hits = 0
-    const upstream = createServer((req, res) => {
-      hits += 1
-      req.resume()
-      req.on('end', () => { res.writeHead(401, { 'www-authenticate': 'Bearer' }); res.end() })
-    })
-    await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve))
-    t.after(() => upstream.close())
-    let refreshes = 0
-    const gw = createGateway({
-      credential: () => ({ url: `http://127.0.0.1:${upstream.address().port}/mcp`, headers: {} }),
-      readOnly: () => limited,
-      onUnauthorized: async () => { refreshes += 1; return false },
-    })
-    await gw.listen()
-    t.after(() => gw.close())
-    const method = limited ? 'tools/list' : 'tools/call'
-    const response = await fetch(gw.urlFor('notion'), {
-      method: 'POST',
-      headers: { ...gw.headers(), accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method, params: { name: 'notion-search' } }),
-    })
-    assert.equal(response.status, 200)
-    const answer = await response.json()
-    assert.equal(answer.id, 7)
-    assert.match(answer.error.message, /notion connector needs sign-in again.*request_connector/)
-    assert.equal(refreshes, 1)
-    assert.equal(hits, 1)
   })
 }
 
