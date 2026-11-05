@@ -96,7 +96,7 @@ html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden
 body{transition:opacity .4s ease}
 body.fade{opacity:0}
 svg{position:absolute;left:0;top:0;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
-.ava{position:absolute;left:13px;top:16px;width:18px;height:18px;border-radius:50%;border:2px solid #fff;object-fit:cover;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.ava{position:absolute;left:26px;top:26px;width:18px;height:18px;border-radius:50%;border:2px solid #fff;object-fit:cover;box-shadow:0 1px 2px rgba(0,0,0,.3)}
 .ring{position:absolute;left:1px;top:-1px;width:14px;height:14px;border-radius:50%;border:2px solid ${safeColor};opacity:.85;animation:ripple .5s ease-out forwards}
 @keyframes ripple{from{transform:scale(.6);opacity:.85}to{transform:scale(2.6);opacity:0}}
 </style></head><body>
@@ -158,9 +158,10 @@ export function createPointChecker({ platform, ownPid = process.pid, spawn = rea
 // macOS: walk the on-screen window list front-to-back; the point is visible
 // when the first layer-0 window containing it belongs to the target pid. Our
 // own overlay windows never block the answer — they are skipped by owner pid.
-const JXA_CHECKER = String.raw`
+const JXA_CHECKER = `
 ObjC.import('Foundation')
 ObjC.import('CoreGraphics')
+var own = Number($.NSProcessInfo.processInfo.environment.objectForKey('DSBOT_OWN_PID').js || 0)
 var input = $.NSFileHandle.fileHandleWithStandardInput
 var output = $.NSFileHandle.fileHandleWithStandardOutput
 var buf = ''
@@ -173,28 +174,27 @@ while (true) {
   if (!data || data.length === 0) break
   buf += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js
   var nl
-  while ((nl = buf.indexOf('\n')) >= 0) {
+  while ((nl = buf.indexOf('\\n')) >= 0) {
     var line = buf.slice(0, nl); buf = buf.slice(nl + 1)
-    var parts = line.trim().split(/\s+/)
+    var parts = line.trim().split(/\\s+/)
     var x = Number(parts[0]), y = Number(parts[1]), pid = Number(parts[2])
     var yes = false
     try {
-      var ref = $.CGWindowListCopyWindowInfo(1, 0)
-      var list = ObjC.castRefToObject(ref)
+      var list = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)
       var count = list ? list.count : 0
       for (var i = 0; i < count && !yes; i++) {
         var win = list.objectAtIndex(i)
-        var owner = ObjC.unwrap(win.objectForKey('kCGWindowOwnerPID'))
-        var layer = ObjC.unwrap(win.objectForKey('kCGWindowLayer'))
-        if (Number(layer) !== 0) continue
+        var owner = Number(win.objectForKey('kCGWindowOwnerPID') || 0)
+        if (owner === own) continue
+        if (Number(win.objectForKey('kCGWindowLayer') || 0) !== 0) continue
         var b = win.objectForKey('kCGWindowBounds')
         if (!b) continue
-        var bx = Number(ObjC.unwrap(b.objectForKey('X'))), by = Number(ObjC.unwrap(b.objectForKey('Y')))
-        var bw = Number(ObjC.unwrap(b.objectForKey('Width'))), bh = Number(ObjC.unwrap(b.objectForKey('Height')))
-        if (x >= bx && x < bx + bw && y >= by && y < by + bh) { yes = (Number(owner) === pid); break }
+        var bx = Number(b.objectForKey('X') || 0), by = Number(b.objectForKey('Y') || 0)
+        var bw = Number(b.objectForKey('Width') || 0), bh = Number(b.objectForKey('Height') || 0)
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh) { yes = (owner === pid); break }
       }
     } catch (e) {}
-    answer(yes ? 'y\n' : 'n\n')
+    answer(yes ? 'y\\n' : 'n\\n')
   }
 }
 `
@@ -206,24 +206,20 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class PointCheck {
-  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
-  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(System.Drawing.Point p);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
 "@
-[void][PointCheck]::SetProcessDPIAware()
-# WindowFromPoint already skips our click-through (WS_EX_TRANSPARENT) overlays.
+$own = [int]$env:DSBOT_OWN_PID
 while (($line = [Console]::In.ReadLine()) -ne $null) {
   $parts = $line.Trim() -split '\s+'
   if ($parts.Count -lt 3) { continue }
-  $p = New-Object PointCheck+POINT
-  $p.X = [int]$parts[0]; $p.Y = [int]$parts[1]
+  $p = New-Object System.Drawing.Point([int]$parts[0], [int]$parts[1])
   $h = [PointCheck]::WindowFromPoint($p)
   $root = [PointCheck]::GetAncestor($h, 2)
   [uint32]$pid2 = 0
   [void][PointCheck]::GetWindowThreadProcessId($root, [ref]$pid2)
-  if ($pid2 -eq [uint32]$parts[2]) { [Console]::Out.WriteLine('y') } else { [Console]::Out.WriteLine('n') }
+  if ($pid2 -eq $own) { [Console]::Out.WriteLine('y') } elseif ($pid2 -eq [uint32]$parts[2]) { [Console]::Out.WriteLine('y') } else { [Console]::Out.WriteLine('n') }
 }
 `
