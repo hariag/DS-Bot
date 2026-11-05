@@ -4,8 +4,6 @@ import type { Bot, Room, TeamState } from '../connection.ts'
 // remote edit feels instant. Only the writes the screens fire often are
 // mirrored here; anything else (or an unknown id) returns the same object.
 // The reply's state, or a full reload after a failure, always wins afterwards.
-export const OPTIMISTIC = new Set(['update-bot', 'set-main', 'bot-capability', 'update-room'])
-
 export function optimistic(team: TeamState | null, endpoint: string, payload: Record<string, unknown>): TeamState | null {
   if (team === null) return null
   switch (endpoint) {
@@ -52,12 +50,4 @@ export function optimistic(team: TeamState | null, endpoint: string, payload: Re
     default:
       return team
   }
-}
-
-export interface Write { endpoint: string; payload: Record<string, unknown> }
-
-// A state read that left before a write landed would undo the write's guess, so
-// every write still in flight is laid over each state the phone takes in.
-export function withWrites(team: TeamState, writes: Write[]): TeamState {
-  return writes.reduce<TeamState>((next, write) => optimistic(next, write.endpoint, write.payload) ?? next, team)
 }
