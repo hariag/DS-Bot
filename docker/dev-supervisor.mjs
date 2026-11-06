@@ -5,8 +5,7 @@
 // process; the browser bundle is a build artifact that the plugin serves
 // itself. The supervisor therefore:
 //
-//   src/client/**, src/office/**,
-//   src/shared/**               → rebuild client.js / office.js, then the
+//   src/client/**, src/office/**  → rebuild client.js / office.js, then the
 //                                   browser needs a refresh
 //   src/host/**, src/shared/**,    → restart dsh, which is how the new code
 //   index.js, web-search.js           gets loaded
@@ -17,9 +16,9 @@
 // The changes are found by polling: a bind mount on Docker Desktop does not
 // deliver the host's file events into the container, so fs.watch stays quiet.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 
 const PLUGIN = process.env.DSBOT_PLUGIN_DIR || '/app/ds-bot'
 const PROFILE = process.env.DSH_PROFILE_DIR || '/data/profiles/web'
@@ -29,7 +28,7 @@ const POLL_MS = 1500
 
 // What the supervisor watches. The bundles the build writes are not in here,
 // so the rebuild does not trigger the next poll.
-const WATCHED = ['src', 'plugin.js', 'index.js', 'web-search.js', 'package.json', 'cordis.patch.yml']
+const WATCHED = ['src', 'index.js', 'web-search.js', 'package.json', 'cordis.patch.yml']
 
 const log = message => console.log(`[ds-bot-dev] ${message}`)
 
@@ -40,13 +39,12 @@ let stopping = false
 let pending = new Set()
 let timer = null
 let building = false
-let buildQueued = false
 let restarting = false
 let known = new Map()
 
 const run = (command, args, options = {}) => new Promise(resolve => {
   const done = spawn(command, args, { stdio: 'inherit', ...options })
-  done.on('exit', code => resolve(code ?? 1))
+  done.on('exit', code => resolve(code ?? 0))
   done.on('error', error => {
     console.error(`[ds-bot-dev] ${command} failed: ${error.message}`)
     resolve(1)
@@ -62,25 +60,28 @@ const linkProfile = () => {
   if (!existsSync(backupPath)) {
     writeFileSync(backupPath, readFileSync(manifestPath, 'utf8'))
     log('kept the release profile manifest as package.json.release')
-    const installed = join(PROFILE, 'node_modules', 'ds-bot')
-    if (existsSync(installed)) renameSync(installed, join(PROFILE, 'ds-bot.release'))
-  }
-  const lockPath = join(PROFILE, 'pnpm-lock.yaml')
-  const lockBackupPath = join(PROFILE, 'pnpm-lock.yaml.release')
-  if (existsSync(lockPath) && !existsSync(lockBackupPath)) {
-    writeFileSync(lockBackupPath, readFileSync(lockPath, 'utf8'))
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   manifest.dependencies = { ...manifest.dependencies, 'ds-bot': `link:${PLUGIN}` }
+  // Pinned, so corepack does not look for the latest pnpm over the network.
+  manifest.packageManager = 'pnpm@11.28.5'
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  const workspacePath = join(PROFILE, 'pnpm-workspace.yaml')
+  if (!existsSync(workspacePath)) {
+    writeFileSync(workspacePath, 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+  }
 }
 
 const installProfile = async () => {
   log('linking the plugin into the mounted checkout')
+  const code = await run('pnpm', ['--store-dir', '/opt/pnpm-store', 'install', '--offline', '--no-frozen-lockfile'], {
+    cwd: PROFILE,
+    env: { ...process.env, CI: 'true' },
+  })
   const installed = join(PROFILE, 'node_modules', 'ds-bot')
-  mkdirSync(dirname(installed), { recursive: true })
-  rmSync(installed, { recursive: true, force: true })
-  symlinkSync(PLUGIN, installed, 'dir')
+  if (code !== 0 && !existsSync(installed)) {
+    throw new Error('pnpm install failed and the profile has no plugin')
+  }
   // The profile must resolve to the checkout, or the container would keep
   // serving the packed plugin and every change would be ignored.
   let target = ''
@@ -131,7 +132,7 @@ const startDsh = () => {
 const stopDsh = () => {
   if (!child) return null
   const dying = child
-  // Keep the child tracked until exit so a signal during reload can await it.
+  child = null
   dying.kill('SIGTERM')
   const killer = setTimeout(() => dying.kill('SIGKILL'), 12_000)
   killer.unref?.()
@@ -139,18 +140,12 @@ const stopDsh = () => {
 }
 
 const rebuild = async () => {
-  if (building) {
-    buildQueued = true
-    return
-  }
+  if (building) return
   building = true
   try {
-    do {
-      buildQueued = false
-      const code = await run(process.execPath, [join(PLUGIN, 'scripts', 'build-client.mjs')], { cwd: PLUGIN })
-      if (code === 0) log('rebuilt client.js and office.js; refresh the browser to see it')
-      else log('the client build failed; see the output above')
-    } while (buildQueued)
+    const code = await run(process.execPath, [join(PLUGIN, 'scripts', 'build-client.mjs')], { cwd: PLUGIN })
+    if (code === 0) log('rebuilt client.js and office.js; refresh the browser to see it')
+    else log('the client build failed; see the output above')
   } finally {
     building = false
   }
@@ -188,10 +183,9 @@ const apply = async () => {
   const files = [...pending]
   pending = new Set()
   if (files.length === 0) return
-  const bundle = files.some(file => file.startsWith('src/client/') || file.startsWith('src/office/')
-    || file.startsWith('src/shared/'))
+  const bundle = files.some(file => file.startsWith('src/client/') || file.startsWith('src/office/'))
   const host = files.some(file => file.startsWith('src/host/') || file.startsWith('src/shared/')
-    || file === 'plugin.js' || file === 'index.js' || file === 'web-search.js' || file === 'package.json'
+    || file === 'index.js' || file === 'web-search.js' || file === 'package.json'
     || file === 'cordis.patch.yml')
   if (bundle) await rebuild()
   if (host) restart()
@@ -257,6 +251,7 @@ const pollPlugin = () => {
 }
 
 const watchPlugin = () => {
+  known = snapshot()
   log(`watching ${PLUGIN} for changes (every ${POLL_MS} ms)`)
   setInterval(() => {
     try {
@@ -271,9 +266,6 @@ const main = async () => {
   if (DSH.length === 0) throw new Error('usage: dev-supervisor.mjs <command> [args...]')
   linkProfile()
   await installProfile()
-  known = snapshot()
-  await rebuild()
-  pollPlugin()
   clearForeignLock()
   startDsh()
   watchPlugin()
