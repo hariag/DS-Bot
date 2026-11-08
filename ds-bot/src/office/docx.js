@@ -3,6 +3,8 @@
 import { childrenOf, elementsOf, firstOf, textOf, parseXml } from './xml.js'
 
 
+const RUN_MARKS = { 'w:tab': '\t', 'w:br': '\n', 'w:cr': '\n' }
+
 const parts = (pkg) => [...pkg.parts.keys()].filter(name =>
   name === 'word/document.xml' || /^word\/(header|footer)\d+\.xml$/.test(name)
   || /^word\/(footnotes|endnotes|comments)\.xml$/.test(name))
@@ -14,6 +16,7 @@ function blockText(el, changes = false) {
     if (node.nodeType === 3 || node.nodeType === 4) { if (!inside.del) out += node.data; return }
     if (node.nodeType !== 1) return
     const tag = node.tagName
+    if (tag in RUN_MARKS) { out += RUN_MARKS[tag]; return }
     if (!changes) {
       for (const child of [...node.childNodes]) {
         if (tag === 'w:del' || tag === 'w:moveFrom') continue
@@ -212,10 +215,18 @@ export function docxEdit(pkg, ops) {
     if (!docs.has(name)) docs.set(name, pkg.xml(name))
     return docs.get(name)
   }
+  // All ids in a batch refer to the document the caller read, before any edits.
+  const body = firstOf(getDoc('word/document.xml').documentElement, 'w:body')
+  const blocks = blockIndex(getDoc('word/document.xml'))
+  const blockOf = (id) => {
+    const block = blocks.get(id)
+    if (!block || block.parentNode !== body) throw new Error(`no block ${id}`)
+    return block
+  }
   const changed = new Set()
   let count = 0
   ops.forEach((op, index) => {
-    try { applyOp(pkg, getDoc, changed, op); count++ }
+    try { applyOp(pkg, getDoc, blockOf, changed, op); count++ }
     catch (error) { const e = new Error(`op ${index} (${opKind(op)}): ${error.message}`); e.code = 'ops'; throw e }
   })
   for (const [name, doc] of docs) if (changed.has(name)) pkg.putXml(name, doc)
@@ -224,7 +235,7 @@ export function docxEdit(pkg, ops) {
 
 const opKind = (op) => Object.keys(op).find(k => !['o', 'inPlace'].includes(k)) ?? '?'
 
-function applyOp(pkg, getDoc, changed, op) {
+function applyOp(pkg, getDoc, blockOf, changed, op) {
   const mainDoc = () => getDoc('word/document.xml')
   if (op.replace) {
     const { find, with: withText, regex = false, bodyOnly = false } = op.replace
@@ -238,8 +249,7 @@ function applyOp(pkg, getDoc, changed, op) {
   }
   if (op.set_cell) {
     const { table, row, col, text } = op.set_cell
-    const tbl = blockIndex(mainDoc()).get(`t${table}`)
-    if (!tbl) throw new Error(`no table t${table}`)
+    const tbl = blockOf(`t${table}`)
     const tr = childrenOf(tbl, 'w:tr')[row - 1]
     const tc = tr && childrenOf(tr, 'w:tc')[col - 1]
     if (!tc) throw new Error(`no cell r${row}c${col} in t${table}`)
@@ -266,14 +276,12 @@ function applyOp(pkg, getDoc, changed, op) {
   if (op.insert) {
     const { after, before, text, style, like } = op.insert
     const doc = mainDoc()
-    const index = blockIndex(doc)
-    const anchor = index.get(after ?? before)
-    if (!anchor) throw new Error(`no paragraph ${after ?? before}`)
+    const anchor = blockOf(after ?? before)
     const p = doc.createElement('w:p')
     if (style || like) {
       const pPr = doc.createElement('w:pPr')
       const pStyle = doc.createElement('w:pStyle')
-      pStyle.setAttribute('w:val', style ?? paraStyle(index.get(like)) ?? 'Normal')
+      pStyle.setAttribute('w:val', style ?? paraStyle(blockOf(like)) ?? 'Normal')
       pPr.appendChild(pStyle); p.appendChild(pPr)
     }
     const r = doc.createElement('w:r')
@@ -285,18 +293,15 @@ function applyOp(pkg, getDoc, changed, op) {
     return
   }
   if (op.delete) {
-    const doc = mainDoc()
-    const index = blockIndex(doc)
     for (const id of op.delete.paragraphs) {
-      const el = index.get(id)
-      if (!el) throw new Error(`no block ${id}`)
+      const el = blockOf(id)
       el.parentNode.removeChild(el)
     }
     changed.add('word/document.xml')
     return
   }
   if (op.comment) {
-    addComment(pkg, getDoc, changed, op.comment)
+    addComment(pkg, getDoc, blockOf, changed, op.comment)
     return
   }
   if (op.accept_changes || op.reject_changes) {
@@ -330,50 +335,53 @@ const cloneRun = (doc, src, text) => {
   return clone
 }
 
-// Replace text across runs inside one document; deletions skipped; formatting
-// of the match-start run kept. Each affected run is rebuilt once from its
-// original text and every match that touches it, so several matches in one
-// run, adjacent matches and spanning matches all compose. Returns the count.
+// Edit content nodes in place: a run can contain tabs, breaks and drawings as
+// well as text. Rebuilding it from its joined text moves those other nodes.
 function replaceInDoc(doc, re, withText) {
   let total = 0
   const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
   for (const p of elementsOf(doc.documentElement, 'w:p')) {
-    const runs = elementsOf(p, 'w:r').filter(r => !isDeleted(p, r) && nearestPara(r) === p)
-    const texts = runs.map(r => elementsOf(r, 'w:t').map(t => t.textContent).join(''))
-    const joined = texts.join('')
+    let joined = ''
+    const spans = []
+    for (const node of elementsOf(p)) {
+      if (nearestPara(node) !== p || isDeleted(p, node)) continue
+      const value = node.tagName === 'w:t' ? node.textContent : RUN_MARKS[node.tagName]
+      if (value === undefined) continue
+      const start = joined.length
+      joined += value
+      spans.push({ node, start, end: joined.length })
+    }
     const matches = [...joined.matchAll(global)]
     if (matches.length === 0) continue
-    const bounds = []
-    let cursor = 0
-    for (const t of texts) { bounds.push([cursor, cursor + t.length]); cursor += t.length }
-    for (let i = 0; i < runs.length; i++) {
-      const [rs, rend] = bounds[i]
-      const covers = matches.filter(m => m.index < rend && (m.index + m[0].length > rs || (m.index >= rs && m.index < rend)))
-      if (covers.length === 0) continue
-      // Pieces in order: kept text fragments alternating with replacement runs
-      // (a run emits a replacement only for matches starting inside it).
-      const pieces = []
-      let pos = 0
-      for (const m of covers) {
-        const cs = Math.max(0, m.index - rs)
-        const ce = Math.min(texts[i].length, m.index + m[0].length - rs)
-        if (cs > pos) pieces.push({ text: texts[i].slice(pos, cs) })
-        if (m.index >= rs && m.index < rend) pieces.push({ repl: expand(m, withText) })
-        pos = ce
-      }
-      if (pos < texts[i].length || pieces.length === 0) pieces.push({ text: texts[i].slice(pos) })
-      const run = runs[i]
-      let anchor = run
-      for (const [k, piece] of pieces.entries()) {
-        if (k === 0) {
-          setRunText(run, piece.text ?? '')
-          if (piece.text !== undefined) continue
+    if (spans.length === 0) {
+      const run = doc.createElement('w:r')
+      const node = doc.createElement('w:t')
+      run.appendChild(node); p.appendChild(run)
+      spans.push({ node, start: 0, end: 0 })
+    }
+    // Right to left keeps offsets before each edit valid, including multiple
+    // matches in one text node and replacements spanning differently styled runs.
+    for (const match of matches.reverse()) {
+      const start = match.index, end = start + match[0].length
+      const first = spans.find(span => span.end > start) ?? spans.at(-1)
+      for (const span of spans) {
+        if (span !== first && (span.end <= start || span.start >= end)) continue
+        const { node } = span
+        const replacement = span === first ? expand(match, withText) : ''
+        if (node.tagName === 'w:t') {
+          const before = node.textContent.slice(0, Math.max(0, start - span.start))
+          const after = node.textContent.slice(Math.max(0, end - span.start))
+          node.textContent = before + replacement + after
+          if (node.textContent !== node.textContent.trim()) node.setAttribute('xml:space', 'preserve')
+        } else {
+          const text = doc.createElement('w:t')
+          text.setAttribute('xml:space', 'preserve')
+          text.textContent = replacement
+          node.parentNode.insertBefore(text, node)
+          if (end > span.start) node.parentNode.removeChild(node)
         }
-        const clone = cloneRun(doc, run, piece.repl ?? piece.text)
-        anchor.parentNode.insertBefore(clone, anchor.nextSibling)
-        anchor = clone
       }
-      total += covers.filter(m => m.index >= rs && m.index < rend).length
+      total++
     }
   }
   return total
@@ -487,10 +495,9 @@ function phraseRuns(doc, p, anchor) {
   return { firstRun, lastRun }
 }
 
-function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = 'Bot', initials = 'B' }) {
+function addComment(pkg, getDoc, blockOf, changed, { paragraph, text, anchor, author = 'Bot', initials = 'B' }) {
   const doc = getDoc('word/document.xml')
-  const p = blockIndex(doc).get(paragraph)
-  if (!p) throw new Error(`no paragraph ${paragraph}`)
+  const p = blockOf(paragraph)
   // comments.xml + its rel + content type are created when missing.
   let commentsDoc
   if (!pkg.parts.has('word/comments.xml')) {

@@ -34,9 +34,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/conventions.js
+// node_modules/@xmldom/xmldom/lib/conventions.js
 var require_conventions = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/conventions.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/conventions.js"(exports) {
     "use strict";
     function find(list, predicate, ac) {
       if (ac === void 0) {
@@ -243,9 +243,9 @@ var require_conventions = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/errors.js
+// node_modules/@xmldom/xmldom/lib/errors.js
 var require_errors = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/errors.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/errors.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     function extendError(constructor, writableName) {
@@ -402,9 +402,9 @@ var require_errors = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/grammar.js
+// node_modules/@xmldom/xmldom/lib/grammar.js
 var require_grammar = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/grammar.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/grammar.js"(exports) {
     "use strict";
     function detectUnicodeSupport(RegExpImpl) {
       try {
@@ -609,9 +609,9 @@ var require_grammar = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/dom.js
+// node_modules/@xmldom/xmldom/lib/dom.js
 var require_dom = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/dom.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/dom.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     var find = conventions.find;
@@ -3276,9 +3276,9 @@ var require_dom = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/entities.js
+// node_modules/@xmldom/xmldom/lib/entities.js
 var require_entities = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/entities.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/entities.js"(exports) {
     "use strict";
     var freeze = require_conventions().freeze;
     exports.XML_ENTITIES = freeze({
@@ -5419,9 +5419,9 @@ var require_entities = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/sax.js
+// node_modules/@xmldom/xmldom/lib/sax.js
 var require_sax = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/sax.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/sax.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     var g = require_grammar();
@@ -6201,9 +6201,9 @@ var require_sax = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/dom-parser.js
+// node_modules/@xmldom/xmldom/lib/dom-parser.js
 var require_dom_parser = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/dom-parser.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/dom-parser.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     var dom = require_dom();
@@ -6469,9 +6469,9 @@ var require_dom_parser = __commonJS({
   }
 });
 
-// ../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/index.js
+// node_modules/@xmldom/xmldom/lib/index.js
 var require_lib = __commonJS({
-  "../../dsb-group-goal/ds-bot/node_modules/@xmldom/xmldom/lib/index.js"(exports) {
+  "node_modules/@xmldom/xmldom/lib/index.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     exports.assign = conventions.assign;
@@ -7336,6 +7336,7 @@ function hasIdAnywhere(doc, tag, id) {
 }
 
 // src/office/docx.js
+var RUN_MARKS = { "w:tab": "	", "w:br": "\n", "w:cr": "\n" };
 var parts = (pkg) => [...pkg.parts.keys()].filter((name) => name === "word/document.xml" || /^word\/(header|footer)\d+\.xml$/.test(name) || /^word\/(footnotes|endnotes|comments)\.xml$/.test(name));
 function blockText(el, changes = false) {
   let out = "";
@@ -7346,6 +7347,10 @@ function blockText(el, changes = false) {
     }
     if (node.nodeType !== 1) return;
     const tag = node.tagName;
+    if (tag in RUN_MARKS) {
+      out += RUN_MARKS[tag];
+      return;
+    }
     if (!changes) {
       for (const child2 of [...node.childNodes]) {
         if (tag === "w:del" || tag === "w:moveFrom") continue;
@@ -7548,11 +7553,18 @@ function docxEdit(pkg, ops) {
     if (!docs.has(name)) docs.set(name, pkg.xml(name));
     return docs.get(name);
   };
+  const body = firstOf(getDoc("word/document.xml").documentElement, "w:body");
+  const blocks = blockIndex(getDoc("word/document.xml"));
+  const blockOf = (id) => {
+    const block = blocks.get(id);
+    if (!block || block.parentNode !== body) throw new Error(`no block ${id}`);
+    return block;
+  };
   const changed = /* @__PURE__ */ new Set();
   let count = 0;
   ops.forEach((op, index) => {
     try {
-      applyOp(pkg, getDoc, changed, op);
+      applyOp(pkg, getDoc, blockOf, changed, op);
       count++;
     } catch (error) {
       const e = new Error(`op ${index} (${opKind(op)}): ${error.message}`);
@@ -7564,7 +7576,7 @@ function docxEdit(pkg, ops) {
   return { changed: [...changed], count };
 }
 var opKind = (op) => Object.keys(op).find((k) => !["o", "inPlace"].includes(k)) ?? "?";
-function applyOp(pkg, getDoc, changed, op) {
+function applyOp(pkg, getDoc, blockOf, changed, op) {
   const mainDoc = () => getDoc("word/document.xml");
   if (op.replace) {
     const { find, with: withText, regex = false, bodyOnly = false } = op.replace;
@@ -7578,8 +7590,7 @@ function applyOp(pkg, getDoc, changed, op) {
   }
   if (op.set_cell) {
     const { table, row, col, text } = op.set_cell;
-    const tbl = blockIndex(mainDoc()).get(`t${table}`);
-    if (!tbl) throw new Error(`no table t${table}`);
+    const tbl = blockOf(`t${table}`);
     const tr = childrenOf(tbl, "w:tr")[row - 1];
     const tc = tr && childrenOf(tr, "w:tc")[col - 1];
     if (!tc) throw new Error(`no cell r${row}c${col} in t${table}`);
@@ -7612,14 +7623,12 @@ function applyOp(pkg, getDoc, changed, op) {
   if (op.insert) {
     const { after, before, text, style, like } = op.insert;
     const doc = mainDoc();
-    const index = blockIndex(doc);
-    const anchor = index.get(after ?? before);
-    if (!anchor) throw new Error(`no paragraph ${after ?? before}`);
+    const anchor = blockOf(after ?? before);
     const p = doc.createElement("w:p");
     if (style || like) {
       const pPr = doc.createElement("w:pPr");
       const pStyle = doc.createElement("w:pStyle");
-      pStyle.setAttribute("w:val", style ?? paraStyle(index.get(like)) ?? "Normal");
+      pStyle.setAttribute("w:val", style ?? paraStyle(blockOf(like)) ?? "Normal");
       pPr.appendChild(pStyle);
       p.appendChild(pPr);
     }
@@ -7634,18 +7643,15 @@ function applyOp(pkg, getDoc, changed, op) {
     return;
   }
   if (op.delete) {
-    const doc = mainDoc();
-    const index = blockIndex(doc);
     for (const id of op.delete.paragraphs) {
-      const el = index.get(id);
-      if (!el) throw new Error(`no block ${id}`);
+      const el = blockOf(id);
       el.parentNode.removeChild(el);
     }
     changed.add("word/document.xml");
     return;
   }
   if (op.comment) {
-    addComment(pkg, getDoc, changed, op.comment);
+    addComment(pkg, getDoc, blockOf, changed, op.comment);
     return;
   }
   if (op.accept_changes || op.reject_changes) {
@@ -7681,43 +7687,46 @@ function replaceInDoc(doc, re, withText) {
   let total = 0;
   const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
   for (const p of elementsOf(doc.documentElement, "w:p")) {
-    const runs = elementsOf(p, "w:r").filter((r) => !isDeleted(p, r) && nearestPara(r) === p);
-    const texts = runs.map((r) => elementsOf(r, "w:t").map((t) => t.textContent).join(""));
-    const joined = texts.join("");
+    let joined = "";
+    const spans = [];
+    for (const node of elementsOf(p)) {
+      if (nearestPara(node) !== p || isDeleted(p, node)) continue;
+      const value = node.tagName === "w:t" ? node.textContent : RUN_MARKS[node.tagName];
+      if (value === void 0) continue;
+      const start = joined.length;
+      joined += value;
+      spans.push({ node, start, end: joined.length });
+    }
     const matches = [...joined.matchAll(global)];
     if (matches.length === 0) continue;
-    const bounds = [];
-    let cursor = 0;
-    for (const t of texts) {
-      bounds.push([cursor, cursor + t.length]);
-      cursor += t.length;
+    if (spans.length === 0) {
+      const run = doc.createElement("w:r");
+      const node = doc.createElement("w:t");
+      run.appendChild(node);
+      p.appendChild(run);
+      spans.push({ node, start: 0, end: 0 });
     }
-    for (let i = 0; i < runs.length; i++) {
-      const [rs, rend] = bounds[i];
-      const covers = matches.filter((m) => m.index < rend && (m.index + m[0].length > rs || m.index >= rs && m.index < rend));
-      if (covers.length === 0) continue;
-      const pieces = [];
-      let pos = 0;
-      for (const m of covers) {
-        const cs = Math.max(0, m.index - rs);
-        const ce = Math.min(texts[i].length, m.index + m[0].length - rs);
-        if (cs > pos) pieces.push({ text: texts[i].slice(pos, cs) });
-        if (m.index >= rs && m.index < rend) pieces.push({ repl: expand(m, withText) });
-        pos = ce;
-      }
-      if (pos < texts[i].length || pieces.length === 0) pieces.push({ text: texts[i].slice(pos) });
-      const run = runs[i];
-      let anchor = run;
-      for (const [k, piece] of pieces.entries()) {
-        if (k === 0) {
-          setRunText(run, piece.text ?? "");
-          if (piece.text !== void 0) continue;
+    for (const match of matches.reverse()) {
+      const start = match.index, end = start + match[0].length;
+      const first = spans.find((span) => span.end > start) ?? spans.at(-1);
+      for (const span of spans) {
+        if (span !== first && (span.end <= start || span.start >= end)) continue;
+        const { node } = span;
+        const replacement = span === first ? expand(match, withText) : "";
+        if (node.tagName === "w:t") {
+          const before = node.textContent.slice(0, Math.max(0, start - span.start));
+          const after = node.textContent.slice(Math.max(0, end - span.start));
+          node.textContent = before + replacement + after;
+          if (node.textContent !== node.textContent.trim()) node.setAttribute("xml:space", "preserve");
+        } else {
+          const text = doc.createElement("w:t");
+          text.setAttribute("xml:space", "preserve");
+          text.textContent = replacement;
+          node.parentNode.insertBefore(text, node);
+          if (end > span.start) node.parentNode.removeChild(node);
         }
-        const clone = cloneRun(doc, run, piece.repl ?? piece.text);
-        anchor.parentNode.insertBefore(clone, anchor.nextSibling);
-        anchor = clone;
       }
-      total += covers.filter((m) => m.index >= rs && m.index < rend).length;
+      total++;
     }
   }
   return total;
@@ -7832,10 +7841,9 @@ function phraseRuns(doc, p, anchor) {
   }
   return { firstRun, lastRun };
 }
-function addComment(pkg, getDoc, changed, { paragraph, text, anchor, author = "Bot", initials = "B" }) {
+function addComment(pkg, getDoc, blockOf, changed, { paragraph, text, anchor, author = "Bot", initials = "B" }) {
   const doc = getDoc("word/document.xml");
-  const p = blockIndex(doc).get(paragraph);
-  if (!p) throw new Error(`no paragraph ${paragraph}`);
+  const p = blockOf(paragraph);
   let commentsDoc;
   if (!pkg.parts.has("word/comments.xml")) {
     commentsDoc = parseXml('<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>');
@@ -8036,7 +8044,7 @@ function phOf(sp) {
 }
 var shapeName = (sp) => child(child(sp, "p:nvSpPr") ?? child(sp, "p:nvPicPr") ?? child(sp, "p:nvGrpSpPr") ?? child(sp, "p:nvCxnSpPr") ?? child(sp, "p:nvGraphicFramePr") ?? sp, "p:cNvPr")?.getAttribute("name");
 var shapeId = (sp) => child(child(sp, "p:nvSpPr") ?? child(sp, "p:nvPicPr") ?? child(sp, "p:nvGrpSpPr") ?? child(sp, "p:nvCxnSpPr") ?? child(sp, "p:nvGraphicFramePr") ?? sp, "p:cNvPr")?.getAttribute("id");
-var xfrmOf = (sp) => child(child(sp, "p:spPr") ?? sp, "a:xfrm");
+var xfrmOf = (sp) => sp.tagName === "p:graphicFrame" ? child(sp, "p:xfrm") : child(child(sp, "p:spPr") ?? sp, "a:xfrm");
 var off = (xfrm) => ({ x: Number(firstOf(xfrm, "a:off")?.getAttribute("x") ?? 0), y: Number(firstOf(xfrm, "a:off")?.getAttribute("y") ?? 0) });
 var ext = (xfrm) => ({ cx: Number(firstOf(xfrm, "a:ext")?.getAttribute("cx") ?? 0), cy: Number(firstOf(xfrm, "a:ext")?.getAttribute("cy") ?? 0) });
 function applyGroup(box, grpSp) {
@@ -8388,7 +8396,7 @@ function pptxClean(pkg, { dryRun = false } = {}) {
 
 // src/office/xlsx.js
 var DATE_FORMATS = /* @__PURE__ */ new Set([14, 15, 16, 17, 22, 45, 46, 47]);
-var dateLike = (code) => /(^|[^\\])[ymdhs]/i.test(code ?? "");
+var dateLike = (code) => /[ymdhs]/i.test((code ?? "").replace(/"[^"]*"|\\.|_.|\*./g, "").split(";")[0].replace(/\[(?![hms]+\])[^\]]*\]/gi, ""));
 function numFmts(pkg) {
   const map = /* @__PURE__ */ new Map();
   if (!pkg.parts.has("xl/styles.xml")) return map;
