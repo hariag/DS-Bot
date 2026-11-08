@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
-import { answerSender, failureLine, turnFailure } from './turns.js'
+import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
 import { textOf } from './text.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
@@ -311,16 +311,13 @@ export function install(rt) {
   async function reconcileEnded(sessionId, record, ended) {
     const trigger = record.trigger
     if (trigger === undefined) return
-    if (trigger.role !== 'request' || trigger.audience === 'user') return
+    const workId = rt.workOf(trigger)
+    if (!rt.ownsWork(record.botId, workId)) return
     const exchangeId = trigger.exchangeId
-    const sender = trigger.senderSessionId
+    const asker = rt.workAsker(workId)
+    const sender = asker?.senderSessionId
     if (exchangeId === undefined || sender === undefined || rt.botOf(sender) === undefined) return
-    // The work it was for: gone when the answer already went up.
-    const work = rt.state.works?.[exchangeId]
-    if (work === undefined) return
     const name = rt.botOf(rt.selfOf(sessionId))?.name ?? 'The other Bot'
-    const asker = rt.workAsker(exchangeId)
-    if (asker === undefined) return
     // DSH stopped that turn as it shut down: it is picked up at the next start.
     if (ended.reason?.kind === 'aborted' && ended.reason.reason?.kind === 'disposed') {
       update(sessionId, () => record)
@@ -351,10 +348,10 @@ export function install(rt) {
     const said = turn.texts.join('\n\n')
     // The answer went up in another run: the work closes with what it said, and
     // nothing is sent twice.
-    const back = rt.roomOf(trigger.senderRoomId)?.sessions?.[sender]
+    const back = rt.roomOf(asker.senderRoomId)?.sessions?.[sender]
     const sent = await logOf(back ?? rt.chatOf(sender))
-    if (sent !== undefined && answeredIn(sent, exchangeId)) {
-      rt.closeWork?.(exchangeId, name, rt.answerText(exchangeId, said, name))
+    if (sent !== undefined && answeredIn(sent, workId)) {
+      rt.closeWork?.(workId, name, rt.answerText(workId, said, name))
       return
     }
     const reason = turn.reason
@@ -377,14 +374,36 @@ export function install(rt) {
       answerSender(rt, sessionId, asker, `${name} was stopped before it could answer your message.`)
       return
     }
+    // A turn cut off at the output limit is not a finish: the answer says so, and the
+    // diagnostics record it, with the route the Session's log holds for it.
+    const cutOff = reason?.kind === 'max-tokens'
+    const withoutText = cutOff && turn.texts.length === 0
+    if (cutOff) {
+      rt.noteCutOffTurn?.(sessionId, { withoutText })
+      const context = events.findLast(event => event?.type === 'request/context')?.data
+      const ref = context?.provider && context?.model ? `${context.provider}/${context.model}` : undefined
+      const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+      rt.noteFailure?.({
+        level: 'warn',
+        source: 'turn',
+        code: 'MAX_TOKENS',
+        text: `${withoutText
+          ? 'the turn was cut off at the output limit before it wrote anything'
+          : 'the turn was cut off at the output limit, so its answer is not complete'}${ref ? ` (${ref})` : ''}`,
+        bot: name,
+        where: room === undefined ? 'own chat' : `group "${room.name}"`,
+        sessionId,
+      })
+    }
+    const answer = cutOff ? cutOffText(said) : said
     // The turn ended with what it said: the answer goes up the way a finished turn's
     // does, with the results that came back for it and the text it held. A work that
     // still waits for what it handed on keeps its part until that comes back.
-    if (rt.waitsWork(exchangeId)) {
-      rt.holdWork(exchangeId, said)
+    if (rt.waitsWork(workId)) {
+      rt.holdWork(workId, answer)
       return
     }
-    const text = rt.answerText(exchangeId, said, name)
+    const text = rt.answerText(workId, answer, name)
     const long = text.length > MESSAGE_INLINE_MAX ? await rt.attachLong(text, `Answer from ${name}.txt`) : undefined
     answerSender(rt, sessionId, asker, text, long)
   }
