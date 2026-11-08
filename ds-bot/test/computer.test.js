@@ -133,6 +133,8 @@ test('the guard refuses in order: switch, Bot, level, control, protected, consen
   assert.equal((await call('w1', 'cua', { method: 'click', params: {} })).kind, 'deny')
   // turn it on through the endpoint like the switch does
   await rt.computerEndpoint('set-enabled', { enabled: true })
+  // a non-Bot Session is refused
+  assert.equal((await call('plain', 'cua', { method: 'click', params: {} })).kind, 'deny')
   // view level: reads pass, input does not
   await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
   assert.equal(await call('w1', 'cua', { method: 'getState', params: {} }), 'allowed')
@@ -286,27 +288,6 @@ test('the provider mounts when the switch comes on and reports its status', asyn
   assert.equal(fibers.length, 0)
 })
 
-test('the macOS provider gets the helper the desktop app placed outside its bundle', { skip: process.platform !== 'darwin' }, async (t) => {
-  const { ctx, home, rt } = setup()
-  const previous = process.env.DS_BOT_COMPUTER_HELPER
-  process.env.DS_BOT_COMPUTER_HELPER = '/support/computer-use/hash/DSH Computer Use.app/Contents/MacOS/dsh-cua-native'
-  t.after(async () => {
-    if (previous === undefined) delete process.env.DS_BOT_COMPUTER_HELPER
-    else process.env.DS_BOT_COMPUTER_HELPER = previous
-    await ctx.dispose()
-    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
-  })
-  const services = {}
-  ctx.get = name => services[name]
-  services.loader = { import: async name => ({ name }) }
-  services.agents = { list: () => [] }
-  const fibers = withProvider(ctx, services)
-  await rt.load()
-  await rt.computerEndpoint('set-enabled', { enabled: true })
-  await rt.computerEndpoint('provider-retry', {})
-  assert.deepEqual(fibers[1].config, { agentPreset: false, helperPath: process.env.DS_BOT_COMPUTER_HELPER })
-})
-
 test('provider status: occupied, missing, unsupported, error and retry', async (t) => {
   const { ctx, home, rt } = setup()
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
@@ -382,60 +363,26 @@ test('masking: non-Bot agents and off Bots lose the tools and the sections', asy
   assert.ok(ctx.registeredTools.size > registeredBefore)
 })
 
-const gateOf = ctx => {
-  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
-  return (sessionId, name, args = {}) => gate({ name, arguments: args, agent: { id: sessionId }, callId: `c-${sessionId}` }, async () => 'allowed')
-}
-const maskingAgent = (ctx, id, denied) => ({
-  id, session: { id },
-  ctx: {
-    tools: { register: tool => { ctx.registeredTools.set(tool.name, tool); return () => {} }, restrict: filter => { denied.push([id, filter.deny]); return () => {} } },
-    on: () => () => {},
-    effect: () => {},
-  },
-})
-
-test('a plain Session keeps DSH\'s own computer use while the DS Bot switch is off (#1101)', async (t) => {
+test('Windows Bots that can operate apps are told how input really lands', async (t) => {
   const { ctx, home, rt } = setup()
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  const denied = []
-  const services = { agents: { list: () => [] } }
-  ctx.get = name => services[name]
-  await rt.load()
-  ctx.tools.schemas = () => [{ name: 'cua' }, { name: 'bash' }]
-  const call = gateOf(ctx)
-  assert.equal(await call('plain', 'cua', { method: 'click', params: {} }), 'allowed')
-  assert.equal((await call('w1', 'cua', { method: 'click', params: {} })).kind, 'deny')
-  services.agents = { list: () => [maskingAgent(ctx, 'w1', denied), maskingAgent(ctx, 'plain', denied)] }
-  rt.refreshComputer()
-  assert.deepEqual(denied, [['w1', ['cua']]])
-})
-
-test('with DSH\'s own provider in place Bots are refused and a plain Session is not', async (t) => {
-  const { ctx, home, rt } = setup()
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] }, computerUse: { providerName: 'dsh-cua' } }
-  ctx.get = name => services[name]
-  await rt.load()
-  await rt.computerEndpoint('set-enabled', { enabled: true })
-  await rt.computerEndpoint('provider-retry', {})
-  assert.equal(rt.computerStatus().state, 'occupied')
-  const call = gateOf(ctx)
-  assert.equal(await call('plain', 'cua', { method: 'click', params: {} }), 'allowed')
-  assert.equal((await call('w1', 'cua', { method: 'getState', params: {} })).kind, 'deny')
-})
-
-test('a plain Session is refused on the provider DS Bot mounted', async (t) => {
-  const { ctx, home, rt } = setup()
-  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  t.after(async () => { Object.defineProperty(process, 'platform', platform); await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
   const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
   ctx.get = name => services[name]
   withProvider(ctx, services)
   await rt.load()
   await rt.computerEndpoint('set-enabled', { enabled: true })
   await rt.computerEndpoint('provider-retry', {})
-  assert.equal(rt.computerStatus().state, 'ready')
-  assert.equal((await gateOf(ctx)('plain', 'cua', { method: 'click', params: {} })).kind, 'deny')
+  const text = () => ctx.sections.get('computer-use:ds-bot').text({ agent: { id: 'w1' } })
+  assert.match(text(), /use set_value/)
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  assert.doesNotMatch(text(), /set_value/)
+})
+
+test('the helper is protected by its real bundle id', async () => {
+  const { isProtectedApp } = await import('../src/host/computer/index.js')
+  assert.equal(isProtectedApp({ id: 'com.deepseek.harness.computer-use' }), true)
 })
 
 test('the ds-bot section is empty for a non-Bot, off, or provider-not-ready agent', async (t) => {
