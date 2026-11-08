@@ -239,14 +239,79 @@ function checkOffice(app) {
   `, 180_000)
 }
 
-// The browser plugins drive the app's own browser through Playwright; without it in the package
-// every browser tool failed before it did anything.
-function checkPlaywright(app) {
-  runInHost(app, 'Playwright', `
-    const { chromium } = createRequire(appRequire.resolve('ds-bot/package.json'))('playwright-core')
-    assert.equal(typeof chromium.connectOverCDP, 'function')
-    console.log('check-packed: the browser plugins find Playwright')
-  `, 30_000)
+// Computer use on Windows loads the Cua Driver SDK's DLL by a path that the SDK derives from its
+// own module; a module inside the asar gives a path that Windows' loader cannot open (#1025).
+// The SDK is found the way the provider's import finds it, then asked for its tools.
+function checkComputerUse(app) {
+  runInHost(app, 'computer use driver', `
+    const { existsSync } = require('node:fs')
+    const { join } = require('node:path')
+    const { pathToFileURL } = require('node:url')
+    ;(async () => {
+      const provider = appRequire.resolve('@deepseek-ai/dsh-experimental-computer-use-cua-driver-native')
+      const sdk = createRequire(provider).resolve.paths('@trycua/cua-driver')
+        .map(dir => join(dir, '@trycua', 'cua-driver')).find(dir => existsSync(join(dir, 'package.json')))
+      assert.ok(sdk !== undefined, 'the provider finds no @trycua/cua-driver')
+      assert.ok(!/[\\\\/]app\\.asar[\\\\/]/u.test(sdk), 'the Cua Driver SDK is inside the asar: ' + sdk)
+      const { CuaDriver } = await import(pathToFileURL(join(sdk, 'dist', 'index.js')).href)
+      const driver = CuaDriver.create(undefined)
+      const { tools } = JSON.parse(await driver.listToolsJson())
+      assert.ok(tools.length > 0, 'the Cua Driver lists no tools')
+      await driver.shutdown?.()
+      console.log('check-packed: the Cua Driver loads from ' + sdk + ' and lists ' + tools.length + ' tools')
+    })().then(() => process.exit(process.exitCode ?? 0), error => { console.error(error); process.exit(1) })
+  `, 60_000)
+}
+
+// The macOS helper must run from outside the app: inside the asar the system cannot start it, and
+// inside the signed bundle Screen Recording goes to the outer app (#1066). The Host's own code
+// places the copy, then the helper is started and asked for its permission status.
+function checkComputerHelper(app) {
+  const resources = resolve(app, '..', '..', 'Resources')
+  runInHost(app, 'computer use helper', `
+    const { spawn } = require('node:child_process')
+    const { createHash } = require('node:crypto')
+    const { mkdtempSync, readFileSync, rmSync } = require('node:fs')
+    const { connect } = require('node:net')
+    const { join } = require('node:path')
+    const { pathToFileURL } = require('node:url')
+    const runtime = mkdtempSync('/tmp/dsbh-')
+    ;(async () => {
+      const { prepareComputerHelper } = await import(pathToFileURL(${JSON.stringify(join(resources, 'app.asar', 'src', 'computer-helper.mjs'))}).href)
+      const helper = await prepareComputerHelper({ runtimeDir: ${JSON.stringify(resources)}, home: ${JSON.stringify(join(work, 'computer-use'))} })
+      assert.ok(helper !== undefined, 'the packaged app carries no computer-use helper')
+      assert.equal(helper.error, undefined, String(helper.error))
+      assert.ok(!helper.path.startsWith(${JSON.stringify(dirname(resources))}), 'the helper still runs from inside the app: ' + helper.path)
+      const runtimeKey = createHash('sha256').update(readFileSync(helper.path)).digest('hex')
+      const launcher = spawn(helper.path, ['--ensure-shared', '--runtime-key', runtimeKey, '--runtime-directory', runtime, '--startup-timeout-ms', '30000'], { stdio: 'inherit' })
+      const code = await new Promise((done, fail) => { launcher.on('error', fail); launcher.on('close', done) })
+      assert.equal(code, 0, 'the helper did not start')
+      const status = await new Promise((done, fail) => {
+        const socket = connect(join(runtime, runtimeKey + '.sock'))
+        let buffer = ''
+        let ready = false
+        socket.on('error', fail)
+        socket.on('connect', () => socket.write(JSON.stringify({ type: 'hello', protocol: 1, runtimeKey, config: { maxRequestBytes: 1048576, maxResponseBytes: 33554432, axTimeoutMs: 5000, textEventIntervalMs: 8, maxClickHoldMs: 5000, screenshotTimeoutMs: 10000, timeoutMs: 30000, graceMs: 2000 } }) + '\\n'))
+        socket.on('data', (chunk) => {
+          buffer += chunk
+          for (let at = buffer.indexOf('\\n'); at >= 0; at = buffer.indexOf('\\n')) {
+            const message = JSON.parse(buffer.slice(0, at))
+            buffer = buffer.slice(at + 1)
+            if (!ready) {
+              ready = true
+              assert.equal(message.type, 'ready', JSON.stringify(message))
+              socket.write(JSON.stringify({ id: 'status', method: 'permissionStatus', params: {} }) + '\\n')
+            } else {
+              socket.end()
+              done(message.result)
+            }
+          }
+        })
+      })
+      assert.equal(typeof status?.accessibility, 'boolean', 'the helper gave no permission status')
+      console.log('check-packed: the computer-use helper runs from ' + helper.path + ' and answers')
+    })().finally(() => rmSync(runtime, { recursive: true, force: true })).then(() => process.exit(process.exitCode ?? 0), error => { console.error(error); process.exit(1) })
+  `, 90_000)
 }
 
 function startMock() {
@@ -347,17 +412,13 @@ function devtools(url, problems) {
   return { opened, call, close: () => { socket.close() } }
 }
 
-// material.css and macos.css style DSH's own page, which can change with a DSH upgrade; every
-// rule must still find an element, on every platform, so the change shows here and not as a
-// broken window. The page is not in fullscreen here, so a rule's html:not([data-fullscreen])
-// is dropped before the look. DSH draws its session tree only in the classic Agent view, which
-// the check does not open, so the rules for the tree are not looked for.
-const frameSheets = ['material.css', 'macos.css']
-function frameRules(file) {
-  const css = readFileSync(join(root, 'src', file), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
+// mica.css styles DSH's own page, which can change with a DSH upgrade; every rule must still
+// find an element, on every platform, so the change shows here and not as a broken window.
+function micaRules() {
+  const css = readFileSync(join(root, 'src', 'mica.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
   return [...css.matchAll(/([^{}]+)\{/gu)].map(([, selectors]) => selectors.split(',')
-    .map(selector => selector.trim().replace(/::(?:before|after)$/u, '').replace(/^html(?::not\(\[data-fullscreen\]\))?\s*/u, ''))
-    .filter(selector => selector !== '' && selector !== 'body' && !selector.includes('_treeBody')))
+    .map(selector => selector.trim().replace(/::(?:before|after)$/u, ''))
+    .filter(selector => selector !== '' && selector !== 'body'))
     .filter(rule => rule.length > 0)
 }
 
@@ -377,10 +438,8 @@ async function chat(cdp) {
   await cdp.call('Runtime.enable')
   await cdp.call('Log.enable')
   await until("document.querySelector('.bt-tile, .bt-row')", 'the team')
-  for (const file of frameSheets) {
-    const stale = await evaluate(`${JSON.stringify(frameRules(file))}.filter(rule => !rule.some(selector => document.querySelector(selector) !== null)).map(rule => rule.join(', '))`)
-    if (stale.length > 0) throw new Error(`src/${file} no longer matches DSH's page: ${stale.join(' | ')}`)
-  }
+  const stale = await evaluate(`${JSON.stringify(micaRules())}.filter(rule => !rule.some(selector => document.querySelector(selector) !== null)).map(rule => rule.join(', '))`)
+  if (stale.length > 0) throw new Error(`src/mica.css no longer matches DSH's page: ${stale.join(' | ')}`)
   await dismissNotice()
   const main = await evaluate("fetch('api/bot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: 'state', payload: {} }) }).then(r => r.json()).then(r => r.value.mainBotId)")
   await evaluate(`document.querySelector(${JSON.stringify(`[data-bot-id="${main}"]`)}).click()`)
@@ -459,7 +518,8 @@ try {
   checkAsarCopy(packedApp)
   checkSharp(packedApp)
   checkOffice(packedApp)
-  checkPlaywright(packedApp)
+  if (process.platform === 'win32') checkComputerUse(packedApp)
+  if (process.platform === 'darwin') checkComputerHelper(packedApp)
   const modelUrl = await startMock()
   const port = await freePort()
   const mainPort = await freePort()

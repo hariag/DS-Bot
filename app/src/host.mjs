@@ -7,6 +7,8 @@ import { readFileSync } from 'node:fs'
 import { inspect } from 'node:util'
 import { loadLayeredEnv, reportSkippedBundles } from '@deepseek-ai/dsh-app-boot'
 import { runProfile } from '@deepseek-ai/dsh/profile-boot'
+import { writeAppPatch } from './app-patch.mjs'
+import { reconcileComputerHelper } from './computer-helper.mjs'
 import { CHECK_PROFILE, INSTALL_ANCHOR, loadAppProfile, loadCheckProfile, PROFILE } from './profile.mjs'
 import { reconcileGoal } from './goal-patch.mjs'
 import { reconcileOfficeRuntime } from './office-patch.mjs'
@@ -30,11 +32,12 @@ async function main() {
   const office = check === undefined ? reconcileOfficeRuntime(profile) : { patchFiles: [] }
   // ds-bot reads the payload's Node for the Office commands it runs itself.
   if (office.node !== undefined) process.env.DS_BOT_OFFICE_NODE = office.node
+  if (check === undefined) await reconcileComputerHelper()
   const application = runProfile({
     environment: loadLayeredEnv('dsh'),
     profile: check === undefined ? PROFILE : CHECK_PROFILE,
     resolvedProfile: { profile, installAnchor: INSTALL_ANCHOR },
-    patchFiles: check === undefined ? [...reconcileSearchSelector(profile), ...reconcileGoal(profile), ...office.patchFiles] : [],
+    patchFiles: check === undefined ? [...writeAppPatch(profile), ...reconcileSearchSelector(profile), ...reconcileGoal(profile), ...office.patchFiles] : [],
     args: ['--no-open', '--port', process.env.DS_BOT_PORT || '0'],
     ...(pnpm === undefined ? {} : {
       packageManager: { command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' } },

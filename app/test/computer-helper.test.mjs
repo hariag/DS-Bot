@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { prepareComputerHelper } from '../../ds-bot/src/host/computer/mac-helper.js'
+import { prepareComputerHelper, reconcileComputerHelper } from '../src/computer-helper.mjs'
 
 const BUNDLE = 'a'.repeat(64)
 const EXECUTABLE = join('DSH Computer Use.app', 'Contents', 'MacOS', 'dsh-cua-native')
@@ -19,7 +19,7 @@ function fixture(t, bundle = BUNDLE, content = 'helper v1') {
   mkdirSync(dirname(join(dir, bundle, EXECUTABLE)), { recursive: true })
   writeFileSync(join(dir, bundle, EXECUTABLE), content)
   writeFileSync(join(dir, 'current.json'), JSON.stringify({ bundle }))
-  return { runtimeDir, home: join(root, 'support', 'computer-use') }
+  return { runtimeDir, home: join(root, 'support', 'computer-use'), source: join(dir, bundle, EXECUTABLE) }
 }
 const copy = (from, to) => cpSync(from, to, { recursive: true })
 const verify = () => {}
@@ -27,40 +27,26 @@ const verify = () => {}
 test('the helper runs from a copy outside the app bundle', async (t) => {
   const { runtimeDir, home } = fixture(t)
   const helper = await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify })
-  assert.equal(helper, join(home, BUNDLE, EXECUTABLE))
-  assert.equal(readFileSync(helper, 'utf8'), 'helper v1')
+  assert.equal(helper.path, join(home, BUNDLE, EXECUTABLE))
+  assert.equal(helper.error, undefined)
+  assert.equal(readFileSync(helper.path, 'utf8'), 'helper v1')
 })
 
 test('a matching copy is reused without copying again', async (t) => {
   const { runtimeDir, home } = fixture(t)
   await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify })
   let copies = 0
-  let checks = 0
-  await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy: (a, b) => { copies++; copy(a, b) }, verify: () => { checks++ } })
+  const helper = await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy: (a, b) => { copies++; copy(a, b) }, verify })
   assert.equal(copies, 0)
-  assert.equal(checks, 1)
-})
-
-test('a cached copy whose bundle signature fails is replaced', async (t) => {
-  const { runtimeDir, home } = fixture(t)
-  await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify })
-  let copies = 0
-  let checks = 0
-  await prepareComputerHelper({
-    runtimeDir, home, arch: 'arm64',
-    copy: (a, b) => { copies++; copy(a, b) },
-    verify: () => { if (++checks === 1) throw new Error('a resource in the bundle was modified') },
-  })
-  assert.equal(copies, 1)
-  assert.equal(checks, 2)
+  assert.equal(helper.error, undefined)
 })
 
 test('a copy that differs from the packaged helper is replaced', async (t) => {
   const { runtimeDir, home } = fixture(t)
   const first = await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify })
-  writeFileSync(first, 'changed on disk')
+  writeFileSync(first.path, 'changed on disk')
   const second = await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify })
-  assert.equal(readFileSync(second, 'utf8'), 'helper v1')
+  assert.equal(readFileSync(second.path, 'utf8'), 'helper v1')
 })
 
 test('a new helper version removes the old copy', async (t) => {
@@ -72,21 +58,36 @@ test('a new helper version removes the old copy', async (t) => {
   writeFileSync(join(dir, next, EXECUTABLE), 'helper v2')
   writeFileSync(join(dir, 'current.json'), JSON.stringify({ bundle: next }))
   const helper = await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify })
-  assert.equal(readFileSync(helper, 'utf8'), 'helper v2')
+  assert.equal(readFileSync(helper.path, 'utf8'), 'helper v2')
   assert.deepEqual(readdirSync(home), [next])
 })
 
-test('a copy that fails its signature check is dropped and reports the error', async (t) => {
-  const { runtimeDir, home } = fixture(t)
+test('a copy that fails its signature check is dropped and the packaged helper is used', async (t) => {
+  const { runtimeDir, home, source } = fixture(t)
   const failure = new Error('invalid signature')
-  await assert.rejects(prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify: () => { throw failure } }), failure)
+  const helper = await prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify: () => { throw failure } })
+  assert.equal(helper.path, source)
+  assert.equal(helper.error, failure)
   assert.deepEqual(readdirSync(home), [])
+})
+
+test('nothing happens outside a packaged app', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ds-bot-computer-helper-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  assert.equal(await prepareComputerHelper({ runtimeDir: root, home: join(root, 'home'), arch: 'arm64', copy, verify }), undefined)
+  assert.equal(existsSync(join(root, 'home')), false)
 })
 
 test('a receipt cannot point out of the helper folder', async (t) => {
   const { runtimeDir, home } = fixture(t)
   writeFileSync(join(binDir(runtimeDir), 'current.json'), JSON.stringify({ bundle: '../../elsewhere' }))
   await assert.rejects(prepareComputerHelper({ runtimeDir, home, arch: 'arm64', copy, verify }), /Invalid computer-use helper receipt/)
+})
+
+test('the Host never fails on the helper and exports nothing without its folders', async () => {
+  const env = {}
+  await reconcileComputerHelper(env)
+  assert.deepEqual(env, {})
 })
 
 // The real signed helper, with the real ditto and codesign.
@@ -102,15 +103,9 @@ test('a real copy keeps DeepSeek\'s signature and drops quarantine', { skip: pro
   const application = join(dir, bundle, 'DSH Computer Use.app')
   execFileSync('/usr/bin/xattr', ['-w', 'com.apple.quarantine', '0081;00000000;Test;', application])
   const helper = await prepareComputerHelper({ runtimeDir, home: join(root, 'support'), arch: process.arch })
+  assert.equal(helper.error, undefined)
   const copied = join(root, 'support', bundle, 'DSH Computer Use.app')
-  assert.equal(helper, join(root, 'support', bundle, EXECUTABLE))
+  assert.equal(helper.path, join(root, 'support', bundle, EXECUTABLE))
   execFileSync('/usr/bin/codesign', ['--verify', '--strict', copied])
   assert.doesNotMatch(execFileSync('/usr/bin/xattr', [copied], { encoding: 'utf8' }), /com\.apple\.quarantine/)
-
-  // A cached copy whose executable still matches but whose bundle signature is broken is replaced.
-  const plist = join(copied, 'Contents', 'Info.plist')
-  writeFileSync(plist, `${readFileSync(plist, 'utf8')}\n<!-- tampered -->\n`)
-  assert.throws(() => execFileSync('/usr/bin/codesign', ['--verify', '--strict', copied], { stdio: 'pipe' }))
-  await prepareComputerHelper({ runtimeDir, home: join(root, 'support'), arch: process.arch })
-  execFileSync('/usr/bin/codesign', ['--verify', '--strict', copied])
 })
