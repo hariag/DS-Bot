@@ -98,6 +98,7 @@ var ZH = {
   "{count} members": "{count} 位成员",
   "Loading…": "加载中…",
   "Edit Bot": "编辑 Bot",
+  "Give up waiting for {name}": "不再等 {name}",
   "Make Main Bot": "设为主 Bot",
   "Remove Main Bot role": "取消主 Bot",
   "Create group chat": "新建群聊",
@@ -294,6 +295,8 @@ var ZH = {
   "Add agent": "添加 Agent",
   "Copies the sign-in command": "复制登录命令",
   "Sign in": "登录",
+  "Sign-in command copied. Run it in a terminal: {command}": "登录命令已复制。请在终端运行：{command}",
+  "Could not copy the sign-in command. Run this in a terminal: {command}": "没能复制登录命令。请在终端手动运行：{command}",
   Found: "已找到",
   "Not found": "未找到",
   Arguments: "参数",
@@ -683,6 +686,7 @@ var ZH = {
   "Text width": "正文宽度",
   "Show thinking": "显示思考过程",
   "Enter sends message": "回车发送消息",
+  "Bring up related memory": "自动带上相关记忆",
   "Group memory size": "群记忆容量",
   "Bot memory size": "Bot 记忆容量",
   "Team memory size": "团队记忆容量",
@@ -1069,7 +1073,9 @@ var ZH = {
   "by {name}": "由 {name} 添加",
   "Remove from memory": "从记忆中删除",
   "until {day}": "有效至 {day}",
+  "Tidied: {merged} merged, {moved} moved, {retired} archived": "已整理：合并 {merged} 条，移动 {moved} 条，归档 {retired} 条",
   "Only when needed": "需要时才读",
+  "Move to…": "移到…",
   "Every conversation": "每次都带",
   "ended {day}": "已于 {day} 结束",
   "Click again to remove": "再点一次删除",
@@ -2155,6 +2161,8 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     deleteAvatar: (id) => call2("avatar-delete", { id }),
     createRoom: (members, options = {}) => after(call2("create-room", { members, ...options })),
     updateBot: (id, patch) => after(call2("update-bot", { id, ...patch })),
+    // Give up one wait the Bot has on a hand-off that will not come back.
+    abandonWork: (id) => after(call2("abandon-work", { id })),
     refreshModels: () => after(call2("models")).catch(() => {
     }),
     // One local agent's models: the first look starts its CLI, later ones read what it said.
@@ -2260,6 +2268,8 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     memoryView: (id, flags = {}) => call2("memory-view", { ...memoryOf(id), ...flags }),
     memoryAsk: (id, text) => call2("memory-ask", { ...memoryOf(id), text }),
     memoryLayer: (id, entry, always) => call2("memory-layer", { ...memoryOf(id), topic: entry.topic, text: entry.text, always }),
+    memoryMove: (id, entry, to) => call2("memory-move", { ...memoryOf(id), scope: entry.scope, topic: entry.topic, text: entry.text, to }),
+    memoryTidyUndo: (id, scope, batch) => call2("memory-tidy-undo", { ...memoryOf(id), scope, batch }),
     memoryPin: (id, entry, pin) => call2("memory-pin", { ...memoryOf(id), scope: entry.scope, topic: entry.topic, text: entry.text, pin }),
     memoryForget: (id, entry) => call2("memory-forget", { ...memoryOf(id), scope: entry.scope, topic: entry.topic, text: entry.text }),
     memoryHistory: (id, before) => call2("memory-history", { ...memoryOf(id), ...before === void 0 ? {} : { before } }),
@@ -3897,6 +3907,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 :is(.bt-round,.bt-icon-btn,.bt-soft,.bt-send,.bt-mini,.bt-pill,.bt-plus,.bt-mic,.bt-voice,.bt-account,.bt-title-toggle,.bt-settings-close,.bt-avatar-trigger,.bt-shape,.bt-color,.bt-swatch,.bt-pick,.bt-more,.bt-mem-row,.bt-mem-send):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 :is(.bt-row,.bt-tile,.bt-tab,.bt-avedit-tab,.bt-settings-item,.bt-menu button,.bt-option,.bt-palette-row,button.bt-set-row):focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-note{font-size:12px;line-height:16px;color:var(--bt-ink-2);margin-top:6px}
+.bt-set-hint .bt-note.bt-danger{color:var(--bt-danger)}
 .bt-swatch-sep{width:1px;height:22px;background:var(--bt-line-2);margin:0 2px}
 .bt-swatch-custom{position:relative;overflow:hidden;background:conic-gradient(#ff3e51,#ffaf38,#00c972,#1cc3b0,#2a92fe,#a97efe,#ff5eb1,#ff3e51);box-sizing:border-box}
 .bt-swatch-custom[data-on=true]{border-color:var(--bt-ink)}
@@ -3957,6 +3968,7 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-mem-head-gap{flex:1}
 .bt-mem-menu{position:absolute;top:52px;right:50px;min-width:220px;--bt-origin:top right}
 .bt-mem-menu button:disabled{opacity:.4;cursor:default;background:none}
+.bt-mem-move{min-width:200px;max-width:min(280px,calc(100vw - 24px));overflow-y:auto;overscroll-behavior:contain;--bt-origin:top right}
 .bt-mem-body{flex:1;overflow-y:auto;padding:22px 28px 24px;scrollbar-width:thin;display:flex;flex-direction:column;gap:12px}
 .bt-mem-summary{transition:opacity .3s ease}
 .bt-mem-summary[data-stale]{opacity:.55}
@@ -4000,6 +4012,9 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-mem-entry:hover .bt-mem-remove,.bt-mem-remove:focus-visible,.bt-mem-remove[data-confirm]{opacity:1}
 .bt-mem-remove:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-mem-pin[data-on]{opacity:1;color:var(--bt-accent)}
+.bt-mem-tidy{margin-bottom:12px;font-size:12px;color:var(--bt-ink-3)}
+.bt-mem-tidy summary{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
+.bt-mem-tidy ul{margin:8px 0 0;padding-left:16px}
 .bt-mem-place{flex:none;height:28px;padding:0 8px;border:0;border-radius:999px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;cursor:pointer;opacity:0}
 .bt-mem-entry:hover .bt-mem-place,.bt-mem-place:focus-visible{opacity:1}
 .bt-mem-place:hover{background:var(--bt-hover);color:var(--bt-ink)}
@@ -4751,6 +4766,7 @@ var ReplyIcon = lineIcon(["M8 5L4 9l4 4", "M4 9h7.5a4.5 4.5 0 0 1 4.5 4.5V15"]);
 var DotsIcon = lineIcon(["M5 10h.01M10 10h.01M15 10h.01"]);
 var CheckIcon = lineIcon(["M4.5 10.5l3.5 3.5 7.5-8"]);
 var GlobeIcon = lineIcon(["M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z", "M3 10h14", "M10 3c2 2.2 2.9 4.5 2.9 7S12 14.8 10 17c-2-2.2-2.9-4.5-2.9-7S8 5.2 10 3z"]);
+var MoveIcon = lineIcon(["M3.5 10h9.5", "M9.5 6l4 4-4 4", "M16.5 4.5v11"]);
 var ArrowDownIcon = lineIcon(["M10 4v12", "M5 11l5 5 5-5"]);
 var DownloadIcon = lineIcon(["M10 3.5v9", "M6.5 9.5L10 13l3.5-3.5", "M4 16h12"]);
 var GaugeIcon = lineIcon(["M3.5 13.5a6.5 6.5 0 1 1 13 0", "M10 13.5l3-4", "M10 13.5h.01"]);
@@ -8818,9 +8834,11 @@ function ClosedView({ title, closed }) {
 }
 function WidgetDock({ sessionId, useRoster, useCards, useHeldCards, actions }) {
   const view = useRoster((value) => value.views?.[sessionId]);
+  const closed = useRoster((value) => value.closedViews?.[sessionId]);
   const drawn = useCards?.((state) => state[sessionId]?.[view?.callId] > 0) === true;
   const held = useHeldCards?.((state) => state[sessionId]?.[heldCardKey("view", view?.id)] > 0) === true;
-  if (view === void 0 || view.callId && drawn && !held) return null;
+  if (view === void 0) return closed === void 0 ? null : (0, import_react16.createElement)("div", { className: "bt-q-dock" }, (0, import_react16.createElement)(SettledQuestion, { question: { question: closed.title || t("View") }, closed: closed.closed }));
+  if (view.callId && drawn && !held) return null;
   return (0, import_react16.createElement)(PendingView, { sessionId, view, actions, inline: false });
 }
 function AnsweredView2({ node }) {
@@ -11058,12 +11076,36 @@ var AVATAR_LIBRARY_CSS = `
 var import_react25 = require("react");
 var POLL_MS2 = 1500;
 var MENU_EXIT_MS2 = 120;
+var MOVE_MENU_GAP = 12;
 var counts = /* @__PURE__ */ new Map();
 var countListeners = /* @__PURE__ */ new Set();
 function noteCount(id, count) {
   if (counts.get(id) === count) return;
   counts.set(id, count);
   for (const listener of countListeners) listener();
+}
+function useMenuDismiss(open, menuRef, triggerRef, close) {
+  (0, import_react25.useEffect)(() => {
+    if (!open) return void 0;
+    const onDown = (event) => {
+      if (menuRef.current?.contains(event.target) || triggerRef.current?.contains(event.target)) return;
+      close();
+    };
+    const onKey = (event) => {
+      if (stepMenuFocus(menuRef.current, event, triggerRef.current)) return;
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        close();
+        triggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
 }
 function useMemoryCount(id, actions) {
   const [count, setCount] = (0, import_react25.useState)(counts.get(id) ?? null);
@@ -11159,7 +11201,7 @@ var groupEntries = (entries2) => entries2.reduce((groups, entry) => {
   else groups.push({ key, scope: entry.scope, topic: entry.topic, entries: [entry] });
   return groups;
 }, []);
-function EntryRow({ entry, remove, pin, layer }) {
+function EntryRow({ entry, remove, pin, layer, openMove }) {
   const [confirming, setConfirming] = (0, import_react25.useState)(false);
   const [busy, setBusy] = (0, import_react25.useState)(false);
   (0, import_react25.useEffect)(() => {
@@ -11206,6 +11248,15 @@ function EntryRow({ entry, remove, pin, layer }) {
     (0, import_react25.createElement)("button", {
       type: "button",
       className: "bt-mem-remove",
+      disabled: busy,
+      "aria-haspopup": "menu",
+      "aria-label": t("Move to…"),
+      title: t("Move to…"),
+      onClick: (event) => openMove(entry, event.currentTarget)
+    }, (0, import_react25.createElement)(MoveIcon)),
+    (0, import_react25.createElement)("button", {
+      type: "button",
+      className: "bt-mem-remove",
       "data-confirm": confirming || void 0,
       disabled: busy,
       "aria-label": confirming ? t("Click again to remove") : t("Remove from memory"),
@@ -11214,7 +11265,43 @@ function EntryRow({ entry, remove, pin, layer }) {
     }, confirming ? t("Remove") : (0, import_react25.createElement)(TrashIcon))
   );
 }
-function Entries({ owner, view, remove, pin, layer }) {
+function MoveMenu({ menuRef, moving, view, move, leaving }) {
+  const { entry, box } = moving;
+  const here = view.keys[entry.scope];
+  const item = (key, label) => (0, import_react25.createElement)("button", { key, type: "button", role: "menuitem", onClick: () => move(entry, key) }, (0, import_react25.createElement)("span", { className: "bt-menu-label" }, label));
+  const list = (kind, head) => {
+    const places = view.places.filter((place) => place.kind === kind && place.key !== here);
+    return places.length === 0 ? null : (0, import_react25.createElement)(import_react25.Fragment, { key: kind }, (0, import_react25.createElement)("div", { className: "bt-menu-sub-head" }, head), places.map((place) => item(place.key, place.name)));
+  };
+  return (0, import_react25.createElement)(
+    "div",
+    { ref: menuRef, className: "bt-menu bt-mem-move", role: "menu", "aria-label": t("Move to…"), style: box, "data-leaving": leaving || void 0 },
+    here === "team" ? null : item("team", t("Team memory")),
+    list("bot", t("Bots")),
+    list("group", t("Group chats"))
+  );
+}
+function TidyNote({ tidy, undo }) {
+  const [busy, setBusy] = (0, import_react25.useState)(false);
+  const line = t("Tidied: {merged} merged, {moved} moved, {retired} archived", { merged: tidy.merged, moved: tidy.moved, retired: tidy.retired });
+  return (0, import_react25.createElement)(
+    "details",
+    { className: "bt-mem-tidy" },
+    (0, import_react25.createElement)(
+      "summary",
+      null,
+      (0, import_react25.createElement)("span", null, line),
+      (0, import_react25.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy, onClick: async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        await undo(tidy);
+        setBusy(false);
+      } }, t("Undo"))
+    ),
+    (0, import_react25.createElement)("ul", null, tidy.items.map((item, at) => (0, import_react25.createElement)("li", { key: at }, item.text)))
+  );
+}
+function Entries({ owner, view, remove, pin, layer, openMove, undoTidy }) {
   const groups = groupEntries(view.entries);
   const sections = owner.group ? [{ scope: "group", title: t("Group memory"), hint: t("Only its members read it"), size: view.sizes.group }] : [
     { scope: "own", title: t("{name}'s memory", { name: owner.name }), size: view.sizes.own },
@@ -11223,6 +11310,7 @@ function Entries({ owner, view, remove, pin, layer }) {
   return (0, import_react25.createElement)(
     "div",
     { className: "bt-mem-entries" },
+    view.tidy ? (0, import_react25.createElement)(TidyNote, { tidy: view.tidy, undo: undoTidy }) : null,
     sections.map((section) => (0, import_react25.createElement)(
       "section",
       { key: section.scope, className: "bt-mem-section" },
@@ -11237,7 +11325,7 @@ function Entries({ owner, view, remove, pin, layer }) {
         import_react25.Fragment,
         { key: group.key },
         group.topic ? (0, import_react25.createElement)("div", { className: "bt-mem-topic" }, group.topic) : null,
-        (0, import_react25.createElement)("ul", { className: "bt-mem-list" }, group.entries.map((entry) => (0, import_react25.createElement)(EntryRow, { key: `${entry.topic ?? ""}:${entry.text}`, entry, remove, pin, layer })))
+        (0, import_react25.createElement)("ul", { className: "bt-mem-list" }, group.entries.map((entry) => (0, import_react25.createElement)(EntryRow, { key: `${entry.topic ?? ""}:${entry.text}`, entry, remove, pin, layer, openMove })))
       )) : (0, import_react25.createElement)("div", { className: "bt-mem-none" }, t("Nothing saved yet"))
     ))
   );
@@ -11397,6 +11485,11 @@ function MemoryDialog({ owner, actions, leaving = false }) {
   const [page, setPage] = (0, import_react25.useState)("summary");
   const [menu, setMenu] = (0, import_react25.useState)(false);
   const [menuShown, menuLeaving] = useLinger(menu, MENU_EXIT_MS2);
+  const [moving, setMoving] = (0, import_react25.useState)(null);
+  const [moveOpen, setMoveOpen] = (0, import_react25.useState)(false);
+  const [moveShown, moveLeaving] = useLinger(moveOpen, MENU_EXIT_MS2);
+  const moveRef = (0, import_react25.useRef)(null);
+  const moveAnchor = (0, import_react25.useRef)(null);
   const [text, setText] = (0, import_react25.useState)("");
   const [answer, setAnswer] = (0, import_react25.useState)(null);
   const menuRef = (0, import_react25.useRef)(null);
@@ -11405,27 +11498,29 @@ function MemoryDialog({ owner, actions, leaving = false }) {
   const now = useNow(3e4);
   const close = (0, import_react25.useCallback)(() => actions.closeMemory(), []);
   useEscape(close);
+  useMenuDismiss(menu, menuRef, dotsRef, () => setMenu(false));
+  useMenuDismiss(moveOpen, moveRef, moveAnchor, () => setMoveOpen(false));
   (0, import_react25.useEffect)(() => {
-    if (!menu) return void 0;
-    const onDown = (event) => {
-      if (menuRef.current?.contains(event.target) || dotsRef.current?.contains(event.target)) return;
-      setMenu(false);
+    if (!moveOpen) return void 0;
+    const onScroll = (event) => {
+      if (!moveRef.current?.contains(event.target)) setMoveOpen(false);
     };
-    const onKey = (event) => {
-      if (stepMenuFocus(menuRef.current, event, dotsRef.current)) return;
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        setMenu(false);
-        dotsRef.current?.focus();
-      }
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [menu]);
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [moveOpen]);
+  const openMove = (entry, button) => {
+    if (moveOpen && moveAnchor.current === button) {
+      setMoveOpen(false);
+      return;
+    }
+    moveAnchor.current = button;
+    const rect = button.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - MOVE_MENU_GAP;
+    const above = rect.top - MOVE_MENU_GAP;
+    const right = Math.max(MOVE_MENU_GAP, window.innerWidth - rect.right);
+    setMoving({ entry, box: above > below ? { right, bottom: window.innerHeight - rect.top + 4, maxHeight: above } : { right, top: rect.bottom + 4, maxHeight: below } });
+    setMoveOpen(true);
+  };
   const regenerate = () => {
     setMenu(false);
     setPage("summary");
@@ -11450,6 +11545,21 @@ function MemoryDialog({ owner, actions, leaving = false }) {
     } catch (failure) {
       setAnswer({ asked: entry.text, error: failure?.message ?? String(failure) });
       return false;
+    }
+  };
+  const undoTidy = async (tidy) => {
+    try {
+      show2(await actions.memoryTidyUndo(owner.id, tidy.scope, tidy.batch));
+    } catch (failure) {
+      setAnswer({ asked: t("Undo"), error: failure?.message ?? String(failure) });
+    }
+  };
+  const move = async (entry, to) => {
+    setMoveOpen(false);
+    try {
+      show2(await actions.memoryMove(owner.id, entry, to));
+    } catch (failure) {
+      setAnswer({ asked: entry.text, error: failure?.message ?? String(failure) });
     }
   };
   const layer = async (entry, always) => {
@@ -11536,7 +11646,7 @@ function MemoryDialog({ owner, actions, leaving = false }) {
         "div",
         { className: "bt-mem-body" },
         error ? (0, import_react25.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, hostText(error)) : null,
-        view === null ? error ? null : (0, import_react25.createElement)(Skeleton) : page === "entries" ? (0, import_react25.createElement)(Entries, { owner, view, remove, pin, layer }) : page === "history" ? (0, import_react25.createElement)(History, { owner, actions, undo, now }) : (0, import_react25.createElement)(Summary, { owner, view, regenerate })
+        view === null ? error ? null : (0, import_react25.createElement)(Skeleton) : page === "entries" ? (0, import_react25.createElement)(Entries, { owner, view, remove, pin, layer, openMove, undoTidy }) : page === "history" ? (0, import_react25.createElement)(History, { owner, actions, undo, now }) : (0, import_react25.createElement)(Summary, { owner, view, regenerate })
       ),
       (0, import_react25.createElement)(
         "div",
@@ -11562,7 +11672,8 @@ function MemoryDialog({ owner, actions, leaving = false }) {
           )
         )
       )
-    )
+    ),
+    moveShown && moving !== null && view !== null ? (0, import_react25.createElement)(MoveMenu, { menuRef: moveRef, moving, view, move, leaving: moveLeaving }) : null
   );
 }
 
@@ -20121,12 +20232,13 @@ function ImMark({ id, size = 36 }) {
 }
 function stateOf(conn, status) {
   if (!conn.enabled) return "off";
-  return status?.state === "ready" || status?.state === "error" || status?.state === "connecting" ? status.state : "connecting";
+  return status?.state === "ready" || status?.state === "error" || status?.state === "retrying" || status?.state === "connecting" ? status.state : "connecting";
 }
 function stateText(conn, status) {
   const state = stateOf(conn, status);
   if (state === "off") return t("Disabled");
   if (state === "ready") return t("Connected");
+  if (state === "retrying") return t("Retrying…");
   if (state === "error") return t("Could not connect: {error}", { error: hostText(status.error ?? "") });
   return t("Connecting…");
 }
@@ -20556,6 +20668,7 @@ var IM_CSS = `
 .bt-im-dot{flex:none;width:7px;height:7px;border-radius:50%;corner-shape:round;background:var(--bt-ink-3)}
 .bt-im-dot[data-state=ready]{background:var(--bt-green)}
 .bt-im-dot[data-state=error]{background:var(--bt-danger)}
+.bt-im-dot[data-state=retrying]{background:var(--bt-star)}
 .bt-im-dot[data-state=off]{background:none;box-shadow:inset 0 0 0 1.5px var(--bt-ink-3)}
 .bt-im-dot[data-state=connecting]{animation:bt-im-breathe 1.4s ease-in-out infinite}
 @keyframes bt-im-breathe{50%{opacity:.35}}
@@ -21441,6 +21554,43 @@ function AgentForm({ initial, submit, close }) {
     )
   );
 }
+function AgentSignInRow({ agent, Row: Row4 }) {
+  const [note, setNote] = (0, import_react46.useState)(null);
+  const copy2 = () => {
+    const done = (copied) => setNote({ copied, command: agent.signIn });
+    try {
+      const writing = navigator.clipboard?.writeText(agent.signIn);
+      if (writing === void 0) {
+        done(false);
+        return;
+      }
+      void Promise.resolve(writing).then(() => done(true), () => done(false));
+    } catch {
+      done(false);
+    }
+  };
+  const message = note === null ? null : (0, import_react46.createElement)("span", {
+    className: note.copied ? "bt-note" : "bt-note bt-danger",
+    role: note.copied ? "status" : "alert"
+  }, note.copied ? t("Sign-in command copied. Run it in a terminal: {command}", { command: note.command }) : t("Could not copy the sign-in command. Run this in a terminal: {command}", { command: note.command }));
+  return (0, import_react46.createElement)(
+    Row4,
+    {
+      label: agent.name,
+      hint: [
+        [agent.path, agent.version].filter(Boolean).join(" · "),
+        message === null ? null : (0, import_react46.createElement)("br"),
+        message
+      ]
+    },
+    (0, import_react46.createElement)(
+      "div",
+      { className: "bt-set-actions" },
+      agent.signIn ? (0, import_react46.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", title: t("Copies the sign-in command"), onClick: copy2 }, t("Sign in")) : null,
+      (0, import_react46.createElement)("span", { className: "bt-tag" }, agent.signedIn === true ? t("Signed in") : agent.signedIn === false ? t("Not signed in") : agent.path ? t("Found") : t("Not found"))
+    )
+  );
+}
 function LocalAgentsPage({ run: run2, Section: Section2, Row: Row4 }) {
   const [view, setView] = (0, import_react46.useState)(null);
   const [editing, setEditing] = (0, import_react46.useState)(null);
@@ -21456,21 +21606,7 @@ function LocalAgentsPage({ run: run2, Section: Section2, Row: Row4 }) {
       Section2,
       { key: "found", title: t("Detected agents") },
       view.detected.length === 0 ? (0, import_react46.createElement)(Row4, { label: t("No agent CLIs found") }) : null,
-      view.detected.map((agent) => (0, import_react46.createElement)(
-        Row4,
-        {
-          key: agent.route,
-          label: agent.name,
-          hint: [agent.path, agent.version].filter(Boolean).join(" · ")
-        },
-        (0, import_react46.createElement)(
-          "div",
-          { className: "bt-set-actions" },
-          agent.signIn ? (0, import_react46.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", title: t("Copies the sign-in command"), onClick: () => navigator.clipboard?.writeText(agent.signIn).catch(() => {
-          }) }, t("Sign in")) : null,
-          (0, import_react46.createElement)("span", { className: "bt-tag" }, agent.signedIn === true ? t("Signed in") : agent.signedIn === false ? t("Not signed in") : agent.path ? t("Found") : t("Not found"))
-        )
-      )),
+      view.detected.map((agent) => (0, import_react46.createElement)(AgentSignInRow, { key: agent.route, agent, Row: Row4 })),
       (0, import_react46.createElement)(
         Row4,
         { key: "refresh", label: t("Refresh"), hint: t("Scan again for agent CLIs.") },
@@ -21673,6 +21809,11 @@ function GeneralPage({ roster, actions, run: run2, dsh }) {
     (0, import_react47.createElement)(
       SetSection,
       { key: "memory", title: t("Memory") },
+      (0, import_react47.createElement)(
+        SetRow,
+        { label: t("Bring up related memory") },
+        (0, import_react47.createElement)(Switch, { label: t("Bring up related memory"), on: prefs.memoryAutoRecall !== false, onChange: (memoryAutoRecall) => run2(actions.setPrefs({ memoryAutoRecall })) })
+      ),
       MEMORY_SIZES.map(({ scope, label, size }) => (0, import_react47.createElement)(
         SetRow,
         { key: scope, label: t(label) },
@@ -22655,8 +22796,8 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
   const goal = room2?.goal;
-  const goalCompose = useUi((state) => state.goalCompose === sessionId);
-  const goalOpen = useUi((state) => state.goalOpen === sessionId);
+  const goalCompose = useUi((state) => room2 !== void 0 && state.goalCompose === room2.id);
+  const goalOpen = useUi((state) => room2 !== void 0 && state.goalOpen === room2.id);
   const roomWorkKey = useWork?.((work) => room2 ? JSON.stringify(work.rooms?.[sessionId] ?? []) : "") ?? "[]";
   const roomWork = room2 ? JSON.parse(roomWorkKey || "[]") : [];
   const view = goal ? goalView(goal, { roster, roomWork }) : null;
@@ -24943,7 +25084,7 @@ function sectionMoveItems(entry, roster, actions) {
     }]
   ].filter(Boolean);
 }
-function ContextMenu({ menu, roster, actions, leaving = false }) {
+function ContextMenu({ menu, roster, actions, useWork, leaving = false }) {
   useEscape(() => actions.closeMenu());
   const ref = (0, import_react57.useRef)(null);
   const trigger = (0, import_react57.useRef)(typeof document === "undefined" ? null : document.activeElement);
@@ -24973,6 +25114,8 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
   const bot = roster.byId[menu.id];
   const room2 = roster.roomsById[menu.id];
   const entry = bot ?? room2;
+  const waitsRaw = useWork && bot ? useWork((work) => JSON.stringify(work.waiting?.[bot.id] ?? null)) : "null";
+  const waits = (0, import_react57.useMemo)(() => JSON.parse(waitsRaw), [waitsRaw]);
   if (entry === void 0) return null;
   const isMainBot = isMainOf(roster, menu.id);
   const isTile = roster.mainBotId === menu.id;
@@ -24996,6 +25139,7 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
       bot && isMainBot && mainCount > 1 ? [t("Remove Main Bot role"), StarLineIcon, () => actions.setMain(bot.id, false)] : null
     ],
     [[t("Copy conversation ID"), CopyIcon, () => navigator.clipboard?.writeText(bot ? currentPart(bot) : menu.id)]],
+    bot ? (waits?.waits ?? []).map((item) => [t("Give up waiting for {name}", { name: item.name ?? t("a Bot") }), SignOutIcon, () => actions.abandonWork(item.id)]) : [],
     [
       isMainBot ? null : [t("Hide from sidebar"), HideIcon, () => actions.setFlags(menu.id, { hidden: true })],
       isMainBot ? null : [room2 ? t("Delete group") : t("Delete"), TrashIcon, () => bot ? actions.deleteBot(bot.id) : actions.deleteRoom(menu.id), true]
@@ -26986,7 +27130,7 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     ui2.palette ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
     ui2.exchange ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ExchangeDialog, { pair: ui2.exchange, roster, actions }), document.body) : null,
     ui2.voice ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, roster, actions, useSessions, useSessionStatus }), document.body) : null,
-    menu ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, leaving: menuLeaving }), document.body) : null,
+    menu ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, useWork, leaving: menuLeaving }), document.body) : null,
     settings ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(SettingsDialog, { page: settings.page, id: settings.id, roster, actions, useUpdate, leaving: settingsLeaving }), document.body) : null,
     owner ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(MemoryDialog, { key: owner.id, owner, actions, leaving: memoryLeaving }), document.body) : null
   );
