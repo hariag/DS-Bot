@@ -98,7 +98,6 @@ var ZH = {
   "{count} members": "{count} 位成员",
   "Loading…": "加载中…",
   "Edit Bot": "编辑 Bot",
-  "Give up waiting for {name}": "不再等 {name}",
   "Make Main Bot": "设为主 Bot",
   "Remove Main Bot role": "取消主 Bot",
   "Create group chat": "新建群聊",
@@ -295,8 +294,6 @@ var ZH = {
   "Add agent": "添加 Agent",
   "Copies the sign-in command": "复制登录命令",
   "Sign in": "登录",
-  "Sign-in command copied. Run it in a terminal: {command}": "登录命令已复制。请在终端运行：{command}",
-  "Could not copy the sign-in command. Run this in a terminal: {command}": "没能复制登录命令。请在终端手动运行：{command}",
   Found: "已找到",
   "Not found": "未找到",
   Arguments: "参数",
@@ -686,7 +683,6 @@ var ZH = {
   "Text width": "正文宽度",
   "Show thinking": "显示思考过程",
   "Enter sends message": "回车发送消息",
-  "Bring up related memory": "自动带上相关记忆",
   "Group memory size": "群记忆容量",
   "Bot memory size": "Bot 记忆容量",
   "Team memory size": "团队记忆容量",
@@ -1073,7 +1069,6 @@ var ZH = {
   "by {name}": "由 {name} 添加",
   "Remove from memory": "从记忆中删除",
   "until {day}": "有效至 {day}",
-  "Tidied: {merged} merged, {moved} moved, {retired} archived": "已整理：合并 {merged} 条，移动 {moved} 条，归档 {retired} 条",
   "Only when needed": "需要时才读",
   "Every conversation": "每次都带",
   "ended {day}": "已于 {day} 结束",
@@ -2160,8 +2155,6 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     deleteAvatar: (id) => call2("avatar-delete", { id }),
     createRoom: (members, options = {}) => after(call2("create-room", { members, ...options })),
     updateBot: (id, patch) => after(call2("update-bot", { id, ...patch })),
-    // Give up one wait the Bot has on a hand-off that will not come back.
-    abandonWork: (id) => after(call2("abandon-work", { id })),
     refreshModels: () => after(call2("models")).catch(() => {
     }),
     // One local agent's models: the first look starts its CLI, later ones read what it said.
@@ -2267,7 +2260,6 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     memoryView: (id, flags = {}) => call2("memory-view", { ...memoryOf(id), ...flags }),
     memoryAsk: (id, text) => call2("memory-ask", { ...memoryOf(id), text }),
     memoryLayer: (id, entry, always) => call2("memory-layer", { ...memoryOf(id), topic: entry.topic, text: entry.text, always }),
-    memoryTidyUndo: (id, scope, batch) => call2("memory-tidy-undo", { ...memoryOf(id), scope, batch }),
     memoryPin: (id, entry, pin) => call2("memory-pin", { ...memoryOf(id), scope: entry.scope, topic: entry.topic, text: entry.text, pin }),
     memoryForget: (id, entry) => call2("memory-forget", { ...memoryOf(id), scope: entry.scope, topic: entry.topic, text: entry.text }),
     memoryHistory: (id, before) => call2("memory-history", { ...memoryOf(id), ...before === void 0 ? {} : { before } }),
@@ -3905,7 +3897,6 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 :is(.bt-round,.bt-icon-btn,.bt-soft,.bt-send,.bt-mini,.bt-pill,.bt-plus,.bt-mic,.bt-voice,.bt-account,.bt-title-toggle,.bt-settings-close,.bt-avatar-trigger,.bt-shape,.bt-color,.bt-swatch,.bt-pick,.bt-more,.bt-mem-row,.bt-mem-send):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 :is(.bt-row,.bt-tile,.bt-tab,.bt-avedit-tab,.bt-settings-item,.bt-menu button,.bt-option,.bt-palette-row,button.bt-set-row):focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-note{font-size:12px;line-height:16px;color:var(--bt-ink-2);margin-top:6px}
-.bt-set-hint .bt-note.bt-danger{color:var(--bt-danger)}
 .bt-swatch-sep{width:1px;height:22px;background:var(--bt-line-2);margin:0 2px}
 .bt-swatch-custom{position:relative;overflow:hidden;background:conic-gradient(#ff3e51,#ffaf38,#00c972,#1cc3b0,#2a92fe,#a97efe,#ff5eb1,#ff3e51);box-sizing:border-box}
 .bt-swatch-custom[data-on=true]{border-color:var(--bt-ink)}
@@ -4009,13 +4000,10 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-mem-entry:hover .bt-mem-remove,.bt-mem-remove:focus-visible,.bt-mem-remove[data-confirm]{opacity:1}
 .bt-mem-remove:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-mem-pin[data-on]{opacity:1;color:var(--bt-accent)}
-.bt-mem-tidy{margin-bottom:12px;font-size:12px;color:var(--bt-ink-3)}
-.bt-mem-tidy summary{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
-.bt-mem-tidy ul{margin:8px 0 0;padding-left:16px}
-.bt-mem-layer{flex:none;height:28px;padding:0 8px;border:0;border-radius:999px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;cursor:pointer;opacity:0}
-.bt-mem-entry:hover .bt-mem-layer,.bt-mem-layer:focus-visible{opacity:1}
-.bt-mem-layer:hover{background:var(--bt-hover);color:var(--bt-ink)}
-@media (hover:none){.bt-mem-layer{opacity:1}}
+.bt-mem-place{flex:none;height:28px;padding:0 8px;border:0;border-radius:999px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;cursor:pointer;opacity:0}
+.bt-mem-entry:hover .bt-mem-place,.bt-mem-place:focus-visible{opacity:1}
+.bt-mem-place:hover{background:var(--bt-hover);color:var(--bt-ink)}
+@media (hover:none){.bt-mem-place{opacity:1}}
 .bt-mem-remove[data-confirm]{background:color-mix(in srgb,var(--bt-danger) 10%,transparent);color:var(--bt-danger);padding:0 10px}
 @media (hover:none){.bt-mem-remove{opacity:1}}
 .bt-mem-none{font-size:13px;line-height:18px;color:var(--bt-ink-3);padding:8px 4px}
@@ -11211,7 +11199,7 @@ function EntryRow({ entry, remove, pin, layer }) {
     }, (0, import_react25.createElement)(PinIcon)),
     entry.scope === "team" ? (0, import_react25.createElement)("button", {
       type: "button",
-      className: "bt-mem-layer",
+      className: "bt-mem-place",
       disabled: busy,
       onClick: () => layer(entry, entry.topic !== null)
     }, entry.topic === null ? t("Only when needed") : t("Every conversation")) : null,
@@ -11226,27 +11214,7 @@ function EntryRow({ entry, remove, pin, layer }) {
     }, confirming ? t("Remove") : (0, import_react25.createElement)(TrashIcon))
   );
 }
-function TidyNote({ tidy, undo }) {
-  const [busy, setBusy] = (0, import_react25.useState)(false);
-  const line = t("Tidied: {merged} merged, {moved} moved, {retired} archived", { merged: tidy.merged, moved: tidy.moved, retired: tidy.retired });
-  return (0, import_react25.createElement)(
-    "details",
-    { className: "bt-mem-tidy" },
-    (0, import_react25.createElement)(
-      "summary",
-      null,
-      (0, import_react25.createElement)("span", null, line),
-      (0, import_react25.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy, onClick: async (event) => {
-        event.preventDefault();
-        setBusy(true);
-        await undo(tidy);
-        setBusy(false);
-      } }, t("Undo"))
-    ),
-    (0, import_react25.createElement)("ul", null, tidy.items.map((item, at) => (0, import_react25.createElement)("li", { key: at }, item.text)))
-  );
-}
-function Entries({ owner, view, remove, pin, layer, undoTidy }) {
+function Entries({ owner, view, remove, pin, layer }) {
   const groups = groupEntries(view.entries);
   const sections = owner.group ? [{ scope: "group", title: t("Group memory"), hint: t("Only its members read it"), size: view.sizes.group }] : [
     { scope: "own", title: t("{name}'s memory", { name: owner.name }), size: view.sizes.own },
@@ -11255,7 +11223,6 @@ function Entries({ owner, view, remove, pin, layer, undoTidy }) {
   return (0, import_react25.createElement)(
     "div",
     { className: "bt-mem-entries" },
-    view.tidy ? (0, import_react25.createElement)(TidyNote, { tidy: view.tidy, undo: undoTidy }) : null,
     sections.map((section) => (0, import_react25.createElement)(
       "section",
       { key: section.scope, className: "bt-mem-section" },
@@ -11485,13 +11452,6 @@ function MemoryDialog({ owner, actions, leaving = false }) {
       return false;
     }
   };
-  const undoTidy = async (tidy) => {
-    try {
-      show2(await actions.memoryTidyUndo(owner.id, tidy.scope, tidy.batch));
-    } catch (failure) {
-      setAnswer({ asked: t("Undo"), error: failure?.message ?? String(failure) });
-    }
-  };
   const layer = async (entry, always) => {
     try {
       show2(await actions.memoryLayer(owner.id, entry, always));
@@ -11576,7 +11536,7 @@ function MemoryDialog({ owner, actions, leaving = false }) {
         "div",
         { className: "bt-mem-body" },
         error ? (0, import_react25.createElement)("div", { className: "bt-error", role: "alert", style: { padding: 0 } }, hostText(error)) : null,
-        view === null ? error ? null : (0, import_react25.createElement)(Skeleton) : page === "entries" ? (0, import_react25.createElement)(Entries, { owner, view, remove, pin, layer, undoTidy }) : page === "history" ? (0, import_react25.createElement)(History, { owner, actions, undo, now }) : (0, import_react25.createElement)(Summary, { owner, view, regenerate })
+        view === null ? error ? null : (0, import_react25.createElement)(Skeleton) : page === "entries" ? (0, import_react25.createElement)(Entries, { owner, view, remove, pin, layer }) : page === "history" ? (0, import_react25.createElement)(History, { owner, actions, undo, now }) : (0, import_react25.createElement)(Summary, { owner, view, regenerate })
       ),
       (0, import_react25.createElement)(
         "div",
@@ -21481,43 +21441,6 @@ function AgentForm({ initial, submit, close }) {
     )
   );
 }
-function AgentSignInRow({ agent, Row: Row4 }) {
-  const [note, setNote] = (0, import_react46.useState)(null);
-  const copy2 = () => {
-    const done = (copied) => setNote({ copied, command: agent.signIn });
-    try {
-      const writing = navigator.clipboard?.writeText(agent.signIn);
-      if (writing === void 0) {
-        done(false);
-        return;
-      }
-      void Promise.resolve(writing).then(() => done(true), () => done(false));
-    } catch {
-      done(false);
-    }
-  };
-  const message = note === null ? null : (0, import_react46.createElement)("span", {
-    className: note.copied ? "bt-note" : "bt-note bt-danger",
-    role: note.copied ? "status" : "alert"
-  }, note.copied ? t("Sign-in command copied. Run it in a terminal: {command}", { command: note.command }) : t("Could not copy the sign-in command. Run this in a terminal: {command}", { command: note.command }));
-  return (0, import_react46.createElement)(
-    Row4,
-    {
-      label: agent.name,
-      hint: [
-        [agent.path, agent.version].filter(Boolean).join(" · "),
-        message === null ? null : (0, import_react46.createElement)("br"),
-        message
-      ]
-    },
-    (0, import_react46.createElement)(
-      "div",
-      { className: "bt-set-actions" },
-      agent.signIn ? (0, import_react46.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", title: t("Copies the sign-in command"), onClick: copy2 }, t("Sign in")) : null,
-      (0, import_react46.createElement)("span", { className: "bt-tag" }, agent.signedIn === true ? t("Signed in") : agent.signedIn === false ? t("Not signed in") : agent.path ? t("Found") : t("Not found"))
-    )
-  );
-}
 function LocalAgentsPage({ run: run2, Section: Section2, Row: Row4 }) {
   const [view, setView] = (0, import_react46.useState)(null);
   const [editing, setEditing] = (0, import_react46.useState)(null);
@@ -21533,7 +21456,21 @@ function LocalAgentsPage({ run: run2, Section: Section2, Row: Row4 }) {
       Section2,
       { key: "found", title: t("Detected agents") },
       view.detected.length === 0 ? (0, import_react46.createElement)(Row4, { label: t("No agent CLIs found") }) : null,
-      view.detected.map((agent) => (0, import_react46.createElement)(AgentSignInRow, { key: agent.route, agent, Row: Row4 })),
+      view.detected.map((agent) => (0, import_react46.createElement)(
+        Row4,
+        {
+          key: agent.route,
+          label: agent.name,
+          hint: [agent.path, agent.version].filter(Boolean).join(" · ")
+        },
+        (0, import_react46.createElement)(
+          "div",
+          { className: "bt-set-actions" },
+          agent.signIn ? (0, import_react46.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", title: t("Copies the sign-in command"), onClick: () => navigator.clipboard?.writeText(agent.signIn).catch(() => {
+          }) }, t("Sign in")) : null,
+          (0, import_react46.createElement)("span", { className: "bt-tag" }, agent.signedIn === true ? t("Signed in") : agent.signedIn === false ? t("Not signed in") : agent.path ? t("Found") : t("Not found"))
+        )
+      )),
       (0, import_react46.createElement)(
         Row4,
         { key: "refresh", label: t("Refresh"), hint: t("Scan again for agent CLIs.") },
@@ -21736,11 +21673,6 @@ function GeneralPage({ roster, actions, run: run2, dsh }) {
     (0, import_react47.createElement)(
       SetSection,
       { key: "memory", title: t("Memory") },
-      (0, import_react47.createElement)(
-        SetRow,
-        { label: t("Bring up related memory") },
-        (0, import_react47.createElement)(Switch, { label: t("Bring up related memory"), on: prefs.memoryAutoRecall !== false, onChange: (memoryAutoRecall) => run2(actions.setPrefs({ memoryAutoRecall })) })
-      ),
       MEMORY_SIZES.map(({ scope, label, size }) => (0, import_react47.createElement)(
         SetRow,
         { key: scope, label: t(label) },
@@ -25011,7 +24943,7 @@ function sectionMoveItems(entry, roster, actions) {
     }]
   ].filter(Boolean);
 }
-function ContextMenu({ menu, roster, actions, useWork, leaving = false }) {
+function ContextMenu({ menu, roster, actions, leaving = false }) {
   useEscape(() => actions.closeMenu());
   const ref = (0, import_react57.useRef)(null);
   const trigger = (0, import_react57.useRef)(typeof document === "undefined" ? null : document.activeElement);
@@ -25041,8 +24973,6 @@ function ContextMenu({ menu, roster, actions, useWork, leaving = false }) {
   const bot = roster.byId[menu.id];
   const room2 = roster.roomsById[menu.id];
   const entry = bot ?? room2;
-  const waitsRaw = useWork && bot ? useWork((work) => JSON.stringify(work.waiting?.[bot.id] ?? null)) : "null";
-  const waits = (0, import_react57.useMemo)(() => JSON.parse(waitsRaw), [waitsRaw]);
   if (entry === void 0) return null;
   const isMainBot = isMainOf(roster, menu.id);
   const isTile = roster.mainBotId === menu.id;
@@ -25066,7 +24996,6 @@ function ContextMenu({ menu, roster, actions, useWork, leaving = false }) {
       bot && isMainBot && mainCount > 1 ? [t("Remove Main Bot role"), StarLineIcon, () => actions.setMain(bot.id, false)] : null
     ],
     [[t("Copy conversation ID"), CopyIcon, () => navigator.clipboard?.writeText(bot ? currentPart(bot) : menu.id)]],
-    bot ? (waits?.waits ?? []).map((item) => [t("Give up waiting for {name}", { name: item.name ?? t("a Bot") }), SignOutIcon, () => actions.abandonWork(item.id)]) : [],
     [
       isMainBot ? null : [t("Hide from sidebar"), HideIcon, () => actions.setFlags(menu.id, { hidden: true })],
       isMainBot ? null : [room2 ? t("Delete group") : t("Delete"), TrashIcon, () => bot ? actions.deleteBot(bot.id) : actions.deleteRoom(menu.id), true]
@@ -27057,7 +26986,7 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     ui2.palette ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
     ui2.exchange ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ExchangeDialog, { pair: ui2.exchange, roster, actions }), document.body) : null,
     ui2.voice ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, roster, actions, useSessions, useSessionStatus }), document.body) : null,
-    menu ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, useWork, leaving: menuLeaving }), document.body) : null,
+    menu ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, leaving: menuLeaving }), document.body) : null,
     settings ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(SettingsDialog, { page: settings.page, id: settings.id, roster, actions, useUpdate, leaving: settingsLeaving }), document.body) : null,
     owner ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(MemoryDialog, { key: owner.id, owner, actions, leaving: memoryLeaving }), document.body) : null
   );
