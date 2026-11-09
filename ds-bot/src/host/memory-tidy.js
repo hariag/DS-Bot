@@ -31,17 +31,20 @@ function parseTidy(text) {
 
 export function installTidy(rt, memory) {
   const { ctx, config, state } = rt
-  const { TEAM, ownScope, groupScope, keeperOf, scopeKey, dirOf, today, queued, recoverPending, writable, settled, loadScope, publish, writeStep, removeStep, writeText, botShot, languageNow, allEntries, entryProblem, changedSince, USER } = memory
-  // All of it sits in the memory's own folder: a private Bot's words stay in its own,
-  // and an archive of a deleted Bot or group takes them along.
-  const statePath = scope => join(dirOf(scope), 'tidied.json')
-  const batchPath = (scope, batch) => join(dirOf(scope), 'tidy', `${batch}.json`)
-  const doneOf = (scope) => {
-    try {
-      return JSON.parse(readFileSync(statePath(scope), 'utf8'))
-    } catch {
-      return undefined
+  const { root, TEAM, ownScope, groupScope, keeperOf, scopeKey, dirOf, today, queued, recoverPending, writable, settled, loadScope, publish, writeStep, removeStep, writeText, botShot, languageNow, allEntries, entryProblem, changedSince, USER } = memory
+  const statePath = join(root, 'tidied.json')
+  const batchPath = batch => join(root, 'tidy', `${batch}.json`)
+
+  let done
+  const doneNow = () => {
+    if (done === undefined) {
+      try {
+        done = JSON.parse(readFileSync(statePath, 'utf8'))
+      } catch {
+        done = {}
+      }
     }
+    return done
   }
 
   // Every memory with someone to read it for: a team tidy offers only its topics, since
@@ -59,7 +62,7 @@ export function installTidy(rt, memory) {
 
   async function tidy(job) {
     const key = scopeKey(job.scope)
-    const prior = doneOf(job.scope)
+    const prior = doneNow()[key]
     const day = today()
     const files = await settled(() => loadScope(job.scope))
     const offered = offeredOf(job, files)
@@ -73,15 +76,16 @@ export function installTidy(rt, memory) {
       if (parsed === undefined) rt.warn('ds-bot: the memory tidy of %s got no list of changes from the model', key)
       else changes = parsed
     }
+    const numbered = open.map(entryId)
     await queued(async () => {
       await recoverPending()
       if (rt.botOf(job.keeper.id) === undefined) return
       writable(job.scope, USER)
-      await applyTidy(job, key, day, changes, open, ended, prior)
+      await applyTidy(job, key, day, changes, numbered, ended.map(entryId), prior)
     })
   }
 
-  async function applyTidy(job, key, day, changes, numbered, ended, prior) {
+  async function applyTidy(job, key, day, changes, numbered, endedIds, prior) {
     const files = loadScope(job.scope)
     const offered = offeredOf(job, files)
     const byId = new Map(offered.map(entry => [entryId(entry), entry]))
@@ -95,17 +99,11 @@ export function installTidy(rt, memory) {
     const time = new Date().toISOString()
     const take = (entry) => { draft.set(entry.file.file, draft.get(entry.file.file).filter(line => line !== entry.file.lines[entry.line])) }
     const retire = (entry, why, extra = {}) => retired.push({ batch, time, file: entry.file.file, line: entry.file.lines[entry.line], why, ...extra })
-    const unchanged = (expected) => {
-      if (expected === undefined) return undefined
-      const current = byId.get(entryId(expected))
-      if (current?.file.file === expected.file.file && current.file.lines[current.line] === expected.file.lines[expected.line]) return current
-      return undefined
-    }
-    const pick = at => unchanged(numbered[Number(at) - 1])
+    const pick = at => byId.get(numbered[Number(at) - 1])
     const used = new Set()
 
-    for (const expected of ended) {
-      const entry = unchanged(expected)
+    for (const id of endedIds) {
+      const entry = byId.get(id)
       if (entry === undefined) continue
       take(entry)
       retire(entry, 'ended')
@@ -128,8 +126,7 @@ export function installTidy(rt, memory) {
         continue
       }
       if (op === 'merge') {
-        const entries = [...new Set((Array.isArray(change.entries) ? change.entries : []).map(pick))]
-        if (entries.some(entry => entry === undefined || used.has(entry))) continue
+        const entries = [...new Set((Array.isArray(change.entries) ? change.entries : []).map(pick))].filter(entry => entry !== undefined && !used.has(entry))
         const text = cleanEntry(change.text)
         if (entries.length < 2 || entries.length > budget.left || entryProblem(text) !== undefined) continue
         budget.left -= entries.length
@@ -187,9 +184,10 @@ export function installTidy(rt, memory) {
     if (mainItem !== undefined) mainItem.after = mainNow
     else if (main.content !== mainNow && main.lines.length > 0) touched.push({ file: MAIN, before: main.content, after: mainNow })
     const record = { time, day, ...(prior?.batch === undefined ? {} : { previous: prior.batch }) }
-    const stamp = { ...record, ...counts, ...(touched.length === 0 ? {} : { batch, items: items.slice(0, ITEMS_SHOWN) }) }
+    const stamp = { ...doneNow(), [key]: { ...record, ...counts, ...(touched.length === 0 ? {} : { batch, items: items.slice(0, ITEMS_SHOWN) }) } }
     if (touched.length === 0) {
-      if (rt.readOnly() === undefined) await writeText(statePath(job.scope), JSON.stringify(stamp))
+      done = stamp
+      if (rt.readOnly() === undefined) await writeText(statePath, JSON.stringify(stamp))
       return
     }
     for (const item of touched) steps.push(item.after === null ? removeStep(join(dir, item.file)) : writeStep(join(dir, item.file), item.after))
@@ -197,9 +195,10 @@ export function installTidy(rt, memory) {
     let log = ''
     try { log = readFileSync(retiredPath, 'utf8') } catch { /* none yet */ }
     if (retired.length > 0) steps.push(writeStep(retiredPath, `${log}${retired.map(row => JSON.stringify(row)).join('\n')}\n`))
-    steps.push(writeStep(batchPath(job.scope, batch), JSON.stringify({ batch, scope: key, files: touched, retiredBefore: log })))
-    steps.push(writeStep(statePath(job.scope), JSON.stringify(stamp)))
+    steps.push(writeStep(batchPath(batch), JSON.stringify({ batch, scope: key, files: touched, retiredBefore: log })))
+    steps.push(writeStep(statePath, JSON.stringify(stamp)))
     await publish({ op: 'tidy', scope: key, steps, row: { op: 'tidy', scope: key, batch, ...counts, actor: job.keeper.id, actorName: job.keeper.name, auto: true } })
+    done = stamp
   }
 
   // A batch comes back whole, or not at all: a file changed since is left as it reads.
@@ -208,28 +207,29 @@ export function installTidy(rt, memory) {
     await queued(async () => {
       await recoverPending()
       writable(scope, USER)
-      const last = doneOf(scope)
-      if (batch === '' || last?.batch !== batch) throw new Error('That tidy is not the latest one of this memory.')
-      const saved = JSON.parse(readFileSync(batchPath(scope, batch), 'utf8'))
+      if (doneNow()[key]?.batch !== batch) throw new Error('That tidy is not the latest one of this memory.')
+      const saved = JSON.parse(readFileSync(batchPath(batch), 'utf8'))
       const dir = dirOf(scope)
       const read = (file) => { try { return readFileSync(join(dir, file), 'utf8') } catch { return null } }
       if (saved.files.some(item => read(item.file) !== item.after)) throw new Error('This memory has changed since that tidy, so it cannot be undone as a whole.')
       const steps = saved.files.map(item => (item.before === null ? removeStep(join(dir, item.file)) : writeStep(join(dir, item.file), item.before)))
       steps.push(saved.retiredBefore === '' ? removeStep(join(dir, RETIRED)) : writeStep(join(dir, RETIRED), saved.retiredBefore))
-      const { batch: _gone, items: _items, ...rest } = last
-      steps.push(writeStep(statePath(scope), JSON.stringify({ ...rest, undone: batch })))
+      const { batch: _gone, items: _items, ...rest } = doneNow()[key]
+      const stamp = { ...doneNow(), [key]: { ...rest, undone: batch } }
+      steps.push(writeStep(statePath, JSON.stringify(stamp)))
       await publish({ op: 'tidy-undo', scope: key, steps, row: { op: 'tidy-undo', scope: key, batch, actor: 'user', actorName: 'user' } })
+      done = stamp
     })
   }
 
   const tidyView = (scopes) => {
-    const latest = Object.entries(scopes).map(([tag, scope]) => ({ tag, ...doneOf(scope) })).filter(item => item.batch !== undefined).sort((a, b) => String(b.time).localeCompare(String(a.time)))[0]
+    const latest = Object.entries(scopes).map(([tag, scope]) => ({ tag, ...doneNow()[scopeKey(scope)] })).filter(item => item.batch !== undefined).sort((a, b) => String(b.time).localeCompare(String(a.time)))[0]
     return latest === undefined ? null : { scope: latest.tag, batch: latest.batch, at: latest.time, merged: latest.merged, moved: latest.moved, retired: latest.retired, items: latest.items ?? [] }
   }
 
   // One memory at a time, and only one that changed since its last tidy, on a new day.
   const due = (job) => {
-    const last = doneOf(job.scope)
+    const last = doneNow()[scopeKey(job.scope)]
     return last?.day !== today() && changedSince(scopeKey(job.scope), last?.time)
   }
   let running = false
@@ -258,7 +258,7 @@ export function installTidy(rt, memory) {
   const tidyNow = async (key) => {
     await rt.load()
     const job = jobs().find(item => scopeKey(item.scope) === key)
-    if (job !== undefined && doneOf(job.scope)?.day !== today()) await tidy(job)
+    if (job !== undefined && doneNow()[key]?.day !== today()) await tidy(job)
   }
   return { tidyView, undoTidy, tidyNow }
 }
