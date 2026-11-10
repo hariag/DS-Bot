@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { afterRound } from './relay-rows.js'
+import { withRows } from './relay-rows.js'
 import { createRuntime } from '../index.js'
 import { fakeAttachments, fakeContext } from './fake-ctx.js'
 import { LONG_HEAD, MESSAGE_INLINE_MAX, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
@@ -12,7 +12,7 @@ import { promisesWork } from '../src/host/turns.js'
 let rt
 
 // Chief, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
-const seed = (room = {}, extraRooms = {}, bots = {}, top = {}) => ({
+const seed = (room = {}, extraRooms = {}, bots = {}) => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
@@ -28,12 +28,11 @@ const seed = (room = {}, extraRooms = {}, bots = {}, top = {}) => ({
   questions: {},
   prefs: {},
   revision: 0,
-  ...top,
 })
 
-async function start(t, room, services, extraRooms, bots, llm, top) {
+async function start(t, room, services, extraRooms, bots, llm) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-work-'))
-  writeFileSync(join(home, 'state.json'), JSON.stringify(seed(room, extraRooms, bots, top)))
+  writeFileSync(join(home, 'state.json'), JSON.stringify(seed(room, extraRooms, bots)))
   const selected = []
   const ctx = fakeContext({ services })
   const agents = new Map()
@@ -105,9 +104,9 @@ async function start(t, room, services, extraRooms, bots, llm, top) {
     let result
     const stop = new AbortController()
     t.after(() => stop.abort())
-    void tool('group_relay', {}, sessionId, { callId, signal: stop.signal }).then(async (value) => { result = await afterRound(rt, sessionId, value) })
+    void tool('group_relay', {}, sessionId, { callId, signal: stop.signal }).then((value) => { result = withRows(rt, sessionId, JSON.parse(value)) })
     const read = () => result
-    read.cancel = () => { stop.abort(); rt.stopRoomRound(rt.roomOf(sessionId)?.id ?? sessionId) }
+    read.cancel = () => stop.abort()
     return read
   }
   const say = text => ({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -1045,8 +1044,7 @@ test('the user stops a member\'s work in a group, and the group shows it', async
   assert.deepEqual(log.map(line => [line.who, line.kind]), [['Writer', 'stopped']])
 })
 
-// #592: stopping only the round left a member the round moved on from working. The round
-// runs in DS Bot, not in the group's Session, so the Session has nothing to cancel.
+// #592: DSH's own stop reaches only the round; a member the round moved on from kept working.
 test('one press stops the group\'s round and every member at work there, and nothing elsewhere', async (t) => {
   const host = await start(t)
   assert.equal((await host.call('stop-room-work', { roomId: 'r1' })).value, false)
@@ -1059,18 +1057,12 @@ test('one press stops the group\'s round and every member at work there, and not
   host.emit('c', 'turn/start', { turn: 1 })
   const stopped = await host.call('stop-room-work', { roomId: 'r1' })
   assert.deepEqual([stopped.ok, stopped.value], [true, true])
-  for (const id of ['ga', 'gb']) assert.deepEqual(host.agentOf(id).cancelled[0], { kind: 'user' }, id)
-  for (const id of ['r1', 'c', 'gc']) assert.deepEqual(host.agentOf(id).cancelled, [], id)
+  for (const id of ['r1', 'ga', 'gb']) assert.deepEqual(host.agentOf(id).cancelled, [{ kind: 'user' }], id)
+  for (const id of ['c', 'gc']) assert.deepEqual(host.agentOf(id).cancelled, [], id)
+  assert.deepEqual(logLines(host).map(line => [line.who, line.kind]), [['User', undefined], ['Chief', 'stopped'], ['Writer', 'stopped']])
   host.emit('ga', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
   await settle(() => first() !== undefined)
-  // The round ended with the stop: Writer, which worked outside it, tells the group in a
-  // post of its own.
-  const post = host.takePost()
-  assert.deepEqual([post.source.stopped, post.source.senderSessionId], [true, 'b'])
-  const after = host.round('c2', post)
-  await settle(() => after() !== undefined)
-  assert.deepEqual(logLines(host).map(line => [line.who, line.kind]), [['User', undefined], ['Chief', 'stopped'], ['Writer', 'stopped']])
-  assert.deepEqual([...kinds(first()), ...kinds(after())].filter(([kind]) => kind === 'stopped'), [['stopped', 'Chief'], ['stopped', 'Writer']])
+  assert.deepEqual(kinds(first()).filter(([kind]) => kind === 'stopped'), [['stopped', 'Chief'], ['stopped', 'Writer']])
 })
 
 test('a member that cannot be stopped leaves the others stopped and reports the failure', async (t) => {
@@ -1084,6 +1076,27 @@ test('a member that cannot be stopped leaves the others stopped and reports the 
   assert.deepEqual(host.agentOf('gb').cancelled, [{ kind: 'user' }])
   await settle(() => host.agentOf('r1').calls.length === 1)
   assert.equal(host.takePost().source.stopped, true)
+})
+
+test('a round that cannot be stopped leaves the members stopped and reports the failure', async (t) => {
+  const host = await start(t)
+  const stop = new AbortController()
+  host.emit('gb', 'turn/start', { turn: 1 })
+  host.emit('r1', 'user/message', host.say('@Chief 看看进度'))
+  const relay = host.tool('group_relay', {}, 'r1', { callId: 'c1', signal: stop.signal })
+  try {
+    await settle(() => host.agentOf('ga').calls.length === 1)
+    host.begin('ga')
+    host.agentOf('r1').cancel = () => { throw new Error('round cancel failed') }
+    const stopped = await host.call('stop-room-work', { roomId: 'r1' })
+    assert.equal(stopped.ok, false)
+    assert.match(stopped.error.message, /round cancel failed/)
+    for (const id of ['ga', 'gb']) assert.deepEqual(host.agentOf(id).cancelled, [{ kind: 'user' }], id)
+  } finally {
+    stop.abort()
+    host.emit('ga', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
+    await relay
+  }
 })
 
 test('a subagent whose interrupt throws is still cancelled, and so is the member', async (t) => {
@@ -1126,7 +1139,7 @@ test('a stopped round warns when a member turn cannot be stopped', async (t) => 
   await settle(() => host.agentOf('gb').calls.length === 1)
   host.begin('gb')
   host.agentOf('gb').cancel = () => { throw new Error('cancel failed') }
-  rt.stopRoomRound('r1')
+  stop.abort()
   await relay
   await settle(() => warned.some(line => /cancel failed/.test(line)))
 })
@@ -2228,84 +2241,37 @@ test('a batch wake says which member finished with no closing message of its own
   host.finish('ga', '[PASS]')
 })
 
-// A batch is saved with the team, so who still owes whom survives a restart.
-test('a call batch is saved with the team while its member works', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
+// #977: a final reply that announces work while no tool, job or subagent runs is marked
+// for the reader, and a local file it names is checked. Nothing is retried or reworded.
+test('a reply announcing work with nothing running is marked, with its missing file (#977)', async (t) => {
   const host = await start(t)
-  const first = host.round('c1', host.say('@Chief 安排一下'))
-  await settle(() => host.agentOf('ga').calls.length === 1)
-  host.begin('ga')
-  host.finish('ga', '@Writer 整理文档')
+  const first = host.round('c1', host.say('@Writer 导出报告'))
   await settle(() => host.agentOf('gb').calls.length === 1)
   host.begin('gb')
-  host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
-  t.mock.timers.tick(ROOM_WORK_GRACE_MS)
+  const missing = join(tmpdir(), `ds-bot-977-${process.pid}-${Date.now()}`, 'report.pptx')
+  const long = `正在导出报告到 ${missing}，稍后汇报。${'背景：这一页要沿用上一版的样式和图表。'.repeat(12)}`
+  host.finish('gb', long)
   await settle(() => first() !== undefined)
-  await rt.save()
-  const saved = Object.values(JSON.parse(readFileSync(join(host.home, 'state.json'), 'utf8')).roomBatches)
-  assert.deepEqual(saved.map(batch => [batch.roomId, batch.by, batch.pending, batch.worked]), [['r1', 'a', ['b'], true]])
-  host.finish('gb', '文档好了')
+  const reply = first().replies.find(row => row.name === 'Writer')
+  assert.deepEqual(reply.claims, { missingFiles: [missing], inProgress: true })
+  assert.equal(host.agentOf('gb').calls.length, 1, 'nothing is retried')
 })
 
-// After a restart, a member that does not pick its work up again never answers: the batch
-// settles without it, and the Bot that asked is woken once with the result that came.
-test('after a restart a batch whose last member is gone wakes the caller with the results it has', async (t) => {
-  const log = [{ seq: 1, who: 'User', text: '@Chief 安排' }, { seq: 2, who: 'Chief', botId: 'a', text: '@Writer @Tester 各做一半' }, { seq: 3, who: 'Tester', botId: 'c', text: 'TESTER-RESULT：测试全过。' }]
-  const batch = { key: 'k-batch', roomId: 'r1', by: 'a', pending: ['b'], done: ['Tester'], results: [{ name: 'Tester', seq: 3 }], worked: true, answered: false, at: 1 }
-  const host = await start(t, { log, seq: 3, shown: 3 }, undefined, undefined, undefined, undefined, { roomBatches: { 'k-batch': batch } })
-  await settle(() => host.agentOf('r1').calls.length === 1)
-  const post = host.takePost()
-  assert.deepEqual([post.source.role, post.source.done, post.source.askedBy, post.source.batch], ['post', true, 'a', 'k-batch'])
-  host.round('c1', post)
-  await settle(() => host.agentOf('ga').calls.length === 1)
-  const wake = text(host.agentOf('ga').calls[0])
-  assert.match(wake, /Tester finished the work you asked for/)
-  assert.match(wake, /TESTER-RESULT/)
-  assert.equal(host.agentOf('gb').calls.length, 0)
-  host.begin('ga')
-  host.finish('ga', '[PASS]')
-  await settle(() => Object.keys(rt.state.roomBatches).length === 0)
-})
-
-test('after a restart a batch nobody finished is dropped without waking anyone', async (t) => {
-  const batch = { key: 'k-none', roomId: 'r1', by: 'a', pending: ['b', 'c'], done: [], results: [], worked: false, answered: false, at: 1 }
-  const host = await start(t, undefined, undefined, undefined, undefined, undefined, { roomBatches: { 'k-none': batch } })
-  await settle(() => Object.keys(rt.state.roomBatches).length === 0)
-  assert.equal(host.agentOf('r1').calls.length, 0)
-})
-
-// The round runs in DS Bot, not inside the group_relay call: the call returns at once, so
-// the group's Session is free and DSH cuts nothing short.
-test('the relay call returns at once and the round goes on without it', async (t) => {
+// A member that started real work is not marked, and a file that exists is not named.
+test('work that did run and a file that exists carry no marker (#977)', async (t) => {
   const host = await start(t)
-  host.emit('r1', 'user/message', host.say('@Writer 整理文档'))
-  const value = await host.tool('group_relay', {}, 'r1', { callId: 'c1', signal: new AbortController().signal })
-  assert.deepEqual(Object.keys(JSON.parse(value)), ['from'])
+  const first = host.round('c1', host.say('@Writer 导出报告'))
   await settle(() => host.agentOf('gb').calls.length === 1)
-  assert.equal([...rt.roomProgress.values()].filter(round => round.roomId === 'r1').length, 1)
   host.begin('gb')
-  host.finish('gb', '整理好了。')
-  await settle(() => rt.roomRounds('r1').length === 0)
-  const { from } = JSON.parse(value)
-  assert.deepEqual(rt.groupRows('r1', from).map(row => row.text), ['整理好了。'])
-})
-
-// A message the user sends while a round runs joins that round; what is said after it
-// shows under it.
-test('a message sent while a round runs joins it, and the rows after it show under it', async (t) => {
-  const host = await start(t)
-  const first = host.round('c1', host.say('@Chief 安排一下'))
-  await settle(() => host.agentOf('ga').calls.length === 1)
-  host.begin('ga')
-  const second = host.round('c2', host.say('@Writer 你也看看'))
-  // One round in the group: the second message called Writer in it.
-  await settle(() => host.agentOf('gb').calls.length === 1)
-  assert.equal([...rt.roomProgress.values()].filter(round => round.roomId === 'r1').length, 1)
-  host.begin('gb')
-  host.finish('gb', '我看过了。')
-  host.finish('ga', '安排好了。')
-  await settle(() => first() !== undefined && second() !== undefined)
-  assert.deepEqual(first().replies, [])
-  assert.deepEqual(second().replies.map(row => [row.name, row.text]), [['Writer', '我看过了。'], ['Chief', '安排好了。']])
-  assert.deepEqual(logLines(host).map(line => line.who), ['User', 'User', 'Writer', 'Chief'])
+  const root = mkdtempSync(join(tmpdir(), 'ds-bot-977-file-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const done = join(root, 'report.pptx')
+  writeFileSync(done, 'x')
+  host.emit('gb', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
+  host.emit('gb', 'tool/result', { callId: 'k1' })
+  host.finish('gb', `正在导出报告到 ${done}，稍后汇报。`)
+  await settle(() => first() !== undefined)
+  const reply = first().replies.find(row => row.name === 'Writer')
+  assert.equal(reply.claims, undefined)
+  assert.equal(host.agentOf('gb').calls.length, 1)
 })
