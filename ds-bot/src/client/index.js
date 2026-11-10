@@ -830,6 +830,7 @@ export function apply(ctx) {
   // injects them (the session facade and the conversation service).
   const queueFace = (sessionId) => ({
     ...face(),
+    sessionId,
     updateQueue: async (itemId, action) => (await ctx.sessions.binding(sessionId)?.session?.updateQueue(itemId, action)) ?? { ok: false },
     loadImage: (attachment) => ctx.uiConversation.imageUrl(sessionId, attachment),
   })

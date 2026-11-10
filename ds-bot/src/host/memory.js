@@ -60,7 +60,7 @@ const RECENT_ROWS_MAX = 2_000
 const RECENT_TAIL_CHARS = 512 * 1024
 const QUERY_TERMS_MAX = 6
 const SOURCE_READ_MS = 5_000
-const MODEL_TIMEOUT_MS = 120_000
+const MODEL_TIMEOUT_MS = 600_000
 const SUMMARY_MAX_TOKENS = 2_048
 // A reply cut off at the limit is tried once more with room for reasoning plus
 // the answer; a model that thinks can spend the smaller budget thinking alone.

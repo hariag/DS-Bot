@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readAvatar } from './avatar.js'
-import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, SOURCE_KIND } from './constants.js'
+import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES } from './constants.js'
 import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
 import { NAME_MAX } from './requests.js'
@@ -91,7 +91,7 @@ export function install(rt) {
         const section = sectionNameOf(bot.sectionId)
         const tags = [bot.role, section ? `section "${section}"` : '', model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.private === true ? 'private' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
         const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
-        const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id)}`
+        const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id, self)}`
         return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}${now}`
       })
       if (lines.length === 0) return 'No Bots yet.'
@@ -117,22 +117,6 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
     return room ? `group "${room.name}"` : 'its own chat'
   }
-  // A Bot request still in the inbox: no step or turn has taken it out yet.
-  const unreadRequest = (agent, senderId, toUser) => {
-    for (const [message, steered] of [...(agent.inbox?.nextStep ?? []).map(message => [message, true]), ...(agent.inbox?.nextTurn ?? []).map(message => [message, false])]) {
-      const source = message.source
-      if (source?.kind === SOURCE_KIND && source.role === 'request' && source.senderSessionId === senderId
-        && (source.audience === 'user') === toUser && !source.deferred && !source.resumed) return { message, steered }
-    }
-    return undefined
-  }
-  // A message's own words and files, without its header line.
-  const bodyOf = (message) => {
-    const content = Array.isArray(message.content) ? message.content : []
-    const first = content.find(block => block?.type === 'text')?.text ?? ''
-    return { text: first.slice(first.indexOf('\n') + 1), files: content.filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment) }
-  }
-
   // A tool that throws shows as failed in the chat, instead of as sent or stopped.
   const refuse = (message) => { throw new Error(message) }
 
@@ -243,31 +227,23 @@ export function install(rt) {
         const toUser = args.reply_to === 'user'
         const work = toUser ? undefined : works[0]
         const chat = rt.chatOf(target.id)
-        const agent = await rt.resolveAgent(chat)
-        const status = rt.statusOf(target.id)
-        // A request it has not read yet, sent for the same work, takes this one in, so
-        // messages to a Bot that cannot read them do not pile up.
-        const earlier = unreadRequest(agent, sender.id, toUser)
-        const joinable = earlier !== undefined && (toUser || rt.sameWork(earlier.message.source.exchangeId, work))
-        const before = joinable ? bodyOf(earlier.message) : undefined
-        let long = await rt.attachLong(before ? `${before.text}\n\n${text}` : text, `Message from ${sender.name}.txt`)
+        await rt.resolveAgent(chat)
+        const status = rt.statusOf(target.id, sender.id)
+        const long = await rt.attachLong(text, `Message from ${sender.name}.txt`)
         // Nothing went out, so a named request must not take this as a delivered
         // receipt: admitRequest drops the pending record instead, and a retry can send.
         if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
-        const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
-        if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
         const working = rt.live.get(chat)?.turn !== undefined
-        const steer = (args.when !== 'queue' && !toUser) || (joins && earlier.steered)
-        const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
-        if (joins) rt.forgetDelivery?.(exchangeId)
-        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
+        const steer = args.when !== 'queue' && !toUser
+        const exchangeId = randomUUID()
+        if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
         try {
-          await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: [...long.files, ...(joins ? before.files : [])], length: long.length, role: 'request', steer, exchangeId, ...(joins ? { merged: true } : {}), ...(toUser ? { audience: 'user' } : {}) })
+          await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) })
         } catch (error) {
           // The delivery stays noted for the next start while its Bot exists
           // (resume.js), and the resent request still answers up the tree, so the
           // work it opened stays too. Only a target that is gone drops the work.
-          if (!joins && rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
+          if (rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
           throw error
         }
         const sent = toUser
@@ -279,7 +255,6 @@ export function install(rt) {
               : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
         const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from)?.name : undefined
         const notes = [
-          joins ? `${target.name} had not read your earlier message yet, so this one was added to it, and it answers both at once.` : '',
           status === 'idle' ? '' : `${target.name} now: ${status}.`,
           asker ? `When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to ${asker} once all of it is back.` : '',
         ].filter(Boolean)
@@ -781,6 +756,9 @@ export function install(rt) {
     const held = scoped.get(id)
     if (held === undefined) return
     scoped.delete(id)
+    for (const lift of held.connectorLifts ?? []) {
+      try { lift() } catch (error) { rt.warn('ds-bot: a connector restriction of %s was not removed: %s', id, error) }
+    }
     for (const dispose of held.disposers) {
       try {
         dispose()
@@ -949,23 +927,34 @@ export function install(rt) {
   // tools matching each off connector's prefix. Re-applied on tools/change.
   const maskConnectorTools = (agent, held) => {
     if (typeof agent.ctx?.tools?.restrict !== 'function' || typeof ctx.tools?.schemas !== 'function') return
+    if (held.connectorUpdating) return
     const botId = rt.selfOf(agent.session?.id)
     const prefixes = rt.connectorOffFor?.(botId) ?? []
-    const served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
-    const deny = [...served].filter(name => prefixes.some(prefix => name.startsWith(prefix)))
     const before = held.connectorDenied ?? new Set()
+    if (prefixes.length === 0 && before.size === 0) return
+    const served = typeof ctx.tools.definitions === 'function' ? ctx.tools.definitions() : ctx.tools.schemas()
+    const deny = served.map(tool => tool.name).filter(name => prefixes.some(prefix => name.startsWith(prefix)))
     if (deny.length === before.size && deny.every(name => before.has(name))) return
-    for (const lift of held.connectorLifts ?? []) { try { lift() } catch { /* already lifted */ } }
-    held.connectorLifts = []
-    held.connectorDenied = new Set(deny)
-    for (const name of deny) {
-      try {
-        const lift = agent.ctx.tools.restrict({ deny: [name] })
-        if (typeof lift === 'function') held.connectorLifts.push(lift)
-      } catch { /* a scoped name cannot be restricted; connectors are global */ }
+    held.connectorUpdating = true
+    try {
+      for (const lift of held.connectorLifts ?? []) { try { lift() } catch { /* already lifted */ } }
+      held.connectorLifts = []
+      held.connectorDenied = new Set()
+      for (const name of deny) {
+        try {
+          const lift = agent.ctx.tools.restrict({ deny: [name] })
+          if (typeof lift === 'function') {
+            held.connectorLifts.push(lift)
+            held.connectorDenied.add(name)
+          }
+        } catch { /* a scoped name cannot be restricted; connectors are global */ }
+      }
+    } finally {
+      held.connectorUpdating = false
     }
   }
   const reapplyToolMasks = () => {
+    if (rt.stopping === true) return
     for (const held of scoped.values()) {
       if (held.agent === undefined) continue
       try { maskConnectorTools(held.agent, held) } catch (error) { rt.warn('ds-bot: connector mask failed: %s', error) }

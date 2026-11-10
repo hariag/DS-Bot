@@ -11,7 +11,8 @@ import { CodexEngine } from '../src/host/local-agents/codex.js'
 import { JsonRpcPeer, wireProcess } from '../src/host/local-agents/jsonrpc.js'
 import { ClaudeEngine } from '../src/host/local-agents/claude.js'
 import { LoopbackMcp, flattenSchema } from '../src/host/local-agents/mcp.js'
-import { cleanEnv } from '../src/host/local-agents/discover.js'
+import { cleanEnv, refreshSearchDirs } from '../src/host/local-agents/discover.js'
+import { install as localAgentsInstall } from '../src/host/local-agents/index.js'
 import { validateCustom, isLocalAgentRoute, cliMode, acpMode } from '../src/host/local-agents/engines.js'
 import { install as partsInstall } from '../src/host/parts.js'
 import { install as modelsInstall } from '../src/host/models.js'
@@ -857,4 +858,35 @@ test('an open-ended request outlives the default deadline', async () => {
   assert.equal(await settled, 'timeout', 'a positive timeout still fires')
   peer.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { stopReason: 'end_turn' } }))
   assert.deepEqual(await open, { stopReason: 'end_turn' }, 'a 0 timeout never expires')
+})
+
+test('a pending local-agent scan cannot access services after the plugin stops', async () => {
+  const ctx = fakeContext()
+  const service = ctx.llm
+  let active = true
+  let lateServiceReads = 0
+  Object.defineProperty(ctx, 'llm', { get() {
+    if (!active) { lateServiceReads += 1; throw new Error('cannot get required service "llm" in inactive context') }
+    return service
+  } })
+  const rt = { ctx, state: {}, teamTools: [], load: () => Promise.resolve(), warn: () => {} }
+  localAgentsInstall(rt)
+  active = false
+  await ctx.dispose()
+  await refreshSearchDirs()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(lateServiceReads, 0)
+})
+
+test('local-agent routes stay registered while the plugin is active', async (t) => {
+  const ctx = fakeContext()
+  const warnings = []
+  const rt = { ctx, state: { localAgents: { custom: [{ id: 'example' }], sessions: {} } }, teamTools: [], load: () => Promise.resolve(), warn: (...args) => warnings.push(args) }
+  t.after(() => ctx.dispose())
+  localAgentsInstall(rt)
+  await refreshSearchDirs()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(ctx.adapters.length, 1)
+  assert.ok(ctx.adapters[0].routes.some(route => route.includes('example')))
+  assert.deepEqual(warnings, [])
 })

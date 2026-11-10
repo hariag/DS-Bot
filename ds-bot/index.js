@@ -82,6 +82,7 @@ export function createRuntime(ctx, config = {}) {
     },
   }
   for (const module of MODULES) module.install(rt)
+  ctx.effect(() => () => { rt.stopping = true }, 'ds-bot: stopping')
   // A live Agent can be scoped before the last module has added its tools (the memory
   // module starts a load during install): complete the scope now that every tool is in.
   rt.syncScopedTools?.()

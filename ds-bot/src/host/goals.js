@@ -408,18 +408,18 @@ export function markTasks(room, botId, from, to, note, now = Date.now()) {
   return true
 }
 
-const DUTY_ACTIVE = 'You run this goal. Hand each task of the current stage to its member with @Name; members you call in one message start together. When they report back, check the results against the stage\'s "done when" yourself or have a reviewing member check them. Then call group_goal pass with the evidence and hand out the next stage in the same reply, or call group_goal rework with what is missing and call the members again. Keep all work inside the objective and the rules. When the user corrects the direction, call group_goal revise first. Ask the user only for decisions you cannot make.'
+const DUTY_ACTIVE = "You run this goal. First check current task states, existing owners and work in other conversations, dependencies, authorization, resource locks and available capacity. Call only members whose tasks are ready and need assignment; members named in one message start together. Do not redispatch working or reported work without a concrete reason. Review every task in the current stage and every stage acceptance item with evidence; group_goal pass marks every stage task done, so pass only when each task to be marked done is actually complete and verified. If a task is no longer applicable, first record the authorized scope decision and safely reconcile the stage; never falsely mark it done just to advance. If a specific member must redo work, first verify that member has an affected task in the current stage, preserve evidence and the affected task notes before group_goal rework with that bot; targeted rework also clears that member's affected task notes, while leaving bot out resets every task and clears all task notes. If the member has no current task, track the work on the project board or use a safe scoped revision. Record external blockers and work on independent authorized actions rather than treating waiting as rework. Revise this goal for an explicit user correction, or for necessary task or dependency adjustments within its existing authorized objective and acceptance; never materially change the user objective or acceptance scope or weaken its standard without explicit user direction; refine verification details within the authorized original acceptance and record the change. Use task to update one member status without passing stages. Revising constraints replaces the entire list. Revising stages rebuilds current and future stages and loses task notes, stage rework and feedback, and original IDs; show omits complete future task definitions. Before such a replacement, retrieve and preserve the complete current and future definitions, task states, notes, feedback and evidence from verifiable records; if unavailable, do not guess or rebuild, and track the work on the project board. When calling revise, supply only fields that need changing and reconcile all affected work after the revision. Track independent new user goals separately without overwriting this goal. Each stage should have at most one aggregated task per Bot; track separate acceptance items on the project board. Pause or resume this goal only on an explicit user request; an external blocker is not a pause, and do not attribute a Bot action to the user. Stop can stop other group members and their work; use it only for an explicit request to stop this whole goal after assessing impact. Keep all work within applicable user authorization and rules. Ask the user only for decisions you cannot make."
 const DUTY_PASSED = 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
-const DUTY_PAUSED = 'The user paused this goal. Do not hand out stage work or pass stages. Talk with the user, and write their corrections into the goal with group_goal revise. The user resumes it.'
+const DUTY_PAUSED = "This group goal is paused. Do not assume who paused it without evidence, assign new work or pass stages for it. Continue unrelated user-authorized work that does not depend on the paused goal. Resume only on an explicit user request."
 const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : DUTY_ACTIVE)
 
 const DUTY_DRAFT = [
-  'Align with the user before you write it, following the goal-grill skill:',
+  'Establish the goal from the user request and available facts; follow goal-grill when available and ask only for decisions genuinely needed:',
   '1. Find the facts yourself (files, code, records) or ask members with @Name. Never ask the user what you can look up.',
   '2. List the decisions only the user can make. Ask them in one message, numbered, each with your recommended answer, so the user can reply "as recommended". Skip this when nothing is open.',
-  '3. Then call group_goal start: the objective, how to check it is done (commands, tests, files, evidence), the rules to keep, and the stages in order, each with its own check and its tasks for named members.',
+  '3. When the goal is sufficiently clear, call group_goal start with objective, acceptance, rules and stages; use at most one aggregated task per Bot in each stage and track independent items on the project board.',
 ].join('\n')
-const NUDGE_LINE = 'Goal check from DS Bot: nothing is running in this group and the goal is not finished. Take the next step now: hand out the current stage\'s tasks that are not done, check a stage whose members have reported, or complete the goal if every stage passed. If you are waiting for the user, reply [PASS].'
+const NUDGE_LINE = "Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. Check existing task states, ownership, dependencies and evidence before assigning anything. Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. If no authorized step can progress while waiting, record the unblock condition and reply [PASS]."
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
 
 export function install(rt) {
@@ -466,8 +466,8 @@ export function install(rt) {
       if (tasks.length === 0) lines.push('You have no task in this stage.')
       else for (const task of tasks) lines.push(`Your task in it: ${task.task} (${TASK_LABEL[task.status]}).`)
     }
-    lines.push('Work only toward this. When you finish your task, end your reply with the evidence: the files you changed, the commands you ran and what they printed.')
-    if (goal.status === 'paused') lines.push('The goal is paused: finish only what you are doing now and start no new stage work.')
+    lines.push('Work toward this group goal and any other active goals explicitly requested by the user, within your assigned role and scope. A new request does not cancel an earlier goal unless the user clearly changes, pauses, or cancels it. When you finish your task, end your reply with the evidence: the files you changed, the commands you ran and what they printed.')
+    if (goal.status === 'paused') lines.push('This group goal is paused: finish only work already underway for it and start no new work on this goal. Follow separate user requests within their authorization.')
     return { lines, stage: `${stage === undefined ? count : goal.current + 1}/${count}` }
   }
 
@@ -488,6 +488,7 @@ export function install(rt) {
       const view = memberLines(room, goal, member)
       block = [`<group_goal status="${goal.status}" stage="${view.stage}">`, ...view.lines, '</group_goal>'].join('\n')
     }
+    if (goal.status !== 'drafting') block += '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
     if (isAdmin && nudge) block += `\n${NUDGE_LINE}`
     if (isAdmin && resume) block += `\n${RESUME_LINE}`
     return block
@@ -671,7 +672,7 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'group_goal',
-    description: 'Set and run a group chat\'s goal: one outcome for the whole group, how to check it is done, and stages whose tasks go to members. Only the group\'s admin or a Main Bot changes it; any member can show it. Inside that group\'s own conversation the group is implied; elsewhere name it. Actions: show; draft (you are aligning the goal with the user before writing it); start (write it and begin stage 1); revise (change it when the user corrects the direction; reason required); task (set one member\'s task status or note); pass (the current stage meets its check; evidence required); rework (the current stage falls short; reason required); complete (every stage passed and the overall check is met; evidence and summary required); pause; resume; stop (reason required).',
+    description: "Set and run one group goal. Show an existing goal before changing it; independent goals are tracked separately. Start only when no active or paused group goal exists. Revise constraints replaces the full list; revise stages rebuilds current and later stages and loses notes, rework feedback and IDs, while show omits complete future task details. Update one status with task; before replacing stages, retrieve and preserve complete definitions and evidence, or do not rebuild. Register at most one aggregated task per Bot per stage. Pass marks every current-stage task done: first verify every task to be marked done is actually complete and all acceptance evidence is valid; handle inapplicable tasks by a documented scope decision and safe stage reconciliation, not a false done. Rework with bot targets one member; first verify the member has a task in the current stage and preserve evidence and notes. Targeted rework clears affected task notes; without bot it resets the whole stage and clears all task notes. Pause or resume only on explicit user request. Stop may stop other members working in the group; use only for an explicit request to stop the whole goal. Keep current user authorization and applicable rules.",
     parameters: {
       group: { type: 'string', description: 'Exact group chat name from list_bots; leave out inside that group' },
       action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop'], description: 'What to do' },
@@ -703,9 +704,9 @@ export function install(rt) {
             },
           },
         },
-        description: 'start: every stage, in order. revise: replaces the current stage and every stage after it; passed stages stay. Each stage has a title, its own check (how to tell this stage is done) and its tasks, each for one member by exact name',
+        description: 'start: every stage, in order. revise: replaces the current stage and every stage after it; passed stages stay. Each stage has a title, a check and at most one aggregated task per member by exact name; track separately required acceptance items on the project board',
       },
-      bot: { type: 'string', description: 'task: the member whose task changes. rework: only this member\'s task goes back' },
+      bot: { type: 'string', description: "task: the member whose task changes. rework: name the affected member and first confirm they have a task in the current stage; the tool does not verify this. Targeted rework clears that member's affected task notes; omitting bot resets the entire current stage and clears all task notes. If a member has multiple tasks, all of that member's tasks are reset." },
       stage: { type: 'integer', description: 'task: stage number, 1 for the first; the current stage when left out' },
       status: { type: 'string', enum: ['pending', 'working', 'reported', 'done'], description: 'task: the task\'s new status' },
       note: { type: 'string', description: 'task: where the task stands, in a few words' },
@@ -751,7 +752,7 @@ export function install(rt) {
           break
         case 'start':
           result = startGoal(room, args, self, of, names)
-          next = 'Started. Hand out the tasks of stage 1 now, with @Name in your reply.'
+          next = 'Started. Check ownership, dependencies, authorization and capacity; hand out only ready tasks needing assignment with @Name, and record blockers.'
           break
         case 'revise':
           result = reviseGoal(room, args, self, of, names)
@@ -764,12 +765,12 @@ export function install(rt) {
           result = passGoal(room, args, self)
           next = result.goal === undefined ? ''
             : result.goal.stages[result.goal.current] !== undefined
-              ? `Stage ${result.goal.current} passed. Stage ${result.goal.current + 1} "${result.goal.stages[result.goal.current].title}" is current: hand out its tasks with @Name in this reply.`
+              ? `Stage ${result.goal.current} passed. Stage ${result.goal.current + 1} "${result.goal.stages[result.goal.current].title}" is current: check ownership, dependencies, authorization and capacity, then hand out only ready tasks needing assignment with @Name.`
               : 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
           break
         case 'rework':
           result = reworkGoal(room, args, self, of, names)
-          next = 'Sent back. Call the members again with @Name and say what is missing.'
+          next = 'Sent back. Preserve prior evidence, identify the affected owner and missing work, and assign only when ready and not already being handled.'
           break
         case 'complete':
           result = completeGoal(room, args, self)

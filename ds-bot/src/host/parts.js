@@ -192,7 +192,7 @@ export function install(rt) {
   const STUCK_CODES = ['IMAGE_OFFLOAD_REQUIRED']
   const ORIGINAL_COMPACT = Symbol.for('ds-bot/compaction')
   const STEWARD_MAX_TOKENS = 4_096
-  const STEWARD_TIMEOUT_MS = 120_000
+  const STEWARD_TIMEOUT_MS = 600_000
   const STEWARD_LINES = 40
   const FOLDER_RETRY_MS = 300_000
   const PAUSE_NOTE = 'DS Bot paused your turn for a context check. Go on with it now from where you stopped.'
@@ -597,7 +597,7 @@ export function install(rt) {
       llmStreamCall: written !== undefined,
       provider: written?.provider ?? route.provider,
       model: written?.model ?? route.model,
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(written?.maxTokens !== undefined ? { maxTokens: written.maxTokens } : {}),
       ...(written?.usage === undefined ? {} : { usage: written.usage }),
     }
   }
@@ -619,15 +619,23 @@ export function install(rt) {
       if (wanted !== undefined && routes.every(one => one.provider !== wanted.provider || one.model !== wanted.model)) routes.push(wanted)
     }
     let last
-    for (const one of routes) {
+    for (const [index, one] of routes.entries()) {
       try {
+        // A model-switch checkpoint is maintenance, not the Bot's answer. Use
+        // the least reasoning offered to leave room for the actual summary.
+        // The old model's output setting does not describe the fallback model.
+        const plan = forSwitch ? await notePlan(one) : undefined
+        const effort = forSwitch ? plan?.effort : one.reasoningEffort
+        const outputLimit = forSwitch && index > 0 ? undefined : maxTokens
         const assembler = new BlockAssembler()
         for await (const chunk of ctx.llm.stream({
-          ...one,
+          provider: one.provider,
+          model: one.model,
+          ...(effort === undefined ? {} : { reasoningEffort: effort }),
           messages: [...head, ...tail, { role: 'user', content: [{ type: 'text', text: prompt }] }],
           toolHistory: session.toolHistory(),
           ...(input.tools ? { tools: [...input.tools] } : {}),
-          ...(maxTokens !== undefined ? { maxTokens } : {}),
+          ...(outputLimit !== undefined ? { maxTokens: outputLimit } : {}),
           sessionId: session.id,
           purpose: 'compaction',
           signal,
@@ -638,7 +646,7 @@ export function install(rt) {
         const rawOutput = assembler.blocks()
         const summary = rawOutput.filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
         if (summary === '') throw new Error('the checkpoint was empty')
-        return { summary, rawOutput, provider: one.provider, model: one.model, usage: assembler.usage }
+        return { summary, rawOutput, provider: one.provider, model: one.model, maxTokens: outputLimit, usage: assembler.usage }
       } catch (error) {
         // A cancelled request is the caller's own decision, not a route that cannot answer.
         if (!forSwitch || signal?.aborted) throw error
@@ -854,6 +862,9 @@ export function install(rt) {
   const grown = (sessionId, tokens, lines) => tokens >= (partBase.get(sessionId) ?? 0) + lines.check / 4
   // A read-only process (another dsh holds the team) neither condenses nor switches.
   const readOnly = () => rt.readOnly() !== undefined
+  // DSH uses the same source kind for queued reminders and next-step change notices.
+  const scheduleReminder = message => message.source?.kind === 'schedule'
+    && /^\[SCHEDULE REMINDER(?: BATCH)?\](?:\n|$)/.test(textOf(message.content))
 
   // Input for an earlier part goes on in the current one: a browser may still show the
   // old part, and a turn stopped for a switch hands on what it claimed.
@@ -870,13 +881,14 @@ export function install(rt) {
       // that goes on has its own folder, which its handoff names.
       if (kind === 'working-directory') continue
       const exchangeId = message.source?.exchangeId
-      if (exchangeId !== undefined && pending.some(queued => queued.source?.exchangeId === exchangeId)) continue
-      const copy = createUserMessage({ content: message.content, ...(message.source ? { source: message.source } : {}) })
-      if (kind === 'user' || kind === SOURCE_KIND || kind === REPLY_KIND) agent.followup(copy)
+      if (pending.some(queued => queued.id === message.id || (exchangeId !== undefined && queued.source?.exchangeId === exchangeId))) continue
+      const copy = kind === 'schedule' ? message : createUserMessage({ content: message.content, ...(message.source ? { source: message.source } : {}) })
+      if (kind === 'user' || scheduleReminder(message) || kind === SOURCE_KIND || kind === REPLY_KIND) agent.followup(copy)
       else agent.inject(copy)
       pending.push(copy)
     }
-    await ctx.sessions.flush(agent.session)
+    if (await ctx.sessions.flush(agent.session) === false) throw new Error('forwarded input was not persisted')
+    rt.moveQueued?.(target, messages)
   }
 
   // The plugin's own fiber is disposed (a reload, or DSH closing): every service
@@ -886,7 +898,7 @@ export function install(rt) {
   const noteInfo = (template, ...args) => { try { ctx.logger.info(template, ...args) } catch {} }
 
   // A message's inbox boundary, the same one forward() delivers it to.
-  const inboxTargetOf = message => (message.source?.kind === 'user' || message.source?.kind === SOURCE_KIND || message.source?.kind === REPLY_KIND ? 'next-turn' : 'next-step')
+  const inboxTargetOf = message => (message.source?.kind === 'user' || scheduleReminder(message) || message.source?.kind === SOURCE_KIND || message.source?.kind === REPLY_KIND ? 'next-turn' : 'next-step')
 
   // Input a switch could not hand on goes back into the part's own durable inbox, in
   // order: input followup would deliver waits for the next turn, the rest waits for
@@ -907,8 +919,12 @@ export function install(rt) {
   // a turn that starts during unload would run without DS Bot's hooks.
   const wake = (agent) => {
     const pending = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
-    for (const message of pending) agent.inbox.remove(message.id)
-    pending.forEach((message, index) => agent.send(message, inboxTargetOf(message), index === 0))
+    const resend = () => {
+      for (const message of pending) agent.inbox.remove(message.id)
+      pending.forEach((message, index) => agent.send(message, inboxTargetOf(message), index === 0))
+    }
+    if (rt.keepQueued) rt.keepQueued(agent.id, pending, resend)
+    else resend()
   }
 
   // A switch that lost its move or its input to a failure leaves its part marked in
