@@ -846,18 +846,6 @@ var JA = {
   "Messages": "メッセージ",
   "Commands": "コマンド",
   "Search Bots, chats and messages": "Bot、チャット、メッセージを検索",
-  "Search this group": "このグループを検索",
-  "Search this group’s messages": "このグループのメッセージを検索",
-  "Search messages in {name}": "{name} のメッセージを検索",
-  "Type at least two characters": "2 文字以上入力してください",
-  "No messages found": "メッセージが見つかりません",
-  "Try a different word": "別の単語でお試しください",
-  "Searching…": "検索中…",
-  "Back to results": "結果に戻る",
-  "Around this message": "このメッセージの前後",
-  "1 match": "1 件",
-  "{count} matches": "{count} 件",
-  "Showing the {count} newest": "最新 {count} 件を表示",
   "Clear search": "検索をクリア",
   "Results": "検索結果",
   "No results": "結果がありません",
@@ -1357,6 +1345,10 @@ var JA = {
   "Could not reach the model service": "モデルサービスに接続できませんでした",
   "Its group conversation could not open": "グループ会話を開けませんでした",
   "Its group conversation could not open, so it starts a new one next time": "グループ会話を開けなかったため、次回新しい会話を開始します",
+  "Pasted text · {count} characters": "貼り付けたテキスト · {count} 文字",
+  "Put back": "戻す",
+  "Put back into the box": "入力欄に戻す",
+  "Remove pasted text": "貼り付けたテキストを削除",
   "Add files": "ファイルを追加",
   "Reference a chat": "チャットを参照",
   "Chat with {name}": "{name} とのチャット",
@@ -3134,18 +3126,6 @@ var KO = {
   Messages: "메시지",
   Commands: "명령어",
   "Search Bots, chats and messages": "Bot, 대화 및 메시지 검색",
-  "Search this group": "이 그룹 검색",
-  "Search this group’s messages": "이 그룹의 메시지 검색",
-  "Search messages in {name}": "{name}의 메시지 검색",
-  "Type at least two characters": "두 글자 이상 입력하세요",
-  "No messages found": "메시지를 찾을 수 없습니다",
-  "Try a different word": "다른 단어로 시도하세요",
-  "Searching…": "검색 중…",
-  "Back to results": "결과로 돌아가기",
-  "Around this message": "이 메시지 앞뒤",
-  "1 match": "1건",
-  "{count} matches": "{count}건",
-  "Showing the {count} newest": "최신 {count}건만 표시",
   "Clear search": "검색 지우기",
   Results: "검색 결과",
   "No results": "결과 없음",
@@ -3659,6 +3639,10 @@ var KO = {
   "Its group conversation could not open": "그룹 대화 세션을 열 수 없습니다",
   "Its group conversation could not open, so it starts a new one next time": "그룹 대화 세션을 열 수 없어 다음번에 새 세션을 시작합니다",
   // The composer's +
+  "Pasted text · {count} characters": "붙여넣은 텍스트 · {count}자",
+  "Put back": "되돌리기",
+  "Put back into the box": "입력창에 되돌리기",
+  "Remove pasted text": "붙여넣은 텍스트 삭제",
   "Add files": "파일 추가",
   "Reference a chat": "대화 참조",
   "Chat with {name}": "{name}와(과)의 대화",
@@ -5441,18 +5425,6 @@ var ES = {
   Messages: "Mensajes",
   Commands: "Comandos",
   "Search Bots, chats and messages": "Buscar Bots, chats y mensajes",
-  "Search this group": "Buscar en este grupo",
-  "Search this group’s messages": "Buscar en los mensajes de este grupo",
-  "Search messages in {name}": "Buscar mensajes en {name}",
-  "Type at least two characters": "Escribe al menos dos caracteres",
-  "No messages found": "No se encontraron mensajes",
-  "Try a different word": "Prueba con otra palabra",
-  "Searching…": "Buscando…",
-  "Back to results": "Volver a los resultados",
-  "Around this message": "Alrededor de este mensaje",
-  "1 match": "1 coincidencia",
-  "{count} matches": "{count} coincidencias",
-  "Showing the {count} newest": "Mostrando las {count} más recientes",
   "Clear search": "Borrar búsqueda",
   Results: "Resultados",
   "No results": "Sin resultados",
@@ -5966,6 +5938,10 @@ var ES = {
   "Its group conversation could not open": "No se pudo abrir su conversación grupal",
   "Its group conversation could not open, so it starts a new one next time": "No se pudo abrir su conversación grupal, por lo que iniciará una nueva la próxima vez",
   // The composer's +
+  "Pasted text · {count} characters": "Texto pegado · {count} caracteres",
+  "Put back": "Devolver",
+  "Put back into the box": "Devolver al cuadro de texto",
+  "Remove pasted text": "Quitar el texto pegado",
   "Add files": "Añadir archivos",
   "Reference a chat": "Referenciar un chat",
   "Chat with {name}": "Chat con {name}",
@@ -7722,18 +7698,6 @@ var FR = {
   "Messages": "Messages",
   "Commands": "Commandes",
   "Search Bots, chats and messages": "Rechercher des Bots, discussions et messages",
-  "Search this group": "Rechercher dans ce groupe",
-  "Search this group’s messages": "Rechercher dans les messages de ce groupe",
-  "Search messages in {name}": "Rechercher des messages dans {name}",
-  "Type at least two characters": "Saisissez au moins deux caractères",
-  "No messages found": "Aucun message trouvé",
-  "Try a different word": "Essayez un autre mot",
-  "Searching…": "Recherche…",
-  "Back to results": "Retour aux résultats",
-  "Around this message": "Autour de ce message",
-  "1 match": "1 résultat",
-  "{count} matches": "{count} résultats",
-  "Showing the {count} newest": "Les {count} plus récents affichés",
   "Clear search": "Effacer la recherche",
   "Results": "Résultats",
   "No results": "Aucun résultat",
@@ -8233,6 +8197,10 @@ var FR = {
   "Could not reach the model service": "Impossible de joindre le service de modèles",
   "Its group conversation could not open": "Sa discussion de groupe n’a pas pu s’ouvrir",
   "Its group conversation could not open, so it starts a new one next time": "Sa discussion de groupe n’a pas pu s’ouvrir ; une nouvelle sera créée la prochaine fois",
+  "Pasted text · {count} characters": "Texte collé · {count} caractères",
+  "Put back": "Remettre",
+  "Put back into the box": "Remettre dans le champ",
+  "Remove pasted text": "Supprimer le texte collé",
   "Add files": "Ajouter des fichiers",
   "Reference a chat": "Référencer une discussion",
   "Chat with {name}": "Discussion avec {name}",
@@ -10010,18 +9978,6 @@ var DE = {
   Messages: "Nachrichten",
   Commands: "Befehle",
   "Search Bots, chats and messages": "Bots, Chats und Nachrichten durchsuchen",
-  "Search this group": "Diese Gruppe durchsuchen",
-  "Search this group’s messages": "Nachrichten dieser Gruppe durchsuchen",
-  "Search messages in {name}": "Nachrichten in {name} durchsuchen",
-  "Type at least two characters": "Mindestens zwei Zeichen eingeben",
-  "No messages found": "Keine Nachrichten gefunden",
-  "Try a different word": "Anderes Wort versuchen",
-  "Searching…": "Suche läuft…",
-  "Back to results": "Zurück zu den Ergebnissen",
-  "Around this message": "Rund um diese Nachricht",
-  "1 match": "1 Treffer",
-  "{count} matches": "{count} Treffer",
-  "Showing the {count} newest": "Die {count} neuesten Treffer",
   "Clear search": "Suche löschen",
   Results: "Ergebnisse",
   "No results": "Keine Ergebnisse",
@@ -10535,6 +10491,10 @@ var DE = {
   "Its group conversation could not open": "Seine Gruppensitzung konnte nicht geöffnet werden",
   "Its group conversation could not open, so it starts a new one next time": "Seine Gruppensitzung konnte nicht geöffnet werden; beim nächsten Mal wird eine neue gestartet",
   // The composer's +
+  "Pasted text · {count} characters": "Eingefügter Text · {count} Zeichen",
+  "Put back": "Zurückholen",
+  "Put back into the box": "Zurück ins Eingabefeld",
+  "Remove pasted text": "Eingefügten Text entfernen",
   "Add files": "Dateien hinzufügen",
   "Reference a chat": "Chat referenzieren",
   "Chat with {name}": "Chat mit {name}",
@@ -12322,19 +12282,6 @@ var ZH = {
   Results: "结果",
   "No results": "没有结果",
   "Try a Bot name or words from a message": "试试 Bot 名字或消息里的词",
-  // Group history search
-  "Search this group": "搜索这个群",
-  "Search this group’s messages": "搜索这个群的消息",
-  "Search messages in {name}": "在 {name} 里搜索消息",
-  "Type at least two characters": "至少输入两个字",
-  "No messages found": "没有找到消息",
-  "Try a different word": "换个词试试",
-  "Searching…": "搜索中…",
-  "Back to results": "返回结果",
-  "Around this message": "这条消息的前后",
-  "1 match": "1 条结果",
-  "{count} matches": "{count} 条结果",
-  "Showing the {count} newest": "只显示最新 {count} 条",
   // Bot exchange
   "Bot exchange": "Bot 间对话",
   "Bot exchange transcript": "Bot 间对话记录",
@@ -12347,9 +12294,6 @@ var ZH = {
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
   "Ran for {duration}": "本次用时 {duration}",
-  "Nothing is running": "没有任务在运行",
-  "This reply says work is going on, but no tool, background job or subagent is running.": "这条回复说还在处理，但没有工具、后台任务或子代理在跑。",
-  "File not found: {path}": "文件不存在：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 缓存命中 {hit}%",
   "1 turn": "1 轮",
   "{count} turns": "{count} 轮",
@@ -12846,6 +12790,11 @@ var ZH = {
   "Could not reach the model service": "连不上模型服务",
   "Its group conversation could not open": "它的群聊会话打不开",
   "Its group conversation could not open, so it starts a new one next time": "它的群聊会话打不开，下次会换一个新的",
+  // A long paste, folded into a card
+  "Pasted text · {count} characters": "粘贴的文本 · {count} 字",
+  "Put back": "放回",
+  "Put back into the box": "放回输入框",
+  "Remove pasted text": "删除粘贴的文本",
   // The composer's +
   "Add files": "添加文件",
   "Reference a chat": "引用对话",
@@ -13706,6 +13655,8 @@ function countCards(state, sessionId, callIds, delta) {
 // src/client/team-actions.js
 function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock, panelFolded }) {
   const memoryOf = (id) => roster.getSnapshot().roomsById[id] ? { roomId: id } : { botId: id };
+  let pastes = 0;
+  const pasteState = (state, sessionId, blocks) => ({ ...state, paste: { ...state.paste, [sessionId]: blocks } });
   const yieldTo = (state, view) => state.panelYield === true || panelFolded?.(view) === true;
   const openSideChat = (sessionId, chatId) => {
     ui2.set((state) => ({ ...state, details: sessionId, view: "side", side: chatId ?? null, renaming: false, tab: null, panelYield: yieldTo(state, "side") }));
@@ -13724,13 +13675,6 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     // The token keeps a late exit timer from closing a palette opened again since.
     closePalette: (token) => {
       ui2.set((state) => state.palette && (token === void 0 || state.palette.token === token) ? { ...state, palette: null } : state);
-    },
-    // Searching one group's own history, from its header.
-    openGroupSearch: (roomId) => {
-      if (roomId) ui2.set((state) => ({ ...state, groupSearch: { roomId, token: Date.now() }, palette: null, newChat: null, menu: null }));
-    },
-    closeGroupSearch: (token) => {
-      ui2.set((state) => state.groupSearch && (token === void 0 || state.groupSearch.token === token) ? { ...state, groupSearch: null } : state);
     },
     openExchange: (a, b) => {
       if (a && b) ui2.set((state) => ({ ...state, exchange: [a, b] }));
@@ -13806,6 +13750,30 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
       ui2.set((state) => state.details ? { ...state, details: null, view: "details", renaming: false, tab: null, side: null } : state);
     },
     quote: (sessionId, text) => ui2.set((state) => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
+    // A long paste becomes a card; its text stays here until it goes back into the box.
+    addPaste: (sessionId, text, name) => {
+      pastes += 1;
+      const block = { id: `paste-${pastes}`, text, name, attachmentId: null };
+      ui2.set((state) => pasteState(state, sessionId, [...state.paste?.[sessionId] ?? [], block]));
+      return block.id;
+    },
+    // The shell's attachment for a waiting card, in the order both sides saw them.
+    linkPastes: (sessionId, ids) => ui2.set((state) => {
+      const blocks = state.paste?.[sessionId] ?? [];
+      let next = 0;
+      const linked = blocks.map((block) => {
+        if (block.attachmentId !== null) return block;
+        const id = ids[next];
+        next += 1;
+        return id === void 0 ? block : { ...block, attachmentId: id };
+      });
+      return linked.every((block, index) => block === blocks[index]) ? state : pasteState(state, sessionId, linked);
+    }),
+    removePaste: (sessionId, blockIds) => ui2.set((state) => {
+      const blocks = state.paste?.[sessionId] ?? [];
+      const kept = blocks.filter((block) => !blockIds.includes(block.id));
+      return kept.length === blocks.length ? state : pasteState(state, sessionId, kept);
+    }),
     clearQuote: (token) => ui2.set((state) => state.quote?.token === token ? { ...state, quote: null } : state),
     setFlags: (id, flags) => after(call2("set-flags", { id, ...flags })),
     saveSection: (payload) => after(call2("section-save", payload)),
@@ -15004,9 +14972,6 @@ button.bt-lead{border:0;background:none;padding:0;cursor:pointer}
 .bt-group-name:has(>.bt-lead){display:flex;align-items:center;margin:0 0 2px;font-size:13px;line-height:22px;font-weight:600;color:var(--bt-ink)}
 .bt-group-name>.bt-lead{margin:0 8px 0 0}
 .bt-group-time,.bt-group-took{margin-left:6px;font-size:11px;line-height:16px;font-weight:400;color:var(--bt-ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
-.bt-claim{margin-left:28px;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
-.bt-claim-file{color:var(--bt-danger)}
-.bt-claim-inProgress{color:var(--bt-ink-2)}
 .bt-x{border:0;background:none;color:var(--bt-ink-2);cursor:pointer;width:24px;height:24px;border-radius:6px;font-size:16px;line-height:24px;padding:0;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
 
@@ -15579,29 +15544,6 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-palette-empty-icon svg{width:32px;height:32px}
 .bt-palette-empty-label{font-size:14px;font-weight:500;color:var(--bt-ink-2)}
 .bt-palette-empty-hint{font-size:13px;line-height:16px;color:var(--bt-ink-3)}
-.bt-head-search{flex:none;margin-left:2px;pointer-events:auto}
-.bt-head-search svg{width:16px;height:16px}
-.bt-gs-body{position:relative;flex:1;min-height:220px;max-height:min(420px,54vh);overflow-y:auto;padding:6px 8px;box-sizing:border-box}
-.bt-gs-row{display:flex;flex-direction:column;gap:3px;width:100%;padding:9px 10px;border:0;border-radius:10px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;box-sizing:border-box}
-.bt-gs-row:hover,.bt-gs-row:focus-visible{background:var(--bt-hover)}
-.bt-gs-meta{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:16px;min-width:0}
-.bt-gs-author{font-weight:600;color:var(--bt-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-gs-when{color:var(--bt-ink-3);white-space:nowrap}
-.bt-gs-snippet{font-size:13px;line-height:18px;color:var(--bt-ink-2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.bt-gs-line,.bt-gs-full{font-size:14px;line-height:20px;color:var(--bt-ink);white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-gs-detail{padding:10px 10px 14px;display:flex;flex-direction:column;gap:8px;animation:bt-veil-in .18s ease-out}
-.bt-gs-back{display:inline-flex;align-items:center;gap:4px;align-self:flex-start;border:0;background:none;color:var(--bt-accent);font:inherit;font-size:13px;line-height:18px;padding:2px 4px;border-radius:6px;cursor:pointer}
-.bt-gs-back:hover{background:var(--bt-hover)}
-.bt-gs-back-ico{display:inline-flex;transform:rotate(180deg)}
-.bt-gs-back-ico svg{width:12px;height:12px}
-.bt-gs-full{padding:8px 0;border-bottom:.5px solid var(--bt-line)}
-.bt-gs-context{display:flex;flex-direction:column;gap:6px}
-.bt-gs-context-label{font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-gs-ctx{background:var(--bt-hover);border-radius:8px;padding:6px 8px}
-.bt-gs-ctx .bt-gs-line{font-size:13px;line-height:18px;color:var(--bt-ink-2)}
-.bt-gs mark{background:color-mix(in srgb,var(--bt-star) 32%,transparent);color:inherit;border-radius:4px;padding:0 1px}
-.bt-gs-foot{display:flex;justify-content:space-between;gap:8px;padding:6px 14px 10px;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-gs-cap{white-space:nowrap}
 @media (prefers-reduced-motion:reduce){.bt-palette{animation:bt-fade .1s ease-out}}
 .bt-account-menu{width:224px}
 .bt-account{flex:none;width:36px;height:36px;border:0;padding:0;background:none;border-radius:50%;cursor:pointer;display:inline-flex}
@@ -16498,6 +16440,7 @@ var ConnectorIcon = lineIcon(["M7 10a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z", "M18
 var SignOutIcon = lineIcon(["M8.5 17H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5", "M10 10h6.5", "M13.5 7l3 3-3 3"]);
 var SignInIcon = lineIcon(["M11.5 3H14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2.5", "M3.5 10H10", "M7 7l3 3-3 3"]);
 var PaperclipIcon = lineIcon(["M15.5 9.5l-5.6 5.6a3.4 3.4 0 0 1-4.8-4.8l6.1-6.1a2.25 2.25 0 0 1 3.2 3.2l-6 6a1.1 1.1 0 0 1-1.6-1.6l5.5-5.5"]);
+var TextIcon = lineIcon(["M4 5h12", "M4 8.5h12", "M4 12h9", "M4 15.5h6"]);
 var ClockIcon = lineIcon(["M10 3.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z", "M10 6.5V10l2.5 1.5"]);
 var GearIcon = lineIcon(["M10 7.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2z", "M7.85 4.4l.29-1.87a7.7 7.7 0 0 1 3.72 0l.29 1.87a6 6 0 0 1 1.63.94l1.76-.69a7.7 7.7 0 0 1 1.86 3.23l-1.47 1.18a6 6 0 0 1 0 1.88l1.47 1.18a7.7 7.7 0 0 1-1.86 3.23l-1.76-.69a6 6 0 0 1-1.63.94l-.29 1.87a7.7 7.7 0 0 1-3.72 0l-.29-1.87a6 6 0 0 1-1.63-.94l-1.76.69a7.7 7.7 0 0 1-1.86-3.23l1.47-1.18a6 6 0 0 1 0-1.88L2.6 7.88a7.7 7.7 0 0 1 1.86-3.23l1.76.69a6 6 0 0 1 1.63-.94z"]);
 var PinIcon = lineIcon(["M12.5 3l4.5 4.5-3 1.5-2.5 2.5.5 3.5-1.5 1.5L7 13 3.5 16.5", "M7 13l-3.5-3.5L5 8l3.5.5L11 6l1.5-3"]);
@@ -18033,7 +17976,7 @@ var COMPUTER_CSS = `
 .bt-cstep-shot-open img{max-height:280px;max-width:480px}
 `;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/react/ui.js
+// node_modules/deep-view/src/react/ui.js
 var import_react12 = require("react");
 var FallbackMarkdown = ({ text }) => (0, import_react12.createElement)("span", null, String(text ?? ""));
 var ViewUi = (0, import_react12.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
@@ -18100,7 +18043,7 @@ function useOptionKeys2(count, onPick, ownRef) {
   return count > 0 && listening <= 1;
 }
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/core/formula.js
+// node_modules/deep-view/src/core/formula.js
 var FUNCTIONS = {
   min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
   max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
@@ -18381,7 +18324,7 @@ function evaluate(tree, lookup) {
   }
 }
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/core/views.js
+// node_modules/deep-view/src/core/views.js
 var LAYOUT = ["stack", "row"];
 var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
 var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
@@ -19013,7 +18956,7 @@ function validateForm(node, values) {
   return { fields };
 }
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/react/chart.js
+// node_modules/deep-view/src/react/chart.js
 var import_react13 = require("react");
 var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
 var colorAt = (index) => PALETTE[index % PALETTE.length];
@@ -19452,7 +19395,7 @@ var CHART_CSS = `
 @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
 `;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/react/frame.js
+// node_modules/deep-view/src/react/frame.js
 var import_react14 = require("react");
 var THEME_VARS = [
   ["--view-ink", "--bt-ink", "--dv-ink"],
@@ -19534,7 +19477,7 @@ var HTML_CSS = `
 .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
 `;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/react/card.js
+// node_modules/deep-view/src/react/card.js
 var import_react15 = require("react");
 var mdLabels = (ui2) => ({ code: { copyLabel: ui2.t("Copy"), copiedLabel: ui2.t("Copied") }, footnotes: ui2.t("Footnotes") });
 var TONES2 = ["good", "warn", "bad"];
@@ -20276,7 +20219,7 @@ ${CHART_CSS}
 ${HTML_CSS}
 `;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/react/styles.js
+// node_modules/deep-view/src/react/styles.js
 var THEME_CSS = `
 body{
 --dv-ink:var(--dsw-alias-label-primary);
@@ -20374,10 +20317,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
 @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
 `;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/react/index.js
+// node_modules/deep-view/src/react/index.js
 var DEEP_VIEW_CSS = THEME_CSS + QUESTION_CSS + WIDGET_CSS;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/deep-view/src/core/reply.js
+// node_modules/deep-view/src/core/reply.js
 var REPLY_KIND = "user-question-reply";
 var REPLY_SOURCE_KIND = "deep-view-reply";
 function viewCardText(args) {
@@ -25924,20 +25867,7 @@ function scheduleGroupChains(flow) {
     if (flow.isConnected !== false) syncGroupChains(flow);
   });
 }
-function claimLines(claims) {
-  if (claims === void 0 || claims === null) return [];
-  const lines = [];
-  if (claims.inProgress === true) {
-    lines.push({
-      kind: "inProgress",
-      text: t("Nothing is running"),
-      detail: t("This reply says work is going on, but no tool, background job or subagent is running.")
-    });
-  }
-  for (const path2 of claims.missingFiles ?? []) lines.push({ kind: "file", text: t("File not found: {path}", { path: path2 }) });
-  return lines;
-}
-function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration, claims }) {
+function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration }) {
   const ref = (0, import_react32.useRef)(null);
   (0, import_react32.useLayoutEffect)(() => {
     const el = ref.current;
@@ -25966,8 +25896,7 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, 
       Number.isFinite(time) ? (0, import_react32.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null,
       took ? (0, import_react32.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
-    (0, import_react32.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead: flat ? null : lead, whole }),
-    claimLines(claims).map((line) => (0, import_react32.createElement)("div", { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: "status", title: line.detail ?? void 0 }, line.text))
+    (0, import_react32.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead: flat ? null : lead, whole })
   );
 }
 function GroupEvent({ prefix, room: room2, name, roster, actions }) {
@@ -26191,7 +26120,6 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
         msgKey: `${sessionId}:post:${row.seq ?? row.time}`,
         time: row.time,
         duration: row.duration,
-        claims: row.claims,
         whole: row.file ? { length: row.length, load: () => actions.fileText(row.file) } : void 0
       });
     }
@@ -26603,7 +26531,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
           goalEventText(reply)
         );
       }
-      return (0, import_react32.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration, claims: reply.claims });
+      return (0, import_react32.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration });
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id];
@@ -27055,10 +26983,10 @@ function installFrameWatch(frame) {
 // src/client/sidebar.js
 var import_react34 = require("react");
 var import_react_dom5 = require("react-dom");
-function useMarkedUnread(id, active, marked2, actions) {
+function useMarkedUnread(id, active, marked, actions) {
   (0, import_react34.useEffect)(() => {
-    if (active && marked2) actions.clearUnread(id);
-  }, [active, marked2]);
+    if (active && marked) actions.clearUnread(id);
+  }, [active, marked]);
 }
 var PinMark = () => (0, import_react34.createElement)("span", { className: "bt-pin", "aria-hidden": true }, (0, import_react34.createElement)(PinMarkIcon));
 var nameIfCut = (event) => {
@@ -27079,14 +27007,14 @@ var waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits?.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
   return names.length === 0 ? "" : t("Waiting for {names}", { names: names.join(t(" and ")) });
 };
-function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked: marked2, onDragStart }) {
+function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked, onDragStart }) {
   const id = bot.id;
   const part = currentPart(bot);
   const preview = useSessions((list) => previewOf(list, part, roster.exchangeTurns[part]));
   const running = useSessionStatus((map) => map.get(part)?.running === true);
   const active = useSessionRetainInfo(part, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
-  const unread = useSessionStatus((map) => map.get(part)?.completionUnread === true || map.get(part)?.pendingInteraction !== void 0) || marked2 && !active;
-  useMarkedUnread(id, active, marked2, actions);
+  const unread = useSessionStatus((map) => map.get(part)?.completionUnread === true || map.get(part)?.pendingInteraction !== void 0) || marked && !active;
+  useMarkedUnread(id, active, marked, actions);
   const main = isMainOf(roster, id);
   const tile = roster.mainBotId === id;
   const approval = useApproval(useWork, (entry) => entry.botId === id);
@@ -27151,14 +27079,14 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     wide && unread && !active ? (0, import_react34.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : !wide && !active && (alert || unread) ? (0, import_react34.createElement)("span", { className: `bt-dot${alert ? " bt-dot-wait" : ""}`, "aria-hidden": true }) : null
   );
 }
-function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked: marked2, onDragStart }) {
+function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked, onDragStart }) {
   const id = room2.id;
   const sessionId = room2.sessionId ?? id;
   const fallback = useSessions((list) => previewOf(list, sessionId));
   const preview = room2.preview?.replace(/\s+/g, " ").trim() || fallback;
   const active = useSessionRetainInfo(sessionId, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
-  const unread = useSessionStatus((map) => map.get(sessionId)?.completionUnread === true) || marked2 && !active;
-  useMarkedUnread(id, active, marked2, actions);
+  const unread = useSessionStatus((map) => map.get(sessionId)?.completionUnread === true) || marked && !active;
+  useMarkedUnread(id, active, marked, actions);
   const approval = useApproval(useWork, (entry) => entry.roomId === id);
   const members = useGroupWork(useWork, (rooms) => (rooms[id] ?? []).filter((entry) => entry.botId !== void 0).map((entry) => ({ id: entry.botId, ...doingOf(entry) })));
   const first = roster.byId[members[0]?.id];
@@ -27253,7 +27181,7 @@ function AgentSessionRow({ session, agent, actions, renaming, index }) {
     (0, import_react34.createElement)("span", { className: "bt-agent-sub-time" }, session.at > 0 ? relativeShort(session.at) : "")
   );
 }
-function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, marked: marked2, onDragStart }) {
+function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, marked, onDragStart }) {
   const info = useSessions((list) => JSON.stringify(agent.sessions.map((id) => {
     const row = list.byId[id];
     return {
@@ -27281,8 +27209,8 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
   const renaming = useUi((value) => value.renameAgent);
   const active = sessions.some((session) => session.active);
   const running = sessions.some((session) => session.running);
-  const unread = sessions.some((session) => session.unread) || marked2 && !active;
-  useMarkedUnread(agent.id, active, marked2, actions);
+  const unread = sessions.some((session) => session.unread) || marked && !active;
+  useMarkedUnread(agent.id, active, marked, actions);
   const preview = sessions[0] === void 0 ? t("New session") : agentSessionTitle(sessions[0]);
   const label = ["DSH Agent", running ? t("Working") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const open = active && wide;
@@ -30357,7 +30285,7 @@ var CONNECTORS_PAGE_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
 `;
 
-// ../../../DS Bot/DeepSeek-Bot/ds-bot/node_modules/qrcode-generator/dist/qrcode.mjs
+// node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -34716,13 +34644,6 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     { className: "bt-head" },
     showGoal ? (0, import_react49.createElement)(GoalIsland, { room: room2, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill }) : pill,
     (0, import_react49.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
-    room2 !== void 0 && !away ? (0, import_react49.createElement)("button", {
-      type: "button",
-      className: "bt-icon-btn bt-head-search",
-      "aria-label": t("Search this group"),
-      title: t("Search this group"),
-      onClick: () => actions.openGroupSearch(room2.id)
-    }, (0, import_react49.createElement)(SearchIcon)) : null,
     (0, import_react49.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     (0, import_react49.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions })
   );
@@ -36232,181 +36153,152 @@ ${shown}`, { axis: "y", ...QUICK_EDGES });
   );
 }
 
-// src/client/group-search.js
+// src/client/paste-card.js
 var import_react54 = require("react");
-var EXIT_MS = 160;
-var MIN_QUERY = 2;
-var DEBOUNCE_MS = 220;
-var SNIPPET_CHARS = 180;
-var termsOf = (query) => [...new Set(String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean))];
-function marked(text, terms) {
-  const source = String(text ?? "");
-  if (terms.length === 0) return source;
-  const pattern = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "giu");
-  return source.split(pattern).map((part, at) => at % 2 === 1 ? (0, import_react54.createElement)("mark", { key: at }, part) : part);
+var PASTE_LIMIT = 1500;
+var NO_BLOCKS = [];
+var NO_IDS = [];
+var ORPHAN_MS = 3e3;
+var foldPastedText = (text) => typeof text === "string" && text.length > PASTE_LIMIT ? text : null;
+var pastedName = (text) => `Pasted text (${text.length} characters).txt`;
+var blockLives = (block, ids) => block.attachmentId === null || ids.includes(block.attachmentId);
+function putBackText({ block, inputActions, draft = "" }) {
+  const text = block?.text ?? "";
+  if (text === "" || !inputActions) return false;
+  if (block.attachmentId && typeof inputActions.removeAttachment === "function") inputActions.removeAttachment(block.attachmentId);
+  if (typeof inputActions.insertText === "function" && inputActions.insertText(text, inputActions.captureInsertion())) return true;
+  inputActions.setDraft?.(`${draft}${text}`);
+  return true;
 }
-function snippetOf(text, terms) {
-  const source = String(text ?? "");
-  if (source.length <= SNIPPET_CHARS) return source;
-  const lower = source.toLowerCase();
-  const at = terms.reduce((best, term) => {
-    const found = lower.indexOf(term);
-    return found >= 0 && (best < 0 || found < best) ? found : best;
-  }, -1);
-  const from = Math.max(0, (at < 0 ? 0 : at) - 60);
-  return `${from > 0 ? "…" : ""}${source.slice(from, from + SNIPPET_CHARS)}${from + SNIPPET_CHARS < source.length ? "…" : ""}`;
+function handOffPaste({ event, card, sessionId, actions }) {
+  if ((event.clipboardData?.files?.length ?? 0) > 0) return null;
+  const kept = foldPastedText(event.clipboardData?.getData("text/plain") ?? "");
+  if (kept === null) return null;
+  const input = card.querySelector("input[type=file]");
+  if (input === null || input === void 0) return null;
+  const file = new File([kept], pastedName(kept), { type: "text/plain" });
+  event.preventDefault();
+  event.stopPropagation();
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  input.files = transfer.files;
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  actions.addPaste(sessionId, kept, file.name);
+  return file.name;
 }
-var authorOf = (line, roster) => line?.botId === void 0 ? t("You") : roster.byId[line.botId]?.name ?? line?.name ?? t("a Bot");
-function Line({ line, roster, terms, className }) {
+function PasteCard({ text, onPutBack, onRemove }) {
   return (0, import_react54.createElement)(
     "div",
-    { className },
-    (0, import_react54.createElement)(
-      "div",
-      { className: "bt-gs-meta" },
-      (0, import_react54.createElement)("span", { className: "bt-gs-author" }, authorOf(line, roster)),
-      Number.isFinite(line.time) ? (0, import_react54.createElement)("span", { className: "bt-gs-when" }, clockLabel(line.time)) : null
-    ),
-    (0, import_react54.createElement)("div", { className: "bt-gs-line" }, marked(line.text, terms))
-  );
-}
-function Detail({ hit, roster, terms, back }) {
-  return (0, import_react54.createElement)(
-    "div",
-    { className: "bt-gs-detail" },
-    (0, import_react54.createElement)(
-      "button",
-      { type: "button", className: "bt-gs-back", onClick: back },
-      (0, import_react54.createElement)("span", { className: "bt-gs-back-ico", "aria-hidden": true }, (0, import_react54.createElement)(ChevronRightIcon)),
-      t("Back to results")
-    ),
-    (0, import_react54.createElement)(
-      "div",
-      { className: "bt-gs-meta" },
-      (0, import_react54.createElement)("span", { className: "bt-gs-author" }, authorOf(hit, roster)),
-      Number.isFinite(hit.time) ? (0, import_react54.createElement)("span", { className: "bt-gs-when" }, clockLabel(hit.time)) : null
-    ),
-    (0, import_react54.createElement)("div", { className: "bt-gs-full" }, marked(hit.text, terms)),
-    hit.before !== void 0 || hit.after !== void 0 ? (0, import_react54.createElement)(
-      "div",
-      { className: "bt-gs-context", "aria-label": t("Around this message") },
-      (0, import_react54.createElement)("div", { className: "bt-gs-context-label" }, t("Around this message")),
-      hit.before !== void 0 ? (0, import_react54.createElement)(Line, { line: hit.before, roster, terms, className: "bt-gs-ctx" }) : null,
-      hit.after !== void 0 ? (0, import_react54.createElement)(Line, { line: hit.after, roster, terms, className: "bt-gs-ctx" }) : null
-    ) : null
-  );
-}
-function GroupSearch({ room: room2, roster, token, actions }) {
-  const [query, setQuery] = (0, import_react54.useState)("");
-  const [answer, setAnswer] = (0, import_react54.useState)(null);
-  const [busy, setBusy] = (0, import_react54.useState)(false);
-  const [error, setError] = (0, import_react54.useState)(null);
-  const [picked, setPicked] = (0, import_react54.useState)(null);
-  const [leaving, setLeaving] = (0, import_react54.useState)(false);
-  const input = (0, import_react54.useRef)(null);
-  const close = () => {
-    if (leaving) return;
-    setLeaving(true);
-    setTimeout(() => actions.closeGroupSearch(token), EXIT_MS);
-  };
-  useEscape(close);
-  const terms = termsOf(query);
-  const text = query.trim();
-  (0, import_react54.useEffect)(() => {
-    if (text.length < MIN_QUERY) {
-      setAnswer(null);
-      setBusy(false);
-      setError(null);
-      return void 0;
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      setBusy(true);
-      call("group-search", { roomId: room2.id, query: text }, controller.signal).then((result) => {
-        setAnswer({ results: Array.isArray(result?.results) ? result.results : [], capped: result?.capped === true });
-        setBusy(false);
-        setError(null);
-      }, (failure) => {
-        if (failure?.name === "AbortError") return;
-        setBusy(false);
-        setError(failure);
-      });
-    }, DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [text, room2.id]);
-  (0, import_react54.useEffect)(() => {
-    setPicked(null);
-  }, [text]);
-  const results = answer?.results ?? [];
-  const body = picked !== null ? (0, import_react54.createElement)(Detail, { hit: picked, roster, terms, back: () => setPicked(null) }) : text.length < MIN_QUERY ? (0, import_react54.createElement)(
-    "div",
-    { className: "bt-palette-empty" },
-    (0, import_react54.createElement)("span", { className: "bt-palette-empty-icon", "aria-hidden": true }, (0, import_react54.createElement)(SearchIcon)),
-    (0, import_react54.createElement)("span", { className: "bt-palette-empty-label" }, t("Search this group’s messages")),
-    (0, import_react54.createElement)("span", { className: "bt-palette-empty-hint" }, t("Type at least two characters"))
-  ) : error !== null ? (0, import_react54.createElement)("div", { className: "bt-palette-empty" }, (0, import_react54.createElement)("span", { className: "bt-palette-empty-label" }, hostText(error?.message ?? error))) : results.length === 0 ? (0, import_react54.createElement)(
-    "div",
-    { className: "bt-palette-empty" },
-    busy ? (0, import_react54.createElement)("span", { className: "bt-palette-empty-label" }, t("Searching…")) : [
-      (0, import_react54.createElement)("span", { className: "bt-palette-empty-icon", key: "ico", "aria-hidden": true }, (0, import_react54.createElement)(SearchIcon)),
-      (0, import_react54.createElement)("span", { className: "bt-palette-empty-label", key: "label" }, t("No messages found")),
-      (0, import_react54.createElement)("span", { className: "bt-palette-empty-hint", key: "hint" }, t("Try a different word"))
-    ]
-  ) : results.map((hit, index) => (0, import_react54.createElement)(
-    "button",
-    {
-      key: `${hit.seq ?? index}`,
+    { className: "bt-paste-card" },
+    (0, import_react54.createElement)("span", { className: "bt-paste-icon", "aria-hidden": true }, (0, import_react54.createElement)(TextIcon)),
+    (0, import_react54.createElement)("span", { className: "bt-paste-label" }, t("Pasted text · {count} characters", { count: text.length.toLocaleString() })),
+    onPutBack === void 0 ? null : (0, import_react54.createElement)("button", {
       type: "button",
-      className: "bt-gs-row",
-      onClick: () => setPicked(hit)
-    },
-    (0, import_react54.createElement)(
-      "div",
-      { className: "bt-gs-meta" },
-      (0, import_react54.createElement)("span", { className: "bt-gs-author" }, authorOf(hit, roster)),
-      Number.isFinite(hit.time) ? (0, import_react54.createElement)("span", { className: "bt-gs-when" }, clockLabel(hit.time)) : null
-    ),
-    (0, import_react54.createElement)("div", { className: "bt-gs-snippet" }, marked(snippetOf(hit.text, terms), terms))
-  ));
-  const footer = picked === null && text.length >= MIN_QUERY && results.length > 0 ? (0, import_react54.createElement)(
-    "div",
-    { className: "bt-gs-foot" },
-    (0, import_react54.createElement)("span", null, results.length === 1 ? t("1 match") : t("{count} matches", { count: results.length })),
-    answer?.capped === true ? (0, import_react54.createElement)("span", { className: "bt-gs-cap" }, t("Showing the {count} newest", { count: results.length })) : null
-  ) : null;
-  return (0, import_react54.createElement)(
-    "div",
-    { className: "bt-palette-layer", "data-leaving": leaving || void 0 },
-    (0, import_react54.createElement)("div", { className: "bt-backdrop", onMouseDown: close }),
-    (0, import_react54.createElement)(
-      "div",
-      { className: "bt-palette bt-gs", role: "dialog", "aria-modal": true, "aria-label": t("Search this group") },
-      (0, import_react54.createElement)(
-        "div",
-        { className: "bt-palette-head" },
-        (0, import_react54.createElement)("span", { className: "bt-palette-glyph", "aria-hidden": true }, (0, import_react54.createElement)(SearchIcon)),
-        (0, import_react54.createElement)("input", {
-          ref: input,
-          autoFocus: true,
-          value: query,
-          "aria-label": t("Search this group"),
-          placeholder: t("Search messages in {name}", { name: room2.name }),
-          onChange: (event) => setQuery(event.target.value)
-        }),
-        query !== "" ? (0, import_react54.createElement)("button", { type: "button", className: "bt-palette-clear", "aria-label": t("Clear search"), onClick: () => {
-          setQuery("");
-          setPicked(null);
-          input.current?.focus();
-        } }, (0, import_react54.createElement)(CloseIcon)) : (0, import_react54.createElement)("button", { type: "button", className: "bt-palette-clear", "aria-label": t("Close"), onClick: close }, (0, import_react54.createElement)(CloseIcon))
-      ),
-      (0, import_react54.createElement)("div", { className: "bt-gs-body", "aria-live": "polite" }, body),
-      footer
-    )
+      className: "bt-paste-put",
+      title: t("Put back into the box"),
+      onClick: onPutBack
+    }, t("Put back")),
+    (0, import_react54.createElement)("button", {
+      type: "button",
+      className: "bt-paste-x",
+      "aria-label": t("Remove pasted text"),
+      title: t("Remove pasted text"),
+      onClick: onRemove
+    }, "×")
   );
 }
+function PasteDock({ sessionId, inputActions, useUi, useInput, actions }) {
+  const blocks = useUi((state) => state.paste?.[sessionId]) ?? NO_BLOCKS;
+  const draft = useInput?.((state) => state.draft) ?? "";
+  if (blocks.length === 0) return null;
+  const drop = (block) => {
+    if (block.attachmentId && typeof inputActions?.removeAttachment === "function") inputActions.removeAttachment(block.attachmentId);
+    actions.removePaste(sessionId, [block.id]);
+  };
+  return (0, import_react54.createElement)("div", { className: "bt-paste-dock" }, blocks.map((block) => (0, import_react54.createElement)(PasteCard, {
+    key: block.id,
+    text: block.text,
+    onPutBack: () => {
+      if (putBackText({ block, inputActions, draft })) actions.removePaste(sessionId, [block.id]);
+    },
+    onRemove: () => drop(block)
+  })));
+}
+function PasteGuard({ sessionId, inputActions, useInput, useUi, actions }) {
+  const anchor = (0, import_react54.useRef)(null);
+  const blocks = useUi((state) => state.paste?.[sessionId]) ?? NO_BLOCKS;
+  const ids = useInput?.((state) => state.attachmentIds) ?? NO_IDS;
+  const seen = (0, import_react54.useRef)(null);
+  const unclaimed = (0, import_react54.useRef)([]);
+  const latest = (0, import_react54.useRef)({ blocks, ids });
+  latest.current = { blocks, ids };
+  (0, import_react54.useEffect)(() => {
+    const before = seen.current;
+    seen.current = ids;
+    if (before !== null) {
+      const added = ids.filter((id) => !before.includes(id));
+      if (added.length > 0) unclaimed.current.push(...added);
+    }
+    if (unclaimed.current.length === 0) return;
+    if (!latest.current.blocks.some((block) => block.attachmentId === null)) return;
+    actions.linkPastes(sessionId, unclaimed.current.splice(0));
+  }, [ids, blocks]);
+  (0, import_react54.useEffect)(() => {
+    const gone = latest.current.blocks.filter((block) => !blockLives(block, ids));
+    if (gone.length > 0) actions.removePaste(sessionId, gone.map((block) => block.id));
+  }, [ids]);
+  (0, import_react54.useEffect)(() => {
+    const waiting = blocks.filter((block) => block.attachmentId === null);
+    if (waiting.length === 0) return void 0;
+    const timer = setTimeout(() => {
+      for (const block of waiting) {
+        const now = latest.current.blocks.find((item) => item.id === block.id);
+        if (now === void 0 || now.attachmentId !== null) continue;
+        inputActions?.insertText?.(block.text, inputActions?.captureInsertion?.());
+        actions.removePaste(sessionId, [block.id]);
+      }
+    }, ORPHAN_MS);
+    return () => clearTimeout(timer);
+  }, [blocks]);
+  (0, import_react54.useEffect)(() => {
+    const card = anchor.current?.closest("[data-composer-card]");
+    if (card === null || card === void 0) return void 0;
+    const mark2 = () => {
+      for (const block of blocks) {
+        if (block.attachmentId === null) continue;
+        for (const node of card.querySelectorAll("[title]")) {
+          if (node.getAttribute("title") === block.name) node.setAttribute("data-bt-paste", "");
+        }
+      }
+    };
+    mark2();
+    const observer = new MutationObserver(mark2);
+    observer.observe(card, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [blocks, ids]);
+  (0, import_react54.useEffect)(() => {
+    const card = anchor.current?.closest("[data-composer-card]");
+    if (card === null || card === void 0) return void 0;
+    const onPaste = (event) => {
+      handOffPaste({ event, card, sessionId, actions });
+    };
+    card.addEventListener("paste", onPaste, true);
+    return () => card.removeEventListener("paste", onPaste, true);
+  }, [sessionId]);
+  return (0, import_react54.createElement)("span", { ref: anchor, className: "bt-paste-guard", "aria-hidden": true });
+}
+var PASTE_CSS = `
+.bt-paste-guard{display:none}
+[data-composer-card] [data-bt-paste]{display:none!important}
+.bt-paste-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance,0px) - var(--dsh-composer-side-clearance,0px) - var(--dsh-composer-dock-inset,0px) - var(--dsh-composer-dock-inset,0px));max-width:calc(var(--dsh-composer-card-max-width,748px) - var(--dsh-composer-dock-inset,0px) - var(--dsh-composer-dock-inset,0px));margin:0 auto calc(0px - var(--dsh-composer-stack-gap,8px) + 8px);padding:0 var(--dsh-composer-dock-inset,0px);flex:none;display:flex;flex-direction:column;gap:6px}
+.bt-paste-card{box-sizing:border-box;display:flex;align-items:center;gap:8px;min-height:36px;padding:4px 5px 4px 10px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;line-height:18px}
+.bt-paste-icon{flex:none;display:inline-flex;width:16px;height:16px;color:var(--bt-ink-3)}
+.bt-paste-label{min-width:0;flex:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-paste-put{flex:none;border:0;border-radius:8px;background:none;color:var(--bt-accent);font:inherit;font-size:13px;line-height:18px;padding:4px 6px;cursor:pointer}
+.bt-paste-put:hover{background:color-mix(in srgb,var(--bt-accent) 10%,transparent)}
+.bt-paste-x{flex:none;display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:8px;background:none;color:var(--bt-ink-3);font:inherit;font-size:15px;line-height:1;cursor:pointer}
+.bt-paste-x:hover{background:color-mix(in srgb,var(--bt-ink) 8%,transparent);color:var(--bt-ink)}
+`;
 
 // src/client/new-chat.js
 var import_react55 = require("react");
@@ -36416,11 +36308,14 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
   const [group, setGroup] = (0, import_react55.useState)(mode === "group");
   const [admin, setAdmin] = (0, import_react55.useState)(null);
   const [message, setMessage] = (0, import_react55.useState)("");
+  const [pasted, setPasted] = (0, import_react55.useState)(null);
   const [busy, setBusy] = (0, import_react55.useState)(false);
   const [error, setError] = (0, import_react55.useState)("");
   const [cursor, setCursor] = (0, import_react55.useState)(0);
   const [draft, setDraft] = (0, import_react55.useState)(mode === "create" ? { name: "", fromList: false, sectionId } : null);
   const inputRef = (0, import_react55.useRef)(null);
+  const messageRef = (0, import_react55.useRef)(null);
+  const draftText = () => `${message}${pasted?.text ?? ""}`;
   const close = () => actions.closeOverlay();
   useEscape(close);
   const wanted = query.trim().toLowerCase();
@@ -36464,7 +36359,7 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
     if (bot.hidden || sectionId && bot.sectionId !== sectionId) {
       await actions.setFlags(bot.id, { ...bot.hidden ? { hidden: false } : {}, ...sectionId ? { sectionId } : {} });
     }
-    if (message.trim()) await actions.send(bot.id, message.trim());
+    if (draftText().trim()) await actions.send(bot.id, draftText().trim());
     actions.openSession(bot.id);
     close();
   });
@@ -36480,7 +36375,7 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
   };
   const makeGroup = async () => {
     if (admin === null || picked.length === 0) return;
-    const text = message.trim();
+    const text = draftText().trim();
     const room2 = await actions.createRoom([admin, ...picked], { admin, ...sectionId ? { sectionId } : {}, ...text ? {} : { greet: true } });
     if (text) await actions.send(room2.id, text);
     actions.openSession(room2.id);
@@ -36488,7 +36383,7 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
   };
   const createGroup = () => run2(makeGroup);
   const sendMessage = () => run2(async () => {
-    const text = message.trim();
+    const text = draftText().trim();
     if (group && admin !== null) {
       await makeGroup();
       return;
@@ -36540,7 +36435,7 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
         roster,
         actions,
         start: draft,
-        brief: message.trim(),
+        brief: draftText().trim(),
         canGoBack: draft.fromList,
         onBack: draft.fromList ? () => {
           setDraft(null);
@@ -36642,16 +36537,33 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
       (0, import_react55.createElement)(
         "div",
         { className: "bt-nc-compose" },
+        pasted === null ? null : (0, import_react55.createElement)("div", { className: "bt-paste-dock" }, (0, import_react55.createElement)(PasteCard, {
+          text: pasted.text,
+          onPutBack: () => {
+            setMessage((current) => `${current}${pasted.text}`);
+            setPasted(null);
+            messageRef.current?.focus();
+          },
+          onRemove: () => setPasted(null)
+        })),
         (0, import_react55.createElement)(
           "div",
           { className: "bt-nc-card" },
           (0, import_react55.createElement)("span", { className: "bt-nc-plus", "aria-hidden": true }, (0, import_react55.createElement)(PlusIcon)),
           (0, import_react55.createElement)("textarea", {
+            ref: messageRef,
             rows: 1,
             value: message,
             placeholder,
             "aria-label": placeholder,
             onChange: (event) => setMessage(event.target.value),
+            onPaste: (event) => {
+              if ((event.clipboardData?.files?.length ?? 0) > 0) return;
+              const kept = foldPastedText(event.clipboardData?.getData("text/plain") ?? "");
+              if (kept === null) return;
+              event.preventDefault();
+              setPasted({ text: kept });
+            },
             onKeyDown: (event) => {
               if (event.key === "Enter" && sendsOnEnter(roster.prefs) && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
@@ -36659,7 +36571,7 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
               }
             }
           }),
-          (0, import_react55.createElement)("button", { type: "button", className: "bt-nc-send", "aria-label": t("Send message"), disabled: busy || message.trim() === "" || picked.length === 0, onClick: sendMessage }, (0, import_react55.createElement)(ArrowUpIcon))
+          (0, import_react55.createElement)("button", { type: "button", className: "bt-nc-send", "aria-label": t("Send message"), disabled: busy || draftText().trim() === "" || picked.length === 0, onClick: sendMessage }, (0, import_react55.createElement)(ArrowUpIcon))
         )
       )
     )
@@ -39163,7 +39075,6 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     pane ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === "overlay", roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
     ui2.newChat ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(NewChat, { key: `${ui2.newChat}:${ui2.newChatSection ?? ""}`, mode: ui2.newChat, sectionId: ui2.newChatSection ?? null, paneLeft: layout.column, roster, actions }), document.body) : null,
     ui2.palette ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
-    ui2.groupSearch && roster.roomsById[ui2.groupSearch.roomId] ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(GroupSearch, { key: ui2.groupSearch.token, room: roster.roomsById[ui2.groupSearch.roomId], roster, token: ui2.groupSearch.token, actions }), document.body) : null,
     ui2.exchange ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(ExchangeDialog, { pair: ui2.exchange, paneLeft: layout.column, roster, actions }), document.body) : null,
     ui2.voice ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, paneLeft: layout.column, roster, actions, useSessions, useSessionStatus }), document.body) : null,
     menu ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, useWork, leaving: menuLeaving }), document.body) : null,
@@ -39466,19 +39377,19 @@ ${"#".repeat(Math.min(6, Number(level) || 2))} ${title}${mark2}
       return quoted2 ? keep(quoted2.split("\n").map((line) => line ? `> ${line}` : ">").join("\n")) : "";
     }
     const end = body2.trimEnd().length;
-    const marked2 = mark2 ? `${body2.slice(0, end)}${mark2}${body2.slice(end)}` : body2;
-    if (ctx.pre && !BLOCK_DISPLAY.test(display)) return marked2;
+    const marked = mark2 ? `${body2.slice(0, end)}${mark2}${body2.slice(end)}` : body2;
+    if (ctx.pre && !BLOCK_DISPLAY.test(display)) return marked;
     if (keepsSpace && BLOCK_DISPLAY.test(display) && tag !== "pre") {
-      return keep(expand(marked2).replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\s+$/g, ""), "");
+      return keep(expand(marked).replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\s+$/g, ""), "");
     }
     if (BLOCK_DISPLAY.test(display)) return `
 
-${marked2}
+${marked}
 
 `;
-    if (INLINE_BLOCK.test(display)) return ` ${marked2} `;
-    if (tag === "li") return ` · ${marked2}`;
-    return marked2;
+    if (INLINE_BLOCK.test(display)) return ` ${marked} `;
+    if (tag === "li") return ` · ${marked}`;
+    return marked;
   }
   const body = document.body;
   let text = "";
@@ -40829,7 +40740,7 @@ function apply(ctx) {
   const reactionStore = sharedMap(STORAGE.reactions);
   const seenStore = sharedMap(STORAGE.seen);
   let seenAt = seenStore.read();
-  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null, groupSearch: null });
+  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, paste: {}, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null });
   let sidebarSaved = readSidebar();
   const sidebarPref = createSource(sidebarSaved.pref);
   const frame = createSource({ viewport: typeof window === "undefined" ? 0 : window.innerWidth, sidebarWidth: sidebarSaved.width, collapsedWidth: 0, collapsed: false });
@@ -41237,7 +41148,7 @@ function apply(ctx) {
     isAgentSession: (id) => isAgentSessionId(id),
     openSession: (id) => {
       if (isAgentSessionId(id)) return actions.openAgentSession(id);
-      ui2.set((state) => state.newChat || state.exchange || state.menu || state.palette || state.groupSearch ? { ...state, newChat: null, exchange: null, menu: null, palette: null, groupSearch: null } : state);
+      ui2.set((state) => state.newChat || state.exchange || state.menu || state.palette ? { ...state, newChat: null, exchange: null, menu: null, palette: null } : state);
       setPlain(false);
       const target = partFor(id);
       show2(target);
@@ -41245,7 +41156,7 @@ function apply(ctx) {
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
-      ui2.set((state) => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, groupSearch: null, details: null, view: "details", renaming: false, tab: null }));
+      ui2.set((state) => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, details: null, view: "details", renaming: false, tab: null }));
       setPlain(true);
       show2(sessionId);
     },
@@ -41348,7 +41259,7 @@ function apply(ctx) {
         return;
       }
       if (mode === "agent") {
-        ui2.set((state) => ({ ...state, details: null, view: "details", settings: null, palette: null, groupSearch: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, toast: null }));
+        ui2.set((state) => ({ ...state, details: null, view: "details", settings: null, palette: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, toast: null }));
       }
       writeMode(mode);
       surface.set((state) => ({ ...state, mode }));
@@ -41767,6 +41678,7 @@ function apply(ctx) {
     [FEEDBACK_CSS, "feedback"],
     [ABOUT_CSS, "about"],
     [MEMBER_CSS, "members"],
+    [PASTE_CSS, "paste"],
     [IM_CSS, "im"],
     [GOAL_CSS, "goal"],
     [USER_MESSAGE_CSS, "user-messages"],
@@ -41851,12 +41763,14 @@ function apply(ctx) {
     () => shadow("conversation.composer.dock", { id: "activity", order: 0, priority: BOT_PRIORITY }, Nothing),
     () => shadow("conversation.composer.dock", { id: "usage", order: 1, priority: BOT_PRIORITY }, Nothing),
     () => shadow("conversation.composer.dock", { id: "btw", order: 2, priority: BOT_PRIORITY, inject: face }, BtwDock),
+    () => shadow("conversation.input.left", { id: "bot-paste", order: -110, inject: face }, PasteGuard),
     () => shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
     () => shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
     () => shadow("conversation.composer", {
       priority: BOT_PRIORITY,
       select: (owner) => owner.pendingInteraction?.kind === "question" ? owner.pendingInteraction : null
     }, QuestionCard),
+    () => shadow("conversation.input.dock", { id: "bot-paste", order: -130, inject: face }, PasteDock),
     () => shadow("conversation.input.dock", { id: "bot-members", order: -120, inject: face }, MemberDock),
     () => shadow("conversation.input.dock", { id: "bot-model", order: -110, inject: face }, ModelChoiceDock),
     () => shadow("conversation.input.dock", { id: "bot-question", order: -100, inject: face }, QuestionDock),
