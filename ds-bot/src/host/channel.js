@@ -7,10 +7,19 @@ import { handoffReply, questionReply, viewReply } from './parts.js'
 import { validateViewAnswer } from 'deep-view/core'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
-const STAGED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
-const STAGED_MS = 30 * 60_000
-
-const LANGUAGES = { zh: 'Chinese (简体中文)', en: 'English' }
+const LANGUAGES = {
+  zh: 'Chinese (简体中文)',
+  'zh-tw': 'Traditional Chinese (繁體中文)',
+  'zh-hk': 'Traditional Chinese (繁體中文)',
+  'zh-mo': 'Traditional Chinese (繁體中文)',
+  'zh-hant': 'Traditional Chinese (繁體中文)',
+  en: 'English',
+  ja: 'Japanese (日本語)',
+  ko: 'Korean (한국어)',
+  es: 'Spanish (Español)',
+  fr: 'French (Français)',
+  de: 'German (Deutsch)',
+}
 const RUN_STATS = ['sessionStats', 'tokenUsage', 'contextPressure']
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
@@ -34,10 +43,12 @@ export function install(rt) {
 
   // The DSH interface language of the last browser that asked for the team.
   let uiLocale
-  rt.uiLanguage = () => (uiLocale === undefined ? undefined : LANGUAGES[uiLocale.split('-')[0].toLowerCase()] ?? uiLocale)
+  rt.uiLanguage = () => {
+    if (uiLocale === undefined) return undefined
+    const lower = uiLocale.toLowerCase()
+    return LANGUAGES[lower] ?? LANGUAGES[lower.split('-')[0]] ?? uiLocale
+  }
 
-  // Photos staged by `stage-image`, kept until the message that names them is sent.
-  const staged = new Map()
   const ok = value => ({ ok: true, value })
   const fail = (message, code = 'bot/error') => ({ ok: false, error: { code, message, details: {} } })
   // Models come from DSH, not state.json, so a provider added on the Models pages of Settings
@@ -80,6 +91,8 @@ export function install(rt) {
     sideChats: rt.sideView?.() ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
+    // Sidebar sections that group Bots, group chats and the DSH Agent by workflow.
+    sections: state.sections ?? [],
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
     capabilities: rt.capabilityLibraryView(),
@@ -142,7 +155,7 @@ export function install(rt) {
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models'])
+  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -297,20 +310,11 @@ export function install(rt) {
         case 'room-progress': {
           // Any part id of the group's own Session means the group itself.
           const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
-          return ok([...rt.roomProgress.entries()].filter(([, entry]) => entry.roomId === (room?.id ?? body.roomId)).map(([callId, entry]) => ({ callId, replies: rt.groupRows(entry.roomId, entry.from), speaking: entry.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id) })))
-        }
-        // The rows a settled round of a group chat shows, from its book.
-        case 'group-rows': {
-          await rt.load()
-          const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
-          const from = Number(body.from)
-          const to = body.to === undefined ? undefined : Number(body.to)
-          if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return ok([])
-          return ok(rt.groupRows(room.id, from, to))
+          return ok([...rt.roomProgress.entries()].filter(([, entry]) => entry.roomId === (room?.id ?? body.roomId)).map(([callId, entry]) => ({ callId, replies: entry.replies, speaking: entry.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id) })))
         }
         case 'create-bot': {
           await rt.bootstrap()
-          const bot = await rt.createBot({ name: body.name, role: body.role, color: body.color, instructions: body.instructions, brief: body.brief, avatar: body.avatar, model: body.model, effort: body.effort, workDir: body.workDir })
+          const bot = await rt.createBot({ name: body.name, role: body.role, color: body.color, instructions: body.instructions, brief: body.brief, avatar: body.avatar, model: body.model, effort: body.effort, workDir: body.workDir, section: body.section, sectionId: body.sectionId })
           return ok(bot)
         }
         case 'update-bot':
@@ -357,7 +361,7 @@ export function install(rt) {
           return ok(view())
         case 'create-room': {
           await rt.load()
-          const room = await rt.createRoom({ members: Array.isArray(body.members) ? body.members : [], name: body.name, ...(typeof body.admin === 'string' ? { admin: body.admin } : {}) })
+          const room = await rt.createRoom({ members: Array.isArray(body.members) ? body.members : [], name: body.name, section: body.section, sectionId: body.sectionId, ...(typeof body.admin === 'string' ? { admin: body.admin } : {}) })
           if (body.greet === true) await rt.greetRoom(room.id).catch(error => rt.warn('ds-bot: greeting in %s failed: %s', room.name, error))
           return ok(room)
         }
@@ -373,6 +377,8 @@ export function install(rt) {
             remove: Array.isArray(body.remove) ? body.remove : undefined,
             workDir: body.workDir,
             permission: body.permission,
+            section: body.section,
+            sectionId: body.sectionId,
           })
           return ok({ room: view().rooms.find(entry => entry.id === room.id), changes })
         }
@@ -408,6 +414,17 @@ export function install(rt) {
         case 'set-flags':
           await rt.load()
           return ok(await rt.setFlags(body.id, body))
+        case 'section-save':
+          await rt.load()
+          return ok(await rt.saveSection(body))
+        case 'section-order':
+          await rt.load()
+          await rt.reorderSections(body.ids)
+          return ok(view())
+        case 'section-delete':
+          await rt.load()
+          await rt.deleteSection(body.id)
+          return ok(view())
         case 'delete-room':
           await rt.load()
           await rt.deleteRoom(body.id)
@@ -535,33 +552,11 @@ export function install(rt) {
           await rt.save()
           return ok(true)
         }
-        // A photo for the next `send`, one per call: a phone's link carries a few MB per
-        // message, so photos travel one by one and the message names them.
-        case 'stage-image': {
-          const mediaType = String(body.mediaType ?? '')
-          const data = typeof body.data === 'string' ? body.data : ''
-          if (!STAGED_TYPES.has(mediaType) || data === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return fail('This is not a photo DS Bot can send', 'bot/invalid')
-          const now = Date.now()
-          for (const [id, entry] of staged) if (entry.at < now - STAGED_MS) staged.delete(id)
-          const id = randomUUID()
-          staged.set(id, { mediaType, data, at: now })
-          return ok({ id })
-        }
         case 'send': {
           const text = String(body.text ?? '').trim()
-          const ids = Array.isArray(body.images) ? body.images.map(String) : []
-          if ((text === '' && ids.length === 0) || typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
-          const images = ids.map(id => staged.get(id))
-          if (images.some(entry => entry === undefined)) return fail('A photo did not arrive. Send it again.', 'bot/stale')
+          if (text === '' || typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           await rt.load()
-          await rt.sendUser({
-            sessionId: body.sessionId,
-            content: [
-              ...(text === '' ? [] : [{ type: 'text', text }]),
-              ...images.map(({ mediaType, data }) => ({ type: 'image', mediaType, data })),
-            ],
-          })
-          for (const id of ids) staged.delete(id)
+          await rt.sendUser({ sessionId: body.sessionId, content: [{ type: 'text', text }] })
           return ok(true)
         }
         case 'btw-delete': {

@@ -1,6 +1,12 @@
-// Interface copy follows the DSH language. Keys are the English text; `zh` maps them.
-// Copy is looked up at render time and every slot outlet re-renders on a language
-// switch, so nothing caches a translated string.
+// Interface copy follows the DSH language. Keys are the English text; `zh`, `zh-TW`,
+// `ja`, `ko`, `es`, `fr` and `de` map them. Copy is looked up at render time and every
+// slot outlet re-renders on a language switch, so nothing caches a translated string.
+import { convertDict, convertHostErrors, toTraditional } from './locales/zh-tw.js'
+import { DSH_JA, HOST_ERRORS_JA, JA } from './locales/ja.js'
+import { DSH_KO, HOST_ERRORS_KO, KO } from './locales/ko.js'
+import { DSH_ES, HOST_ERRORS_ES, ES } from './locales/es.js'
+import { DSH_FR, HOST_ERRORS_FR, FR } from './locales/fr.js'
+import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 
 export const NAMESPACE = 'ds-bot'
 
@@ -147,6 +153,7 @@ const ZH = {
   'Add capability': '添加能力',
   'No capabilities saved': '还没有保存能力',
   Type: '类型',
+  Description: '说明',
   'MCP server': 'MCP 服务',
   Skill: '技能',
   Pack: '能力包',
@@ -345,9 +352,6 @@ const ZH = {
   'Press Enter to steer queued messages': '按 Enter 插话发送排队的消息',
   'Couldn’t steer the queued messages. Try again.': '插话发送失败，请重试。',
   '{n} queued messages': '{n} 条排队消息',
-  '{n} Bot messages waiting': '{n} 条 Bot 消息待处理',
-  'Next step': '当前回合下一步',
-  'Next turn': '下一回合',
   'Sending…': '发送中…',
   'Queued image': '排队消息图片',
   'Queued file {name}': '排队文件 {name}',
@@ -1483,7 +1487,7 @@ const ZH = {
   'Discard': '丢弃',
   'Discarded': '已丢弃',
   'Allow recipient': '允许收件人',
-  'Turn off drafts for this Bot': '为此 Bot 关闭草稿',
+  'Allow this Bot to send directly': '允许此 Bot 直接发送',
   'Manage rules': '管理规则',
   'Sending rules': '发信规则',
   'From': '发件人',
@@ -1655,6 +1659,65 @@ const HOST_ZH = {
 }
 Object.assign(ZH, HOST_ZH)
 
+const ZH_TW = convertDict(ZH)
+const HOST_ERRORS_ZH_TW = convertHostErrors(HOST_ERRORS)
+
+export const LANGUAGES = [
+  { id: 'zh-TW', label: '繁體中文', fallback: 'zh' },
+  { id: 'ja', label: '日本語', fallback: 'en' },
+  { id: 'ko', label: '한국어', fallback: 'en' },
+  { id: 'es', label: 'Español', fallback: 'en' },
+  { id: 'fr', label: 'Français', fallback: 'en' },
+  { id: 'de', label: 'Deutsch', fallback: 'en' },
+]
+
+export const DICTIONARY = {
+  zh: ZH,
+  'zh-TW': ZH_TW,
+  ja: JA,
+  ko: KO,
+  es: ES,
+  fr: FR,
+  de: DE,
+}
+
+const HOST_ERROR_TABLE = {
+  zh: HOST_ERRORS,
+  'zh-TW': HOST_ERRORS_ZH_TW,
+  ja: HOST_ERRORS_JA,
+  ko: HOST_ERRORS_KO,
+  es: HOST_ERRORS_ES,
+  fr: HOST_ERRORS_FR,
+  de: HOST_ERRORS_DE,
+}
+
+const DSH_LOCALE_PACKS = {
+  ja: DSH_JA,
+  ko: DSH_KO,
+  es: ES && DSH_ES,
+  fr: DSH_FR,
+  de: DSH_DE,
+}
+
+const DATE_LOCALES = {
+  zh: 'zh-CN',
+  'zh-TW': 'zh-TW',
+  ja: 'ja-JP',
+  ko: 'ko-KR',
+  es: 'es-ES',
+  fr: 'fr-FR',
+  de: 'de-DE',
+  en: 'en-US',
+}
+
+function resolveLangKey(tag) {
+  const lower = String(tag ?? '').toLowerCase()
+  if (lower === 'zh-tw' || lower === 'zh-hk' || lower === 'zh-mo' || lower.startsWith('zh-hant')) return 'zh-TW'
+  if (lower.startsWith('zh')) return 'zh'
+  const primary = lower.split('-')[0]
+  return Object.hasOwn(DICTIONARY, primary) ? primary : 'en'
+}
+
 const fill = (text, params) => (params
   ? text.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match))
   : text)
@@ -1667,10 +1730,56 @@ export function installLocale(locale) {
   if (!locale || typeof locale.register !== 'function' || typeof locale.bind !== 'function') return () => {}
   service = locale
   bound = locale.bind(NAMESPACE)
-  const off = locale.register(NAMESPACE, 'zh', ZH)
+  const offs = []
+  const pushOff = (fn) => { if (typeof fn === 'function') offs.push(fn) }
+
+  if (typeof locale.addLanguage === 'function') {
+    const existing = new Set((locale.getLocale?.()?.locales ?? []).map(item => String(item.id).toLowerCase()))
+    for (const def of LANGUAGES) {
+      if (!existing.has(def.id.toLowerCase())) {
+        try { pushOff(locale.addLanguage(def)) } catch { /* already added */ }
+      }
+    }
+  }
+
+  for (const [langId, dict] of Object.entries(DICTIONARY)) {
+    pushOff(locale.register(NAMESPACE, langId, dict))
+  }
+
+  // Register DSH settings/common namespace translations so DSH rows inside Settings match.
+  for (const [langId, namespaces] of Object.entries(DSH_LOCALE_PACKS)) {
+    for (const [ns, dict] of Object.entries(namespaces ?? {})) {
+      if (locale.dicts instanceof Map && locale.dicts.get(ns)?.has(langId.toLowerCase())) continue
+      try { pushOff(locale.register(ns, langId, dict)) } catch { /* already registered */ }
+    }
+  }
+
+  // Convert any existing and future DSH `zh` namespace dictionaries into `zh-TW`.
+  if (locale.dicts instanceof Map) {
+    for (const [ns, map] of locale.dicts.entries()) {
+      if (ns === NAMESPACE || map.has('zh-tw')) continue
+      const zhDict = map.get('zh')
+      if (zhDict) {
+        try { pushOff(locale.register(ns, 'zh-TW', convertDict(zhDict))) } catch { /* ignore */ }
+      }
+    }
+  }
+
+  const origResolveText = typeof locale.resolveText === 'function' ? locale.resolveText.bind(locale) : null
+  if (origResolveText) {
+    locale.resolveText = (text) => {
+      const resolved = origResolveText(text)
+      if (resolveLangKey(language()) === 'zh-TW' && typeof text === 'object' && text !== null && !('zh-tw' in text)) {
+        return toTraditional(resolved)
+      }
+      return resolved
+    }
+    offs.push(() => { locale.resolveText = origResolveText })
+  }
+
   return () => {
     if (service === locale) { service = null; bound = null }
-    if (typeof off === 'function') off()
+    for (let i = offs.length - 1; i >= 0; i--) offs[i]()
   }
 }
 
@@ -1680,9 +1789,10 @@ export function t(key, params) {
 
 // A message from the host, in the interface language.
 export function hostText(message) {
-  if (!language().startsWith('zh')) return message
+  const lang = resolveLangKey(language())
+  if (lang === 'en') return message
   if (Object.hasOwn(ZH, message)) return t(message)
-  for (const [pattern, template] of HOST_ERRORS) {
+  for (const [pattern, template] of HOST_ERROR_TABLE[lang] ?? []) {
     if (pattern.test(message)) return message.replace(pattern, template)
   }
   return message
@@ -1694,18 +1804,4 @@ export function language() {
   return typeof active === 'string' ? active : 'en'
 }
 
-export const dateLocale = () => (language().startsWith('zh') ? 'zh-CN' : 'en-US')
-
-// Translations for the tests: the Chinese dictionary itself.
-export const DICTIONARY = { zh: ZH }
-
-// MarkdownText re-parses when `labels` changes identity, and a streaming message starts
-// over, so one object serves until the language changes the text.
-let labels = null
-export function mdLabels() {
-  const [copyLabel, copiedLabel, footnotes] = [t('Copy'), t('Copied'), t('Footnotes')]
-  if (labels?.code.copyLabel !== copyLabel || labels.code.copiedLabel !== copiedLabel || labels.footnotes !== footnotes) {
-    labels = { code: { copyLabel, copiedLabel }, footnotes }
-  }
-  return labels
-}
+export const dateLocale = () => DATE_LOCALES[resolveLangKey(language())] ?? 'en-US'
