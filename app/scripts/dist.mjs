@@ -10,14 +10,11 @@ import { fileURLToPath } from 'node:url'
 const RETRY_DELAYS_MS = [30_000, 90_000, 180_000]
 const TAIL_CHARS = 64 * 1024
 
-// electron-builder ends a failed build with a ⨯ line for the error that stopped it. Only that
-// last line counts: prepare-runtime.mjs logs every failed attempt it retries, so a 504 earlier
-// in the output says nothing about an archive that then answers 404. The lines it ends with when
-// an answer, not the build, failed:
+// The lines electron-builder and prepare-runtime.mjs print when an answer, not the build, failed:
 //   ⨯ Response code 504 (Gateway Time-out)  failedTask=build stackTrace=HTTPError: ...
 //   ⨯ failed to build AppImage  error=Response code 504 (Gateway Time-out)
 //   ⨯ primary runtime download: 504 https://github.com/astral-sh/python-build-standalone/...
-const GATEWAY_FAILURE = /Response code (?:5\d\d|429|408)\b|primary runtime download: (?:5\d\d|429|408) /u
+const GATEWAY_FAILURE = /^.*(?:Response code (?:5\d\d|429|408)\b|primary runtime download: (?:5\d\d|429|408) ).*$/mu
 
 /**
  * The line that shows a run failed on a download answer that may succeed later.
@@ -25,8 +22,7 @@ const GATEWAY_FAILURE = /Response code (?:5\d\d|429|408)\b|primary runtime downl
  * @returns {string | undefined} the line, or undefined when the build itself failed
  */
 export function gatewayFailure(output) {
-  const last = output.match(/^\s*⨯ .*$/gmu)?.at(-1)?.trim()
-  return last !== undefined && GATEWAY_FAILURE.test(last) ? last : undefined
+  return GATEWAY_FAILURE.exec(output)?.[0].trim()
 }
 
 /** @param {number} ms - Delay in milliseconds. @returns {Promise<void>} */
