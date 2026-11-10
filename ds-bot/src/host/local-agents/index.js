@@ -36,6 +36,8 @@ const spawnEngine = (kind, route, spec) => (kind === 'acp' ? new AcpEngine(route
 
 export function install(rt) {
   const { ctx, state } = rt
+  let stopping = false
+  const isStopped = () => stopping || rt.stopping === true
   // state.localAgents is replaced by the state load after install; read it
   // each time instead of holding the pre-load object.
   const store = () => {
@@ -53,6 +55,7 @@ export function install(rt) {
   const found = new Map()
   async function scan() {
     await refreshSearchDirs()
+    if (isStopped()) return [...found.values()]
     for (const route of Object.keys(ENGINES)) {
       const spec = ENGINES[route]
       const path = findExecutable(spec.command)
@@ -117,7 +120,7 @@ export function install(rt) {
   })
 
   let registration
-  const supported = () => typeof ctx.llm?.registerAdapter === 'function'
+  const supported = () => !isStopped() && typeof ctx.llm?.registerAdapter === 'function'
   const usedRefs = () => [...new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel]).filter(Boolean))]
   // A route a Bot runs on stays registered when its CLI goes away: the turn then fails
   // with the repair card, and nothing moves the Bot to another run mode by itself.
@@ -135,12 +138,15 @@ export function install(rt) {
   // Custom agents hold a route whether or not their command resolves yet; a
   // missing one fails at prompt time with a typed error.
   applyRoutes()
-  void scan()
+  void scan().catch(error => {
+    if (!isStopped()) rt.warn('ds-bot: local-agent scan failed: %s', error)
+  })
   // Custom agents arrive with the state load; their routes register then too.
   void rt.load?.().then(() => applyRoutes()).catch(() => {})
   // The callback returns the disposer: running adapter.dispose() inside the
   // setup would leave the adapter disposed from the moment it installs.
   ctx.effect(() => () => {
+    stopping = true
     void adapter.dispose()
     registration?.()
   }, 'ds-bot: local agents')

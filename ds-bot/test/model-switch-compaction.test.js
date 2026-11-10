@@ -27,7 +27,7 @@ const TEAM = {
   questions: {},
 }
 
-function start({ summarize = true, outlet = false, stream } = {}) {
+function start({ summarize = true, outlet = false, stream, modelInfo, route } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-compaction-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const bench = { regions: [], nows: [], summarised: 0, checkpoints: [] }
@@ -49,7 +49,9 @@ function start({ summarize = true, outlet = false, stream } = {}) {
     llm: {
       listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
       listModels: async () => [{ id: 'v4' }],
-      resolveModelInfo: async () => ({ context: { contextWindow: 100_000 }, defaultMaxTokens: 8_000 }),
+      resolveModelInfo: async (...args) => modelInfo === undefined
+        ? { context: { contextWindow: 100_000 }, defaultMaxTokens: 8_000 }
+        : modelInfo(...args),
       stream(options) {
         if (stream !== undefined) return stream(options)
         throw new Error('the checkpoint model is not called by these tests')
@@ -70,7 +72,7 @@ function start({ summarize = true, outlet = false, stream } = {}) {
     session: {
       id: sessionId,
       seq: 2,
-      requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4' } }),
+      requestHeader: () => ({ config: route ?? { provider: 'deepseek', model: 'v4' } }),
       deriveMessages: () => [],
       toolHistory: () => [],
     },
@@ -142,6 +144,35 @@ test('a checkpoint the route cannot write does not fail the switch', async (t) =
   assert.equal(bench.checkpoints.length, 1)
   assert.match(bench.checkpoints[0].summary[0].text, /^\[Checkpoint 1\]/)
   assert.match(bench.checkpoints[0].summary[0].text, /No summary was written/)
+})
+
+test('a switch checkpoint uses each model’s lowest effort and does not copy the old output limit to the fallback', async (t) => {
+  const asked = []
+  const { rt, bench, compaction, adoptFor, agentOf, stop } = start({
+    outlet: true,
+    route: { provider: 'deepseek', model: 'v4', reasoningEffort: 'max', maxTokens: 128_000 },
+    modelInfo: async () => ({ context: { contextWindow: 100_000 }, reasoning: { efforts: [{ id: 'off' }, { id: 'max' }] } }),
+    stream: options => {
+      asked.push(options)
+      if (options.model === 'v4') throw new Error('old model unavailable')
+      return (async function* () {
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: 'the preserved checkpoint' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'the preserved checkpoint' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  })
+  t.after(stop)
+  rt.desiredModel = async () => 'deepseek/fallback'
+  adoptFor('b2')
+  await compaction.compactRegion(3, 9, agentOf('b2'), new AbortController().signal)
+  assert.deepEqual(asked.map(item => [item.model, item.reasoningEffort, item.maxTokens]), [
+    ['v4', 'off', 128_000], ['fallback', 'off', undefined],
+  ])
+  assert.equal(bench.checkpoints[0].model, 'fallback')
+  assert.equal(bench.checkpoints[0].maxTokens, undefined)
+  assert.match(bench.checkpoints[0].summary[0].text, /the preserved checkpoint/)
 })
 
 test('a checkpoint the route cannot write still fails outside a switch', async (t) => {

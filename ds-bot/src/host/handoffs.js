@@ -8,7 +8,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { LATE_ANSWER, TEXT_KEPT } from './constants.js'
+import { LATE_ANSWER, SOURCE_KIND, TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
 
 const minutes = since => {
@@ -386,7 +386,7 @@ export function install(rt) {
   }
 
   // What a Bot is doing, in one line for the Bots that work with it.
-  function statusOf(botId) {
+  function statusOf(botId, viewerId) {
     const chat = rt.chatOf(botId)
     const sessions = [...new Set([chat, ...(rt.groupSessionsOf?.(botId) ?? [])])]
     const place = sessionId => {
@@ -423,12 +423,39 @@ export function install(rt) {
     if (lines.length === 0) lines.push('idle')
     if (state.questions?.[chat] !== undefined) lines.push('a question card in its own chat waits for the user\'s answer')
     if (state.views?.[chat] !== undefined) lines.push('a view card in its own chat waits for the user\'s answer')
-    const unread = new Map()
-    for (const args of rt.unreadOf?.(chat) ?? []) {
-      const name = nameOf(args.fromId)
-      if (name !== undefined) unread.set(name, (unread.get(name) ?? 0) + 1)
+    const registry = ctx.get?.('agents')
+    const pending = (id) => {
+      const inbox = registry?.get?.(id)?.inbox
+      if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) return undefined
+      return [...inbox.nextStep, ...inbox.nextTurn]
     }
-    if (unread.size > 0) lines.push(`not read yet: ${[...unread].map(([name, count]) => `${count} from ${name}`).join(', ')}`)
+    const own = pending(chat)
+    if (own === undefined) {
+      lines.push('own chat pending inputs: unavailable')
+    } else {
+      const deferred = own.filter(message => message.source?.deferred === true).length
+      lines.push(`own chat pending inputs: ${own.length}${deferred > 0 ? ` (${deferred} deferred)` : ''}`)
+      const unread = new Map()
+      for (const message of own) {
+        const source = message.source
+        const name = source?.kind === SOURCE_KIND && !source.deferred ? nameOf(source.senderSessionId) : undefined
+        if (name !== undefined) unread.set(name, (unread.get(name) ?? 0) + 1)
+      }
+      if (unread.size > 0) lines.push(`unread Bot inputs in own chat: ${[...unread].map(([name, count]) => `${count} from ${name}`).join(', ')}`)
+    }
+    const groups = sessions.filter(sessionId => {
+      if (sessionId === chat) return false
+      const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+      return room !== undefined && (rt.isMain(viewerId) || room.members.includes(viewerId))
+    }).map(pending)
+    if (groups.length > 0) {
+      const loaded = groups.filter(group => group !== undefined)
+      const total = loaded.reduce((count, group) => count + group.length, 0)
+      const deferred = loaded.reduce((count, group) => count + group.filter(message => message.source?.deferred === true).length, 0)
+      const unknown = groups.length - loaded.length
+      const scope = unknown > 0 ? ` in ${loaded.length} available session(s); ${unknown} group session(s) unavailable` : ''
+      lines.push(`group pending inputs: ${total}${deferred > 0 ? ` (${deferred} deferred)` : ''}${scope}`)
+    }
     return lines.join('; ')
   }
 

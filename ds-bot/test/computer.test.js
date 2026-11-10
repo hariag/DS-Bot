@@ -70,6 +70,29 @@ test('the catalog classifies every provider call into observe, background, foreg
   assert.equal(isComputerTool('schedule_list'), false)
 })
 
+test('unloading releases computer masks without recreating them', async (t) => {
+  const denied = new Set()
+  let mounts = 0
+  const agent = {
+    id: 'm1',
+    session: { id: 'm1' },
+    ctx: {
+      tools: { restrict: () => { mounts += 1; denied.add('cua'); return () => denied.delete('cua') } },
+      on: () => () => {},
+    },
+  }
+  const { ctx, home, rt } = setup({ services: { agents: { list: () => [agent] } } })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  ctx.tools.schemas = () => [{ name: 'cua' }]
+  await rt.load()
+  rt.refreshComputer()
+  assert.equal(mounts, 1)
+  assert.equal(denied.has('cua'), true)
+  await ctx.dispose()
+  assert.equal(mounts, 1)
+  assert.equal(denied.size, 0)
+})
+
 test('levels admit their kinds and nothing above', () => {
   assert.equal(levelAllows('off', 'observe'), false)
   assert.equal(levelAllows('view', 'observe'), true)

@@ -15,6 +15,17 @@ import { estimateTokens } from '../src/host/text.js'
 import { latestMemoryChange, summaryBlocks } from '../src/client/text.js'
 import { fakeContext } from './fake-ctx.js'
 
+function timeoutsUsed(t) {
+  const original = AbortSignal.timeout
+  const calls = new Map()
+  t.mock.method(AbortSignal, 'timeout', function (ms) {
+    const signal = original.call(AbortSignal, ms)
+    calls.set(signal, ms)
+    return signal
+  })
+  return calls
+}
+
 test('entries carry their metadata at the end of the line, as Agent Memory Repo writes it', () => {
   assert.deepEqual(splitMeta('Prefers tea [source: part 2 #14; by: Chief; added: 2026-10-09]'), {
     text: 'Prefers tea', meta: { source: 'part 2 #14', by: 'Chief', added: '2026-10-09' },
@@ -1023,6 +1034,7 @@ test('deleting a Bot moves its memory to the archive', async (t) => {
 })
 
 test('the memory panel shows every entry and a summary the Bot\'s model writes once per change', async (t) => {
+  const timeouts = timeoutsUsed(t)
   const replies = ['## Overview\nYou like tea.']
   const { tool, call, requests, stop } = start({ replies })
   t.after(() => stop())
@@ -1041,6 +1053,7 @@ test('the memory panel shows every entry and a summary the Bot\'s model writes o
   assert.deepEqual([done.summary.text, done.fresh, done.summarizing, done.error], ['## Overview\nYou like tea.', true, false, null])
   assert.equal(requests.length, 1)
   assert.deepEqual([requests[0].provider, requests[0].model, requests[0].reasoningEffort], ['deepseek', 'v4', 'off'])
+  assert.equal(timeouts.get(requests[0].signal), 600_000)
   assert.match(requests[0].messages[0].content[0].text, /## Writer's memory\n- Likes tea\n\n## Team memory\n\(nothing\)/)
 
   // A new entry leaves the old summary up, marked stale, until the next one is in.
