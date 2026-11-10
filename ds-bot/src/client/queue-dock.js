@@ -8,8 +8,8 @@ import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, Pape
 // kind 'bot' — but they are the Bot's incoming messages, not drafts of the user.
 // The shell's dock draws every queued row as the user's own: a relay looked
 // typed, and one tap on its edit, delete or steer controls rewrote or dropped a
-// team's exchange (#663). Here only rows the user authored are listed; a Bot's
-// deliveries still reach it, they just never sit in this dock.
+// team's exchange (#663). Bot deliveries are displayed separately as read-only
+// items, while only the user's own queued sends have actions.
 
 // Kinds carrying the user's own queued sends: composer submissions, scheduled
 // sends and an answer filed through a question card.
@@ -96,7 +96,7 @@ function RowButton({ label, title, disabled, onClick, children }) {
 // One item renders directly; several default to a collapsible count header; an
 // empty queue renders nothing. Rows still in flight show a sending state with
 // disabled actions until their queue rows arrive.
-export function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFactorySlot, actions }) {
+export function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.('inbox')
   const pendingSubmissions = useSession?.((s) => s.pendingSubmissions) ?? EMPTY_QUEUE
   const queue = useMemo(() => {
@@ -109,6 +109,17 @@ export function QueueDock({ useSession, useProjection, updateQueue, loadImage, r
     return pendingSubmissions.filter(submission => submission.placement === 'queued' && !admitted.has(submission.requestId))
   }, [pendingSubmissions, queue])
   const rowCount = queue.length + pendingQueue.length
+  const botQueue = useMemo(() => [
+    ...(inbox?.['next-step'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-step' })),
+    ...(inbox?.['next-turn'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-turn' })),
+  ], [inbox])
+  const [botExpandedSession, setBotExpandedSession] = useState(null)
+  const botCollapsed = botExpandedSession !== sessionId
+  const botListId = useId()
+  useEffect(() => { setBotExpandedSession(null) }, [sessionId])
+  useEffect(() => {
+    if (botQueue.length === 0 && !botCollapsed) setBotExpandedSession(null)
+  }, [botQueue.length, botCollapsed])
   const running = useSession?.((s) => s.running) === true
   const queueMutable = useSession?.((s) => s.subagent === null || s.subagent === undefined || s.subagent.address?.mode === 'continuable') ?? true
   const [editing, setEditing] = useState(null)
@@ -119,7 +130,7 @@ export function QueueDock({ useSession, useProjection, updateQueue, loadImage, r
     if (rowCount === 0 && !collapsed) setCollapsed(true)
     if (editing !== null && (!queueMutable || !queue.some(row => row.id === editing.id))) setEditing(null)
   }, [collapsed, editing, queue, queueMutable, rowCount])
-  if (rowCount === 0) return null
+  if (rowCount === 0 && botQueue.length === 0) return null
   const interactionActive = queueMutable && (editing !== null || busy !== null)
   const expanded = !collapsed || interactionActive
   const listVisible = rowCount === 1 || expanded
@@ -148,7 +159,26 @@ export function QueueDock({ useSession, useProjection, updateQueue, loadImage, r
     if (await applyAction(editing.id, { kind: 'edit', content: [{ type: 'text', text: editing.text }] }, t('Couldn’t edit the queued message — it may have started already.'))) setEditing(null)
   }
   return h('div', { className: 'bt-queue-dock', 'data-queue-dock': '' },
-    h('div', { className: 'bt-queue-panel' },
+    botQueue.length > 0 && h('div', { className: 'bt-queue-panel bt-bot-queue-panel', 'data-bot-queue-dock': '' },
+      h('button', { type: 'button', className: 'bt-queue-head', 'data-bot-queue-head': '', 'aria-controls': botListId, 'aria-expanded': !botCollapsed, onClick: () => setBotExpandedSession(value => value === sessionId ? null : sessionId) },
+        h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
+        h('span', { className: 'bt-queue-count' }, t('{n} Bot messages waiting', { n: botQueue.length })),
+        h('span', { className: 'bt-queue-chev', 'aria-hidden': true }, !botCollapsed ? h(ChevronDownIcon) : h(ChevronUpIcon))),
+      h('ul', { id: botListId, className: 'bt-queue-list bt-bot-queue-list', 'data-bot-queue-list': '', hidden: botCollapsed },
+        !botCollapsed && botQueue.map(({ row, placement }) => {
+          const attachments = queueAttachments(row.content)
+          const text = row.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+          return h('li', { key: row.id, className: 'bt-bot-queue-row', 'data-bot-queue-row': '', 'data-bot-queue-placement': placement },
+            h('div', { className: 'bt-bot-queue-meta' },
+              h('span', { className: 'bt-bot-queue-sender' }, row.source?.senderName || t('Bot')),
+              h('span', { className: 'bt-bot-queue-placement' }, t(placement === 'next-step' ? 'Next step' : 'Next turn'))),
+            attachments.length > 0 && h('span', { className: 'bt-queue-attachments bt-bot-queue-attachments' },
+              attachments.map((item, index) => item.type === 'image'
+                ? h(QueueThumb, { key: `${item.attachment.attachmentId}:${index}`, attachment: item.attachment, loadImage, label: t('Queued image') })
+                : h(QueueFile, { key: `${item.attachment.attachmentId}:${item.attachment.name}:${index}`, attachment: item.attachment, label: t('Queued file {name}', { name: item.attachment.name }) }))),
+            text !== '' && h('div', { className: 'bt-bot-queue-text' }, text))
+        }))),
+    rowCount > 0 && h('div', { className: 'bt-queue-panel' },
       rowCount > 1 && h('button', { type: 'button', className: 'bt-queue-head', 'aria-controls': listId, 'aria-expanded': expanded, disabled: interactionActive, onClick: () => setCollapsed(value => !value) },
         h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
         h('span', { className: 'bt-queue-count' }, t('{n} queued messages', { n: rowCount })),
@@ -206,6 +236,14 @@ export const QUEUE_CSS = `
 .bt-queue-list{max-height:180px;margin:0;padding:0;list-style:none;overflow-y:auto}
 .bt-queue-row{box-sizing:border-box;min-height:36px;width:100%;border-radius:var(--dsw-radius-md,10px);display:flex;align-items:center;gap:10px;padding:4px 5px 4px 12px}
 .bt-queue-row+.bt-queue-row{box-shadow:inset 0 1px 0 var(--bt-line)}
+.bt-bot-queue-list{max-height:240px}
+.bt-bot-queue-row{padding:8px 12px;min-width:0}
+.bt-bot-queue-row+.bt-bot-queue-row{box-shadow:inset 0 1px 0 var(--bt-line)}
+.bt-bot-queue-meta{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:18px;color:var(--bt-ink-2)}
+.bt-bot-queue-sender{min-width:0;overflow-wrap:anywhere;font-weight:500;color:var(--bt-ink-2)}
+.bt-bot-queue-placement{flex:none}
+.bt-bot-queue-text{margin-top:4px;min-width:0;max-height:160px;overflow-y:auto;font-size:13px;line-height:20px;color:var(--bt-ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-queue-attachments.bt-bot-queue-attachments{max-width:100%;margin-top:4px}
 .bt-queue-attachments{flex:none;min-width:0;max-width:55%;display:flex;gap:4px;overflow:hidden}
 .bt-queue-pending .bt-queue-attachments{flex-shrink:1}
 .bt-queue-file{box-sizing:border-box;height:24px;min-width:74px;flex:0 180px;border:.5px solid var(--bt-line);border-radius:var(--dsw-radius-sm,6px);background:var(--bt-main);display:inline-flex;align-items:center;gap:4px;padding:0 6px;overflow:hidden}

@@ -15,7 +15,7 @@ export const OCR_PROMPT = [
   'Then add a line starting with "Image:" that describes in one to three sentences what is not text (photo, chart, diagram, screen layout).',
   'Reply with only that. If there is no text, reply with only the "Image:" line.',
 ].join(' ')
-export const OCR_TIMEOUT_MS = 120_000
+export const OCR_TIMEOUT_MS = 600_000
 export const OCR_RETRY_MS = 120_000
 export const OCR_CACHE_MAX = 500
 export const MAX_AVATAR_IMAGE = 160_000

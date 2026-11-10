@@ -125,6 +125,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'route POST /api/bot',
     'effect ds-bot: load state',
     'effect ds-bot: local agents',
+    'effect ds-bot: stopping',
   ])
 })
 

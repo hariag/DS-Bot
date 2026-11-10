@@ -152,8 +152,9 @@ export function install(rt) {
     else turns[id] = next
     persist()
   }
-  const forgetQueued = (exchangeId) => {
+  const forgetQueued = (exchangeId, onlySession) => {
     for (const [sessionId, list] of Object.entries(queued)) {
+      if (onlySession !== undefined && sessionId !== onlySession) continue
       const at = list.findIndex(item => item.args.exchangeId === exchangeId)
       if (at === -1) continue
       const rest = list.toSpliced(at, 1)
@@ -186,11 +187,54 @@ export function install(rt) {
   // What a Session was sent and no turn has read yet.
   rt.unreadOf = sessionId => (queued[sessionId] ?? []).map(item => item.args)
   rt.forgetDelivery = forgetQueued
+  const retained = new Map()
+  rt.keepQueued = (sessionId, messages, action) => {
+    const ids = new Set(messages.filter(message => message.source?.kind === SOURCE_KIND).map(message => message.source.exchangeId).filter(Boolean))
+    const counts = retained.get(sessionId) ?? new Map()
+    retained.set(sessionId, counts)
+    for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
+    try { return action() } finally {
+      for (const id of ids) {
+        const remaining = counts.get(id) - 1
+        if (remaining === 0) counts.delete(id)
+        else counts.set(id, remaining)
+      }
+      if (counts.size === 0) retained.delete(sessionId)
+    }
+  }
+  rt.moveQueued = (target, messages) => {
+    const ids = new Set(messages.filter(message => message.source?.kind === SOURCE_KIND).map(message => message.source.exchangeId).filter(Boolean))
+    if (ids.size === 0) return
+    const next = { ...queued }
+    const incoming = [...(next[target] ?? [])]
+    const present = new Set(incoming.map(item => item.args.exchangeId))
+    let changed = false
+    for (const [sessionId, list] of Object.entries(queued)) {
+      if (sessionId === target) continue
+      const rest = []
+      for (const item of list) {
+        if (!ids.has(item.args.exchangeId)) { rest.push(item); continue }
+        if (!present.has(item.args.exchangeId)) {
+          incoming.push(item)
+          present.add(item.args.exchangeId)
+        }
+        changed = true
+      }
+      if (rest.length === 0) delete next[sessionId]
+      else if (rest.length !== list.length) next[sessionId] = rest
+    }
+    if (!changed) return
+    next[target] = incoming
+    queued = next
+    persist()
+  }
 
   // A message is done with once a turn takes it up, or once it leaves the inbox untaken
   // while DS Bot runs: the user stopped the Bot, or DS Bot moved or withdrew it.
-  ctx.on('agent/inbox/discarded', ({ message } = {}) => {
-    if (message?.source?.kind === SOURCE_KIND && message.source.exchangeId) forgetQueued(message.source.exchangeId)
+  ctx.on('agent/inbox/discarded', ({ agent, message } = {}) => {
+    if (message?.source?.kind !== SOURCE_KIND || !message.source.exchangeId) return
+    if (retained.get(agent?.id)?.has(message.source.exchangeId)) return
+    forgetQueued(message.source.exchangeId, agent?.id)
   })
   // Exchanges a turn took up since this start, until the resends are done, so a resend
   // never repeats one.

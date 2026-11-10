@@ -73,7 +73,7 @@ async function start(home, logs, inspect) {
   const askApproval = sessionId => ctx.listeners.get('approval/request')[0]({ agent: { session: { id: sessionId } }, toolName: 'pwsh', reason: 'escalate sandbox' }, () => 'from-dsh')
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   await tool('list_bots', {}, 'a')
-  const host = { ctx, agentOf, emit, tool, call, askApproval, stop: () => ctx.dispose() }
+  const host = { rt, ctx, agentOf, emit, tool, call, askApproval, stop: () => ctx.dispose() }
   started.set(home, [...(started.get(home) ?? []), host])
   return host
 }
@@ -581,6 +581,58 @@ test('a message a shutdown cancelled is sent again once; one still waiting, take
   t.mock.timers.tick(3000)
   await settle(() => third.agentOf('b').calls.length === 2)
   assert.deepEqual(third.agentOf('b').calls.map(message => message.source.exchangeId), [plan, numbers].map(message => message.source.exchangeId))
+})
+
+test('moving a pending delivery keeps its recovery note through discard and restart', async (t) => {
+  const home = freshHome(t)
+  const first = await start(home)
+  await first.tool('message_bot', { to: 'Writer', message: 'keep this', when: 'queue' }, 'a')
+  const message = first.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+
+  first.rt.moveQueued('b-next', [message])
+  for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
+  await settle(() => notes(home).queued?.['b-next']?.length === 1 && notes(home).queued?.b === undefined)
+  assert.equal(notes(home).queued['b-next'][0].args.exchangeId, message.source.exchangeId)
+  await first.stop()
+
+  const state = stateOf(home)
+  state.bots.b.sessionId = 'b-next'
+  writeFileSync(join(home, 'state.json'), JSON.stringify(state))
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const second = await start(home)
+  second.agentOf('b-next').inbox.nextTurn.push(message)
+  t.mock.timers.tick(3000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(second.agentOf('b-next').calls.length, 0)
+  second.emit('b-next', 'user/message', { content: message.content, source: message.source })
+  await settle(() => notes(home).queued?.['b-next'] === undefined)
+})
+
+test('a forwarded delivery taken up before note transfer is not noted again', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  await host.tool('message_bot', { to: 'Writer', message: 'take this', when: 'queue' }, 'a')
+  const message = host.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+  host.emit('b-next', 'user/message', { content: message.content, source: message.source })
+  host.rt.moveQueued('b-next', [message])
+  await settle(() => Object.values(notes(home).queued ?? {}).every(list => list.every(item => item.args.exchangeId !== message.source.exchangeId)))
+})
+
+test('waking an inbox retains its delivery note while removing and resending', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  await host.tool('message_bot', { to: 'Writer', message: 'wake me', when: 'queue' }, 'a')
+  const message = host.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+  const discard = () => {
+    for (const listener of host.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
+  }
+  host.rt.keepQueued('b', [message], discard)
+  assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
+  discard()
+  await settle(() => notes(home).queued?.b === undefined)
 })
 
 test('a queued request kept over a restart is sent again however old, and the asker is told it was late', async (t) => {

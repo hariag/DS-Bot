@@ -184,7 +184,7 @@ const adminNote = room => [
   'You are this group\'s admin.',
   room.mode === 'admin' ? 'Plain messages come to you first: answer them, or call the members who should answer with @Name.' : '',
   '"@all" calls every member. When the user asks, change the group with update_group.',
-  'When the user wants this group to reach a goal, set it with group_goal: align with the user first (goal-grill skill), then start it.',
+  'When the user wants a group goal, inspect any active or paused goal first. Track an independent new objective separately rather than overwrite it. Start a group goal when none is active and the request is clear; ask only for decisions genuinely needed.',
 ].filter(Boolean).join(' ')
 
 // The opening turn of a group the user just made without a first message.

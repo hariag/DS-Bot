@@ -163,6 +163,42 @@ test('a profile without the tool gets no mask, which restrict() would refuse', a
   assert.match(guard(QUESTION, 'writer'), /Bots cannot use ask_user_question/)
 })
 
+test('connector restrictions survive tool changes and lift on re-enable or unload', async (t) => {
+  const env = await setup({ served: ['read'] })
+  t.after(env.stop)
+  const agent = await env.agentFor('writer')
+  const name = 'mcp__notion__read'
+  const masked = new Set()
+  let prefixes = []
+  let projected = 0
+  env.rt.connectorOffFor = () => prefixes
+  env.ctx.tools.definitions = () => [{ name: 'read' }, { name }]
+  env.ctx.tools.schemas = scoped => {
+    projected += 1
+    return [{ name: 'read' }, { name }].filter(tool => !scoped || !masked.has(tool.name))
+  }
+  agent.ctx.tools.restrict = ({ deny }) => {
+    for (const entry of deny) masked.add(entry)
+    env.ctx.emit('tools/change')
+    return () => { for (const entry of deny) masked.delete(entry); env.ctx.emit('tools/change') }
+  }
+  env.rt.reapplyToolMasks()
+  assert.equal(projected, 0)
+  prefixes = ['mcp__notion__']
+  env.rt.reapplyToolMasks()
+  assert.equal(masked.has(name), true)
+  env.ctx.emit('tools/change')
+  assert.equal(masked.has(name), true)
+  prefixes = []
+  env.rt.reapplyToolMasks()
+  assert.equal(masked.has(name), false)
+  prefixes = ['mcp__notion__']
+  env.rt.reapplyToolMasks()
+  assert.equal(masked.has(name), true)
+  await env.ctx.dispose()
+  assert.equal(masked.size, 0)
+})
+
 test('the guard refuses the blocking question tool in Bot Sessions only', async (t) => {
   const { guard, stop } = await setup()
   t.after(stop)

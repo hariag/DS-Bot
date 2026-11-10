@@ -77,6 +77,8 @@ DS Bot has group chats. A group chat is a great way to get several bots to work 
 
 Any bot can hand work to other bots with @, and those bots do the work on their own and post the results back to the group. A group chat has its own memory and working folder, invisible to bots outside the group. For larger work, a group chat can run a Goal: the admin aligns with you on what "done" means, splits the work into stages across members, and checks each stage before moving on.
 
+Bots can inspect available private and group inbox counts before handing work on. Private requests stay separate; a new unrelated task can wait in the queue while an urgent correction reaches the current turn.
+
 ![Group chat: the admin, Chief, hands the work to Writer and Coder](docs/images/group.png)
 
 ### Private bot

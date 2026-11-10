@@ -148,7 +148,7 @@ test('group_goal start validates the goal with the contract refusals', async (t)
 
 test('a goal starts, passes its stages, and completes', async (t) => {
   const host = await start(t)
-  assert.match(await startGoal(host), /Started\. Hand out the tasks of stage 1 now/)
+  assert.match(await startGoal(host), /Started\. Check ownership, dependencies, authorization and capacity; hand out only ready tasks needing assignment/)
   const started = goal(host)
   assert.deepEqual([started.status, started.current, started.stages.map(stage => stage.status)], ['active', 0, ['active', 'pending']])
   assert.deepEqual(started.stages[0].tasks.map(task => task.status), ['pending'])

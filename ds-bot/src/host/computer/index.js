@@ -212,7 +212,7 @@ export function install(rt) {
     }
     leases.releaseAll()
     for (const { abort } of inFlight.values()) abort.abort(new Error('Computer use was turned off'))
-    refreshComputer()
+    if (!stopped) refreshComputer()
   }
   async function teardownProvider() {
     await unmountProvider()
@@ -222,7 +222,8 @@ export function install(rt) {
   }
 
   // ---- Masking: who sees the tools ----
-  const denyNames = agent => (typeof ctx.tools?.schemas === 'function' ? ctx.tools.schemas(agent) : [])
+  const denyNames = agent => (typeof ctx.tools?.definitions === 'function' ? ctx.tools.definitions(agent)
+    : typeof ctx.tools?.schemas === 'function' ? ctx.tools.schemas(agent) : [])
     .map(schema => schema.name).filter(name => isComputerTool(name))
   const maskable = agent => {
     const id = agent?.session?.id ?? agent?.id
@@ -264,11 +265,19 @@ export function install(rt) {
       // exists on the deny path.
       return
     }
-    for (const name of denyNames(agent)) {
-      try {
-        const lift = agent.ctx.tools?.restrict?.({ deny: [name] })
+    const denied = denyNames(agent)
+    try {
+      if (denied.length > 0) {
+        const lift = agent.ctx.tools?.restrict?.({ deny: denied })
         if (typeof lift === 'function') held.lifts.push(lift)
-      } catch {}
+      }
+    } catch {
+      for (const name of denied) {
+        try {
+          const lift = agent.ctx.tools?.restrict?.({ deny: [name] })
+          if (typeof lift === 'function') held.lifts.push(lift)
+        } catch {}
+      }
     }
     if (typeof agent.ctx.on === 'function') {
       try {

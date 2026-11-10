@@ -274,6 +274,41 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   assert.deepEqual(env.mounts.filter(mount => !mount.disposed).map(mount => mount.sessionId), ['chief', 'room-chief', 'worker', 'helper'])
 })
 
+for (const outcome of ['resolved', 'rejected']) {
+  test(`startup stops resolving Bot Agents after unload when an in-flight resolve is ${outcome}`, async t => {
+    const state = team()
+    state.rooms = {}
+    state.bots.chief.capabilities = ['guide']
+    state.bots.worker.capabilities = ['guide']
+    state.capabilities = { items: { guide: { name: 'guide', kind: 'skill', content: 'Work.' } } }
+    const resolved = []
+    const warnings = []
+    let release
+    let reject
+    let tracked = 0
+    const pending = new Promise((ok, fail) => { release = ok; reject = fail })
+    const env = await setup({
+      state,
+      beforeLoad: ({ rt }) => {
+        rt.warn = (...args) => warnings.push(args)
+        rt.chatOf = botId => botId
+        rt.groupSessionsOf = () => []
+        rt.resolveAgent = async sessionId => { resolved.push(sessionId); return pending }
+      },
+    })
+    t.after(() => env.dispose())
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(resolved, ['chief'])
+    await env.ctx.dispose()
+    if (outcome === 'resolved') release({ session: { id: 'chief' }, ctx: { effect: () => { tracked += 1 } } })
+    else reject(new Error('cannot get required service "sessionController" in inactive context'))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(resolved, ['chief'])
+    assert.equal(tracked, 0)
+    assert.equal(warnings.some(args => String(args[0]).includes('capability Agent')), false)
+  })
+}
+
 test('one-item attach changes keep the other attachments', async t => {
   const env = await setup()
   t.after(() => env.dispose())
