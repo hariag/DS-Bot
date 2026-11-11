@@ -38,6 +38,13 @@ export function install(rt) {
   // Bumped each time the in-memory state is replaced from the file, so a queued
   // save cannot write a snapshot taken of the state it replaced.
   let lockEpoch = 0
+  const homeDrains = new Set()
+  const requireHomeLock = () => {
+    if (lockBroken || holder !== undefined || !lock.owns()) {
+      throw Object.assign(new Error('The Bot team lock is not held by this host.'), { code: 'ELOCKLOST' })
+    }
+  }
+  const onHomeDrain = callback => { homeDrains.add(callback); return () => homeDrains.delete(callback) }
   const stamp = () => {
     try {
       const { mtimeMs, size } = statSync(statePath)
@@ -431,7 +438,7 @@ export function install(rt) {
 
   ctx.effect(() => () => {
     stopped = true
-    return writing.finally(() => lock.release())
+    return Promise.allSettled([writing, ...[...homeDrains].map(drain => Promise.resolve().then(drain))]).finally(() => lock.release())
   }, 'ds-bot: state lock')
 
   const botOf = id => (id === undefined ? undefined : own(state.bots, id))
@@ -582,7 +589,7 @@ export function install(rt) {
   }
 
   Object.assign(rt, {
-    state, load, save, refresh, readOnly, own, onSaved, closeCard,
+    state, load, save, refresh, readOnly, own, onSaved, closeCard, requireHomeLock, onHomeDrain,
     botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession,
     chatOwners, groupOwners, roomOwners, pastOwners,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { syncBuiltinESMExports } from 'node:module'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { withRows } from './relay-rows.js'
@@ -8,6 +10,7 @@ import { setTimeout as realDelay } from 'node:timers/promises'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
+import { writeNotesAtomically } from '../src/host/resume.js'
 
 // Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
@@ -610,6 +613,32 @@ test('moving a pending delivery keeps its recovery note through discard and rest
   await settle(() => notes(home).queued?.['b-next'] === undefined)
 })
 
+test('a large forwarded inbox keeps delivery identities through restart without resending', async (t) => {
+  const home = freshHome(t)
+  const first = await start(home)
+  for (let i = 0; i < 235; i++) await first.tool('message_bot', { to: 'Writer', message: `queued ${i}`, when: 'queue' }, 'a')
+  const messages = first.agentOf('b').calls.slice()
+  const ids = messages.map(message => message.source.exchangeId)
+  await settle(() => notes(home).queued?.b?.length === 235)
+  first.rt.moveQueued('b-next', messages)
+  for (const message of messages) {
+    for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
+  }
+  await settle(() => notes(home).queued?.['b-next']?.length === 235 && notes(home).queued?.b === undefined)
+  assert.deepEqual(notes(home).queued['b-next'].map(item => item.args.exchangeId), ids)
+  await first.stop()
+  const state = stateOf(home)
+  state.bots.b.sessionId = 'b-next'
+  writeFileSync(join(home, 'state.json'), JSON.stringify(state))
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const second = await start(home)
+  second.agentOf('b-next').inbox.nextTurn.push(...messages)
+  t.mock.timers.tick(3000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(second.agentOf('b-next').calls.length, 0)
+  assert.deepEqual(notes(home).queued['b-next'].map(item => item.args.exchangeId), ids)
+})
+
 test('a forwarded delivery taken up before note transfer is not noted again', async (t) => {
   const home = freshHome(t)
   const host = await start(home)
@@ -682,7 +711,7 @@ test('queued deliveries are kept whole, not cut at fifty', async (t) => {
   await settle(() => second.agentOf('b').calls.length === 55)
 })
 
-test('a delivery that fails is not recorded as delivered, and stays queued for the next start', async (t) => {
+test('a delivery whose flush fails stays queued for review after restart', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -700,8 +729,10 @@ test('a delivery that fails is not recorded as delivered, and stays queued for t
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => second.agentOf('b').calls.length === 1)
-  assert.equal(second.agentOf('b').calls[0].source.role, 'request')
+  const entries = await readDiagnostics(home, rows => rows.some(row => /send outcome is unknown/.test(row.text)))
+  assert.ok(entries.some(row => /send outcome is unknown/.test(row.text)))
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.equal(notes(home).queued.b[0].recoveryHold, 'prepared')
 })
 
 test('a reply that fails to reach the asker reaches it as a failure notice carrying the answer', async (t) => {
@@ -749,7 +780,7 @@ test('a reply that fails to reach the asker reaches it as a failure notice carry
   await settle(() => (notes(home).queued.b ?? []).length === 0)
 })
 
-test('a failure notice that cannot reach the asker stays queued and wakes it after restart', async (t) => {
+test('a failure notice with an uncertain send stays queued for review after restart', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const state = seed()
   state.bots.c = { id: 'c', name: 'Reviewer', sessionId: 'c', createdAt: 3 }
@@ -774,15 +805,10 @@ test('a failure notice that cannot reach the asker stays queued and wakes it aft
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => second.agentOf('b').calls.length === 1)
-  const [notice] = second.agentOf('b').calls
-  assert.deepEqual([notice.source.role, notice.source.replyTo, notice.source.work], ['reply', 'y1', 'x1'])
-  assert.match(text(notice), /could not send its reply.*\nThe numbers check out\.$/)
-  run(second, 'b', 2, notice)
-  second.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'The plan is ready.' }] } })
-  second.emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  await settle(() => second.agentOf('a').calls.length === 1)
-  assert.match(text(second.agentOf('a').calls[0]), /Reviewer could not send its reply to you; what it had answered:\nThe numbers check out\./)
+  const entries = await readDiagnostics(home, rows => rows.some(row => /send outcome is unknown/.test(row.text)))
+  assert.ok(entries.some(row => /send outcome is unknown/.test(row.text)))
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.match(notes(home).queued.b[0].args.text, /could not send its reply/)
 })
 
 test('new deliveries before recovery do not overwrite the saved queue', async (t) => {
@@ -832,7 +858,7 @@ test('a resend that cannot open the Session keeps the whole queue for the next s
   await settle(() => third.agentOf('b').calls.length === 3)
 })
 
-test('a request kept for retry keeps its work, and the result flows up after the restart', async (t) => {
+test('a request with an uncertain send keeps its work for review after restart', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const state = seed()
   state.bots.c = { id: 'c', name: 'Reviewer', sessionId: 'c', createdAt: 3 }
@@ -853,28 +879,19 @@ test('a request kept for retry keeps its work, and the result flows up after the
   first.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   // The delivery stays queued, so the work it opened stays too.
   await settleState(t, home, () => Object.values(stateOf(home).works ?? {}).some(work => work.to === 'c' && work.parent === 'x1'))
-  const handed = Object.entries(stateOf(home).works).find(([, work]) => work.to === 'c' && work.parent === 'x1')
   await settle(() => (notes(home).queued.c ?? []).length === 1)
   await first.stop()
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => second.agentOf('c').calls.length === 1)
-  // Reviewer answers; the result goes back up the work tree to Writer.
-  run(second, 'c', 1, second.agentOf('c').calls[0])
-  second.emit('c', 'assistant/message', { message: { content: [{ type: 'text', text: 'The numbers check out.' }] } })
-  second.emit('c', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  await settle(() => second.agentOf('b').calls.length === 1)
-  const reply = second.agentOf('b').calls[0]
-  assert.deepEqual([reply.source.role, reply.source.work, reply.source.replyTo], ['reply', 'x1', handed[0]])
-  run(second, 'b', 2, reply)
-  second.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'The plan is ready.' }] } })
-  second.emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  await settle(() => second.agentOf('a').calls.length === 1)
-  assert.match(text(second.agentOf('a').calls[0]), /Reviewer.*numbers check out/s)
+  const entries = await readDiagnostics(home, rows => rows.some(row => /send outcome is unknown/.test(row.text)))
+  assert.ok(entries.some(row => /send outcome is unknown/.test(row.text)))
+  assert.equal(second.agentOf('c').calls.length, 0)
+  assert.equal(notes(home).queued.c[0].recoveryHold, 'prepared')
+  assert.ok(Object.values(stateOf(home).works).some(work => work.to === 'c' && work.parent === 'x1'))
 })
 
-test('a resend whose first send never landed records the exchange once it arrives', async (t) => {
+test('a failed flush is not claimed as delivered or automatically resent', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -889,12 +906,10 @@ test('a resend whose first send never landed records the exchange once it arrive
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => second.agentOf('b').calls.length === 1)
-  // The first send never reached the Session, so the resend records the exchange.
-  const [again] = second.agentOf('b').calls
-  await settleState(t, home, () => (stateOf(home).exchanges ?? []).length === 1)
-  const [entry] = stateOf(home).exchanges
-  assert.deepEqual([entry.id, entry.role, entry.from, entry.to], [again.source.exchangeId, 'request', 'a', 'b'])
+  const entries = await readDiagnostics(home, rows => rows.some(row => /send outcome is unknown/.test(row.text)))
+  assert.ok(entries.some(row => /send outcome is unknown/.test(row.text)))
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.equal((stateOf(home).exchanges ?? []).length, 0)
 })
 
 const WRITTEN = 'Checking now.\n<tool_call>\n<function=pwsh>\n<parameter=command>\nGet-ChildItem E:\\\n</parameter>\n</function>\n</tool_call>'
@@ -1022,4 +1037,260 @@ test('a written tool call is told apart from text about one', () => {
   assert.equal(stripWrittenCalls('plain <text> with an angle or two'), 'plain <text> with an angle or two')
   assert.equal(writesToolCall('plain <text> with an angle or two'), false)
   assert.equal(stripWrittenCalls('a < b or c > d'), 'a < b or c > d')
+})
+
+for (const reason of ['completed', 'error', 'interrupted']) {
+  test(`a queued note already seen in a previous ${reason} turn is held for review`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const home = freshHome(t)
+    const first = await start(home)
+    await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
+    const message = first.agentOf('b').calls[0]
+    await settle(() => notes(home).queued?.b?.length === 1)
+    await first.stop()
+    // The turn's user/message made the Session log, but the asynchronous removal
+    // from inflight.json did not. Its outcome cannot be inferred from the reason.
+    const logs = new Map([['b', [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'user/message', data: { source: message.source } },
+      { type: 'turn/end', data: { reason: { kind: reason } } },
+    ]]])
+    const warnings = []
+    const second = await start(home, logs)
+    second.ctx.logger.warn = (...args) => warnings.push(args.join(' '))
+    t.mock.timers.tick(3000)
+    await settle(() => warnings.some(line => /not resent/.test(line)))
+    assert.equal(second.agentOf('b').calls.length, 0)
+    assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
+  })
+}
+
+test('a queued delivery with unreadable history is retained and reported', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const first = await start(home)
+  await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
+  const message = first.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+  await first.stop()
+  const warnings = []
+  const second = await start(home, undefined, async () => { throw new Error('unavailable') })
+  second.ctx.logger.warn = (...args) => warnings.push(args.join(' '))
+  t.mock.timers.tick(3000)
+  await settle(() => warnings.some(line => /history could not be read/.test(line)))
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
+})
+
+test('an uncertain queued exchange is not restarted through the interrupted-turn path', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const first = await start(home)
+  await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
+  const message = first.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+  await first.stop()
+  const original = notes(home)
+  original.turns.b = { botId: 'b', since: 1, trigger: { role: 'request', exchangeId: message.source.exchangeId, senderSessionId: 'a' } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify(original))
+  const logs = new Map([['b', [{ type: 'user/message', data: { source: message.source } }]]])
+  const warnings = []
+  const second = await start(home, logs)
+  second.ctx.logger.warn = (...args) => warnings.push(args.join(' '))
+  t.mock.timers.tick(3000)
+  await settle(() => warnings.some(line => /not resent/.test(line)))
+  await settle(() => notes(home).turns?.b?.trigger?.exchangeId === message.source.exchangeId)
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
+})
+
+test('a moved delivery retains its old history for later restart reconciliation', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const first = await start(home)
+  await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
+  const message = first.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+  first.rt.moveQueued('b-next', [message])
+  await settle(() => notes(home).queued?.['b-next']?.length === 1)
+  await first.stop()
+  assert.deepEqual(notes(home).queued['b-next'][0].resumeOrigins, ['b'])
+  const state = stateOf(home)
+  state.bots.b.sessionId = 'b-next'
+  writeFileSync(join(home, 'state.json'), JSON.stringify(state))
+  const logs = new Map([['b', [{ type: 'user/message', data: { source: message.source } }]]])
+  const warnings = []
+  const second = await start(home, logs)
+  second.ctx.logger.warn = (...args) => warnings.push(args.join(' '))
+  t.mock.timers.tick(3000)
+  await settle(() => warnings.some(line => /not resent/.test(line)))
+  assert.equal(second.agentOf('b-next').calls.length, 0)
+  await second.stop()
+  assert.ok(notes(home).queued['b-next'][0].resumeOrigins.includes('b'))
+})
+
+test('corrupt recovery notes are preserved and block new Bot deliveries', async (t) => {
+  const home = freshHome(t)
+  const file = join(home, 'inflight.json')
+  const original = Buffer.from('{"turns":{"b":', 'utf8')
+  writeFileSync(file, original)
+  const host = await start(home)
+  await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'Draft the plan' }, 'a'), /Recovery notes are unavailable/)
+  assert.equal(host.agentOf('b').calls.length, 0)
+  await host.stop()
+  assert.deepEqual(readFileSync(file), original)
+  const entries = await readDiagnostics(home, rows => rows.some(row => /recovery notes.*unreadable/i.test(row.text)))
+  assert.ok(entries.some(row => /original file is preserved/i.test(row.text)))
+})
+
+test('failure before replacement keeps the original recovery bytes', async (t) => {
+  const home = freshHome(t)
+  const file = join(home, 'inflight.json')
+  const original = Buffer.from('{"turns":{},"queued":{}}')
+  writeFileSync(file, original)
+  const ops = {
+    writeFile: fsp.writeFile,
+    unlink: fsp.unlink,
+    replaceFile: async () => { throw Object.assign(new Error('injected rename failure'), { code: 'EIO' }) },
+  }
+  await assert.rejects(writeNotesAtomically(file, '{"new":true}', () => {}, ops), { code: 'EIO' })
+  assert.deepEqual(readFileSync(file), original)
+  assert.deepEqual((await fsp.readdir(home)).filter(name => name.endsWith('.tmp')), [])
+})
+
+test('external recovery-file changes are preserved and halt future Bot deliveries', async (t) => {
+  const home = freshHome(t)
+  const file = join(home, 'inflight.json')
+  const host = await start(home)
+  await host.tool('message_bot', { to: 'Writer', message: 'First', when: 'queue' }, 'a')
+  await settle(() => notes(home).queued?.b?.length === 1)
+  const external = Buffer.from('{"turns":{},"queued":{"other":[]}}')
+  writeFileSync(file, external)
+  await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'Second', when: 'queue' }, 'a'), /ECONFLICT/)
+  const entries = await readDiagnostics(home, rows => rows.some(row => /noting running turns failed/.test(row.text)))
+  assert.ok(entries.some(row => /ECONFLICT/.test(row.text)))
+  await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'Third' }, 'a'), /Recovery notes are unavailable/)
+  assert.deepEqual(readFileSync(file), external)
+})
+
+test('a lost team lock prevents recovery notes from overwriting the previous file', async (t) => {
+  const home = freshHome(t)
+  const file = join(home, 'inflight.json')
+  const host = await start(home)
+  await host.tool('message_bot', { to: 'Writer', message: 'First', when: 'queue' }, 'a')
+  await settle(() => notes(home).queued?.b?.length === 1)
+  const original = readFileSync(file)
+  writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: process.ppid, host: hostname(), token: 'new-owner' }))
+  await assert.rejects(host.rt.deliver({ fromId: 'a', toId: 'b', role: 'request', text: 'Second' }), /ELOCKLOST/)
+  const entries = await readDiagnostics(home, rows => rows.some(row => /noting running turns failed/.test(row.text)))
+  assert.ok(entries.some(row => /ELOCKLOST/.test(row.text)))
+  await assert.rejects(host.rt.deliver({ fromId: 'a', toId: 'b', role: 'request', text: 'Third' }), /Recovery notes are unavailable/)
+  assert.deepEqual(readFileSync(file), original)
+})
+
+test('shutdown holds the state lock until concurrent recovery-note writes drain', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  const file = join(home, 'inflight.json')
+  const originalRename = fsp.rename
+  let entered
+  let release
+  const atRename = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  let first = true
+  fsp.rename = async (from, to) => {
+    if (to === file && first) { first = false; entered(); await gate }
+    return originalRename(from, to)
+  }
+  syncBuiltinESMExports()
+  try {
+    const one = host.rt.deliver({ fromId: 'a', toId: 'b', role: 'request', text: 'First' })
+    await atRename
+    const two = host.rt.deliver({ fromId: 'a', toId: 'b', role: 'request', text: 'Second' })
+    await new Promise(resolve => setImmediate(resolve))
+    const stopping = host.stop()
+    assert.equal(existsSync(join(home, 'state.lock')), true)
+    release()
+    await Promise.all([assert.rejects(one, /delivery stopped/), assert.rejects(two, /delivery stopped/)])
+    await stopping
+    assert.equal(existsSync(join(home, 'state.lock')), false)
+    assert.equal(notes(home).queued.b.length, 2)
+    assert.ok(notes(home).queued.b.every(item => item.recoveryHold === 'prepared'))
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const restarted = await start(home)
+    t.mock.timers.tick(3000)
+    const entries = await readDiagnostics(home, rows => rows.filter(row => /send outcome is unknown/.test(row.text)).length >= 2)
+    assert.ok(entries.filter(row => /send outcome is unknown/.test(row.text)).length >= 2)
+    assert.equal(restarted.agentOf('b').calls.length, 0)
+    assert.equal(notes(home).queued.b.length, 2)
+  } finally {
+    release()
+    fsp.rename = originalRename
+    syncBuiltinESMExports()
+  }
+})
+
+test('a concurrent delivery waits for a snapshot containing its own exchange', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  const file = join(home, 'inflight.json')
+  const originalRename = fsp.rename
+  let firstEntered, secondEntered, releaseFirst, releaseSecond
+  const firstAt = new Promise(resolve => { firstEntered = resolve })
+  const secondAt = new Promise(resolve => { secondEntered = resolve })
+  const firstGate = new Promise(resolve => { releaseFirst = resolve })
+  const secondGate = new Promise(resolve => { releaseSecond = resolve })
+  let count = 0
+  fsp.rename = async (from, to) => {
+    if (to === file && ++count === 1) { firstEntered(); await firstGate }
+    else if (to === file && count === 2) { secondEntered(); await secondGate }
+    return originalRename(from, to)
+  }
+  syncBuiltinESMExports()
+  try {
+    const one = host.rt.deliver({ fromId: 'a', toId: 'b', role: 'request', text: 'First', exchangeId: 'barrier-one' })
+    await firstAt
+    const two = host.rt.deliver({ fromId: 'a', toId: 'b', role: 'request', text: 'Second', exchangeId: 'barrier-two' })
+    assert.equal(host.agentOf('b').calls.length, 0)
+    releaseFirst()
+    await secondAt
+    await settle(() => host.agentOf('b').calls.length === 1)
+    assert.equal(host.agentOf('b').calls[0].source.exchangeId, 'barrier-one')
+    assert.deepEqual(notes(home).queued.b.map(item => item.args.exchangeId), ['barrier-one'])
+    releaseSecond()
+    await Promise.all([one, two])
+    assert.deepEqual(host.agentOf('b').calls.map(message => message.source.exchangeId), ['barrier-one', 'barrier-two'])
+  } finally {
+    releaseFirst()
+    releaseSecond()
+    fsp.rename = originalRename
+    syncBuiltinESMExports()
+  }
+})
+
+test('sender identity remains stable if the Bot is deleted during the write barrier', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  const file = join(home, 'inflight.json')
+  const originalRename = fsp.rename
+  let release, entered
+  const gate = new Promise(resolve => { release = resolve })
+  const atRename = new Promise(resolve => { entered = resolve })
+  fsp.rename = async (from, to) => {
+    if (to === file) { entered(); await gate }
+    return originalRename(from, to)
+  }
+  syncBuiltinESMExports()
+  try {
+    const pending = host.rt.deliver({ fromId: 'b', toId: 'a', role: 'reply', text: 'Writer was deleted.' })
+    await atRename
+    delete host.rt.state.bots.b
+    release()
+    await pending
+    assert.match(text(host.agentOf('a').calls[0]), /^\[Reply from Writer\]/)
+  } finally {
+    release()
+    fsp.rename = originalRename
+    syncBuiltinESMExports()
+  }
 })

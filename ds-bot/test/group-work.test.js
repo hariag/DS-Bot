@@ -166,8 +166,12 @@ test('message_bot from a group to one of its members calls it there, as "@Name" 
   const first = host.round('c1', host.say('@Chief 安排一下文档'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   host.begin('ga')
+  const previousGet = host.ctx.get
+  host.ctx.get = name => name === 'agents' ? { get: id => host.agentOf(id) } : previousGet(name)
+  host.agentOf('gb').inbox.nextTurn.push({ source: { kind: 'bot' } }, { source: { kind: 'bot' } }, { source: { kind: 'user' } })
   const sent = await host.tool('message_bot', { to: 'Writer', message: '把文档整理好' }, 'ga')
   assert.match(sent, /^Called Writer in "Ops"/)
+  assert.match(sent, /Before this call, its inbox in this group had 2 Bot message\(s\) waiting/)
   host.finish('ga', '安排好了。')
   await settle(() => host.agentOf('gb').calls.length === 1)
   const called = host.begin('gb')

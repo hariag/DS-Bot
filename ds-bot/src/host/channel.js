@@ -30,6 +30,69 @@ const isInternal = error => error instanceof TypeError || error instanceof Refer
 const MEMORY_LIMIT_SCOPES = new Set(['group', 'bot', 'team'])
 const MEMORY_LIMIT_MIN = 1_000
 const MEMORY_LIMIT_MAX = 200_000
+const QUEUE_PREVIEW_MAX = 400
+
+export function groupQueueView(rooms, bots, getAgent, unreadOf) {
+  const result = {}
+  for (const room of Object.values(rooms ?? {})) {
+    for (const [botId, currentId] of Object.entries(room.sessions ?? {})) {
+      const earlier = (room.segments?.[botId] ?? []).map(segment => segment.sessionId).filter(Boolean)
+      const seen = new Set()
+      for (const sessionId of new Set([currentId, ...earlier])) {
+        const inbox = getAgent?.(sessionId)?.inbox
+        const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+        if (!available) {
+          // A historical session only needs attention when its delivery ledger still names mail.
+          if (sessionId === currentId || (unreadOf?.(sessionId) ?? []).length > 0) {
+            ;(result[botId] ??= []).push({ id: `unavailable:${sessionId}`, roomId: room.id, roomName: room.name, unavailable: true, previous: sessionId !== currentId })
+          }
+          continue
+        }
+        for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+          if (item.source?.kind !== 'bot') continue
+          const exchangeId = item.source.exchangeId
+          if (exchangeId !== undefined && seen.has(exchangeId)) continue
+          if (exchangeId !== undefined) seen.add(exchangeId)
+          const content = Array.isArray(item.content) ? item.content : []
+          const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+          ;(result[botId] ??= []).push({
+            id: item.id ?? item.source.exchangeId ?? `${sessionId}:${index}`, roomId: room.id, roomName: room.name, previous: sessionId !== currentId,
+            senderName: item.source.senderName ?? bots?.[item.source.askedBy ?? item.source.fromId]?.name ?? '',
+            text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text,
+          })
+        }
+      }
+    }
+  }
+  return result
+}
+
+export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
+  const result = {}
+  for (const bot of Object.values(bots ?? {})) {
+    const seen = new Set()
+    for (const sessionId of new Set((bot.segments ?? []).map(segment => segment.sessionId).filter(Boolean))) {
+      const inbox = getAgent?.(sessionId)?.inbox
+      const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+      if (!available) {
+        if ((unreadOf?.(sessionId) ?? []).length > 0) {
+          ;(result[bot.id] ??= []).push({ id: `unavailable:${sessionId}`, unavailable: true })
+        }
+        continue
+      }
+      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+        if (item.source?.kind !== 'bot') continue
+        const exchangeId = item.source.exchangeId
+        if (exchangeId !== undefined && seen.has(exchangeId)) continue
+        if (exchangeId !== undefined) seen.add(exchangeId)
+        const content = Array.isArray(item.content) ? item.content : []
+        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+        ;(result[bot.id] ??= []).push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
+      }
+    }
+  }
+  return result
+}
 
 export function errorCode(error) {
   if (typeof error?.code === 'string' && error.code.startsWith('bot/')) return error.code
@@ -125,7 +188,7 @@ export function install(rt) {
   // and per Session, when its running turn began.
   const live = () => ({
     activity: rt.activityView(),
-    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {} },
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {}, groupQueues: groupQueueView(state.rooms, state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), earlierPrivateQueues: earlierPrivateQueueView(state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf) },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     learning: rt.learningView(),

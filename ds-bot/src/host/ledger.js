@@ -44,6 +44,14 @@ export function install(rt) {
   const books = new Map()
   /** @type {Map<string, Promise<unknown>>} */
   const writing = new Map()
+  // A later append must not silently write past a missing earlier record.
+  const writeFailures = new Map()
+  const skippedWrites = new Set()
+  const noteWriteFailure = (book, error) => {
+    if (writeFailures.has(book)) return
+    writeFailures.set(book, error)
+    rt.warn('ds-bot: a record of %s was not written: %s', book, error?.message ?? error)
+  }
   /** @type {Map<string, (book: string) => object[] | undefined>} */
   const importers = new Map()
 
@@ -98,36 +106,55 @@ export function install(rt) {
     const entry = open(book)
     entry.records.push(record)
     if (Number.isInteger(record.seq)) entry.bySeq.set(record.seq, record)
-    if (!writes()) return record
+    if (!writes()) { skippedWrites.add(book); return record }
     const line = `${JSON.stringify(record)}\n`
     entry.size += Buffer.byteLength(line)
     const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
+      if (writeFailures.has(book) || skippedWrites.has(book)) return
       await mkdir(dir, { recursive: true })
       await appendFile(pathOf(book), line, 'utf8')
     })
-    writing.set(book, run.catch((error) => {
-      rt.warn('ds-bot: a record of %s was not written: %s', book, error?.message ?? error)
-    }))
+    writing.set(book, run.catch(error => noteWriteFailure(book, error)))
     return record
   }
 
-  // Everything appended so far is on disk.
+  // The queued writes completed; this does not imply an fsync durability barrier.
   const flush = async (book) => {
-    if (book !== undefined) return writing.get(book)
+    if (book !== undefined) {
+      await writing.get(book)
+      if (writeFailures.has(book)) throw writeFailures.get(book)
+      return
+    }
     await Promise.all(writing.values())
+    if (writeFailures.size > 0) throw new AggregateError([...writeFailures.values()], 'One or more ledger writes failed')
+  }
+
+  // A read-only append exists only in memory; regaining the lock does not make
+  // that missing prefix durable. Only an explicit successful drop clears it.
+  const flushRequired = async (book) => {
+    await flush(book)
+    if (!writes()) throw new Error('The ledger is read-only')
+    if (book === undefined ? skippedWrites.size > 0 : skippedWrites.has(book)) {
+      throw new Error('The ledger has writes that were not persisted')
+    }
   }
 
   function drop(book) {
     books.delete(book)
-    if (!writes()) return
-    const run = (writing.get(book) ?? Promise.resolve()).then(() => rm(pathOf(book), { force: true }))
-    writing.set(book, run.catch(() => {}))
+    if (!writes()) { skippedWrites.add(book); return }
+    const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
+      await rm(pathOf(book), { force: true })
+      writeFailures.delete(book)
+      skippedWrites.delete(book)
+    })
+    writing.set(book, run.catch(error => noteWriteFailure(book, error)))
   }
 
   const ledger = {
     open,
     append,
     flush,
+    flushRequired,
     drop,
     records: book => open(book).records,
     record: (book, seq) => open(book).bySeq.get(seq),

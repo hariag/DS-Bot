@@ -11,10 +11,11 @@
 // request itself is never sent again there.
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
+import { replaceFile } from './files.js'
 import { textOf } from './text.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
@@ -102,12 +103,35 @@ const triggerOf = info => ({
 })
 
 const readNotes = (file) => {
+  let raw
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'))
-    const object = value => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {})
-    return { turns: object(parsed?.turns), queued: object(parsed?.queued) }
+    raw = readFileSync(file, 'utf8')
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { turns: {}, queued: {}, raw: undefined }
+      : { turns: {}, queued: {}, blocked: error?.code ?? error?.name ?? 'read error' }
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+    if (!object(parsed) || (parsed.turns !== undefined && !object(parsed.turns)) || (parsed.queued !== undefined && !object(parsed.queued))) throw new Error('invalid notes')
+    return { turns: parsed.turns ?? {}, queued: parsed.queued ?? {}, raw }
   } catch {
-    return { turns: {}, queued: {} }
+    return { turns: {}, queued: {}, blocked: 'invalid recovery notes' }
+  }
+}
+
+// The injectable file operations allow a failed replacement to be tested without
+// touching an active host's recovery file.
+export async function writeNotesAtomically(file, snapshot, check, ops = { writeFile, unlink, replaceFile }) {
+  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    check()
+    await ops.writeFile(temp, snapshot, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    check()
+    await ops.replaceFile(temp, file, check)
+  } catch (error) {
+    await ops.unlink(temp).catch(() => {})
+    throw error
   }
 }
 
@@ -117,6 +141,9 @@ export function install(rt) {
 
   // What the last run left; read before this run notes anything.
   let interrupted = readNotes(file)
+  let expected = interrupted.raw
+  let blocked = interrupted.blocked
+  if (blocked !== undefined) rt.warn('ds-bot: recovery notes %s are unreadable (%s); the original file is preserved and Bot deliveries are paused until it is repaired and the plugin is reloaded', file, blocked)
 
   /** @type {Record<string, {botId:string, roomId?:string, since:number, trigger?:any, approval?:{tool:string, reason:string}, resumed?:boolean}>} */
   let turns = {}
@@ -127,22 +154,38 @@ export function install(rt) {
   let stopped = false
   let latest
   let due = false
-  const persist = () => {
+  let pending
+  rt.onHomeDrain(() => writing)
+  const persist = ({ required = false } = {}) => {
     // Only the host that saves the team runs its work again.
-    if (stopped || rt.readOnly() !== undefined) return
+    if (stopped || blocked !== undefined || rt.readOnly() !== undefined) {
+      return required ? Promise.reject(new Error('Recovery notes cannot be saved by this host.')) : writing
+    }
     latest = JSON.stringify({ turns, queued })
     // One write waits at a time and takes the latest notes, so a busy round does not
     // write the file once per change.
-    if (due) return
+    if (due) return pending
     due = true
-    // Written in place: a rename over the file fails on Windows while anything reads
-    // it, and a torn write only loses what one restart would pick up.
-    writing = writing.then(async () => {
+    const run = writing.then(async () => {
       due = false
+      if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}).`)
       const snapshot = latest
       await mkdir(home, { recursive: true })
-      await writeFile(file, snapshot, 'utf8')
-    }).catch(error => rt.warn('ds-bot: noting running turns failed: %s', error))
+      const check = () => {
+        rt.requireHomeLock()
+        let actual
+        try { actual = readFileSync(file, 'utf8') } catch (error) { if (error?.code !== 'ENOENT') throw error }
+        if (actual !== expected) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
+      }
+      await writeNotesAtomically(file, snapshot, check)
+      expected = snapshot
+    })
+    pending = run
+    writing = run.catch(error => {
+      blocked = error?.code ?? error?.name ?? 'write error'
+      rt.warn('ds-bot: noting running turns failed (%s); Bot deliveries are paused and recovery notes require review', blocked)
+    })
+    return run
   }
   const update = (id, change) => {
     const next = change(turns[id])
@@ -165,20 +208,44 @@ export function install(rt) {
       return
     }
   }
+  const markSent = exchangeId => {
+    for (const [sessionId, list] of Object.entries(queued)) {
+      const at = list.findIndex(item => item.args.exchangeId === exchangeId)
+      if (at === -1 || list[at].recoveryHold !== 'prepared') continue
+      const next = [...list]
+      const { recoveryHold: _, ...item } = next[at]
+      next[at] = item
+      queued = { ...queued, [sessionId]: next }
+      persist()
+      return
+    }
+  }
 
   const deliver = rt.deliver
   rt.deliver = async (args) => {
-    const noted = { ...args, exchangeId: args.exchangeId ?? randomUUID() }
+    if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}); Bot delivery is paused until the notes are repaired and the plugin is reloaded.`)
+    if (stopped || rt.readOnly() !== undefined) throw new Error('Recovery notes cannot be saved by this host.')
+    // The sender can be removed or renamed while the write barrier is pending.
+    // Keep the identity visible at admission, including in a recovered delivery.
+    const fromName = args.fromName ?? rt.botOf(args.fromId)?.name
+    const noted = { ...args, ...(fromName === undefined ? {} : { fromName }), exchangeId: args.exchangeId ?? randomUUID() }
     const sessionId = noted.sessionId ?? rt.chatOf(noted.toId)
     // Noted before it is sent: a turn may take it up before the send returns. Notes
     // are kept whole; nothing waits out a delivery silently.
-    queued = { ...queued, [sessionId]: [...(queued[sessionId] ?? []), { at: Date.now(), args: noted }] }
-    persist()
+    // If this process stops between saving the note and calling deliver, the
+    // caller may see a failure and retry. A prepared note is held for review on
+    // restart; it must not be silently turned into an automatic extra delivery.
+    queued = { ...queued, [sessionId]: [...(queued[sessionId] ?? []), { at: Date.now(), args: noted, recoveryHold: 'prepared' }] }
+    await persist({ required: true })
+    if (stopped) throw new Error('Bot delivery stopped after its recovery note was saved; the note is retained for recovery.')
+    rt.requireHomeLock()
     try {
-      return await deliver(noted)
+      const result = await deliver(noted)
+      markSent(noted.exchangeId)
+      return result
     } catch (error) {
-      // A delivery that never reached the inbox stays noted: the next start sends
-      // it again. One whose Bot is gone is dropped, since it can never be sent.
+      // The delivery outcome can be uncertain: its prepared note stays for review.
+      // One whose Bot is gone is dropped, since it can never be sent.
       if (rt.botOf(noted.toId) === undefined) forgetQueued(noted.exchangeId)
       throw error
     }
@@ -215,7 +282,7 @@ export function install(rt) {
       for (const item of list) {
         if (!ids.has(item.args.exchangeId)) { rest.push(item); continue }
         if (!present.has(item.args.exchangeId)) {
-          incoming.push(item)
+          incoming.push({ ...item, resumeOrigins: [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), sessionId])] })
           present.add(item.args.exchangeId)
         }
         changed = true
@@ -319,15 +386,48 @@ export function install(rt) {
   // cancelled is sent again. The notes stay queued until a turn takes the messages
   // up, so a send that fails here, or a Session that cannot be opened, leaves them
   // for the next start instead of losing them.
-  async function resendQueued(sessionId, list) {
+  async function resendQueued(sessionId, list, held) {
+    for (const item of list) if (taken?.has(item?.args?.exchangeId) === true) held.add(item.args.exchangeId)
     const fresh = list.filter(item => rt.botOf(item.args?.toId) !== undefined
       && sessionFor(sessionId, item.args) !== undefined && taken?.has(item.args.exchangeId) !== true)
     if (fresh.length === 0) return
-    const target = sessionFor(sessionId, fresh[0].args)
-    const agent = await rt.resolveAgent(target)
-    const waiting = new Set([...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].map(message => message.source?.exchangeId))
-    for (const { args } of fresh) {
-      if (waiting.has(args.exchangeId)) continue
+    const agents = new Map()
+    const logs = new Map()
+    const logFor = id => {
+      if (!logs.has(id)) logs.set(id, logOf(id))
+      return logs.get(id)
+    }
+    for (const { args, resumeOrigins, recoveryHold } of fresh) {
+      const target = sessionFor(sessionId, args)
+      if (!agents.has(target)) agents.set(target, await rt.resolveAgent(target))
+      const agent = agents.get(target)
+      const waiting = () => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+        .some(message => message.source?.exchangeId === args.exchangeId)
+      if (waiting()) { held.add(args.exchangeId); continue }
+      if (recoveryHold === 'prepared') {
+        held.add(args.exchangeId)
+        const text = `Queued exchange ${args.exchangeId} was prepared for delivery, but its send outcome is unknown. Its recovery note is retained for review.`
+        rt.warn('ds-bot: %s', text)
+        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text, sessionId: target })
+        continue
+      }
+      // A note can outlive the turn that took it: note writes run asynchronously.
+      // An earlier user/message is not proof of completion (it may be a joined,
+      // deferred or failed input), so retain it for reconciliation rather than
+      // sending it again or dropping it. Include old parts after a Session move.
+      const origins = [...new Set([sessionId, target, ...(Array.isArray(resumeOrigins) ? resumeOrigins : [])]
+        .filter(id => typeof id === 'string' && id !== ''))]
+      const histories = await Promise.all(origins.map(logFor))
+      if (waiting() || taken?.has(args.exchangeId) === true) { held.add(args.exchangeId); continue }
+      const seen = histories.some(events => events?.some(event => event.type === 'user/message' && event.data?.source?.exchangeId === args.exchangeId))
+      const unreadable = histories.some(events => events === undefined)
+      if (seen || unreadable) {
+        held.add(args.exchangeId)
+        const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
+        rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
+        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
+        continue
+      }
       if (taken?.has(args.exchangeId) === true) {
         forgetQueued(args.exchangeId)
         continue
@@ -468,7 +568,8 @@ export function install(rt) {
       for (const item of list) {
         if (item?.args?.exchangeId === undefined || taken?.has(item.args.exchangeId) === true || rt.botOf(item.args.toId) === undefined) continue
         const key = sessionFor(oldId, item.args) ?? oldId
-        queued = { ...queued, [key]: [...(queued[key] ?? []), item] }
+        const resumeOrigins = [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), oldId])]
+        queued = { ...queued, [key]: [...(queued[key] ?? []), { ...item, resumeOrigins }] }
       }
     }
     persist()
@@ -487,12 +588,22 @@ export function install(rt) {
       else cut.push([sessionId, record])
     }
     firstTurn = undefined
+    const held = new Set()
     for (const [sessionId, list] of Object.entries(dropped)) {
       if (!Array.isArray(list)) continue
-      await resendQueued(sessionId, list).catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
+      await resendQueued(sessionId, list, held).catch(error => {
+        for (const item of list) if (typeof item?.args?.exchangeId === 'string') held.add(item.args.exchangeId)
+        rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error)
+      })
     }
     taken = undefined
     for (const [sessionId, record] of cut) {
+      if (held.has(record.trigger?.exchangeId)) {
+        // Do not bypass the queued-delivery hold by starting the same exchange
+        // through the interrupted-turn recovery path.
+        update(sessionId, current => current ?? record)
+        continue
+      }
       await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
   }

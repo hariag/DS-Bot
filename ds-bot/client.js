@@ -456,6 +456,10 @@ var JA = {
   "Couldn’t steer the queued messages. Try again.": "待機中のメッセージを割り込み送信できませんでした。再試行してください。",
   "{n} queued messages": "待機中のメッセージ {n} 件",
   "{n} Bot messages waiting": "待機中の Bot メッセージ {n} 件",
+  "Bot private {private} + group {group}": "Bot 個別 {private} 件 + グループ {group} 件",
+  "Group inbox unavailable": "グループ受信箱を取得できません",
+  "Private inbox unavailable": "個別受信箱を取得できません",
+  "Earlier conversation": "以前の会話",
   "Sending…": "送信中…",
   "Queued image": "待機中の画像",
   "Queued file {name}": "待機中のファイル {name}",
@@ -2714,6 +2718,10 @@ var KO = {
   "Couldn’t steer the queued messages. Try again.": "대기 중인 메시지를 즉시 전송하지 못했습니다. 다시 시도하세요.",
   "{n} queued messages": "대기 중인 메시지 {n}개",
   "{n} Bot messages waiting": "대기 중인 Bot 메시지 {n}개",
+  "Bot private {private} + group {group}": "Bot 개인 대화 {private}개 + 그룹 대화 {group}개",
+  "Group inbox unavailable": "그룹 수신함을 읽을 수 없음",
+  "Private inbox unavailable": "개인 수신함을 읽을 수 없음",
+  "Earlier conversation": "이전 대화",
   "Sending…": "전송 중…",
   "Queued image": "대기 중인 이미지",
   "Queued file {name}": "대기 중인 파일 {name}",
@@ -5010,6 +5018,10 @@ var ES = {
   "Couldn’t steer the queued messages. Try again.": "No se pudieron adelantar los mensajes en cola. Inténtalo de nuevo.",
   "{n} queued messages": "{n} mensajes en cola",
   "{n} Bot messages waiting": "{n} mensajes de Bot pendientes",
+  "Bot private {private} + group {group}": "Bot privado {private} + grupo {group}",
+  "Group inbox unavailable": "Bandeja de grupo no disponible",
+  "Private inbox unavailable": "Bandeja privada no disponible",
+  "Earlier conversation": "Conversación anterior",
   "Sending…": "Enviando…",
   "Queued image": "Imagen en cola",
   "Queued file {name}": "Archivo en cola {name}",
@@ -7299,6 +7311,10 @@ var FR = {
   "Couldn’t steer the queued messages. Try again.": "Impossible d’envoyer immédiatement les messages en file d’attente. Réessayez.",
   "{n} queued messages": "{n} messages en file d’attente",
   "{n} Bot messages waiting": "{n} messages de Bot en attente",
+  "Bot private {private} + group {group}": "Bot privé {private} + groupe {group}",
+  "Group inbox unavailable": "Boîte de groupe indisponible",
+  "Private inbox unavailable": "Boîte privée indisponible",
+  "Earlier conversation": "Conversation précédente",
   "Sending…": "Envoi…",
   "Queued image": "Image en file d’attente",
   "Queued file {name}": "Fichier {name} en file d’attente",
@@ -9557,6 +9573,10 @@ var DE = {
   "Couldn’t steer the queued messages. Try again.": "Eingereihte Nachrichten konnten nicht eingeschoben werden. Bitte erneut versuchen.",
   "{n} queued messages": "{n} eingereihte Nachrichten",
   "{n} Bot messages waiting": "{n} Bot-Nachrichten warten",
+  "Bot private {private} + group {group}": "Bot privat {private} + Gruppe {group}",
+  "Group inbox unavailable": "Gruppenpostfach nicht verfügbar",
+  "Private inbox unavailable": "Privates Postfach nicht verfügbar",
+  "Earlier conversation": "Frühere Unterhaltung",
   "Sending…": "Wird gesendet…",
   "Queued image": "Eingereihtes Bild",
   "Queued file {name}": "Eingereihte Datei {name}",
@@ -11854,6 +11874,10 @@ var ZH = {
   "Couldn’t steer the queued messages. Try again.": "插话发送失败，请重试。",
   "{n} queued messages": "{n} 条排队消息",
   "{n} Bot messages waiting": "{n} 条 Bot 消息待处理",
+  "Bot private {private} + group {group}": "Bot 私聊 {private} 条 + 群聊 {group} 条",
+  "Group inbox unavailable": "群收件箱暂不可读取",
+  "Private inbox unavailable": "私聊收件箱暂不可读取",
+  "Earlier conversation": "历史会话",
   "Next step": "当前回合下一步",
   "Next turn": "下一回合",
   "Sending…": "发送中…",
@@ -40277,8 +40301,16 @@ function EditField({ text, onChange, onSave, onCancel }) {
 function RowButton({ label, title, disabled, onClick, children }) {
   return (0, import_react63.createElement)("button", { type: "button", className: "bt-queue-action", "aria-label": label, title: title ?? label, disabled, onClick }, children);
 }
-function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImage, renderFactorySlot, actions }) {
+function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.("inbox");
+  const botId = useRoster?.((roster) => roster.byId?.[sessionId]?.id) ?? null;
+  const groupQueueJson = useWork?.((work) => JSON.stringify(work.groupQueues?.[botId] ?? [])) ?? "[]";
+  const groupQueue = (0, import_react63.useMemo)(() => JSON.parse(groupQueueJson), [groupQueueJson]);
+  const earlierPrivateJson = useWork?.((work) => JSON.stringify(work.earlierPrivateQueues?.[botId] ?? [])) ?? "[]";
+  const earlierPrivateItems = (0, import_react63.useMemo)(() => JSON.parse(earlierPrivateJson), [earlierPrivateJson]);
+  const groupPending = groupQueue.filter((item) => !item.unavailable).length;
+  const groupUnknown = groupQueue.some((item) => item.unavailable);
+  const inboxAvailable = Array.isArray(inbox?.["next-step"]) && Array.isArray(inbox?.["next-turn"]);
   const pendingSubmissions = useSession?.((s) => s.pendingSubmissions) ?? EMPTY_QUEUE;
   const queue = (0, import_react63.useMemo)(() => {
     const rows2 = (inbox?.["next-turn"] ?? EMPTY_QUEUE).filter((row) => OWN_QUEUE_KINDS.has(row.source?.kind));
@@ -40294,6 +40326,12 @@ function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImag
     ...(inbox?.["next-step"] ?? EMPTY_QUEUE).filter((row) => row.source?.kind === "bot").map((row) => ({ row, placement: "next-step" })),
     ...(inbox?.["next-turn"] ?? EMPTY_QUEUE).filter((row) => row.source?.kind === "bot").map((row) => ({ row, placement: "next-turn" }))
   ], [inbox]);
+  const earlierPrivate = (0, import_react63.useMemo)(() => {
+    const present = new Set(botQueue.map(({ row }) => row.source?.exchangeId).filter(Boolean));
+    return earlierPrivateItems.filter((item) => !item.exchangeId || !present.has(item.exchangeId));
+  }, [botQueue, earlierPrivateItems]);
+  const privatePending = botQueue.length + earlierPrivate.filter((item) => !item.unavailable).length;
+  const privateUnknown = botId !== null && !inboxAvailable || earlierPrivate.some((item) => item.unavailable);
   const [botExpandedSession, setBotExpandedSession] = (0, import_react63.useState)(null);
   const botCollapsed = botExpandedSession !== sessionId;
   const botListId = (0, import_react63.useId)();
@@ -40301,8 +40339,8 @@ function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImag
     setBotExpandedSession(null);
   }, [sessionId]);
   (0, import_react63.useEffect)(() => {
-    if (botQueue.length === 0 && !botCollapsed) setBotExpandedSession(null);
-  }, [botQueue.length, botCollapsed]);
+    if (botQueue.length === 0 && earlierPrivate.length === 0 && groupQueue.length === 0 && !botCollapsed) setBotExpandedSession(null);
+  }, [botQueue.length, earlierPrivate.length, groupQueue.length, botCollapsed]);
   const running = useSession?.((s) => s.running) === true;
   const queueMutable = useSession?.((s) => s.subagent === null || s.subagent === void 0 || s.subagent.address?.mode === "continuable") ?? true;
   const [editing, setEditing] = (0, import_react63.useState)(null);
@@ -40313,7 +40351,7 @@ function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImag
     if (rowCount === 0 && !collapsed) setCollapsed(true);
     if (editing !== null && (!queueMutable || !queue.some((row) => row.id === editing.id))) setEditing(null);
   }, [collapsed, editing, queue, queueMutable, rowCount]);
-  if (rowCount === 0 && botQueue.length === 0) return null;
+  if (rowCount === 0 && botQueue.length === 0 && earlierPrivate.length === 0 && groupQueue.length === 0 && !privateUnknown) return null;
   const interactionActive = queueMutable && (editing !== null || busy !== null);
   const expanded = !collapsed || interactionActive;
   const listVisible = rowCount === 1 || expanded;
@@ -40340,14 +40378,14 @@ function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImag
   return (0, import_react63.createElement)(
     "div",
     { className: "bt-queue-dock", "data-queue-dock": "" },
-    botQueue.length > 0 && (0, import_react63.createElement)(
+    (botQueue.length > 0 || earlierPrivate.length > 0 || groupQueue.length > 0 || privateUnknown) && (0, import_react63.createElement)(
       "div",
       { className: "bt-queue-panel bt-bot-queue-panel", "data-bot-queue-dock": "" },
       (0, import_react63.createElement)(
         "button",
         { type: "button", className: "bt-queue-head", "data-bot-queue-head": "", "aria-controls": botListId, "aria-expanded": !botCollapsed, onClick: () => setBotExpandedSession((value) => value === sessionId ? null : sessionId) },
         (0, import_react63.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react63.createElement)(QueueIcon)),
-        (0, import_react63.createElement)("span", { className: "bt-queue-count" }, t("{n} Bot messages waiting", { n: botQueue.length })),
+        (0, import_react63.createElement)("span", { className: "bt-queue-count" }, t("Bot private {private} + group {group}", { private: privateUnknown ? `${privatePending}+?` : privatePending, group: groupUnknown ? `${groupPending}+?` : groupPending })),
         (0, import_react63.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, !botCollapsed ? (0, import_react63.createElement)(ChevronDownIcon) : (0, import_react63.createElement)(ChevronUpIcon))
       ),
       (0, import_react63.createElement)(
@@ -40372,7 +40410,30 @@ function QueueDock({ sessionId, useSession, useProjection, updateQueue, loadImag
             ),
             text !== "" && (0, import_react63.createElement)("div", { className: "bt-bot-queue-text" }, text)
           );
-        })
+        }),
+        !botCollapsed && privateUnknown && !inboxAvailable && (0, import_react63.createElement)("li", { className: "bt-bot-queue-row" }, t("Private inbox unavailable")),
+        !botCollapsed && earlierPrivate.map((item) => (0, import_react63.createElement)(
+          "li",
+          { key: item.id, className: "bt-bot-queue-row", "data-bot-earlier-private-queue-row": "" },
+          (0, import_react63.createElement)(
+            "div",
+            { className: "bt-bot-queue-meta" },
+            (0, import_react63.createElement)("span", { className: "bt-bot-queue-sender" }, item.senderName || t("Bot")),
+            (0, import_react63.createElement)("span", { className: "bt-bot-queue-placement" }, item.unavailable ? t("Private inbox unavailable") : t("Earlier conversation"))
+          ),
+          item.text && (0, import_react63.createElement)("div", { className: "bt-bot-queue-text" }, item.text)
+        )),
+        !botCollapsed && groupQueue.map((item) => (0, import_react63.createElement)(
+          "li",
+          { key: `${item.roomId}:${item.id}`, className: "bt-bot-queue-row", "data-bot-group-queue-row": "" },
+          (0, import_react63.createElement)(
+            "div",
+            { className: "bt-bot-queue-meta" },
+            (0, import_react63.createElement)("span", { className: "bt-bot-queue-sender" }, item.roomName || t("Group")),
+            (0, import_react63.createElement)("span", { className: "bt-bot-queue-placement" }, item.unavailable ? t("Group inbox unavailable") : item.previous ? t("Earlier conversation") : item.senderName)
+          ),
+          item.text && (0, import_react63.createElement)("div", { className: "bt-bot-queue-text" }, item.text)
+        ))
       )
     ),
     rowCount > 0 && (0, import_react63.createElement)(

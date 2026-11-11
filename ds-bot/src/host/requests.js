@@ -1,8 +1,7 @@
 // Request identities: a request a Bot names itself is sent once, however often it repeats it.
 //
-// message_bot merges what the recipient has not read yet, but a request that was read and
-// whose answer was lost could be sent again, and the work would be done twice. A caller
-// that names its request (`request_id`) gets that guarantee: the name belongs to the
+// A request whose answer was lost could be sent again and the work done twice. A caller
+// that names its request (`request_id`) can avoid a second delivery: the name belongs to the
 // caller and to the conversation the request was made from, what the request stands for
 // is remembered with a fingerprint of what was asked, and the receipt of the first call
 // is given back instead of a second delivery. The receipt is written before the message

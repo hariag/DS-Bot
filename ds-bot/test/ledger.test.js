@@ -84,6 +84,54 @@ test('dropping a book removes its file after the writes before it', async (t) =>
   assert.deepEqual(rt.ledger.records('group-r1'), [])
 })
 
+test('failed writes are reported and later records never skip over the missing record', async (t) => {
+  const { rt, home, file, warnings } = host(t)
+  // A regular file in place of the ledger directory makes mkdir fail without
+  // depending on permissions, even when the test runner is root.
+  rt.ledger.open('group-r1')
+  writeFileSync(join(home, 'ledger'), 'not a directory')
+  rt.ledger.append('group-r1', { seq: 1, text: 'first' })
+  rt.ledger.append('group-r1', { seq: 2, text: 'second' })
+  await assert.rejects(rt.ledger.flush('group-r1'))
+  assert.equal(warnings.length, 1)
+
+  rmSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger'))
+  rt.ledger.append('group-r1', { seq: 3, text: 'third' })
+  await assert.rejects(rt.ledger.flush('group-r1'))
+  assert.equal(existsSync(file('group-r1')), false)
+
+  // An unrelated book still writes, while a global flush reports the failure.
+  rt.ledger.append('group-r2', { seq: 1, text: 'independent' })
+  await rt.ledger.flush('group-r2')
+  assert.deepEqual(parseBook(readFileSync(file('group-r2'), 'utf8')).map(record => record.text), ['independent'])
+  await assert.rejects(rt.ledger.flush(), AggregateError)
+
+  // Explicitly dropping a book discards its failed sequence and permits a new one.
+  rt.ledger.drop('group-r1')
+  await rt.ledger.flush('group-r1')
+  rt.ledger.append('group-r1', { seq: 1, text: 'new book' })
+  await rt.ledger.flush('group-r1')
+  assert.deepEqual(parseBook(readFileSync(file('group-r1'), 'utf8')).map(record => record.text), ['new book'])
+})
+
+test('required flush refuses read-only writes even after the host becomes writable', async (t) => {
+  let readOnly = 'another host owns the team'
+  const { rt, file } = host(t, { readOnly: () => readOnly })
+  rt.ledger.append('group-r1', { seq: 1, text: 'memory only' })
+  await rt.ledger.flush('group-r1')
+  await assert.rejects(rt.ledger.flushRequired('group-r1'), /read-only/)
+  readOnly = undefined
+  rt.ledger.append('group-r1', { seq: 2, text: 'must not skip the first' })
+  await assert.rejects(rt.ledger.flushRequired('group-r1'), /not persisted/)
+  assert.equal(existsSync(file('group-r1')), false)
+  rt.ledger.drop('group-r1')
+  await rt.ledger.flushRequired('group-r1')
+  rt.ledger.append('group-r1', { seq: 1, text: 'new book' })
+  await rt.ledger.flushRequired('group-r1')
+  assert.deepEqual(parseBook(readFileSync(file('group-r1'), 'utf8')).map(record => record.text), ['new book'])
+})
+
 test('a book with an id that is not a plain name gets a file name of its own', () => {
   assert.equal(bookFile('group-r1'), 'group-r1.jsonl')
   assert.match(bookFile('group-../x'), /^[0-9a-f]{32}\.jsonl$/)
