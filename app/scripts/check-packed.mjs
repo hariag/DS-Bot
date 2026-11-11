@@ -239,6 +239,16 @@ function checkOffice(app) {
   `, 180_000)
 }
 
+// The browser plugins drive the app's own browser through Playwright; without it in the package
+// every browser tool failed before it did anything.
+function checkPlaywright(app) {
+  runInHost(app, 'Playwright', `
+    const { chromium } = createRequire(appRequire.resolve('ds-bot/package.json'))('playwright-core')
+    assert.equal(typeof chromium.connectOverCDP, 'function')
+    console.log('check-packed: the browser plugins find Playwright')
+  `, 30_000)
+}
+
 // Computer use on Windows loads the Cua Driver SDK's DLL by a path that the SDK derives from its
 // own module; a module inside the asar gives a path that Windows' loader cannot open (#1025).
 // The SDK is found the way the provider's import finds it, then asked for its tools.
@@ -361,13 +371,17 @@ function devtools(url, problems) {
   return { opened, call, close: () => { socket.close() } }
 }
 
-// mica.css styles DSH's own page, which can change with a DSH upgrade; every rule must still
-// find an element, on every platform, so the change shows here and not as a broken window.
-function micaRules() {
-  const css = readFileSync(join(root, 'src', 'mica.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
+// material.css and macos.css style DSH's own page, which can change with a DSH upgrade; every
+// rule must still find an element, on every platform, so the change shows here and not as a
+// broken window. The page is not in fullscreen here, so a rule's html:not([data-fullscreen])
+// is dropped before the look. DSH draws its session tree only in the classic Agent view, which
+// the check does not open, so the rules for the tree are not looked for.
+const frameSheets = ['material.css', 'macos.css']
+function frameRules(file) {
+  const css = readFileSync(join(root, 'src', file), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
   return [...css.matchAll(/([^{}]+)\{/gu)].map(([, selectors]) => selectors.split(',')
-    .map(selector => selector.trim().replace(/::(?:before|after)$/u, ''))
-    .filter(selector => selector !== '' && selector !== 'body'))
+    .map(selector => selector.trim().replace(/::(?:before|after)$/u, '').replace(/^html(?::not\(\[data-fullscreen\]\))?\s*/u, ''))
+    .filter(selector => selector !== '' && selector !== 'body' && !selector.includes('_treeBody') && !selector.includes('_scrollRegion')))
     .filter(rule => rule.length > 0)
 }
 
@@ -387,8 +401,10 @@ async function chat(cdp) {
   await cdp.call('Runtime.enable')
   await cdp.call('Log.enable')
   await until("document.querySelector('.bt-tile, .bt-row')", 'the team')
-  const stale = await evaluate(`${JSON.stringify(micaRules())}.filter(rule => !rule.some(selector => document.querySelector(selector) !== null)).map(rule => rule.join(', '))`)
-  if (stale.length > 0) throw new Error(`src/mica.css no longer matches DSH's page: ${stale.join(' | ')}`)
+  for (const file of frameSheets) {
+    const stale = await evaluate(`${JSON.stringify(frameRules(file))}.filter(rule => !rule.some(selector => document.querySelector(selector) !== null)).map(rule => rule.join(', '))`)
+    if (stale.length > 0) throw new Error(`src/${file} no longer matches DSH's page: ${stale.join(' | ')}`)
+  }
   await dismissNotice()
   const main = await evaluate("fetch('api/bot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: 'state', payload: {} }) }).then(r => r.json()).then(r => r.value.mainBotId)")
   await evaluate(`document.querySelector(${JSON.stringify(`[data-bot-id="${main}"]`)}).click()`)
@@ -456,69 +472,26 @@ async function chat(cdp) {
     while (node && !node.querySelector?.('button[aria-busy]')) node = node.parentElement
     return node?.querySelector('button[aria-busy]') ?? null
   })()`
-  const snapshot = `(() => {
+  const composerState = () => evaluate(`(() => {
     const el = ${box}
     const button = ${send}
-    return {
-      at: performance.now(), focused: document.hasFocus(), visibility: document.visibilityState,
+    return JSON.stringify({
       active: document.activeElement?.tagName ?? null, editable: document.activeElement?.isContentEditable ?? null,
-      editorComposing: el?.hasAttribute('data-composer-composing') ?? false, popup: document.querySelector('[role=listbox]') !== null,
       draft: el?.innerText ?? null, send: button === null ? null : { label: button.getAttribute('aria-label'), disabled: button.disabled },
-    }
-  })()`
-  const composerState = () => evaluate(`JSON.stringify({ ...${snapshot}, enter: window.__packedEnter ?? null, tail: document.body.innerText.slice(-300) })`)
+      tail: document.body.innerText.slice(-300),
+    })
+  })()`)
   try {
-    // Capture readiness in the existing probe: an extra CDP round trip before Enter can hide a race.
-    await until(`(() => {
-      const button = ${send}
-      if (button === null || button.disabled) return false
-      if (window.__packedEnter === undefined) {
-        const trace = window.__packedEnter = { events: [] }
-        // Every press is recorded, not just the first: a run that needed the second one has to
-        // say so.
-        for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-          const entry = { ...${snapshot}, type, key: event.key, code: event.code, keyCode: event.keyCode,
-            target: event.target?.tagName ?? null, composing: event.isComposing, repeat: event.repeat,
-            shift: event.shiftKey, ctrl: event.ctrlKey, alt: event.altKey, meta: event.metaKey }
-          trace.events.push(entry)
-          // A later task sees preventDefault from every capture and bubble handler.
-          setTimeout(() => { entry.prevented = event.defaultPrevented }, 0)
-        }, { capture: true })
-      }
-      return true
-    })()`, 'the send button', 30_000)
+    await until(`(() => { const button = ${send}; return button !== null && !button.disabled })()`, 'the send button', 30_000)
   } catch (error) {
     throw new Error(`${error.message}; composer: ${await composerState()}`)
   }
-  // The composer still drops an Enter now and then: it lands while the field is being rebound, and
-  // the message stays where it was. A user who sees that presses Enter again, so do the same — but
-  // only while nothing has changed. The first press may also have been sent with its text just
-  // slow to clear, and pressing again then would post it twice or post an empty one, so a draft that
-  // moved on, a disabled send button or a lost focus ends the retries instead.
-  const message = 'packaged app check'
-  const draft = `String(${box}?.innerText ?? '')`
-  let previousDraft = null
-  let sent = false
-  for (let press = 1; press <= 3 && !sent; press += 1) {
-    if (press > 1) {
-      await sleep(1000)
-      const state = JSON.parse(await evaluate(`JSON.stringify(${snapshot})`))
-      const shown = String(state.draft ?? '')
-      if (!shown.includes(message)) break
-      if (shown !== previousDraft) break
-      if (state.send === null || state.send.disabled) break
-      if (!state.editable) break
-    }
-    previousDraft = await evaluate(draft)
-    for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-    try {
-      await until(`!${draft}.includes(${JSON.stringify(message)})`, 'Enter to send the message', 10_000)
-      sent = true
-    } catch {
-      // The field still holds the text; the next pass reads the state before deciding to press again.
-    }
+  for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  try {
+    await until(`!(${box}?.innerText ?? '').includes('packaged app check')`, 'Enter to send the message', 10_000)
+  } catch (error) {
+    throw new Error(`${error.message}; composer: ${await composerState()}`)
   }
-  if (!sent) throw new Error(`the message stayed in the composer after 3 Enter presses; composer: ${await composerState()}`)
   // The mock model starts its reply with 收到： and the message.
   try {
     await until(text('收到：packaged app check'), 'the reply')
@@ -573,6 +546,7 @@ try {
   checkAsarCopy(packedApp)
   checkSharp(packedApp)
   checkOffice(packedApp)
+  checkPlaywright(packedApp)
   if (process.platform === 'win32') checkComputerUse(packedApp)
   const modelUrl = await startMock()
   const port = await freePort()
