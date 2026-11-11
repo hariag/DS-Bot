@@ -16,7 +16,7 @@ const { JSDOM } = createRequire(join(process.env.DSH_HARNESS ?? join(PLUGIN, '..
 // fixtures retain refs across commits and run their layout effects after each render.
 const { outputFiles } = await build({
   stdin: {
-    contents: "export { SHELL_CSS } from './src/client/styles.js'\nexport { SIDEBAR_CSS, TeamSidebar, PluginsButton } from './src/client/sidebar.js'",
+    contents: "export { SHELL_CSS } from './src/client/styles.js'\nexport { SIDEBAR_CSS, TeamSidebar } from './src/client/sidebar.js'",
     resolveDir: PLUGIN,
   },
   bundle: true, format: 'cjs', platform: 'browser', write: false, logLevel: 'silent',
@@ -42,7 +42,7 @@ const sandbox = {
   window: viewport,
 }
 runInNewContext(outputFiles[0].text, sandbox)
-const { SHELL_CSS, SIDEBAR_CSS, TeamSidebar, PluginsButton } = module.exports
+const { SHELL_CSS, SIDEBAR_CSS, TeamSidebar } = module.exports
 
 function navigationSidebar(wide, { leftDrawer = false } = {}) {
   const calls = []
@@ -213,7 +213,7 @@ test('a sidebar row shows its name on hover when the name is hidden or cut', () 
   const bot = { id: 'writer', name: 'Writer', createdAt: 1 }
   const room = { id: 'room', name: 'Launch plan for the spring release', members: ['writer'], createdAt: 2 }
   const roster = { bots: [bot], rooms: [room], agents: [], byId: { writer: bot }, roomsById: { room }, ready: true, exchangeTurns: {} }
-  const rowsOf = (wide) => {
+  const rowsOf = (pref) => {
     const rows = []
     const walk = (node) => {
       if (Array.isArray(node)) { node.forEach(walk); return }
@@ -222,7 +222,7 @@ test('a sidebar row shows its name on hover when the name is hidden or cut', () 
       walk(node.props?.children)
     }
     walk(TeamSidebar({
-      wide,
+      useSidebarPref: pick => pick(pref),
       actions: Object.fromEntries(['openSession', 'openMenu', 'openPalette', 'openNewChat', 'toggleSidebar', 'clearUnread'].map(name => [name, () => {}])),
       useRoster: pick => pick(roster), useUi: pick => pick({ unread: {} }), useRegistry: pick => pick({}),
       useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
@@ -231,10 +231,10 @@ test('a sidebar row shows its name on hover when the name is hidden or cut', () 
     }))
     return Object.fromEntries(rows.map(row => [row.type.name, row.type(row.props)]))
   }
-  const rail = rowsOf(false)
+  const rail = rowsOf('rail')
   assert.equal(rail.BotRow.props.title, 'Writer')
   assert.equal(rail.RoomRow.props.title, 'Launch plan for the spring release')
-  const wide = rowsOf(true)
+  const wide = rowsOf('open')
   assert.equal(wide.RoomRow.props.title, undefined)
   // jsdom lays nothing out, so the name's widths are set by hand.
   const { document } = new JSDOM('<button title="stale"><span class="bt-row-title">Launch plan for the spring release</span></button>').window
@@ -466,27 +466,9 @@ test('the rail spaces its icons on the open column\'s rhythm', () => {
   assert.match(bodyOf('.bt-rail'), /(^|;)gap:6px/)
 })
 
-// The Plugins shortcut calls DSH's plugin page; a host without that navigation
-// face has no page to open, so the button stays out of the foot entirely.
-test('the Plugins shortcut stays out where the host has no plugin navigation', () => {
-  assert.equal(PluginsButton({ actions: {} }), null)
-  assert.equal(PluginsButton({ actions: { hasPlugins: () => false, openPlugins: () => { throw new Error('must not open') } } }), null)
-})
-
-test('the Plugins shortcut opens the plugin manager and names itself', () => {
-  const calls = []
-  const button = PluginsButton({ actions: { hasPlugins: () => true, openPlugins: () => calls.push('open') } })
-  assert.equal(button.type, 'button')
-  assert.equal(button.props['aria-label'], 'Plugins')
-  assert.equal(button.props.title, 'Plugins')
-  button.props.onClick()
-  assert.deepEqual(calls, ['open'])
-})
-
-// The foot of the team column is the sidebar's own `.bt-leftcol-foot`, not the
-// shell's footArea: only the account menu and the Agent-mode return button go
-// through the shell's action slot.
-test('the shell footer action slot holds the account and the return button only', () => {
+// #452: the Connect plugins button left the footer; what DS Bot puts there is
+// the account menu and the way back from Agent mode.
+test('the Bot footer holds the account and the return button only', () => {
   const source = readFileSync(new URL('../src/client/index.js', import.meta.url), 'utf8')
   const ids = [...source.matchAll(/shadow\('sidebar\.footer\.action',\s*\{[^}]*?id:\s*['"]([^'"]+)['"]/g)].map(match => match[1])
   assert.deepEqual(ids.sort(), ['bot-account', 'bot-return'])
@@ -611,32 +593,60 @@ test('TeamSidebar subscribes to specific ui slices rather than the whole ui obje
 })
 
 
-// A Bot team that never started leaves nothing to use on the Bot surface; the hint
-// that says so carries the way back to the classic view, wide or on the rail (#1314).
-for (const wide of [true, false]) {
-  test(`a Bot team that could not start offers the classic view (${wide ? 'open column' : 'rail'})`, () => {
-    viewport.innerWidth = 1280
-    const calls = []
-    const tree = TeamSidebar({
-      wide,
-      useRoster: pick => pick({ bots: [], rooms: [], agents: [], byId: {}, ready: false }),
-      useUi: pick => pick({ unread: {}, leftDrawer: false, bootFailed: true }),
-      useRegistry: pick => pick({}),
-      useSessions: pick => pick({ ids: [], byId: {} }),
-      useUpdate: () => ({}),
-      actions: { toggleSidebar() {}, setSurface: mode => calls.push(mode) },
-    })
-    const find = (node, match) => {
-      if (Array.isArray(node)) { for (const child of node) { const hit = find(child, match); if (hit) return hit } return undefined }
-      if (!node || typeof node !== 'object') return undefined
-      if (match(node)) return node
-      return find(node.props?.children, match)
-    }
-    const hint = find(tree, node => node.type?.name === 'BootFailed')
-    assert.ok(hint, 'the could-not-start hint renders')
-    const button = find(hint.type(hint.props), node => node.type === 'button')
-    assert.equal(button.props.children.join(''), 'Switch to classic Agent mode')
-    button.props.onClick()
-    assert.deepEqual(calls, ['agent'])
+// The Bot column's footer carries the way to the classic Agent page, the counterpart of
+// the DS Bot button the classic page keeps in its own footer.
+function footerOf(wide, actions) {
+  viewport.innerWidth = 1280
+  renderRefs = undefined
+  layoutEffects = []
+  const bot = { id: 'writer', name: 'Writer', createdAt: 1 }
+  const roster = { bots: [bot], rooms: [], agents: [], byId: { writer: bot }, ready: true }
+  const tree = TeamSidebar({
+    wide, actions,
+    useRoster: pick => pick(roster), useUi: pick => pick({ unread: {}, leftDrawer: false }), useRegistry: pick => pick({}),
+    useSessions: pick => pick({ ids: [], byId: {} }), useUpdate: () => ({}),
+    useSidebarPref: pick => pick(wide ? 'open' : 'rail'),
   })
+  layoutEffects = undefined
+  let foot
+  const walk = (node) => {
+    if (Array.isArray(node)) { node.forEach(walk); return }
+    if (!node || typeof node !== 'object') return
+    if (typeof node.props?.className === 'string' && node.props.className.split(' ').includes('bt-leftcol-foot')) foot = node
+    walk(node.props?.children)
+  }
+  walk(tree)
+  const kids = [foot.props.children].flat().filter(Boolean)
+  return kids.map(kid => (typeof kid.type === 'function' ? kid.type(kid.props) : kid)).filter(Boolean)
 }
+const textOf = node => (typeof node === 'string' ? node : [node?.props?.children].flat().filter(Boolean).map(textOf).join(''))
+
+test('the open column has a one-click switch to the classic Agent page beside the account button', () => {
+  const calls = []
+  const [account, classic] = footerOf(true, { setSurface: mode => calls.push(mode) })
+  assert.ok(account !== undefined)
+  assert.equal(classic.type, 'button')
+  assert.equal(classic.props.className, 'bt-classic')
+  assert.equal(classic.props['aria-label'], 'Switch to classic Agent mode')
+  assert.equal(classic.props.title, 'Switch to classic Agent mode')
+  assert.equal(textOf(classic), 'Classic Agent mode')
+  classic.props.onClick()
+  assert.deepEqual(calls, ['agent'])
+})
+
+test('the rail has the same switch as an icon button between the new-chat button and the account button', () => {
+  const calls = []
+  const [add, classic] = footerOf(false, { setSurface: mode => calls.push(mode), openNewChat() {} })
+  assert.equal(add.props['aria-label'], 'New…')
+  assert.equal(classic.type, 'button')
+  assert.equal(classic.props.className, 'bt-round')
+  assert.equal(classic.props['aria-label'], 'Switch to classic Agent mode')
+  assert.equal(textOf(classic), '')
+  classic.props.onClick()
+  assert.deepEqual(calls, ['agent'])
+})
+
+test('a surface that cannot switch shows no switch button', () => {
+  assert.equal(footerOf(true, {}).length, 1)
+  assert.equal(footerOf(false, { openNewChat() {} }).length, 2)
+})

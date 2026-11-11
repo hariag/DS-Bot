@@ -4,7 +4,7 @@ import { FishLogo } from './dsh-primitives.js'
 import { inkFill } from './inks.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, PlugIcon, CloudDownloadIcon, SignInIcon, SignOutIcon, SlidersIcon, ChevronRightIcon, DotsIcon, FolderIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, SignInIcon, SignOutIcon, SlidersIcon, ChevronRightIcon, DotsIcon, FolderIcon } from './icons.js'
 import { lookOf, MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { AgentBadge } from './agent-badge.js'
@@ -249,16 +249,14 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
       preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
     wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true })
       : !wide && unread && !active ? h('span', { className: 'bt-dot', 'aria-hidden': true }) : null),
-    // The rail has no Session list. Left in, its text is wider than the rail, so this wrapper
-    // filled the rail and the 56px row sat at its left edge instead of the centre.
-    wide ? h('div', { className: 'bt-agent-sub', 'data-open': open || undefined },
+    h('div', { className: 'bt-agent-sub', 'data-open': open || undefined },
       h('div', { className: 'bt-agent-sub-in' },
         h('button', { type: 'button', className: 'bt-agent-sub-row bt-agent-new', style: { '--i': 0 }, onClick: () => { void actions.newAgentSession(agent.id).catch(error => actions.reportError(error, 'agent-session')) } },
           h(PlusIcon), h('span', { className: 'bt-agent-sub-title' }, t('New session'))),
         sessions.map((session, index) => h(AgentSessionRow, {
           key: session.id, session, agent, actions, index: index + 1,
           renaming: renaming === session.id,
-        })))) : null)
+        })))))
 }
 
 function renderSidebarEntry(entry, rowProps, markedUnread, onDragStart) {
@@ -477,8 +475,7 @@ function TitleToggle({ hidden, onToggle }) {
 // The Bot-API-down hint cannot send the user to Settings → Feedback: its
 // diagnostics request needs the same API. What still works in this state is
 // the last error this window recorded, and the engine's own startup output —
-// its console, or the app's startup error box (#516). With no Bot team there is
-// nothing to use on this surface, so the hint also offers the classic view.
+// its console, or the app's startup error box (#516).
 const bootHint = () => {
   const last = clientErrors().at(-1)?.text
   return last === undefined
@@ -486,12 +483,17 @@ const bootHint = () => {
     : t('The Bot team could not start. {error}. The engine’s startup output — its console, or the app’s startup error box — has the cause.', { error: last })
 }
 
-function BootFailed({ actions }) {
-  return h('div', { className: 'bt-hint bt-boot-failed', role: 'alert' },
-    h('div', null, bootHint()),
-    typeof actions.setSurface === 'function'
-      ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => actions.setSurface('agent') }, t('Switch to classic Agent mode'))
-      : null)
+// The Bot column's own way to the classic Agent page: the classic page keeps a
+// DS Bot button in its footer, and this is its counterpart, so one click flips the
+// surface and one click flips it back. It names the page it opens, like that button.
+function ClassicSwitch({ wide, actions }) {
+  if (typeof actions.setSurface !== 'function') return null
+  const label = t('Switch to classic Agent mode')
+  const onClick = () => actions.setSurface('agent')
+  return wide
+    ? h('button', { type: 'button', className: 'bt-classic', 'aria-label': label, title: label, onClick },
+        h(SwitchIcon), h('span', { className: 'bt-classic-name' }, t('Classic Agent mode')))
+    : h('button', { type: 'button', className: 'bt-round', 'aria-label': label, title: label, onClick }, h(SwitchIcon))
 }
 
 export function TeamSidebar(props) {
@@ -807,16 +809,16 @@ export function TeamSidebar(props) {
     : h('div', { className: 'bt-rail-top' },
         h(UpdateButton, { useUpdate: props.useUpdate, actions }),
         h('button', { type: 'button', className: 'bt-round bt-side-collapse', 'aria-label': t('Collapse sidebar'), title: t('Collapse sidebar'), onClick: onToggle }, h(SidebarIcon)),
-        main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : bootFailed ? h(BootFailed, { actions }) : h('div', { className: 'bt-hint' }, t('Setting up your Main Bot…')),
+        main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, bootFailed ? bootHint() : t('Setting up your Main Bot…')),
         h('span', { className: 'bt-rail-sep', 'aria-hidden': true }))
   // The foot stands in for the shell's hidden footer: the account avatar, and on
   // the rail the new-chat button above it.
   const foot = wideContent
-    ? h('div', { className: 'bt-leftcol-foot' }, h(AccountLauncher, { seat: false, actions }), h(PluginsButton, { actions }))
+    ? h('div', { className: 'bt-leftcol-foot' }, h(AccountLauncher, { seat: false, actions }), h(ClassicSwitch, { wide: true, actions }))
     : h('div', { className: 'bt-leftcol-foot bt-leftcol-foot-rail' },
         h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
-        h(AccountLauncher, { seat: false, actions }),
-        h(PluginsButton, { actions }))
+        h(ClassicSwitch, { wide: false, actions }),
+        h(AccountLauncher, { seat: false, actions }))
   const content = h('div', { className: wideContent ? 'bt-side' : 'bt-side bt-rail', onKeyDown: typeToSearch },
     top,
     wideContent && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
@@ -825,7 +827,7 @@ export function TeamSidebar(props) {
       onDragEnd: () => { setDragId(null); setDropTarget(null) },
       onDragLeave: (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget(null) },
     },
-      wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : bootFailed ? h(BootFailed, { actions }) : h('div', { className: 'bt-hint' }, t('Setting up your Main Bot…'))) : null,
+      wideContent ? (main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, bootFailed ? bootHint() : t('Setting up your Main Bot…'))) : null,
       sections.length > 0 && wideContent
         ? h('div', {
             className: 'bt-sec-ungrouped',
@@ -1217,15 +1219,6 @@ function useLandOnMainBot(roster, useSessions, actions) {
     const timer = setTimeout(() => actions.landOn(roster.mainBotId, last), last ? 0 : 400)
     return () => clearTimeout(timer)
   }, [mainView, roster])
-}
-
-// The Plugins icon beside the foot's account gear: it opens the shell's plugin
-// manager panel. Wherever that panel's navigation face is absent — such as a
-// profile the peer may not list bundles in — nothing renders.
-export function PluginsButton({ actions }) {
-  if (!actions.hasPlugins?.()) return null
-  return h('button', { type: 'button', className: 'bt-account', 'aria-label': t('Plugins'), title: t('Plugins'), onClick: () => actions.openPlugins() },
-    h('span', { className: 'bt-you', 'aria-hidden': true }, h(PlugIcon)))
 }
 
 export function FooterAccount(props) {
