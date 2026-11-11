@@ -3,8 +3,9 @@
 //
 // Turn tracking: which turns were triggered by another Bot, and what they said.
 import { randomUUID } from 'node:crypto'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
-import { HANDOFF_ACK, LATE_ANSWER, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND, STEER_CUT } from './constants.js'
+import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, LATE_ANSWER, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { cleanText } from './diagnostics.js'
 import { absoluteLinks } from './links.js'
 import { splitRef, textOf } from './text.js'
@@ -133,6 +134,8 @@ const RECOVERED_TURN = -1
 // a deliberate one.
 const CUT_OFF_NOTE = '[cut off at the model\'s output limit; the answer is not complete]'
 const CUT_OFF_EMPTY_NOTE = '[cut off at the model\'s output limit before it wrote anything]'
+const RECOVERY_TEXT = 'Some earlier messages in this conversation were already accepted, but their turn did not finish. Handle every outstanding message in its original order. The original messages are already in the conversation history; do not ask the user to resend them. Before repeating any side effect, inspect the current state and completed tool results; continue only what remains undone. Finish each item or state clearly what is still blocked.'
+const CONTROL_ROLES = new Set(['kickoff', 'update', 'secret'])
 // The answer a cut-off turn leaves: what it said, marked as unfinished, or the line
 // that stands in for a turn that wrote nothing at all.
 export const cutOffText = said => (said === '' ? CUT_OFF_EMPTY_NOTE : `${said}\n\n${CUT_OFF_NOTE}`)
@@ -676,12 +679,61 @@ export function install(rt) {
     for (const bot of lifted) void rt.releaseKickoff(bot).catch(error => rt.warn('ds-bot: greeting of %s not sent again: %s', bot.name, error))
   }
 
-  // The repair card's Retry. A greeting that failed goes out again; otherwise the Bot
-  // answers the user's last message, which is not sent again. A greeting on its way, or
-  // a turn under way in the Bot's chat, answers already: a turn on top answers twice.
+  // Retry sends a failed greeting again; other failed inputs stay in their original
+  // Session and are tracked by event sequence until a completed turn settles them.
   async function resumeBot(bot) {
     if (await rt.releaseKickoff(bot)) return
-    if (rt.greetingOut?.(bot.id) || live.get(rt.chatOf(bot.id))?.turn !== undefined) return
+    await rt.load?.()
+    if (rt.greetingOut?.(bot.id)) return
+    const candidates = new Set([
+      rt.chatOf(bot.id),
+      ...(rt.groupSessionsOf?.(bot.id) ?? []),
+      ...(Array.isArray(bot.segments) ? bot.segments.map(segment => segment.sessionId) : []),
+    ].filter(sessionId => typeof sessionId === 'string'))
+    for (const sessionId of candidates) await reconcilePending(sessionId)
+    const sessions = Object.entries(state.pendingInputs ?? {})
+      .filter(([, items]) => Array.isArray(items) && items.some(item => item.ownerId === bot.id))
+      .sort((a, b) => Math.min(...a[1].map(item => item.seq)) - Math.min(...b[1].map(item => item.seq)))
+    if (sessions.length > 0) {
+      for (const [sessionId] of sessions) {
+        await reconcilePending(sessionId)
+        const items = (state.pendingInputs[sessionId] ?? []).filter(item => item.ownerId === bot.id)
+        if (items.length === 0 || live.get(sessionId)?.turn !== undefined) continue
+        const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
+        if (agent === undefined) continue
+        if (agent.status === 'running') continue
+        const ids = items.map(item => item.id)
+        const queuedRecovery = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .some(message => Array.isArray(message?.source?.recoveryIds) && message.source.recoveryIds.some(id => ids.includes(id)))
+        if (queuedRecovery) continue
+        const marker = state.pendingRecovery?.[sessionId]
+        if (marker !== undefined) {
+          const queued = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+            .some(message => message?.source?.recoveryKey === marker.key)
+          if (queued) continue
+          const status = await recoveryStatus(sessionId, marker.key)
+          if (status === 'active' || status === 'completed') continue
+          // A failed attempt may be retried with a new key. A recent marker with no
+          // log receipt can still be between followup() and DSH's durable append.
+          if (status === 'missing' && Date.now() - marker.at < 60_000) continue
+          delete state.pendingRecovery[sessionId]
+        }
+        const recoveryIds = ids
+        const recoveryKey = randomUUID()
+        state.pendingRecovery ??= {}
+        state.pendingRecovery[sessionId] = { key: recoveryKey, ids: recoveryIds, ownerId: bot.id, at: Date.now() }
+        await rt.save()
+        try {
+          await rt.deliver({ toId: bot.id, sessionId, role: 'continue', recoveryIds, recoveryKey, text: RECOVERY_TEXT })
+        } catch (error) {
+          if (state.pendingRecovery[sessionId]?.key === recoveryKey) delete state.pendingRecovery[sessionId]
+          await rt.save().catch(() => {})
+          throw error
+        }
+      }
+      return
+    }
+    if (live.get(rt.chatOf(bot.id))?.turn !== undefined) return
     const code = bot.blocked?.code
     await rt.deliver({
       toId: bot.id,
@@ -689,6 +741,137 @@ export function install(rt) {
       text: `Your last turn failed${code ? ` (${code})` : ''} and the user has fixed it. Answer the user's last unanswered message.`,
     })
   }
+
+  const businessInput = source => source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === 'schedule'
+    || (source?.kind === SOURCE_KIND && !CONTROL_ROLES.has(source.role)
+      && !(source.role === 'continue' && (source.recoveryKey !== undefined || Array.isArray(source.recoveryIds))))
+
+  const removePending = (sessionId, ids) => {
+    if (ids.size === 0) return false
+    const before = state.pendingInputs?.[sessionId] ?? []
+    const after = before.filter(item => !ids.has(item.id))
+    if (after.length === before.length) return false
+    if (after.length === 0) delete state.pendingInputs[sessionId]
+    else state.pendingInputs[sessionId] = after
+    return true
+  }
+
+  async function reconcilePending(sessionId, signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)) {
+    if (rt.eventsBackwards === undefined) return
+    const pending = state.pendingInputs?.[sessionId] ?? []
+    const seqs = pending.map(item => item.seq).filter(Number.isSafeInteger)
+    const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
+    const through = Number(agent?.session?.seq) - 1
+    if (!Number.isSafeInteger(through) || through < 0) return
+    const previous = Number.isSafeInteger(state.recoveryCursor?.[sessionId]) ? state.recoveryCursor[sessionId] : undefined
+    const lowerBound = seqs.length > 0
+      ? Math.min(previous ?? Infinity, Math.min(...seqs) - 1)
+      : (previous ?? -1)
+    if (previous === through) return
+    const events = []
+    for await (const event of rt.eventsBackwards(sessionId, signal, Infinity)) {
+      if (event.seq <= lowerBound) break
+      events.push(event)
+    }
+    events.reverse()
+    let current
+    const outstanding = new Map(pending.map(item => [item.id, item]))
+    const remember = item => outstanding.set(item.id, item)
+    const settleTurn = (reason) => {
+      if (current === undefined) return
+      if (reason?.kind === 'completed') {
+        for (const item of current.inputs) outstanding.delete(item.id)
+        for (const id of current.recoveryIds) outstanding.delete(id)
+      } else {
+        const cancelled = reason?.kind === 'aborted' && (reason.reason?.kind === 'user'
+          || reason.reason?.kind === 'hook' && [STEER_CUT, 'ds-bot/stopped'].includes(reason.reason.reason))
+        if (!cancelled) for (const item of current.inputs) remember(item)
+      }
+      current = undefined
+    }
+    for (const event of events) {
+      if (event.type === 'turn/start') {
+        settleTurn()
+        current = { turn: event.data?.turn, inputs: [], recoveryIds: [] }
+      } else if (event.type === 'user/message') {
+        current ??= { inputs: [], recoveryIds: [] }
+        if (businessInput(event.data?.source) && Number.isSafeInteger(event.seq)) {
+          current.inputs.push({
+            id: `${sessionId}:${event.seq}`,
+            seq: event.seq,
+            turn: current.turn,
+            ownerId: rt.selfOf(sessionId),
+            ...(typeof event.data.source.exchangeId === 'string' ? { exchangeId: event.data.source.exchangeId } : {}),
+          })
+        }
+        const ids = event.data?.source?.recoveryIds
+        if (Array.isArray(ids)) current.recoveryIds.push(...ids.filter(id => typeof id === 'string'))
+      } else if (event.type === 'turn/end') settleTurn(event.data?.reason)
+    }
+    settleTurn()
+    const next = [...outstanding.values()].sort((a, b) => a.seq - b.seq)
+    const changed = JSON.stringify(next) !== JSON.stringify(pending)
+    const cursorChanged = previous !== through
+    if (changed) {
+      if (next.length === 0) delete state.pendingInputs[sessionId]
+      else (state.pendingInputs ??= {})[sessionId] = next
+      const marker = state.pendingRecovery?.[sessionId]
+      if (marker !== undefined && !next.some(item => marker.ids?.includes(item.id))) delete state.pendingRecovery[sessionId]
+    }
+    state.recoveryCursor ??= {}
+    state.recoveryCursor[sessionId] = through
+    if (changed || cursorChanged) await rt.save()
+  }
+
+  async function recoveryStatus(sessionId, recoveryKey) {
+    if (typeof recoveryKey !== 'string' || rt.eventsBackwards === undefined) return 'missing'
+    const events = []
+    for await (const event of rt.eventsBackwards(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS), Infinity)) {
+      events.push(event)
+      if (event.type === 'user/message' && event.data?.source?.recoveryKey === recoveryKey) break
+    }
+    events.reverse()
+    let found = false
+    let status = 'missing'
+    for (const event of events) {
+      if (event.type === 'user/message' && event.data?.source?.recoveryKey === recoveryKey) {
+        found = true
+        status = 'active'
+      } else if (found && event.type === 'turn/end') {
+        status = event.data?.reason?.kind === 'completed' ? 'completed' : 'failed'
+        break
+      }
+    }
+    return status
+  }
+
+  ctx.on?.('agent/pre-step', async ({ agent, signal }, next) => {
+    const decision = await next()
+    if (decision.kind === 'reject' || signal.aborted || !rt.isBotSession(agent.id)) return decision
+    const entry = live.get(agent.id)
+    if (entry === undefined || entry.turn === undefined || entry.recoveryInjected) return decision
+    await reconcilePending(agent.id, signal)
+    if (signal.aborted) return decision
+    const pending = state.pendingInputs?.[agent.id] ?? []
+    const inStep = decision.messages.flatMap(message => Array.isArray(message?.source?.recoveryIds)
+      ? message.source.recoveryIds.filter(value => typeof value === 'string') : [])
+    entry.recoveryIds = [...new Set([...(entry.recoveryIds ?? []), ...inStep])]
+    const key = decision.messages.findLast(message => typeof message?.source?.recoveryKey === 'string')?.source?.recoveryKey
+    if (key !== undefined) entry.turnRecoveryKey = key
+    const currentIds = new Set([...(entry.turnInputs ?? []).map(item => item.id), ...(entry.recoveryIds ?? [])])
+    const recoveryIds = pending.map(item => item.id).filter(id => !currentIds.has(id))
+    if (recoveryIds.length === 0) {
+      entry.recoveryInjected = inStep.length > 0
+      return decision
+    }
+    entry.recoveryInjected = true
+    entry.turnRecoveryKey = randomUUID()
+    const recovery = createUserMessage({
+      content: [{ type: 'text', text: RECOVERY_TEXT }],
+      source: { kind: SOURCE_KIND, form: 'snapshot', role: 'continue', recoveryIds, recoveryKey: entry.turnRecoveryKey },
+    })
+    return { ...decision, messages: [recovery, ...decision.messages] }
+  })
   ctx.on?.('subagent/start', (info) => {
     const childId = info?.id
     if (typeof childId !== 'string' || childId === '' || stoppedSubagents.has(childId)) return
@@ -745,6 +928,10 @@ export function install(rt) {
       case 'turn/start':
         setActivity(id, 'thinking')
         entry.turn = event.data.turn
+        entry.turnInputs = []
+        entry.recoveryIds = []
+        entry.recoveryInjected = false
+        entry.turnRecoveryKey = undefined
         entry.since = event.time ?? Date.now()
         entry.texts = []
         entry.shown = 0
@@ -793,6 +980,25 @@ export function install(rt) {
         break
       case 'user/message': {
         const source = event.data?.source
+        if (Array.isArray(source?.recoveryIds)) {
+          entry.recoveryIds = [...new Set([...(entry.recoveryIds ?? []), ...source.recoveryIds.filter(value => typeof value === 'string')])]
+        }
+        if (typeof source?.recoveryKey === 'string') entry.turnRecoveryKey = source.recoveryKey
+        if (businessInput(source) && Number.isSafeInteger(event.seq) && entry.turn !== undefined) {
+          const item = {
+            id: `${id}:${event.seq}`,
+            seq: event.seq,
+            turn: entry.turn,
+            ownerId: rt.selfOf(id),
+            ...(typeof source.exchangeId === 'string' ? { exchangeId: source.exchangeId } : {}),
+          }
+          const pending = state.pendingInputs ??= {}
+          const items = pending[id] ??= []
+          if (!items.some(other => other.id === item.id)) items.push(item)
+          entry.turnInputs ??= []
+          if (!entry.turnInputs.some(other => other.id === item.id)) entry.turnInputs.push(item)
+          void rt.save().catch(error => rt.warn('ds-bot: pending input %s not saved: %s', item.id, error))
+        }
         if (source?.kind === 'subagent-settled' || source?.kind === 'agent-message') {
           if (typeof source.senderSessionId === 'string') {
             noteSubagentEnd(source.senderSessionId)
@@ -1042,6 +1248,28 @@ export function install(rt) {
         }
         const held = rt.groupOwners.has(id) ? rt.takeRoomSteps?.(id) ?? '' : ''
         if (switched) break
+        let recoveryChanged = false
+        if (reason?.kind === 'completed') {
+          recoveryChanged = removePending(id, new Set([
+            ...(entry.turnInputs ?? []).map(item => item.id),
+            ...(entry.recoveryIds ?? []),
+          ])) || recoveryChanged
+        }
+        const recoveryMarker = state.pendingRecovery?.[id]
+        if (recoveryMarker !== undefined && recoveryMarker.key === entry.turnRecoveryKey) {
+          delete state.pendingRecovery[id]
+          recoveryChanged = true
+        }
+        state.recoveryCursor ??= {}
+        if (Number.isSafeInteger(event.seq) && event.seq > (state.recoveryCursor[id] ?? -1)) {
+          state.recoveryCursor[id] = event.seq
+          recoveryChanged = true
+        }
+        if (recoveryChanged) void rt.save().catch(error => rt.warn('ds-bot: pending recovery for %s not saved: %s', id, error))
+        entry.turnInputs = []
+        entry.recoveryIds = []
+        entry.turnRecoveryKey = undefined
+        entry.recoveryInjected = false
         const owner = rt.chatOwners.get(id)
         // A turn cut off at the output limit is not a finish: whoever reads its answer
         // is told, and the diagnostics record it. Nothing written at all, twice in a
