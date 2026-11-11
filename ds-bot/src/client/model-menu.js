@@ -96,8 +96,13 @@ export function EffortBar({ reasoning, current, onPick }) {
   const drag = useRef(null)
   const [picked, setPicked] = useState(current)
   const [dragRatio, setDragRatio] = useState(null)
+  // Saves still under way: the Bot's level only catches up once the last of them is done,
+  // so an older answer cannot pull the knob back from a newer pick.
+  const pending = useRef(0)
+  const latest = useRef(current)
+  latest.current = current
   useEffect(() => {
-    if (!drag.current) setPicked(current)
+    if (!drag.current && pending.current === 0) setPicked(current)
   }, [current])
   if (stops.length === 0) return null
   const hasDefault = (reasoning?.efforts ?? []).some(effort => effort.id === reasoning?.defaultEffort)
@@ -108,7 +113,15 @@ export function EffortBar({ reasoning, current, onPick }) {
   const ratio = dragRatio ?? stopRatio
   const commit = (effort) => {
     setPicked(effort)
-    if ((effort ?? null) !== (current ?? null)) onPick(effort)
+    if (pending.current === 0 && (effort ?? null) === (current ?? null)) return
+    const saving = onPick(effort)
+    if (typeof saving?.then !== 'function') return
+    pending.current += 1
+    const done = () => {
+      pending.current -= 1
+      if (pending.current === 0 && !drag.current) setPicked(latest.current)
+    }
+    saving.then(done, done)
   }
   const ratioAt = (clientX) => {
     const rect = track.current?.getBoundingClientRect()
@@ -193,16 +206,72 @@ export function EffortBar({ reasoning, current, onPick }) {
     h('span', { className: 'bt-effort-knob', 'aria-hidden': true })))
 }
 
-function ModelRows({ roster, current, onPick }) {
-  return groupModels(roster.models).map(([provider, list]) => h(Fragment, { key: list[0].provider ?? provider },
-    h('div', { className: 'bt-model-group', role: 'presentation' }, provider),
-    list.map(model => h('button', {
-      key: model.ref, type: 'button', role: 'menuitemradio', 'aria-checked': model.ref === current, title: model.ref,
-      onClick: () => onPick(model.ref),
-    },
-    h('span', { className: 'bt-menu-label' }, nameOf(model)),
-    model.ref === roster.defaultModel ? h('span', { className: 'bt-menu-hint' }, t('Default')) : null,
-    h('span', { className: 'bt-model-tick', 'aria-hidden': true }, model.ref === current ? h(CheckIcon) : null)))))
+// The stable id of a provider group: the models' provider, never the display name,
+// which repeats when two providers carry the same name.
+const groupIdOf = list => list[0]?.provider ?? (typeof list[0]?.ref === 'string' ? list[0].ref.split('/')[0] : '')
+
+// The group that holds the Bot's model, by that id; undefined when the model is no
+// longer served, or the Bot has none.
+function currentGroupId(groups, current) {
+  if (current === undefined || current === null) return undefined
+  const found = groups.find(([, list]) => list.some(model => model.ref === current))
+  return found === undefined ? undefined : groupIdOf(found[1])
+}
+
+// A group is open when the user opened or closed it during this opening of the menu.
+// Otherwise the current model's provider is open, or the first provider when the model
+// is not in the catalog. A search opens every group it matched, so a result is never
+// hidden behind a heading, and the manual state applies again once the search clears.
+export function groupOpen({ id, index, currentId, filtering, manual }) {
+  if (filtering) return true
+  const chosen = manual[id]
+  if (chosen !== undefined) return chosen
+  return currentId === undefined ? index === 0 : id === currentId
+}
+
+// The manual state after a heading is clicked, `open` being what the heading showed.
+export const toggledGroup = (manual, id, open) => ({ ...manual, [id]: !open })
+
+// The provider headings and the models under the open ones. A search shows the plain
+// headings of every matched group, with nothing to collapse: every result is visible.
+// Kept apart from the state so a test can open and close a group the way its heading does.
+export function ModelGroupList({ groups, current, currentId, defaultModel, onPick, manual, onToggle, filtering = false }) {
+  return groups.map(([provider, list], index) => {
+    const id = groupIdOf(list)
+    const open = groupOpen({ id, index, currentId, filtering, manual })
+    return h(Fragment, { key: `group:${id || provider}` },
+      filtering
+        ? h('div', { className: 'bt-model-group', role: 'presentation' }, provider)
+        : h('button', {
+            type: 'button', role: 'menuitem', className: 'bt-model-group bt-model-group-toggle',
+            'aria-expanded': open, 'data-open': open ? '' : undefined,
+            onClick: () => onToggle(id, open),
+          },
+          h(Caret), h('span', { className: 'bt-menu-label' }, provider)),
+      open ? list.map(model => h('button', {
+        key: model.ref, type: 'button', role: 'menuitemradio', 'aria-checked': model.ref === current, title: model.ref,
+        onClick: () => onPick(model.ref),
+      },
+      h('span', { className: 'bt-menu-label' }, nameOf(model)),
+      model.ref === defaultModel ? h('span', { className: 'bt-menu-hint' }, t('Default')) : null,
+      h('span', { className: 'bt-model-tick', 'aria-hidden': true }, model.ref === current ? h(CheckIcon) : null))) : null)
+  })
+}
+
+const NO_MANUAL = {}
+// The manual state belongs to one opening of the menu. The leaving menu lives through
+// its 120ms exit animation, so a reopen can land on the same mounted rows; asking with
+// the new opening number then reads the default again instead of the old choices.
+export const manualFor = (state, opening) => (state.opening === opening ? state.manual : NO_MANUAL)
+
+export function ModelRows({ roster, current, onPick, filtering = false, opening = 0 }) {
+  const groups = groupModels(roster.models)
+  const [state, setState] = useState({ opening, manual: NO_MANUAL })
+  const manual = manualFor(state, opening)
+  return h(ModelGroupList, {
+    groups, current, currentId: currentGroupId(groups, current), defaultModel: roster.defaultModel, onPick, filtering, manual,
+    onToggle: (id, open) => setState(previous => ({ opening, manual: toggledGroup(manualFor(previous, opening), id, open) })),
+  })
 }
 
 export const Caret = () => h('svg', { className: 'bt-model-caret', width: 12, height: 12, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'M5.5 8l4.5 4.5L14.5 8' }))
@@ -253,6 +322,50 @@ export function useAnchoredMenu() {
   return { isOpen: place !== null, shownPlace, leaving, button, menu, open, close }
 }
 
+// The same menu opened in the flow under its trigger, so what follows it moves with it.
+// A click outside the group (trigger, list, and what sits under them) or Escape closes it.
+export function useInlineMenu() {
+  const [isOpen, setOpen] = useState(false)
+  const root = useRef(null)
+  const button = useRef(null)
+  const menu = useRef(null)
+  const close = () => setOpen(false)
+  useEffect(() => {
+    if (!isOpen) return undefined
+    const onDown = (event) => { if (!root.current?.contains(event.target)) close() }
+    const onKey = (event) => {
+      if (stepMenuFocus(menu.current, event, button.current)) return
+      if (event.key === 'Escape') { event.stopPropagation(); close(); button.current?.focus() }
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [isOpen])
+  return { isOpen, root, button, menu, open: () => setOpen(true), close }
+}
+
+// Content that grows from nothing and shrinks back to nothing in the flow, so what
+// follows it moves with it. It stays mounted for the length of the shrink and keeps what
+// it last showed meanwhile; a quick reopen turns the move around where it stands.
+export function Collapse({ open, children }) {
+  const [shown] = useLinger(open, SPRING_SHAPE.duration)
+  const [expanded, setExpanded] = useState(open)
+  const box = useRef(null)
+  const last = useRef(children)
+  if (open) last.current = children
+  useLayoutEffect(() => {
+    // Reading the height settles the collapsed layout first, so the opening has a start.
+    if (open) void box.current?.offsetHeight
+    setExpanded(open)
+  }, [open])
+  if (!shown) return null
+  return h('div', { ref: box, className: 'bt-collapse', 'data-open': expanded || undefined },
+    h('div', { className: 'bt-collapse-in' }, open ? children : last.current))
+}
+
 // A local agent's list comes from its CLI, which only its own menu asks: the menu opens
 // at once and fills in when the CLI has answered.
 export function useAgentModels(actions) {
@@ -265,12 +378,8 @@ export function useAgentModels(actions) {
   return [reading, read]
 }
 
-// The trigger shows the model name over its provider. A Thinking section lists the
-// levels of the shown model when it has them.
-// `onPick`/`onPickEffort` replace saving to the Bot, for a Bot that does not exist yet.
-// `withEfforts: false` keeps the Thinking section out, for a pick that has no level of its own.
-export function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffort, withEfforts = true }) {
-  const { isOpen, shownPlace, leaving, button, menu, open, close } = useAnchoredMenu()
+// What the model picker reads from the Bot and the roster; the popup and the inline form share it.
+function useModelPicker({ bot, roster, actions, run, onPick, onPickEffort, withEfforts }) {
   const [reading, readModels] = useAgentModels(actions)
   const shown = modelOf(bot, roster)
   const current = bot.model ?? bot.appliedModel
@@ -283,46 +392,111 @@ export function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onP
   const effortLabel = currentEffort === undefined
     ? (reasoning?.efforts?.length > 0 ? t('Default') : undefined)
     : reasoning.efforts.find(effort => effort.id === currentEffort)?.name ?? currentEffort
+  // Each opening is a new number, so the rows start from the current model again even
+  // when the previous menu is still playing its exit animation under a quick reopen.
+  const [opening, setOpening] = useState(0)
+  const models = modelsFor(roster.models, current)
+  return {
+    bot, roster, shown, current, local, reasoning, picked, effortLabel, models, opening, reading, withEfforts,
+    manage: local ? undefined : manageModels(actions),
+    hasEfforts: withEfforts && effortStops(reasoning).length > 0,
+    // DSH settings can change the list at any time, so opening asks again.
+    opened: () => {
+      if (local) readModels(routeOf(current))
+      else void actions?.refreshModels?.()
+      setOpening(count => count + 1)
+    },
+    choose: (ref) => {
+      if (onPick) onPick(ref)
+      else if (ref !== current || !bot.model) void run(actions.updateBot(bot.id, { model: ref }))
+    },
+    // Hands the save back, so the slider can tell when the Bot has caught up with its pick.
+    chooseEffort: effort => (onPickEffort ? onPickEffort(effort) : run(actions.updateBot(bot.id, { effort: effort ?? null }))),
+  }
+}
+
+// The trigger shows the model name over its provider.
+const modelTrigger = (picker, { wide, button, isOpen, onClick }) => {
+  const { bot, shown, models, withEfforts, effortLabel } = picker
+  return h('button', {
+    ref: button, type: 'button', className: 'bt-model-trigger', 'data-wide': wide || undefined,
+    'aria-haspopup': 'menu', 'aria-expanded': isOpen, 'aria-label': t('Model: {model}', { model: shown?.name ?? t('none') }),
+    'data-missing': shown !== undefined && !shown.served && models.length > 0 ? '' : undefined, onClick,
+  },
+  h('span', { className: 'bt-model-copy' },
+    h('span', { className: 'bt-model-name' }, shown?.name ?? t('Choose a model')),
+    shown ? h('span', { className: 'bt-model-provider' }, shown.served || models.length === 0
+      ? (!withEfforts || effortLabel === undefined ? shown.provider : `${shown.provider} · ${effortLabel}`)
+      : t('{provider} · not available', { provider: shown.provider })) : null),
+  h(Caret))
+}
+
+const modelScroll = ({ roster, models, current, local, reading, opening }, pick) => h('div', { className: 'bt-model-scroll' },
+  models.length > 0 ? h(ModelRows, { roster: { ...roster, models }, current, onPick: pick, opening })
+    : local ? null : h('div', { className: 'bt-model-none' }, t('No models are set up in DeepSeek Harness yet.')),
+  reading ? h('div', { className: 'bt-model-none' }, t('Reading models…')) : null)
+
+const manageButton = (manage, close) => h('button', { type: 'button', role: 'menuitem', onClick: () => { close(); manage() } },
+  h(SlidersIcon), h('span', { className: 'bt-menu-label' }, t('Models and providers…')))
+
+const modelMenuLabel = bot => t('Model for {name}', { name: bot.name })
+
+// The model picker. It opens as a menu under its trigger; `inline` opens it in the flow
+// instead and keeps the Thinking slider under it, for a place with room for both.
+// `onPick`/`onPickEffort` replace saving to the Bot, for a Bot that does not exist yet.
+// `withEfforts: false` keeps the Thinking level out, for a pick that has no level of its own.
+export function ModelMenu(props) {
+  return props.inline ? h(InlineModelMenu, props) : h(PopupModelMenu, props)
+}
+
+// A Thinking section at the foot of the menu lists the levels of the shown model when it has them.
+function PopupModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffort, withEfforts = true }) {
+  const { isOpen, shownPlace, leaving, button, menu, open, close } = useAnchoredMenu()
+  const picker = useModelPicker({ bot, roster, actions, run, onPick, onPickEffort, withEfforts })
+  const { manage, hasEfforts } = picker
   const toggle = () => {
     if (isOpen) { close(); return }
-    // DSH settings can change the list at any time, so opening asks again.
-    if (local) readModels(routeOf(current))
-    else void actions?.refreshModels?.()
+    picker.opened()
     open()
   }
   const pick = (ref) => {
     close()
-    if (onPick) onPick(ref)
-    else if (ref !== current || !bot.model) void run(actions.updateBot(bot.id, { model: ref }))
+    picker.choose(ref)
   }
-  const pickEffort = (effort) => {
-    if (onPickEffort) onPickEffort(effort)
-    else if (effort !== bot.effort) void run(actions.updateBot(bot.id, { effort: effort ?? null }))
-  }
-  const models = modelsFor(roster.models, current)
-  const manage = local ? undefined : manageModels(actions)
-  const hasEfforts = withEfforts && effortStops(reasoning).length > 0
   return h(Fragment, null,
-    h('button', {
-      ref: button, type: 'button', className: 'bt-model-trigger', 'data-wide': wide || undefined,
-      'aria-haspopup': 'menu', 'aria-expanded': isOpen, 'aria-label': t('Model: {model}', { model: shown?.name ?? t('none') }),
-      'data-missing': shown !== undefined && !shown.served && models.length > 0 ? '' : undefined, onClick: toggle,
-    },
-    h('span', { className: 'bt-model-copy' },
-      h('span', { className: 'bt-model-name' }, shown?.name ?? t('Choose a model')),
-      shown ? h('span', { className: 'bt-model-provider' }, shown.served || models.length === 0
-        ? (!withEfforts || effortLabel === undefined ? shown.provider : `${shown.provider} · ${effortLabel}`)
-        : t('{provider} · not available', { provider: shown.provider })) : null),
-    h(Caret)),
-    shownPlace ? createPortal(h('div', { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== undefined ? ' bt-menu-up' : ''}`, role: 'menu', 'aria-label': t('Model for {name}', { name: bot.name }), style: shownPlace, 'data-leaving': leaving || undefined },
-      h('div', { className: 'bt-model-scroll' },
-        models.length > 0 ? h(ModelRows, { roster: { ...roster, models }, current, onPick: pick })
-          : local ? null : h('div', { className: 'bt-model-none' }, t('No models are set up in DeepSeek Harness yet.')),
-        reading ? h('div', { className: 'bt-model-none' }, t('Reading models…')) : null),
+    modelTrigger(picker, { wide, button, isOpen, onClick: toggle }),
+    shownPlace ? createPortal(h('div', { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== undefined ? ' bt-menu-up' : ''}`, role: 'menu', 'aria-label': modelMenuLabel(bot), style: shownPlace, 'data-leaving': leaving || undefined },
+      modelScroll(picker, pick),
       hasEfforts || manage ? h('div', { className: 'bt-model-foot' },
-        hasEfforts ? h(EffortBar, { reasoning, current: picked, onPick: pickEffort }) : null,
+        hasEfforts ? h(EffortBar, { reasoning: picker.reasoning, current: picker.picked, onPick: picker.chooseEffort }) : null,
         hasEfforts && manage ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
-        manage ? h('button', { type: 'button', role: 'menuitem', onClick: () => { close(); manage() } }, h(SlidersIcon), h('span', { className: 'bt-menu-label' }, t('Models and providers…'))) : null) : null), document.body) : null)
+        manage ? manageButton(manage, close) : null) : null), document.body) : null)
+}
+
+// The list opens under the trigger and pushes what follows it down; the Thinking slider
+// stays under the trigger, or under the list while it is open.
+function InlineModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffort, withEfforts = true }) {
+  const { isOpen, root, button, menu, open, close } = useInlineMenu()
+  const picker = useModelPicker({ bot, roster, actions, run, onPick, onPickEffort, withEfforts })
+  const { manage, hasEfforts } = picker
+  const toggle = () => {
+    if (isOpen) { close(); return }
+    picker.opened()
+    open()
+  }
+  const pick = (ref) => {
+    close()
+    button.current?.focus()
+    picker.choose(ref)
+  }
+  return h('div', { ref: root, className: 'bt-model-inline' },
+    modelTrigger(picker, { wide, button, isOpen, onClick: toggle }),
+    h(Collapse, { open: isOpen },
+      h('div', { ref: menu, className: 'bt-menu bt-model-menu bt-model-inline-menu', role: 'menu', 'aria-label': modelMenuLabel(bot) },
+        modelScroll(picker, pick),
+        manage ? h('div', { className: 'bt-model-foot' }, manageButton(manage, close)) : null)),
+    h(Collapse, { open: hasEfforts },
+      hasEfforts ? h('div', { className: 'bt-model-effort' }, h(EffortBar, { reasoning: picker.reasoning, current: picker.picked, onPick: picker.chooseEffort })) : null))
 }
 
 // The card a Bot's chat opens on while the Bot has no model, or has one that is no
@@ -470,20 +644,31 @@ export const MODEL_CSS = `
 .bt-model-menu:not(.bt-folder-menu){padding:0;overflow:hidden;display:flex;flex-direction:column;gap:0}
 .bt-model-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain;padding:6px;display:flex;flex-direction:column;gap:2px}
 .bt-model-foot{flex:none;display:flex;flex-direction:column;gap:2px;padding:4px 6px 6px;border-top:.5px solid var(--bt-line-2)}
+.bt-model-inline{display:flex;flex-direction:column;min-width:0}
+/* The inline list is a menu in the flow: the popup's float, glass and entrance give way to a card the width of its trigger. */
+.bt-menu.bt-model-inline-menu{position:static;z-index:auto;min-width:0;margin-top:4px;background:var(--bt-card);-webkit-backdrop-filter:none;backdrop-filter:none;border:0;box-shadow:inset 0 0 0 1px var(--bt-line);animation:none}
+.bt-model-inline-menu .bt-model-scroll{max-height:min(280px,45vh)}
+.bt-collapse{display:grid;grid-template-rows:0fr;transition:${spring(SPRING_SHAPE, 'grid-template-rows')}}
+.bt-collapse[data-open]{grid-template-rows:1fr}
+.bt-collapse:not([data-open]){pointer-events:none}
+.bt-collapse-in{min-height:0;overflow:hidden}
+/* The collapse clips at its box: the extra 3px keeps the slider's focus ring inside it. */
+.bt-model-effort{padding:2px 0 3px}
+.bt-model-effort .bt-effort-bar{padding:4px 12px 5px}
 .bt-effort-bar{display:flex;flex-direction:column;gap:6px;padding:4px 6px 5px}
 .bt-effort-head{display:flex;align-items:center;justify-content:space-between;gap:8px;height:18px;padding:0 2px}
 .bt-effort-label{font-size:11px;line-height:14px;font-weight:500;color:var(--bt-ink-3)}
 .bt-effort-meta{display:inline-flex;align-items:center;gap:5px;min-width:0}
 .bt-effort-tag{font-size:11px;line-height:14px;color:var(--bt-ink-3)}
 .bt-effort-val{font-size:12px;line-height:16px;font-weight:600;color:var(--bt-accent);white-space:nowrap}
-.bt-menu button.bt-effort-reset{flex:none;position:relative;width:28px;height:28px;min-height:0;margin:-5px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing};transition:color .12s ease}
-.bt-menu button.bt-effort-reset::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--bt-hover);transition:background-color .12s ease}
-.bt-menu button.bt-effort-reset svg{position:relative;width:11px;height:11px;margin:0}
-.bt-menu button.bt-effort-reset:hover:not(:disabled){color:var(--bt-ink)}
-.bt-menu button.bt-effort-reset:hover:not(:disabled)::before{background:var(--bt-active)}
-.bt-menu button.bt-effort-reset:disabled{opacity:.35;cursor:default}
-.bt-menu button.bt-effort-reset:disabled::before{background:none}
-.bt-menu button.bt-effort-reset:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
+.bt-effort-bar button.bt-effort-reset{flex:none;position:relative;width:28px;height:28px;min-height:0;margin:-5px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing};transition:color .12s ease}
+.bt-effort-bar button.bt-effort-reset::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--bt-hover);transition:background-color .12s ease}
+.bt-effort-bar button.bt-effort-reset svg{position:relative;width:11px;height:11px;margin:0}
+.bt-effort-bar button.bt-effort-reset:hover:not(:disabled){color:var(--bt-ink)}
+.bt-effort-bar button.bt-effort-reset:hover:not(:disabled)::before{background:var(--bt-active)}
+.bt-effort-bar button.bt-effort-reset:disabled{opacity:.35;cursor:default}
+.bt-effort-bar button.bt-effort-reset:disabled::before{background:none}
+.bt-effort-bar button.bt-effort-reset:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
 .bt-effort-track{position:relative;height:28px;margin:-3px 0;border-radius:999px;cursor:pointer;user-select:none;touch-action:none}
 .bt-effort-track::before{content:"";position:absolute;left:0;right:0;top:3px;bottom:3px;border-radius:999px;background:var(--bt-hover);box-shadow:inset 0 0 0 .5px var(--bt-line)}
 .bt-effort-track:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
@@ -495,6 +680,13 @@ export const MODEL_CSS = `
 .bt-effort-track:hover .bt-effort-knob,.bt-effort-track[data-dragging] .bt-effort-knob{scale:1.08}
 .bt-model-group{flex:none;padding:8px 8px 2px;font-size:11px;line-height:14px;font-weight:500;color:var(--bt-ink-3);text-transform:none}
 .bt-model-group:first-child{padding-top:2px}
+/* A heading that opens and closes its group: the same type as the plain headings other
+menus use, with the menu item's hover, focus ring and a caret that points at the state. */
+.bt-model-group-toggle{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;margin:0;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:var(--bt-ink-3);font:inherit;font-size:11px;line-height:14px;font-weight:500;text-align:left;cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.bt-model-group-toggle:hover{background:var(--bt-hover);color:var(--bt-ink-2)}
+.bt-model-group-toggle:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
+.bt-model-group-toggle .bt-model-caret{color:inherit}
+.bt-model-group-toggle[aria-expanded=false] .bt-model-caret{transform:rotate(-90deg)}
 .bt-model-tick{flex:none;width:16px;height:16px;display:inline-flex;color:var(--bt-ink-2)}
 .bt-model-tick svg{animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} 60ms backwards}
 .bt-model-none{padding:8px;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
@@ -525,5 +717,5 @@ export const MODEL_CSS = `
 @keyframes bt-model-in{from{opacity:0;transform:translateY(6px)}}
 .bt-model-spin{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--bt-line-2);border-top-color:var(--bt-ink-2);animation:bt-model-spin .7s linear infinite}
 @keyframes bt-model-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.bt-model-dock{animation:none}.bt-model-spin{animation-duration:2s}.bt-model-caret,.bt-effort-fill,.bt-effort-knob{transition:none}.bt-model-tick svg{animation:none}}
+@media (prefers-reduced-motion:reduce){.bt-collapse{transition:none}.bt-model-dock{animation:none}.bt-model-spin{animation-duration:2s}.bt-model-caret,.bt-effort-fill,.bt-effort-knob{transition:none}.bt-model-tick svg{animation:none}}
 `
