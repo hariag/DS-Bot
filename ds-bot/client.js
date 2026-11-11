@@ -431,6 +431,8 @@ var JA = {
   "The model service failed.": "モデルサービスでエラーが発生しました。",
   "DeepSeek Harness stopped before this turn finished.": "このターンが完了する前に DeepSeek Harness が停止しました。",
   "This turn failed.": "このターンの実行に失敗しました。",
+  "The conversation could not be compacted for this model. Try again or choose another model.": "このモデル用に会話を圧縮できませんでした。再試行するか、別のモデルを選択してください。",
+  "Open model settings": "モデル設定を開く",
   "The model service": "モデルサービス",
   "DeepSeek account": "DeepSeek アカウント",
   "This Bot": "この Bot",
@@ -860,9 +862,6 @@ var JA = {
   "Today {time}": "今日 {time}",
   "Yesterday {time}": "昨日 {time}",
   "Ran for {duration}": "実行時間 {duration}",
-  "No background work detected": "バックグラウンドの作業を検出できませんでした",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot には、この返信のツール呼び出しや実行中のバックグラウンドタスクの記録がありません。",
-  "File not found: {path}": "ファイルが見つかりません：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · キャッシュヒット {hit}%",
   "1 turn": "1 ターン",
   "{count} turns": "{count} ターン",
@@ -1346,6 +1345,7 @@ var JA = {
   "The model service failed": "モデルサービスでエラーが発生しました",
   "The model took too long to answer": "モデルの応答がタイムアウトしました",
   "Could not reach the model service": "モデルサービスに接続できませんでした",
+  "The conversation could not be compacted for the model switch": "モデル切り替え時に会話を圧縮できませんでした",
   "Its group conversation could not open": "グループ会話を開けませんでした",
   "Its group conversation could not open, so it starts a new one next time": "グループ会話を開けなかったため、次回新しい会話を開始します",
   "Add files": "ファイルを追加",
@@ -2690,6 +2690,8 @@ var KO = {
   "The model service failed.": "모델 서비스 오류가 발생했습니다.",
   "DeepSeek Harness stopped before this turn finished.": "이번 차례가 끝나기 전에 DeepSeek Harness가 중지되었습니다.",
   "This turn failed.": "이번 차례 실행에 실패했습니다.",
+  "The conversation could not be compacted for this model. Try again or choose another model.": "이 모델에 맞게 대화를 압축하지 못했습니다. 다시 시도하거나 다른 모델을 선택하세요.",
+  "Open model settings": "모델 설정 열기",
   "The model service": "모델 서비스",
   "DeepSeek account": "DeepSeek 계정",
   "This Bot": "이 Bot",
@@ -3141,9 +3143,6 @@ var KO = {
   "Today {time}": "오늘 {time}",
   "Yesterday {time}": "어제 {time}",
   "Ran for {duration}": "{duration} 동안 실행됨",
-  "No background work detected": "백그라운드 작업이 감지되지 않음",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot에 이 답변의 도구 호출이나 실행 중인 백그라운드 작업이 기록되어 있지 않습니다.",
-  "File not found: {path}": "파일을 찾을 수 없음: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 캐시 적중 {hit}%",
   "1 turn": "1턴",
   "{count} turns": "{count}턴",
@@ -3638,6 +3637,7 @@ var KO = {
   "The model service failed": "모델 서비스 오류",
   "The model took too long to answer": "모델 응답 시간이 초과되었습니다",
   "Could not reach the model service": "모델 서비스에 연결할 수 없습니다",
+  "The conversation could not be compacted for the model switch": "모델 전환을 위해 대화를 압축하지 못했습니다",
   "Its group conversation could not open": "그룹 대화 세션을 열 수 없습니다",
   "Its group conversation could not open, so it starts a new one next time": "그룹 대화 세션을 열 수 없어 다음번에 새 세션을 시작합니다",
   // The composer's +
@@ -4988,6 +4988,8 @@ var ES = {
   "The model service failed.": "El servicio de modelos falló.",
   "DeepSeek Harness stopped before this turn finished.": "DeepSeek Harness se detuvo antes de que terminara este turno.",
   "This turn failed.": "Este turno falló.",
+  "The conversation could not be compacted for this model. Try again or choose another model.": "No se pudo compactar la conversación para este modelo. Vuelve a intentarlo o elige otro modelo.",
+  "Open model settings": "Abrir ajustes del modelo",
   "The model service": "El servicio de modelos",
   "DeepSeek account": "Cuenta de DeepSeek",
   "This Bot": "Este Bot",
@@ -5439,9 +5441,6 @@ var ES = {
   "Today {time}": "Hoy {time}",
   "Yesterday {time}": "Ayer {time}",
   "Ran for {duration}": "Duración: {duration}",
-  "No background work detected": "No se detectó trabajo en segundo plano",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot no ha registrado llamadas a herramientas ni tareas activas en segundo plano para esta respuesta.",
-  "File not found: {path}": "No se encuentra el archivo: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Acierto de caché {hit}%",
   "1 turn": "1 turno",
   "{count} turns": "{count} turnos",
@@ -5936,6 +5935,7 @@ var ES = {
   "The model service failed": "El servicio de modelos falló",
   "The model took too long to answer": "El modelo tardó demasiado en responder",
   "Could not reach the model service": "No se pudo conectar con el servicio de modelos",
+  "The conversation could not be compacted for the model switch": "No se pudo compactar la conversación para cambiar de modelo",
   "Its group conversation could not open": "No se pudo abrir su conversación grupal",
   "Its group conversation could not open, so it starts a new one next time": "No se pudo abrir su conversación grupal, por lo que iniciará una nueva la próxima vez",
   // The composer's +
@@ -7280,6 +7280,8 @@ var FR = {
   "The model service failed.": "Le service de modèles a rencontré une erreur.",
   "DeepSeek Harness stopped before this turn finished.": "DeepSeek Harness s’est arrêté avant la fin de ce tour.",
   "This turn failed.": "Ce tour a échoué.",
+  "The conversation could not be compacted for this model. Try again or choose another model.": "La conversation n’a pas pu être condensée pour ce modèle. Réessayez ou choisissez un autre modèle.",
+  "Open model settings": "Ouvrir les réglages du modèle",
   "The model service": "Le service de modèles",
   "DeepSeek account": "Compte DeepSeek",
   "This Bot": "Ce Bot",
@@ -7709,9 +7711,6 @@ var FR = {
   "Today {time}": "Aujourd’hui {time}",
   "Yesterday {time}": "Hier {time}",
   "Ran for {duration}": "Exécuté pendant {duration}",
-  "No background work detected": "Aucune tâche en arrière-plan détectée",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot n’a enregistré aucun appel d’outil ni aucune tâche active en arrière-plan pour cette réponse.",
-  "File not found: {path}": "Fichier introuvable : {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache {hit} %",
   "1 turn": "1 tour",
   "{count} turns": "{count} tours",
@@ -8195,6 +8194,7 @@ var FR = {
   "The model service failed": "Le service de modèles a rencontré une erreur",
   "The model took too long to answer": "Le modèle a mis trop de temps à répondre",
   "Could not reach the model service": "Impossible de joindre le service de modèles",
+  "The conversation could not be compacted for the model switch": "La conversation n’a pas pu être condensée pour changer de modèle",
   "Its group conversation could not open": "Sa discussion de groupe n’a pas pu s’ouvrir",
   "Its group conversation could not open, so it starts a new one next time": "Sa discussion de groupe n’a pas pu s’ouvrir ; une nouvelle sera créée la prochaine fois",
   "Add files": "Ajouter des fichiers",
@@ -9539,6 +9539,8 @@ var DE = {
   "The model service failed.": "Fehler beim Modelldienst.",
   "DeepSeek Harness stopped before this turn finished.": "DeepSeek Harness wurde beendet, bevor dieser Durchgang abgeschlossen war.",
   "This turn failed.": "Dieser Durchgang ist fehlgeschlagen.",
+  "The conversation could not be compacted for this model. Try again or choose another model.": "Der Gesprächskontext konnte für dieses Modell nicht komprimiert werden. Versuche es erneut oder wähle ein anderes Modell.",
+  "Open model settings": "Modelleinstellungen öffnen",
   "The model service": "Der Modelldienst",
   "DeepSeek account": "DeepSeek-Konto",
   "This Bot": "Dieser Bot",
@@ -9990,9 +9992,6 @@ var DE = {
   "Today {time}": "Heute {time}",
   "Yesterday {time}": "Gestern {time}",
   "Ran for {duration}": "Laufzeit {duration}",
-  "No background work detected": "Keine Hintergrundarbeit erkannt",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot hat für diese Antwort keinen Werkzeugaufruf und keine aktive Hintergrundaufgabe aufgezeichnet.",
-  "File not found: {path}": "Datei nicht gefunden: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache-Treffer {hit}%",
   "1 turn": "1 Durchgang",
   "{count} turns": "{count} Durchgänge",
@@ -10487,6 +10486,7 @@ var DE = {
   "The model service failed": "Fehler beim Modelldienst",
   "The model took too long to answer": "Zeitüberschreitung bei der Modellantwort",
   "Could not reach the model service": "Modelldienst nicht erreichbar",
+  "The conversation could not be compacted for the model switch": "Die Unterhaltung konnte für den Modellwechsel nicht komprimiert werden",
   "Its group conversation could not open": "Seine Gruppensitzung konnte nicht geöffnet werden",
   "Its group conversation could not open, so it starts a new one next time": "Seine Gruppensitzung konnte nicht geöffnet werden; beim nächsten Mal wird eine neue gestartet",
   // The composer's +
@@ -11838,6 +11838,8 @@ var ZH = {
   "The model service failed.": "模型服务出错了。",
   "DeepSeek Harness stopped before this turn finished.": "这一轮还没完成，DeepSeek Harness 就停下了。",
   "This turn failed.": "这一轮运行失败了。",
+  "The conversation could not be compacted for this model. Try again or choose another model.": "无法为这个模型压缩对话。请重试或选择其他模型。",
+  "Open model settings": "打开模型设置",
   "The model service": "模型服务",
   "DeepSeek account": "DeepSeek 账号",
   "This Bot": "这个 Bot",
@@ -12289,9 +12291,6 @@ var ZH = {
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
   "Ran for {duration}": "本次用时 {duration}",
-  "No background work detected": "未检测到后台任务",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot 未记录到这条回复的工具调用或正在运行的后台任务。",
-  "File not found: {path}": "文件不存在：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 缓存命中 {hit}%",
   "1 turn": "1 轮",
   "{count} turns": "{count} 轮",
@@ -12786,6 +12785,7 @@ var ZH = {
   "The model service failed": "模型服务出错",
   "The model took too long to answer": "模型响应超时",
   "Could not reach the model service": "连不上模型服务",
+  "The conversation could not be compacted for the model switch": "切换模型时无法压缩对话",
   "Its group conversation could not open": "它的群聊会话打不开",
   "Its group conversation could not open, so it starts a new one next time": "它的群聊会话打不开，下次会换一个新的",
   // The composer's +
@@ -13386,6 +13386,7 @@ var FAILURES = {
   SERVER: "The model service failed",
   TIMEOUT: "The model took too long to answer",
   TRANSPORT: "Could not reach the model service",
+  MODEL_SWITCH_COMPACTION_FAILED: "The conversation could not be compacted for the model switch",
   SESSION: "Its group conversation could not open",
   SESSION_RESET: "Its group conversation could not open, so it starts a new one next time"
 };
@@ -14939,9 +14940,6 @@ button.bt-lead{border:0;background:none;padding:0;cursor:pointer}
 .bt-group-name:has(>.bt-lead){display:flex;align-items:center;margin:0 0 2px;font-size:13px;line-height:22px;font-weight:600;color:var(--bt-ink)}
 .bt-group-name>.bt-lead{margin:0 8px 0 0}
 .bt-group-time,.bt-group-took{margin-left:6px;font-size:11px;line-height:16px;font-weight:400;color:var(--bt-ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
-.bt-claim{margin-left:28px;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
-.bt-claim-file{color:var(--bt-danger)}
-.bt-claim-inProgress{color:var(--bt-ink-2)}
 .bt-x{border:0;background:none;color:var(--bt-ink-2);cursor:pointer;width:24px;height:24px;border-radius:6px;font-size:16px;line-height:24px;padding:0;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
 
@@ -24795,7 +24793,7 @@ function stackReplies(replies) {
   const items = [];
   replies.forEach((reply, index) => {
     const last = items.at(-1);
-    if (reply.kind === void 0 && last?.reply.kind === void 0 && last?.reply.botId === reply.botId && reply.claims === void 0 && last.reply.claims === void 0) {
+    if (reply.kind === void 0 && last?.reply.kind === void 0 && last?.reply.botId === reply.botId) {
       last.texts.push(reply.text);
       last.time = reply.time;
       last.duration = reply.duration;
@@ -25836,20 +25834,7 @@ function scheduleGroupChains(flow) {
     if (flow.isConnected !== false) syncGroupChains(flow);
   });
 }
-function claimLines(claims) {
-  if (claims === void 0 || claims === null) return [];
-  const lines = [];
-  if (claims.inProgress === true) {
-    lines.push({
-      kind: "inProgress",
-      text: t("No background work detected"),
-      detail: t("DS Bot has no recorded tool call or active background task for this reply.")
-    });
-  }
-  for (const path2 of claims.missingFiles ?? []) lines.push({ kind: "file", text: t("File not found: {path}", { path: path2 }) });
-  return lines;
-}
-function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration, claims }) {
+function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration }) {
   const ref = (0, import_react32.useRef)(null);
   (0, import_react32.useLayoutEffect)(() => {
     const el = ref.current;
@@ -25878,8 +25863,7 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, 
       Number.isFinite(time) ? (0, import_react32.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null,
       took ? (0, import_react32.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
-    (0, import_react32.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead: flat ? null : lead, whole }),
-    claimLines(claims).map((line) => (0, import_react32.createElement)("div", { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: "status", title: line.detail ?? void 0 }, line.text))
+    (0, import_react32.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead: flat ? null : lead, whole })
   );
 }
 function GroupEvent({ prefix, room: room2, name, roster, actions }) {
@@ -26103,7 +26087,6 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
         msgKey: `${sessionId}:post:${row.seq ?? row.time}`,
         time: row.time,
         duration: row.duration,
-        claims: row.claims,
         whole: row.file ? { length: row.length, load: () => actions.fileText(row.file) } : void 0
       });
     }
@@ -26174,7 +26157,6 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
           msgKey: `${sessionId}:post:${data.seq ?? node.key}`,
           useUi,
           time: data.time,
-          claims: source.claims,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : void 0
         });
       }
@@ -26516,7 +26498,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
           goalEventText(reply)
         );
       }
-      return (0, import_react32.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration, claims: reply.claims });
+      return (0, import_react32.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration });
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id];
@@ -35729,6 +35711,8 @@ function failureText2(code, { name, provider, status }) {
       return t("The model service failed.");
     case "INTERRUPTED":
       return t("DeepSeek Harness stopped before this turn finished.");
+    case "MODEL_SWITCH_COMPACTION_FAILED":
+      return t("The conversation could not be compacted for this model. Try again or choose another model.");
     default:
       return knownFailure(code) ?? t("This turn failed.");
   }
@@ -35747,6 +35731,8 @@ function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
       return official ? ["top-up"] : [];
     case "ACCOUNT_QUOTA":
       return topUp ? ["top-up"] : [];
+    case "MODEL_SWITCH_COMPACTION_FAILED":
+      return ["model", "model-settings"];
     default:
       return [];
   }
@@ -35754,6 +35740,7 @@ function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
 var retryShown = (code, blocked) => !CREDENTIAL_CODES.has(code) || blocked === void 0;
 var FIX_LABELS = {
   key: () => t("Enter API key"),
+  "model-settings": () => t("Open model settings"),
   rekey: () => t("Enter the key again"),
   "sign-in": (signedIn) => signedIn ? t("Use the DeepSeek account") : t("Sign in with a DeepSeek account"),
   "use-account": () => t("Use a DeepSeek account instead"),
@@ -35884,7 +35871,8 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
     "sign-in": viaAccount,
     "use-account": viaAccount,
     "sign-in-again": () => actions.signIn(),
-    model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0
+    model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0,
+    "model-settings": manageModels(actions)
   };
   const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: provider === ACCOUNT }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
   const asked = isHiddenTurn(roster, sessionId, data.turn);
