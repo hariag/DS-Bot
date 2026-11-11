@@ -123,7 +123,6 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
-  "Opening…": "開いています…",
   "Main Bot": "メイン Bot",
   "Working": "実行中",
   "Waiting for your answer": "回答待ち",
@@ -432,8 +431,6 @@ var JA = {
   "The model service failed.": "モデルサービスでエラーが発生しました。",
   "DeepSeek Harness stopped before this turn finished.": "このターンが完了する前に DeepSeek Harness が停止しました。",
   "This turn failed.": "このターンの実行に失敗しました。",
-  "The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.": "モデルの出力上限がコンテキストウィンドウを超えているため、何も送信できません。コンテキストウィンドウを大きくするか、出力上限を小さくしてください。",
-  "Open model settings": "モデル設定を開く",
   "The model service": "モデルサービス",
   "DeepSeek account": "DeepSeek アカウント",
   "This Bot": "この Bot",
@@ -546,6 +543,7 @@ var JA = {
   "Name after members": "メンバー名を使用",
   "Rename {name}": "{name} の名前を変更",
   "Rename": "名前を変更",
+  "Add instructions in Bot settings": "Bot 設定で指示を追加",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "定期タスクはまだありません。追加するには、チャットで Bot に内容と日時を伝えてください。",
   "The browser is in DSH Desktop and the DS Bot app.": "ブラウザは DSH デスクトップ版および DS Bot アプリで利用できます。",
   "New tab": "新しいタブ",
@@ -619,7 +617,6 @@ var JA = {
   "Applies from the next message.": "次のメッセージから適用されます。",
   "Profile": "プロフィール",
   "Label": "ラベル",
-  "Add a label": "ラベルを追加",
   "Optional. Shown under the name.": "任意。名前の下に表示されます。",
   "Research, admin…": "リサーチ、管理…",
   "What this Bot does": "この Bot の役割",
@@ -822,7 +819,6 @@ var JA = {
   "New session": "新しいセッション",
   "Archive": "アーカイブ",
   "Session actions": "セッションの操作",
-  "Plugins": "プラグイン",
   "Plain dsh session": "標準の dsh セッション",
   "just now": "たった今",
   "{n} min": "{n} 分",
@@ -864,6 +860,9 @@ var JA = {
   "Today {time}": "今日 {time}",
   "Yesterday {time}": "昨日 {time}",
   "Ran for {duration}": "実行時間 {duration}",
+  "No background work detected": "バックグラウンドの作業を検出できませんでした",
+  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot には、この返信のツール呼び出しや実行中のバックグラウンドタスクの記録がありません。",
+  "File not found: {path}": "ファイルが見つかりません：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · キャッシュヒット {hit}%",
   "1 turn": "1 ターン",
   "{count} turns": "{count} ターン",
@@ -1333,7 +1332,6 @@ var JA = {
   "Settings → Feedback has the details.": "詳細は「設定 → フィードバック」を確認してください。",
   "Could not reach DSH. Check that it is still running.": "DSH に接続できませんでした。起動しているか確認してください。",
   "{name} stopped: {reason}. Switch its model or ask it to go on.": "{name} が停止しました: {reason}。モデルを切り替えるか、続行するよう伝えてください。",
-  "{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.": "{name} のバックグラウンド ヘルパーは完了できませんでした：{reason}。必要なら続行を依頼してください。",
   "Unknown error": "不明なエラー",
   "The model has no API key": "モデルに API キーが設定されていません",
   "The API key is not in the right format": "API キーの形式が正しくありません",
@@ -1348,7 +1346,6 @@ var JA = {
   "The model service failed": "モデルサービスでエラーが発生しました",
   "The model took too long to answer": "モデルの応答がタイムアウトしました",
   "Could not reach the model service": "モデルサービスに接続できませんでした",
-  "The model's output limit is above its context window": "モデルの出力上限がコンテキストウィンドウを超えています",
   "Its group conversation could not open": "グループ会話を開けませんでした",
   "Its group conversation could not open, so it starts a new one next time": "グループ会話を開けなかったため、次回新しい会話を開始します",
   "Add files": "ファイルを追加",
@@ -2379,7 +2376,6 @@ var DSH_JA = {
 
 // src/client/locales/ko.js
 var KO = {
-  "Opening…": "여는 중…",
   // Shared
   "Main Bot": "메인 Bot",
   Working: "작업 중",
@@ -2694,8 +2690,6 @@ var KO = {
   "The model service failed.": "모델 서비스 오류가 발생했습니다.",
   "DeepSeek Harness stopped before this turn finished.": "이번 차례가 끝나기 전에 DeepSeek Harness가 중지되었습니다.",
   "This turn failed.": "이번 차례 실행에 실패했습니다.",
-  "The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.": "모델의 출력 한도가 컨텍스트 윈도우보다 커서 아무것도 보낼 수 없습니다. 컨텍스트 윈도우를 늘리거나 출력 한도를 줄이세요.",
-  "Open model settings": "모델 설정 열기",
   "The model service": "모델 서비스",
   "DeepSeek account": "DeepSeek 계정",
   "This Bot": "이 Bot",
@@ -2811,6 +2805,7 @@ var KO = {
   "Name after members": "멤버 이름으로 자동 지정",
   "Rename {name}": "{name} 이름 변경",
   Rename: "이름 변경",
+  "Add instructions in Bot settings": "Bot 설정에서 지침 추가",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "아직 예약 작업이 없습니다. 대화창에서 Bot에게 할 일과 시간을 말해 추가하세요.",
   "The browser is in DSH Desktop and the DS Bot app.": "브라우저는 DSH 데스크톱 및 DS Bot 앱에서 사용할 수 있습니다.",
   "New tab": "새 탭",
@@ -2886,7 +2881,6 @@ var KO = {
   "Applies from the next message.": "다음 메시지부터 적용됩니다.",
   Profile: "프로필",
   Label: "라벨",
-  "Add a label": "라벨 추가",
   "Optional. Shown under the name.": "선택사항. 이름 아래에 표시됩니다.",
   "Research, admin…": "리서치, 관리…",
   "What this Bot does": "이 Bot의 역할",
@@ -3102,7 +3096,6 @@ var KO = {
   "New session": "새 세션",
   Archive: "보관",
   "Session actions": "세션 작업",
-  "Plugins": "플러그인",
   "Plain dsh session": "기본 dsh 세션",
   "just now": "방금",
   "{n} min": "{n}분",
@@ -3148,6 +3141,9 @@ var KO = {
   "Today {time}": "오늘 {time}",
   "Yesterday {time}": "어제 {time}",
   "Ran for {duration}": "{duration} 동안 실행됨",
+  "No background work detected": "백그라운드 작업이 감지되지 않음",
+  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot에 이 답변의 도구 호출이나 실행 중인 백그라운드 작업이 기록되어 있지 않습니다.",
+  "File not found: {path}": "파일을 찾을 수 없음: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 캐시 적중 {hit}%",
   "1 turn": "1턴",
   "{count} turns": "{count}턴",
@@ -3628,7 +3624,6 @@ var KO = {
   "Settings → Feedback has the details.": "설정 → 피드백에서 자세한 내용을 확인하세요.",
   "Could not reach DSH. Check that it is still running.": "DSH에 연결할 수 없습니다. 실행 중인지 확인하세요.",
   "{name} stopped: {reason}. Switch its model or ask it to go on.": "{name} 중지됨: {reason}. 모델을 변경하거나 계속 진행하도록 요청하세요.",
-  "{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.": "{name}의 백그라운드 도우미가 끝내지 못했습니다: {reason}. 계속 필요하면 다시 진행하도록 요청하세요.",
   "Unknown error": "알 수 없는 오류",
   "The model has no API key": "모델에 API 키가 없습니다",
   "The API key is not in the right format": "API 키 형식이 올바르지 않습니다",
@@ -3643,7 +3638,6 @@ var KO = {
   "The model service failed": "모델 서비스 오류",
   "The model took too long to answer": "모델 응답 시간이 초과되었습니다",
   "Could not reach the model service": "모델 서비스에 연결할 수 없습니다",
-  "The model's output limit is above its context window": "모델의 출력 한도가 컨텍스트 윈도우보다 큽니다",
   "Its group conversation could not open": "그룹 대화 세션을 열 수 없습니다",
   "Its group conversation could not open, so it starts a new one next time": "그룹 대화 세션을 열 수 없어 다음번에 새 세션을 시작합니다",
   // The composer's +
@@ -4680,7 +4674,6 @@ var DSH_KO = {
 
 // src/client/locales/es.js
 var ES = {
-  "Opening…": "Abriendo…",
   // Shared
   "Main Bot": "Bot principal",
   Working: "En curso",
@@ -4995,8 +4988,6 @@ var ES = {
   "The model service failed.": "El servicio de modelos falló.",
   "DeepSeek Harness stopped before this turn finished.": "DeepSeek Harness se detuvo antes de que terminara este turno.",
   "This turn failed.": "Este turno falló.",
-  "The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.": "El límite de salida del modelo supera su ventana de contexto, así que no se puede enviar nada. Aumenta la ventana de contexto o reduce el límite de salida.",
-  "Open model settings": "Abrir ajustes del modelo",
   "The model service": "El servicio de modelos",
   "DeepSeek account": "Cuenta de DeepSeek",
   "This Bot": "Este Bot",
@@ -5112,6 +5103,7 @@ var ES = {
   "Name after members": "Nombrar según los miembros",
   "Rename {name}": "Renombrar {name}",
   Rename: "Renombrar",
+  "Add instructions in Bot settings": "Añadir instrucciones en los ajustes del Bot",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "Aún no hay tareas programadas. Para añadir una, dile al Bot en su chat qué hacer y cuándo.",
   "The browser is in DSH Desktop and the DS Bot app.": "El navegador está disponible en DSH Desktop y en la aplicación DS Bot.",
   "New tab": "Nueva pestaña",
@@ -5187,7 +5179,6 @@ var ES = {
   "Applies from the next message.": "Se aplica a partir del siguiente mensaje.",
   Profile: "Perfil",
   Label: "Etiqueta",
-  "Add a label": "Añadir etiqueta",
   "Optional. Shown under the name.": "Opcional. Se muestra debajo del nombre.",
   "Research, admin…": "Investigación, administración…",
   "What this Bot does": "Qué hace este Bot",
@@ -5403,7 +5394,6 @@ var ES = {
   "New session": "Nueva sesión",
   Archive: "Archivar",
   "Session actions": "Acciones de sesión",
-  "Plugins": "Complementos",
   "Plain dsh session": "Sesión nativa de dsh",
   "just now": "ahora mismo",
   "{n} min": "{n} min",
@@ -5449,6 +5439,9 @@ var ES = {
   "Today {time}": "Hoy {time}",
   "Yesterday {time}": "Ayer {time}",
   "Ran for {duration}": "Duración: {duration}",
+  "No background work detected": "No se detectó trabajo en segundo plano",
+  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot no ha registrado llamadas a herramientas ni tareas activas en segundo plano para esta respuesta.",
+  "File not found: {path}": "No se encuentra el archivo: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Acierto de caché {hit}%",
   "1 turn": "1 turno",
   "{count} turns": "{count} turnos",
@@ -5929,7 +5922,6 @@ var ES = {
   "Settings → Feedback has the details.": "Los detalles están en Ajustes → Comentarios.",
   "Could not reach DSH. Check that it is still running.": "No se pudo conectar con DSH. Comprueba que siga en ejecución.",
   "{name} stopped: {reason}. Switch its model or ask it to go on.": "{name} se detuvo: {reason}. Cambia su modelo o pídele que continúe.",
-  "{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.": "El ayudante en segundo plano de {name} no terminó: {reason}. Pídele que siga si aún importa.",
   "Unknown error": "Error desconocido",
   "The model has no API key": "El modelo no tiene clave API",
   "The API key is not in the right format": "La clave API no tiene el formato correcto",
@@ -5944,7 +5936,6 @@ var ES = {
   "The model service failed": "El servicio de modelos falló",
   "The model took too long to answer": "El modelo tardó demasiado en responder",
   "Could not reach the model service": "No se pudo conectar con el servicio de modelos",
-  "The model's output limit is above its context window": "El límite de salida del modelo supera su ventana de contexto",
   "Its group conversation could not open": "No se pudo abrir su conversación grupal",
   "Its group conversation could not open, so it starts a new one next time": "No se pudo abrir su conversación grupal, por lo que iniciará una nueva la próxima vez",
   // The composer's +
@@ -6981,7 +6972,6 @@ var DSH_ES = {
 
 // src/client/locales/fr.js
 var FR = {
-  "Opening…": "Ouverture…",
   "Main Bot": "Bot principal",
   "Working": "En cours",
   "Waiting for your answer": "Attend votre réponse",
@@ -7290,8 +7280,6 @@ var FR = {
   "The model service failed.": "Le service de modèles a rencontré une erreur.",
   "DeepSeek Harness stopped before this turn finished.": "DeepSeek Harness s’est arrêté avant la fin de ce tour.",
   "This turn failed.": "Ce tour a échoué.",
-  "The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.": "La limite de sortie du modèle dépasse sa fenêtre de contexte, donc rien ne peut être envoyé. Augmentez la fenêtre de contexte ou réduisez la limite de sortie.",
-  "Open model settings": "Ouvrir les réglages du modèle",
   "The model service": "Le service de modèles",
   "DeepSeek account": "Compte DeepSeek",
   "This Bot": "Ce Bot",
@@ -7404,6 +7392,7 @@ var FR = {
   "Name after members": "Nommer d’après les membres",
   "Rename {name}": "Renommer {name}",
   "Rename": "Renommer",
+  "Add instructions in Bot settings": "Ajouter des instructions dans les paramètres du Bot",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "Aucune tâche planifiée. Pour en ajouter une, dites au Bot dans sa discussion quoi faire et quand.",
   "The browser is in DSH Desktop and the DS Bot app.": "Le navigateur est disponible dans DSH Desktop et l’application DS Bot.",
   "New tab": "Nouvel onglet",
@@ -7477,7 +7466,6 @@ var FR = {
   "Applies from the next message.": "S’applique dès le prochain message.",
   "Profile": "Profil",
   "Label": "Étiquette",
-  "Add a label": "Ajouter une étiquette",
   "Optional. Shown under the name.": "Facultatif. Affiché sous le nom.",
   "Research, admin…": "Recherche, administration…",
   "What this Bot does": "Rôle de ce Bot",
@@ -7680,7 +7668,6 @@ var FR = {
   "New session": "Nouvelle session",
   "Archive": "Archiver",
   "Session actions": "Actions de session",
-  "Plugins": "Plugins",
   "Plain dsh session": "Session dsh standard",
   "just now": "à l’instant",
   "{n} min": "{n} min",
@@ -7722,6 +7709,9 @@ var FR = {
   "Today {time}": "Aujourd’hui {time}",
   "Yesterday {time}": "Hier {time}",
   "Ran for {duration}": "Exécuté pendant {duration}",
+  "No background work detected": "Aucune tâche en arrière-plan détectée",
+  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot n’a enregistré aucun appel d’outil ni aucune tâche active en arrière-plan pour cette réponse.",
+  "File not found: {path}": "Fichier introuvable : {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache {hit} %",
   "1 turn": "1 tour",
   "{count} turns": "{count} tours",
@@ -8191,7 +8181,6 @@ var FR = {
   "Settings → Feedback has the details.": "Voir les détails dans Paramètres → Retours.",
   "Could not reach DSH. Check that it is still running.": "Impossible de joindre DSH. Vérifiez qu’il est toujours en cours d’exécution.",
   "{name} stopped: {reason}. Switch its model or ask it to go on.": "{name} s’est arrêté : {reason}. Changez son modèle ou demandez-lui de continuer.",
-  "{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.": "L'assistant en arrière-plan de {name} n'a pas terminé : {reason}. Demandez-lui de continuer si c'est encore utile.",
   "Unknown error": "Erreur inconnue",
   "The model has no API key": "Le modèle n’a pas de clé API",
   "The API key is not in the right format": "La clé API n’est pas au bon format",
@@ -8206,7 +8195,6 @@ var FR = {
   "The model service failed": "Le service de modèles a rencontré une erreur",
   "The model took too long to answer": "Le modèle a mis trop de temps à répondre",
   "Could not reach the model service": "Impossible de joindre le service de modèles",
-  "The model's output limit is above its context window": "La limite de sortie du modèle dépasse sa fenêtre de contexte",
   "Its group conversation could not open": "Sa discussion de groupe n’a pas pu s’ouvrir",
   "Its group conversation could not open, so it starts a new one next time": "Sa discussion de groupe n’a pas pu s’ouvrir ; une nouvelle sera créée la prochaine fois",
   "Add files": "Ajouter des fichiers",
@@ -9237,7 +9225,6 @@ var DSH_FR = {
 
 // src/client/locales/de.js
 var DE = {
-  "Opening…": "Wird geöffnet…",
   // Shared
   "Main Bot": "Haupt-Bot",
   Working: "Arbeitet",
@@ -9552,8 +9539,6 @@ var DE = {
   "The model service failed.": "Fehler beim Modelldienst.",
   "DeepSeek Harness stopped before this turn finished.": "DeepSeek Harness wurde beendet, bevor dieser Durchgang abgeschlossen war.",
   "This turn failed.": "Dieser Durchgang ist fehlgeschlagen.",
-  "The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.": "Das Ausgabelimit des Modells übersteigt sein Kontextfenster, daher kann nichts gesendet werden. Vergrößere das Kontextfenster oder verringere das Ausgabelimit.",
-  "Open model settings": "Modelleinstellungen öffnen",
   "The model service": "Der Modelldienst",
   "DeepSeek account": "DeepSeek-Konto",
   "This Bot": "Dieser Bot",
@@ -9669,6 +9654,7 @@ var DE = {
   "Name after members": "Nach Mitgliedern benennen",
   "Rename {name}": "{name} umbenennen",
   Rename: "Umbenennen",
+  "Add instructions in Bot settings": "Anweisungen in den Bot-Einstellungen hinzufügen",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "Noch keine geplanten Aufgaben. Sage dem Bot einfach im Chat, was er wann erledigen soll.",
   "The browser is in DSH Desktop and the DS Bot app.": "Der Browser ist in DSH Desktop und in der DS Bot-App verfügbar.",
   "New tab": "Neuer Tab",
@@ -9744,7 +9730,6 @@ var DE = {
   "Applies from the next message.": "Gilt ab der nächsten Nachricht.",
   Profile: "Profil",
   Label: "Kurzbeschreibung",
-  "Add a label": "Kurzbeschreibung hinzufügen",
   "Optional. Shown under the name.": "Optional. Wird unter dem Namen angezeigt.",
   "Research, admin…": "Recherche, Organisation…",
   "What this Bot does": "Aufgabe dieses Bots",
@@ -9960,7 +9945,6 @@ var DE = {
   "New session": "Neue Sitzung",
   Archive: "Archivieren",
   "Session actions": "Sitzungsaktionen",
-  "Plugins": "Plugins",
   "Plain dsh session": "Native dsh-Sitzung",
   "just now": "gerade eben",
   "{n} min": "{n} Min.",
@@ -10006,6 +9990,9 @@ var DE = {
   "Today {time}": "Heute {time}",
   "Yesterday {time}": "Gestern {time}",
   "Ran for {duration}": "Laufzeit {duration}",
+  "No background work detected": "Keine Hintergrundarbeit erkannt",
+  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot hat für diese Antwort keinen Werkzeugaufruf und keine aktive Hintergrundaufgabe aufgezeichnet.",
+  "File not found: {path}": "Datei nicht gefunden: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache-Treffer {hit}%",
   "1 turn": "1 Durchgang",
   "{count} turns": "{count} Durchgänge",
@@ -10486,7 +10473,6 @@ var DE = {
   "Settings → Feedback has the details.": "Details findest du unter Einstellungen → Feedback.",
   "Could not reach DSH. Check that it is still running.": "DSH ist nicht erreichbar. Prüfe bitte, ob es noch läuft.",
   "{name} stopped: {reason}. Switch its model or ask it to go on.": "{name} hat gestoppt: {reason}. Wechsle das Modell oder bitte ihn weiterzumachen.",
-  "{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.": "Der Hintergrundhelfer von {name} wurde nicht fertig: {reason}. Bitte {name}, weiterzumachen, falls es noch wichtig ist.",
   "Unknown error": "Unbekannter Fehler",
   "The model has no API key": "Für das Modell ist kein API-Schlüssel hinterlegt",
   "The API key is not in the right format": "Der API-Schlüssel hat ein ungültiges Format",
@@ -10501,7 +10487,6 @@ var DE = {
   "The model service failed": "Fehler beim Modelldienst",
   "The model took too long to answer": "Zeitüberschreitung bei der Modellantwort",
   "Could not reach the model service": "Modelldienst nicht erreichbar",
-  "The model's output limit is above its context window": "Das Ausgabelimit des Modells übersteigt sein Kontextfenster",
   "Its group conversation could not open": "Seine Gruppensitzung konnte nicht geöffnet werden",
   "Its group conversation could not open, so it starts a new one next time": "Seine Gruppensitzung konnte nicht geöffnet werden; beim nächsten Mal wird eine neue gestartet",
   // The composer's +
@@ -11853,8 +11838,6 @@ var ZH = {
   "The model service failed.": "模型服务出错了。",
   "DeepSeek Harness stopped before this turn finished.": "这一轮还没完成，DeepSeek Harness 就停下了。",
   "This turn failed.": "这一轮运行失败了。",
-  "The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.": "模型的输出上限大于它的上下文窗口，什么也发不出去。请把上下文窗口调大，或把输出上限调小。",
-  "Open model settings": "打开模型设置",
   "The model service": "模型服务",
   "DeepSeek account": "DeepSeek 账号",
   "This Bot": "这个 Bot",
@@ -11970,6 +11953,7 @@ var ZH = {
   "Name after members": "按成员命名",
   "Rename {name}": "重命名 {name}",
   Rename: "重命名",
+  "Add instructions in Bot settings": "在 Bot 设置里添加说明",
   "No scheduled tasks yet. To add one, tell the Bot in its chat what to do and when.": "还没有定时任务。要添加，在对话里告诉 Bot 做什么、什么时候做。",
   "The browser is in DSH Desktop and the DS Bot app.": "浏览器在 DSH 桌面版和 DS Bot 应用里。",
   "New tab": "新标签页",
@@ -12045,7 +12029,6 @@ var ZH = {
   "Applies from the next message.": "从下一条消息开始生效。",
   Profile: "资料",
   Label: "标签",
-  "Add a label": "添加标签",
   "Optional. Shown under the name.": "可选，显示在名字下方。",
   "Research, admin…": "研究、行政…",
   "What this Bot does": "这个 Bot 做什么",
@@ -12261,7 +12244,6 @@ var ZH = {
   "New session": "新会话",
   Archive: "归档",
   "Session actions": "会话操作",
-  Plugins: "插件",
   "Plain dsh session": "原生 dsh 会话",
   "just now": "刚刚",
   "{n} min": "{n} 分钟",
@@ -12307,6 +12289,9 @@ var ZH = {
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
   "Ran for {duration}": "本次用时 {duration}",
+  "No background work detected": "未检测到后台任务",
+  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot 未记录到这条回复的工具调用或正在运行的后台任务。",
+  "File not found: {path}": "文件不存在：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 缓存命中 {hit}%",
   "1 turn": "1 轮",
   "{count} turns": "{count} 轮",
@@ -12787,7 +12772,6 @@ var ZH = {
   "Settings → Feedback has the details.": "详情见 设置 → 反馈。",
   "Could not reach DSH. Check that it is still running.": "连不上 DSH，请确认它还在运行。",
   "{name} stopped: {reason}. Switch its model or ask it to go on.": "{name} 停下了：{reason}。换个模型，或让它继续。",
-  "{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.": "{name} 的后台子代理没做完：{reason}。如果还需要，让它继续。",
   "Unknown error": "未知错误",
   "The model has no API key": "模型还没有 API Key",
   "The API key is not in the right format": "API Key 格式不对",
@@ -12802,12 +12786,9 @@ var ZH = {
   "The model service failed": "模型服务出错",
   "The model took too long to answer": "模型响应超时",
   "Could not reach the model service": "连不上模型服务",
-  "The model's output limit is above its context window": "模型的输出上限大于上下文窗口",
   "Its group conversation could not open": "它的群聊会话打不开",
   "Its group conversation could not open, so it starts a new one next time": "它的群聊会话打不开，下次会换一个新的",
   // The composer's +
-  // A Session that is still landing
-  "Opening…": "正在打开…",
   "Add files": "添加文件",
   "Reference a chat": "引用对话",
   "Chat with {name}": "与 {name} 的对话",
@@ -13405,7 +13386,6 @@ var FAILURES = {
   SERVER: "The model service failed",
   TIMEOUT: "The model took too long to answer",
   TRANSPORT: "Could not reach the model service",
-  MODEL_SWITCH_COMPACTION_FAILED: "The model's output limit is above its context window",
   SESSION: "Its group conversation could not open",
   SESSION_RESET: "Its group conversation could not open, so it starts a new one next time"
 };
@@ -13574,8 +13554,8 @@ function bodyOf(def, paint, flat = false) {
     return "";
   }
 }
-var eyeMarkup = ([cx, cy, w, h62, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h62 / 2}" width="${w}" height="${h62}" rx="${w / 2}"/></g>`;
-var happyEyeMarkup = ([cx, cy, w, h62, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h62 * 0.14}Q0 ${-h62 * 0.42} ${w * 0.62} ${h62 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
+var eyeMarkup = ([cx, cy, w, h61, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h61 / 2}" width="${w}" height="${h61}" rx="${w / 2}"/></g>`;
+var happyEyeMarkup = ([cx, cy, w, h61, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h61 * 0.14}Q0 ${-h61 * 0.42} ${w * 0.62} ${h61 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
 var maskBox = (size) => `maskUnits="userSpaceOnUse" x="${-size}" y="${-size}" width="${size * 3}" height="${size * 3}"`;
 var holes = (def, eyes) => `<rect x="${-def.size}" y="${-def.size}" width="${def.size * 3}" height="${def.size * 3}" fill="#fff"/>${eyes}`;
 var MASK_ID = "%MASK%";
@@ -13889,8 +13869,6 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     earlier: (sessionId, cursor) => call2("earlier", { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
     usage: () => call2("usage", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
-    // The details panel's status line: turns, speed, cache hits and context for one Bot.
-    runStats: (botId) => call2("run-stats", { botId }),
     // `summarize` starts a summary when the entries changed; `regenerate` always does.
     memoryView: (id, flags = {}) => call2("memory-view", { ...memoryOf(id), ...flags }),
     memoryAsk: (id, text) => call2("memory-ask", { ...memoryOf(id), text }),
@@ -14403,12 +14381,12 @@ function liveSprings(apply2) {
     const dt = Math.min(0.5, Math.max(1e-3, (now - last) / 1e3));
     last = now;
     const steps = Math.ceil(dt * 240);
-    const h62 = dt / steps;
+    const h61 = dt / steps;
     let moving = false;
     for (const [key, value] of values) {
       for (let index = 0; index < steps; index += 1) {
-        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h62;
-        value.x += value.v * h62;
+        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h61;
+        value.x += value.v * h61;
       }
       if (Math.abs(value.x - value.to) < 0.05 && Math.abs(value.v) < 1) {
         value.x = value.to;
@@ -14961,6 +14939,9 @@ button.bt-lead{border:0;background:none;padding:0;cursor:pointer}
 .bt-group-name:has(>.bt-lead){display:flex;align-items:center;margin:0 0 2px;font-size:13px;line-height:22px;font-weight:600;color:var(--bt-ink)}
 .bt-group-name>.bt-lead{margin:0 8px 0 0}
 .bt-group-time,.bt-group-took{margin-left:6px;font-size:11px;line-height:16px;font-weight:400;color:var(--bt-ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bt-claim{margin-left:28px;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
+.bt-claim-file{color:var(--bt-danger)}
+.bt-claim-inProgress{color:var(--bt-ink-2)}
 .bt-x{border:0;background:none;color:var(--bt-ink-2);cursor:pointer;width:24px;height:24px;border-radius:6px;font-size:16px;line-height:24px;padding:0;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
 
@@ -15151,10 +15132,6 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-drawer-name:hover{background:var(--bt-hover)}
 .bt-drawer-name-input{font-size:17px;line-height:24px;text-align:center;border:.5px solid var(--bt-line-2);border-radius:6px;padding:0 6px;background:var(--bt-main);color:var(--bt-ink);outline:none;font-weight:500}
 .bt-drawer-role{font-size:12px;line-height:16px;color:var(--bt-ink-3);margin-top:6px;text-align:center}
-.bt-drawer-role-input{width:min(100%,220px);height:24px;box-sizing:border-box;margin-top:4px;padding:0 6px;border:1px solid transparent;border-radius:6px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;line-height:16px;text-align:center;outline:none;transition:background-color .12s ease,border-color .12s ease,color .12s ease}
-.bt-drawer-role-input:hover{background:var(--bt-hover)}
-.bt-drawer-role-input:focus{background:var(--bt-main);border-color:var(--bt-line-2);color:var(--bt-ink)}
-.bt-drawer-role-input::placeholder{color:var(--bt-ink-3);opacity:.7}
 .bt-tabs{position:relative;display:flex;justify-content:center;gap:2px;margin:16px 16px 0}
 .bt-tab{position:relative;z-index:1;border:0;background:none;border-radius:999px;padding:4px 8px;font-size:13px;line-height:20px;color:var(--bt-ink-2);cursor:pointer;white-space:nowrap}
 .bt-tab:hover{color:var(--bt-ink)}
@@ -15216,9 +15193,6 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-set-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bt-about{white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
 .bt-about[data-open]{display:block;-webkit-line-clamp:unset}
-.bt-about[data-editable]{margin:0 -6px;padding:2px 6px;border-radius:6px;cursor:text;transition:background-color .12s ease}
-.bt-about[data-editable]:hover{background:var(--bt-hover)}
-.bt-about[data-editable]:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
 .bt-more{border:0;background:none;color:var(--bt-ink-3);font-size:12px;line-height:16px;cursor:pointer;padding:2px 0}
 .bt-more:hover{color:var(--bt-ink)}
 .bt-subhead{display:flex;align-items:center;gap:4px;padding:10px 12px 4px}
@@ -21090,11 +21064,8 @@ function EffortBar({ reasoning, current, onPick }) {
   const drag = (0, import_react19.useRef)(null);
   const [picked, setPicked] = (0, import_react19.useState)(current);
   const [dragRatio, setDragRatio] = (0, import_react19.useState)(null);
-  const pending = (0, import_react19.useRef)(0);
-  const latest = (0, import_react19.useRef)(current);
-  latest.current = current;
   (0, import_react19.useEffect)(() => {
-    if (!drag.current && pending.current === 0) setPicked(current);
+    if (!drag.current) setPicked(current);
   }, [current]);
   if (stops.length === 0) return null;
   const hasDefault = (reasoning?.efforts ?? []).some((effort) => effort.id === reasoning?.defaultEffort);
@@ -21105,15 +21076,7 @@ function EffortBar({ reasoning, current, onPick }) {
   const ratio = dragRatio ?? stopRatio;
   const commit = (effort) => {
     setPicked(effort);
-    if (pending.current === 0 && (effort ?? null) === (current ?? null)) return;
-    const saving = onPick(effort);
-    if (typeof saving?.then !== "function") return;
-    pending.current += 1;
-    const done = () => {
-      pending.current -= 1;
-      if (pending.current === 0 && !drag.current) setPicked(latest.current);
-    };
-    saving.then(done, done);
+    if ((effort ?? null) !== (current ?? null)) onPick(effort);
   };
   const ratioAt = (clientX) => {
     const rect = track.current?.getBoundingClientRect();
@@ -21336,51 +21299,6 @@ function useAnchoredMenu() {
   }, [anchor, tick]);
   return { isOpen: place !== null, shownPlace, leaving, button, menu, open, close };
 }
-function useInlineMenu() {
-  const [isOpen, setOpen] = (0, import_react19.useState)(false);
-  const root = (0, import_react19.useRef)(null);
-  const button = (0, import_react19.useRef)(null);
-  const menu = (0, import_react19.useRef)(null);
-  const close = () => setOpen(false);
-  (0, import_react19.useEffect)(() => {
-    if (!isOpen) return void 0;
-    const onDown = (event) => {
-      if (!root.current?.contains(event.target)) close();
-    };
-    const onKey = (event) => {
-      if (stepMenuFocus(menu.current, event, button.current)) return;
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        close();
-        button.current?.focus();
-      }
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [isOpen]);
-  return { isOpen, root, button, menu, open: () => setOpen(true), close };
-}
-function Collapse({ open, children }) {
-  const [shown] = useLinger(open, SPRING_SHAPE.duration);
-  const [expanded, setExpanded] = (0, import_react19.useState)(open);
-  const box = (0, import_react19.useRef)(null);
-  const last = (0, import_react19.useRef)(children);
-  if (open) last.current = children;
-  (0, import_react19.useLayoutEffect)(() => {
-    if (open) void box.current?.offsetHeight;
-    setExpanded(open);
-  }, [open]);
-  if (!shown) return null;
-  return (0, import_react19.createElement)(
-    "div",
-    { ref: box, className: "bt-collapse", "data-open": expanded || void 0 },
-    (0, import_react19.createElement)("div", { className: "bt-collapse-in" }, open ? children : last.current)
-  );
-}
 function useAgentModels(actions) {
   const [reading, setReading] = (0, import_react19.useState)(false);
   const read = (route) => {
@@ -21390,7 +21308,8 @@ function useAgentModels(actions) {
   };
   return [reading, read];
 }
-function useModelPicker({ bot, roster, actions, run: run2, onPick, onPickEffort, withEfforts }) {
+function ModelMenu({ bot, roster, actions, run: run2, wide = false, onPick, onPickEffort, withEfforts = true }) {
+  const { isOpen, shownPlace, leaving, button, menu, open, close } = useAnchoredMenu();
   const [reading, readModels] = useAgentModels(actions);
   const shown = modelOf(bot, roster);
   const current = bot.model ?? bot.appliedModel;
@@ -21401,149 +21320,72 @@ function useModelPicker({ bot, roster, actions, run: run2, onPick, onPickEffort,
   const currentEffort = picked ?? reasoning?.defaultEffort;
   const effortLabel = currentEffort === void 0 ? reasoning?.efforts?.length > 0 ? t("Default") : void 0 : reasoning.efforts.find((effort) => effort.id === currentEffort)?.name ?? currentEffort;
   const [opening, setOpening] = (0, import_react19.useState)(0);
-  const models = modelsFor(roster.models, current);
-  return {
-    bot,
-    roster,
-    shown,
-    current,
-    local,
-    reasoning,
-    picked,
-    effortLabel,
-    models,
-    opening,
-    reading,
-    withEfforts,
-    manage: local ? void 0 : manageModels(actions),
-    hasEfforts: withEfforts && effortStops(reasoning).length > 0,
-    // DSH settings can change the list at any time, so opening asks again.
-    opened: () => {
-      if (local) readModels(routeOf(current));
-      else void actions?.refreshModels?.();
-      setOpening((count) => count + 1);
-    },
-    choose: (ref) => {
-      if (onPick) onPick(ref);
-      else if (ref !== current || !bot.model) void run2(actions.updateBot(bot.id, { model: ref }));
-    },
-    // Hands the save back, so the slider can tell when the Bot has caught up with its pick.
-    chooseEffort: (effort) => onPickEffort ? onPickEffort(effort) : run2(actions.updateBot(bot.id, { effort: effort ?? null }))
-  };
-}
-var modelTrigger = (picker, { wide, button, isOpen, onClick }) => {
-  const { shown, models, withEfforts, effortLabel } = picker;
-  return (0, import_react19.createElement)(
-    "button",
-    {
-      ref: button,
-      type: "button",
-      className: "bt-model-trigger",
-      "data-wide": wide || void 0,
-      "aria-haspopup": "menu",
-      "aria-expanded": isOpen,
-      "aria-label": t("Model: {model}", { model: shown?.name ?? t("none") }),
-      "data-missing": shown !== void 0 && !shown.served && models.length > 0 ? "" : void 0,
-      onClick
-    },
-    (0, import_react19.createElement)(
-      "span",
-      { className: "bt-model-copy" },
-      (0, import_react19.createElement)("span", { className: "bt-model-name" }, shown?.name ?? t("Choose a model")),
-      shown ? (0, import_react19.createElement)("span", { className: "bt-model-provider" }, shown.served || models.length === 0 ? !withEfforts || effortLabel === void 0 ? shown.provider : `${shown.provider} · ${effortLabel}` : t("{provider} · not available", { provider: shown.provider })) : null
-    ),
-    (0, import_react19.createElement)(Caret)
-  );
-};
-var modelScroll = ({ roster, models, current, local, reading, opening }, pick2) => (0, import_react19.createElement)(
-  "div",
-  { className: "bt-model-scroll" },
-  models.length > 0 ? (0, import_react19.createElement)(ModelRows, { roster: { ...roster, models }, current, onPick: pick2, opening }) : local ? null : (0, import_react19.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
-  reading ? (0, import_react19.createElement)("div", { className: "bt-model-none" }, t("Reading models…")) : null
-);
-var manageButton = (manage, close) => (0, import_react19.createElement)(
-  "button",
-  { type: "button", role: "menuitem", onClick: () => {
-    close();
-    manage();
-  } },
-  (0, import_react19.createElement)(SlidersIcon),
-  (0, import_react19.createElement)("span", { className: "bt-menu-label" }, t("Models and providers…"))
-);
-var modelMenuLabel = (bot) => t("Model for {name}", { name: bot.name });
-function ModelMenu(props) {
-  return props.inline ? (0, import_react19.createElement)(InlineModelMenu, props) : (0, import_react19.createElement)(PopupModelMenu, props);
-}
-function PopupModelMenu({ bot, roster, actions, run: run2, wide = false, onPick, onPickEffort, withEfforts = true }) {
-  const { isOpen, shownPlace, leaving, button, menu, open, close } = useAnchoredMenu();
-  const picker = useModelPicker({ bot, roster, actions, run: run2, onPick, onPickEffort, withEfforts });
-  const { manage, hasEfforts } = picker;
   const toggle = () => {
     if (isOpen) {
       close();
       return;
     }
-    picker.opened();
+    if (local) readModels(routeOf(current));
+    else void actions?.refreshModels?.();
+    setOpening((count) => count + 1);
     open();
   };
   const pick2 = (ref) => {
     close();
-    picker.choose(ref);
+    if (onPick) onPick(ref);
+    else if (ref !== current || !bot.model) void run2(actions.updateBot(bot.id, { model: ref }));
   };
+  const pickEffort = (effort) => {
+    if (onPickEffort) onPickEffort(effort);
+    else if (effort !== bot.effort) void run2(actions.updateBot(bot.id, { effort: effort ?? null }));
+  };
+  const models = modelsFor(roster.models, current);
+  const manage = local ? void 0 : manageModels(actions);
+  const hasEfforts = withEfforts && effortStops(reasoning).length > 0;
   return (0, import_react19.createElement)(
     import_react19.Fragment,
     null,
-    modelTrigger(picker, { wide, button, isOpen, onClick: toggle }),
+    (0, import_react19.createElement)(
+      "button",
+      {
+        ref: button,
+        type: "button",
+        className: "bt-model-trigger",
+        "data-wide": wide || void 0,
+        "aria-haspopup": "menu",
+        "aria-expanded": isOpen,
+        "aria-label": t("Model: {model}", { model: shown?.name ?? t("none") }),
+        "data-missing": shown !== void 0 && !shown.served && models.length > 0 ? "" : void 0,
+        onClick: toggle
+      },
+      (0, import_react19.createElement)(
+        "span",
+        { className: "bt-model-copy" },
+        (0, import_react19.createElement)("span", { className: "bt-model-name" }, shown?.name ?? t("Choose a model")),
+        shown ? (0, import_react19.createElement)("span", { className: "bt-model-provider" }, shown.served || models.length === 0 ? !withEfforts || effortLabel === void 0 ? shown.provider : `${shown.provider} · ${effortLabel}` : t("{provider} · not available", { provider: shown.provider })) : null
+      ),
+      (0, import_react19.createElement)(Caret)
+    ),
     shownPlace ? (0, import_react_dom.createPortal)((0, import_react19.createElement)(
       "div",
-      { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== void 0 ? " bt-menu-up" : ""}`, role: "menu", "aria-label": modelMenuLabel(bot), style: shownPlace, "data-leaving": leaving || void 0 },
-      modelScroll(picker, pick2),
+      { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== void 0 ? " bt-menu-up" : ""}`, role: "menu", "aria-label": t("Model for {name}", { name: bot.name }), style: shownPlace, "data-leaving": leaving || void 0 },
+      (0, import_react19.createElement)(
+        "div",
+        { className: "bt-model-scroll" },
+        models.length > 0 ? (0, import_react19.createElement)(ModelRows, { roster: { ...roster, models }, current, onPick: pick2, opening }) : local ? null : (0, import_react19.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
+        reading ? (0, import_react19.createElement)("div", { className: "bt-model-none" }, t("Reading models…")) : null
+      ),
       hasEfforts || manage ? (0, import_react19.createElement)(
         "div",
         { className: "bt-model-foot" },
-        hasEfforts ? (0, import_react19.createElement)(EffortBar, { reasoning: picker.reasoning, current: picker.picked, onPick: picker.chooseEffort }) : null,
+        hasEfforts ? (0, import_react19.createElement)(EffortBar, { reasoning, current: picked, onPick: pickEffort }) : null,
         hasEfforts && manage ? (0, import_react19.createElement)("div", { className: "bt-menu-sep", role: "separator" }) : null,
-        manage ? manageButton(manage, close) : null
+        manage ? (0, import_react19.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
+          close();
+          manage();
+        } }, (0, import_react19.createElement)(SlidersIcon), (0, import_react19.createElement)("span", { className: "bt-menu-label" }, t("Models and providers…"))) : null
       ) : null
     ), document.body) : null
-  );
-}
-function InlineModelMenu({ bot, roster, actions, run: run2, wide = false, onPick, onPickEffort, withEfforts = true }) {
-  const { isOpen, root, button, menu, open, close } = useInlineMenu();
-  const picker = useModelPicker({ bot, roster, actions, run: run2, onPick, onPickEffort, withEfforts });
-  const { manage, hasEfforts } = picker;
-  const toggle = () => {
-    if (isOpen) {
-      close();
-      return;
-    }
-    picker.opened();
-    open();
-  };
-  const pick2 = (ref) => {
-    close();
-    button.current?.focus();
-    picker.choose(ref);
-  };
-  return (0, import_react19.createElement)(
-    "div",
-    { ref: root, className: "bt-model-inline" },
-    modelTrigger(picker, { wide, button, isOpen, onClick: toggle }),
-    (0, import_react19.createElement)(
-      Collapse,
-      { open: isOpen },
-      (0, import_react19.createElement)(
-        "div",
-        { ref: menu, className: "bt-menu bt-model-menu bt-model-inline-menu", role: "menu", "aria-label": modelMenuLabel(bot) },
-        modelScroll(picker, pick2),
-        manage ? (0, import_react19.createElement)("div", { className: "bt-model-foot" }, manageButton(manage, close)) : null
-      )
-    ),
-    (0, import_react19.createElement)(
-      Collapse,
-      { open: hasEfforts },
-      hasEfforts ? (0, import_react19.createElement)("div", { className: "bt-model-effort" }, (0, import_react19.createElement)(EffortBar, { reasoning: picker.reasoning, current: picker.picked, onPick: picker.chooseEffort })) : null
-    )
   );
 }
 function ModelChoiceDock({ sessionId, useRoster, actions }) {
@@ -21695,31 +21537,20 @@ var MODEL_CSS = `
 .bt-model-menu:not(.bt-folder-menu){padding:0;overflow:hidden;display:flex;flex-direction:column;gap:0}
 .bt-model-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain;padding:6px;display:flex;flex-direction:column;gap:2px}
 .bt-model-foot{flex:none;display:flex;flex-direction:column;gap:2px;padding:4px 6px 6px;border-top:.5px solid var(--bt-line-2)}
-.bt-model-inline{display:flex;flex-direction:column;min-width:0}
-/* The inline list is a menu in the flow: the popup's float, glass and entrance give way to a card the width of its trigger. */
-.bt-menu.bt-model-inline-menu{position:static;z-index:auto;min-width:0;margin-top:4px;background:var(--bt-card);-webkit-backdrop-filter:none;backdrop-filter:none;border:0;box-shadow:inset 0 0 0 1px var(--bt-line);animation:none}
-.bt-model-inline-menu .bt-model-scroll{max-height:min(280px,45vh)}
-.bt-collapse{display:grid;grid-template-rows:0fr;transition:${spring(SPRING_SHAPE, "grid-template-rows")}}
-.bt-collapse[data-open]{grid-template-rows:1fr}
-.bt-collapse:not([data-open]){pointer-events:none}
-.bt-collapse-in{min-height:0;overflow:hidden}
-/* The collapse clips at its box: the extra 3px keeps the slider's focus ring inside it. */
-.bt-model-effort{padding:2px 0 3px}
-.bt-model-effort .bt-effort-bar{padding:4px 12px 5px}
 .bt-effort-bar{display:flex;flex-direction:column;gap:6px;padding:4px 6px 5px}
 .bt-effort-head{display:flex;align-items:center;justify-content:space-between;gap:8px;height:18px;padding:0 2px}
 .bt-effort-label{font-size:11px;line-height:14px;font-weight:500;color:var(--bt-ink-3)}
 .bt-effort-meta{display:inline-flex;align-items:center;gap:5px;min-width:0}
 .bt-effort-tag{font-size:11px;line-height:14px;color:var(--bt-ink-3)}
 .bt-effort-val{font-size:12px;line-height:16px;font-weight:600;color:var(--bt-accent);white-space:nowrap}
-.bt-effort-bar button.bt-effort-reset{flex:none;position:relative;width:28px;height:28px;min-height:0;margin:-5px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing};transition:color .12s ease}
-.bt-effort-bar button.bt-effort-reset::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--bt-hover);transition:background-color .12s ease}
-.bt-effort-bar button.bt-effort-reset svg{position:relative;width:11px;height:11px;margin:0}
-.bt-effort-bar button.bt-effort-reset:hover:not(:disabled){color:var(--bt-ink)}
-.bt-effort-bar button.bt-effort-reset:hover:not(:disabled)::before{background:var(--bt-active)}
-.bt-effort-bar button.bt-effort-reset:disabled{opacity:.35;cursor:default}
-.bt-effort-bar button.bt-effort-reset:disabled::before{background:none}
-.bt-effort-bar button.bt-effort-reset:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
+.bt-menu button.bt-effort-reset{flex:none;position:relative;width:28px;height:28px;min-height:0;margin:-5px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;animation:bt-check-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing};transition:color .12s ease}
+.bt-menu button.bt-effort-reset::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--bt-hover);transition:background-color .12s ease}
+.bt-menu button.bt-effort-reset svg{position:relative;width:11px;height:11px;margin:0}
+.bt-menu button.bt-effort-reset:hover:not(:disabled){color:var(--bt-ink)}
+.bt-menu button.bt-effort-reset:hover:not(:disabled)::before{background:var(--bt-active)}
+.bt-menu button.bt-effort-reset:disabled{opacity:.35;cursor:default}
+.bt-menu button.bt-effort-reset:disabled::before{background:none}
+.bt-menu button.bt-effort-reset:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
 .bt-effort-track{position:relative;height:28px;margin:-3px 0;border-radius:999px;cursor:pointer;user-select:none;touch-action:none}
 .bt-effort-track::before{content:"";position:absolute;left:0;right:0;top:3px;bottom:3px;border-radius:999px;background:var(--bt-hover);box-shadow:inset 0 0 0 .5px var(--bt-line)}
 .bt-effort-track:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
@@ -21768,7 +21599,7 @@ menus use, with the menu item's hover, focus ring and a caret that points at the
 @keyframes bt-model-in{from{opacity:0;transform:translateY(6px)}}
 .bt-model-spin{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--bt-line-2);border-top-color:var(--bt-ink-2);animation:bt-model-spin .7s linear infinite}
 @keyframes bt-model-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.bt-collapse{transition:none}.bt-model-dock{animation:none}.bt-model-spin{animation-duration:2s}.bt-model-caret,.bt-effort-fill,.bt-effort-knob{transition:none}.bt-model-tick svg{animation:none}}
+@media (prefers-reduced-motion:reduce){.bt-model-dock{animation:none}.bt-model-spin{animation-duration:2s}.bt-model-caret,.bt-effort-fill,.bt-effort-knob{transition:none}.bt-model-tick svg{animation:none}}
 `;
 
 // src/client/bot-draft.js
@@ -23496,20 +23327,12 @@ function MemoryDialog({ owner, actions, leaving = false }) {
 // src/client/bot-settings.js
 var import_react26 = require("react");
 var capitalize = (word) => word[0].toUpperCase() + word.slice(1);
-function InlineText({ label, value, placeholder, required = false, maxLength, multiline = false, className, autoFocus = false, onSave, onDone }) {
+function InlineText({ label, value, placeholder, required = false, maxLength, multiline = false, onSave }) {
   const [draft, setDraft] = (0, import_react26.useState)(null);
   const reverting = (0, import_react26.useRef)(false);
-  const field = (0, import_react26.useRef)(null);
-  (0, import_react26.useEffect)(() => {
-    const node = field.current;
-    if (!autoFocus || !node) return;
-    node.focus();
-    node.setSelectionRange(node.value.length, node.value.length);
-  }, []);
   const commit = () => {
     const next = draft?.trim();
     setDraft(null);
-    onDone?.();
     if (reverting.current) {
       reverting.current = false;
       return;
@@ -23518,8 +23341,7 @@ function InlineText({ label, value, placeholder, required = false, maxLength, mu
     void onSave(next);
   };
   return (0, import_react26.createElement)(multiline ? "textarea" : "input", {
-    ref: field,
-    className: className ?? (multiline ? "bt-bs-input bt-bs-area" : "bt-bs-input"),
+    className: multiline ? "bt-bs-input bt-bs-area" : "bt-bs-input",
     value: draft ?? value ?? "",
     placeholder,
     maxLength,
@@ -24973,7 +24795,7 @@ function stackReplies(replies) {
   const items = [];
   replies.forEach((reply, index) => {
     const last = items.at(-1);
-    if (reply.kind === void 0 && last?.reply.kind === void 0 && last?.reply.botId === reply.botId) {
+    if (reply.kind === void 0 && last?.reply.kind === void 0 && last?.reply.botId === reply.botId && reply.claims === void 0 && last.reply.claims === void 0) {
       last.texts.push(reply.text);
       last.time = reply.time;
       last.duration = reply.duration;
@@ -26014,7 +25836,20 @@ function scheduleGroupChains(flow) {
     if (flow.isConnected !== false) syncGroupChains(flow);
   });
 }
-function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionId, roster, actions, msgKey, useUi, whole, time, duration }) {
+function claimLines(claims) {
+  if (claims === void 0 || claims === null) return [];
+  const lines = [];
+  if (claims.inProgress === true) {
+    lines.push({
+      kind: "inProgress",
+      text: t("No background work detected"),
+      detail: t("DS Bot has no recorded tool call or active background task for this reply.")
+    });
+  }
+  for (const path2 of claims.missingFiles ?? []) lines.push({ kind: "file", text: t("File not found: {path}", { path: path2 }) });
+  return lines;
+}
+function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, roster, actions, msgKey, useUi, whole, time, duration, claims }) {
   const ref = (0, import_react32.useRef)(null);
   (0, import_react32.useLayoutEffect)(() => {
     const el = ref.current;
@@ -26031,7 +25866,6 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionI
   );
   const flat = layoutOf(roster.prefs) === "flat";
   const took = Number.isFinite(duration) && duration >= 1e3 ? elapsedLabel(duration) : void 0;
-  const quoteSession = sessionId ?? room2?.sessionId ?? room2?.id;
   return (0, import_react32.createElement)(
     "div",
     { ref, className: "bt-group-msg", "data-bot-id": bot.id },
@@ -26044,7 +25878,8 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionI
       Number.isFinite(time) ? (0, import_react32.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null,
       took ? (0, import_react32.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
-    (0, import_react32.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: quoteSession, msgKey, useUi, lead: flat ? null : lead, whole })
+    (0, import_react32.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: room2?.id, msgKey, useUi, lead: flat ? null : lead, whole }),
+    claimLines(claims).map((line) => (0, import_react32.createElement)("div", { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: "status", title: line.detail ?? void 0 }, line.text))
   );
 }
 function GroupEvent({ prefix, room: room2, name, roster, actions }) {
@@ -26263,12 +26098,12 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
         text: row.file ? stripLongNote(row.text) : row.text,
         texts: row.texts,
         room: roster.roomsById[sessionId],
-        sessionId,
         roster,
         actions,
         msgKey: `${sessionId}:post:${row.seq ?? row.time}`,
         time: row.time,
         duration: row.duration,
+        claims: row.claims,
         whole: row.file ? { length: row.length, load: () => actions.fileText(row.file) } : void 0
       });
     }
@@ -26334,12 +26169,12 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
           bot: poster,
           text: file ? stripLongNote(text) : text,
           room: room2,
-          sessionId,
           roster,
           actions,
           msgKey: `${sessionId}:post:${data.seq ?? node.key}`,
           useUi,
           time: data.time,
+          claims: source.claims,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : void 0
         });
       }
@@ -26545,13 +26380,6 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
       t("{name} stopped: {reason}. Switch its model or ask it to go on.", { name: bot.name, reason: failureLabel(reply.code, reply.text) })
     );
   }
-  if (reply.kind === "helper-failed") {
-    return (0, import_react32.createElement)(
-      "div",
-      { className: "bt-event bt-event-error", role: "status", title: reply.text },
-      t("{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.", { name: bot.name, reason: reply.text })
-    );
-  }
   if (reply.kind === "lookup") {
     return (0, import_react32.createElement)(
       "div",
@@ -26688,7 +26516,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
           goalEventText(reply)
         );
       }
-      return (0, import_react32.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration });
+      return (0, import_react32.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration, claims: reply.claims });
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id];
@@ -27984,12 +27812,11 @@ function TeamSidebar(props) {
     main ? (0, import_react34.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react34.createElement)("div", { className: "bt-hint" }, bootFailed ? bootHint() : t("Setting up your Main Bot…")),
     (0, import_react34.createElement)("span", { className: "bt-rail-sep", "aria-hidden": true })
   );
-  const foot = wideContent ? (0, import_react34.createElement)("div", { className: "bt-leftcol-foot" }, (0, import_react34.createElement)(AccountLauncher, { seat: false, actions }), (0, import_react34.createElement)(PluginsButton, { actions })) : (0, import_react34.createElement)(
+  const foot = wideContent ? (0, import_react34.createElement)("div", { className: "bt-leftcol-foot" }, (0, import_react34.createElement)(AccountLauncher, { seat: false, actions })) : (0, import_react34.createElement)(
     "div",
     { className: "bt-leftcol-foot bt-leftcol-foot-rail" },
     (0, import_react34.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react34.createElement)(PlusIcon)),
-    (0, import_react34.createElement)(AccountLauncher, { seat: false, actions }),
-    (0, import_react34.createElement)(PluginsButton, { actions })
+    (0, import_react34.createElement)(AccountLauncher, { seat: false, actions })
   );
   const content = (0, import_react34.createElement)(
     "div",
@@ -28429,14 +28256,6 @@ function useLandOnMainBot(roster, useSessions, actions) {
     const timer = setTimeout(() => actions.landOn(roster.mainBotId, last), last ? 0 : 400);
     return () => clearTimeout(timer);
   }, [mainView, roster]);
-}
-function PluginsButton({ actions }) {
-  if (!actions.hasPlugins?.()) return null;
-  return (0, import_react34.createElement)(
-    "button",
-    { type: "button", className: "bt-account", "aria-label": t("Plugins"), title: t("Plugins"), onClick: () => actions.openPlugins() },
-    (0, import_react34.createElement)("span", { className: "bt-you", "aria-hidden": true }, (0, import_react34.createElement)(PlugIcon))
-  );
 }
 function FooterAccount(props) {
   const seated = props.useUi((value) => value.accountSeated === true);
@@ -35910,10 +35729,6 @@ function failureText2(code, { name, provider, status }) {
       return t("The model service failed.");
     case "INTERRUPTED":
       return t("DeepSeek Harness stopped before this turn finished.");
-    // The model's own limits, not the request: its output cap does not fit inside its
-    // context window, so DSH cannot make room for a switch. Only the model settings fix it.
-    case "MODEL_SWITCH_COMPACTION_FAILED":
-      return t("The model's output limit is above its context window, so nothing can be sent. Raise the context window or lower the output limit.");
     default:
       return knownFailure(code) ?? t("This turn failed.");
   }
@@ -35932,16 +35747,13 @@ function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
       return official ? ["top-up"] : [];
     case "ACCOUNT_QUOTA":
       return topUp ? ["top-up"] : [];
-    case "MODEL_SWITCH_COMPACTION_FAILED":
-      return ["model-settings"];
     default:
       return [];
   }
 }
-var retryShown = (code, blocked) => code === "MODEL_SWITCH_COMPACTION_FAILED" ? false : !CREDENTIAL_CODES.has(code) || blocked === void 0;
+var retryShown = (code, blocked) => !CREDENTIAL_CODES.has(code) || blocked === void 0;
 var FIX_LABELS = {
   key: () => t("Enter API key"),
-  "model-settings": () => t("Open model settings"),
   rekey: () => t("Enter the key again"),
   "sign-in": (signedIn) => signedIn ? t("Use the DeepSeek account") : t("Sign in with a DeepSeek account"),
   "use-account": () => t("Use a DeepSeek account instead"),
@@ -36072,8 +35884,7 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
     "sign-in": viaAccount,
     "use-account": viaAccount,
     "sign-in-again": () => actions.signIn(),
-    model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0,
-    "model-settings": manageModels(actions)
+    model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0
   };
   const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: provider === ACCOUNT }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
   const asked = isHiddenTurn(roster, sessionId, data.turn);
@@ -37682,45 +37493,17 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
     (0, import_react59.createElement)("button", { type: "button", className: "bt-bcard-new", style: { animationDelay: `${state.ids.length * 30}ms` }, onClick: () => actions.browserNewTab(sessionId) }, (0, import_react59.createElement)(PlusIcon), t("New tab"))
   );
 }
-function useSaved(value, save) {
-  const [pending, setPending] = (0, import_react59.useState)(null);
-  const commit = (next) => {
-    setPending({ next });
-    return Promise.resolve(save(next)).finally(() => setPending(null));
-  };
-  return [pending ? pending.next : value, commit];
-}
-function BotLabel({ bot, actions, run: run2 }) {
-  const [role, save] = useSaved(bot.role ?? "", (next) => run2(actions.updateBot(bot.id, { role: next })));
-  return (0, import_react59.createElement)(InlineText, { label: t("Label"), value: role, placeholder: t("Add a label"), maxLength: 24, className: "bt-drawer-role-input", onSave: save });
-}
-function About({ text, title = "About", label, placeholder, onSave }) {
+function About({ text, title = "About" }) {
   const [open, setOpen] = (0, import_react59.useState)(false);
-  const [editing, setEditing] = (0, import_react59.useState)(false);
-  const [shown, save] = useSaved(text, (next) => onSave(next));
-  const long = shown.split("\n").length > 5 || shown.length > 240;
+  const long = text.split("\n").length > 5 || text.length > 240;
   const body = (0, import_react59.useRef)(null);
   useMorph(body, open);
-  const field = onSave !== void 0 && (editing || shown === "");
-  const edit = () => {
-    if (!window.getSelection?.()?.toString()) setEditing(true);
-  };
   return (0, import_react59.createElement)(
     "div",
     null,
     (0, import_react59.createElement)("div", { className: "bt-section-title" }, t(title)),
-    field ? (0, import_react59.createElement)(InlineText, { label, value: shown, multiline: true, placeholder, autoFocus: editing, className: "bt-input bt-input-area", onSave: save, onDone: () => setEditing(false) }) : (0, import_react59.createElement)("div", {
-      ref: body,
-      className: "bt-about",
-      "data-open": open || void 0,
-      ...onSave ? { role: "button", tabIndex: 0, title: t("Edit"), "data-editable": "", onClick: edit, onKeyDown: (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          setEditing(true);
-        }
-      } } : {}
-    }, shown),
-    long && !field ? (0, import_react59.createElement)("button", { type: "button", className: "bt-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null
+    (0, import_react59.createElement)("div", { ref: body, className: "bt-about", "data-open": open || void 0 }, text),
+    long ? (0, import_react59.createElement)("button", { type: "button", className: "bt-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null
   );
 }
 var PILE_MAX = 4;
@@ -37954,7 +37737,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
     if (bot && next) await run2(actions.updateBot(bot.id, { name: next }));
     if (room2) await run2(actions.updateRoom(room2.id, { name: next }));
   };
-  const subtitle = bot ? void 0 : roomSubtitle(room2, roster);
+  const subtitle = bot ? bot.role : roomSubtitle(room2, roster);
   const tabs = bot ? roster.computer?.enabled === true ? ["details", "browser", "computer"] : ["details", "browser"] : ["details"];
   return [
     (0, import_react59.createElement)(import_react59.Fragment, { key: "top" }, top),
@@ -37981,7 +37764,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
         setDraftName(room2 && !room2.named ? "" : current);
         setEditing(true);
       } }, current),
-      bot ? (0, import_react59.createElement)(BotLabel, { bot, actions, run: run2 }) : subtitle ? (0, import_react59.createElement)("span", { className: "bt-drawer-role" }, subtitle) : null
+      subtitle ? (0, import_react59.createElement)("span", { className: "bt-drawer-role" }, subtitle) : null
     ),
     tabs.length > 1 ? (0, import_react59.createElement)(
       "div",
@@ -38001,7 +37784,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
           "div",
           { key: "model", className: "bt-drawer-model" },
           (0, import_react59.createElement)("div", { className: "bt-section-title" }, t("Model")),
-          (0, import_react59.createElement)(ModelMenu, { bot, roster, actions, run: run2, wide: true, inline: true }),
+          (0, import_react59.createElement)(ModelMenu, { bot, roster, actions, run: run2, wide: true }),
           modelOf(bot, roster) ? null : (0, import_react59.createElement)("div", { className: "bt-note" }, t("Pick a model and {name} can start.", { name: bot.name }))
         ),
         bot.engine ? (0, import_react59.createElement)(AgentSessions, { key: "sessions", bot, part, run: run2, useSessions }) : null,
@@ -38013,13 +37796,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
           (0, import_react59.createElement)("div", { className: "bt-section-title" }, t("Working folder")),
           (0, import_react59.createElement)(FolderMenu, { value: bot.workDir, actions, run: run2, wide: true, onPick: (workDir) => run2(actions.updateBot(bot.id, { workDir })) })
         ),
-        (0, import_react59.createElement)(About, {
-          key: "about",
-          text: bot.instructions ?? "",
-          label: t("Instructions"),
-          placeholder: t("What this Bot is responsible for…"),
-          onSave: (instructions) => run2(actions.updateBot(bot.id, { instructions }))
-        }),
+        bot.instructions ? (0, import_react59.createElement)(About, { key: "about", text: bot.instructions }) : (0, import_react59.createElement)("button", { key: "about", type: "button", className: "bt-more", onClick: () => setView("settings") }, t("Add instructions in Bot settings")),
         roster.memory === false ? null : (0, import_react59.createElement)(MemoryRow, { key: "memory", owner: { id: bot.id, name: bot.name }, actions }),
         usage ? (0, import_react59.createElement)(
           "div",
@@ -39062,51 +38839,8 @@ var BROWSER_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-ptabs,.bt-panel-view,.bt-bcard,.bt-ptab-name{animation:none}}
 `;
 
-// src/client/opening.js
-var import_react61 = require("react");
-var OPENING_WAIT_MS = 5e3;
-function openingModel({ pending, current, roster }) {
-  if (!pending || pending.target === void 0) return null;
-  if (current === pending.target) return null;
-  const bot = roster?.byId?.[pending.id];
-  const room2 = roster?.roomsById?.[pending.id];
-  return {
-    id: pending.id,
-    name: bot?.name ?? room2?.name ?? pending.name ?? "",
-    bot,
-    group: room2 !== void 0
-  };
-}
-function OpeningCover({ model, column }) {
-  if (model === null) return null;
-  return (0, import_react61.createElement)(
-    "div",
-    {
-      className: "bt-opening",
-      style: { left: `${column}px` },
-      role: "status",
-      "aria-live": "polite"
-    },
-    (0, import_react61.createElement)(
-      "div",
-      { className: "bt-opening-card" },
-      (0, import_react61.createElement)("span", { className: "bt-opening-mark" }, model.bot ? (0, import_react61.createElement)(BotMark, { bot: model.bot, size: 44 }) : (0, import_react61.createElement)(PeopleIcon)),
-      model.name ? (0, import_react61.createElement)("span", { className: "bt-opening-name" }, model.name) : null,
-      (0, import_react61.createElement)("span", { className: "bt-opening-note" }, t("Opening…"))
-    )
-  );
-}
-var OPENING_CSS = `
-.bt-opening{position:fixed;top:var(--dsh-frame-chrome-top,0px);right:0;bottom:0;z-index:30;display:grid;place-items:center;background:var(--bt-main);color:var(--bt-ink);font-family:var(--bt-font);animation:bt-opening-in .12s ease-out}
-.bt-opening-card{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:60vw;min-width:0}
-.bt-opening-mark{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;color:var(--bt-ink-3)}
-.bt-opening-name{font-size:15px;font-weight:600;line-height:20px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-opening-note{font-size:13px;line-height:18px;color:var(--bt-ink-3)}
-@keyframes bt-opening-in{from{opacity:0}to{opacity:1}}
-`;
-
 // src/client/overlays.js
-var import_react62 = require("react");
+var import_react61 = require("react");
 var import_react_dom11 = require("react-dom");
 var DIALOG_EXIT_MS2 = 160;
 var MENU_EXIT_MS3 = 120;
@@ -39117,8 +38851,8 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   const frameSnap = useFrame ? useFrame((value) => value) : { viewport: window.innerWidth, sidebarWidth: FALLBACK_SIDEBAR_WIDTH, collapsedWidth: 0 };
   const pref = useSidebarPref ? useSidebarPref((value) => value) : "open";
   const current = useSessions((list) => Object.values(list.byId).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id ?? null);
-  const previous = (0, import_react62.useRef)(current);
-  (0, import_react62.useEffect)(() => {
+  const previous = (0, import_react61.useRef)(current);
+  (0, import_react61.useEffect)(() => {
     if (previous.current === current) return;
     previous.current = current;
     if (current) actions.followPanel?.(current);
@@ -39132,8 +38866,8 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     panel: open ? { view: open.view, yielded: ui2.panelYield === true } : null
   });
   const shown = open !== null && layout.panel !== "folded" ? open : null;
-  const [kept, setKept] = (0, import_react62.useState)(shown);
-  (0, import_react62.useEffect)(() => {
+  const [kept, setKept] = (0, import_react61.useState)(shown);
+  (0, import_react61.useEffect)(() => {
     if (shown) {
       setKept(shown);
       return void 0;
@@ -39153,19 +38887,17 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   const [memory, memoryLeaving] = useLinger(ui2.memory && memoryOwner(ui2.memory) ? ui2.memory : null, DIALOG_EXIT_MS2);
   const owner = memory ? memoryOwner(memory) : null;
   const [menu, menuLeaving] = useLinger(ui2.menu, MENU_EXIT_MS3);
-  const opening = openingModel({ pending: ui2.pendingOpen ?? null, current, roster });
-  return (0, import_react62.createElement)(
-    import_react62.Fragment,
+  return (0, import_react61.createElement)(
+    import_react61.Fragment,
     null,
-    opening ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(OpeningCover, { model: opening, column: layout.column }), document.body) : null,
-    pane ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === "overlay", roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
-    ui2.newChat ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(NewChat, { key: `${ui2.newChat}:${ui2.newChatSection ?? ""}`, mode: ui2.newChat, sectionId: ui2.newChatSection ?? null, paneLeft: layout.column, roster, actions }), document.body) : null,
-    ui2.palette ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
-    ui2.exchange ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(ExchangeDialog, { pair: ui2.exchange, paneLeft: layout.column, roster, actions }), document.body) : null,
-    ui2.voice ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, paneLeft: layout.column, roster, actions, useSessions, useSessionStatus }), document.body) : null,
-    menu ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, useWork, leaving: menuLeaving }), document.body) : null,
-    settings ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(SettingsDialog, { page: settings.page, id: settings.id, roster, actions, useUpdate, leaving: settingsLeaving }), document.body) : null,
-    owner ? (0, import_react_dom11.createPortal)((0, import_react62.createElement)(MemoryDialog, { key: owner.id, owner, actions, leaving: memoryLeaving }), document.body) : null
+    pane ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === "overlay", roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
+    ui2.newChat ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(NewChat, { key: `${ui2.newChat}:${ui2.newChatSection ?? ""}`, mode: ui2.newChat, sectionId: ui2.newChatSection ?? null, paneLeft: layout.column, roster, actions }), document.body) : null,
+    ui2.palette ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(CommandPalette, { key: ui2.palette.token, start: ui2.palette.query, token: ui2.palette.token, roster, actions, useSessions }), document.body) : null,
+    ui2.exchange ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ExchangeDialog, { pair: ui2.exchange, paneLeft: layout.column, roster, actions }), document.body) : null,
+    ui2.voice ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(VoiceMode, { key: ui2.voice, sessionId: ui2.voice, paneLeft: layout.column, roster, actions, useSessions, useSessionStatus }), document.body) : null,
+    menu ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(ContextMenu, { key: `${menu.kind ?? ""}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, useWork, leaving: menuLeaving }), document.body) : null,
+    settings ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(SettingsDialog, { page: settings.page, id: settings.id, roster, actions, useUpdate, leaving: settingsLeaving }), document.body) : null,
+    owner ? (0, import_react_dom11.createPortal)((0, import_react61.createElement)(MemoryDialog, { key: owner.id, owner, actions, leaving: memoryLeaving }), document.body) : null
   );
 }
 
@@ -40223,43 +39955,26 @@ function lineDiff(before, after) {
   rows2.push(...b.slice(offset).map((line, index) => ({ kind: "same", line, number: offset + index + 1 })));
   return rows2;
 }
-var answerKeepsCard = (failure) => failure?.code !== "bot/stale";
-var withoutEntry = (state, key) => {
-  if (!(key in state)) return state;
-  const next = { ...state };
-  delete next[key];
-  return next;
-};
-function answerFailure(record, proposal, failure) {
-  if (!answerKeepsCard(failure)) return withoutEntry(record, proposal.id);
-  return { ...record, [proposal.id]: { proposal, error: failure?.message ?? String(failure) } };
-}
-function proposalCards({ proposals = [], settled = [], failures = {} }) {
-  const visible = [...settled.filter((entry) => !proposals.some((proposal) => proposal.id === entry.id)), ...proposals];
-  for (const entry of Object.values(failures)) {
-    if (!proposals.some((proposal) => proposal.id === entry.proposal.id) && !visible.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
-  }
-  return visible.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-}
 
 // src/client/learning-card.js
-var import_react63 = require("react");
+var import_react62 = require("react");
 var failedAnswers = /* @__PURE__ */ new Map();
 function ProposalCard({ proposal, initialError = "", onFailure, onResolved, actions }) {
   const outcome = proposal.outcome;
-  const [busy, setBusy] = (0, import_react63.useState)(false);
-  const [error, setError] = (0, import_react63.useState)(initialError);
-  const [open, setOpen] = (0, import_react63.useState)(false);
-  const busyRef = (0, import_react63.useRef)(false);
-  const titleId = (0, import_react63.useId)();
+  const [busy, setBusy] = (0, import_react62.useState)(false);
+  const [error, setError] = (0, import_react62.useState)(initialError);
+  const [open, setOpen] = (0, import_react62.useState)(false);
+  const busyRef = (0, import_react62.useRef)(false);
+  const titleId = (0, import_react62.useId)();
   const answer = (approve) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError("");
     void Promise.resolve().then(() => actions.learningAnswer(proposal.id, approve)).then(() => onResolved(proposal.id), (failure) => {
-      setError(failure?.message ?? String(failure));
-      onFailure(proposal, failure);
+      const message = failure?.message ?? String(failure);
+      setError(message);
+      onFailure(proposal, message);
     }).finally(() => {
       busyRef.current = false;
       setBusy(false);
@@ -40267,68 +39982,68 @@ function ProposalCard({ proposal, initialError = "", onFailure, onResolved, acti
   };
   const update = proposal.action === "update";
   const agents = proposal.kind === "agents";
-  const rows2 = (0, import_react63.useMemo)(() => lineDiff(update ? proposal.previous?.content : "", proposal.content), [update, proposal.previous?.content, proposal.content]);
+  const rows2 = (0, import_react62.useMemo)(() => lineDiff(update ? proposal.previous?.content : "", proposal.content), [update, proposal.previous?.content, proposal.content]);
   const change = agents ? [
-    (0, import_react63.createElement)(FileBox, { key: "file", name: "AGENTS.md", path: proposal.folder, state: proposal.exists === false ? "Added" : "Modified", blocks: proposal.edits.map((edit) => [
+    (0, import_react62.createElement)(FileBox, { key: "file", name: "AGENTS.md", path: proposal.folder, state: proposal.exists === false ? "Added" : "Modified", blocks: proposal.edits.map((edit) => [
       ...(edit.op === "add" ? [] : editLines(edit.old)).map((line) => ({ kind: "removed", line })),
       ...(edit.op === "remove" ? [] : editLines(edit.text)).map((line) => ({ kind: "added", line }))
     ]) }),
-    ...proposal.edits.map((edit, index) => edit.why ? (0, import_react63.createElement)("p", { className: "bt-learning-why", key: `why-${index}` }, edit.why) : null)
+    ...proposal.edits.map((edit, index) => edit.why ? (0, import_react62.createElement)("p", { className: "bt-learning-why", key: `why-${index}` }, edit.why) : null)
   ] : [
-    (0, import_react63.createElement)(FileBox, { key: "file", name: "SKILL.md", path: `skills/${proposal.name}`, state: update ? "Updated" : "Added", blocks: [rows2] }),
-    proposal.why ? (0, import_react63.createElement)("p", { className: "bt-learning-why", key: "why" }, proposal.why) : null
+    (0, import_react62.createElement)(FileBox, { key: "file", name: "SKILL.md", path: `skills/${proposal.name}`, state: update ? "Updated" : "Added", blocks: [rows2] }),
+    proposal.why ? (0, import_react62.createElement)("p", { className: "bt-learning-why", key: "why" }, proposal.why) : null
   ];
   const kind = t(agents ? "AGENTS.md update" : update ? "Skill update" : "New skill");
   if (outcome) {
     const what = agents ? proposal.folder : proposal.name;
-    return (0, import_react63.createElement)(
+    return (0, import_react62.createElement)(
       "section",
       { className: "bt-q bt-q-settled bt-learning-card bt-learning-settled", role: "group", "aria-label": `${kind} · ${what}`, "data-outcome": outcome },
-      (0, import_react63.createElement)(
+      (0, import_react62.createElement)(
         "button",
         { type: "button", className: "bt-learning-fold", "aria-expanded": open, onClick: () => setOpen(!open) },
-        (0, import_react63.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react63.createElement)(agents ? PencilIcon : MemoryIcon)),
-        (0, import_react63.createElement)("span", { className: "bt-learning-kind" }, kind),
-        (0, import_react63.createElement)("span", { className: "bt-learning-sum" }, `${t(outcome === "approved" ? "Approved" : "Declined")} · ${what}`)
+        (0, import_react62.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react62.createElement)(agents ? PencilIcon : MemoryIcon)),
+        (0, import_react62.createElement)("span", { className: "bt-learning-kind" }, kind),
+        (0, import_react62.createElement)("span", { className: "bt-learning-sum" }, `${t(outcome === "approved" ? "Approved" : "Declined")} · ${what}`)
       ),
       open ? change : null
     );
   }
   const oldDetail = update && typeof proposal.previous?.description === "string" && proposal.previous.description !== proposal.description ? proposal.previous.description : void 0;
-  return (0, import_react63.createElement)(
+  return (0, import_react62.createElement)(
     "section",
     { className: "bt-q bt-learning-card", role: "group", "aria-labelledby": titleId, "aria-busy": busy },
-    agents ? (0, import_react63.createElement)(ProposalHead, { titleId, icon: PencilIcon, title: kind }) : (0, import_react63.createElement)(ProposalHead, { titleId, title: proposal.name, kind, detail: proposal.description, oldDetail }),
+    agents ? (0, import_react62.createElement)(ProposalHead, { titleId, icon: PencilIcon, title: kind }) : (0, import_react62.createElement)(ProposalHead, { titleId, title: proposal.name, kind, detail: proposal.description, oldDetail }),
     change,
-    error ? (0, import_react63.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
-    (0, import_react63.createElement)(ProposalFoot, { busy, answer })
+    error ? (0, import_react62.createElement)("div", { className: "bt-learning-error", role: "alert" }, error) : null,
+    (0, import_react62.createElement)(ProposalFoot, { busy, answer })
   );
 }
 function ProposalHead({ titleId, icon: icon2 = MemoryIcon, title, kind, detail, oldDetail }) {
-  return (0, import_react63.createElement)(
+  return (0, import_react62.createElement)(
     "div",
     { className: "bt-q-head" },
-    (0, import_react63.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react63.createElement)(icon2)),
-    (0, import_react63.createElement)(
+    (0, import_react62.createElement)("span", { className: "bt-learning-icon", "aria-hidden": true }, (0, import_react62.createElement)(icon2)),
+    (0, import_react62.createElement)(
       "div",
       { className: "bt-q-text" },
-      (0, import_react63.createElement)("p", { className: "bt-q-title", id: titleId }, title),
-      kind ? (0, import_react63.createElement)("div", { className: "bt-q-detail" }, kind) : null,
-      oldDetail ? (0, import_react63.createElement)("p", { className: "bt-learning-description bt-learning-old" }, (0, import_react63.createElement)("del", null, oldDetail)) : null,
-      detail ? (0, import_react63.createElement)("p", { className: "bt-learning-description" }, detail) : null
+      (0, import_react62.createElement)("p", { className: "bt-q-title", id: titleId }, title),
+      kind ? (0, import_react62.createElement)("div", { className: "bt-q-detail" }, kind) : null,
+      oldDetail ? (0, import_react62.createElement)("p", { className: "bt-learning-description bt-learning-old" }, (0, import_react62.createElement)("del", null, oldDetail)) : null,
+      detail ? (0, import_react62.createElement)("p", { className: "bt-learning-description" }, detail) : null
     ),
-    (0, import_react63.createElement)("span", { className: "bt-q-badge bt-learning-status" }, (0, import_react63.createElement)("span", { className: "bt-learning-dot", "aria-hidden": true }), t("Awaiting approval"))
+    (0, import_react62.createElement)("span", { className: "bt-q-badge bt-learning-status" }, (0, import_react62.createElement)("span", { className: "bt-learning-dot", "aria-hidden": true }), t("Awaiting approval"))
   );
 }
 function ProposalFoot({ busy, answer }) {
-  return (0, import_react63.createElement)(
+  return (0, import_react62.createElement)(
     "div",
     { className: "bt-q-foot bt-learning-foot" },
-    (0, import_react63.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
-    (0, import_react63.createElement)(
+    (0, import_react62.createElement)("button", { type: "button", className: "bt-learning-btn bt-learning-decline", disabled: busy, onClick: () => answer(false) }, t("Decline")),
+    (0, import_react62.createElement)(
       "button",
       { type: "button", className: "bt-learning-btn bt-learning-approve", disabled: busy, onClick: () => answer(true) },
-      (0, import_react63.createElement)(CheckIcon),
+      (0, import_react62.createElement)(CheckIcon),
       t("Approve")
     )
   );
@@ -40336,43 +40051,43 @@ function ProposalFoot({ busy, answer }) {
 var COLLAPSE_ROWS = 8;
 var SIGNS = { added: "+", removed: "−", same: "" };
 function FileBox({ name, path: path2, state, blocks }) {
-  const [open, setOpen] = (0, import_react63.useState)(false);
+  const [open, setOpen] = (0, import_react62.useState)(false);
   const all = blocks.flat();
   const added = all.filter((row) => row.kind === "added").length;
   const removed = all.filter((row) => row.kind === "removed").length;
   const folds = all.length > COLLAPSE_ROWS;
   const shut = folds && !open;
-  return (0, import_react63.createElement)(
+  return (0, import_react62.createElement)(
     "div",
     { className: "bt-learning-file" },
-    (0, import_react63.createElement)(
+    (0, import_react62.createElement)(
       "div",
       { className: "bt-learning-filehead" },
-      (0, import_react63.createElement)("span", { className: "bt-learning-name" }, name),
-      path2 ? (0, import_react63.createElement)("span", { className: "bt-learning-path" }, path2) : null,
-      (0, import_react63.createElement)("span", { className: "bt-learning-spacer" }),
-      added > 0 ? (0, import_react63.createElement)("span", { className: "bt-learning-plus" }, `+${added}`) : null,
-      removed > 0 ? (0, import_react63.createElement)("span", { className: "bt-learning-minus" }, `−${removed}`) : null,
-      (0, import_react63.createElement)("span", { className: `bt-learning-state bt-learning-state-${state.toLowerCase()}` }, t(state))
+      (0, import_react62.createElement)("span", { className: "bt-learning-name" }, name),
+      path2 ? (0, import_react62.createElement)("span", { className: "bt-learning-path" }, path2) : null,
+      (0, import_react62.createElement)("span", { className: "bt-learning-spacer" }),
+      added > 0 ? (0, import_react62.createElement)("span", { className: "bt-learning-plus" }, `+${added}`) : null,
+      removed > 0 ? (0, import_react62.createElement)("span", { className: "bt-learning-minus" }, `−${removed}`) : null,
+      (0, import_react62.createElement)("span", { className: `bt-learning-state bt-learning-state-${state.toLowerCase()}` }, t(state))
     ),
-    (0, import_react63.createElement)(
+    (0, import_react62.createElement)(
       "div",
       { className: shut ? "bt-learning-code bt-learning-shut" : "bt-learning-code" },
       blocks.map((rows2, blockIndex) => [
-        blockIndex > 0 ? (0, import_react63.createElement)("div", { className: "bt-learning-gap", key: `gap-${blockIndex}` }) : null,
-        ...rows2.map((row, rowIndex) => (0, import_react63.createElement)(
+        blockIndex > 0 ? (0, import_react62.createElement)("div", { className: "bt-learning-gap", key: `gap-${blockIndex}` }) : null,
+        ...rows2.map((row, rowIndex) => (0, import_react62.createElement)(
           "div",
           { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
-          (0, import_react63.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.number ?? ""),
-          (0, import_react63.createElement)("span", { className: "bt-learning-sign", "aria-hidden": true }, SIGNS[row.kind]),
-          (0, import_react63.createElement)("span", { className: "bt-learning-text" }, row.line || " ")
+          (0, import_react62.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.number ?? ""),
+          (0, import_react62.createElement)("span", { className: "bt-learning-sign", "aria-hidden": true }, SIGNS[row.kind]),
+          (0, import_react62.createElement)("span", { className: "bt-learning-text" }, row.line || " ")
         ))
       ])
     ),
-    folds ? (0, import_react63.createElement)(
+    folds ? (0, import_react62.createElement)(
       "div",
       { className: shut ? "bt-learning-morebar bt-learning-morebar-shut" : "bt-learning-morebar" },
-      (0, import_react63.createElement)(
+      (0, import_react62.createElement)(
         "button",
         { type: "button", className: "bt-learning-more", "aria-expanded": open, onClick: () => setOpen(!open) },
         t(open ? "Show less" : "Show all {count} lines", { count: all.length })
@@ -40383,38 +40098,39 @@ function FileBox({ name, path: path2, state, blocks }) {
 function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
   const roster = useRoster((value) => value);
   const facts = useTurnFacts(sessionId, actions);
-  const [failed, setFailed] = (0, import_react63.useState)({});
+  const [failed, setFailed] = (0, import_react62.useState)({});
   const bot = roster.byId?.[sessionId];
-  const settledIds = (bot === void 0 ? [] : roster.learningSettled?.[bot.id] ?? []).map((entry) => entry.id);
-  (0, import_react62.useEffect)(() => {
-    const gone = Object.keys(failed).filter((id) => settledIds.includes(id));
-    if (gone.length === 0) return;
-    for (const id of gone) failedAnswers.delete(id);
-    setFailed((current) => gone.reduce((next, id) => withoutEntry(next, id), current));
-  }, [settledIds.join("|")]);
   if (!bot || currentPart(bot) !== sessionId) return null;
   const proposals = roster.learning?.[bot.id] ?? [];
-  const settled = roster.learningSettled?.[bot.id] ?? [];
-  const remembered = Object.fromEntries([...failedAnswers.values(), ...Object.values(failed)].filter((entry) => entry.proposal.botId === bot.id).map((entry) => [entry.proposal.id, entry]));
-  const visible = proposalCards({ proposals, settled, failures: remembered });
+  const settled = (roster.learningSettled?.[bot.id] ?? []).filter((entry) => !proposals.some((proposal) => proposal.id === entry.id));
+  const visible = [...settled, ...proposals];
+  for (const entry of Object.values(failed)) {
+    if (entry.proposal.botId === bot.id && !visible.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
+  }
+  for (const entry of failedAnswers.values()) {
+    if (entry.proposal.botId === bot.id && !proposals.some((proposal) => proposal.id === entry.proposal.id) && !visible.some((proposal) => proposal.id === entry.proposal.id)) visible.push(entry.proposal);
+  }
+  visible.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const cards = visible.filter((proposal) => {
     const placement = proposalPlacement(proposal, facts?.turns);
     return dock ? placement.kind === "dock" : placement.kind === "turn" && placement.turn === turn?.turn;
   });
   if (cards.length === 0) return null;
-  const onFailure = (proposal, failure) => {
-    if (answerKeepsCard(failure)) failedAnswers.set(proposal.id, { proposal, error: failure?.message ?? String(failure) });
-    else failedAnswers.delete(proposal.id);
-    setFailed((current) => answerFailure(current, proposal, failure));
+  const onFailure = (proposal, error) => {
+    failedAnswers.set(proposal.id, { proposal, error });
+    setFailed((current) => ({ ...current, [proposal.id]: { proposal, error } }));
   };
   const onResolved = (id) => setFailed((current) => {
     failedAnswers.delete(id);
-    return withoutEntry(current, id);
+    if (!(id in current)) return current;
+    const next = { ...current };
+    delete next[id];
+    return next;
   });
-  return (0, import_react63.createElement)("div", { className: dock ? "bt-learning-stack bt-learning-dock" : "bt-learning-stack" }, cards.map((proposal) => (0, import_react63.createElement)(
+  return (0, import_react62.createElement)("div", { className: dock ? "bt-learning-stack bt-learning-dock" : "bt-learning-stack" }, cards.map((proposal) => (0, import_react62.createElement)(
     "div",
     { className: "bt-q-inline", key: proposal.id },
-    (0, import_react63.createElement)(ProposalCard, {
+    (0, import_react62.createElement)(ProposalCard, {
       proposal,
       initialError: failed[proposal.id]?.error ?? failedAnswers.get(proposal.id)?.error,
       onFailure,
@@ -40424,10 +40140,10 @@ function LearningProposals({ turn, dock, sessionId, useRoster, actions }) {
   )));
 }
 function LearningTurnTail(props) {
-  return (0, import_react63.createElement)(LearningProposals, { ...props, dock: false });
+  return (0, import_react62.createElement)(LearningProposals, { ...props, dock: false });
 }
 function LearningDock(props) {
-  return (0, import_react63.createElement)(LearningProposals, { ...props, dock: true });
+  return (0, import_react62.createElement)(LearningProposals, { ...props, dock: true });
 }
 var LEARNING_CSS = `
 .bt-learning-stack{display:flex;flex-direction:column;gap:4px}
@@ -40517,7 +40233,7 @@ function createSwitchWindow(settle) {
 }
 
 // src/client/queue-dock.js
-var import_react64 = require("react");
+var import_react63 = require("react");
 var OWN_QUEUE_KINDS = /* @__PURE__ */ new Set(["user", "schedule", "user-question-reply"]);
 var EMPTY_QUEUE = [];
 var QUEUE_TEXT_FACTS = { collapseWhitespace: true, trimWhitespace: true };
@@ -40534,17 +40250,17 @@ function queueAttachments(content) {
 var fileSizeText2 = (bytes) => typeof bytes !== "number" || !Number.isFinite(bytes) ? "" : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 function QueueFile({ attachment, label }) {
   const size = fileSizeText2(attachment.bytes);
-  return (0, import_react64.createElement)(
+  return (0, import_react63.createElement)(
     "span",
     { className: "bt-queue-file", "aria-label": label, title: attachment.name },
-    (0, import_react64.createElement)("span", { className: "bt-queue-fileicon", "aria-hidden": true }, (0, import_react64.createElement)(PaperclipIcon)),
-    (0, import_react64.createElement)("span", { className: "bt-queue-filename" }, attachment.name),
-    size !== "" ? (0, import_react64.createElement)("span", { className: "bt-queue-filesize" }, size) : null
+    (0, import_react63.createElement)("span", { className: "bt-queue-fileicon", "aria-hidden": true }, (0, import_react63.createElement)(PaperclipIcon)),
+    (0, import_react63.createElement)("span", { className: "bt-queue-filename" }, attachment.name),
+    size !== "" ? (0, import_react63.createElement)("span", { className: "bt-queue-filesize" }, size) : null
   );
 }
 function QueueThumb({ attachment, loadImage, label }) {
-  const [url, setUrl] = (0, import_react64.useState)(null);
-  (0, import_react64.useEffect)(() => {
+  const [url, setUrl] = (0, import_react63.useState)(null);
+  (0, import_react63.useEffect)(() => {
     let alive = true;
     loadImage(attachment).then((resolved) => {
       if (alive) setUrl(resolved);
@@ -40554,22 +40270,22 @@ function QueueThumb({ attachment, loadImage, label }) {
       alive = false;
     };
   }, [attachment, loadImage]);
-  return url === null ? (0, import_react64.createElement)("span", { className: "bt-queue-thumb", "aria-hidden": true }) : (0, import_react64.createElement)("img", { className: "bt-queue-thumb", src: url, alt: label });
+  return url === null ? (0, import_react63.createElement)("span", { className: "bt-queue-thumb", "aria-hidden": true }) : (0, import_react63.createElement)("img", { className: "bt-queue-thumb", src: url, alt: label });
 }
 function Preview({ text, renderFactorySlot }) {
   const rendered = renderFactorySlot?.("conversation.user.text", { text, facts: QUEUE_TEXT_FACTS, interactive: false, ellipsis: true });
-  return (0, import_react64.createElement)("span", { className: "bt-queue-preview" }, rendered ?? text);
+  return (0, import_react63.createElement)("span", { className: "bt-queue-preview" }, rendered ?? text);
 }
 function EditField({ text, onChange, onSave, onCancel }) {
-  const field = (0, import_react64.useRef)(null);
-  (0, import_react64.useEffect)(() => {
+  const field = (0, import_react63.useRef)(null);
+  (0, import_react63.useEffect)(() => {
     const node = field.current;
     if (node === null) return;
     node.focus();
     node.style.height = "auto";
     node.style.height = `${node.scrollHeight}px`;
   }, [text]);
-  return (0, import_react64.createElement)("textarea", {
+  return (0, import_react63.createElement)("textarea", {
     ref: field,
     className: "bt-queue-edit",
     value: text,
@@ -40588,28 +40304,28 @@ function EditField({ text, onChange, onSave, onCancel }) {
   });
 }
 function RowButton({ label, title, disabled, onClick, children }) {
-  return (0, import_react64.createElement)("button", { type: "button", className: "bt-queue-action", "aria-label": label, title: title ?? label, disabled, onClick }, children);
+  return (0, import_react63.createElement)("button", { type: "button", className: "bt-queue-action", "aria-label": label, title: title ?? label, disabled, onClick }, children);
 }
 function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.("inbox");
   const pendingSubmissions = useSession?.((s) => s.pendingSubmissions) ?? EMPTY_QUEUE;
-  const queue = (0, import_react64.useMemo)(() => {
+  const queue = (0, import_react63.useMemo)(() => {
     const rows2 = (inbox?.["next-turn"] ?? EMPTY_QUEUE).filter((row) => OWN_QUEUE_KINDS.has(row.source?.kind));
     const inChat = new Set(pendingSubmissions.filter((item) => item.placement === "transcript").map((item) => item.requestId));
     return inChat.size === 0 ? rows2 : rows2.filter(({ source }) => source === null || typeof source !== "object" || !("rpcId" in source) || !inChat.has(source.rpcId));
   }, [inbox, pendingSubmissions]);
-  const pendingQueue = (0, import_react64.useMemo)(() => {
+  const pendingQueue = (0, import_react63.useMemo)(() => {
     const admitted = new Set(queue.flatMap(({ source }) => source !== null && typeof source === "object" && "rpcId" in source ? [source.rpcId] : []));
     return pendingSubmissions.filter((submission) => submission.placement === "queued" && !admitted.has(submission.requestId));
   }, [pendingSubmissions, queue]);
   const rowCount = queue.length + pendingQueue.length;
   const running = useSession?.((s) => s.running) === true;
   const queueMutable = useSession?.((s) => s.subagent === null || s.subagent === void 0 || s.subagent.address?.mode === "continuable") ?? true;
-  const [editing, setEditing] = (0, import_react64.useState)(null);
-  const [busy, setBusy] = (0, import_react64.useState)(null);
-  const [collapsed, setCollapsed] = (0, import_react64.useState)(true);
-  const listId = (0, import_react64.useId)();
-  (0, import_react64.useEffect)(() => {
+  const [editing, setEditing] = (0, import_react63.useState)(null);
+  const [busy, setBusy] = (0, import_react63.useState)(null);
+  const [collapsed, setCollapsed] = (0, import_react63.useState)(true);
+  const listId = (0, import_react63.useId)();
+  (0, import_react63.useEffect)(() => {
     if (rowCount === 0 && !collapsed) setCollapsed(true);
     if (editing !== null && (!queueMutable || !queue.some((row) => row.id === editing.id))) setEditing(null);
   }, [collapsed, editing, queue, queueMutable, rowCount]);
@@ -40637,77 +40353,77 @@ function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFa
     if (editing === null || editing.text.trim() === "") return;
     if (await applyAction(editing.id, { kind: "edit", content: [{ type: "text", text: editing.text }] }, t("Couldn’t edit the queued message — it may have started already."))) setEditing(null);
   };
-  return (0, import_react64.createElement)(
+  return (0, import_react63.createElement)(
     "div",
     { className: "bt-queue-dock", "data-queue-dock": "" },
-    (0, import_react64.createElement)(
+    (0, import_react63.createElement)(
       "div",
       { className: "bt-queue-panel" },
-      rowCount > 1 && (0, import_react64.createElement)(
+      rowCount > 1 && (0, import_react63.createElement)(
         "button",
         { type: "button", className: "bt-queue-head", "aria-controls": listId, "aria-expanded": expanded, disabled: interactionActive, onClick: () => setCollapsed((value) => !value) },
-        (0, import_react64.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react64.createElement)(QueueIcon)),
-        (0, import_react64.createElement)("span", { className: "bt-queue-count" }, t("{n} queued messages", { n: rowCount })),
-        !listVisible && pendingQueue.length > 0 && (0, import_react64.createElement)("span", { className: "bt-queue-status", role: "status" }, t("Sending…")),
-        (0, import_react64.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, expanded ? (0, import_react64.createElement)(ChevronDownIcon) : (0, import_react64.createElement)(ChevronUpIcon))
+        (0, import_react63.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react63.createElement)(QueueIcon)),
+        (0, import_react63.createElement)("span", { className: "bt-queue-count" }, t("{n} queued messages", { n: rowCount })),
+        !listVisible && pendingQueue.length > 0 && (0, import_react63.createElement)("span", { className: "bt-queue-status", role: "status" }, t("Sending…")),
+        (0, import_react63.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, expanded ? (0, import_react63.createElement)(ChevronDownIcon) : (0, import_react63.createElement)(ChevronUpIcon))
       ),
-      (0, import_react64.createElement)(
+      (0, import_react63.createElement)(
         "ul",
         { id: listId, className: "bt-queue-list", hidden: !listVisible },
         listVisible && queue.map((row) => {
           const attachments = queueAttachments(row.content);
           const text = textOf(row.content);
-          return (0, import_react64.createElement)(
+          return (0, import_react63.createElement)(
             "li",
             { key: row.id, className: "bt-queue-row" },
-            rowCount === 1 && (0, import_react64.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react64.createElement)(QueueIcon)),
-            editing?.id === row.id ? (0, import_react64.createElement)(EditField, { text: editing.text, onChange: (text2) => setEditing({ id: row.id, text: text2 }), onSave: saveEdit, onCancel: () => setEditing(null) }) : (0, import_react64.createElement)(
-              import_react64.Fragment,
+            rowCount === 1 && (0, import_react63.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react63.createElement)(QueueIcon)),
+            editing?.id === row.id ? (0, import_react63.createElement)(EditField, { text: editing.text, onChange: (text2) => setEditing({ id: row.id, text: text2 }), onSave: saveEdit, onCancel: () => setEditing(null) }) : (0, import_react63.createElement)(
+              import_react63.Fragment,
               null,
-              attachments.length > 0 && (0, import_react64.createElement)(
+              attachments.length > 0 && (0, import_react63.createElement)(
                 "span",
                 { className: "bt-queue-attachments" },
-                attachments.map((item, index) => item.type === "image" ? (0, import_react64.createElement)(QueueThumb, { key: `${item.attachment.attachmentId}:${index}`, attachment: item.attachment, loadImage, label: t("Queued image") }) : (0, import_react64.createElement)(QueueFile, { key: `${item.attachment.attachmentId}:${item.attachment.name}:${index}`, attachment: item.attachment, label: t("Queued file {name}", { name: item.attachment.name }) }))
+                attachments.map((item, index) => item.type === "image" ? (0, import_react63.createElement)(QueueThumb, { key: `${item.attachment.attachmentId}:${index}`, attachment: item.attachment, loadImage, label: t("Queued image") }) : (0, import_react63.createElement)(QueueFile, { key: `${item.attachment.attachmentId}:${item.attachment.name}:${index}`, attachment: item.attachment, label: t("Queued file {name}", { name: item.attachment.name }) }))
               ),
-              (0, import_react64.createElement)(Preview, { text: row.content.filter((block) => block.type === "text").map((block) => block.text).join(""), renderFactorySlot })
+              (0, import_react63.createElement)(Preview, { text: row.content.filter((block) => block.type === "text").map((block) => block.text).join(""), renderFactorySlot })
             ),
-            queueMutable && (0, import_react64.createElement)(
+            queueMutable && (0, import_react63.createElement)(
               "div",
               { className: "bt-queue-actions" },
-              editing?.id === row.id ? (0, import_react64.createElement)(
-                import_react64.Fragment,
+              editing?.id === row.id ? (0, import_react63.createElement)(
+                import_react63.Fragment,
                 null,
-                (0, import_react64.createElement)(RowButton, { label: t("Save queued message"), disabled: busy !== null || editing.text.trim() === "", onClick: saveEdit }, (0, import_react64.createElement)(CheckIcon)),
-                (0, import_react64.createElement)(RowButton, { label: t("Cancel editing"), disabled: busy !== null, onClick: () => setEditing(null) }, (0, import_react64.createElement)(CloseIcon))
-              ) : (0, import_react64.createElement)(
-                import_react64.Fragment,
+                (0, import_react63.createElement)(RowButton, { label: t("Save queued message"), disabled: busy !== null || editing.text.trim() === "", onClick: saveEdit }, (0, import_react63.createElement)(CheckIcon)),
+                (0, import_react63.createElement)(RowButton, { label: t("Cancel editing"), disabled: busy !== null, onClick: () => setEditing(null) }, (0, import_react63.createElement)(CloseIcon))
+              ) : (0, import_react63.createElement)(
+                import_react63.Fragment,
                 null,
-                (0, import_react64.createElement)(RowButton, { label: t("Edit queued message"), title: text === null ? t("Contains non-text content, so editing is not supported yet") : void 0, disabled: busy !== null || text === null, onClick: () => {
+                (0, import_react63.createElement)(RowButton, { label: t("Edit queued message"), title: text === null ? t("Contains non-text content, so editing is not supported yet") : void 0, disabled: busy !== null || text === null, onClick: () => {
                   if (text !== null) setEditing({ id: row.id, text });
-                } }, (0, import_react64.createElement)(PencilIcon)),
-                (0, import_react64.createElement)(RowButton, { label: t("Delete queued message"), disabled: busy !== null, onClick: () => applyAction(row.id, { kind: "remove" }, t("Couldn’t delete the queued message — it may have started already.")) }, (0, import_react64.createElement)(TrashIcon)),
-                (0, import_react64.createElement)(RowButton, { label: t("Steer queued message"), title: running ? void 0 : t("Only while a turn is running"), disabled: busy !== null || !running, onClick: () => applyAction(row.id, { kind: "steer" }, t("Couldn’t steer the queued message. Try again.")) }, (0, import_react64.createElement)(ArrowUpIcon))
+                } }, (0, import_react63.createElement)(PencilIcon)),
+                (0, import_react63.createElement)(RowButton, { label: t("Delete queued message"), disabled: busy !== null, onClick: () => applyAction(row.id, { kind: "remove" }, t("Couldn’t delete the queued message — it may have started already.")) }, (0, import_react63.createElement)(TrashIcon)),
+                (0, import_react63.createElement)(RowButton, { label: t("Steer queued message"), title: running ? void 0 : t("Only while a turn is running"), disabled: busy !== null || !running, onClick: () => applyAction(row.id, { kind: "steer" }, t("Couldn’t steer the queued message. Try again.")) }, (0, import_react63.createElement)(ArrowUpIcon))
               )
             )
           );
         }),
-        listVisible && pendingQueue.map((submission) => (0, import_react64.createElement)(
+        listVisible && pendingQueue.map((submission) => (0, import_react63.createElement)(
           "li",
           { key: submission.requestId, className: "bt-queue-row bt-queue-pending" },
-          rowCount === 1 && (0, import_react64.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react64.createElement)(QueueIcon)),
-          submission.attachments.length > 0 && (0, import_react64.createElement)(
+          rowCount === 1 && (0, import_react63.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react63.createElement)(QueueIcon)),
+          submission.attachments.length > 0 && (0, import_react63.createElement)(
             "span",
             { className: "bt-queue-attachments" },
-            submission.attachments.map((attachment, index) => attachment.type === "image" ? (0, import_react64.createElement)("img", { key: `${attachment.value.previewUrl}:${index}`, className: "bt-queue-thumb", src: attachment.value.previewUrl, alt: t("Queued image") }) : (0, import_react64.createElement)(QueueFile, { key: `${attachment.value.attachmentId}:${attachment.value.name}:${index}`, attachment: attachment.value, label: t("Queued file {name}", { name: attachment.value.name }) }))
+            submission.attachments.map((attachment, index) => attachment.type === "image" ? (0, import_react63.createElement)("img", { key: `${attachment.value.previewUrl}:${index}`, className: "bt-queue-thumb", src: attachment.value.previewUrl, alt: t("Queued image") }) : (0, import_react63.createElement)(QueueFile, { key: `${attachment.value.attachmentId}:${attachment.value.name}:${index}`, attachment: attachment.value, label: t("Queued file {name}", { name: attachment.value.name }) }))
           ),
-          (0, import_react64.createElement)(Preview, { text: submission.text, renderFactorySlot }),
-          (0, import_react64.createElement)("span", { className: "bt-queue-status", role: "status" }, t("Sending…")),
-          queueMutable && (0, import_react64.createElement)(
+          (0, import_react63.createElement)(Preview, { text: submission.text, renderFactorySlot }),
+          (0, import_react63.createElement)("span", { className: "bt-queue-status", role: "status" }, t("Sending…")),
+          queueMutable && (0, import_react63.createElement)(
             "div",
             { className: "bt-queue-actions" },
-            (0, import_react64.createElement)(RowButton, { label: t("Edit queued message"), title: t("Sending…"), disabled: true }, (0, import_react64.createElement)(PencilIcon)),
-            (0, import_react64.createElement)(RowButton, { label: t("Delete queued message"), title: t("Sending…"), disabled: true }, (0, import_react64.createElement)(TrashIcon)),
-            (0, import_react64.createElement)(RowButton, { label: t("Steer queued message"), title: t("Sending…"), disabled: true }, (0, import_react64.createElement)(ArrowUpIcon))
+            (0, import_react63.createElement)(RowButton, { label: t("Edit queued message"), title: t("Sending…"), disabled: true }, (0, import_react63.createElement)(PencilIcon)),
+            (0, import_react63.createElement)(RowButton, { label: t("Delete queued message"), title: t("Sending…"), disabled: true }, (0, import_react63.createElement)(TrashIcon)),
+            (0, import_react63.createElement)(RowButton, { label: t("Steer queued message"), title: t("Sending…"), disabled: true }, (0, import_react63.createElement)(ArrowUpIcon))
           )
         ))
       )
@@ -40778,7 +40494,7 @@ function noticeApprovals({ work, roster, shownSession, openSession, since = Date
 }
 
 // src/client/open-listed.js
-function listedOpener({ list, open, refresh, current, begin, done }) {
+function listedOpener({ list, open, refresh, current }) {
   let drop = () => {
   };
   return (target) => {
@@ -40791,30 +40507,20 @@ function listedOpener({ list, open, refresh, current, begin, done }) {
       return;
     }
     const from = current?.();
-    begin?.(target);
-    let waiting = true;
-    const settle = () => {
-      if (!waiting) return;
-      waiting = false;
-      drop = () => {
-      };
-      done?.(target);
-    };
     const off = list.subscribe(() => {
       if (current?.() !== from) {
         off();
-        settle();
+        drop = () => {
+        };
         return;
       }
       if (!listed()) return;
       off();
-      settle();
+      drop = () => {
+      };
       open(target);
     });
-    drop = () => {
-      off();
-      settle();
-    };
+    drop = off;
     refresh?.();
   };
 }
@@ -40852,7 +40558,7 @@ function apply(ctx) {
   const reactionStore = sharedMap(STORAGE.reactions);
   const seenStore = sharedMap(STORAGE.seen);
   let seenAt = seenStore.read();
-  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, pendingOpen: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null });
+  const ui2 = createSource({ details: null, view: "details", renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, settings: null, memory: null, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null });
   let sidebarSaved = readSidebar();
   const sidebarPref = createSource(sidebarSaved.pref);
   const frame = createSource({ viewport: typeof window === "undefined" ? 0 : window.innerWidth, sidebarWidth: sidebarSaved.width, collapsedWidth: 0, collapsed: false });
@@ -41223,29 +40929,10 @@ function apply(ctx) {
   };
   const latestAgentSession = (agentId, list) => agentSessions(agentId).sort((a, b) => (list.byId[b]?.updatedAt ?? 0) - (list.byId[a]?.updatedAt ?? 0))[0];
   const mainView = () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
-  const ownerOfSession = (sessionId) => {
-    const snapshot = roster.getSnapshot();
-    if (snapshot.byId[sessionId] !== void 0) return snapshot.byId[sessionId];
-    if (snapshot.roomsById[sessionId] !== void 0) return snapshot.roomsById[sessionId];
-    return Object.values(snapshot.byId).find((bot) => currentPart(bot) === sessionId) ?? Object.values(snapshot.roomsById).find((room2) => (room2.sessionId ?? room2.id) === sessionId);
-  };
-  let openingTimer = null;
-  const beginOpening = (target) => {
-    const owner = ownerOfSession(target);
-    ui2.set((state) => ({ ...state, pendingOpen: { target, id: owner?.id ?? target, name: owner?.name ?? "" } }));
-    clearTimeout(openingTimer);
-    openingTimer = setTimeout(() => {
-      ui2.set((state) => state.pendingOpen?.target === target ? { ...state, pendingOpen: null } : state);
-    }, OPENING_WAIT_MS);
-  };
-  const endOpening = () => {
-    clearTimeout(openingTimer);
-    ui2.set((state) => state.pendingOpen === null ? state : { ...state, pendingOpen: null });
-  };
   const show2 = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly("refresh sessions")), open: (target) => {
     expected2 = target;
     ctx.uiWorkspace.openSession(target);
-  }, current: mainView, begin: beginOpening, done: endOpening });
+  }, current: mainView });
   const panelFolded = (view) => {
     const state = ui2.getSnapshot();
     if (state.details === null) return false;
@@ -41484,8 +41171,6 @@ function apply(ctx) {
   actions.signIn = () => ui2.set((state) => ({ ...state, signIn: (state.signIn ?? 0) + 1 }));
   actions.closeSignIn = () => ui2.set((state) => ({ ...state, signIn: null }));
   actions.accountT = () => ctx.get("locale").bind("settings.account");
-  actions.hasPlugins = () => ctx.get("pluginNavigation") !== void 0;
-  actions.openPlugins = () => ctx.get("pluginNavigation")?.openList();
   actions.speech = () => ctx.get("remote.speech") ?? void 0;
   actions.openHarnessOnboarding = (id) => settingsShell?.openOnboarding(id);
   actions.voiceSetup = (providerId) => {
@@ -41811,7 +41496,6 @@ function apply(ctx) {
     [FEEDBACK_CSS, "feedback"],
     [ABOUT_CSS, "about"],
     [MEMBER_CSS, "members"],
-    [OPENING_CSS, "opening"],
     [IM_CSS, "im"],
     [GOAL_CSS, "goal"],
     [USER_MESSAGE_CSS, "user-messages"],
