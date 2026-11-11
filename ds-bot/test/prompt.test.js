@@ -20,6 +20,22 @@ function start() {
   return { ctx, prompt }
 }
 
+test('turn budget reminders preserve the admitted messages and identify the last step', async (t) => {
+  const { ctx } = start()
+  t.after(() => ctx.dispose())
+  const hook = ctx.listeners.get('agent/pre-step')[0]
+  const signal = new AbortController().signal
+  const original = { kind: 'enter', messages: [{ content: 'original' }] }
+  const run = (id, step) => hook({ agent: { id }, step, signal }, async () => original)
+  assert.equal(await run('worker', 24), original)
+  const warning = await run('group-worker', 25)
+  assert.equal(warning.messages[0], original.messages[0])
+  assert.match(warning.messages[1].content[0].text, /step 25.*limit is 30/)
+  const final = await run('worker', 30)
+  assert.match(final.messages[1].content[0].text, /without starting another tool call/)
+  assert.equal(await run('room', 30), original)
+})
+
 test('Bots get a scoped progress rule without changing the private/group prompt prefix', (t) => {
   const { ctx, prompt } = start()
   t.after(() => ctx.dispose())

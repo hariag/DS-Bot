@@ -138,8 +138,13 @@ export function install(rt) {
 
   const callInGroup = async (exec, room, sender, target, message) => {
     const call = `@${target.name}`
+    const targetSession = room.sessions?.[target.id]
+    const inbox = targetSession === undefined ? undefined : ctx.get?.('agents')?.get?.(targetSession)?.inbox
+    const waiting = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+      ? [...inbox.nextStep, ...inbox.nextTurn].filter(item => item.source?.kind === 'bot').length : undefined
     await rt.roomStepText(exec.agent.id, rt.live.get(exec.agent.id)?.info, message.startsWith(call) ? message : `${call} ${message}`, false)
-    return `Called ${target.name} in "${room.name}" with your message, as writing "${call}" there does: it works on it in the group, and you answer its result there. Nothing went to its own chat.`
+    const queue = waiting === undefined ? 'The target group inbox count was unavailable.' : `Before this call, its inbox in this group had ${waiting} Bot message(s) waiting.`
+    return `Called ${target.name} in "${room.name}" with your message, as writing "${call}" there does: it works on it in the group, and you answer its result there. Nothing went to its own chat. ${queue}`
   }
 
   // The Bots each Session's post_to_group called by name in its current turn, so that

@@ -140,3 +140,23 @@ test('a Bot whose greeting is still held gets no notice before its model pick', 
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(sent.length, 0)
 })
+
+test('a profile update waits for its asynchronous notice delivery attempt', async (t) => {
+  const { ctx, call, sent, stop } = start()
+  t.after(stop)
+  let release, entered
+  const gate = new Promise(resolve => { release = resolve })
+  const flushing = new Promise(resolve => { entered = resolve })
+  ctx.sessions.flush = async () => { entered(); await gate }
+  let done = false
+  const update = call('update-bot', { id: 'b2', instructions: 'Ship the fix' }).then(result => { done = true; return result })
+  try {
+    await flushing
+    assert.equal(sent.length, 1)
+    assert.equal(done, false)
+    release()
+    assert.equal((await update).ok, true)
+  } finally {
+    release()
+  }
+})

@@ -1,9 +1,17 @@
 // Prompt: one section whose text depends only on the rendering Session's own Bot
 // record, so the prefix stays byte-stable across turns and roster changes.
 
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+
 const TEAM_RULES = [
   '## How your Bot team works',
   '- Every Bot is its own long-lived conversation with the user, with its own memory and computer.',
+  '- Budget each turn to at most 30 model steps, including tool-use steps. Plan for a safe stopping point before the limit. Split longer work into bounded pieces, delegate independent pieces when appropriate, and record the objective, evidence, current state and next action before handing off. Keep message order, approvals and verification intact; never claim unfinished work is complete.',
+  '- Send teammates only actionable requests or decisions. For acceptance or a status change, include the task, target version, acceptance criteria, evidence and result, open issues and requested action. Consolidate updates on the same work when ordering permits; keep group updates brief and link to evidence instead of repeating full reports.',
+  '- Before claiming or delegating project work, check its current task record, owner, write scope and target version across the relevant conversations. Use the same task identity across groups and private chats. Different group Sessions can run at the same time; a message request_id only deduplicates retries in its own scope, not work across groups. If ownership or exclusive write scope is unclear, investigate read-only and ask the responsible lead.',
+  '- Give a message_bot request a stable request_id for the same logical request and reuse it only with the same parameters in that conversation. If its delivery outcome is uncertain, check the original delivery and result before any new request; do not invent a new ID merely to bypass the uncertainty. A new or changed task needs its own ID.',
+  '- Work from changes since the last successful checkpoint when available. Reuse a check only when its target version, criteria, environment and type match; changed risks, explicit requests and independent acceptance may require a fresh check. Prioritize delivery and actual blockers over repetitive patrols or status echoes.',
+  '- When reporting a number, include its object, unit, selection and deduplication rules, source version, sample time and evidence. Compare only matching scopes; distinguish a ref commit, a file blob and the value inside a pointer file. Treat future timestamps and conflicting figures as unresolved until checked against authoritative sources.',
   '- The team changes over time. Call list_bots whenever you need to know who exists or what each Bot is doing right now; do not rely on memory.',
   '- message_bot sends a message to another Bot. Send one only when that Bot must act, or needs a fact you have; never send thanks, acknowledgements, or status echoes. If it is working, it reads your message at its next step, so you can also use message_bot to warn it off a mistake or redirect it in time; it answers once that work is done. Pass when "queue" only for a new task unrelated to what it is doing now; it then waits until its current work is done. Its reply arrives later as a new "[Reply from …]" message. Never wait, poll, or resend. When you hand on part of what a Bot asked you for, end your turn: each reply brings you back to that work, and your answer goes to the Bot that asked once everything you handed on is back, together with what came back. Never message a Bot that waits for the result of the work you are doing; your answer reaches it by itself.',
   '- When the user wants other Bots to tell them something themselves (introduce themselves, report in their own chats), call message_bot with reply_to "user": each Bot then answers the user in its own chat and nothing comes back to you. Do not relay those answers yourself.',
@@ -27,6 +35,7 @@ const TEAM_RULES = [
 const MAIN_RULES = [
   '## You are the Main Bot (Chief of Staff)',
   '- You run the user\'s Bot team: you decide who does what, create new Bots, and report back.',
+  '- Act primarily as a router and decision maker: delegate ordinary work and independent acceptance to the appropriate responsible Bots. Ask for concise evidence and a specific decision or status change; batch routine status updates where allowed. Verify evidence required by the user or project rules and escalate unresolved risks.',
   '- When the user wants something that deserves its own ongoing specialist, call create_bot (check list_bots first to avoid duplicates). Give it a short name, a two-to-four character role label, and concrete instructions.',
   '- After creating a Bot, tell the user in one line that it is ready, using its exact name.',
   '- Route work to the right Bot: one Bot\'s task with message_bot, a group\'s task with post_to_group (or @Name when you speak in that group). Send each task one way only, then tell the user what you asked and that you will report back.',
@@ -39,6 +48,18 @@ const MAIN_RULES = [
 
 export function install(rt) {
   const { ctx } = rt
+
+  ctx.on?.('agent/pre-step', async ({ agent, step, signal }, next) => {
+    const decision = await next()
+    if (decision.kind === 'reject' || signal.aborted || ![25, 28, 30].includes(step) || rt.botOf(rt.selfOf(agent.id)) === undefined) return decision
+    const text = step === 30
+      ? 'This is step 30 of this turn. Finish this turn now without starting another tool call. If work remains, give a precise checkpoint and next action; do not say it is complete.'
+      : `This is step ${step} of this turn; the limit is 30. Finish or delegate a bounded piece and leave a precise checkpoint before the limit.`
+    return { ...decision, messages: [...decision.messages, createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'ds-bot-turn-budget', form: 'snapshot', sections: [{ name: 'ds-bot-turn-budget', text }] },
+    })] }
+  })
 
   // A group Session renders exactly its Bot's text, so both share one cached prefix.
   const promptFor = (id) => {

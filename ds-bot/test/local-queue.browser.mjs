@@ -6,8 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import assert from 'node:assert/strict'
 
 const plugin = resolve(import.meta.dirname, '..')
-const harness = process.env.DSH_HARNESS
-if (!harness) throw new Error('Set DSH_HARNESS to the isolated DeepSeek Harness workspace for this browser test')
+const harness = process.env.DSH_HARNESS ?? '/data2t/working/deepseek-harness'
 const req = createRequire(join(harness, 'apps/web/package.json'))
 const { chromium } = req('playwright')
 const react = join(dirname(req.resolve('react')), 'umd/react.development.js')
@@ -39,21 +38,25 @@ try {
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: `
     var ${reactBinding}=window.React;
-    var t=(s,params={})=>({'{n} Bot messages waiting':'{n} 条 Bot 消息待处理','Next step':'当前回合下一步','Next turn':'下一回合'}[s]??s).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
+    var t=(s,params={})=>({'Bot private {private} + group {group}':'Bot 私聊 {private} 条 + 群聊 {group} 条','Next step':'当前回合下一步','Next turn':'下一回合'}[s]??s).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
     for(const name of ${JSON.stringify(icons)}) globalThis[name]=()=>React.createElement('span',{'aria-hidden':true},'·');
     ${production}
     const style=document.createElement('style');style.textContent=QUEUE_CSS;document.head.append(style);
     globalThis.fixtureInbox={'next-turn':[],'next-step':[]};
+    globalThis.fixtureGroup=[];
+    globalThis.fixtureSession='';
     globalThis.fixtureErrors=[];
     const props={
       useSession:select=>select({pendingSubmissions:[],running:true,subagent:null}),
       useProjection:()=>globalThis.fixtureInbox,
+      useRoster:select=>select({byId:{[globalThis.fixtureSession]:{id:'bot'}}}),
+      useWork:select=>select({groupQueues:{bot:globalThis.fixtureGroup}}),
       updateQueue:()=>{throw Error('fixture must not mutate queue')},
       loadImage:async()=>'',renderFactorySlot:undefined,
       actions:{reportError:error=>globalThis.fixtureErrors.push(String(error))}
     };
     const root=ReactDOM.createRoot(document.getElementById('root'));
-    globalThis.renderFixture=(inbox,sessionId)=>{globalThis.fixtureInbox=inbox;ReactDOM.flushSync(()=>root.render(React.createElement(QueueDock,{...props,sessionId})))};
+    globalThis.renderFixture=(inbox,sessionId,group=[])=>{globalThis.fixtureInbox=inbox;globalThis.fixtureSession=sessionId;globalThis.fixtureGroup=group;ReactDOM.flushSync(()=>root.render(React.createElement(QueueDock,{...props,sessionId})))};
   ` })
   const bot = (id, text, role = 'reply') => ({ id, source: { kind: 'bot', form: 'relay', role, senderName: '测试 Bot', exchangeId: `exchange-${id}` }, content: [{ type: 'text', text }] })
   const user = { id: 'user-1', source: { kind: 'user', rpcId: 'fixture-request' }, content: [{ type: 'text', text: '用户消息测试' }] }
@@ -74,6 +77,18 @@ try {
   await head.click()
   assert.equal(await head.getAttribute('aria-expanded'), 'false')
   assert.equal(await list.isVisible(), false)
+
+  await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [], 'next-step': [] }, 'fixture-session-a', [{ id: 'g1', roomId: 'r1', roomName: '研发群', senderName: '架构师', text: '需要决策' }]))
+  assert.match(await head.innerText(), /私聊 0 条 \+ 群聊 1 条/)
+  await head.click()
+  assert.match(await list.innerText(), /研发群/)
+  assert.match(await list.innerText(), /需要决策/)
+  await head.click()
+  await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [], 'next-step': [] }, 'fixture-session-a', [{ id: 'unknown', roomId: 'r1', roomName: '研发群', unavailable: true }]))
+  assert.match(await head.innerText(), /群聊 0\+\? 条/)
+  await head.click()
+  assert.match(await list.innerText(), /Group inbox unavailable/)
+  await head.click()
 
   // User and Bot queues must be independent. Show both Bot placements without tool context.
   const longText = '长消息内容。'.repeat(80)

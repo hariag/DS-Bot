@@ -37,14 +37,16 @@ const { QueueDock } = module.exports
 
 const row = (id, kind, text) => ({ id, source: { kind }, content: [{ type: 'text', text }] })
 
-const dock = (nextTurn, { running = false, pendingSubmissions = [], nextStep = [], botOpen = false } = {}) => {
+const dock = (nextTurn, { running = false, pendingSubmissions = [], nextStep = [], botOpen = false, groupQueue = [], earlierPrivate = [], missingInbox = false } = {}) => {
   const sessionId = 'session-a'
   stateIndex = 0
   firstState = botOpen ? sessionId : undefined
   return QueueDock({
     sessionId,
     useSession: selector => selector({ running, pendingSubmissions, subagent: null }),
-    useProjection: () => ({ 'next-turn': nextTurn, 'next-step': nextStep }),
+    useProjection: () => missingInbox ? {} : ({ 'next-turn': nextTurn, 'next-step': nextStep }),
+    useRoster: selector => selector({ byId: { [sessionId]: { id: 'bot-a' } } }),
+    useWork: selector => selector({ groupQueues: { 'bot-a': groupQueue }, earlierPrivateQueues: { 'bot-a': earlierPrivate } }),
     updateQueue: async () => ({ ok: true }),
     loadImage: async () => 'about:blank',
     actions: { reportError: () => {} },
@@ -81,8 +83,47 @@ test('a queue of only Bot mail renders a collapsed separate count', () => {
   const tree = dock([row('b1', 'bot', '[Reply from Writer]\ndone')])
   const { rows, texts } = collect(tree)
   assert.equal(rows.length, 0)
-  assert.ok(texts.includes('1 Bot messages waiting'))
+  assert.ok(texts.includes('Bot private 1 + group 0'))
   assert.ok(!texts.some(text => text.includes('[Reply from')))
+})
+
+test('group mail appears with private mail and also when the private queue is empty', () => {
+  const groupQueue = [{ id: 'g1', roomId: 'room', roomName: 'Team', senderName: 'Writer', text: 'Please decide' }]
+  const { texts } = collect(dock([], { groupQueue, botOpen: true }))
+  assert.ok(texts.includes('Bot private 0 + group 1'))
+  assert.ok(texts.includes('Team'))
+  assert.ok(texts.includes('Writer'))
+  assert.ok(texts.includes('Please decide'))
+  assert.ok(collect(dock([row('b1', 'bot', 'private')], { groupQueue })).texts.includes('Bot private 1 + group 1'))
+})
+
+test('an unavailable group inbox is shown as unknown instead of zero', () => {
+  const groupQueue = [{ id: 'unavailable:g', roomId: 'room', roomName: 'Team', unavailable: true }]
+  const { texts } = collect(dock([], { groupQueue, botOpen: true }))
+  assert.ok(texts.includes('Bot private 0 + group 0+?'))
+  assert.ok(texts.includes('Group inbox unavailable'))
+})
+
+test('earlier private inbox entries and unknowns are included in the private count', () => {
+  const earlierPrivate = [{ id: 'old', senderName: 'Writer', text: 'earlier' }, { id: 'missing', unavailable: true }]
+  const { texts } = collect(dock([row('new', 'bot', 'current')], { earlierPrivate, botOpen: true }))
+  assert.ok(texts.includes('Bot private 2+? + group 0'))
+  assert.ok(texts.includes('Private inbox unavailable'))
+  assert.ok(texts.includes('earlier'))
+})
+
+test('a missing private inbox projection is unknown rather than empty', () => {
+  const { texts } = collect(dock([], { missingInbox: true, botOpen: true }))
+  assert.ok(texts.includes('Bot private 0+? + group 0'))
+  assert.ok(texts.includes('Private inbox unavailable'))
+})
+
+test('the same exchange in current and earlier private inboxes counts once', () => {
+  const current = { ...row('current', 'bot', 'new'), source: { kind: 'bot', exchangeId: 'same' } }
+  const earlierPrivate = [{ id: 'old', exchangeId: 'same', text: 'old' }]
+  const { texts } = collect(dock([current], { earlierPrivate, botOpen: true }))
+  assert.ok(texts.includes('Bot private 1 + group 0'))
+  assert.ok(!texts.includes('old'))
 })
 
 test('expanded Bot mail shows both placements without edit or delete controls', () => {

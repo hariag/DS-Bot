@@ -44,10 +44,14 @@ export function install(rt) {
   const books = new Map()
   /** @type {Map<string, Promise<unknown>>} */
   const writing = new Map()
-  // The last write of each book as it went, failure included, for a caller that must not
-  // go on when its record is not on disk.
-  /** @type {Map<string, Promise<unknown>>} */
-  const lastWrite = new Map()
+  // A later append must not silently write past a missing earlier record.
+  const writeFailures = new Map()
+  const skippedWrites = new Set()
+  const noteWriteFailure = (book, error) => {
+    if (writeFailures.has(book)) return
+    writeFailures.set(book, error)
+    rt.warn('ds-bot: a record of %s was not written: %s', book, error?.message ?? error)
+  }
   /** @type {Map<string, (book: string) => object[] | undefined>} */
   const importers = new Map()
 
@@ -64,8 +68,7 @@ export function install(rt) {
   // an importer finds of its conversation from before the ledger (writing hosts only).
   function open(book) {
     const known = books.get(book)
-    // A copy read while another host wrote is stale once this host writes.
-    if (known !== undefined && (writes() ? !known.readOnly : sizeOf(book) === known.size)) return known
+    if (known !== undefined && (writes() || sizeOf(book) === known.size)) return known
     let text
     let size = -1
     try {
@@ -93,9 +96,7 @@ export function install(rt) {
         }
       }
     }
-    // An interruption can leave the last line without its end; the next record starts on a
-    // line of its own, or it would join the cut one and be lost with it.
-    const entry = { records, bySeq: index(records), size, readOnly: !writes(), torn: text !== undefined && text !== '' && !text.endsWith('\n') }
+    const entry = { records, bySeq: index(records), size }
     books.set(book, entry)
     return entry
   }
@@ -105,47 +106,55 @@ export function install(rt) {
     const entry = open(book)
     entry.records.push(record)
     if (Number.isInteger(record.seq)) entry.bySeq.set(record.seq, record)
-    if (!writes()) return record
-    const line = `${entry.torn ? '\n' : ''}${JSON.stringify(record)}\n`
-    entry.torn = false
+    if (!writes()) { skippedWrites.add(book); return record }
+    const line = `${JSON.stringify(record)}\n`
     entry.size += Buffer.byteLength(line)
     const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
+      if (writeFailures.has(book) || skippedWrites.has(book)) return
       await mkdir(dir, { recursive: true })
       await appendFile(pathOf(book), line, 'utf8')
     })
-    lastWrite.set(book, run)
-    writing.set(book, run.catch((error) => {
-      rt.warn('ds-bot: a record of %s was not written: %s', book, error?.message ?? error)
-      // Memory holds only what the disk has, so a record that did not land is written again
-      // when it is sent again. Part of its line may have landed: the next one starts anew.
-      if (books.get(book) !== entry) return
-      const at = entry.records.indexOf(record)
-      if (at !== -1) entry.records.splice(at, 1)
-      if (Number.isInteger(record.seq) && entry.bySeq.get(record.seq) === record) entry.bySeq.delete(record.seq)
-      entry.torn = true
-    }))
+    writing.set(book, run.catch(error => noteWriteFailure(book, error)))
     return record
   }
 
-  // Everything appended so far is on disk.
+  // The queued writes completed; this does not imply an fsync durability barrier.
   const flush = async (book) => {
-    if (book !== undefined) return writing.get(book)
+    if (book !== undefined) {
+      await writing.get(book)
+      if (writeFailures.has(book)) throw writeFailures.get(book)
+      return
+    }
     await Promise.all(writing.values())
+    if (writeFailures.size > 0) throw new AggregateError([...writeFailures.values()], 'One or more ledger writes failed')
+  }
+
+  // A read-only append exists only in memory; regaining the lock does not make
+  // that missing prefix durable. Only an explicit successful drop clears it.
+  const flushRequired = async (book) => {
+    await flush(book)
+    if (!writes()) throw new Error('The ledger is read-only')
+    if (book === undefined ? skippedWrites.size > 0 : skippedWrites.has(book)) {
+      throw new Error('The ledger has writes that were not persisted')
+    }
   }
 
   function drop(book) {
     books.delete(book)
-    if (!writes()) return
-    const run = (writing.get(book) ?? Promise.resolve()).then(() => rm(pathOf(book), { force: true }))
-    writing.set(book, run.catch(() => {}))
+    if (!writes()) { skippedWrites.add(book); return }
+    const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
+      await rm(pathOf(book), { force: true })
+      writeFailures.delete(book)
+      skippedWrites.delete(book)
+    })
+    writing.set(book, run.catch(error => noteWriteFailure(book, error)))
   }
 
   const ledger = {
     open,
     append,
     flush,
-    // Rejects when the last record of the book did not reach the disk.
-    written: book => lastWrite.get(book) ?? Promise.resolve(),
+    flushRequired,
     drop,
     records: book => open(book).records,
     record: (book, seq) => open(book).bySeq.get(seq),
@@ -170,6 +179,4 @@ export function install(rt) {
     importer: (prefix, read) => { importers.set(prefix, read) },
   }
   rt.ledger = ledger
-  // What is still on its way to disk lands before the plugin goes.
-  rt.ctx?.effect?.(() => () => flush(), 'ds-bot: ledger')
 }

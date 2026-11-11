@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
 import { LoopbackMcp } from '../src/host/local-agents/mcp.js'
@@ -64,5 +65,35 @@ test('MCP: a synchronous tool error returns an error and clears the call', async
   const event = await eventFrom(await call(mcp))
   assert.equal(event.result.isError, true)
   assert.equal(event.result.content[0].text, 'tool failed')
+  assert.equal(mcp.calls.size, 0)
+})
+
+test('MCP: a late result cannot write to an ended response', async t => {
+  const started = deferred()
+  const result = deferred()
+  const mcp = new LoopbackMcp(() => [], () => { started.resolve(); return result.promise })
+  t.after(() => mcp.close())
+  class Response extends EventEmitter {
+    writableEnded = false
+    destroyed = false
+    writesAfterEnd = 0
+    writeHead() {}
+    write() {
+      if (this.writableEnded) {
+        this.writesAfterEnd += 1
+        queueMicrotask(() => this.emit('error', Object.assign(new Error('write after end'), { code: 'ERR_STREAM_WRITE_AFTER_END' })))
+      }
+      return true
+    }
+    end() { this.writableEnded = true }
+    destroy() { this.destroyed = true }
+  }
+  const response = new Response()
+  mcp.serveCall({ id: 1, params: { name: 'work' } }, response)
+  await started.promise
+  mcp.failAll(new Error('session closed'))
+  result.resolve({ text: 'late result' })
+  await delay(25)
+  assert.equal(response.writesAfterEnd, 0)
   assert.equal(mcp.calls.size, 0)
 })
