@@ -373,23 +373,7 @@ function scheduleGroupChains(flow) {
 // One Bot message inside a group chat: avatar, name (with its group role), when it ran
 // and how long it took, bubble. The flat layout moves the avatar from beside the last
 // bubble to the head of the name row, so the text below runs the whole width.
-// The host's checks on a final reply, as lines under it. A marker only tells the
-// reader; it never asks the Bot to do anything again.
-export function claimLines(claims) {
-  if (claims === undefined || claims === null) return []
-  const lines = []
-  if (claims.inProgress === true) {
-    lines.push({
-      kind: 'inProgress',
-      text: t('No background work detected'),
-      detail: t('DS Bot has no recorded tool call or active background task for this reply.'),
-    })
-  }
-  for (const path of claims.missingFiles ?? []) lines.push({ kind: 'file', text: t('File not found: {path}', { path }) })
-  return lines
-}
-
-export function GroupMessage({ bot, text, texts = [text], room, roster, actions, msgKey, useUi, whole, time, duration, claims }) {
+function GroupMessage({ bot, text, texts = [text], room, roster, actions, msgKey, useUi, whole, time, duration }) {
   const ref = useRef(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -408,8 +392,7 @@ export function GroupMessage({ bot, text, texts = [text], room, roster, actions,
       room?.admin === bot.id ? h('span', { className: 'bt-group-role' }, t('Admin')) : null,
       Number.isFinite(time) ? h('span', { className: 'bt-group-time', title: clockLabel(time) }, messageClock(time)) : null,
       took ? h('span', { className: 'bt-group-took', title: t('Ran for {duration}', { duration: took }) }, took) : null),
-    h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi, lead: flat ? null : lead, whole }),
-    claimLines(claims).map(line => h('div', { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: 'status', title: line.detail ?? undefined }, line.text)))
+    h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi, lead: flat ? null : lead, whole }))
 }
 
 // A centered event line that names a group chat and opens it.
@@ -638,7 +621,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
       const poster = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
       return h(GroupMessage, {
         key, bot: poster, text: row.file ? stripLongNote(row.text) : row.text, texts: row.texts, room: roster.roomsById[sessionId], roster, actions,
-        msgKey: `${sessionId}:post:${row.seq ?? row.time}`, time: row.time, duration: row.duration, claims: row.claims,
+        msgKey: `${sessionId}:post:${row.seq ?? row.time}`, time: row.time, duration: row.duration,
         whole: row.file ? { length: row.length, load: () => actions.fileText(row.file) } : undefined,
       })
     }
@@ -722,7 +705,6 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         // A trigger's data carries no turn; its event seq is the one durable name of this post.
         return h(GroupMessage, {
           bot: poster, text: file ? stripLongNote(text) : text, room, roster, actions, msgKey: `${sessionId}:post:${data.seq ?? node.key}`, useUi, time: data.time,
-          claims: source.claims,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : undefined,
         })
       }
@@ -988,7 +970,7 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
   return null
 }
 
-// A settled round's rows do not change: each is read from the group's book once per page.
+// Rows a later call closed do not change: each is read from the group's book once per page.
 const settledRows = new Map()
 
 function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
@@ -1013,24 +995,37 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   // the ledger carries them in its result.
   const resultText = done ? contentText(content) : ''
   const range = done ? relayRange(resultText) : undefined
-  const rowsKey = range === undefined ? undefined : `${sessionId}:${range.from}:${range.to ?? ''}`
-  const [settled, setSettled] = useState(() => (rowsKey === undefined ? null : settledRows.get(rowsKey) ?? null))
+  const rowsKey = range === undefined ? undefined : `${sessionId}:${range.from}:${range.to ?? ''}:${range.anchor ?? ''}`
+  const [view, setView] = useState(() => (rowsKey === undefined ? null : settledRows.get(rowsKey) ?? null))
+  // An open cell that is quiet is read again when the team changes, not on a clock.
+  const quietKey = view?.open === true && view.active !== true ? roster.revision : undefined
   useEffect(() => {
     if (rowsKey === undefined) return undefined
     const known = settledRows.get(rowsKey)
-    if (known !== undefined) { setSettled(known); return undefined }
+    if (known !== undefined) { setView(known); return undefined }
+    // The newest call's rows grow while the group works: they are read every second then,
+    // and once when the group is quiet, until the next call closes them.
     let stop = false
-    void actions.groupRows(sessionId, range.from, range.to).then((rows) => {
-      // A failed read is not kept, so the next draw asks again.
-      if (Array.isArray(rows) && rows.length > 0) settledRows.set(rowsKey, rows)
-      if (!stop) setSettled(Array.isArray(rows) ? rows : [])
-    })
-    return () => { stop = true }
-  }, [rowsKey])
+    let timer
+    let seen = ''
+    const tick = async () => {
+      const next = await actions.groupRows(sessionId, range.from, range.to, range.anchor)
+      if (stop) return
+      if (next !== null && Array.isArray(next?.rows)) {
+        if (!next.open) settledRows.set(rowsKey, next)
+        const key = JSON.stringify(next)
+        if (key !== seen) { seen = key; setView(next) }
+        if (!next.open || next.active !== true) return
+      }
+      timer = setTimeout(tick, document.hidden ? 5000 : 1000)
+    }
+    void tick()
+    return () => { stop = true; clearTimeout(timer) }
+  }, [rowsKey, quietKey])
   let replies = live.replies
   let broken = false
   if (range !== undefined) {
-    replies = settled ?? live.replies
+    replies = view?.rows ?? live.replies
   } else if (done) {
     const parsed = parseReplies(resultText)
     replies = parsed.replies.length ? parsed.replies : live.replies
@@ -1038,7 +1033,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   }
   // Every member answering in the round is typing; what each is doing comes as text,
   // so the cell redraws only when that changes.
-  const pending = done ? [] : live.speaking
+  const pending = range !== undefined ? (view?.open ? view.speaking ?? [] : []) : done ? [] : live.speaking
   const doing = JSON.parse(useWork?.(work => JSON.stringify(pending.map((id) => {
     const tool = work.bots?.[id]?.tool
     return tool ? [tool, workPhrase(work.bots[id])] : []
@@ -1064,7 +1059,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return h('div', { key: `goal-${index}`, className: 'bt-event', title: reply.text || undefined },
           h('span', { className: 'bt-event-ico', 'aria-hidden': true }, h(GoalIcon)), goalEventText(reply))
       }
-      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi, time, duration, claims: reply.claims })
+      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi, time, duration })
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id]
