@@ -32,6 +32,8 @@ function start(team, { models = [], reasoning = {}, archiveError, keys, selectio
   if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   const services = {}
   const ctx = fakeContext({ services })
+  const eventLog = new Map()
+  eventLogsByContext.set(ctx, eventLog)
   const records = new Set()
   if (keys !== undefined) Object.assign(services, keyed(ctx, new Set(keys), records))
   if (selection !== undefined) {
@@ -67,7 +69,18 @@ function start(team, { models = [], reasoning = {}, archiveError, keys, selectio
     },
     sessionController: {
       create: async () => ({ sessionId: `s${++sessions}` }),
-      resolveAgent: async sessionId => ({ agent: { session: { id: sessionId }, followup: message => sent.push({ sessionId, message }) } }),
+      resolveAgent: async sessionId => ({ agent: {
+        id: sessionId,
+        status: 'idle',
+        session: { id: sessionId, seq: Math.max(0, ...(eventLog.get(sessionId) ?? []).map(event => event.seq + 1)) },
+        followup: message => sent.push({ sessionId, message }),
+      } }),
+      page: async ({ address, throughSeq, beforeSeq, maxMessages }) => {
+        const eligible = (eventLog.get(address.sessionId) ?? [])
+          .filter(event => Number.isSafeInteger(event.seq) && event.seq <= throughSeq && (beforeSeq === undefined || event.seq < beforeSeq))
+          .sort((a, b) => a.seq - b.seq)
+        return { records: eligible.slice(-maxMessages).map(event => ({ event })), hasMore: eligible.length > maxMessages }
+      },
       selectModel: async (request) => { selected.push(request) },
     },
     sessionTitle: { rename: async () => {} },
@@ -533,11 +546,32 @@ test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its hel
 })
 
 // A turn in a Bot Session as DSH reports it, to every listener.
-const emitIn = (ctx, sessionId, event) => { for (const listener of ctx.listeners.get('session/event')) listener({ id: sessionId }, event) }
+const eventLogsByContext = new WeakMap()
+const emitIn = (ctx, sessionId, event) => {
+  const logs = eventLogsByContext.get(ctx)
+  if (logs !== undefined) {
+    const events = logs.get(sessionId) ?? []
+    events.push(event)
+    logs.set(sessionId, events)
+  }
+  for (const listener of ctx.listeners.get('session/event')) listener({ id: sessionId }, event)
+}
+const eventSeqs = new Map()
+const nextEventSeq = sessionId => {
+  const next = (eventSeqs.get(sessionId) ?? 0) + 1
+  eventSeqs.set(sessionId, next)
+  return next
+}
 function runTurn(ctx, sessionId, turn, message, reason) {
-  emitIn(ctx, sessionId, { type: 'turn/start', data: { turn } })
-  emitIn(ctx, sessionId, { type: 'user/message', data: message })
-  emitIn(ctx, sessionId, { type: 'turn/end', data: { turn, reason } })
+  emitIn(ctx, sessionId, { type: 'turn/start', seq: nextEventSeq(sessionId), data: { turn } })
+  const inputs = []
+  for (const input of Array.isArray(message) ? message : [message]) {
+    const seq = nextEventSeq(sessionId)
+    inputs.push(`${sessionId}:${seq}`)
+    emitIn(ctx, sessionId, { type: 'user/message', seq, data: input })
+  }
+  emitIn(ctx, sessionId, { type: 'turn/end', seq: nextEventSeq(sessionId), data: { turn, reason } })
+  return inputs
 }
 const typed = text => ({ source: { kind: 'user' }, content: [{ type: 'text', text }] })
 const failed = (code, extra = {}) => ({ kind: 'error', error: { code, message: `${code}: sk-12***34 was refused`, ...extra } })
@@ -677,8 +711,8 @@ test('a Bot is blocked by the facts of a failure only the user can fix, until it
   assert.equal((await botIn(call, chief)).blocked, undefined)
 })
 
-test('Retry has the Bot answer the user\'s last message without sending it again, or sends a failed greeting again', async (t) => {
-  const { call, stop, sent, ctx } = start(undefined, { models: ['deepseek-v4-flash'] })
+test('Retry recovers all dequeued inputs once without resending their original messages', async (t) => {
+  const { call, stop, sent, ctx, home } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   const chief = (await call('state', {})).value.mainBotId
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
@@ -692,13 +726,35 @@ test('Retry has the Bot answer the user\'s last message without sending it again
   assert.equal(sent[1].message.content[0].text, sent[0].message.content[0].text)
 
   runTurn(ctx, chief, 2, sent[1].message, { kind: 'completed' })
-  runTurn(ctx, chief, 3, typed('Plan my week'), failed('QUOTA', { status: 402 }))
+  const failedInputs = runTurn(ctx, chief, 3, [typed('Plan my week'), typed('Also book the meeting')], failed('QUOTA', { status: 402 }))
   await settle()
+  // Simulate a crash before the queued state write: the Session log is the recovery source.
+  delete rt.state.pendingInputs[chief]
+  delete rt.state.recoveryCursor[chief]
+  await rt.save()
   assert.equal((await call('resume', { botId: chief })).ok, true)
+  assert.deepEqual(rt.state.pendingInputs[chief]?.map(item => item.id), failedInputs)
   assert.equal(sent.length, 3)
   assert.equal(sent[2].sessionId, chief)
   assert.equal(sent[2].message.source.role, 'continue')
-  assert.equal(sent[2].message.content[0].text, '[Retry after a failed turn]\nYour last turn failed (QUOTA) and the user has fixed it. Answer the user\'s last unanswered message.')
+  assert.deepEqual(sent[2].message.source.recoveryIds, failedInputs)
+  assert.match(sent[2].message.content[0].text, /Handle every outstanding message in its original order/)
+  assert.doesNotMatch(sent[2].message.content[0].text, /Plan my week|book the meeting/)
+  assert.equal((await call('resume', { botId: chief })).ok, true)
+  assert.equal(sent.length, 3, 'a second Retry must not enqueue the same recovery batch')
+  runTurn(ctx, chief, 4, sent[2].message, failed('QUOTA', { status: 402 }))
+  await settle()
+  let saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.deepEqual(saved.pendingInputs[chief].map(item => item.id), failedInputs)
+  assert.equal((await call('resume', { botId: chief })).ok, true)
+  assert.equal(sent.length, 4)
+  assert.deepEqual(sent[3].message.source.recoveryIds, sent[2].message.source.recoveryIds)
+  assert.notEqual(sent[3].message.source.recoveryKey, sent[2].message.source.recoveryKey)
+  runTurn(ctx, chief, 5, sent[3].message, { kind: 'completed' })
+  await settle()
+  saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(saved.pendingInputs?.[chief], undefined)
+  assert.equal(saved.pendingRecovery?.[chief], undefined)
   assert.equal((await botIn(call, chief)).waiting, undefined)
 })
 
