@@ -107,6 +107,7 @@ const noticeText = (line) => {
   if (line.reason === 'folder') return `The group's folder ${line.path} is gone, so its members work in the team workspace; set the group's folder again in the group's settings.`
   if (line.reason === 'goal') return goalNotice(line)
   if (line.reason === 'failed') return `${(line.names ?? []).join(' and ')} stopped: its model call failed (${line.detail}). What it was doing here is not finished; the user can switch its model in its settings or ask it to go on.`
+  if (line.reason === 'helper-failed') return `${(line.names ?? []).join(' and ')}'s background helper did not finish: ${line.detail}. The work it was doing here is not finished; ask it to go on if it still matters.`
   return line.text ?? ''
 }
 // `text` is what to show of a message line, by default what the log keeps of it.
@@ -307,6 +308,7 @@ export function install(rt) {
     if (record.kind !== 'notice') return { kind: record.kind, ...who, time }
     switch (record.reason) {
       case 'failed': return { kind: 'failed', ...who, code: record.code, ...(record.status ? { status: record.status } : {}), text: record.message ?? record.detail, time }
+      case 'helper-failed': return { kind: 'helper-failed', ...who, text: record.detail, time }
       case 'missed': return { kind: 'missed', ...who, time }
       case 'admin-passed': return { kind: 'admin-passed', ...who, time }
       case 'paused': return { kind: 'paused', idle: record.idle, ...who, name: bot?.name ?? record.from, count: record.count ?? record.limit, limit: record.limit, names: record.names, time }
@@ -367,6 +369,23 @@ export function install(rt) {
     const { code, status, message } = failure
     say(room, { who: 'DS Bot', kind: 'notice', reason: 'failed', names: [member.name], about: member.id, detail: failureLine(failure), code, ...(status ? { status } : {}), message })
   }
+
+  // Reuse the late-failure event so an idle group draws the ledger row without
+  // turning the child's failure into another member message or calling anyone.
+  const noteHelperFailure = async (sessionId, { reason, helper }) => {
+    const owner = rt.groupOwners.get(sessionId)
+    const room = rt.roomOf(owner?.roomId)
+    const member = rt.botOf(owner?.botId)
+    if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    const detail = helper ? `${helper}: ${reason}` : reason
+    const line = say(room, { who: 'DS Bot', kind: 'notice', reason: 'helper-failed', names: [member.name], about: member.id, detail })
+    await rt.save()
+    // The post names the notice's seq: the round it opens starts there, so the chat draws
+    // the notice row too, and the empty post is not written a second time.
+    await postToRoom(room, member, '', { late: true, quiet: true, logged: line?.seq, failed: { code: 'SUBAGENT_FAILED', message: detail } })
+      .catch(error => rt.warn('ds-bot: background helper failure not posted: %s', error))
+  }
+  rt.subagentFailureNotice = noteHelperFailure
 
   async function roomFolderNotice(roomId, folder) {
     const room = rt.roomOf(roomId)
