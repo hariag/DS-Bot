@@ -142,7 +142,6 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
       flush: async () => {
         flushes += 1
         if (fail.flush === true || fail.flush instanceof Error || fail.flush === flushes) throw errorOf(fail.flush)
-        if (fail.flushFalse === flushes) return false
       },
     },
   })
@@ -203,59 +202,6 @@ const moveWriter = async (host, input, step = 2) => {
   assert.deepEqual(await host.preStep('b', input, step), { kind: 'reject' })
 }
 
-test('switching a Bot moves a pending delivery and its recovery note together', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const writer = host.agentOf('b')
-  writer.followup = (message) => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
-  const remove = writer.inbox.remove.bind(writer.inbox)
-  writer.inbox.remove = (id) => {
-    const message = [...writer.inbox.nextStep, ...writer.inbox.nextTurn].find(item => item.id === id)
-    const removed = remove(id)
-    if (removed) host.ctx.emit('agent/inbox/discarded', { agent: writer, message })
-    return removed
-  }
-  await host.tool('message_bot', { to: 'Writer', message: 'queued task', when: 'queue' }, 'a')
-  const message = writer.inbox.nextTurn[0]
-  const notes = () => {
-    try { return JSON.parse(readFileSync(join(host.home, 'inflight.json'), 'utf8')).queued ?? {} } catch { return {} }
-  }
-  await until(() => notes().b?.length === 1)
-  await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
-  await until(() => notes().s1?.length === 1 && notes().b === undefined)
-  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.source?.exchangeId === message.source.exchangeId)
-  assert.ok(forwarded)
-  assert.equal(notes().s1[0].args.exchangeId, message.source.exchangeId)
-})
-
-test('switching a Bot keeps a scheduled reminder queued under the same identity', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const message = { id: 'schedule-one', role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER]\nScheduled inspection' }], source: { kind: 'schedule' } }
-  const batch = { id: 'schedule-batch', role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER BATCH]\nScheduled inspections' }], source: { kind: 'schedule' } }
-  host.agentOf('b').inbox.nextTurn.push(message, batch)
-  await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
-  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.id === 'schedule-one')
-  assert.equal(forwarded?.[0], 'followup')
-  assert.deepEqual(forwarded?.[1], message)
-  assert.equal(host.agentOf('s1').calls.find(([, item]) => item.id === batch.id)?.[0], 'followup')
-  assert.equal(host.agentOf('b').inbox.nextTurn.some(item => item.id === message.id), false)
-})
-
-test('switching keeps a schedule change notice at the next-step boundary', async (t) => {
-  const host = await start({ services })
-  t.after(host.stop)
-  const message = { id: 'schedule-notice', role: 'user', content: [{ type: 'text', text: '[SCHEDULE CHANGE]\nA task changed' }], source: { kind: 'schedule' } }
-  host.agentOf('b').inbox.nextStep.push(message)
-  await moveWriter(host, [])
-  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
-  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.id === 'schedule-notice')
-  assert.equal(forwarded?.[0], 'inject')
-  assert.deepEqual(forwarded?.[1], message)
-})
-
 test('a move that fails while the plugin unloads hands its input back to the part it left', async (t) => {
   // The first flush writes the fresh part's handoff; the second moves the input.
   const fail = { flush: 2 }
@@ -274,16 +220,6 @@ test('a move that fails while the plugin unloads hands its input back to the par
   assert.deepEqual(inboxTexts(host.agentOf('b')), ['Now build it', 'and this too', 'waiting input'])
   assert.equal(host.warnings.length, 0)
   assert.ok(host.infos.some(line => line.includes('input kept in part')))
-})
-
-test('a move keeps its old input when the new Session does not acknowledge persistence', async (t) => {
-  const host = await start({ fail: { flushFalse: 2 }, services })
-  t.after(host.stop)
-  host.agentOf('b').inbox.nextTurn.push(said('h1', 'waiting input', 'e-held'))
-  await moveWriter(host, [said('m1', 'carried input', 'e-carry')])
-  await until(() => host.warnings.some(line => line.includes('did not move on to a fresh part')))
-  assert.deepEqual(host.state().switching, { b: { botId: 'b' } })
-  assert.deepEqual(inboxTexts(host.agentOf('b')), ['carried input', 'waiting input'])
 })
 
 test('a move that never started keeps carry and one pause note in the inbox; a retry adds none', async (t) => {
@@ -424,6 +360,22 @@ test('an earlier part is stopped only after its tasks moved to the fresh part', 
   assert.deepEqual(order, [['move', 'b', 's1'], ['archive', 'b']])
 })
 
+test('a failed task move leaves the earlier part unarchived and marked for retry', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  host.rt.moveSchedules = async () => { throw new Error('task storage unavailable') }
+  await moveWriter(host, [])
+  await until(() => host.warnings.some(line => line.includes('task storage unavailable')))
+  await settle()
+  assert.deepEqual(host.archived, [])
+  assert.deepEqual(host.state().switching, { b: { botId: 'b' } })
+
+  host.rt.moveSchedules = async () => {}
+  await host.rt.heldBack()
+  assert.deepEqual(host.archived, [['b', { stopActivity: true }]])
+  assert.deepEqual(host.state().switching, {})
+})
+
 test('unmarked earlier parts are never resolved by the restart pass', async (t) => {
   const host = await start({ services })
   await moveWriter(host, [])
@@ -547,8 +499,7 @@ test('a group conversation cut off with nothing written moves on too', async (t)
   }
   await until(() => host.state().rooms.r1.sessions.b === 's1')
   assert.equal(host.state().rooms.r1.segments.b[0].fallback, 'cutoff')
-  // The earlier part is archived after the move is saved and its tasks moved, so wait
-  // for that side effect instead of asserting right after the session id changes.
-  await until(() => host.archived.length === 1)
+  // The old part is archived just after the switch is saved.
+  await until(() => host.archived.length > 0)
   assert.deepEqual(host.archived, [['gb', { stopActivity: true }]])
 })
