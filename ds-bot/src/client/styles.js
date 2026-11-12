@@ -221,6 +221,7 @@ html[data-bt-collapsing] [class*="_frame"]:has(>[class*="_sidebarCol"]){transiti
 
 /* The width settings: the share of the column a bubble may take, and the flat text. */
 body{--bt-msg-w:.8;--bt-flat-w:1}
+body{--bt-qr-paper:#fff;--bt-qr-ink:#000}
 .bt-astack{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin:0}
 .bt-bubble{max-width:min(calc(var(--bt-msg-w) * 100%),calc(100% - 82px));background:var(--bt-bubble);color:var(--bt-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 10px);box-sizing:border-box;overflow-wrap:anywhere;text-wrap:pretty;text-autospace:normal}
 .bt-msg:not(:first-child)>.bt-msg-line>.bt-bubble{border-start-start-radius:6px}
@@ -254,9 +255,6 @@ button.bt-lead{border:0;background:none;padding:0;cursor:pointer}
 .bt-group-name:has(>.bt-lead){display:flex;align-items:center;margin:0 0 2px;font-size:13px;line-height:22px;font-weight:600;color:var(--bt-ink)}
 .bt-group-name>.bt-lead{margin:0 8px 0 0}
 .bt-group-time,.bt-group-took{margin-left:6px;font-size:11px;line-height:16px;font-weight:400;color:var(--bt-ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
-.bt-claim{margin-left:28px;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
-.bt-claim-file{color:var(--bt-danger)}
-.bt-claim-inProgress{color:var(--bt-ink-2)}
 .bt-x{border:0;background:none;color:var(--bt-ink-2);cursor:pointer;width:24px;height:24px;border-radius:6px;font-size:16px;line-height:24px;padding:0;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, 'scale')}}
 .bt-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
 
@@ -355,7 +353,6 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-option-hint{font-size:11px;color:var(--bt-ink-2);flex:none;animation:bt-veil-in .16s ease-out}
 .bt-option-icon{width:22px;height:22px;border-radius:50%;background:var(--bt-hover);color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;flex:none}
 .bt-hint{padding:14px;text-align:center;font-size:13px;color:var(--bt-ink-2)}
-.bt-boot-failed{display:flex;flex-direction:column;align-items:center;gap:10px}
 .bt-nc-spacer{flex:1}
 .bt-nc-compose{padding:0 16px 14px;display:flex;justify-content:center}
 .bt-nc-card{display:flex;align-items:flex-end;gap:6px;width:100%;max-width:var(--dsh-chat-content-width,748px);min-height:44px;padding:4px 6px;border-radius:22px;border:1px solid var(--bt-line-2);background:var(--bt-main);box-shadow:0 2px 8px -2px rgba(0,0,0,.06);box-sizing:border-box}
@@ -448,10 +445,6 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-drawer-name:hover{background:var(--bt-hover)}
 .bt-drawer-name-input{font-size:17px;line-height:24px;text-align:center;border:.5px solid var(--bt-line-2);border-radius:6px;padding:0 6px;background:var(--bt-main);color:var(--bt-ink);outline:none;font-weight:500}
 .bt-drawer-role{font-size:12px;line-height:16px;color:var(--bt-ink-3);margin-top:6px;text-align:center}
-.bt-drawer-role-input{width:min(100%,220px);height:24px;box-sizing:border-box;margin-top:4px;padding:0 6px;border:1px solid transparent;border-radius:6px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;line-height:16px;text-align:center;outline:none;transition:background-color .12s ease,border-color .12s ease,color .12s ease}
-.bt-drawer-role-input:hover{background:var(--bt-hover)}
-.bt-drawer-role-input:focus{background:var(--bt-main);border-color:var(--bt-line-2);color:var(--bt-ink)}
-.bt-drawer-role-input::placeholder{color:var(--bt-ink-3);opacity:.7}
 .bt-tabs{position:relative;display:flex;justify-content:center;gap:2px;margin:16px 16px 0}
 .bt-tab{position:relative;z-index:1;border:0;background:none;border-radius:999px;padding:4px 8px;font-size:13px;line-height:20px;color:var(--bt-ink-2);cursor:pointer;white-space:nowrap}
 .bt-tab:hover{color:var(--bt-ink)}
@@ -513,9 +506,6 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-set-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bt-about{white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
 .bt-about[data-open]{display:block;-webkit-line-clamp:unset}
-.bt-about[data-editable]{margin:0 -6px;padding:2px 6px;border-radius:6px;cursor:text;transition:background-color .12s ease}
-.bt-about[data-editable]:hover{background:var(--bt-hover)}
-.bt-about[data-editable]:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
 .bt-more{border:0;background:none;color:var(--bt-ink-3);font-size:12px;line-height:16px;cursor:pointer;padding:2px 0}
 .bt-more:hover{color:var(--bt-ink)}
 .bt-subhead{display:flex;align-items:center;gap:4px;padding:10px 12px 4px}
@@ -605,7 +595,6 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-set-model .bt-set-control{flex:0 1 auto;min-width:0;max-width:65%}
 .bt-set-number{width:112px}
 .bt-set-places .bt-set-hint{overflow-wrap:anywhere}
-.bt-set-hint.bt-danger{color:var(--bt-danger)}
 .bt-set-value{font-size:13px;color:var(--bt-ink-2);text-align:right}
 .bt-set-bot{flex:1;display:flex;align-items:center;gap:8px;min-width:0}
 .bt-browser-note{margin:0;padding:10px 12px;color:var(--bt-ink-2);font-size:12px;line-height:17px}
@@ -649,6 +638,18 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-set-form-foot{justify-content:flex-end}
 @media(max-width:600px){.bt-set-form-row{grid-template-columns:1fr}}
 
+/* Settings → Phone. */
+.bt-phone-server{gap:8px}
+.bt-phone-server .bt-input{flex:1;min-width:0}
+.bt-phone-warn .bt-set-hint{color:var(--bt-danger)}
+.bt-phone-error{padding:0 4px 12px}
+.bt-phone-pair{display:flex;align-items:center;gap:20px;padding:16px}
+.bt-phone-qr{flex:none;width:184px;height:184px;border-radius:8px}
+.bt-phone-qr rect{fill:var(--bt-qr-paper)}
+.bt-phone-qr path{fill:var(--bt-qr-ink)}
+.bt-phone-pair-copy{display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:20px}
+@media(max-width:700px){.bt-phone-pair{flex-direction:column;align-items:flex-start}}
+
 /* Settings → Connectors. */
 .bt-connector{display:flex;flex-direction:column;gap:10px;padding:12px}
 .bt-connector-head{display:flex;align-items:center;gap:12px;min-width:0}
@@ -685,17 +686,21 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 /* Shell chrome reshaped for the team view. Selectors use stable data attributes where the
    shell offers them and CSS-module name suffixes elsewhere. */
 [class*="_newSession"],nav[class*="_panelList"],[class*="_logoRow"]>[class*="_brand"],[class*="_logoRow"]:not(:has([class*="_toggle"])){display:none!important}
-/* The shell's sidebar switch stays where the shell puts it whenever the sidebar is
-   collapsed: on the rail, or fixed in a Windows title bar, where it also stays while
-   the sidebar is open. Elsewhere an open sidebar uses the team's own top row. */
+/* An open sidebar uses the team's own top row; under a Windows title bar the shell's
+   logo row stays, flattened to nothing. */
 html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
 html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
 html[data-windows-titlebar] .bt-side-collapse{display:none}
-/* Under a Windows title bar our own switch replaces the shell's: the shell's
-   toggle expands the shell sidebar first, and pulling it back afterwards is a
-   visible flash of the shell's column. */
-html[data-windows-titlebar] [class*="_logoRow"]>[class*="_toggle"]{display:none!important}
-html[data-windows-titlebar] .bt-title-toggle{position:fixed;left:12px;top:calc((var(--dsh-windows-titlebar-height,0px) - 28px) / 2);width:28px;height:28px;z-index:30;-webkit-app-region:no-drag;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;padding:0;background:transparent;color:var(--bt-ink);cursor:pointer;font-family:var(--bt-font)}
+/* The sidebar switch is always the team view's own, so the shell's is hidden wherever it
+   sits: in the logo row, or in the top strip of a macOS desktop window. The strip stays,
+   as the window's drag area. Left showing, the shell's toggle expands the shell sidebar
+   first, and pulling it back afterwards is a visible flash of the shell's column; its
+   tooltip also casts a shadow across the rail's edge. */
+[class*="_logoRow"]>[class*="_toggle"],[class*="_topStrip"]>[class*="_toggle"]{display:none!important}
+/* Under a Windows title bar our own switch takes the shell's place in the band. A host
+   whose window controls stand at the band's left (the macOS traffic lights) sets
+   --bt-caption-start to the room they take. */
+html[data-windows-titlebar] .bt-title-toggle{position:fixed;left:calc(12px + var(--bt-caption-start,0px));top:calc((var(--dsh-windows-titlebar-height,0px) - 28px) / 2);width:28px;height:28px;z-index:30;-webkit-app-region:no-drag;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;padding:0;background:transparent;color:var(--bt-ink);cursor:pointer;font-family:var(--bt-font)}
 html[data-windows-titlebar] .bt-title-toggle:hover{background:var(--bt-hover)}
 /* Elsewhere the switch shows only while the column is hidden, where the column's
    own top row had it. */
@@ -760,14 +765,14 @@ html:not([data-windows-titlebar]) [class*="_footArea"],:not([class*="_collapsed"
 .bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:10px;z-index:-1}
 .bt-msg:hover>.bt-msg-line>.bt-tools,.bt-msg:focus-within>.bt-msg-line>.bt-tools,.bt-tools[data-open]{opacity:1;visibility:visible}
 /* The flat layout: a Bot's text has no bubble and takes its own share of the column
-   (the whole of it unless set). The toolbar hangs below the message's bottom right,
-   clear of its last line. */
+   (the whole of it unless set). The toolbar floats over the message's bottom right. */
 body[data-bt-layout=flat] .bt-astack{align-items:stretch;gap:10px}
 body[data-bt-layout=flat] .bt-msg,body[data-bt-layout=flat] .bt-astack[data-lead]>.bt-msg{align-items:stretch;max-width:calc(var(--bt-flat-w) * 100%)}
-body[data-bt-layout=flat] .bt-msg{position:relative}
-body[data-bt-layout=flat] .bt-msg-line{position:static}
 body[data-bt-layout=flat] .bt-bubble{background:none;padding:0;border-radius:0}
-body[data-bt-layout=flat] .bt-tools{top:100%;bottom:auto;right:0;left:auto;margin-left:0;margin-top:2px;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+body[data-bt-layout=flat] .bt-tools{bottom:-14px;right:0;left:auto;margin-left:0;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+/* With reactions below, the toolbar stays inside the message row instead of
+   covering their top edge when the hover shows it. */
+body[data-bt-layout=flat] .bt-msg:has(>.bt-reacts) .bt-tools{bottom:0}
 body[data-bt-layout=flat] .bt-tools::after{display:none}
 .bt-tool{width:24px;height:24px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .bt-tool:hover,.bt-tool[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
@@ -837,29 +842,6 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 .bt-palette-empty-icon svg{width:32px;height:32px}
 .bt-palette-empty-label{font-size:14px;font-weight:500;color:var(--bt-ink-2)}
 .bt-palette-empty-hint{font-size:13px;line-height:16px;color:var(--bt-ink-3)}
-.bt-head-search{flex:none;margin-left:2px;pointer-events:auto}
-.bt-head-search svg{width:16px;height:16px}
-.bt-gs-body{position:relative;flex:1;min-height:220px;max-height:min(420px,54vh);overflow-y:auto;padding:6px 8px;box-sizing:border-box}
-.bt-gs-row{display:flex;flex-direction:column;gap:3px;width:100%;padding:9px 10px;border:0;border-radius:10px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;box-sizing:border-box}
-.bt-gs-row:hover,.bt-gs-row:focus-visible{background:var(--bt-hover)}
-.bt-gs-meta{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:16px;min-width:0}
-.bt-gs-author{font-weight:600;color:var(--bt-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-gs-when{color:var(--bt-ink-3);white-space:nowrap}
-.bt-gs-snippet{font-size:13px;line-height:18px;color:var(--bt-ink-2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.bt-gs-line,.bt-gs-full{font-size:14px;line-height:20px;color:var(--bt-ink);white-space:pre-wrap;overflow-wrap:anywhere}
-.bt-gs-detail{padding:10px 10px 14px;display:flex;flex-direction:column;gap:8px;animation:bt-veil-in .18s ease-out}
-.bt-gs-back{display:inline-flex;align-items:center;gap:4px;align-self:flex-start;border:0;background:none;color:var(--bt-accent);font:inherit;font-size:13px;line-height:18px;padding:2px 4px;border-radius:6px;cursor:pointer}
-.bt-gs-back:hover{background:var(--bt-hover)}
-.bt-gs-back-ico{display:inline-flex;transform:rotate(180deg)}
-.bt-gs-back-ico svg{width:12px;height:12px}
-.bt-gs-full{padding:8px 0;border-bottom:.5px solid var(--bt-line)}
-.bt-gs-context{display:flex;flex-direction:column;gap:6px}
-.bt-gs-context-label{font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-gs-ctx{background:var(--bt-hover);border-radius:8px;padding:6px 8px}
-.bt-gs-ctx .bt-gs-line{font-size:13px;line-height:18px;color:var(--bt-ink-2)}
-.bt-gs mark{background:color-mix(in srgb,var(--bt-star) 32%,transparent);color:inherit;border-radius:4px;padding:0 1px}
-.bt-gs-foot{display:flex;justify-content:space-between;gap:8px;padding:6px 14px 10px;font-size:12px;line-height:16px;color:var(--bt-ink-3)}
-.bt-gs-cap{white-space:nowrap}
 @media (prefers-reduced-motion:reduce){.bt-palette{animation:bt-fade .1s ease-out}}
 .bt-account-menu{width:224px}
 .bt-account{flex:none;width:36px;height:36px;border:0;padding:0;background:none;border-radius:50%;cursor:pointer;display:inline-flex}
@@ -885,6 +867,7 @@ button:hover .bt-you{background:color-mix(in srgb,var(--bt-ink) 9%,var(--bt-side
 :is(.bt-round,.bt-icon-btn,.bt-soft,.bt-send,.bt-mini,.bt-pill,.bt-plus,.bt-mic,.bt-voice,.bt-account,.bt-title-toggle,.bt-settings-close,.bt-avatar-trigger,.bt-shape,.bt-color,.bt-swatch,.bt-pick,.bt-more,.bt-mem-row,.bt-mem-send):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 :is(.bt-row,.bt-tile,.bt-tab,.bt-avedit-tab,.bt-settings-item,.bt-menu button,.bt-option,.bt-palette-row,button.bt-set-row):focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-note{font-size:12px;line-height:16px;color:var(--bt-ink-2);margin-top:6px}
+.bt-set-hint .bt-note.bt-danger{color:var(--bt-danger)}
 .bt-swatch-sep{width:1px;height:22px;background:var(--bt-line-2);margin:0 2px}
 .bt-swatch-custom{position:relative;overflow:hidden;background:conic-gradient(#ff3e51,#ffaf38,#00c972,#1cc3b0,#2a92fe,#a97efe,#ff5eb1,#ff3e51);box-sizing:border-box}
 .bt-swatch-custom[data-on=true]{border-color:var(--bt-ink)}
@@ -989,6 +972,9 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 .bt-mem-entry:hover .bt-mem-remove,.bt-mem-remove:focus-visible,.bt-mem-remove[data-confirm]{opacity:1}
 .bt-mem-remove:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-mem-pin[data-on]{opacity:1;color:var(--bt-accent)}
+.bt-mem-tidy{margin-bottom:12px;font-size:12px;color:var(--bt-ink-3)}
+.bt-mem-tidy summary{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
+.bt-mem-tidy ul{margin:8px 0 0;padding-left:16px}
 .bt-mem-place{flex:none;height:28px;padding:0 8px;border:0;border-radius:999px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;cursor:pointer;opacity:0}
 .bt-mem-entry:hover .bt-mem-place,.bt-mem-place:focus-visible{opacity:1}
 .bt-mem-place:hover{background:var(--bt-hover);color:var(--bt-ink)}
@@ -1240,15 +1226,11 @@ body[data-bt-goal] [class*="_scroll"]:has(> [class*="_column"]){padding-top:calc
 .bt-voice:hover{opacity:.9}
 .bt-mic:active,.bt-voice:active{scale:.9}
 /* Touch devices never hover: tap-open toolbars (data-open on the message), always
-   visible icon buttons and 44px targets replace the hover affordances. The message
-   toolbar sits below the message instead of over it; its secondary buttons are 36px,
-   so the pill stays shorter than the primary touch controls. */
+   visible icon buttons and 44px targets replace the hover affordances. */
 @media (hover:none){
-  .bt-msg{position:relative}
-  .bt-msg-line{position:static}
-  .bt-tools{top:100%;bottom:auto;left:auto;right:4px;margin-left:0;margin-top:2px;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+  .bt-tools{left:auto;right:4px;margin-left:0;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
   .bt-tools::after{display:none}
-  .bt-tool{width:36px;height:36px}
+  .bt-tool{width:44px;height:44px}
   .bt-menu button,.bt-menu [role=menuitem],.bt-react-strip button{min-height:44px}
   .bt-utools[data-open]{opacity:1;visibility:visible}
   .bt-utools button{width:44px;height:44px}
@@ -1287,22 +1269,6 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-q-inline .bt-q{margin:0;max-width:min(550px,86%);order:0}
 .bt-q-dock{width:100%;display:flex;justify-content:center}
 .bt-q-dock .bt-q{margin:0 auto 8px}
-/* Phones: the conversation flow gets the whole screen instead of the desktop
-   shares. A Bot message may take the width beside its avatar, a card the width of
-   the flow, and long text or a wide block wraps inside it instead of running off
-   the edge. This covers the group's chat flow, not only DS Bot's own panels. */
-@media (max-width:640px){
-.bt-msg,.bt-astack[data-lead]>.bt-msg{max-width:100%}
-.bt-bubble,[data-chat-flow] [class*="_bubble"]{max-width:100%;overflow-wrap:anywhere;word-break:break-word}
-.bt-group-msg,.bt-group-name{max-width:100%}
-[data-chat-flow] :is(pre,table){max-width:100%;overflow-x:auto}
-.bt-q{width:100%;max-width:none;padding:12px 14px;border-radius:16px}
-.bt-q-inline .bt-q,.bt-q-inline .dv-view,.bt-q-inline .dv-q{width:100%;max-width:100%}
-.bt-q .bt-q-opt,.bt-q button,.bt-q-inline .dv-view button,.dv-seg.dv-view-seg button{min-height:44px}
-.bt-q-opt-label,.bt-q-inline .dv-q-label{white-space:normal;overflow-wrap:anywhere}
-.bt-dialog-log{padding-left:12px;padding-right:12px}
-.bt-exchange .bt-dialog-log{padding-left:12px;padding-right:12px}
-}
 [class*="_toBottomSlot"]{justify-content:center!important;padding-right:0!important}
 [data-conversation-scroll] [class*="_toBottomSlot"]{bottom:calc(var(--dsh-composer-height,152px) + 8px)!important}
 [class*="_toBottomSlot"]>button{width:36px!important;height:36px!important;margin-top:-36px!important;background:var(--bt-glass-bg)!important;-webkit-backdrop-filter:blur(16px) saturate(180%)!important;backdrop-filter:blur(16px) saturate(180%)!important;color:var(--bt-ink)!important;box-shadow:var(--bt-glass-shadow)!important;animation:bt-tobottom-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out;transition:background-color .12s ease,${spring(SPRING_TAP, 'scale')}}
