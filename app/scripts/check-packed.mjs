@@ -381,7 +381,7 @@ function frameRules(file) {
   const css = readFileSync(join(root, 'src', file), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')
   return [...css.matchAll(/([^{}]+)\{/gu)].map(([, selectors]) => selectors.split(',')
     .map(selector => selector.trim().replace(/::(?:before|after)$/u, '').replace(/^html(?::not\(\[data-fullscreen\]\))?\s*/u, ''))
-    .filter(selector => selector !== '' && selector !== 'body' && !selector.includes('_treeBody') && !selector.includes('_scrollRegion')))
+    .filter(selector => selector !== '' && selector !== 'body' && !selector.includes('_treeBody')))
     .filter(rule => rule.length > 0)
 }
 
@@ -416,7 +416,7 @@ async function chat(cdp) {
   // Click the composer through the input pipeline. A bare focus() is not enough where no window
   // manager gives the window focus (xvfb in CI): the text and the Enter would go nowhere.
   const box = "[...document.querySelectorAll('[role=textbox][contenteditable=true], textarea')].at(-1)"
-  const focusCheck = "(document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA'"
+  const focusCheck = "document.hasFocus() && ((document.activeElement?.isContentEditable ?? false) || document.activeElement?.tagName === 'TEXTAREA')"
   // A greeting that just arrived leaves the composer rebinding: for a moment the field is
   // not editable, so a click lands on it but does not focus it. The probe and the click are
   // separate round trips, so keep probing and click only where the field itself is on top
@@ -472,23 +472,45 @@ async function chat(cdp) {
     while (node && !node.querySelector?.('button[aria-busy]')) node = node.parentElement
     return node?.querySelector('button[aria-busy]') ?? null
   })()`
-  const composerState = () => evaluate(`(() => {
+  const snapshot = `(() => {
     const el = ${box}
     const button = ${send}
-    return JSON.stringify({
+    return {
+      at: performance.now(), focused: document.hasFocus(), visibility: document.visibilityState,
       active: document.activeElement?.tagName ?? null, editable: document.activeElement?.isContentEditable ?? null,
+      editorComposing: el?.hasAttribute('data-composer-composing') ?? false, popup: document.querySelector('[role=listbox]') !== null,
       draft: el?.innerText ?? null, send: button === null ? null : { label: button.getAttribute('aria-label'), disabled: button.disabled },
-      tail: document.body.innerText.slice(-300),
-    })
-  })()`)
+    }
+  })()`
+  const composerState = () => evaluate(`JSON.stringify({ ...${snapshot}, enter: window.__packedEnter ?? null, tail: document.body.innerText.slice(-300) })`)
   try {
-    await until(`(() => { const button = ${send}; return button !== null && !button.disabled })()`, 'the send button', 30_000)
+    // Capture readiness in the existing probe: an extra CDP round trip before Enter can hide a race.
+    await until(`(() => {
+      const button = ${send}
+      if (button === null || button.disabled) return false
+      if (window.__packedEnter === undefined) {
+        const trace = window.__packedEnter = { events: [] }
+        // Every press is recorded, not just the first: a run that needed the second one has to
+        // say so.
+        for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
+          const entry = { ...${snapshot}, type, key: event.key, code: event.code, keyCode: event.keyCode,
+            target: event.target?.tagName ?? null, composing: event.isComposing, repeat: event.repeat,
+            shift: event.shiftKey, ctrl: event.ctrlKey, alt: event.altKey, meta: event.metaKey }
+          trace.events.push(entry)
+          // A later task sees preventDefault from every capture and bubble handler.
+          setTimeout(() => { entry.prevented = event.defaultPrevented }, 0)
+        }, { capture: true })
+      }
+      return true
+    })()`, 'the send button', 30_000)
   } catch (error) {
     throw new Error(`${error.message}; composer: ${await composerState()}`)
   }
+  const message = 'packaged app check'
+  const draft = `String(${box}?.innerText ?? '')`
   for (const type of ['keyDown', 'keyUp']) await cdp.call('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
   try {
-    await until(`!(${box}?.innerText ?? '').includes('packaged app check')`, 'Enter to send the message', 10_000)
+    await until(`!${draft}.includes(${JSON.stringify(message)})`, 'Enter to send the message', 10_000)
   } catch (error) {
     throw new Error(`${error.message}; composer: ${await composerState()}`)
   }
@@ -571,6 +593,16 @@ try {
     })
     if (answer.exceptionDetails) throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text)
     return answer.result?.value
+  }
+  // Wait until the start window finishes its cross-fade and closes before driving the team window;
+  // otherwise the splash teardown on Xvfb drops window focus after the composer was clicked.
+  const revealEnd = Date.now() + 120_000
+  while (Date.now() < revealEnd) {
+    if (await windowState('BrowserWindow.getAllWindows().length === 1 && win !== undefined && !win.isDestroyed() && win.isVisible()') === true) break
+    await sleep(200)
+  }
+  if (await windowState('BrowserWindow.getAllWindows().length === 1 && win !== undefined && !win.isDestroyed() && win.isVisible()') !== true) {
+    throw new Error('timed out waiting for the start window to hand off to the team window')
   }
   const chatError = await chat(cdp).then(() => undefined, error => error)
   if (shotFile) {
