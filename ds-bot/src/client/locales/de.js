@@ -1,6 +1,8 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  'Opening…': 'Wird geöffnet…',
+  'Still opening…': 'Wird noch geöffnet…',
   // Shared
   'Main Bot': 'Haupt-Bot',
   Working: 'Arbeitet',
@@ -688,10 +690,6 @@ export const DE = {
   'Mark as Unread': 'Als ungelesen markieren',
   'Rename Bot': 'Bot umbenennen',
   'Group settings': 'Gruppeneinstellungen',
-  'Shared to-do': 'Gemeinsame To-dos',
-  '{count} open': '{count} offen',
-  'No shared to-dos yet. Ask a Bot in this group to add one.': 'Noch keine gemeinsamen To-dos. Bitte einen Bot dieser Gruppe, eins hinzuzufügen.',
-  'Clear completed': 'Erledigte löschen',
   'Rename group': 'Gruppenchat umbenennen',
   'Copy conversation ID': 'Chat-ID kopieren',
   'Hide from sidebar': 'In Seitenleiste ausblenden',

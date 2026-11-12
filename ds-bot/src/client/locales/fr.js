@@ -1,6 +1,8 @@
 // French (fr) localization for DS Bot client and DSH settings namespaces.
 
 export const FR = {
+  "Opening…": "Ouverture…",
+  "Still opening…": "Toujours en cours d’ouverture…",
   "Main Bot": "Bot principal",
   "Working": "En cours",
   "Waiting for your answer": "Attend votre réponse",
@@ -688,10 +690,6 @@ export const FR = {
   "Mark as Unread": "Marquer comme non lu",
   "Rename Bot": "Renommer le Bot",
   "Group settings": "Paramètres du groupe",
-  "Shared to-do": "Tâches partagées",
-  "{count} open": "{count} en cours",
-  "No shared to-dos yet. Ask a Bot in this group to add one.": "Aucune tâche partagée pour l’instant. Demandez à un Bot de ce groupe d’en ajouter une.",
-  "Clear completed": "Effacer les tâches terminées",
   "Rename group": "Renommer le groupe",
   "Copy conversation ID": "Copier l’ID de la discussion",
   "Hide from sidebar": "Masquer de la barre latérale",
@@ -2252,5 +2250,5 @@ export const DSH_FR = {
     "subagentModelSelectionRequired": "Sélectionnez au moins un modèle avant d’enregistrer.",
     "subagentModelSelectionConflict": "Les paramètres ont été modifiés ailleurs. Abandonnez vos modifications et réessayez.",
     "subagentModelSelectionOff": "Les sous-agents utilisent les valeurs par défaut configurées ou héritent du modèle de l’agent parent. Les choix de modèles enregistrés sont conservés."
-  }
+  },
 }

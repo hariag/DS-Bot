@@ -1,6 +1,8 @@
 // Spanish (es) localization for DS Bot client and DSH settings namespaces.
 
 export const ES = {
+  'Opening…': 'Abriendo…',
+  'Still opening…': 'Sigue abriendo…',
   // Shared
   'Main Bot': 'Bot principal',
   Working: 'En curso',
@@ -688,10 +690,6 @@ export const ES = {
   'Mark as Unread': 'Marcar como no leído',
   'Rename Bot': 'Renombrar Bot',
   'Group settings': 'Ajustes del grupo',
-  'Shared to-do': 'Tareas compartidas',
-  '{count} open': '{count} pendientes',
-  'No shared to-dos yet. Ask a Bot in this group to add one.': 'Aún no hay tareas compartidas. Pide a un Bot de este grupo que añada una.',
-  'Clear completed': 'Borrar completadas',
   'Rename group': 'Renombrar grupo',
   'Copy conversation ID': 'Copiar ID de conversación',
   'Hide from sidebar': 'Ocultar de la barra lateral',
