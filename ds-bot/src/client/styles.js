@@ -221,7 +221,6 @@ html[data-bt-collapsing] [class*="_frame"]:has(>[class*="_sidebarCol"]){transiti
 
 /* The width settings: the share of the column a bubble may take, and the flat text. */
 body{--bt-msg-w:.8;--bt-flat-w:1}
-body{--bt-qr-paper:#fff;--bt-qr-ink:#000}
 .bt-astack{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin:0}
 .bt-bubble{max-width:min(calc(var(--bt-msg-w) * 100%),calc(100% - 82px));background:var(--bt-bubble);color:var(--bt-ink);border-radius:18px;padding:7px 12px;font-size:var(--dsh-content-font-size,14px);line-height:calc(var(--dsh-content-font-size,14px) + 10px);box-sizing:border-box;overflow-wrap:anywhere;text-wrap:pretty;text-autospace:normal}
 .bt-msg:not(:first-child)>.bt-msg-line>.bt-bubble{border-start-start-radius:6px}
@@ -445,6 +444,11 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-drawer-name:hover{background:var(--bt-hover)}
 .bt-drawer-name-input{font-size:17px;line-height:24px;text-align:center;border:.5px solid var(--bt-line-2);border-radius:6px;padding:0 6px;background:var(--bt-main);color:var(--bt-ink);outline:none;font-weight:500}
 .bt-drawer-role{font-size:12px;line-height:16px;color:var(--bt-ink-3);margin-top:6px;text-align:center}
+.bt-drawer-role-input{width:min(100%,220px);min-height:28px;box-sizing:border-box;margin-top:4px;padding:0 6px;border:1px solid transparent;border-radius:6px;background:none;color:var(--bt-ink-3);font:inherit;font-size:12px;line-height:16px;text-align:center;outline:none;transition:background-color .12s ease,border-color .12s ease,color .12s ease}
+.bt-drawer-role-input:hover{background:var(--bt-hover)}
+.bt-drawer-role-input:focus{background:var(--bt-main);border-color:var(--bt-line-2);color:var(--bt-ink)}
+.bt-drawer-role-input:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
+.bt-drawer-role-input::placeholder{color:var(--bt-ink-3);opacity:.7}
 .bt-tabs{position:relative;display:flex;justify-content:center;gap:2px;margin:16px 16px 0}
 .bt-tab{position:relative;z-index:1;border:0;background:none;border-radius:999px;padding:4px 8px;font-size:13px;line-height:20px;color:var(--bt-ink-2);cursor:pointer;white-space:nowrap}
 .bt-tab:hover{color:var(--bt-ink)}
@@ -506,6 +510,9 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is(.bt-pane,.bt-panel)::befo
 .bt-set-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bt-about{white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
 .bt-about[data-open]{display:block;-webkit-line-clamp:unset}
+.bt-about[data-editable]{margin:0 -6px;padding:2px 6px;border-radius:6px;cursor:text;transition:background-color .12s ease}
+.bt-about[data-editable]:hover{background:var(--bt-hover)}
+.bt-about[data-editable]:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
 .bt-more{border:0;background:none;color:var(--bt-ink-3);font-size:12px;line-height:16px;cursor:pointer;padding:2px 0}
 .bt-more:hover{color:var(--bt-ink)}
 .bt-subhead{display:flex;align-items:center;gap:4px;padding:10px 12px 4px}
@@ -638,19 +645,6 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 .bt-set-form-foot{justify-content:flex-end}
 @media(max-width:600px){.bt-set-form-row{grid-template-columns:1fr}}
 
-/* Settings → Phone. */
-.bt-phone{display:flex;flex-direction:column;gap:20px}
-.bt-phone-server{gap:8px}
-.bt-phone-server .bt-input{flex:1;min-width:0}
-.bt-phone-warn .bt-set-hint{color:var(--bt-danger)}
-.bt-phone-error{padding:0 4px}
-.bt-phone-pair{display:flex;align-items:center;gap:20px;padding:16px}
-.bt-phone-qr{flex:none;width:184px;height:184px;border-radius:8px}
-.bt-phone-qr rect{fill:var(--bt-qr-paper)}
-.bt-phone-qr path{fill:var(--bt-qr-ink)}
-.bt-phone-pair-copy{display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:20px}
-@media(max-width:700px){.bt-phone-pair{flex-direction:column;align-items:flex-start}}
-
 /* Settings → Connectors. */
 .bt-connector{display:flex;flex-direction:column;gap:10px;padding:12px}
 .bt-connector-head{display:flex;align-items:center;gap:12px;min-width:0}
@@ -687,20 +681,17 @@ button.bt-set-row:hover{background:var(--bt-hover)}
 /* Shell chrome reshaped for the team view. Selectors use stable data attributes where the
    shell offers them and CSS-module name suffixes elsewhere. */
 [class*="_newSession"],nav[class*="_panelList"],[class*="_logoRow"]>[class*="_brand"],[class*="_logoRow"]:not(:has([class*="_toggle"])){display:none!important}
-/* An open sidebar uses the team's own top row; under a Windows title bar the shell's
-   logo row stays, flattened to nothing. */
+/* The shell's sidebar switch stays where the shell puts it whenever the sidebar is
+   collapsed: on the rail, or fixed in a Windows title bar, where it also stays while
+   the sidebar is open. Elsewhere an open sidebar uses the team's own top row. */
 html:not([data-windows-titlebar]) :not([class*="_collapsed"])>[class*="_logoRow"]{display:none!important}
 html[data-windows-titlebar] :not([class*="_collapsed"])>[class*="_logoRow"]{height:0!important;margin:0!important}
 html[data-windows-titlebar] .bt-side-collapse{display:none}
-/* The sidebar switch is always the team view's own, so the shell's is hidden wherever it
-   sits: in the logo row, or in the top strip of a macOS desktop window. The strip stays,
-   as the window's drag area. Left showing, the shell's toggle expands the shell sidebar
-   first, and pulling it back afterwards is a visible flash of the shell's column; its
-   tooltip also casts a shadow across the rail's edge. */
-[class*="_logoRow"]>[class*="_toggle"],[class*="_topStrip"]>[class*="_toggle"]{display:none!important}
-/* Under a Windows title bar our own switch takes the shell's place in the band. A host
-   whose window controls stand at the band's left (the macOS traffic lights) sets
-   --bt-caption-start to the room they take. */
+/* Under a Windows title bar our own switch replaces the shell's: the shell's
+   toggle expands the shell sidebar first, and pulling it back afterwards is a
+   visible flash of the shell's column. A host whose window controls stand at the band's
+   left (the macOS traffic lights) sets --bt-caption-start to the room they take. */
+html[data-windows-titlebar] [class*="_logoRow"]>[class*="_toggle"]{display:none!important}
 html[data-windows-titlebar] .bt-title-toggle{position:fixed;left:calc(12px + var(--bt-caption-start,0px));top:calc((var(--dsh-windows-titlebar-height,0px) - 28px) / 2);width:28px;height:28px;z-index:30;-webkit-app-region:no-drag;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;padding:0;background:transparent;color:var(--bt-ink);cursor:pointer;font-family:var(--bt-font)}
 html[data-windows-titlebar] .bt-title-toggle:hover{background:var(--bt-hover)}
 /* Elsewhere the switch shows only while the column is hidden, where the column's
@@ -1491,10 +1482,3 @@ export function installCompiledStyles(text, tag) {
     style.remove()
   }
 }
-
-// The classic page's return button draws its surface from these. Agent mode withdraws the
-// rest of this sheet, so they are installed on their own, with the return button's rules;
-// a mid grey reads on the shell's light and dark themes.
-export const RETURN_TOKENS = `
-body{--bt-return-fill:rgba(127,127,127,.08);--bt-return-fill-hover:rgba(127,127,127,.14)}
-`

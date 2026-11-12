@@ -263,3 +263,14 @@ test('the Bot status line needs the runStats action and then draws turns, speed,
   // Moving to another part clears the previous part's figures until the new read finishes.
   assert.equal(RunStats({ bot, part: 'a-2', running: false, actions: { runStats: () => ({ then() {} }) } }), null)
 })
+
+test('the Bot label and instructions are keyed by Bot id and stay read-only when another dsh holds the team', () => {
+  const writable = editable({ role: 'Writer', instructions: 'Drafts notes.' })
+  assert.equal(named(writable, 'BotLabel')[0].key, 'role:a')
+  assert.equal(named(writable, 'About')[0].key, 'about:a')
+
+  const locked = drawer('a', {}, { ...roster, readOnly: 'Another dsh holds this team.', byId: { a: { ...bot, role: 'Writer', instructions: 'Drafts notes.' } } })
+  assert.equal(named(locked, 'BotLabel').length, 0)
+  const [about] = named(locked, 'About')
+  assert.equal(about.props.onSave, undefined)
+})
