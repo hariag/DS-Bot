@@ -175,6 +175,36 @@ test('a switch checkpoint uses each model’s lowest effort and does not copy th
   assert.match(bench.checkpoints[0].summary[0].text, /the preserved checkpoint/)
 })
 
+test('a transient checkpoint failure retries the same low-effort switch request', async (t) => {
+  const asked = []
+  const { ctx, bench, compaction, adoptFor, agentOf, stop } = start({
+    outlet: true,
+    route: { provider: 'deepseek', model: 'v4', reasoningEffort: 'max', maxTokens: 8_000 },
+    modelInfo: async () => ({ context: { contextWindow: 100_000 }, reasoning: { efforts: [{ id: 'off' }, { id: 'max' }] } }),
+    stream: options => {
+      asked.push(options)
+      return (async function* () {
+        if (asked.length === 1) {
+          yield { type: 'finish', reason: { kind: 'error', failure: { code: 'TRANSPORT', message: 'connection lost' } } }
+          return
+        }
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: 'checkpoint after retry' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'checkpoint after retry' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  })
+  t.after(stop)
+  ctx.llm.providerRetryPolicy = () => ({ mode: 'normal', maxRetries: 1, retryableCodes: ['TRANSPORT'], initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 })
+  adoptFor('b2')
+  await compaction.compactRegion(3, 9, agentOf('b2'), new AbortController().signal)
+  assert.deepEqual(asked.map(({ provider, model, reasoningEffort, maxTokens }) => [provider, model, reasoningEffort, maxTokens]), [
+    ['deepseek', 'v4', 'off', 8_000], ['deepseek', 'v4', 'off', 8_000],
+  ])
+  assert.match(bench.checkpoints[0].summary[0].text, /checkpoint after retry/)
+})
+
 test('a checkpoint the route cannot write still fails outside a switch', async (t) => {
   // The steward's own condense path keeps its old behaviour: a model that cannot answer
   // makes the part move on instead of leaving a checkpoint without a summary.

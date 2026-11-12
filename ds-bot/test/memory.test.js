@@ -17,10 +17,17 @@ import { fakeContext } from './fake-ctx.js'
 
 function timeoutsUsed(t) {
   const original = AbortSignal.timeout
+  const any = AbortSignal.any
   const calls = new Map()
   t.mock.method(AbortSignal, 'timeout', function (ms) {
     const signal = original.call(AbortSignal, ms)
     calls.set(signal, ms)
+    return signal
+  })
+  t.mock.method(AbortSignal, 'any', function (signals) {
+    const sources = [...signals]
+    const signal = any.call(AbortSignal, sources)
+    for (const source of sources) if (calls.has(source)) calls.set(signal, calls.get(source))
     return signal
   })
   return calls
@@ -1070,6 +1077,41 @@ test('the memory panel shows every entry and a summary the Bot\'s model writes o
   assert.equal((await call('memory-view', { botId: 'b2' })).value.summary.text, '## Overview\nYou like tea and live in Hangzhou.')
   assert.equal((await call('memory-view', { botId: 'nope' })).error.message, 'Unknown Bot')
 })
+
+for (const reason of ['timeout', 'plugin disposal']) {
+  test(`a memory model call forwards ${reason} to its active stream`, async (t) => {
+    const timeout = new AbortController()
+    if (reason === 'timeout') {
+      const original = AbortSignal.timeout
+      t.mock.method(AbortSignal, 'timeout', ms => ms === 600_000 ? timeout.signal : original.call(AbortSignal, ms))
+    }
+    const { ctx, call, stop } = start()
+    t.after(async () => { timeout.abort(); await stop() })
+    await call('state', {})
+    let enter
+    const entered = new Promise(resolve => { enter = resolve })
+    let count = 0
+    ctx.llm.stream = async function* (request) {
+      count += 1
+      const stopped = new Promise(resolve => {
+        if (request.signal.aborted) resolve()
+        else request.signal.addEventListener('abort', resolve, { once: true })
+      })
+      enter(request.signal)
+      await stopped
+      yield { type: 'finish', reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'aborted' } } }
+    }
+    const shot = rt.botShot(rt.state.bots.b2, 'Summarize', 'Remember this')
+    const rejected = assert.rejects(shot, /aborted/)
+    const signal = await Promise.race([entered, shot.then(() => { throw new Error('model finished before cancellation') })])
+    assert.equal(signal.aborted, false)
+    if (reason === 'timeout') timeout.abort()
+    else await ctx.dispose()
+    await rejected
+    assert.equal(signal.aborted, true)
+    assert.equal(count, 1)
+  })
+}
 
 test('a summary cut off at the output limit is written once more with a bigger budget, never kept half', async (t) => {
   const replies = [

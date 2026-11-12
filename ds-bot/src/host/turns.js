@@ -713,21 +713,29 @@ export function install(rt) {
           if (queued) continue
           const status = await recoveryStatus(sessionId, marker.key)
           if (status === 'active' || status === 'completed') continue
-          // A failed attempt may be retried with a new key. A recent marker with no
-          // log receipt can still be between followup() and DSH's durable append.
-          if (status === 'missing' && Date.now() - marker.at < 60_000) continue
+          // An absent log receipt does not prove that followup did not take effect.
+          // Keep the marker until the prior attempt is reconciled; changing its key
+          // would permit a second recovery turn after an uncertain delivery.
+          if (status === 'missing') {
+            if (marker.uncertain !== true && Date.now() - marker.at < 60_000) continue
+            throw new Error('The earlier recovery delivery has an unknown outcome; inspect its Session and side effects before retrying.')
+          }
+          // A turn known to have failed may be retried with a new key.
           delete state.pendingRecovery[sessionId]
         }
         const recoveryIds = ids
         const recoveryKey = randomUUID()
         state.pendingRecovery ??= {}
         state.pendingRecovery[sessionId] = { key: recoveryKey, ids: recoveryIds, ownerId: bot.id, at: Date.now() }
-        await rt.save()
+        // Do not send unless the recovery key can survive this process stopping.
+        await rt.save({ required: true })
         try {
           await rt.deliver({ toId: bot.id, sessionId, role: 'continue', recoveryIds, recoveryKey, text: RECOVERY_TEXT })
         } catch (error) {
-          if (state.pendingRecovery[sessionId]?.key === recoveryKey) delete state.pendingRecovery[sessionId]
-          await rt.save().catch(() => {})
+          // followup may already have run when its subsequent Session flush fails.
+          // Retain the durable marker rather than creating a new recovery identity.
+          if (state.pendingRecovery[sessionId]?.key === recoveryKey) state.pendingRecovery[sessionId].uncertain = true
+          await rt.save({ required: true }).catch(() => {})
           throw error
         }
       }

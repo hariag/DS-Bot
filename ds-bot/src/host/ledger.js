@@ -68,17 +68,22 @@ export function install(rt) {
   // an importer finds of its conversation from before the ledger (writing hosts only).
   function open(book) {
     const known = books.get(book)
-    if (known !== undefined && (writes() || sizeOf(book) === known.size)) return known
+    // A copy read while another host wrote is stale once this host writes.
+    if (known !== undefined && (writes() ? !known.readOnly : sizeOf(book) === known.size)) return known
     let text
     let size = -1
+    let readFailed = false
     try {
       text = readFileSync(pathOf(book), 'utf8')
       size = Buffer.byteLength(text)
     } catch (error) {
-      if (error?.code !== 'ENOENT') rt.warn('ds-bot: ledger %s could not be read: %s', book, error?.message ?? error)
+      if (error?.code !== 'ENOENT') {
+        readFailed = true
+        noteWriteFailure(book, error)
+      }
     }
     let records = text === undefined ? [] : parseBook(text)
-    if (text === undefined) {
+    if (text === undefined && !readFailed) {
       const prefix = book.slice(0, book.indexOf('-') + 1)
       const imported = importers.get(prefix)?.(book)
       if (imported !== undefined && imported.length > 0) {
@@ -91,12 +96,14 @@ export function install(rt) {
             renameSync(temp, pathOf(book))
             size = sizeOf(book)
           } catch (error) {
-            rt.warn('ds-bot: ledger %s could not be started from earlier messages: %s', book, error?.message ?? error)
+            noteWriteFailure(book, error)
           }
         }
       }
     }
-    const entry = { records, bySeq: index(records), size }
+    // An interruption can leave the last line without its end; the next record starts on a
+    // line of its own, or it would join the cut one and be lost with it.
+    const entry = { records, bySeq: index(records), size, readOnly: !writes(), torn: text !== undefined && text !== '' && !text.endsWith('\n') }
     books.set(book, entry)
     return entry
   }
@@ -107,14 +114,25 @@ export function install(rt) {
     entry.records.push(record)
     if (Number.isInteger(record.seq)) entry.bySeq.set(record.seq, record)
     if (!writes()) { skippedWrites.add(book); return record }
-    const line = `${JSON.stringify(record)}\n`
+    const line = `${entry.torn ? '\n' : ''}${JSON.stringify(record)}\n`
+    entry.torn = false
     entry.size += Buffer.byteLength(line)
     const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
-      if (writeFailures.has(book) || skippedWrites.has(book)) return
+      if (writeFailures.has(book)) throw writeFailures.get(book)
+      if (skippedWrites.has(book)) throw new Error('The ledger has writes that were not persisted')
       await mkdir(dir, { recursive: true })
       await appendFile(pathOf(book), line, 'utf8')
     })
-    writing.set(book, run.catch(error => noteWriteFailure(book, error)))
+    writing.set(book, run.catch((error) => {
+      noteWriteFailure(book, error)
+      // Memory holds only what the disk has, so a record that did not land is written again
+      // when it is sent again. Part of its line may have landed: the next one starts anew.
+      if (books.get(book) !== entry) return
+      const at = entry.records.indexOf(record)
+      if (at !== -1) entry.records.splice(at, 1)
+      entry.bySeq = index(entry.records)
+      entry.torn = true
+    }))
     return record
   }
 
@@ -155,6 +173,8 @@ export function install(rt) {
     append,
     flush,
     flushRequired,
+    // A caller must not deliver when any earlier record is missing either.
+    written: flushRequired,
     drop,
     records: book => open(book).records,
     record: (book, seq) => open(book).bySeq.get(seq),
@@ -179,4 +199,6 @@ export function install(rt) {
     importer: (prefix, read) => { importers.set(prefix, read) },
   }
   rt.ledger = ledger
+  // What is still on its way to disk lands before the plugin goes.
+  rt.ctx?.effect?.(() => () => flush(), 'ds-bot: ledger')
 }

@@ -8,10 +8,17 @@ import { fakeContext } from './fake-ctx.js'
 
 function timeoutsUsed(t) {
   const original = AbortSignal.timeout
+  const any = AbortSignal.any
   const calls = new Map()
   t.mock.method(AbortSignal, 'timeout', function (ms) {
     const signal = original.call(AbortSignal, ms)
     calls.set(signal, ms)
+    return signal
+  })
+  t.mock.method(AbortSignal, 'any', function (signals) {
+    const sources = [...signals]
+    const signal = any.call(AbortSignal, sources)
+    for (const source of sources) if (calls.has(source)) calls.set(signal, calls.get(source))
     return signal
   })
   return calls

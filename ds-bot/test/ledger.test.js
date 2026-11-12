@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -37,7 +37,6 @@ test('a line cut by an interruption is left out, and the book goes on after it',
   mkdirSync(join(home, 'ledger'), { recursive: true })
   writeFileSync(file('group-r1'), `${JSON.stringify({ seq: 1, text: 'whole' })}\n{"seq":2,"text":"cu`)
   assert.deepEqual(rt.ledger.records('group-r1').map(record => record.seq), [1])
-  appendFileSync(file('group-r1'), '\n')
   rt.ledger.append('group-r1', { seq: 2, text: 'again' })
   await rt.ledger.flush('group-r1')
   const again = host(t, { home })
@@ -142,4 +141,68 @@ test("a round's result names its rows; a result from before the ledger does not"
   assert.deepEqual(relayRange('{"from":3,"to":9,"passed":[]}'), { from: 3, to: 9 })
   assert.equal(relayRange('{"replies":[],"passed":[]}'), undefined)
   assert.equal(relayRange('{"replies":[{"botId":"a","text":"cu'), undefined)
+})
+
+// A window that only read a book takes over writing when the other host goes: what that
+// host wrote meanwhile is read again before anything new is added.
+test('a reader that takes over writing reads the book again first', async (t) => {
+  const writer = host(t)
+  writer.rt.ledger.append('group-r1', { seq: 1, text: 'one' })
+  await writer.rt.ledger.flush()
+  let reading = 'another dsh holds the team'
+  const reader = host(t, { home: writer.home, readOnly: () => reading })
+  assert.equal(reader.rt.ledger.lastSeq('group-r1'), 1)
+  writer.rt.ledger.append('group-r1', { seq: 2, text: 'two' })
+  await writer.rt.ledger.flush()
+  reading = undefined
+  reader.rt.ledger.append('group-r1', { seq: 3, text: 'three' })
+  await reader.rt.ledger.flush()
+  assert.deepEqual(reader.rt.ledger.records('group-r1').map(record => record.seq), [1, 2, 3])
+  assert.deepEqual(parseBook(readFileSync(writer.file('group-r1'), 'utf8')).map(record => record.seq), [1, 2, 3])
+})
+
+test('a failed ledger write blocks later deliveries and removes unwritten records from memory', async (t) => {
+  const { rt, home } = host(t)
+  rt.ledger.open('pair-a-b')
+  writeFileSync(join(home, 'ledger'), 'not a directory')
+  rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
+  rt.ledger.append('pair-a-b', { id: 'y', text: 'later' })
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  rmSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger'))
+  rt.ledger.append('pair-a-b', { id: 'z', text: 'retry' })
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  assert.equal(existsSync(join(home, 'ledger', 'pair-a-b.jsonl')), false)
+})
+
+test('written refuses an in-memory-only append even if the host becomes writable', async (t) => {
+  let readOnly = 'another host owns the team'
+  const { rt } = host(t, { readOnly: () => readOnly })
+  rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
+  await assert.rejects(rt.ledger.written('pair-a-b'), /read-only/)
+  readOnly = undefined
+  await assert.rejects(rt.ledger.written('pair-a-b'), /not persisted/)
+})
+
+test('a failed import is not accepted as a persisted delivery record', async (t) => {
+  const { rt, home } = host(t)
+  rt.ledger.importer('pair-', () => {
+    writeFileSync(join(home, 'ledger'), 'not a directory')
+    return [{ id: 'x', text: 'old' }]
+  })
+  assert.equal(rt.ledger.records('pair-a-b')[0].id, 'x')
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+})
+
+test('an unreadable book is not replaced by an importer', async (t) => {
+  const { rt, home } = host(t)
+  writeFileSync(join(home, 'ledger'), 'not a directory')
+  let imported = false
+  rt.ledger.importer('pair-', () => { imported = true; return [{ id: 'x' }] })
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  assert.equal(imported, false)
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.equal(readFileSync(join(home, 'ledger'), 'utf8'), 'not a directory')
 })

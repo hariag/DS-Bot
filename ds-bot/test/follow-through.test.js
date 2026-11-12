@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { withRows } from './relay-rows.js'
+import { afterRound } from './relay-rows.js'
 import { setTimeout as realDelay } from 'node:timers/promises'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
@@ -138,7 +138,7 @@ async function openRoomTurn(t, host) {
   let result
   const stop = new AbortController()
   t.after(() => stop.abort())
-  void host.tool('group_relay', {}, 'r1', { callId: 'c1', signal: stop.signal }).then((value) => { result = withRows(rt, 'r1', JSON.parse(value)) })
+  void host.tool('group_relay', {}, 'r1', { callId: 'c1', signal: stop.signal }).then(async (value) => { result = await afterRound(rt, 'r1', value) })
   await settle(() => host.agentOf('gb').calls.length === 1)
   run(host, 'gb', 1, host.agentOf('gb').calls[0])
   return () => result
@@ -167,7 +167,7 @@ test('a group turn cut off by a restart is picked up once, and the group is told
 
   // The group shows the event, and the admin reads it on its next turn.
   second.emit('r1', 'user/message', { content: post.content, source: post.source })
-  const relay = withRows(rt, 'r1', JSON.parse(await second.tool('group_relay', {}, 'r1', { callId: 'c2', signal: new AbortController().signal })))
+  const relay = await afterRound(rt, 'r1', await second.tool('group_relay', {}, 'r1', { callId: 'c2', signal: new AbortController().signal }))
   assert.deepEqual(relay.replies.map(reply => [reply.kind, reply.name]), [['resumed', 'Writer']])
   const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   assert.equal(state.rooms.r1.log.at(-1).kind, 'resumed')
@@ -865,8 +865,8 @@ test('a request with an uncertain send keeps its work for review after restart',
   state.works = { x1: { from: 'a', to: 'b', open: [], results: [], at: 1 } }
   const home = freshHome(t, state)
   const first = await start(home)
-  // Writer is doing the work Chief gave it and hands part of it to Reviewer; the
-  // send fails before it reaches Reviewer, so it stays queued for the next start.
+  // Writer hands part of Chief's work to Reviewer. A Session flush failure occurs
+  // after followup, so whether the request reached Reviewer is uncertain.
   run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
   const flushing = first.ctx.sessions.flush
   first.ctx.sessions.flush = async (session) => {
@@ -910,6 +910,9 @@ test('a failed flush is not claimed as delivered or automatically resent', async
   assert.ok(entries.some(row => /send outcome is unknown/.test(row.text)))
   assert.equal(second.agentOf('b').calls.length, 0)
   assert.equal((stateOf(home).exchanges ?? []).length, 0)
+  // The upstream pair ledger can contain a pre-send record, which must not be
+  // exposed as a delivery when the Session flush failed.
+  assert.deepEqual((await second.call('exchange', { a: 'a', b: 'b' })).value, [])
 })
 
 const WRITTEN = 'Checking now.\n<tool_call>\n<function=pwsh>\n<parameter=command>\nGet-ChildItem E:\\\n</parameter>\n</function>\n</tool_call>'
