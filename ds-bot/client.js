@@ -810,6 +810,10 @@ var JA = {
   "Mark as Unread": "未読にする",
   "Rename Bot": "Bot の名前を変更",
   "Group settings": "グループ設定",
+  "Shared to-do": "共有 ToDo",
+  "{count} open": "未完了 {count} 件",
+  "No shared to-dos yet. Ask a Bot in this group to add one.": "共有 ToDo はまだありません。このグループの Bot に追加を頼んでください。",
+  "Clear completed": "完了済みを消去",
   "Rename group": "グループ名を変更",
   "Copy conversation ID": "会話 ID をコピー",
   "Hide from sidebar": "サイドバーから隠す",
@@ -3082,6 +3086,10 @@ var KO = {
   "Mark as Unread": "읽지 않음으로 표시",
   "Rename Bot": "Bot 이름 변경",
   "Group settings": "그룹 설정",
+  "Shared to-do": "공유 할 일",
+  "{count} open": "미완료 {count}개",
+  "No shared to-dos yet. Ask a Bot in this group to add one.": "아직 공유 할 일이 없습니다. 이 그룹의 Bot에게 추가를 요청하세요.",
+  "Clear completed": "완료 항목 지우기",
   "Rename group": "그룹 이름 변경",
   "Copy conversation ID": "대화 ID 복사",
   "Hide from sidebar": "사이드바에서 숨기기",
@@ -5377,6 +5385,10 @@ var ES = {
   "Mark as Unread": "Marcar como no leído",
   "Rename Bot": "Renombrar Bot",
   "Group settings": "Ajustes del grupo",
+  "Shared to-do": "Tareas compartidas",
+  "{count} open": "{count} pendientes",
+  "No shared to-dos yet. Ask a Bot in this group to add one.": "Aún no hay tareas compartidas. Pide a un Bot de este grupo que añada una.",
+  "Clear completed": "Borrar completadas",
   "Rename group": "Renombrar grupo",
   "Copy conversation ID": "Copiar ID de conversación",
   "Hide from sidebar": "Ocultar de la barra lateral",
@@ -7650,6 +7662,10 @@ var FR = {
   "Mark as Unread": "Marquer comme non lu",
   "Rename Bot": "Renommer le Bot",
   "Group settings": "Paramètres du groupe",
+  "Shared to-do": "Tâches partagées",
+  "{count} open": "{count} en cours",
+  "No shared to-dos yet. Ask a Bot in this group to add one.": "Aucune tâche partagée pour l’instant. Demandez à un Bot de ce groupe d’en ajouter une.",
+  "Clear completed": "Effacer les tâches terminées",
   "Rename group": "Renommer le groupe",
   "Copy conversation ID": "Copier l’ID de la discussion",
   "Hide from sidebar": "Masquer de la barre latérale",
@@ -9922,6 +9938,10 @@ var DE = {
   "Mark as Unread": "Als ungelesen markieren",
   "Rename Bot": "Bot umbenennen",
   "Group settings": "Gruppeneinstellungen",
+  "Shared to-do": "Gemeinsame To-dos",
+  "{count} open": "{count} offen",
+  "No shared to-dos yet. Ask a Bot in this group to add one.": "Noch keine gemeinsamen To-dos. Bitte einen Bot dieser Gruppe, eins hinzuzufügen.",
+  "Clear completed": "Erledigte löschen",
   "Rename group": "Gruppenchat umbenennen",
   "Copy conversation ID": "Chat-ID kopieren",
   "Hide from sidebar": "In Seitenleiste ausblenden",
@@ -12218,6 +12238,10 @@ var ZH = {
   "Mark as Unread": "标为未读",
   "Rename Bot": "重命名 Bot",
   "Group settings": "群设置",
+  "Shared to-do": "共享待办",
+  "{count} open": "{count} 项未完成",
+  "No shared to-dos yet. Ask a Bot in this group to add one.": "还没有共享待办。让群里的一个 Bot 加一条。",
+  "Clear completed": "清除已完成",
   "Rename group": "重命名群聊",
   "Copy conversation ID": "复制对话 ID",
   "Hide from sidebar": "从侧栏隐藏",
@@ -13773,6 +13797,9 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     setPrefs: (prefs) => after(call2("set-prefs", prefs)),
     setMain: (id, main = true, options = {}) => after(call2("set-main", { id, main, ...options })),
     updateRoom: (id, patch) => after(call2("update-room", { id, ...patch })),
+    roomTodoCheck: (roomId, id, done) => after(call2("room-todo", { roomId, id, done })),
+    roomTodoRemove: (roomId, id) => after(call2("room-todo", { roomId, id, action: "remove" })),
+    roomTodoClear: (roomId) => after(call2("room-todo", { roomId, action: "clear" })),
     send: (sessionId, text) => after(call2("send", { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call2("answer-question", { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: (sessionId) => after(call2("dismiss-question", { sessionId })),
@@ -15416,19 +15443,15 @@ html:not([data-windows-titlebar]) [class*="_footArea"],:not([class*="_collapsed"
 .bt-tools::after{content:"";position:absolute;top:-8px;bottom:-8px;right:100%;width:10px;z-index:-1}
 .bt-msg:hover>.bt-msg-line>.bt-tools,.bt-msg:focus-within>.bt-msg-line>.bt-tools,.bt-tools[data-open]{opacity:1;visibility:visible}
 /* The flat layout: a Bot's text has no bubble and takes its own share of the column
-   (the whole of it unless set). The toolbar hangs below the message's bottom right,
-   clear of its last line. */
+   (the whole of it unless set). The toolbar floats over the message's bottom right. */
 body[data-bt-layout=flat] .bt-astack{align-items:stretch;gap:10px}
 body[data-bt-layout=flat] .bt-msg,body[data-bt-layout=flat] .bt-astack[data-lead]>.bt-msg{align-items:stretch;max-width:calc(var(--bt-flat-w) * 100%)}
-body[data-bt-layout=flat] .bt-msg{position:relative}
-body[data-bt-layout=flat] .bt-msg-line{position:static}
 body[data-bt-layout=flat] .bt-bubble{background:none;padding:0;border-radius:0}
-body[data-bt-layout=flat] .bt-tools{top:100%;bottom:auto;right:0;left:auto;margin-left:0;margin-top:2px;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+body[data-bt-layout=flat] .bt-tools{bottom:-14px;right:0;left:auto;margin-left:0;transform:none;padding:2px;border-radius:999px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+/* With reactions below, the toolbar stays inside the message row instead of
+   covering their top edge when the hover shows it. */
+body[data-bt-layout=flat] .bt-msg:has(>.bt-reacts) .bt-tools{bottom:0}
 body[data-bt-layout=flat] .bt-tools::after{display:none}
-/* Flat layout and touch both hang the toolbar below a position:relative message.
-   The next message is position:relative too, so it paints over that toolbar and
-   takes the tap. The active message stays above its neighbors. */
-.bt-msg:hover,.bt-msg:focus-within,.bt-msg:has(>.bt-msg-line>.bt-tools[data-open]){z-index:2}
 .bt-tool{width:24px;height:24px;border:0;padding:0;border-radius:6px;background:none;color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .bt-tool:hover,.bt-tool[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-tool:active{background:var(--bt-active)}
@@ -15880,17 +15903,11 @@ body[data-bt-goal] [class*="_scroll"]:has(> [class*="_column"]){padding-top:calc
 .bt-voice:hover{opacity:.9}
 .bt-mic:active,.bt-voice:active{scale:.9}
 /* Touch devices never hover: tap-open toolbars (data-open on the message), always
-   visible icon buttons and 44px targets replace the hover affordances. The message
-   toolbar sits below the message instead of over it; its secondary buttons are 36px,
-   so the pill stays shorter than the primary touch controls. */
+   visible icon buttons and 44px targets replace the hover affordances. */
 @media (hover:none){
-  .bt-msg{position:relative}
-  .bt-msg-line{position:static}
-  .bt-tools{top:100%;bottom:auto;left:auto;right:4px;margin-left:0;margin-top:2px;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
+  .bt-tools{left:auto;right:4px;margin-left:0;border-radius:999px;padding:2px;background:var(--bt-card);box-shadow:inset 0 0 0 .5px var(--bt-line-2),0 4px 14px rgba(0,0,0,.14)}
   .bt-tools::after{display:none}
-  /* 36px touch pill plus the 4px gap. The next message moves down instead of sitting under the open toolbar. */
-  .bt-msg:has(>.bt-msg-line>.bt-tools[data-open]){margin-bottom:40px}
-  .bt-tool{width:36px;height:36px}
+  .bt-tool{width:44px;height:44px}
   .bt-menu button,.bt-menu [role=menuitem],.bt-react-strip button{min-height:44px}
   .bt-utools[data-open]{opacity:1;visibility:visible}
   .bt-utools button{width:44px;height:44px}
@@ -28479,6 +28496,51 @@ function GroupPermission({ room: room2, catalog, update }) {
     ) : null
   );
 }
+function GroupTodos({ room: room2, actions }) {
+  const todos = [...room2.todos ?? []].sort((a, b) => Number(a.done === true) - Number(b.done === true) || (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  const open = todos.filter((item) => item.done !== true).length;
+  const done = todos.length - open;
+  return (0, import_react36.createElement)(
+    "div",
+    { className: "bt-gt" },
+    (0, import_react36.createElement)(
+      "div",
+      { className: "bt-gt-head" },
+      (0, import_react36.createElement)("div", { className: "bt-section-title" }, t("Shared to-do"), open > 0 ? (0, import_react36.createElement)("span", { className: "bt-note" }, ` ${t("{count} open", { count: open })}`) : null),
+      done > 0 ? (0, import_react36.createElement)("button", { type: "button", className: "bt-mini", onClick: () => {
+        void actions.roomTodoClear?.(room2.id).catch(() => {
+        });
+      } }, t("Clear completed")) : null
+    ),
+    todos.length === 0 ? (0, import_react36.createElement)("div", { className: "bt-gt-empty" }, t("No shared to-dos yet. Ask a Bot in this group to add one.")) : todos.map((item) => (0, import_react36.createElement)(
+      "div",
+      { key: item.id, className: `bt-gt-row${item.done === true ? " is-done" : ""}` },
+      (0, import_react36.createElement)(
+        "label",
+        { className: "bt-gt-main" },
+        (0, import_react36.createElement)("input", {
+          type: "checkbox",
+          checked: item.done === true,
+          onChange: () => {
+            void actions.roomTodoCheck?.(room2.id, item.id, item.done !== true).catch(() => {
+            });
+          }
+        }),
+        (0, import_react36.createElement)("span", { className: "bt-gt-text" }, item.text)
+      ),
+      (0, import_react36.createElement)("button", {
+        type: "button",
+        className: "bt-x",
+        "aria-label": t("Delete"),
+        title: t("Delete"),
+        onClick: () => {
+          void actions.roomTodoRemove?.(room2.id, item.id).catch(() => {
+          });
+        }
+      }, "×")
+    ))
+  );
+}
 function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted }) {
   const [adding, setAdding] = (0, import_react36.useState)(false);
   const [confirming, setConfirming] = (0, import_react36.useState)(false);
@@ -28711,6 +28773,17 @@ var GROUP_SETTINGS_CSS = `
 .bt-gs-pick{gap:10px;animation:bt-rise .16s ease-out}
 .bt-bs-stack .bt-seg{align-self:stretch}
 .bt-gs-perm .bt-seg button{flex:auto;white-space:nowrap}
+.bt-gt{display:flex;flex-direction:column;gap:4px}
+.bt-gt-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.bt-gt-head>.bt-section-title{margin:0}
+.bt-gt-head>.bt-mini{flex:none}
+.bt-gt-row{display:flex;align-items:flex-start;gap:4px;padding:3px 0;font-size:13px;line-height:18px;color:var(--bt-ink)}
+.bt-gt-main{flex:1;display:flex;align-items:flex-start;gap:8px;min-width:0;cursor:pointer}
+.bt-gt-row input{margin:2px 0 0;flex:none;accent-color:var(--bt-accent);cursor:pointer}
+.bt-gt-text{min-width:0;overflow-wrap:anywhere}
+.bt-gt-row.is-done .bt-gt-text{color:var(--bt-ink-3);text-decoration:line-through}
+.bt-gt-row .bt-x{flex:none;margin-top:-3px}
+.bt-gt-empty{font-size:12px;line-height:16px;color:var(--bt-ink-3)}
 @media (prefers-reduced-motion:reduce){.bt-gs-pick{animation:none}}
 `;
 
@@ -37525,6 +37598,7 @@ function GroupOverview({ room: room2, roster, actions, usage, useWork, openSetti
   const { entries: entries2 } = useMemberWork(room2, useWork);
   return [
     room2.notice ? (0, import_react59.createElement)(About, { key: "notice", title: "Notice", text: room2.notice }) : (0, import_react59.createElement)("button", { key: "notice", type: "button", className: "bt-more", onClick: openSettings }, t("Add a notice in group settings")),
+    (0, import_react59.createElement)(GroupTodos, { key: "todos", room: room2, actions }),
     (0, import_react59.createElement)(
       "div",
       { key: "members" },
