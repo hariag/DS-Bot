@@ -39,7 +39,7 @@ const mdLabels = () => ({ code: { copyLabel: t('Copy'), copiedLabel: t('Copied')
 // `fold`: past what a bubble folds (fold.js); `whole`: the last text is only the start
 // of its message (see useFold). `time` marks the bubbles' message below them; a caller
 // whose own head already shows one (the flat speaker line, the group name row) leaves it unset.
-export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions, fold = FOLD_AT, whole, time, textInteractionSource }) {
+export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions, fold = FOLD_AT, whole, time }) {
   const onClick = (event) => {
     const target = mentionTarget(event)
     if (target === null) return
@@ -52,7 +52,7 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
     texts.map((text, index) => {
       const last = index === texts.length - 1
       return h(Bubble, {
-        key: index, text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, textInteractionSource,
+        key: index, text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold,
         picked: msgKey ? reactions?.[index] ?? [] : [],
         live: streaming && last,
         lead: lead && last ? lead : null,
@@ -94,7 +94,7 @@ const foldArea = (body, code, codeHead, actions) => (code === undefined ? body
     h('pre', { className: 'bt-fold-pre' }, h('code', null, codeHead)),
     h(FoldCodeCopy, { code, actions })))
 
-function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole, textInteractionSource }) {
+function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole }) {
   const { shown, folded, control, code, codeHead } = useFold(text, { limit: fold, whole, live })
   const key = msgKey ? `${msgKey}:${index}` : undefined
   const body = shown === '' ? null : h(MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
@@ -111,7 +111,7 @@ function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, menti
   return h('div', { ref: row, className: 'bt-msg', onClick: tapTools },
     h('div', { className: 'bt-msg-line' },
       lead,
-      h('div', { className: 'bt-bubble', 'data-folded': folded || undefined, 'data-text-interaction-source': textInteractionSource ? '' : undefined },
+      h('div', { className: 'bt-bubble', 'data-folded': folded || undefined },
         control ? h('div', { className: 'bt-fold-body' }, area) : area,
         control),
       live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions, open: toolsOpen })),
@@ -209,7 +209,7 @@ function useThinkingMs({ sessionId, turn, settledSteps, skip }) {
 // A live turn's row moves to the step that reasons now, so whether the reader opened it
 // and where they scrolled is kept per turn (`viewKey`), not per row.
 const rowViews = new Map()
-export function ThinkingRow({ text, live, at, ms, viewKey, textInteractionSource }) {
+export function ThinkingRow({ text, live, at, ms, viewKey }) {
   const box = useRef(null)
   const view = useRef(rowViews.get(viewKey))
   const atEnd = useRef(view.current?.atEnd ?? true)
@@ -243,7 +243,7 @@ export function ThinkingRow({ text, live, at, ms, viewKey, textInteractionSource
     h('summary', null, title,
       live && at !== undefined ? h(Elapsed, { at, className: 'bt-think-time' }) : null,
       !live && ms !== undefined ? h('span', { className: 'bt-think-time' }, `· ${elapsedLabel(Math.max(1000, ms))}`) : null),
-    h('div', { ref: box, className: 'bt-think-text', role: 'region', 'aria-label': title, tabIndex: 0, 'data-fade': fade, 'data-text-interaction-source': textInteractionSource && !live ? '' : undefined, onScroll: measure }, text))
+    h('div', { ref: box, className: 'bt-think-text', role: 'region', 'aria-label': title, tabIndex: 0, 'data-fade': fade, onScroll: measure }, text))
 }
 
 // The files a finished turn changed or delivered, linked from inline code in its
@@ -268,7 +268,6 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
-  const textInteractionSource = data.status === 'settled' && data.finalNode?.messageId !== undefined
   const members = steps.length ? steps : [data]
   const shown = thinkingShown(roster.prefs)
   const reasoning = groupPart === 'response' || !shown ? '' : turnReasoning(steps, data)
@@ -306,12 +305,12 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
     head ? h(SpeakerHead, { bot: speaker, time: data.time }) : null,
     activity.length ? h('div', { className: 'bt-agent-activity' }, activity.map((line, index) => h('div', { key: index, className: 'bt-agent-act', title: line }, h('span', { className: 'bt-agent-act-mark', 'aria-hidden': true }), h('span', { className: 'bt-agent-act-text' }, activityParts(line))))) : null,
     reasoning ? h(ThinkingRow, {
-      text: reasoning, live: thinking !== undefined, viewKey: `${sessionId}:${data.turn}`, textInteractionSource,
+      text: reasoning, live: thinking !== undefined, viewKey: `${sessionId}:${data.turn}`,
       // The live clock counts the settled steps too: backing `at` by the settled
       // time makes one Elapsed show settled + running.
       ...(thinking !== undefined ? { at: typeof thinking.time === 'number' ? thinking.time - (ms ?? 0) : undefined } : { ms }),
     }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, mentions, fold: FOLD_HUGE, time: speaker === undefined ? data.time : undefined, textInteractionSource }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi, mentions, fold: FOLD_HUGE, time: speaker === undefined ? data.time : undefined }) : null)
 }
 
 // `code` in an activity line is the command or path the agent works on.
@@ -374,7 +373,7 @@ function scheduleGroupChains(flow) {
 // One Bot message inside a group chat: avatar, name (with its group role), when it ran
 // and how long it took, bubble. The flat layout moves the avatar from beside the last
 // bubble to the head of the name row, so the text below runs the whole width.
-function GroupMessage({ bot, text, texts = [text], room, roster, actions, msgKey, useUi, whole, time, duration }) {
+function GroupMessage({ bot, text, texts = [text], room, sessionId, roster, actions, msgKey, useUi, whole, time, duration }) {
   const ref = useRef(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -388,12 +387,15 @@ function GroupMessage({ bot, text, texts = [text], room, roster, actions, msgKey
     h(BotMark, { bot, size: 22 }))
   const flat = layoutOf(roster.prefs) === 'flat'
   const took = Number.isFinite(duration) && duration >= 1000 ? elapsedLabel(duration) : undefined
+  // The Reply tool quotes into the composer of the chat on screen: a group that has split
+  // its public chat keeps going in a new Session, while its room id stays the same.
+  const quoteSession = sessionId ?? room?.sessionId ?? room?.id
   return h('div', { ref, className: 'bt-group-msg', 'data-bot-id': bot.id },
     h('span', { className: 'bt-group-name', style: flat ? undefined : { color: inkText(colorOf(bot)) } }, flat ? lead : null, bot.name,
       room?.admin === bot.id ? h('span', { className: 'bt-group-role' }, t('Admin')) : null,
       Number.isFinite(time) ? h('span', { className: 'bt-group-time', title: clockLabel(time) }, messageClock(time)) : null,
       took ? h('span', { className: 'bt-group-took', title: t('Ran for {duration}', { duration: took }) }, took) : null),
-    h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: room?.id, msgKey, useUi, lead: flat ? null : lead, whole, textInteractionSource: true }))
+    h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: quoteSession, msgKey, useUi, lead: flat ? null : lead, whole }))
 }
 
 // A centered event line that names a group chat and opens it.
@@ -484,10 +486,10 @@ function EarlierUser({ row, actions }) {
   const { shown, folded, control, code, codeHead } = useFold(row.text ?? '')
   const body = row.text && shown !== '' ? h(MarkdownText, { text: shown, labels: mdLabels(), variant: 'compact' }) : null
   const area = foldArea(body, code, codeHead, actions)
-  return h('div', { className: 'bt-urow' }, h('div', { className: 'bt-ububble', 'data-folded': folded || undefined, 'data-text-interaction-source': body || code !== undefined ? '' : undefined },
+  return h('div', { className: 'bt-urow' }, h('div', { className: 'bt-ububble', 'data-folded': folded || undefined },
     control ? h('div', { className: 'bt-fold-body' }, area) : area,
     control,
-    row.images ? h('span', { className: 'bt-uimages', 'data-text-interaction-exclude': '' }, row.images === 1 ? t('1 image') : t('{count} images', { count: row.images })) : null),
+    row.images ? h('span', { className: 'bt-uimages' }, row.images === 1 ? t('1 image') : t('{count} images', { count: row.images })) : null),
     row.via ? h('div', { className: 'bt-utime' }, h(ViaTag, { via: row.via }), Number.isFinite(row.time) ? messageClock(row.time) : null) : null)
 }
 
@@ -613,7 +615,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
     // A display-only view replays from the blueprint the host kept on the call.
     case 'view': return h(WidgetCell, { key, sessionId, callId: row.callId, args: { text: name => name === 'title' ? row.title : undefined, value: name => name === 'view' ? row.view : undefined }, done: true, isError: false, roster, actions })
     case 'bot': {
-      const bubbles = h(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : undefined, msgKey: useUi ? `${sessionId}:${row.time}` : undefined, useUi, fold: FOLD_HUGE, textInteractionSource: true })
+      const bubbles = h(Bubbles, { key, texts: row.texts, roster, selfId, actions, sessionId: useUi ? sessionId : undefined, msgKey: useUi ? `${sessionId}:${row.time}` : undefined, useUi, fold: FOLD_HUGE })
       const speaker = layoutOf(roster.prefs) === 'flat' ? roster.byId[selfId] : undefined
       return speaker ? h(Fragment, { key }, h(SpeakerHead, { bot: speaker, time: row.time }), bubbles) : bubbles
     }
@@ -622,7 +624,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
       // A member's message in a group's earlier part, as the live row shows it.
       const poster = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
       return h(GroupMessage, {
-        key, bot: poster, text: row.file ? stripLongNote(row.text) : row.text, texts: row.texts, room: roster.roomsById[sessionId], roster, actions,
+        key, bot: poster, text: row.file ? stripLongNote(row.text) : row.text, texts: row.texts, room: roster.roomsById[sessionId], sessionId, roster, actions,
         msgKey: `${sessionId}:post:${row.seq ?? row.time}`, time: row.time, duration: row.duration,
         whole: row.file ? { length: row.length, load: () => actions.fileText(row.file) } : undefined,
       })
@@ -706,7 +708,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         const text = stripHeader(contentText(data.content))
         // A trigger's data carries no turn; its event seq is the one durable name of this post.
         return h(GroupMessage, {
-          bot: poster, text: file ? stripLongNote(text) : text, room, roster, actions, msgKey: `${sessionId}:post:${data.seq ?? node.key}`, useUi, time: data.time,
+          bot: poster, text: file ? stripLongNote(text) : text, room, sessionId, roster, actions, msgKey: `${sessionId}:post:${data.seq ?? node.key}`, useUi, time: data.time,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : undefined,
         })
       }
@@ -923,6 +925,18 @@ function useLiveNote(actions, sessionId, id, entry) {
   }, [sessionId, id, key])
 }
 
+function helperFailureReason(reply) {
+  let why
+  switch (reply.stopReason) {
+    case 'max-tokens': why = t('Reached the output limit'); break
+    case 'aborted': why = t('Stopped before finishing'); break
+    case 'refusal': why = t('Declined the task'); break
+    case 'error': why = t('Run failed'); break
+    default: why = reply.stopReason ? `${t('Run failed')} (${reply.stopReason})` : (reply.text || t('Run failed')); break
+  }
+  return reply.helper ? `${reply.helper} (${why})` : why
+}
+
 // One non-message row of a group round: the same event line the live view draws
 // for a reply that is not a member's message or the user's own line. `bot` is the
 // resolved member the reply names.
@@ -930,6 +944,10 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
   if (reply.kind === 'failed') {
     return h('div', { className: 'bt-event bt-event-error', role: 'status', title: [reply.code, reply.status, reply.text].filter(Boolean).join(' · ') },
       t('{name} stopped: {reason}. Switch its model or ask it to go on.', { name: bot.name, reason: failureLabel(reply.code, reply.text) }))
+  }
+  if (reply.kind === 'helper-failed') {
+    return h('div', { className: 'bt-event bt-event-error', role: 'status', title: reply.text || undefined },
+      t("{name}'s background helper did not finish: {reason}. Ask it to go on if it still matters.", { name: bot.name, reason: helperFailureReason(reply) }))
   }
   if (reply.kind === 'lookup') {
     return h('div', { className: 'bt-event' },
@@ -1051,7 +1069,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? 'gray' }
       if (reply.kind === 'user') {
         return h('div', { key: `user-${index}`, className: 'bt-urow' },
-          h('div', { className: 'bt-ububble', 'data-text-interaction-source': '' }, h(MarkdownText, { text: reply.text, labels: mdLabels(), variant: 'compact' })),
+          h('div', { className: 'bt-ububble' }, h(MarkdownText, { text: reply.text, labels: mdLabels(), variant: 'compact' })),
           (reply.via !== undefined || Number.isFinite(time)) ? h('div', { className: 'bt-utime', title: clockLabel(time) }, ...(reply.via !== undefined ? [h(ViaTag, { key: 'via', via: reply.via })] : []), Number.isFinite(time) ? messageClock(time) : null) : null)
       }
       if (reply.kind !== undefined) {
@@ -1061,7 +1079,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return h('div', { key: `goal-${index}`, className: 'bt-event', title: reply.text || undefined },
           h('span', { className: 'bt-event-ico', 'aria-hidden': true }, h(GoalIcon)), goalEventText(reply))
       }
-      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi, time, duration })
+      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi, time, duration })
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id]
