@@ -28010,6 +28010,100 @@ function HeldTurns({ recovery }) {
     ))
   );
 }
+function LegacyWorkReview({ scope, request }) {
+  const [workId, setWorkId] = (0, import_react34.useState)(""), [record, setRecord] = (0, import_react34.useState)(null);
+  const [summary, setSummary] = (0, import_react34.useState)(""), [evidence, setEvidence] = (0, import_react34.useState)(""), [unfinished, setUnfinished] = (0, import_react34.useState)("");
+  const [error, setError] = (0, import_react34.useState)(""), [busy, setBusy] = (0, import_react34.useState)(false);
+  const [candidates, setCandidates] = (0, import_react34.useState)(null);
+  const epoch = (0, import_react34.useRef)(0), scopeKey = `${scope.kind}:${scope.id}`;
+  (0, import_react34.useEffect)(() => {
+    epoch.current++;
+    setWorkId("");
+    setRecord(null);
+    setCandidates(null);
+    setSummary("");
+    setEvidence("");
+    setUnfinished("");
+    setError("");
+    setBusy(false);
+    return () => {
+      epoch.current++;
+    };
+  }, [scopeKey]);
+  const run2 = async (endpoint, body) => {
+    const current = epoch.current;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await request(endpoint, { scope, workId, ...body });
+      if (current === epoch.current) setRecord(result);
+    } catch {
+      if (current === epoch.current) setError(t("Action outcome is unknown; check it before making another change."));
+    } finally {
+      if (current === epoch.current) setBusy(false);
+    }
+  };
+  const list = async () => {
+    const current = epoch.current;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await request("legacy-review-list", { scope });
+      if (current === epoch.current) setCandidates(result);
+    } catch {
+      if (current === epoch.current) setError(t("Review sources are unavailable."));
+    } finally {
+      if (current === epoch.current) setBusy(false);
+    }
+  };
+  return (0, import_react34.createElement)(
+    "details",
+    { className: "bt-board-held" },
+    (0, import_react34.createElement)("summary", null, t("Review an existing work")),
+    (0, import_react34.createElement)("p", null, t("Review notes do not send messages or close work. Sources are unverified; inspect the original records.")),
+    (0, import_react34.createElement)("p", null, t("Only works between existing Bots are currently supported.")),
+    (0, import_react34.createElement)("button", { type: "button", disabled: busy, onClick: () => void list() }, t("Find works awaiting inspection")),
+    candidates?.incomplete ? (0, import_react34.createElement)("p", { role: "status" }, t("The recovery list may be incomplete.")) : null,
+    Array.isArray(candidates?.items) ? (0, import_react34.createElement)("div", null, candidates.items.map((item) => (0, import_react34.createElement)("button", { key: item.workId, type: "button", disabled: busy, onClick: () => {
+      setWorkId(item.workId);
+      setRecord(null);
+    } }, `${item.workId} · ${item.owner}`))) : null,
+    (0, import_react34.createElement)("label", null, t("Original work ID"), " ", (0, import_react34.createElement)("input", { value: workId, disabled: busy, onChange: (event) => {
+      setWorkId(event.target.value);
+      setRecord(null);
+    } })),
+    " ",
+    (0, import_react34.createElement)("button", { type: "button", disabled: busy || !workId, onClick: () => void run2("legacy-review-get", {}) }, t("Check")),
+    record?.liveRecovery ? (0, import_react34.createElement)("p", { role: "status" }, record.liveRecovery.available ? `${t("Recovery snapshot")} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt >= 0 && record.liveRecovery.sampledAt <= 864e13 ? new Date(record.liveRecovery.sampledAt).toISOString() : t("Unknown")}): ${record.liveRecovery.observed.queue} / ${record.liveRecovery.observed.held} · ${(record.liveRecovery.ids ?? []).join(", ")}` : t("Current recovery sources are unavailable.")) : null,
+    record?.state === "not-created" ? (0, import_react34.createElement)("button", { type: "button", disabled: busy, onClick: () => void run2("legacy-review-create", {}) }, t("Create review")) : null,
+    record && record.state !== "not-created" ? (0, import_react34.createElement)(
+      "div",
+      null,
+      (0, import_react34.createElement)(Fact, { label: t("Status"), value: record.state }),
+      (0, import_react34.createElement)(Fact, { label: t("Owner"), value: record.owner }),
+      record.archived ? (0, import_react34.createElement)("p", { role: "status" }, t("The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.")) : null,
+      (0, import_react34.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt >= 0 && record.snapshot.sampledAt <= 864e13 ? new Date(record.snapshot.sampledAt).toISOString() : t("Unknown") }),
+      (0, import_react34.createElement)(Fact, { label: t("Original sessions"), value: (record.snapshot?.sources ?? []).map((s) => s.sessionId).join(", ") }),
+      (0, import_react34.createElement)("p", null, t("Execution and external effects remain unknown.")),
+      !record.archived && ["needs-review", "evidence-needed"].includes(record.state) ? (0, import_react34.createElement)(
+        "div",
+        null,
+        (0, import_react34.createElement)("label", null, t("Review note"), (0, import_react34.createElement)("textarea", { value: summary, disabled: busy, onChange: (event) => setSummary(event.target.value) })),
+        (0, import_react34.createElement)("label", null, t("Evidence references, one per line"), (0, import_react34.createElement)("textarea", { value: evidence, disabled: busy, onChange: (event) => setEvidence(event.target.value) })),
+        (0, import_react34.createElement)("label", null, t("Unfinished items, one per line"), (0, import_react34.createElement)("textarea", { value: unfinished, disabled: busy, onChange: (event) => setUnfinished(event.target.value) })),
+        (0, import_react34.createElement)("button", { type: "button", disabled: busy || !summary.trim(), onClick: () => void run2("legacy-review-finding", { expectedRevision: record.revision, summary, evidenceRefs: evidence.split("\n").map((s) => s.trim()).filter(Boolean), unfinished: unfinished.split("\n").map((s) => s.trim()).filter(Boolean) }) }, t("Save review note"))
+      ) : null,
+      (record.history ?? []).map((item) => (0, import_react34.createElement)(
+        "article",
+        { key: item.revision },
+        (0, import_react34.createElement)(Fact, { label: t("Review note"), value: item.finding.summary }),
+        (0, import_react34.createElement)(Fact, { label: t("Evidence references"), value: item.finding.evidenceRefs.join(", ") }),
+        (0, import_react34.createElement)(Fact, { label: t("Unfinished items"), value: item.finding.unfinished.join(", ") })
+      ))
+    ) : null,
+    error ? (0, import_react34.createElement)("p", { role: "alert" }, error) : null
+  );
+}
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   const options = (Array.isArray(tasks) ? tasks : []).filter((task) => task && !task.legacy && typeof task.id === "string" && task.id !== exclude);
   return (0, import_react34.createElement)("label", null, t("Dependencies"), (0, import_react34.createElement)(
@@ -28574,6 +28668,7 @@ function TaskBoard({ scope, title, close, request = call }) {
         (0, import_react34.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => cancel(pending) }, t("Safely cancel pending request"))
       ) : null,
       data ? (0, import_react34.createElement)(HeldTurns, { recovery: data.recovery }) : null,
+      data ? (0, import_react34.createElement)(LegacyWorkReview, { scope, request }) : null,
       data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? (0, import_react34.createElement)(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks, onCreate: (value) => {
         if (!window.crypto?.randomUUID) return Promise.resolve(void 0);
         return run2({ id: window.crypto.randomUUID() }, { type: "create" }, value);

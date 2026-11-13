@@ -91,6 +91,55 @@ function HeldTurns({ recovery }) {
       h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))
 }
 
+// Owner-only manual notes on an existing work. This never dispatches or closes it.
+function LegacyWorkReview({ scope, request }) {
+  const [workId, setWorkId] = useState(''), [record, setRecord] = useState(null)
+  const [summary, setSummary] = useState(''), [evidence, setEvidence] = useState(''), [unfinished, setUnfinished] = useState('')
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false)
+  const [candidates, setCandidates] = useState(null)
+  const epoch = useRef(0), scopeKey = `${scope.kind}:${scope.id}`
+  useEffect(() => { epoch.current++; setWorkId(''); setRecord(null); setCandidates(null); setSummary(''); setEvidence(''); setUnfinished(''); setError(''); setBusy(false); return () => { epoch.current++ } }, [scopeKey])
+  const run = async (endpoint, body) => {
+    const current = epoch.current; setBusy(true); setError('')
+    try { const result = await request(endpoint, { scope, workId, ...body }); if (current === epoch.current) setRecord(result) }
+    catch { if (current === epoch.current) setError(t('Action outcome is unknown; check it before making another change.')) }
+    finally { if (current === epoch.current) setBusy(false) }
+  }
+  const list = async () => {
+    const current=epoch.current;setBusy(true);setError('')
+    try {const result=await request('legacy-review-list',{scope});if(current===epoch.current)setCandidates(result)}
+    catch {if(current===epoch.current)setError(t('Review sources are unavailable.'))}
+    finally {if(current===epoch.current)setBusy(false)}
+  }
+  return h('details', { className:'bt-board-held' }, h('summary', null, t('Review an existing work')),
+    h('p', null, t('Review notes do not send messages or close work. Sources are unverified; inspect the original records.')),
+    h('p', null, t('Only works between existing Bots are currently supported.')),
+    h('button', {type:'button',disabled:busy,onClick:()=>void list()},t('Find works awaiting inspection')),
+    candidates?.incomplete ? h('p', {role:'status'},t('The recovery list may be incomplete.')) : null,
+    Array.isArray(candidates?.items) ? h('div', null, candidates.items.map(item=>h('button', {key:item.workId,type:'button',disabled:busy,onClick:()=>{setWorkId(item.workId);setRecord(null)}},`${item.workId} · ${item.owner}`))) : null,
+    h('label', null, t('Original work ID'), ' ', h('input', { value:workId, disabled:busy, onChange:event => { setWorkId(event.target.value); setRecord(null) } })), ' ',
+    h('button', { type:'button', disabled:busy||!workId, onClick:() => void run('legacy-review-get', {}) }, t('Check')),
+    record?.liveRecovery ? h('p', {role:'status'}, record.liveRecovery.available
+      ? `${t('Recovery snapshot')} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt>=0 && record.liveRecovery.sampledAt<=8_640_000_000_000_000 ? new Date(record.liveRecovery.sampledAt).toISOString() : t('Unknown')}): ${record.liveRecovery.observed.queue} / ${record.liveRecovery.observed.held} · ${(record.liveRecovery.ids ?? []).join(', ')}`
+      : t('Current recovery sources are unavailable.')) : null,
+    record?.state === 'not-created' ? h('button', { type:'button', disabled:busy, onClick:() => void run('legacy-review-create', {}) }, t('Create review')) : null,
+    record && record.state !== 'not-created' ? h('div', null,
+      h(Fact, { label:t('Status'), value:record.state }),
+      h(Fact, { label:t('Owner'), value:record.owner }),
+      record.archived ? h('p', {role:'status'}, t('The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.')) : null,
+      h(Fact, { label:t('Source snapshot time (UTC)'), value:Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt>=0 && record.snapshot.sampledAt<=8_640_000_000_000_000 ? new Date(record.snapshot.sampledAt).toISOString() : t('Unknown') }),
+      h(Fact, { label:t('Original sessions'), value:(record.snapshot?.sources ?? []).map(s=>s.sessionId).join(', ') }),
+      h('p', null, t('Execution and external effects remain unknown.')),
+      !record.archived && ['needs-review','evidence-needed'].includes(record.state) ? h('div', null,
+        h('label', null, t('Review note'), h('textarea', { value:summary, disabled:busy, onChange:event=>setSummary(event.target.value) })),
+        h('label', null, t('Evidence references, one per line'), h('textarea', { value:evidence, disabled:busy, onChange:event=>setEvidence(event.target.value) })),
+        h('label', null, t('Unfinished items, one per line'), h('textarea', { value:unfinished, disabled:busy, onChange:event=>setUnfinished(event.target.value) })),
+        h('button', { type:'button', disabled:busy||!summary.trim(), onClick:() => void run('legacy-review-finding', { expectedRevision:record.revision, summary, evidenceRefs:evidence.split('\n').map(s=>s.trim()).filter(Boolean), unfinished:unfinished.split('\n').map(s=>s.trim()).filter(Boolean) }) }, t('Save review note'))) : null,
+      (record.history ?? []).map(item=>h('article', { key:item.revision }, h(Fact, { label:t('Review note'), value:item.finding.summary }),
+        h(Fact, { label:t('Evidence references'), value:item.finding.evidenceRefs.join(', ') }), h(Fact, { label:t('Unfinished items'), value:item.finding.unfinished.join(', ') })))) : null,
+    error ? h('p', { role:'alert' }, error) : null)
+}
+
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   const options = (Array.isArray(tasks) ? tasks : []).filter(task => task && !task.legacy && typeof task.id === 'string' && task.id !== exclude)
   return h('label', null, t('Dependencies'), h('select', { 'aria-label': t('Dependencies'), multiple: true, value, disabled,
@@ -478,6 +527,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => check(pending) }, t('Check action')), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,
       data ? h(HeldTurns, { recovery: data.recovery }) : null,
+      data ? h(LegacyWorkReview, { scope, request }) : null,
       data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? h(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks, onCreate: value => {
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)

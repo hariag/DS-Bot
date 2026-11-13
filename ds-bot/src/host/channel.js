@@ -353,6 +353,13 @@ export function install(rt) {
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
+        // This handler is reached only through the authenticated instance-owner
+        // route; these endpoints record review notes and never dispatch work.
+        case 'legacy-review-list':
+        case 'legacy-review-get':
+        case 'legacy-review-create':
+        case 'legacy-review-finding':
+          return ok(await rt.legacyReviewCall(endpoint, body))
         case 'board-list':
         case 'board-operation':
         case 'board-command':
@@ -936,7 +943,11 @@ export function install(rt) {
     }
   }
 
-  rt.phoneServe(handle)
+  // Phone relay has a separate paired-device identity and cannot be represented
+  // as the authenticated web/API owner in the manual-review audit yet.
+  rt.phoneServe((endpoint, payload, signal) => endpoint.startsWith('legacy-review-')
+    ? Promise.resolve(fail('Use the authenticated owner connection for manual review.', 'bot/refused'))
+    : handle(endpoint, payload, signal))
 
   // How a user message reaches a Session: a Bot id, a group chat's id, or an earlier
   // part of either resolves to its current part. `content` is the prompt blocks DSH
