@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { afterRound } from './relay-rows.js'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
-import { ROOM_REPLY_TIMEOUT_MS } from '../src/host/constants.js'
+import { ROOM_REPLY_TIMEOUT_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 
 let rt
 
@@ -185,6 +185,22 @@ test('a member still going keeps its turn; one quiet for the whole wait is misse
   host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   await settle(() => true)
   assert.equal(host.agentOf('r1').calls.length, 0)
+})
+
+test('a board task update keeps the group round waiting for its reply, while real work uses the work grace', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const host = await start()
+  t.after(host.stop)
+  const result = await openTurn(t, host)
+  host.emit('gb', 'tool/call', { callId: 'board', name: 'board_task', arguments: JSON.stringify({ action: 'show', task_id: 't1' }) })
+  t.mock.timers.tick(ROOM_WORK_GRACE_MS)
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve))
+  assert.equal(result(), undefined, 'a task-board operation alone does not mark the member as doing long work')
+  host.emit('gb', 'tool/result', { callId: 'board' })
+  host.emit('gb', 'tool/call', { callId: 'work', name: 'bash', arguments: '{}' })
+  t.mock.timers.tick(ROOM_WORK_GRACE_MS)
+  await settle(() => result() !== undefined)
+  assert.deepEqual(result().replies.map(reply => [reply.kind, reply.name]), [['working', 'Writer']])
 })
 
 // Real I/O that does not end in a condition the test can see.
