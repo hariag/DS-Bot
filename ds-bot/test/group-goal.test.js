@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -998,6 +998,89 @@ test('a runtime interrupted turn survives a later turn in its session and is rep
   await settle(() => notices.some(note => note.code === 'RESUME_HELD_RECORDS'))
   assert.equal(restarted.agentOf('gb').calls.length, 0)
   assert.ok(Object.values(JSON.parse(readFileSync(join(restarted.home, 'inflight.json'), 'utf8')).heldTurns).some(item => item.sessionId === 'gb'))
+  const recovery = (await restarted.rt.boardCall('board-list', { scope: { kind: 'room', id: 'r1' } })).recovery
+  assert.equal(recovery.available, true)
+  const held = recovery.items.find(item => item.sessionId === 'gb')
+  assert.ok(held)
+  assert.equal(held.status, 'uncertain')
+  assert.equal(held.turn, undefined, 'turn number is not in the original durable note')
+  assert.equal(held.evidence, 'inflight.json')
+  assert.equal(restarted.agentOf('gb').calls.length, 0, 'reading the recovery view must not restart work')
+  const readOnly = restarted.rt.readOnly
+  restarted.rt.readOnly = () => 'another host is writing'
+  assert.ok(Number.isSafeInteger(recovery.sampledAt), 'successful recovery projection has a sampling time')
+  assert.deepEqual(await restarted.rt.recoveryHeldView({ kind:'room', id:'r1' }), { available:false, incomplete:true, items:[] },
+    'a secondary host must not present stale recovery records as current')
+  restarted.rt.readOnly = readOnly
+  const requireHomeLock = restarted.rt.requireHomeLock
+  restarted.rt.requireHomeLock = () => { throw Object.assign(new Error('lock unavailable'), { code:'ELOCKLOST' }) }
+  assert.equal(restarted.rt.readOnly(), undefined, 'a failed lock is not necessarily reflected in readOnly')
+  assert.deepEqual(await restarted.rt.recoveryHeldView({ kind:'room', id:'r1' }), { available:false, incomplete:true, items:[] },
+    'a host whose lock failed must not claim its in-memory notes are current')
+  restarted.rt.requireHomeLock = requireHomeLock
+  writeFileSync(join(restarted.home, 'state.lock'), JSON.stringify({ pid: 1, token: 'a-different-owner' }))
+  assert.equal(restarted.rt.readOnly(), undefined, 'holder information may remain stale immediately after lock replacement')
+  assert.deepEqual(await restarted.rt.recoveryHeldView({ kind:'room', id:'r1' }), { available:false, incomplete:true, items:[] },
+    'a replaced lock token must make the recovery projection unavailable')
+})
+
+test('recovery projection rejects a changed disk snapshot without writing it', async t => {
+  const host = await start(t)
+  const scope = { kind:'personal', id:'user' }
+  assert.equal((await host.rt.recoveryHeldView(scope)).available, true)
+  const file = join(host.home, 'inflight.json')
+  const changed = JSON.stringify({ turns:{}, queued:{}, heldTurns:{}, extra:'external update' })
+  writeFileSync(file, changed)
+  assert.doesNotThrow(() => host.rt.requireHomeLock())
+  assert.deepEqual(await host.rt.recoveryHeldView(scope), { available:false, incomplete:true, items:[] })
+  assert.equal(readFileSync(file, 'utf8'), changed, 'view must not write or repair recovery notes')
+})
+
+test('recovery projection rejects an oversized file without changing it', async t => {
+  const host = await start(t)
+  const file = join(host.home, 'inflight.json')
+  writeFileSync(file, '{}')
+  truncateSync(file, 64 * 1024 * 1024 + 1)
+  assert.deepEqual(await host.rt.recoveryHeldView({ kind:'personal', id:'user' }), { available:false, incomplete:true, items:[] })
+  assert.doesNotThrow(() => host.rt.requireHomeLock())
+})
+
+test('startup holds are unavailable until the copied records reach the file', async t => {
+  t.mock.timers.enable({ apis:['setTimeout'] })
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-goal-'))
+  const record = { botId:'b', roomId:'r1', since:1 }
+  writeFileSync(join(home, 'state.json'), JSON.stringify(seed()))
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns:{ gb:record }, queued:{}, heldTurns:{} }))
+  const host = await start(t, undefined, undefined, undefined, home)
+  const scope = { kind:'room', id:'r1' }
+  assert.deepEqual(await host.rt.recoveryHeldView(scope), { available:false, incomplete:true, items:[] })
+  await host.rt.holdInterruptedTurn('gb', record)
+  const view = await host.rt.recoveryHeldView(scope)
+  assert.equal(view.available, true)
+  assert.equal(view.items.length, 1)
+  assert.equal(view.items[0].sessionId, 'gb')
+})
+
+test('concurrent recovery sampling and writes never claim an unpersisted snapshot', async t => {
+  const host = await start(t)
+  const scope = { kind:'personal', id:'user' }
+  for (let i = 0; i < 10; i += 1) {
+    const writing = host.rt.holdInterruptedTurn('ga', { botId:'a', roomId:'r1', since:i + 1 })
+    const result = await host.rt.recoveryHeldView(scope)
+    await writing
+    if (result.available) {
+      const disk = JSON.parse(readFileSync(join(host.home, 'inflight.json'), 'utf8'))
+      for (const row of result.items) assert.ok(disk.heldTurns[row.recoveryId], 'available rows must exist on disk')
+    } else assert.equal(result.incomplete, true)
+  }
+})
+
+test('closing a host during recovery sampling cannot leave its view available', async t => {
+  const host = await start(t)
+  const pending = host.rt.recoveryHeldView({ kind:'personal', id:'user' })
+  await host.ctx.dispose()
+  const result = await pending
+  assert.deepEqual(result, { available:false, incomplete:true, items:[] })
 })
 
 test('a stopped member queued group delivery is retained after restart', async (t) => {

@@ -133,7 +133,7 @@ export function install(rt) {
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
     return outcome.value
   }
-  const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(() => {
+  const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
     const { api, store } = service(), scope = payload.scope
     switch (endpoint) {
       case 'board-list': {
@@ -142,7 +142,10 @@ export function install(rt) {
         for (let i = 0; i < 3; i += 1) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
-          if (before === store.version() && rosterRevision === rt.state.revision) return { ...view, revision: `${rosterRevision}:${before}` }
+          const recovery = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [] }
+          if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
+            recovery,
+            revision: `${rosterRevision}:${before}` }
         }
         throw new Error('Board changed; refresh the board')
       }

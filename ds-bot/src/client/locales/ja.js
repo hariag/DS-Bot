@@ -1,6 +1,16 @@
 // Japanese (ja) localization for DS Bot client and DSH settings namespaces.
 
 export const JA = {
+  "Snapshot time (UTC)": "スナップショット時刻（UTC）",
+  "No interrupted turns in this snapshot.": "この時点で中断されたターンはありません。",
+  "Interrupted turns awaiting review": "確認待ちの中断されたターン",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "これらの記録は読み取り専用です。結果は不明で、ここから作業を再送または終了しません。",
+  "Recovery records are unavailable or incomplete.": "復旧記録を利用できないか、不完全です。",
+  "Session ID": "セッション ID",
+  "Original turn": "元のターン",
+  "Started at": "開始時刻",
+  "Exchange ID": "引き継ぎ ID",
+  "Recovery ID": "復旧記録 ID",
   "Task board": "タスクボード",
   "My task board": "自分のタスクボード",
   "Dependencies": "依存関係",

@@ -1,6 +1,16 @@
 // French (fr) localization for DS Bot client and DSH settings namespaces.
 
 export const FR = {
+  "Snapshot time (UTC)": "Heure de l’instantané (UTC)",
+  "No interrupted turns in this snapshot.": "Aucun tour interrompu dans cet instantané.",
+  "Interrupted turns awaiting review": "Tours interrompus en attente de vérification",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "Ces enregistrements sont en lecture seule. Le résultat est inconnu ; aucun travail ne sera renvoyé ou clôturé ici.",
+  "Recovery records are unavailable or incomplete.": "Les enregistrements de récupération sont indisponibles ou incomplets.",
+  "Session ID": "ID de session",
+  "Original turn": "Tour d’origine",
+  "Started at": "Heure de début",
+  "Exchange ID": "ID d’échange",
+  "Recovery ID": "ID de récupération",
   "Task board": "Tableau des tâches",
   "My task board": "Mon tableau des tâches",
   "Dependencies": "Dépendances",

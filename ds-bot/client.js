@@ -123,6 +123,16 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
+  "Snapshot time (UTC)": "スナップショット時刻（UTC）",
+  "No interrupted turns in this snapshot.": "この時点で中断されたターンはありません。",
+  "Interrupted turns awaiting review": "確認待ちの中断されたターン",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "これらの記録は読み取り専用です。結果は不明で、ここから作業を再送または終了しません。",
+  "Recovery records are unavailable or incomplete.": "復旧記録を利用できないか、不完全です。",
+  "Session ID": "セッション ID",
+  "Original turn": "元のターン",
+  "Started at": "開始時刻",
+  "Exchange ID": "引き継ぎ ID",
+  "Recovery ID": "復旧記録 ID",
   "Task board": "タスクボード",
   "My task board": "自分のタスクボード",
   "Dependencies": "依存関係",
@@ -2490,6 +2500,16 @@ var DSH_JA = {
 
 // src/client/locales/ko.js
 var KO = {
+  "Snapshot time (UTC)": "스냅샷 시각(UTC)",
+  "No interrupted turns in this snapshot.": "이 스냅샷에는 중단된 턴이 없습니다.",
+  "Interrupted turns awaiting review": "확인이 필요한 중단된 턴",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "이 기록은 읽기 전용입니다. 결과를 알 수 없으며 여기서 작업을 다시 보내거나 종료하지 않습니다.",
+  "Recovery records are unavailable or incomplete.": "복구 기록을 사용할 수 없거나 불완전합니다.",
+  "Session ID": "세션 ID",
+  "Original turn": "원래 턴",
+  "Started at": "시작 시각",
+  "Exchange ID": "전달 ID",
+  "Recovery ID": "복구 기록 ID",
   "Task board": "작업 보드",
   "My task board": "내 작업 보드",
   "Dependencies": "의존 관계",
@@ -4902,6 +4922,16 @@ var DSH_KO = {
 
 // src/client/locales/es.js
 var ES = {
+  "Snapshot time (UTC)": "Hora de la captura (UTC)",
+  "No interrupted turns in this snapshot.": "No hay turnos interrumpidos en esta captura.",
+  "Interrupted turns awaiting review": "Turnos interrumpidos pendientes de revisión",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "Estos registros son de solo lectura. El resultado es desconocido; aquí no se reenvía ni se cierra el trabajo.",
+  "Recovery records are unavailable or incomplete.": "Los registros de recuperación no están disponibles o están incompletos.",
+  "Session ID": "ID de sesión",
+  "Original turn": "Turno original",
+  "Started at": "Hora de inicio",
+  "Exchange ID": "ID de intercambio",
+  "Recovery ID": "ID de recuperación",
   "Task board": "Tablero de tareas",
   "My task board": "Mi tablero de tareas",
   "Dependencies": "Dependencias",
@@ -7314,6 +7344,16 @@ var DSH_ES = {
 
 // src/client/locales/fr.js
 var FR = {
+  "Snapshot time (UTC)": "Heure de l’instantané (UTC)",
+  "No interrupted turns in this snapshot.": "Aucun tour interrompu dans cet instantané.",
+  "Interrupted turns awaiting review": "Tours interrompus en attente de vérification",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "Ces enregistrements sont en lecture seule. Le résultat est inconnu ; aucun travail ne sera renvoyé ou clôturé ici.",
+  "Recovery records are unavailable or incomplete.": "Les enregistrements de récupération sont indisponibles ou incomplets.",
+  "Session ID": "ID de session",
+  "Original turn": "Tour d’origine",
+  "Started at": "Heure de début",
+  "Exchange ID": "ID d’échange",
+  "Recovery ID": "ID de récupération",
   "Task board": "Tableau des tâches",
   "My task board": "Mon tableau des tâches",
   "Dependencies": "Dépendances",
@@ -9681,6 +9721,16 @@ var DSH_FR = {
 
 // src/client/locales/de.js
 var DE = {
+  "Snapshot time (UTC)": "Zeitpunkt der Momentaufnahme (UTC)",
+  "No interrupted turns in this snapshot.": "Diese Momentaufnahme enthält keine unterbrochenen Runden.",
+  "Interrupted turns awaiting review": "Unterbrochene Runden zur Prüfung",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "Diese Einträge sind schreibgeschützt. Das Ergebnis ist unbekannt; hier wird keine Arbeit erneut gesendet oder abgeschlossen.",
+  "Recovery records are unavailable or incomplete.": "Wiederherstellungseinträge sind nicht verfügbar oder unvollständig.",
+  "Session ID": "Sitzungs-ID",
+  "Original turn": "Ursprüngliche Runde",
+  "Started at": "Startzeit",
+  "Exchange ID": "Austausch-ID",
+  "Recovery ID": "Wiederherstellungs-ID",
   "Task board": "Aufgabenboard",
   "My task board": "Mein Aufgabenboard",
   "Dependencies": "Abhängigkeiten",
@@ -12094,6 +12144,16 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Snapshot time (UTC)": "快照时间（UTC）",
+  "No interrupted turns in this snapshot.": "此快照中没有待核对的中断回合。",
+  "Interrupted turns awaiting review": "待核对的中断回合",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "这些记录为只读，结果尚不明确；此处不会重发或关闭工作。",
+  "Recovery records are unavailable or incomplete.": "恢复记录不可用或不完整。",
+  "Session ID": "会话 ID",
+  "Original turn": "原回合",
+  "Started at": "开始时间",
+  "Exchange ID": "交接 ID",
+  "Recovery ID": "恢复记录 ID",
   "Task board": "任务看板",
   "My task board": "我的任务看板",
   "Group task board": "群任务看板",
@@ -27917,6 +27977,39 @@ function Fact({ label, value }) {
   if (!value) return null;
   return (0, import_react34.createElement)("div", { className: "bt-board-fact" }, (0, import_react34.createElement)("span", null, label), (0, import_react34.createElement)("span", null, value));
 }
+function HeldTurns({ recovery }) {
+  if (!recovery || recovery.available !== true) return (0, import_react34.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
+  const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
+  const sampled = Number.isSafeInteger(recovery.sampledAt) && recovery.sampledAt >= 0 && recovery.sampledAt <= 864e13 ? new Date(recovery.sampledAt).toISOString() : t("Unknown");
+  if (!rows2.length && !recovery.incomplete) return (0, import_react34.createElement)(
+    "p",
+    { className: "bt-board-pending", role: "status" },
+    t("No interrupted turns in this snapshot."),
+    " ",
+    t("Snapshot time (UTC)"),
+    ": ",
+    sampled
+  );
+  return (0, import_react34.createElement)(
+    "details",
+    { className: "bt-board-held" },
+    (0, import_react34.createElement)("summary", null, t("Interrupted turns awaiting review"), rows2.length ? ` (${rows2.length})` : ""),
+    (0, import_react34.createElement)("p", null, t("Snapshot time (UTC)"), ": ", sampled),
+    (0, import_react34.createElement)("p", null, t("These records are read-only. A result is unknown; no work is resent or closed here.")),
+    recovery.incomplete ? (0, import_react34.createElement)("p", { role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
+    rows2.map((item) => (0, import_react34.createElement)(
+      "article",
+      { key: item.recoveryId, className: "bt-board-held-record" },
+      (0, import_react34.createElement)(Fact, { label: t("Bot"), value: item.botName || item.botId }),
+      (0, import_react34.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
+      (0, import_react34.createElement)(Fact, { label: t("Original turn"), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t("Unknown") }),
+      (0, import_react34.createElement)(Fact, { label: t("Started at"), value: Number.isSafeInteger(item.startedAt) ? new Date(item.startedAt).toLocaleString() : t("Unknown") }),
+      (0, import_react34.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
+      (0, import_react34.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId }),
+      (0, import_react34.createElement)(Fact, { label: t("Evidence"), value: "inflight.json" })
+    ))
+  );
+}
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   const options = (Array.isArray(tasks) ? tasks : []).filter((task) => task && !task.legacy && typeof task.id === "string" && task.id !== exclude);
   return (0, import_react34.createElement)("label", null, t("Dependencies"), (0, import_react34.createElement)(
@@ -28460,7 +28553,13 @@ function TaskBoard({ scope, title, close, request = call }) {
           (0, import_react34.createElement)("p", null, scope.kind === "room" ? t("Group task board") : t("Personal task board")),
           showCapacity ? (0, import_react34.createElement)("p", null, t("Instance task capacity: {count} / {limit}", { count: capacity.taskCount, limit: capacity.taskLimit })) : null
         ),
-        (0, import_react34.createElement)("button", { type: "button", onClick: dismiss }, t("Close"))
+        (0, import_react34.createElement)(
+          "div",
+          null,
+          (0, import_react34.createElement)("button", { type: "button", onClick: () => void load() }, t("Refresh")),
+          " ",
+          (0, import_react34.createElement)("button", { type: "button", onClick: dismiss }, t("Close"))
+        )
       ),
       error ? (0, import_react34.createElement)("div", { className: "bt-board-error", role: "alert" }, error) : null,
       capacityReached ? (0, import_react34.createElement)("div", { className: "bt-board-pending", role: "status" }, t("Task limit reached. New tasks cannot be created.")) : null,
@@ -28474,6 +28573,7 @@ function TaskBoard({ scope, title, close, request = call }) {
         " ",
         (0, import_react34.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => cancel(pending) }, t("Safely cancel pending request"))
       ) : null,
+      data ? (0, import_react34.createElement)(HeldTurns, { recovery: data.recovery }) : null,
       data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? (0, import_react34.createElement)(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks, onCreate: (value) => {
         if (!window.crypto?.randomUUID) return Promise.resolve(void 0);
         return run2({ id: window.crypto.randomUUID() }, { type: "create" }, value);
@@ -28517,6 +28617,7 @@ var TASK_BOARD_CSS = `
 .bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:6px 9px}
 .bt-board-dialog button:disabled,.bt-board-dialog select:disabled{opacity:.5}.bt-board-dialog button:not(:disabled){cursor:pointer}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
+.bt-board-held{padding:10px 20px;border-bottom:1px solid var(--bt-line);overflow:auto;max-height:35vh;font-size:12px}.bt-board-held summary{cursor:pointer;font-weight:600}.bt-board-held-record{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere}
 .bt-board-columns{display:flex;gap:12px;overflow:auto;padding:16px 20px 22px;align-items:flex-start;min-height:180px}
 .bt-board-column{flex:0 0 245px;min-width:0;border-radius:12px;background:var(--bt-tag-bg);padding:10px;box-sizing:border-box}
 .bt-board-column h3{font-size:13px;margin:0 0 10px}.bt-board-card{display:flex;flex-direction:column;gap:7px;padding:12px;background:var(--bt-card);border:1px solid var(--bt-line);border-radius:8px;margin-bottom:8px;overflow-wrap:anywhere}

@@ -1,6 +1,16 @@
 // Korean (ko) localization for DS Bot client and DSH settings namespaces.
 
 export const KO = {
+  "Snapshot time (UTC)": "스냅샷 시각(UTC)",
+  "No interrupted turns in this snapshot.": "이 스냅샷에는 중단된 턴이 없습니다.",
+  "Interrupted turns awaiting review": "확인이 필요한 중단된 턴",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "이 기록은 읽기 전용입니다. 결과를 알 수 없으며 여기서 작업을 다시 보내거나 종료하지 않습니다.",
+  "Recovery records are unavailable or incomplete.": "복구 기록을 사용할 수 없거나 불완전합니다.",
+  "Session ID": "세션 ID",
+  "Original turn": "원래 턴",
+  "Started at": "시작 시각",
+  "Exchange ID": "전달 ID",
+  "Recovery ID": "복구 기록 ID",
   "Task board": "작업 보드",
   "My task board": "내 작업 보드",
   "Dependencies": "의존 관계",
