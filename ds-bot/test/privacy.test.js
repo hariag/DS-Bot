@@ -129,6 +129,49 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
 
 const CLOSED = /private Bot/
 
+test('board guard allows the ordinary workspace and rejects explicit board aliases', async (t) => {
+  if (process.platform !== 'linux') return t.skip('symbolic-link fixture requires Linux')
+  const { run, home, team, project, stop } = await start({ privateBot: false })
+  t.after(stop)
+  const board = join(home, 'board-v1')
+  mkdirSync(board, { recursive: true })
+  writeFileSync(join(board, 'private.txt'), 'private')
+  const alias = join(project, 'ordinary-name')
+  symlinkSync(board, alias, 'dir')
+  const child = join(team, 'child'), grand = join(child, 'grand')
+  mkdirSync(grand, { recursive: true })
+  symlinkSync(board, join(child, 'innocent'), 'dir')
+  symlinkSync(board, join(grand, 'innocent'), 'dir')
+  const workspaceFile = join(team, 'ordinary file.txt')
+  assert.deepEqual(await run('bash', { command: `cat "${workspaceFile}"` }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: 'cat ordinary.txt', workdir: team }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: 'cat ./ordinary.txt', workdir: 'child' }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: 'cd child && cd grand && cat ./ordinary.txt', workdir: team }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: `echo ${Array(300).fill('ordinary').join(' ')}`, workdir: team }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nIt's a normal note.\nEOF", workdir: team }, 'b'), { ran: true })
+  const tooComplex = await run('bash', { command: `cd child && cd grand && echo ${Array(3000).fill('ordinary').join(' ')}`, workdir: team }, 'b')
+  assert.equal(tooComplex.ran, false)
+  assert.match(tooComplex.error, /split it into smaller calls/)
+  for (const [name, args] of [
+    ['read', { file_path: join(alias, 'private.txt') }],
+    ['bash', { command: `cat "${join(alias, 'private.txt')}"` }],
+    ['bash', { command: `ls "${alias}"` }],
+    ['bash', { command: 'ls ordinary-name', workdir: project }],
+    ['bash', { command: 'cat "$PWD/ordinary-name/private.txt"', workdir: project }],
+    ['bash', { command: 'cat innocent/private.txt', workdir: 'child' }],
+    ['bash', { command: 'cd child && cd grand && cat innocent/private.txt', workdir: team }],
+    ['bash', { command: `cd "${project}" && cat ordinary-name/private.txt` }],
+    ['pwsh', { command: `Get-Content '${join(alias, 'private.txt')}'` }],
+  ]) {
+    const result = await run(name, args, 'b')
+    assert.equal(result.ran, false, `${name}: ${JSON.stringify(args)}`)
+    assert.match(result.error, /task board is private/)
+  }
+  const terminal = await run('terminal_send', { sessionId: 'one', text: 'cat innocent/private.txt' }, 'b')
+  assert.equal(terminal.ran, false)
+  assert.match(terminal.error, /one-shot shell with a known working directory/)
+})
+
 test('only the user makes a Bot private, and the Bot needs a folder of its own', async (t) => {
   const { rt, project, team, state, stop } = await start({ privateBot: false })
   t.after(stop)
