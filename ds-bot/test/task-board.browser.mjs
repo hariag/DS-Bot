@@ -48,7 +48,7 @@ async function request(endpoint,payload){
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',status:'legacy-unverified',legacy:{originalStatus:'done'}}]:[];
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
-  return {tasks:[task,...legacy,...shared],capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'}],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  return {tasks:[task,...legacy,...shared],recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'}],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
  if(endpoint==='board-image')return images[payload.imageId];
  if(endpoint==='board-command'||endpoint==='board-upload'){
@@ -87,6 +87,24 @@ try {
   await page.addScriptTag({ path: react })
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
+
+  await page.evaluate(() => renderFixture({ kind:'room', id:'g1' }, 'recovery'))
+  await page.getByText('Interrupted turns awaiting review').click()
+  const recovery = page.locator('.bt-board-held-record')
+  await recovery.getByText('session-original').waitFor()
+  assert.match(await recovery.innerText(), /Original turn[\s\S]*Unknown/)
+  assert.match(await recovery.innerText(), /exchange-1/)
+  assert.match(await recovery.innerText(), /inflight\.json/)
+  assert.equal(await recovery.getByRole('button').count(), 0, 'reconciliation view must not replay or close work')
+  await page.getByText('Snapshot time (UTC): 2023-11-14T22:13:20.000Z').waitFor()
+  const beforeRefresh = await page.evaluate(() => fixture.calls.filter(call => call.endpoint === 'board-list').length)
+  await page.evaluate(() => { fixture.recoveryEmpty = true })
+  await page.getByRole('button', { name:'Refresh', exact:true }).click()
+  await page.getByText('No interrupted turns in this snapshot.').waitFor()
+  assert.equal(await page.evaluate(() => fixture.calls.filter(call => call.endpoint === 'board-list').length), beforeRefresh + 1)
+  await page.evaluate(() => renderFixture({ kind:'personal', id:'a' }, 'normal'))
+  await page.getByText('Personal task', {exact:true}).waitFor()
+  assert.equal(await page.locator('.bt-board-held-record').count(), 0, 'scope change must not retain old recovery rows')
 
   await page.evaluate(() => renderFixture({ kind: 'personal', id: 'user' }, 'capacity'))
   await page.getByText('Instance task capacity: 1000 / 1000').waitFor()
