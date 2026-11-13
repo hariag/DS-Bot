@@ -186,7 +186,12 @@ export function install(rt) {
     rooms: Object.values(state.rooms).map(({ log, seen, paused, sessions, segments, parts: ownParts, ...room }) => {
       const parts = [...Object.values(sessions ?? {}), ...Object.values(segments ?? {}).flat().map(segment => segment.sessionId), ...(ownParts ?? []).map(segment => segment.sessionId)]
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
-      return { ...room, sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      // Never expose a scoped check as complete without its live queue proof.
+      // If the goal subsystem is unavailable, mark every scoped assertion unresolved.
+      const goal = rt.goalView?.(rt.roomOf(room.id)) ?? (room.goal?.ownerReview?.checks ? {
+        ...room.goal, ownerReview: { ...room.goal.ownerReview, checks: Object.fromEntries(Object.entries(room.goal.ownerReview.checks).map(([id, check]) => [id, check?.scopedQueueVersion === undefined ? check : { ...check, unresolved: true }])) },
+      } : room.goal)
+      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -262,11 +267,21 @@ export function install(rt) {
   const liveRun = randomUUID()
   let liveSeq = 0
   let liveCache = null
+  const liveHistory = new Map()
+  const scopedReviewState = () => JSON.stringify(Object.values(state.rooms ?? {}).flatMap(room => {
+    const goal = rt.goalView?.(room)
+    return Object.entries(goal?.ownerReview?.checks ?? {})
+      .map(([id, check]) => [room.id, id, check?.unresolved === true])
+  }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
   const liveAnswer = () => {
     const value = live()
     const json = JSON.stringify(value)
-    if (liveCache?.json === json) return liveCache
-    return liveCache = { key: `${liveRun}:${++liveSeq}`, value, json }
+    const scope = scopedReviewState()
+    if (liveCache?.json === json && liveCache.scope === scope) return liveCache
+    liveCache = { key: `${liveRun}:${++liveSeq}`, value, json, scope }
+    liveHistory.set(liveCache.key, scope)
+    if (liveHistory.size > 64) liveHistory.delete(liveHistory.keys().next().value)
+    return liveCache
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
@@ -352,7 +367,8 @@ export function install(rt) {
           await rt.catalog()
           await rt.loadSecrets()
           const answer = liveAnswer()
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) {
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())
+            && (body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope))) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }

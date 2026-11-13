@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -2201,4 +2201,214 @@ test('lost idle provenance keeps inspection fenced and cannot claim a generated 
   assert.equal(g.lastOwnerReview, undefined); assert.equal(host.agentOf('gb').calls.length, 0)
   await host.rt.goalReviewPoll(Date.now() + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
+})
+
+test('unresolved delivery restricts its owner while another unique owner can be checked and evidence read', async (t) => {
+  const host=await start(t)
+  await startGoal(host,{stages:[{title:'Draft',acceptance:'draft reviewed',tasks:[{bot:'Writer',task:'write the draft'},{bot:'Tester',task:'check the draft'}]}]})
+  const g=host.rt.roomOf('r1').goal
+  await host.rt.goalDrive(host.rt.roomOf('r1'),{goalNudge:true,slots:[{id:'a',status:'passed'}]})
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb')throw Error('unresolved writer delivery');return original(id)}
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
+  host.ctx.sessionController.resolveAgent=original
+  const writer=g.stages[0].tasks.find(task=>task.botId==='b'),tester=g.stages[0].tasks.find(task=>task.botId==='c')
+  tester.status='reported'
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const post=host.takeGoal();assert.equal(post.source.reviewInspect,true)
+  host.agentOf('r1').inbox.nextTurn.length=0
+  const result=host.round('scoped-review',post)
+  await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
+  const decide=(name,args={})=>host.ctx.guards.map(guard=>guard({name,arguments:args,agent:{id:'ga'}}))
+  assert.ok(decide('group_goal',reviewArgs(writer)).some(value=>typeof value==='string'))
+  assert.ok(decide('group_goal',reviewArgs(tester)).every(value=>value===undefined))
+  assert.ok(decide('read',{path:'evidence.txt'}).every(value=>value===undefined))
+  assert.ok(decide('message_bot',{to:'Tester',message:'start'}).some(value=>typeof value==='string'))
+  assert.ok(decide('pwsh',{}).some(value=>typeof value==='string'))
+  assert.match(await host.tool('group_goal',reviewArgs(writer),'ga'),/unrelated, unblocked/)
+  assert.match(await host.tool('group_goal',reviewArgs(tester),'ga'),/recorded|check/i)
+  assert.ok(g.ownerReview?.checks?.[tester.id])
+  assert.equal(g.ownerReview?.checks?.[writer.id],undefined)
+  // A new ambiguous note arriving after the first check must close the gate.
+  const unread=host.rt.unreadRoomOf
+  host.rt.unreadRoomOf=id=>unread(id).map(item=>item.toId==='b'?{...item,toId:undefined}:item)
+  assert.ok(decide('group_goal',reviewArgs(tester)).some(value=>typeof value==='string'))
+  assert.match(await host.tool('group_goal',reviewArgs(tester),'ga'),/unrelated, unblocked/)
+  host.rt.unreadRoomOf=unread
+  // Explicit pause wins even if the checked owner is otherwise independent.
+  g.status='paused'
+  assert.ok(decide('group_goal',reviewArgs(tester)).some(value=>typeof value==='string'))
+  g.status='active'
+  host.finish('ga','[PASS]')
+  await settle(()=>result()!==undefined)
+})
+
+test('a scoped check becomes unresolved if the queue changes while its save is pending', async t=>{
+  const host=await start(t)
+  await startGoal(host,{stages:[{title:'Draft',acceptance:'reviewed',tasks:[{bot:'Writer',task:'write'},{bot:'Tester',task:'test'}]}]})
+  const g=host.rt.roomOf('r1').goal
+  await host.rt.goalDrive(host.rt.roomOf('r1'),{goalNudge:true,slots:[{id:'a',status:'passed'}]})
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb'||id==='gc')throw Error('held delivery');return original(id)}
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const post=host.takeGoal();host.agentOf('r1').inbox.nextTurn.length=0
+  const result=host.round('queue-save-race',post)
+  await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
+  const task=g.stages[0].tasks.find(item=>item.botId==='c')
+  let entered,release
+  const ready=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{release=resolve})
+  const save=host.rt.save;let delayed=false
+  host.rt.save=async opts=>{if(opts?.required&&!delayed){delayed=true;entered();await gate}return save(opts)}
+  const check=host.tool('group_goal',reviewArgs(task),'ga')
+  await ready
+  await assert.rejects(host.rt.deliver({toId:'c',sessionId:'gc',role:'room',roomId:'r1',text:'new uncertain work'}))
+  release()
+  assert.match(await check,/unresolved/)
+  host.rt.save=save
+  const record=saved(host).rooms.r1.goal.ownerReview.checks[task.id]
+  assert.ok(record.scopedQueueVersion)
+  assert.notEqual(record.scopedQueueVersion,host.rt.reviewQueueVersion('r1','c'))
+  const state=await host.call('state',{})
+  assert.equal(state.value.rooms.find(room=>room.id==='r1').goal.ownerReview.checks[task.id].unresolved,true)
+  const shown=await host.tool('group_goal',{action:'show'},'ga')
+  assert.match(shown,new RegExp(`review still needs:.*${task.id}`))
+  host.finish('ga','[PASS]');await settle(()=>result()!==undefined)
+})
+
+test('scoped queue version detects ABA and cannot survive host restart', async t=>{
+  const host=await start(t,undefined,undefined,{r2:{id:'r2',name:'Other',members:['a','b'],admin:'a',sessions:{a:'ga2',b:'gb2'},log:[],seq:0,seen:{}}})
+  await startGoal(host,{stages:[{title:'Draft',acceptance:'reviewed',tasks:[{bot:'Writer',task:'write'},{bot:'Tester',task:'test'}]}]})
+  const g=host.rt.roomOf('r1').goal
+  await host.rt.goalDrive(host.rt.roomOf('r1'),{goalNudge:true,slots:[{id:'a',status:'passed'}]})
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb'||id==='gc'||id==='gb2')throw Error('held delivery');return original(id)}
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const post=host.takeGoal();host.agentOf('r1').inbox.nextTurn.length=0
+  const result=host.round('queue-aba',post)
+  await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
+  const task=g.stages[0].tasks.find(item=>item.botId==='c')
+  assert.match(await host.tool('group_goal',reviewArgs(task),'ga'),/Recorded/)
+  const firstView=await host.call('state',{})
+  assert.equal(firstView.value.rooms.find(room=>room.id==='r1').goal.ownerReview.checks[task.id].unresolved,
+    g.ownerReview.checks[task.id].scopedQueueVersion !== host.rt.reviewQueueVersion('r1','c'))
+  const version=saved(host).rooms.r1.goal.ownerReview.checks[task.id].scopedQueueVersion
+  // Another owner's repeated queue activity must not invalidate this check.
+  for(let i=0;i<5;i++){
+    const exchangeId=`other-${i}`
+    await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',exchangeId,text:'other work'}))
+    host.rt.forgetDelivery(exchangeId,'gb')
+    const otherRoomId=`other-room-${i}`
+    await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb2',role:'room',roomId:'r2',exchangeId:otherRoomId,text:'other group'}))
+    host.rt.forgetDelivery(otherRoomId,'gb2')
+  }
+  assert.equal(host.rt.reviewQueueVersion('r1','c'),version)
+  const beforeTarget=await host.call('state',{})
+  assert.equal(beforeTarget.value.rooms.find(room=>room.id==='r1').goal.ownerReview.checks[task.id].unresolved,false)
+  const initial=host.rt.unreadOf('gc')
+  await assert.rejects(host.rt.deliver({toId:'c',sessionId:'gc',role:'room',roomId:'r1',exchangeId:'aba-test',text:'new work'}))
+  host.rt.forgetDelivery('aba-test','gc')
+  assert.deepEqual(host.rt.unreadOf('gc'),initial)
+  assert.notEqual(host.rt.reviewQueueVersion('r1','c'),version)
+  assert.equal(host.rt.state.revision,beforeTarget.value.revision)
+  const changed=await host.call('state',{since:beforeTarget.value.revision,live:beforeTarget.value.liveKey})
+  assert.notEqual(changed.value.unchanged,true)
+  assert.equal(changed.value.rooms.find(room=>room.id==='r1').goal.ownerReview.checks[task.id].unresolved,true)
+  assert.match(await host.tool('group_goal',{action:'show'},'ga'),new RegExp(`review still needs:.*${task.id}`))
+  host.finish('ga','[PASS]');await settle(()=>result()!==undefined)
+  await host.ctx.dispose()
+  const restarted=await start(t,undefined,undefined,undefined,host.home)
+  assert.notEqual(restarted.rt.reviewQueueVersion('r1','c'),version)
+  assert.match(await restarted.tool('group_goal',{action:'show'},'ga'),new RegExp(`review still needs:.*${task.id}`))
+})
+
+test('queue version becomes unavailable on lock loss and changes on reclaim', async t=>{
+  const host=await start(t)
+  const version=host.rt.reviewQueueVersion('r1','c')
+  assert.ok(version)
+  unlinkSync(join(host.home,'state.lock'))
+  assert.equal(host.rt.reviewQueueVersion('r1','c'),undefined)
+  await host.rt.refresh()
+  assert.ok(host.rt.reviewQueueVersion('r1','c'))
+  assert.notEqual(host.rt.reviewQueueVersion('r1','c'),version)
+})
+
+test('an unknown room recipient invalidates every owner even after removal', async t=>{
+  const host=await start(t)
+  const before=host.rt.reviewQueueVersion('r1','c')
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb')throw Error('held delivery');return original(id)}
+  await assert.rejects(host.rt.deliver({toId:'missing',sessionId:'gb',role:'room',roomId:'r1',exchangeId:'unknown-recipient',text:'unknown'}))
+  assert.notEqual(host.rt.reviewQueueVersion('r1','c'),before)
+  host.rt.forgetDelivery('unknown-recipient','gb')
+  assert.notEqual(host.rt.reviewQueueVersion('r1','c'),before)
+})
+
+test('group reports and unknown roles are scoped, while a definite private request stays private', async t=>{
+  const host=await start(t)
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb'||id==='b')throw Error('held delivery');return original(id)}
+  const before=host.rt.reviewQueueVersion('r1','b')
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'report',roomId:'r1',exchangeId:'group-report',text:'report'}))
+  assert.notEqual(host.rt.reviewQueueVersion('r1','b'),before)
+  assert.ok(host.rt.unreadRoomOf('r1').some(item=>item.exchangeId==='group-report'))
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'future-role',exchangeId:'unknown-role',text:'unknown'}))
+  assert.ok(host.rt.unreadRoomOf('r1').some(item=>item.toId==='b'))
+  const beforePrivate=host.rt.reviewQueueVersion('r1','b')
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'b',role:'request',exchangeId:'private-only',text:'private'}))
+  assert.equal(host.rt.reviewQueueVersion('r1','b'),beforePrivate)
+  assert.ok(!host.rt.unreadRoomOf('r1').some(item=>item.exchangeId==='private-only'))
+})
+
+test('an ordinary owner check becomes unresolved when that owner receives uncertain work', async t=>{
+  const host=await start(t)
+  await startGoal(host,{stages:[{title:'Draft',acceptance:'reviewed',tasks:[{bot:'Writer',task:'write'},{bot:'Tester',task:'test'}]}]})
+  const g=host.rt.roomOf('r1').goal
+  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  const post=host.takeGoal();host.agentOf('r1').inbox.nextTurn.length=0
+  const result=host.round('ordinary-check-stale',post)
+  await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
+  const task=g.stages[0].tasks.find(item=>item.botId==='b')
+  assert.match(await host.tool('group_goal',reviewArgs(task),'ga'),/Recorded/)
+  assert.ok(g.ownerReview.checks[task.id].scopedQueueVersion)
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb')throw Error('held delivery');return original(id)}
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'uncertain'}))
+  const state=await host.call('state',{})
+  assert.equal(state.value.rooms.find(room=>room.id==='r1').goal.ownerReview.checks[task.id].unresolved,true)
+  assert.match(await host.tool('group_goal',{action:'show'},'ga'),new RegExp(`review still needs:.*${task.id}`))
+  host.finish('ga','[PASS]');await settle(()=>result()!==undefined)
+})
+
+test('old Sessions, missing room provenance, removed recipients and held turns remain visible through recovery', async t=>{
+  const home=mkdtempSync(join(tmpdir(),'ds-bot-old-room-'))
+  writeFileSync(join(home,'state.json'),JSON.stringify(seed()))
+  const original={turns:{},queued:{oldSession:[
+    {at:1,args:{role:'room',roomId:'r1',toId:'b',exchangeId:'old-valid'},recoveryHold:'prepared'},
+    {at:2,args:{role:'room',roomId:'r1',toId:'removed',exchangeId:'old-removed'},recoveryHold:'prepared'},
+    {at:3,args:{role:'room',toId:'b',exchangeId:'old-unknown-room'},recoveryHold:'prepared'},
+    {at:4,args:{role:'room',roomId:'r1',toId:'removed'},recoveryHold:'prepared'},
+  ],gb:[{at:5},{at:6,args:{role:9}}],weird:{invalid:'preserve'}},heldTurns:{one:{sessionId:'gc',record:{botId:'c',roomId:'r1',trigger:{role:'room',roomId:'r1'}},reason:'unknown'}}}
+  writeFileSync(join(home,'inflight.json'),JSON.stringify(original))
+  const host=await start(t,undefined,undefined,undefined,home)
+  const first=host.rt.unreadRoomOf('r1')
+  assert.equal(first.length,8)
+  assert.ok(first.some(item=>item.toId==='removed'))
+  assert.ok(first.some(item=>item.toId==='c'))
+  assert.equal(host.rt.unreadRoomOf('other').length,2)
+  await new Promise(resolve=>setTimeout(resolve,3400))
+  const persisted=JSON.parse(readFileSync(join(home,'inflight.json'),'utf8'))
+  const retained=Object.values(persisted.queued).flat()
+  assert.ok(retained.some(item=>item.args?.exchangeId==='old-removed'))
+  assert.ok(retained.some(item=>item.args?.role==='room' && item.args?.toId==='removed' && !item.args?.exchangeId))
+  assert.ok(retained.some(item=>item.at===5 && item.args===undefined))
+  assert.ok(retained.some(item=>item.at===6 && item.args?.role===9))
+  assert.deepEqual(persisted.queued.weird,{invalid:'preserve'})
+  assert.ok(persisted.heldTurns.one)
+  assert.ok(host.rt.unreadRoomOf('r1').some(item=>item.toId==='removed'))
+  await host.ctx.dispose()
+  const restarted=await start(t,undefined,undefined,undefined,home)
+  assert.ok(restarted.rt.unreadRoomOf('r1').some(item=>item.toId==='removed'))
+  assert.ok(restarted.rt.unreadRoomOf('other').length>=2)
 })
