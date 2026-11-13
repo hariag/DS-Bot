@@ -1,5 +1,4 @@
 import type { CapabilityItem, CapabilityStatus } from '../connection.ts'
-import { t } from '../ui/i18n.ts'
 
 export type CapabilityStatuses = Record<string, Record<string, CapabilityStatus> | CapabilityStatus>
 
@@ -49,43 +48,4 @@ export function capabilityStatusFor(
     return { state: 'needs-approval' }
   }
   return best
-}
-
-// Host `capability-approve` approves only stdio MCP servers by name, never packs.
-export function unapprovedCapabilitiesFor(
-  items: CapabilityItem[],
-  statuses: CapabilityStatuses | null | undefined,
-  item: CapabilityItem,
-  bots?: { id: string }[],
-): string[] {
-  if (item.kind === 'mcp' && item.transport === 'stdio') {
-    return capabilityStatusFor(statuses, item.name, { bots, item })?.state === 'needs-approval' ? [item.name] : []
-  }
-  if (item.kind !== 'pack') return []
-  const byName = new Map(items.map(entry => [entry.name, entry]))
-  const targets: string[] = []
-  const seen = new Set<string>()
-  for (const childName of item.items ?? []) {
-    if (seen.has(childName)) continue
-    seen.add(childName)
-    const child = byName.get(childName)
-    if (child?.kind !== 'mcp' || child.transport !== 'stdio') continue
-    if (child.approved === false || capabilityStatusFor(statuses, child.name, { bots, item: child })?.state === 'needs-approval') {
-      targets.push(child.name)
-    }
-  }
-  return targets
-}
-
-/**
- * The row text for one capability's status. A status the phone cannot resolve — none
- * at all, or a value without a state — reads as unknown instead of dropping the status
- * from the line (#1523).
- */
-export const capabilityStatusText = (status?: CapabilityStatus) => {
-  if (status === undefined || status.state === undefined) return t('Unknown')
-  return status.state === 'ready' ? t('Ready')
-    : status.state === 'needs-approval' ? t('Needs approval')
-      : status.state === 'error' ? t('Could not connect: {error}', { error: status.error ?? '' })
-        : t('Connecting…')
 }
