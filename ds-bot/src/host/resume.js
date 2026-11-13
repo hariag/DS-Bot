@@ -18,6 +18,7 @@ import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
 import { replaceFile } from './files.js'
 import { textOf } from './text.js'
 import { heldTurnsView } from './recovery-held.js'
+import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
@@ -284,6 +285,46 @@ export function install(rt) {
     void work.then(() => { if (recoverySample === work) recoverySample = undefined },
       () => { if (recoverySample === work) recoverySample = undefined })
     return boundedRecoveryView(work)
+  }
+  // Read-only origins for an owner-initiated manual review. A missing result is
+  // not evidence that the work did not execute; it never triggers a delivery.
+  rt.recoveryWorkOrigins = async workId => {
+    if (recoverySample || typeof workId !== 'string' || !workId) return undefined
+    const sample = (async () => {
+      if (ownsRecoveryView() !== true) return undefined
+      const pendingWrite = writing
+      await pendingWrite
+      if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const saved = expected, disk = await readRecoveryForView()
+      if (!disk.ok || disk.raw !== saved || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const raw = disk.raw === undefined ? {} : JSON.parse(disk.raw)
+      const parsed = { queued: raw.queued ?? {}, turns: raw.turns ?? {}, heldTurns: raw.heldTurns ?? {} }
+      const observed = observeRecoveryRecords({ workId, inflight: parsed })
+      const ids = collectRecoveryOrigins({ workId, inflight: parsed })
+      if (!ids || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      return { ids, observed, sampledAt: Date.now() }
+    })()
+    recoverySample = sample
+    void sample.finally(() => { if (recoverySample === sample) recoverySample = undefined }).catch(() => {})
+    return boundedRecoveryView(sample)
+  }
+  rt.recoveryWorkCandidates = async () => {
+    if (recoverySample) return undefined
+    const sample = (async () => {
+      if (ownsRecoveryView() !== true) return undefined
+      const pendingWrite = writing
+      await pendingWrite
+      if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const saved=expected,disk=await readRecoveryForView()
+      if(!disk.ok || disk.raw!==saved || expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
+      const raw=disk.raw===undefined?{}:JSON.parse(disk.raw)
+      const result=collectRecoveryCandidates({queued:raw.queued??{},turns:raw.turns??{},heldTurns:raw.heldTurns??{}})
+      if(expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
+      return result
+    })()
+    recoverySample=sample
+    void sample.finally(()=>{if(recoverySample===sample)recoverySample=undefined}).catch(()=>{})
+    return boundedRecoveryView(sample)
   }
   let latest
   let due = false
