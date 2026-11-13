@@ -16,8 +16,7 @@ function start(config = {}) {
   install({
     ctx,
     config,
-    selfOf: id => id === 'worker-redo' ? undefined : id?.replace(/^group-/, ''),
-    userRedoOwner: id => id === 'worker-redo' ? { id: 'worker' } : undefined,
+    selfOf: id => id === 'group-worker' ? 'worker' : id,
     botOf: id => bots.get(id),
     roomOf: id => id === 'room' ? {} : undefined,
     isMain: id => id === 'main',
@@ -25,31 +24,6 @@ function start(config = {}) {
   const prompt = id => ctx.sections.get('bot-identity').text({ agent: { id } })
   return { ctx, prompt }
 }
-
-test('existing Bot identities share the board workflow across their private and group sessions', async t => {
-  const { ctx, prompt } = start()
-  t.after(() => ctx.dispose())
-  for (const id of ['main', 'worker']) {
-    const own = prompt(id)
-    assert.equal(prompt(`group-${id}`), own)
-    assert.equal(own.split('## Coordinating work on the task board').length, 2)
-    for (const action of ['list', 'show', 'register', 'start', 'progress', 'report', 'review', 'block']) {
-      assert.ok(own.includes(`board_task ${action}`), action)
-    }
-    assert.match(own, /stable operation_id for this exact registration/)
-    assert.match(own, /version is labeled provisional or awaits assignment/)
-    assert.match(own, /parent_task_id/)
-    assert.match(own, /task\.roomId as room_id/)
-    assert.match(own, /itemsQuery from show and follow nextCursor/)
-    assert.match(own, /board_task progress, operation_id, expected_revision/)
-    assert.match(own, /expected_revision/)
-  }
-  assert.match(prompt('worker'), /Check files\./)
-  assert.match(prompt('main'), /If the board scheduler already dispatched it/)
-  assert.doesNotMatch(prompt('worker-redo'), /board_task/)
-  assert.doesNotMatch(prompt('room'), /board_task/)
-  assert.equal(prompt('outside'), '')
-})
 
 test('deployment instructions apply to all Bot sessions after restart', (t) => {
   const marker = 'A private deployment rule provided by the operator.'
@@ -195,36 +169,6 @@ test('Bots get a scoped progress rule without changing the private/group prompt 
     }
   }
   assert.equal(prompt('group-worker'), prompt('worker'))
-})
-
-// 公开#1499: a Bot that is handed a saved path and finds `read` closed to a PDF has to know where to go next.
-test('Bots are told how to open a PDF the user attached, once, in the shared prefix', (t) => {
-  const { ctx, prompt } = start()
-  t.after(() => ctx.dispose())
-  for (const id of ['main', 'worker']) {
-    const rule = prompt(id).split('\n').filter(line => line.startsWith('- A file the user attaches reaches you as a saved path'))
-    assert.equal(rule.length, 1)
-    assert.match(rule[0], /read tool opens text files only/)
-    assert.match(rule[0], /scanned or not/)
-    assert.match(rule[0], /office skill/)
-    assert.match(rule[0], /office_render/)
-    assert.match(rule[0], /never answer only that the file cannot be read/)
-  }
-  assert.equal(prompt('group-worker'), prompt('worker'))
-})
-
-test('Bots coordinate shared projects through a named manager and refresh a clean repository in small slices', (t) => {
-  const { ctx, prompt } = start()
-  t.after(() => ctx.dispose())
-  const rules = [
-    '- When groups share a project, record the same project ID, repository, integration branch, named Project Manager Bot and a reachable coordination route in each group notice. The PM must be a member of every contributing group or the notice must name a coordination group each Bot can reach. If the mapping or route is missing or ambiguous, ask the group admin to establish it before creating cross-group work; do not infer links from similar names.',
-    '- At shared-repository task intake, before each commit or merge, and when a continuing task changes its shared baseline, use `sync_shared_repository` to fetch the configured GitHub upstream for the current Session and inspect its freshness. At task intake, request `fast_forward`; before a commit/merge or mid-task check, request `check`. Record the returned base/head SHA and `checkedAt`. Fast-forward is allowed only for a clean branch that is strictly behind and has no other active local Bot Session using the same checkout. Preserve dirty or diverged work; do not pull, reset, rebase or overwrite it. If the result is dirty with upstream commits ahead, finish only the already-started bounded slice and report both SHAs to the Project Manager before claiming new work. A diverged branch, missing upstream, failed fetch, busy checkout or uncertain result pauses shared writes for PM reconciliation. A local-ahead-only branch may continue only on its existing task; do not start unrelated work on it. Verify HEAD after each merge. Without GitHub fetch permission, use only a trusted tracking ref with a known check time; if it is stale or unknown, pause shared writes and ask the Project Manager to refresh it.',
-    '- Keep shared-repository work in short task slices with one owner, a stable task ID, a declared write scope and a base SHA. Commit each coherent checked slice promptly; report the commit SHA, changed paths and verification before starting another slice. Do not hold unrelated changes in one long-lived branch.',
-    '- If groups on one project conflict over a path, contract, acceptance rule or dependency order, stop only the conflicting writes and send the Project Manager one actionable message over the agreed route with both task IDs, groups, owners, repository/ref, base/head SHAs, affected paths, evidence, options and a recommendation. Use a stable request_id. If the PM is unreachable, keep the conflict blocked and ask the group admin to establish the route; do not duplicate, overwrite or silently choose between the work. Independent scopes may continue.',
-  ]
-  for (const id of ['main', 'worker', 'group-worker']) {
-    for (const rule of rules) assert.equal(prompt(id).split(rule).length - 1, 1)
-  }
 })
 
 test('the group relay and non-Bot sessions do not get progress instructions', (t) => {

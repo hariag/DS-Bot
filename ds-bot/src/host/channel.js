@@ -4,10 +4,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { install as installBtw } from './btw.js'
 import { install as installSide } from './side.js'
 import { handoffReply, questionReply, viewReply } from './parts.js'
-import { threadCurrentOfPart } from './threads.js'
 import { validateViewAnswer } from 'deep-view/core'
-import { createQueueInspector } from './queue-inspect.mjs'
-import { versionInfo } from './version-info.mjs'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const STAGED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
@@ -92,11 +89,7 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
   for (const bot of Object.values(bots ?? {})) {
     const seen = new Set()
     let unknown
-    const otherParts = [
-      ...(bot.segments ?? []).map(segment => segment.sessionId),
-      ...(bot.openParts ?? []).flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)]),
-    ]
-    for (const sessionId of new Set(otherParts.filter(id => id && id !== (bot.sessionId ?? bot.id)))) {
+    for (const sessionId of new Set((bot.segments ?? []).map(segment => segment.sessionId).filter(Boolean))) {
       const inbox = getAgent?.(sessionId)?.inbox
       const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
       if (!available) {
@@ -153,7 +146,6 @@ export function install(rt) {
   installBtw(rt)
   installSide(rt)
   const { ctx, state } = rt
-  const inspectQueue = createQueueInspector(rt)
 
   // The DSH interface language of the last browser that asked for the team.
   let uiLocale
@@ -170,9 +162,7 @@ export function install(rt) {
   // Models come from DSH, not state.json, so a provider added on the Models pages of Settings
   // changes the view without a new revision.
   const modelsKey = () => `${rt.cachedCatalog().map(entry => `${entry.ref}${entry.needsKey ? '!' : ''}${entry.reasoning ? `:${JSON.stringify(entry.reasoning)}` : ''}`).join(',')}|${rt.cachedDefault() ?? ''}`
-  const groupRowsBatchSize = 16
   const view = () => ({
-    groupRowsBatchSize,
     revision: state.revision,
     workspaceId: state.workspaceId ?? null,
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
@@ -181,18 +171,10 @@ export function install(rt) {
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
     // `waiting`: the Bot holds its greeting until the user picks its model or fixes
     // what failed it. `blocked`: the facts of a failure only the user can fix (turns.js).
-    bots: Object.values(state.bots).map(({ segments, kickoff, openParts, ...bot }) => {
+    bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => {
       const tail = rt.chatTail(rt.chatOf(bot.id))
-      // `openParts` are the parts opened while the Bot was busy: live, with their own
-      // earlier parts, and each one's run state read from the live turns.
-      const open = (openParts ?? []).map(part => ({
-        sessionId: part.sessionId,
-        startedAt: part.startedAt ?? 0,
-        parts: (part.segments ?? []).map(segment => segment.sessionId),
-      }))
       return {
-        ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId),
-        ...(open.length > 0 ? { openParts: open } : {}), ...(kickoff ? { waiting: true } : {}),
+        ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId), ...(kickoff ? { waiting: true } : {}),
         // `engine` is the Bot's local-agent route, present only on abots.
         ...(rt.localAgentBadge?.(bot.model ?? bot.appliedModel) !== undefined ? { engine: rt.localAgentBadge(bot.model ?? bot.appliedModel) } : {}),
         ...(tail ? { lastAt: tail.lastAt, preview: tail.preview } : {}),
@@ -204,12 +186,7 @@ export function install(rt) {
     rooms: Object.values(state.rooms).map(({ log, seen, paused, sessions, segments, parts: ownParts, ...room }) => {
       const parts = [...Object.values(sessions ?? {}), ...Object.values(segments ?? {}).flat().map(segment => segment.sessionId), ...(ownParts ?? []).map(segment => segment.sessionId)]
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
-      // Never expose a scoped check as complete without its live queue proof.
-      // If the goal subsystem is unavailable, mark every scoped assertion unresolved.
-      const goal = rt.goalView?.(rt.roomOf(room.id)) ?? (room.goal?.ownerReview?.checks ? {
-        ...room.goal, ownerReview: { ...room.goal.ownerReview, checks: Object.fromEntries(Object.entries(room.goal.ownerReview.checks).map(([id, check]) => [id, check?.scopedQueueVersion === undefined ? check : { ...check, unresolved: true }])) },
-      } : room.goal)
-      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), memberSessions: sessions ?? {}, ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      return { ...room, sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -220,6 +197,9 @@ export function install(rt) {
     // Aside answers of each Bot's current part, newest first. Not part of the
     // model-visible history; earlier parts send their cards on their own pages.
     btwCards: rt.btwView?.() ?? {},
+    // Browser holds (handoffs and takeovers) per Bot, so the phone can show
+    // the same cards the desktop toolbar shows.
+    browserHolds: rt.browserChannel?.holdSnapshot?.() ?? {},
     // Each Bot's side chats, in creation order. The answers never join the
     // model-visible history; the side panel reads them here.
     sideChats: rt.sideView?.() ?? {},
@@ -229,8 +209,6 @@ export function install(rt) {
     sections: state.sections ?? [],
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
-    // How the secrets file is stored and whether this process can read it now.
-    secretStore: rt.secretStoreStatus(),
     capabilities: rt.capabilityLibraryView(),
     secretRequests: state.secretRequests ?? {},
     connectorRequests: state.connectorRequests ?? {},
@@ -238,7 +216,6 @@ export function install(rt) {
     colors: [...COLORS, ...EXTRA_COLORS],
     models: rt.cachedCatalog(),
     defaultModel: rt.cachedDefault() ?? null,
-    profileDefaultModel: rt.defaultRef() ?? null,
     permissions: rt.permissionCatalog?.() ?? null,
     modelsKey: modelsKey(),
     prefs: state.prefs,
@@ -261,17 +238,7 @@ export function install(rt) {
   // turn there runs; the approvals waiting; per Bot, who it waits for to hand back work;
   // and per Session, when its running turn began.
   const live = () => ({
-    secretStore: rt.secretStoreStatus(),
-    secrets: rt.secretsView(),
     activity: rt.activityView(),
-    groupRowKeys: Object.fromEntries(Object.keys(state.rooms).map(id => [id, rt.groupRowKey?.(id) ?? null])),
-// Which of a Bot's own chat parts has a turn right now, current or background:
-    // the session list's Running mark reads this, not a guess from the transcript.
-    partsRunning: Object.fromEntries(Object.values(state.bots)
-      .flatMap(bot => [rt.chatOf(bot.id), ...(bot.openParts ?? []).map(part => part.sessionId)])
-      .filter((sessionId, index, list) => sessionId !== undefined && list.indexOf(sessionId) === index)
-      .filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
-      .map(sessionId => [sessionId, true])),
     work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {}, groupQueues: groupQueueView(state.rooms, state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), earlierPrivateQueues: earlierPrivateQueueView(state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), roomPostQueues: roomPostQueueView(state.rooms, room => rt.sessionOfRoom(room), id => ctx.get?.('agents')?.get?.(id)), roomPending: Object.fromEntries(Object.values(state.rooms).map(room => [room.id, { relay: rt.roomInbox?.get(room.id)?.length ?? 0, next: rt.roomLaterCount?.(room.id) ?? 0 }])) },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
@@ -282,17 +249,10 @@ export function install(rt) {
     phone: rt.phoneView(),
     imStatus: rt.imStatusView?.() ?? {},
     imVia: rt.imViaView?.() ?? {},
-    // Why this host cannot write the team, or null. It changes without a save — the
-    // other dsh can quit while this window stays open and this host takes the lock
-    // over — so a window learns that it may write again without a reload.
-    readOnly: rt.readOnly() ?? null,
     // Computer use live state: per-Bot control, leases, pending app cards and holds.
     // Named apart from the state view's `computer`: the live answer merges into the
     // same object and would wipe its `enabled` and `provider` fields.
     computerLive: rt.computerLive?.() ?? {},
-    // Browser holds (handoffs and takeovers) change without bumping state.revision,
-    // so they ride on live() to reconcile unchanged-revision polls.
-    browserHolds: rt.browserChannel?.holdSnapshot?.() ?? {},
   })
   // The live fields' sources are spread across the host with no single change
   // counter, so the serialized answer itself is the detector: a poll whose `live`
@@ -300,59 +260,17 @@ export function install(rt) {
   // a per-run prefix: a window can outlive the host, and a counter that restarts
   // at 1 would let its stale key name a different answer.
   const liveRun = randomUUID()
-  // Bot instructions dominate large rosters and often outlive thousands of team saves.
-  // Only a client that echoes the exact current set can reuse its cached strings.
-  let instructions = new Map()
-  let instructionsSeq = 0
-  const withInstructionsKey = (out, previousKey) => {
-    if (instructionsSeq === 0 || out.bots.length !== instructions.size || out.bots.some(bot =>
-      !instructions.has(bot.id) || instructions.get(bot.id) !== bot.instructions)) {
-      instructions = new Map(out.bots.map(bot => [bot.id, bot.instructions]))
-      instructionsSeq++
-    }
-    const instructionsKey = `${liveRun}:instructions:${instructionsSeq}`
-    if (previousKey === instructionsKey) {
-      for (const bot of out.bots) delete bot.instructions // view() made a new object for each Bot
-    }
-    return { ...out, instructionsKey }
-  }
-  // The storage revision includes private bookkeeping. Compare only the public
-  // roster, leaving volatile fields and already-versioned instructions to their own cursors.
-  let rosterJson
-  let rosterSeq = 0
-  const publicRosterKey = (out, liveFields) => {
-    const fields = { ...out, bots: out.bots.map(({ instructions, ...bot }) => bot) }
-    delete fields.revision
-    delete fields.liveKey
-    for (const field of Object.keys(liveFields)) delete fields[field]
-    const json = JSON.stringify(fields)
-    if (json !== rosterJson) {
-      rosterJson = json
-      rosterSeq++
-    }
-    return `${liveRun}:roster:${rosterSeq}`
-  }
   let liveSeq = 0
   let liveCache = null
-  const liveHistory = new Map()
-  const scopedReviewState = () => JSON.stringify(Object.values(state.rooms ?? {}).flatMap(room => {
-    const goal = rt.goalView?.(room)
-    return Object.entries(goal?.ownerReview?.checks ?? {})
-      .map(([id, check]) => [room.id, id, check?.unresolved === true])
-  }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
   const liveAnswer = () => {
     const value = live()
     const json = JSON.stringify(value)
-    const scope = scopedReviewState()
-    if (liveCache?.json === json && liveCache.scope === scope) return liveCache
-    liveCache = { key: `${liveRun}:${++liveSeq}`, value, json, scope }
-    liveHistory.set(liveCache.key, scope)
-    if (liveHistory.size > 64) liveHistory.delete(liveHistory.keys().next().value)
-    return liveCache
+    if (liveCache?.json === json) return liveCache
+    return liveCache = { key: `${liveRun}:${++liveSeq}`, value, json }
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'version', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff'])
+  const READS = new Set(['board-list', 'board-operation', 'board-image', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -368,11 +286,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
       if (body.motion === null || body.motion === 'normal') delete state.prefs.motion
       else if (body.motion === 'quiet' || body.motion === 'lively') state.prefs.motion = body.motion
       else throw invalid('Motion must be quiet, normal or lively')
-    }
-    if (body.effects !== undefined) {
-      if (body.effects === null || body.effects === 'full') delete state.prefs.effects
-      else if (body.effects === 'reduced' || body.effects === 'off') state.prefs.effects = body.effects
-      else throw invalid('Effects must be full, reduced or off')
     }
     if (body.layout !== undefined) {
       if (body.layout === null || body.layout === 'bubble') delete state.prefs.layout
@@ -425,74 +338,27 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
-        case 'queue-inspect':
-          return ok(await inspectQueue(body, signal))
-        // This handler is reached only through the authenticated instance-owner
-        // route; these endpoints record review notes and never dispatch work.
-        case 'legacy-review-list':
-        case 'legacy-review-get':
-        case 'legacy-review-prepare':
-        case 'legacy-review-operation':
-        case 'legacy-review-create':
-        case 'legacy-review-finding':
-        case 'legacy-review-decision':
-          return ok(await rt.legacyReviewCall(endpoint, body))
-        case 'board-project':
-        case 'board-project-bind':
-        case 'board-project-decide':
         case 'board-list':
-        case 'board-release-list':
-        case 'board-release-create':
-        case 'board-release-plan':
-        case 'board-release-configure-team':
-        case 'board-release-update':
-        case 'board-release-assign':
-        case 'board-release-remove':
-        case 'board-release-queue':
-        case 'board-release-start':
-        case 'board-release-cancel':
-        case 'board-release-gate':
-        case 'board-release-check':
-        case 'board-release-report':
-        case 'board-proposal-list':
-        case 'board-proposal-decide':
-        case 'board-history':
-        case 'board-redo-preview':
-        case 'board-redo-confirm':
         case 'board-operation':
         case 'board-command':
-        case 'board-held-decision':
-        case 'board-queued-delivery-decision':
         case 'board-operation-cancel':
         case 'board-image':
           return ok(await rt.boardCall(endpoint, body))
         case 'board-upload':
           return fail('Use the streaming image upload route.', 'bot/invalid')
-        case 'version':
-          return ok(versionInfo(state, rt.home))
         case 'state': {
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
           if (readOnly === undefined) await rt.bootstrap()
           await rt.catalog()
           await rt.loadSecrets()
           const answer = liveAnswer()
-          const reusable = body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope)
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey()) && reusable) {
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }
           // A phone asks for photos by reference and fetches each once (`avatar`).
           const out = { ...view(), liveKey: answer.key, ...answer.value }
-          if (body.avatars === 'ref') return ok(rt.slimAvatars(out))
-          if (typeof body.instructionsKey !== 'string') return ok(out)
-          const web = withInstructionsKey(out, body.instructionsKey)
-          if (typeof body.rosterKey !== 'string') return ok(web)
-          const rosterKey = publicRosterKey(web, answer.value)
-          if (reusable && body.rosterKey === rosterKey && body.instructionsKey === web.instructionsKey) {
-            return ok({ revision: state.revision, unchanged: true, liveKey: answer.key,
-              ...(body.live === answer.key ? {} : answer.value) })
-          }
-          return ok({ ...web, rosterKey })
+          return ok(body.avatars === 'ref' ? rt.slimAvatars(out) : out)
         }
         case 'models':
           await rt.catalog({ fresh: true })
@@ -520,8 +386,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           return ok(await rt.addProvider(body))
         case 'provider-models':
           return ok(await rt.discoverModels(body))
-        case 'provider-models-save':
-          return ok(await rt.saveProviderModels(body))
         case 'provider-remove':
           return ok(await rt.removeProvider(String(body.provider ?? '')))
         case 'duplicate-bot':
@@ -573,38 +437,18 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
           return ok([...rt.roomProgress.entries()].filter(([, entry]) => entry.roomId === (room?.id ?? body.roomId)).map(([callId, entry]) => ({ callId, replies: rt.groupRows(entry.roomId, entry.from), speaking: entry.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id) })))
         }
-        // Search a group's messages, newest first, each hit with its neighbours.
-        // `before` (a seq) or `offset` continues into older hits.
-        case 'group-search': {
-          await rt.load()
-          const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
-          if (room === undefined) return fail('Unknown group chat', 'bot/not-found')
-          return ok(rt.groupSearch(room.id, body.query, { before: body.before, offset: body.offset }))
-        }
         // The rows a settled round of a group chat shows, from its book.
-        // Whether a turn's change review can still be opened: the Host serves a turn's
-        // summary until its Session is disposed.
-        case 'changes-summary':
-          return ok(rt.changesSummary(String(body.sessionId ?? ''), Number(body.seq)))
-        case 'changes-diff':
-          return ok(await rt.changesDiff(String(body.sessionId ?? ''), Number(body.seq), body.index, signal))
-        case 'changes-check':
-          return ok(rt.changesAvailable?.(String(body.sessionId ?? ''), Number(body.seq)) === true)
         case 'group-rows': {
           await rt.load()
           const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
-          const readRange = range => {
-            const from = Number(range?.from)
-            const to = range?.to === undefined ? undefined : Number(range.to)
-            if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return { rows: [], open: false, speaking: [] }
-            const view = rt.groupRowsView(room.id, from, to, typeof range.anchor === 'string' ? range.anchor : undefined)
-            const active = view.open && rt.roomActive(room.id)
-            const speaking = active ? [...rt.roomProgress.values()].filter(round => round.roomId === room.id).flatMap(round => round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)) : []
-            return { ...view, active, speaking }
-          }
-          if (body.ranges === undefined) return ok(readRange(body))
-          if (!Array.isArray(body.ranges) || body.ranges.length > groupRowsBatchSize) return fail('Invalid group range batch', 'bot/invalid')
-          return ok(body.ranges.map(readRange))
+          const from = Number(body.from)
+          const to = body.to === undefined ? undefined : Number(body.to)
+          if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return ok({ rows: [], open: false, speaking: [] })
+          const view = rt.groupRowsView(room.id, from, to, typeof body.anchor === 'string' ? body.anchor : undefined)
+          // The newest call's rows grow while the group works; who is answering shows under them.
+          const active = view.open && rt.roomActive(room.id)
+          const speaking = active ? [...rt.roomProgress.values()].filter(round => round.roomId === room.id).flatMap(round => round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)) : []
+          return ok({ ...view, active, speaking })
         }
         case 'create-bot': {
           await rt.bootstrap()
@@ -625,7 +469,7 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           await rt.load()
           const bot = rt.botOf(String(body.botId ?? ''))
           if (bot === undefined) return fail('Unknown Bot', 'bot/not-found')
-          await rt.resumeBot(bot, body.sessionId, body.turn)
+          await rt.resumeBot(bot)
           return ok(true)
         }
         // The avatar library: photos the user imported once, kept beside the team.
@@ -664,7 +508,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           const { room, changes } = await rt.updateRoom(body.id, {
             name: body.name,
             notice: body.notice,
-            expectedNotice: body.expectedNotice,
             mode: body.mode,
             admin: body.admin,
             members: Array.isArray(body.members) ? body.members : undefined,
@@ -676,23 +519,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
             sectionId: body.sectionId,
           })
           return ok({ room: view().rooms.find(entry => entry.id === room.id), changes })
-        }
-        // The user ticks, removes, or clears completed shared to-dos in the group's
-        // details; members read and change the same list with the group_todo tool.
-        case 'room-todo': {
-          await rt.load()
-          const room = rt.roomOf(String(body.roomId ?? ''))
-          if (room === undefined) return fail('Unknown group chat', 'room/not-found')
-          if (body.action === 'clear') {
-            const removed = await rt.clearDoneRoomTodos(room.id)
-            return ok({ removed: removed.length, todos: room.todos ?? [] })
-          }
-          if (body.action === 'remove') {
-            const item = await rt.removeRoomTodo(room.id, String(body.id ?? ''))
-            return ok({ item, todos: room.todos ?? [] })
-          }
-          const item = await rt.setRoomTodoDone(room.id, String(body.id ?? ''), typeof body.done === 'boolean' ? body.done : undefined)
-          return ok({ item, todos: room.todos ?? [] })
         }
         case 'folders':
         case 'folder-pick':
@@ -782,31 +608,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           const result = await rt.goalControl(String(body.roomId ?? ''), body)
           return result.error !== undefined ? fail(result.error, result.code ?? 'bot/refused') : ok(view())
         }
-        // The task board's two panel actions. A note the user adds is kept on the task
-        // and posted into the group as the user's own message that calls its owner, so
-        // the Bot acts on it where the work runs, as if the user had typed it there.
-        case 'task-note': {
-          await rt.load()
-          const roomId = String(body.roomId ?? '')
-          const result = rt.taskNote(roomId, String(body.id ?? ''), body.text)
-          if (result.error !== undefined) return fail(result.error, 'bot/refused')
-          const bot = rt.botOf(result.task.botId)
-          await rt.save()
-          if (bot !== undefined) {
-            await rt.sendUser({
-              sessionId: roomId,
-              content: [{ type: 'text', text: `@${bot.name} ${result.task.notes.at(-1).text}` }],
-            })
-          }
-          return ok(view())
-        }
-        case 'task-cancel': {
-          await rt.load()
-          const result = rt.taskCancel(String(body.roomId ?? ''), String(body.id ?? ''))
-          if (result.error !== undefined) return fail(result.error, 'bot/refused')
-          await rt.save()
-          return ok(view())
-        }
         case 'stop-chat':
           return ok(await rt.stopChat(String(body.botId ?? '')))
         case 'dismiss-question':
@@ -830,10 +631,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
         case 'secret-cancel':
         case 'secret-update':
         case 'secret-delete':
-        case 'secret-store':
-        case 'secret-unlock':
-        case 'secret-encrypt':
-        case 'secret-decrypt':
           await rt.load()
           return ok(await rt.secretEndpoint(endpoint, body))
         case 'connector-connect':
@@ -891,8 +688,6 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
         case 'avatar':
         case 'room-chat':
         case 'image':
-        case 'file-download':
-        case 'markdown-image':
         case 'usage-summary':
         case 'memory-edit':
         case 'memory-add':
@@ -906,7 +701,8 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
         case 'view-reply': {
           if (typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           await rt.load()
-          const sessionId = ownThreadTarget(body.sessionId) ?? body.sessionId
+          const past = rt.pastOwners.get(body.sessionId)
+          const sessionId = rt.botOf(body.sessionId) ? rt.chatOf(body.sessionId) : past && past.roomId === undefined ? rt.chatOf(past.botId) : body.sessionId
           const pending = rt.own(state.views, sessionId)
           if (pending === undefined || pending.id !== body.viewId) return fail('This view is no longer open', 'bot/stale')
           const checked = validateViewAnswer(pending.view, body.action, body.values)
@@ -1022,7 +818,7 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           // Taking over a handoff keeps its reason, note, and call, so its card stays up.
           const asked = rt.browserChannel.holdOf(botId)
           rt.browserChannel.setHold(botId, asked?.callId !== undefined
-            ? { by: 'user', reason: asked.reason, note: asked.note, callId: asked.callId, ...(asked.sessionId !== undefined ? { sessionId: asked.sessionId } : {}) }
+            ? { by: 'user', reason: asked.reason, note: asked.note, callId: asked.callId }
             : { by: 'user', reason: 'takeover', note: 'The user is controlling this browser.' })
           return ok(true)
         }
@@ -1041,9 +837,7 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           rt.browserChannel.setHold(botId, null)
           if (hold.callId === undefined) return ok(true)
           try {
-            // The answer goes back to the thread that raised the handoff: a background
-            // part the user was not reading must not be answered in the foreground chat.
-            const sessionId = threadCurrentOfPart(rt.botOf(botId), hold.sessionId) ?? rt.chatOf(botId)
+            const sessionId = rt.chatOf(botId)
             const reply = handoffReply(hold, body.outcome)
             await rt.ensureCapabilities(sessionId)
             const agent = await rt.resolveAgent(sessionId)
@@ -1126,31 +920,18 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
     }
   }
 
-  // Neither carrier supplies the authenticated owner identity used by boards.
-  // Reject those calls rather than letting a remote peer inherit that identity.
-  const carrierCall = (endpoint, payload, signal) => endpoint === 'queue-inspect'
-    ? Promise.resolve(fail('Use the authenticated owner connection to inspect inboxes.', 'bot/refused'))
-    : endpoint.startsWith('legacy-review-') || endpoint.startsWith('board-')
-    ? Promise.resolve(fail('Use the authenticated owner connection for this board.', 'bot/refused'))
-    : handle(endpoint, payload, signal)
-  rt.channelCall = carrierCall
-  rt.phoneServe(carrierCall)
+  rt.phoneServe(handle)
 
   // How a user message reaches a Session: a Bot id, a group chat's id, or an earlier
   // part of either resolves to its current part. `content` is the prompt blocks DSH
   // takes (text, image, file receipts); `requestId` lands on the message's source.
-  function ownThreadTarget(ref, past = rt.pastOwners.get(ref)) {
-    if (rt.botOf(ref)) return rt.chatOf(ref)
-    if (past !== undefined && past.roomId === undefined) return threadCurrentOfPart(rt.botOf(past.botId), ref) ?? rt.chatOf(past.botId)
-    return undefined
-  }
-
   async function sendUser({ sessionId: ref, content, requestId = randomUUID() }) {
     const past = rt.pastOwners.get(ref)
     const room = rt.roomOf(ref)
-    const sessionId = ownThreadTarget(ref, past)
-      ?? (room !== undefined ? rt.sessionOfRoom(room)
-        : past !== undefined ? rt.sessionOfRoom(rt.roomOf(past.roomId)) : ref)
+    const sessionId = rt.botOf(ref) ? rt.chatOf(ref)
+      : room !== undefined ? rt.sessionOfRoom(room)
+        : past?.roomId === undefined && past !== undefined ? rt.chatOf(past.botId)
+          : past !== undefined ? rt.sessionOfRoom(rt.roomOf(past.roomId)) : ref
     await rt.ensureCapabilities(sessionId)
     await ctx.sessionController.prompt({
       requestId,
@@ -1162,8 +943,9 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
 
   // The user's answer to an ask_user card, from the web or an IM chat. A Bot id or an
   // earlier part of its own chat means the current one.
-  async function answerQuestion(sessionRef, questionId, answer, requestId) {
-    const sessionId = ownThreadTarget(sessionRef) ?? sessionRef
+  async function answerQuestion(sessionRef, questionId, answer) {
+    const past = rt.pastOwners.get(sessionRef)
+    const sessionId = rt.botOf(sessionRef) ? rt.chatOf(sessionRef) : past && past.roomId === undefined ? rt.chatOf(past.botId) : sessionRef
     const question = rt.own(state.questions, sessionId)
     if (question === undefined || question.id !== questionId) throw Object.assign(new Error('This question is no longer open'), { code: 'bot/stale' })
     const reply = questionReply(question, answer)
@@ -1173,7 +955,7 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
     try {
       await rt.ensureCapabilities(sessionId)
       const agent = await rt.resolveAgent(sessionId)
-      agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: { ...reply.source, ...(requestId === undefined ? {} : { rpcId: requestId }) } }))
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: reply.source }))
       await ctx.sessions.flush(agent.session)
     } catch (error) {
       state.questions[sessionId] ??= question

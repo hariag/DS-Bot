@@ -1,18 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stageBoardImages, readBoardImage } from '../../src/host/board-images.js'
 import pngjs from 'pngjs'
 import jpeg from 'jpeg-js'
-import { privateTempDir } from '../private-temp.mjs'
 
 const makePng = color => pngjs.PNG.sync.write({ width:1, height:1, data:Buffer.from(color) }).toString('base64')
 const png = makePng([0,0,0,255])
 const photo = id => ({ uploadId: id, name: 'one.png', mediaType: 'image/png', data: png })
 function fixture(t) {
-  const directory = privateTempDir(join(tmpdir(), 'dsbot-board-image-'))
+  const directory = mkdtempSync(join(tmpdir(), 'dsbot-board-image-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   return { directory, taskId: 'task-1', assertWriteLock() {} }
 }
@@ -61,26 +60,6 @@ test('a replaced or corrupt stored image cannot be read as a valid reference', t
   const f = fixture(t), [ref] = stageBoardImages({ ...f, images: [photo('one')] })
   const target = join(f.directory, readdirSync(f.directory)[0]); writeFileSync(target, 'broken')
   assert.throws(() => readBoardImage({ ...f, reference: ref }), /does not match/)
-  try { rmSync(target); symlinkSync('/etc/passwd', target) } catch (error) {
-    if (!['EPERM', 'EACCES'].includes(error?.code)) throw error
-    t.diagnostic('this Windows session cannot create file symbolic links; the link-rejection check is covered on POSIX CI')
-    return
-  }
+  rmSync(target); symlinkSync('/etc/passwd', target)
   assert.throws(() => readBoardImage({ ...f, reference: ref }))
-})
-
-test('PDF, ZIP, text and JSON attachments are stored and read as generic files', t => {
-  const f = fixture(t)
-  const files = [
-    { uploadId:'pdf', name:'spec.pdf', mediaType:'application/pdf', data:Buffer.from('%PDF-1.4\nspec\n').toString('base64') },
-    { uploadId:'zip', name:'bundle.zip', mediaType:'application/zip', data:Buffer.from([0x50,0x4b,0x03,0x04,0x14,0x00]).toString('base64') },
-    { uploadId:'text', name:'notes.md', mediaType:'text/markdown', data:Buffer.from('# Notes\n').toString('base64') },
-    { uploadId:'json', name:'data.json', mediaType:'application/json', data:Buffer.from('{"ok":true}\n').toString('base64') },
-  ]
-  const refs = stageBoardImages({ ...f, images:files })
-  assert.equal(refs.length, 4)
-  assert.equal(readBoardImage({ ...f, reference:refs[0] }).mediaType, 'application/pdf')
-  assert.equal(Buffer.from(readBoardImage({ ...f, reference:refs[1] }).data, 'base64').subarray(0,4).toString('hex'), '504b0304')
-  assert.throws(() => stageBoardImages({ ...f, images:[{ ...files[0], data:Buffer.from('not-pdf').toString('base64') }] }), /format/)
-  assert.throws(() => stageBoardImages({ ...f, images:[{ ...files[3], data:Buffer.from('{bad').toString('base64') }] }), /format/)
 })

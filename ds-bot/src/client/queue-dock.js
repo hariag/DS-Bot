@@ -1,5 +1,4 @@
-import { createElement as h, Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { inboxGroups, keepInboxPageOnRetry, stampInboxGroups } from './inbox-groups.js'
+import { createElement as h, Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { t } from './i18n.js'
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, PaperclipIcon, PencilIcon, QueueIcon, TrashIcon } from './icons.js'
 
@@ -139,138 +138,12 @@ export function combineRoomPosts(projection, host, sessionId, available) {
   return { rows, uncertain }
 }
 
-const sourceStatusLabel = {
-  missing: 'Session not found',
-  migration: 'Session needs migration',
-  unavailable: 'Could not read this inbox',
-  ambiguous: 'Session identity could not be confirmed',
-}
-
-function liveMessage({ row, placement }, sessionId) {
-  return {
-    id: row.id, messageId: row.id, sessionId, exchangeId: row.source?.exchangeId, placement,
-    senderName: row.source?.senderName, content: row.content,
-  }
-}
-
-function InboxMessage({ item, loadImage }) {
-  // Only expanded rows need to build text previews and attachment lists.
-  const text = item.content ? item.content.filter(block => block.type === 'text').map(block => block.text).join('\n') : item.text
-  const files = item.content ? queueAttachments(item.content) : EMPTY_QUEUE
-  const placement = item.placement === 'next-step' ? t('Next step') : item.placement === 'next-turn' ? t('Next turn') : ''
-  return h('div', {className:'bt-bot-queue-row', 'data-bot-queue-row':'', 'data-bot-queue-placement':item.placement},
-    h('div', {className:'bt-bot-queue-meta'},
-      h('span', {className:'bt-bot-queue-sender'}, item.senderName || t('Bot')),
-      (placement || item.earlier) && h('span', {className:'bt-bot-queue-placement'}, placement || t('Earlier conversation'))),
-    files.length > 0 ? h('span', {className:'bt-queue-attachments bt-bot-queue-attachments'},
-      files.map(({type, attachment}, index) => type === 'image'
-        ? h(QueueThumb, {key:index, attachment, loadImage, label:t('Queued image')})
-        : h(QueueFile, {key:index, attachment, label:t('Queued file {name}', {name:attachment.name})})))
-      : item.attachments > 0 && h('div', null, t('Attachments: {n}', {n:item.attachments})),
-    text && h('div', {className:'bt-bot-queue-text'}, text))
-}
-
-function InboxSection({ group, loadImage, roomPendingTitle }) {
-  const { name, rows, sources, partial } = group
-  const emptyHistory = sources.filter(source => source.earlier && source.status === 'ready' && source.sampledCount === 0).length
-  const lastRead = sources.reduce((latest, source) => Math.max(latest, source.readAt || 0), 0)
-  return h('section', {className:'bt-inbox-section', 'data-bot-inbox-group':group.key},
-    h('h3', {className:'bt-inbox-group-heading'},
-      h('span', null, name),
-      h('span', {className:'bt-inbox-group-count'}, t(partial ? '{n} seen' : '{n} queued', {n:rows.length}))),
-    lastRead > 0 && h('time', {dateTime:new Date(lastRead).toISOString()}, t('Bot inbox snapshot at {time}', {time:new Date(lastRead).toLocaleString()})),
-    roomPendingTitle && h('div', null, roomPendingTitle, h('div', null, t('Counts exclude items in transfer and may include control events.'))),
-    sources.filter(source => !source.earlier || source.status !== 'ready' || source.sampledCount > 0).map(source =>
-      h('div', {key:source.sessionId, className:'bt-inbox-source', title:source.sessionId},
-        source.earlier ? t('Earlier conversation') : t('Current conversation'),
-        source.earlier && h('code', null, source.sessionId.slice(-8)),
-        Number.isFinite(source.endedAt) && h('time', {dateTime:new Date(source.endedAt).toISOString()}, t('Ended {time}', {time:new Date(source.endedAt).toLocaleString()})),
-        source.sampledCount === 0 && source.status === 'ready' && h('span', null, t('No Bot messages at the time of this read')),
-        source.status !== 'ready' && h('span', null, t(sourceStatusLabel[source.status] ?? 'Could not read this inbox')),
-        Number.isFinite(source.rowsReadAt) && h('time', {dateTime:new Date(source.rowsReadAt).toISOString()},
-          t('Last successful read: {time}', {time:new Date(source.rowsReadAt).toLocaleString()})))),
-    emptyHistory > 0 && h('div', null, t('Earlier inboxes sampled without Bot messages: {n}', {n:emptyHistory})),
-    rows.map((item, index) => h(InboxMessage, {key:JSON.stringify([item.sessionId, item.messageId ?? item.id, index]), item, loadImage})))
-}
-
-function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
-  const [open, setOpen] = useState(false)
-  const [pages, setPages] = useState([])
-  const [busy, setBusy] = useState(false)
-  const [failure, setFailure] = useState(null)
-  const committedGroups = useRef(EMPTY_QUEUE)
-  const liveGroups = useMemo(() => stampInboxGroups(getLiveGroups(), committedGroups.current), [getLiveGroups])
-  useLayoutEffect(() => { committedGroups.current = liveGroups }, [liveGroups])
-  const pending = useRef(null)
-  const panelId = useId()
-  // The parent keys this component by Session. Abort a departing Session's read
-  // and ignore late responses even when the transport does not honor cancellation.
-  useEffect(() => () => pending.current?.abort(), [])
-  async function load(cursor, replaceFrom = null) {
-    if (pending.current) return
-    const request = new AbortController()
-    pending.current = request
-    setBusy(true)
-    setFailure(null)
-    try {
-      const page = await read(cursor, request.signal)
-      if (!request.signal.aborted) setPages(prior => {
-        const sample = {page, cursor, liveGroups}
-        if (replaceFrom === null) return cursor ? [...prior, sample] : [sample]
-        const original = prior[replaceFrom].page
-        const sameRange = page.nextCursor === original.nextCursor && page.total === original.total
-        const updated = {page:keepInboxPageOnRetry(original, page), cursor, liveGroups}
-        return [...prior.slice(0, replaceFrom), updated, ...(sameRange ? prior.slice(replaceFrom + 1) : [])]
-      })
-    } catch (error) {
-      if (!request.signal.aborted) setFailure({cursor, replaceFrom, restart:error?.code === 'bot/invalid'})
-    } finally {
-      if (pending.current === request) {
-        pending.current = null
-        if (!request.signal.aborted) setBusy(false)
-      }
-    }
-  }
-  function toggle() {
-    if (!open && read) void load(undefined, pages.length ? 0 : null)
-    if (open) setFailure(null)
-    if (open && pending.current) {
-      pending.current.abort()
-      pending.current = null
-      setBusy(false)
-    }
-    setOpen(!open)
-  }
-  const last = pages.at(-1)?.page
-  const sourcesRead = pages.reduce((count, sample) => count + sample.page.sources.length, 0)
-  const groups = useMemo(() => inboxGroups(liveGroups, pages), [liveGroups, pages])
-  const total = groups.reduce((sum, group) => sum + group.rows.length, 0)
-  return h('div', {className:'bt-queue-panel bt-inbox-inspection', 'data-inbox-inspection':''},
-    h('button', {type:'button', className:'bt-queue-head', 'aria-controls':panelId, 'aria-expanded':open, onClick:toggle},
-      h('span', {className:'bt-queue-lead', 'aria-hidden':true}, h(QueueIcon)),
-      h('span', {className:'bt-queue-count'}, t('Bot inbox ({n})', {n:total})),
-      h('span', {className:'bt-queue-chev', 'aria-hidden':true}, open ? h(ChevronDownIcon) : h(ChevronUpIcon))),
-    open && h('div', {id:panelId, className:'bt-inbox-inspection-body', 'data-bot-queue-list':''},
-      groups.map(group => h(InboxSection, {key:group.key, group, loadImage, roomPendingTitle})),
-      last && h('div', {className:'bt-inbox-sample-count'}, t('Checked {read} of {total} inboxes', {read:sourcesRead, total:last.total})),
-      pages.map(({page, cursor}, i) => page.sources.some(source => source.status !== 'ready') && h('div', {key:i, className:'bt-inbox-snapshot'},
-        h('time', {dateTime:new Date(page.readAt).toISOString()}, t('Bot inbox snapshot at {time}', {time:new Date(page.readAt).toLocaleString()})),
-        h('button', {className:'bt-inbox-retry', type:'button', disabled:busy, onClick:() => load(cursor, i)}, t('Retry this page')))),
-      busy && h('div', {role:'status'}, t('Reading inboxes…')),
-      failure && h('div', {role:'status'}, t(failure.restart ? 'Inbox scope changed. Start a new read.' : 'Inbox read failed. You can retry.')),
-      h('div', {className:'bt-inbox-inspect-actions'},
-        failure && h('button', {type:'button', disabled:busy, onClick:() => failure.restart ? load() : load(failure.cursor, failure.replaceFrom)}, t(failure.restart ? 'Read from the start' : 'Retry this read')),
-        !failure && last?.nextCursor && h('button', {type:'button', disabled:busy, onClick:() => load(last.nextCursor)}, t('Read next inboxes')),
-        last && !failure && h('button', {type:'button', disabled:busy, onClick:() => load()}, t('Refresh inbox snapshots')))))
-}
-
 // One item renders directly; several default to a collapsible count header; an
 // empty queue renders nothing. Rows still in flight show a sending state with
 // disabled actions until their queue rows arrive.
-export function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, inspectQueue, loadImage, renderFactorySlot, actions }) {
+export function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.('inbox')
   const botId = useRoster?.(roster => roster.byId?.[sessionId]?.id) ?? null
-  const primarySession = useRoster?.(roster => roster.byId?.[sessionId]?.sessionId) ?? sessionId
   const roomId = useRoster?.(roster => roster.roomsById?.[sessionId]?.id) ?? null
   const isRoom = roomId !== null
   const roomStateJson = useWork?.(work => JSON.stringify({ posts: work.roomPostQueues?.[roomId] ?? { rows: [], unavailable: true }, pending: work.roomPending?.[roomId] ?? { relay: 0, next: 0 } })) ?? '{}'
@@ -279,13 +152,8 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
   const groupQueue = useMemo(() => JSON.parse(groupQueueJson), [groupQueueJson])
   const earlierPrivateJson = useWork?.(work => JSON.stringify(work.earlierPrivateQueues?.[botId] ?? [])) ?? '[]'
   const earlierPrivateItems = useMemo(() => JSON.parse(earlierPrivateJson), [earlierPrivateJson])
-  const workAvailable = useWork?.(work => Boolean(work.earlierPrivateQueues && work.groupQueues)) === true
-  const roomsJson = useRoster?.(roster => {
-    if (isRoom) return JSON.stringify([[roomId, roster.roomsById[sessionId].name ?? roomId]])
-    if (!botId || roster.byId[sessionId].private) return '[]'
-    return JSON.stringify((roster.rooms ?? []).filter(room => room.members?.includes(botId)).map(room => [room.id, room.name]))
-  }) ?? '[]'
-  const rooms = useMemo(() => JSON.parse(roomsJson), [roomsJson])
+  const groupPending = groupQueue.filter(item => !item.unavailable).length
+  const groupUnknown = groupQueue.some(item => item.unavailable)
   const inboxAvailable = Array.isArray(inbox?.['next-step']) && Array.isArray(inbox?.['next-turn'])
   const pendingSubmissions = useSession?.((s) => s.pendingSubmissions) ?? EMPTY_QUEUE
   const queue = useMemo(() => {
@@ -298,42 +166,45 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     return pendingSubmissions.filter(submission => submission.placement === 'queued' && !admitted.has(submission.requestId))
   }, [pendingSubmissions, queue])
   const rowCount = queue.length + pendingQueue.length
-  const getLiveGroups = useCallback(() => {
-    const allBotQueue = [
-      ...(inbox?.['next-step'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-step' })),
-      ...(inbox?.['next-turn'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-turn' })),
-    ]
-    const current = inboxAvailable ? [sessionId] : []
-    if (isRoom) {
-      const posts = allBotQueue.filter(({row}) => row.source?.role === 'post')
-      const joined = combineRoomPosts(posts, roomState.posts, sessionId, inboxAvailable)
-      const rows = joined.rows.map(item => item.row ? liveMessage({row:item.row}, item.sessionId) : item)
-      for (const mail of allBotQueue) {
-        if (mail.row.source?.role !== 'post') rows.push(liveMessage(mail, sessionId))
-      }
-      return [{key:roomId, name:rooms[0]?.[1] || roomId, rows, partial:joined.uncertain, liveSessionIds:current}]
-    }
-    const personal = {
-      key:'private', name:t('Bot private inbox'), rows:allBotQueue.map(item => liveMessage(item, sessionId)),
-      partial:!inboxAvailable || !workAvailable || primarySession !== sessionId, liveSessionIds:current,
-    }
-    for (const item of earlierPrivateItems) {
-      if (item.unavailable) personal.partial = true
-      else personal.rows.push({...item, earlier:true})
-    }
-    const byRoom = new Map(rooms.map(([id, name]) => [id, {key:id, name:name || id, rows:[], partial:!workAvailable}]))
-    for (const item of groupQueue) {
-      const group = byRoom.get(item.roomId)
-      if (!group) continue
-      if (item.unavailable) group.partial = true
-      else group.rows.push({...item, earlier:item.previous})
-    }
-    return [personal, ...byRoom.values()]
-  }, [isRoom, roomId, rooms, roomState, inbox, inboxAvailable, workAvailable, primarySession, sessionId, earlierPrivateItems, groupQueue])
+  const allBotQueue = useMemo(() => [
+    ...(inbox?.['next-step'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-step' })),
+    ...(inbox?.['next-turn'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-turn' })),
+  ], [inbox])
+  const roomPosts = isRoom ? allBotQueue.filter(({ row }) => row.source?.role === 'post') : EMPTY_QUEUE
+  const roomJoined = combineRoomPosts(roomPosts, roomState.posts, sessionId, inboxAvailable)
+  const roomUnknown = isRoom && roomJoined.uncertain
+  const roomPostCount = roomJoined.rows.length
+  const roomRelayCount = roomState.pending?.relay ?? 0
+  const roomNextCount = roomState.pending?.next ?? 0
+  const botQueue = isRoom ? allBotQueue.filter(({ row }) => row.source?.role !== 'post') : allBotQueue
+  const earlierPrivate = useMemo(() => {
+    const present = new Set(botQueue.map(({ row }) => row.source?.exchangeId).filter(Boolean))
+    return earlierPrivateItems.filter(item => !item.exchangeId || !present.has(item.exchangeId))
+  }, [botQueue, earlierPrivateItems])
+  const privatePending = botQueue.length + earlierPrivate.filter(item => !item.unavailable).length
+  const privateUnknown = (botId !== null && !inboxAvailable) || earlierPrivate.some(item => item.unavailable)
+  // A partial snapshot is not a reliable total (or even a numeric lower bound).
+  // Keep its uncertainty explicit whenever a real queued row makes the panel visible.
+  const botTitle = [
+    privatePending > 0 && (privateUnknown ? t('Bot private messages waiting; count unavailable') : t('Bot private {n}', { n: privatePending })),
+    groupPending > 0 && (groupUnknown ? t('Group messages waiting; count unavailable') : t('Group {n}', { n: groupPending })),
+  ].filter(Boolean).join(' + ')
   const roomPendingTitle = [
-    roomState.pending?.relay > 0 && t('Relay waiting items: {n}', {n:roomState.pending.relay}),
-    roomState.pending?.next > 0 && t('Next-round items: {n}', {n:roomState.pending.next}),
+    roomRelayCount > 0 && t('Relay waiting items: {n}', { n: roomRelayCount }),
+    roomNextCount > 0 && t('Next-round items: {n}', { n: roomNextCount }),
   ].filter(Boolean).join(' · ')
+  const roomTitle = [
+    roomPostCount > 0 && (roomUnknown ? t('Group posts awaiting dispatch; count unavailable') : t('Group posts awaiting dispatch: {n}', { n: roomPostCount })),
+    roomPendingTitle,
+  ].filter(Boolean).join(' · ')
+  const [botExpandedSession, setBotExpandedSession] = useState(null)
+  const botCollapsed = botExpandedSession !== sessionId
+  const botListId = useId()
+  const roomListId = useId()
+  useEffect(() => { setBotExpandedSession(null) }, [sessionId])
+  useEffect(() => {
+    if (botTitle === '' && (!isRoom || roomTitle === '') && !botCollapsed) setBotExpandedSession(null)
+  }, [botTitle, roomTitle, isRoom, botCollapsed])
   const running = useSession?.((s) => s.running) === true
   const queueMutable = useSession?.((s) => s.subagent === null || s.subagent === undefined || s.subagent.address?.mode === 'continuable') ?? true
   const [editing, setEditing] = useState(null)
@@ -344,8 +215,7 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     if (rowCount === 0 && !collapsed) setCollapsed(true)
     if (editing !== null && (!queueMutable || !queue.some(row => row.id === editing.id))) setEditing(null)
   }, [collapsed, editing, queue, queueMutable, rowCount])
-  const hasInbox = isRoom || botId !== null
-  if (!hasInbox && rowCount === 0) return null
+  if (rowCount === 0 && botTitle === '' && (!isRoom || roomTitle === '')) return null
   const interactionActive = queueMutable && (editing !== null || busy !== null)
   const expanded = !collapsed || interactionActive
   const listVisible = rowCount === 1 || expanded
@@ -374,7 +244,61 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     if (await applyAction(editing.id, { kind: 'edit', content: [{ type: 'text', text: editing.text }] }, t('Couldn’t edit the queued message — it may have started already.'))) setEditing(null)
   }
   return h('div', { className: 'bt-queue-dock', 'data-queue-dock': '' },
-    hasInbox && h(InboxInspection, {key:JSON.stringify([sessionId, botId, roomId, rooms.map(([id]) => id)]), read:inspectQueue, getLiveGroups, loadImage, roomPendingTitle}),
+    isRoom && roomTitle !== '' && h('div', { className: 'bt-queue-panel bt-bot-queue-panel', 'data-room-post-queue-dock': '' },
+      h('button', { type: 'button', className: 'bt-queue-head', 'aria-controls': roomListId, 'aria-expanded': !botCollapsed, onClick: () => setBotExpandedSession(value => value === sessionId ? null : sessionId) },
+        h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
+        h('span', { className: 'bt-queue-count' }, roomTitle),
+        h('span', { className: 'bt-queue-chev', 'aria-hidden': true }, !botCollapsed ? h(ChevronDownIcon) : h(ChevronUpIcon))),
+      (roomRelayCount > 0 || roomNextCount > 0) && h('div', { className: 'bt-bot-queue-row' }, t('Counts exclude items in transfer and may include control events.')),
+      h('ul', { id: roomListId, className: 'bt-queue-list bt-bot-queue-list', 'data-room-post-queue-list': '', hidden: botCollapsed },
+        roomUnknown && h('li', { className: 'bt-bot-queue-row' }, t('Group queue snapshot is incomplete or changing.')),
+        roomPendingTitle !== '' && h('li', { className: 'bt-bot-queue-row' }, roomPendingTitle),
+        h('li', { className: 'bt-bot-queue-row' }, t('Counts exclude items in transfer and may include control events.')),
+        !botCollapsed && roomJoined.rows.map((item, index) => {
+          const row = item.row
+          if (row === undefined) return h('li', { key: `${item.sessionId}:${item.id}:${index}`, className: 'bt-bot-queue-row', 'data-room-post-queue-row': '' },
+            h('div', { className: 'bt-bot-queue-meta' }, h('span', { className: 'bt-bot-queue-sender' }, item.senderName || t('Bot'))),
+            item.attachments > 0 && h('div', null, t('Attachments: {n}', { n: item.attachments })),
+            item.text && h('div', { className: 'bt-bot-queue-text' }, item.text))
+          const text = row.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+          const attachments = queueAttachments(row.content)
+          return h('li', { key: `${item.sessionId}:${item.messageId ?? index}`, className: 'bt-bot-queue-row', 'data-room-post-queue-row': '' },
+            h('div', { className: 'bt-bot-queue-meta' }, h('span', { className: 'bt-bot-queue-sender' }, row.source?.senderName || t('Bot'))),
+            attachments.length > 0 && h('span', { className: 'bt-queue-attachments' }, attachments.map((attachment, position) => attachment.type === 'image'
+              ? h(QueueThumb, { key: position, attachment: attachment.attachment, loadImage, label: t('Queued image') })
+              : h(QueueFile, { key: position, attachment: attachment.attachment, label: t('Queued file {name}', { name: attachment.attachment.name }) }))),
+            text && h('div', { className: 'bt-bot-queue-text' }, text.length > 400 ? `${text.slice(0, 400)}…` : text))
+        }))),
+    botTitle !== '' && h('div', { className: 'bt-queue-panel bt-bot-queue-panel', 'data-bot-queue-dock': '' },
+      h('button', { type: 'button', className: 'bt-queue-head', 'data-bot-queue-head': '', 'aria-controls': botListId, 'aria-expanded': !botCollapsed, onClick: () => setBotExpandedSession(value => value === sessionId ? null : sessionId) },
+        h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
+        h('span', { className: 'bt-queue-count' }, botTitle),
+        h('span', { className: 'bt-queue-chev', 'aria-hidden': true }, !botCollapsed ? h(ChevronDownIcon) : h(ChevronUpIcon))),
+      h('ul', { id: botListId, className: 'bt-queue-list bt-bot-queue-list', 'data-bot-queue-list': '', hidden: botCollapsed },
+        !botCollapsed && botQueue.map(({ row, placement }) => {
+          const attachments = queueAttachments(row.content)
+          const text = row.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+          return h('li', { key: row.id, className: 'bt-bot-queue-row', 'data-bot-queue-row': '', 'data-bot-queue-placement': placement },
+            h('div', { className: 'bt-bot-queue-meta' },
+              h('span', { className: 'bt-bot-queue-sender' }, row.source?.senderName || t('Bot')),
+              h('span', { className: 'bt-bot-queue-placement' }, t(placement === 'next-step' ? 'Next step' : 'Next turn'))),
+            attachments.length > 0 && h('span', { className: 'bt-queue-attachments bt-bot-queue-attachments' },
+              attachments.map((item, index) => item.type === 'image'
+                ? h(QueueThumb, { key: `${item.attachment.attachmentId}:${index}`, attachment: item.attachment, loadImage, label: t('Queued image') })
+                : h(QueueFile, { key: `${item.attachment.attachmentId}:${item.attachment.name}:${index}`, attachment: item.attachment, label: t('Queued file {name}', { name: item.attachment.name }) }))),
+            text !== '' && h('div', { className: 'bt-bot-queue-text' }, text))
+        }),
+        !botCollapsed && privateUnknown && !inboxAvailable && h('li', { className: 'bt-bot-queue-row' }, t('Private inbox unavailable')),
+        !botCollapsed && earlierPrivate.map(item => h('li', { key: item.id, className: 'bt-bot-queue-row', 'data-bot-earlier-private-queue-row': '' },
+          h('div', { className: 'bt-bot-queue-meta' },
+            h('span', { className: 'bt-bot-queue-sender' }, item.senderName || t('Bot')),
+            h('span', { className: 'bt-bot-queue-placement' }, item.unavailable ? t('Private inbox unavailable') : t('Earlier conversation'))),
+          item.text && h('div', { className: 'bt-bot-queue-text' }, item.text))),
+        !botCollapsed && groupQueue.map(item => h('li', { key: `${item.roomId}:${item.id}`, className: 'bt-bot-queue-row', 'data-bot-group-queue-row': '' },
+          h('div', { className: 'bt-bot-queue-meta' },
+            h('span', { className: 'bt-bot-queue-sender' }, item.roomName || t('Group')),
+            h('span', { className: 'bt-bot-queue-placement' }, item.unavailable ? t('Group inbox unavailable') : item.previous ? t('Earlier conversation') : item.senderName)),
+          item.text && h('div', { className: 'bt-bot-queue-text' }, item.text))))),
     rowCount > 0 && h('div', { className: 'bt-queue-panel' },
       rowCount > 1 && h('button', { type: 'button', className: 'bt-queue-head', 'aria-controls': listId, 'aria-expanded': expanded, disabled: interactionActive, onClick: () => setCollapsed(value => !value) },
         h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
@@ -425,15 +349,6 @@ export const QUEUE_CSS = `
 .bt-queue-panel:before{z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--bt-main));backdrop-filter:var(--dsw-menu-backdrop-filter,none);content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-panel:after{border:.5px solid var(--bt-line-2);border-bottom:none;border-radius:inherit;content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-head{box-sizing:border-box;width:100%;height:36px;border:0;border-radius:var(--dsw-radius-md,10px);background:none;color:var(--bt-ink);text-align:left;font:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 12px}
-.bt-inbox-inspection-body{max-height:clamp(140px,32vh,320px);overflow:auto;padding:5px 12px 10px;line-height:1.5;font-size:12px;color:var(--bt-ink-2)}
-.bt-inbox-section+.bt-inbox-section{border-top:1px solid var(--bt-line);margin-top:6px}
-.bt-inbox-group-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0;padding:6px 0;font-size:13px;color:var(--bt-ink);overflow-wrap:anywhere}
-.bt-inbox-group-count{flex:none;color:var(--bt-ink-2);font-weight:500;font-variant-numeric:tabular-nums}
-.bt-inbox-source{display:flex;gap:6px;flex-wrap:wrap}
-.bt-inbox-snapshot{margin-top:6px}.bt-inbox-snapshot>time{display:block;color:var(--bt-ink-3)}
-.bt-inbox-section .bt-bot-queue-row{padding:6px 0}
-.bt-inbox-inspect-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
-.bt-inbox-inspect-actions button,.bt-inbox-retry{border:1px solid var(--bt-line);border-radius:6px;padding:3px 8px;font:inherit;background:var(--bt-main);color:var(--bt-ink);cursor:pointer}
 .bt-queue-head:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-queue-head:disabled{cursor:default}
 .bt-queue-lead{color:var(--bt-ink-3);flex:none;display:grid;place-items:center}

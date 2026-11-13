@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +12,6 @@ import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
 import { writeNotesAtomically } from '../src/host/resume.js'
 import { errorCode } from '../src/host/channel.js'
-import { privateTempDir } from './private-temp.mjs'
 
 // Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
@@ -86,7 +84,7 @@ async function start(home, logs, inspect) {
 }
 
 const freshHome = (t, state = seed()) => {
-  const home = privateTempDir(join(tmpdir(), 'ds-bot-follow-'))
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-follow-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(state))
   t.after(async () => {
     await Promise.all((started.get(home) ?? []).map(host => host.stop()))
@@ -96,97 +94,6 @@ const freshHome = (t, state = seed()) => {
   return home
 }
 const stateOf = home => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
-
-test('ignore and undo retain the interrupted record, reject another scope and survive restart', async (t) => {
-  const home = freshHome(t), id = 'a'.repeat(64)
-  const record = {botId:'b',roomId:'r1',turn:7,trigger:{role:'room',exchangeId:'ex'}}
-  writeFileSync(join(home,'inflight.json'),JSON.stringify({turns:{},queued:{},heldTurns:{[id]:{sessionId:'gb',record,reason:'interrupted outcome unknown'}}}))
-  const host = await start(home)
-  const scope = {kind:'room',id:'r1'}
-  assert.equal((await host.rt.recoveryHeldView(scope)).items[0].decision,'open')
-  await assert.rejects(host.rt.setHeldDecision({kind:'room',id:'other'},id,0,'ignored'))
-  assert.deepEqual(await host.rt.setHeldDecision(scope,id,0,'ignored'),{decision:'ignored',revision:1})
-  assert.deepEqual(await host.rt.setHeldDecision(scope,id,0,'ignored'),{decision:'ignored',revision:1})
-  await assert.rejects(host.rt.setHeldDecision(scope,id,0,'open'))
-  assert.deepEqual(notes(home).heldTurns[id].record,record)
-  assert.equal(notes(home).heldTurns[id].decisions.length,1)
-  await host.stop()
-  const restarted = await start(home)
-  const saved = (await restarted.rt.recoveryHeldView(scope)).items[0]
-  assert.equal(saved.decision,'ignored')
-  assert.equal(saved.status,'uncertain')
-  assert.deepEqual(await restarted.rt.setHeldDecision(scope,id,1,'open'),{decision:'open',revision:2})
-  assert.deepEqual(notes(home).heldTurns[id].record,record)
-  assert.deepEqual(notes(home).heldTurns[id].decisions.map(item=>item.choice),['ignored','open'])
-})
-
-test('ignoring an uncertain queued delivery is durable and prevents automatic resend', async (t) => {
-  t.mock.timers.enable({ apis:['setTimeout'] })
-  const home = freshHome(t)
-  const args = { exchangeId:'queued-once', roomId:'r1', toId:'b', fromId:'a', role:'room', text:'SECRET MESSAGE' }
-  writeFileSync(join(home,'inflight.json'), JSON.stringify({ turns:{}, queued:{ gb:[{ at:1700000000000, args, recoveryHold:'history-unavailable' }] } }))
-  const first = await start(home)
-  const scope = { kind:'room', id:'r1' }
-  const view = await first.rt.recoveryHeldView(scope)
-  assert.equal(view.available,true)
-  assert.equal(view.deliveries.length,1)
-  assert.equal(view.deliveries[0].status,'history-unavailable')
-  assert.doesNotMatch(JSON.stringify(view), /SECRET|fromId|text/)
-  const { recoveryId } = view.deliveries[0]
-  await assert.rejects(first.rt.setQueuedDeliveryDecision({kind:'room',id:'other'},recoveryId,0,'ignored'))
-  assert.deepEqual(await first.rt.setQueuedDeliveryDecision(scope,recoveryId,0,'ignored'),{decision:'ignored',revision:1})
-  assert.deepEqual(await first.rt.setQueuedDeliveryDecision(scope,recoveryId,0,'ignored'),{decision:'ignored',revision:1})
-  await assert.rejects(first.rt.setQueuedDeliveryDecision(scope,recoveryId,0,'open'))
-  assert.deepEqual(notes(home).queued.gb[0].args,args)
-  assert.equal(notes(home).queued.gb[0].decisions[0].choice,'ignored')
-  await first.stop()
-
-  const restarted = await start(home, new Map([['gb',[]]]))
-  assert.equal((await restarted.rt.recoveryHeldView(scope)).deliveries[0].decision,'ignored')
-  t.mock.timers.tick(3000)
-  await realDelay(30)
-  assert.equal(restarted.agentOf('gb').calls.length,0)
-})
-
-test('redo source evidence is bound to its room and current membership', async t => {
-  const home = freshHome(t), record = { botId:'b', roomId:'r1', turn:7, trigger:{ role:'room', roomId:'r1', exchangeId:'ex' } }
-  const id = createHash('sha256').update(JSON.stringify(['gb', record])).digest('hex')
-  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns:{}, queued:{}, heldTurns:{ [id]:{ sessionId:'gb', record } } }))
-  const host = await start(home)
-  const proof = await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id)
-  assert.deepEqual(proof?.record, record)
-  assert.equal(proof.isCurrent(), true)
-  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'personal', id:'user' }, id), undefined)
-  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'other' }, id), undefined)
-  host.rt.state.agents.x = { id:'x', sessions:['gb'] }
-  assert.equal(proof.isCurrent(), false)
-  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
-  delete host.rt.state.agents.x
-  host.rt.state.rooms.r1.members = ['a']
-  assert.equal(proof.isCurrent(), false)
-  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
-})
-
-test('repeating unchanged recovery notes verifies ownership without replacing the durable file', async t => {
-  const home = freshHome(t), host = await start(home)
-  host.emit('gb', 'turn/start', { turn: 9 })
-  await settle(() => notes(home).turns?.gb?.turn === 9)
-  const file = join(home, 'inflight.json')
-  const before = statSync(file, { bigint: true })
-  host.rt.noteApproval('gb', undefined)
-  await host.stop()
-  const after = statSync(file, { bigint: true })
-  assert.equal(before.ino, after.ino)
-  assert.equal(before.mtimeNs, after.mtimeNs)
-  assert.equal(notes(home).turns.gb.turn, 9)
-})
-
-test('new interrupted records preserve the exact turn number', async t => {
-  const home = freshHome(t), host = await start(home)
-  host.emit('gb', 'turn/start', { turn:9 })
-  await settle(() => notes(home).turns?.gb?.turn === 9)
-  assert.equal(notes(home).turns.gb.roomId, 'r1')
-})
 // The team file is written in the background, and Windows may hold it busy for a
 // moment: the retry waits on the clock, which the tests mock.
 const settleState = async (t, home, check) => {
@@ -227,21 +134,6 @@ const run = (host, sessionId, turn, message) => {
   host.emit(sessionId, 'user/message', { content: message.content, source: message.source })
 }
 
-test('a private board assignment ends in the owner chat without a phantom peer reply', async t => {
-  const host = await start(freshHome(t))
-  const request = host.rt.prepareBoardTaskMessage({
-    toId: 'b', sessionId: 'b', text: 'Review the card', messageId: 'board-input',
-    exchangeId: 'board-exchange', actionId: 'execute-card', taskRevision: 4, actionRevision: 4,
-  })
-  const deliver = t.mock.method(host.rt, 'deliver', async () => {})
-  run(host, 'b', 1, request)
-  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'I recorded my result on the card.' }] } })
-  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  assert.equal(deliver.mock.callCount(), 0)
-  assert.equal(host.rt.workOf(request.source), undefined)
-  assert.deepEqual(host.rt.state.exchangeTurns.b ?? [], [])
-})
-
 // Starts a round in 'r1' and opens Writer's turn in 'gb'.
 async function openRoomTurn(t, host) {
   let result
@@ -253,7 +145,7 @@ async function openRoomTurn(t, host) {
   return () => result
 }
 
-test('a group turn cut off by a restart is held for review and never replayed', async (t) => {
+test('a group turn cut off by a restart is picked up once, and the group is told', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -265,18 +157,34 @@ test('a group turn cut off by a restart is held for review and never replayed', 
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'gb'))
-  assert.equal(second.agentOf('gb').calls.length, 0)
-  assert.equal(second.agentOf('r1').calls.length, 0)
-  const held = Object.values(notes(home).heldTurns).find(item => item.sessionId === 'gb')
-  assert.deepEqual([held.record.botId, held.record.roomId, held.record.approval?.tool], ['b', 'r1', 'pwsh'])
-  const recovery = (await second.rt.boardCall('board-list', { scope: { kind: 'room', id: 'r1' } })).recovery
-  assert.equal(recovery.available, true)
-  assert.equal(recovery.items.find(item => item.sessionId === 'gb')?.status, 'uncertain')
-  assert.equal(second.agentOf('gb').calls.length, 0, 'reading the recovery view must not replay work')
+  await settle(() => second.agentOf('gb').calls.length === 1)
+  const post = second.agentOf('r1').calls[0]
+  assert.deepEqual([post.source.role, post.source.resumed, post.source.quiet, post.source.senderSessionId], ['post', true, true, 'b'])
+  const resumed = second.agentOf('gb').calls[0]
+  assert.deepEqual([resumed.source.role, resumed.source.resumed, resumed.source.roomId], ['room', true, 'r1'])
+  assert.match(text(resumed), /^\[Group chat "Ops" · picking up after a restart\]/)
+  assert.match(text(resumed), /approval to run pwsh \(escalate sandbox\)/)
+  await settle(() => Object.keys(inflight(home)).length === 0)
+
+  // The group shows the event, and the admin reads it on its next turn.
+  second.emit('r1', 'user/message', { content: post.content, source: post.source })
+  const relay = await afterRound(rt, 'r1', await second.tool('group_relay', {}, 'r1', { callId: 'c2', signal: new AbortController().signal }))
+  assert.deepEqual(relay.replies.map(reply => [reply.kind, reply.name]), [['resumed', 'Writer']])
+  const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(state.rooms.r1.log.at(-1).kind, 'resumed')
+
+  // Cut off again while picking it up: the group hears it, and the turn stays stopped.
+  run(second, 'gb', 2, resumed)
+  await settle(() => inflight(home).gb?.resumed === true)
+  await second.stop()
+  const third = await start(home)
+  t.mock.timers.tick(3000)
+  await settle(() => third.agentOf('r1').calls.length === 1)
+  assert.equal(third.agentOf('r1').calls[0].source.again, true)
+  assert.equal(third.agentOf('gb').calls.length, 0)
 })
 
-test('a request cut off by a restart is held for review with its original exchange', async (t) => {
+test('a request cut off by a restart goes on under the same exchange; own-chat work resumes in the chat', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -287,18 +195,18 @@ test('a request cut off by a restart is held for review with its original exchan
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'b')
-    && Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'a'))
-  assert.equal(second.agentOf('b').calls.length, 0)
-  assert.equal(second.agentOf('a').calls.length, 0)
-  const held = Object.values(notes(home).heldTurns).find(item => item.sessionId === 'b')
-  assert.equal(held.record.trigger.exchangeId, 'x1')
-  assert.equal(held.record.trigger.role, 'request')
+  await settle(() => second.agentOf('b').calls.length === 1 && second.agentOf('a').calls.length === 1)
+  const request = second.agentOf('b').calls[0]
+  assert.deepEqual([request.source.role, request.source.exchangeId, request.source.senderSessionId, request.source.resumed], ['request', 'x1', 'a', true])
+  assert.match(text(request), /^\[Message from Chief · DeepSeek Harness restarted while you were working on it\]/)
+  const own = second.agentOf('a').calls[0]
+  assert.deepEqual([own.source.role, own.source.resumed], ['resume', true])
+  assert.match(text(own), /^\[DeepSeek Harness restarted while you were working\]/)
   const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   assert.equal(state.exchanges.length, 0)
 })
 
-test('when only DS Bot restarts, live work is not picked up; a later interrupted turn stays held', async (t) => {
+test('when only DS Bot restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -325,10 +233,8 @@ test('when only DS Bot restarts, live work is not picked up; a later interrupted
   await second.stop()
   const third = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'b'))
-  assert.deepEqual([third.agentOf('b').calls.length, third.agentOf('a').calls.length], [0, 0])
-  const held = Object.values(notes(home).heldTurns).find(item => item.sessionId === 'b')
-  assert.equal(held.record.trigger.exchangeId, 'x1')
+  await settle(() => third.agentOf('b').calls.length === 1)
+  assert.deepEqual([third.agentOf('b').calls[0].source.exchangeId, third.agentOf('a').calls.length], ['x1', 0])
 })
 
 // Chief asks Writer for the plan; Writer's turn takes it up and the work waits.
@@ -689,7 +595,7 @@ test('moving a pending delivery keeps its recovery note through discard and rest
   const message = first.agentOf('b').calls[0]
   await settle(() => notes(home).queued?.b?.length === 1)
 
-  first.rt.moveQueued('b', 'b-next', [message])
+  first.rt.moveQueued('b-next', [message])
   for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
   await settle(() => notes(home).queued?.['b-next']?.length === 1 && notes(home).queued?.b === undefined)
   assert.equal(notes(home).queued['b-next'][0].args.exchangeId, message.source.exchangeId)
@@ -715,7 +621,7 @@ test('a large forwarded inbox keeps delivery identities through restart without 
   const messages = first.agentOf('b').calls.slice()
   const ids = messages.map(message => message.source.exchangeId)
   await settle(() => notes(home).queued?.b?.length === 235)
-  first.rt.moveQueued('b', 'b-next', messages)
+  first.rt.moveQueued('b-next', messages)
   for (const message of messages) {
     for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
   }
@@ -741,7 +647,7 @@ test('a forwarded delivery taken up before note transfer is not noted again', as
   const message = host.agentOf('b').calls[0]
   await settle(() => notes(home).queued?.b?.length === 1)
   host.emit('b-next', 'user/message', { content: message.content, source: message.source })
-  host.rt.moveQueued('b', 'b-next', [message])
+  host.rt.moveQueued('b-next', [message])
   await settle(() => Object.values(notes(home).queued ?? {}).every(list => list.every(item => item.args.exchangeId !== message.source.exchangeId)))
 })
 
@@ -758,26 +664,6 @@ test('waking an inbox retains its delivery note while removing and resending', a
   assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
   discard()
   await settle(() => notes(home).queued?.b === undefined)
-})
-
-test('a saved group delivery with no room field follows the original group and never the private chat', async t => {
-  t.mock.timers.enable({apis:['setTimeout']})
-  const home = freshHome(t), team = seed()
-  team.rooms.r1.segments = { b:[{sessionId:'old-gb'}] }
-  writeFileSync(join(home,'state.json'), JSON.stringify(team))
-  const args = {exchangeId:'group-input',toId:'b',role:'room',fromId:'a',text:'Continue in the original group'}
-  writeFileSync(join(home,'inflight.json'), JSON.stringify({turns:{},queued:{
-    'old-gb':[{args,at:1}],
-    'missing-group':[{args:{...args,exchangeId:'unknown-origin'},at:2}],
-    b:[{args:{...args,exchangeId:'private-mismatch',roomId:'r1'},at:3}],
-  }}))
-  const host = await start(home,new Map([['old-gb',[]],['gb',[]],['missing-group',[]],['b',[]]]))
-  t.mock.timers.tick(3000)
-  await settle(() => host.agentOf('gb').calls.length === 1)
-  const [message] = host.agentOf('gb').calls
-  assert.deepEqual([message.source.exchangeId,message.source.roomId],['group-input','r1'])
-  assert.equal(host.agentOf('b').calls.length,0)
-  assert.equal(host.agentOf('missing-group').calls.length,0)
 })
 
 test('a queued request kept over a restart is sent again however old, and the asker is told it was late', async (t) => {
@@ -869,16 +755,6 @@ for (const ErrorType of [TypeError, ReferenceError, RangeError, SyntaxError]) {
     assert.equal(host.agentOf('b').calls.length, 0)
   })
 }
-
-test('a prepared delivery forwards the after-admission observer through recovery notes', async (t) => {
-  const home = freshHome(t)
-  const host = await start(home)
-  let admitted = 0
-  const result = await host.rt.deliver({ toId: 'b', role: 'reply', text: 'result' }, { afterAdmission: () => { admitted += 1 } })
-  assert.equal(admitted, 1, 'the caller sees the exact admission receipt after the recovery note is written')
-  assert.equal(typeof result, 'string')
-  assert.equal(host.agentOf('b').calls.length, 1)
-})
 
 test('observers are per delivery even if the same error object is thrown concurrently', async (t) => {
   const home = freshHome(t)
@@ -1347,105 +1223,6 @@ for (const reason of ['completed', 'error', 'interrupted']) {
   })
 }
 
-test('a receipt found in an old part stays held when a later history omits it', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = freshHome(t)
-  const team = seed()
-  team.bots.b.segments = [{sessionId:'old'}]
-  writeFileSync(join(home,'state.json'),JSON.stringify(team))
-  const args = { exchangeId:'seen-once', toId:'b', fromId:'a', role:'request', text:'test' }
-  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{ old:[{ at:1, args }] } }))
-  const first = await start(home, new Map([['old', [{ type:'user/message', data:{ source:args } }]]]))
-  let finished = false
-  first.rt.settleRoomBatches = () => { finished = true }
-  t.mock.timers.tick(3000)
-  await settle(() => finished)
-  await first.stop()
-  const [receipt] = notes(home).queued.b
-  assert.deepEqual(receipt.resumeOrigins, ['old'])
-  assert.equal(receipt.recoveryHold, 'history-seen')
-
-  let reads = 0
-  const next = await start(home, undefined, async () => { reads++; return { events:[] } })
-  finished = false
-  next.rt.settleRoomBatches = () => { finished = true }
-  const notices = []
-  next.rt.noteFailure = entry => notices.push(entry)
-  t.mock.timers.tick(3000)
-  await settle(() => finished)
-  await next.stop()
-  assert.equal(reads, 0)
-  assert.equal(next.agentOf('b').calls.length, 0)
-  assert.equal(notes(home).queued.b[0].recoveryHold, 'history-seen')
-  assert.equal(notices.some(entry => entry.code === 'RESUME_DELIVERY_UNCERTAIN'), false)
-})
-
-test('merging a moved delivery preserves a receipt and live uptake retires it', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = freshHome(t)
-  const args = { exchangeId:'moved-once', toId:'b', fromId:'a', role:'request', text:'test' }
-  const source = { kind:'bot', exchangeId:args.exchangeId, role:'request', senderSessionId:'a' }
-  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{
-    old:[{ at:1, args, recoveryHold:'history-seen' }], b:[{ at:1, args }]
-  } }))
-  const host = await start(home)
-  host.rt.moveQueued('old', 'b', [{ source }])
-  await settle(() => notes(home).queued.b[0].recoveryHold === 'history-seen')
-  let finished = false
-  host.rt.settleRoomBatches = () => { finished = true }
-  t.mock.timers.tick(3000)
-  await settle(() => finished)
-  assert.equal(host.agentOf('b').calls.length, 0)
-  host.emit('b', 'user/message', { source, content:[] })
-  await settle(() => !notes(home).queued.b)
-  await host.stop()
-})
-
-test('moving a receipt does not suppress other deliveries that share its exchange ID', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = freshHome(t)
-  const args = { exchangeId:'reused', toId:'b', fromId:'a', role:'request', text:'seen' }
-  const note = other => ({ at:1, args:{ ...args, ...other } })
-  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{
-    old:[{ ...note({}), recoveryHold:'history-seen' }],
-    b:[note({ role:'reply', text:'other role' })],
-    gb:[note({ roomId:'r1', role:'room', text:'other group' })],
-    a:[note({ toId:'a', fromId:'b', text:'other recipient' })]
-  } }))
-  const host = await start(home)
-  host.rt.moveQueued('old', 'b', [{ source:{ kind:'bot', exchangeId:args.exchangeId, senderSessionId:'a', role:'request' } }])
-  await settle(() => notes(home).queued.b.length === 2)
-  let finished = false
-  host.rt.settleRoomBatches = () => { finished = true }
-  t.mock.timers.tick(3000)
-  await settle(() => finished)
-  assert.deepEqual(host.agentOf('b').calls.map(call => call.source.role), ['reply'])
-  assert.deepEqual(host.agentOf('gb').calls.map(call => call.source.role), ['room'])
-  assert.deepEqual(host.agentOf('a').calls.map(call => call.source.role), ['request'])
-  await host.stop()
-})
-
-test('a stopped group still removes a waiting delivery with a durable receipt', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = freshHome(t)
-  const args = { exchangeId:'seen-in-group', toId:'b', fromId:'a', role:'room', roomId:'r1', text:'test' }
-  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{ gb:[{ at:1, args, recoveryHold:'history-seen' }] } }))
-  const host = await start(home)
-  const inbox = host.agentOf('gb').inbox
-  const waiting = { id:'msg', source:{ kind:'bot', exchangeId:args.exchangeId } }
-  inbox.nextTurn = [waiting]
-  const removed = []
-  inbox.remove = id => removed.push(id)
-  host.rt.goalRecoveryBlocked = () => true
-  let finished = false
-  host.rt.settleRoomBatches = () => { finished = true }
-  t.mock.timers.tick(3000)
-  await settle(() => finished)
-  await host.stop()
-  assert.deepEqual(removed, ['msg'])
-  assert.equal(notes(home).queued.gb[0].recoveryHold, 'history-seen')
-})
-
 test('a queued delivery with unreadable history is retained and reported', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
@@ -1461,54 +1238,6 @@ test('a queued delivery with unreadable history is retained and reported', async
   await settle(() => warnings.some(line => /history could not be read/.test(line)))
   assert.equal(second.agentOf('b').calls.length, 0)
   assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
-})
-
-test('a queued delivery is matched through DSH event pages without using inspect', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = freshHome(t)
-  const first = await start(home)
-  await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
-  const message = first.agentOf('b').calls[0]
-  await settle(() => notes(home).queued?.b?.length === 1)
-  await first.stop()
-
-  let inspectCalls = 0
-  const second = await start(home, undefined, async () => {
-    inspectCalls += 1
-    throw new Error('inspect must not be used when DSH provides events')
-  })
-  const requests = []
-  second.ctx.sessionController.events = async (request, signal) => {
-    requests.push(request)
-    assert.equal(signal.aborted, false)
-    if (requests.length === 1) return {
-      cursor: 50,
-      hasMore: true,
-      records: [
-        { type: 'event', event: { type: 'turn/start', seq: 48, time: 1, data: { turn: 4 } } },
-        { type: 'event', event: { type: 'user/message', seq: 49, time: 2, data: { source: { exchangeId: 'newer-exchange' } } } },
-        { type: 'event', event: { type: 'turn/end', seq: 50, time: 3, data: { turn: 4 } } },
-      ],
-    }
-    return {
-      cursor: 50,
-      hasMore: false,
-      records: [
-        { type: 'event', event: { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } } },
-        { type: 'event', event: { type: 'user/message', seq: 7, time: 1, data: { source: message.source } } },
-        { type: 'event', event: { type: 'turn/end', seq: 47, time: 2, data: { turn: 3 } } },
-      ],
-    }
-  }
-
-  t.mock.timers.tick(3000)
-  await settle(() => notes(home).queued.b[0]?.recoveryHold === 'history-seen')
-  assert.equal(second.agentOf('b').calls.length, 0)
-  assert.equal(inspectCalls, 0)
-  assert.deepEqual(requests, [
-    { address: { kind: 'session', sessionId: 'b' }, maxMessages: 50 },
-    { address: { kind: 'session', sessionId: 'b' }, maxMessages: 50, throughSeq: 50, beforeSeq: 48 },
-  ])
 })
 
 test('an uncertain queued exchange is not restarted through the interrupted-turn path', async (t) => {
@@ -1540,7 +1269,7 @@ test('a moved delivery retains its old history for later restart reconciliation'
   await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
   const message = first.agentOf('b').calls[0]
   await settle(() => notes(home).queued?.b?.length === 1)
-  first.rt.moveQueued('b', 'b-next', [message])
+  first.rt.moveQueued('b-next', [message])
   await settle(() => notes(home).queued?.['b-next']?.length === 1)
   await first.stop()
   assert.deepEqual(notes(home).queued['b-next'][0].resumeOrigins, ['b'])
@@ -1599,35 +1328,6 @@ test('external recovery-file changes are preserved and halt future Bot deliverie
   const entries = await readDiagnostics(home, rows => rows.some(row => /noting running turns failed/.test(row.text)))
   assert.ok(entries.some(row => /ECONFLICT/.test(row.text)))
   await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'Third' }, 'a'), /Recovery notes are unavailable/)
-  assert.deepEqual(readFileSync(file), external)
-})
-
-test('an unchanged recovery snapshot still detects an outside edit', async t => {
-  const home = freshHome(t), host = await start(home)
-  host.emit('gb', 'turn/start', { turn: 9 })
-  await settle(() => notes(home).turns?.gb?.turn === 9)
-  const file = join(home, 'inflight.json')
-  const external = '{"turns":{},"queued":{"other":[]}}'
-  writeFileSync(file, external)
-  host.rt.noteApproval('gb', undefined)
-  await readDiagnostics(home, rows => rows.some(row => /noting running turns failed.*ECONFLICT/.test(row.text)))
-  await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'After edit' }, 'a'), /Recovery notes are unavailable/)
-  assert.equal(readFileSync(file, 'utf8'), external)
-})
-
-test('recovery compares the original bytes when different input decodes to the same text', async t => {
-  const home = freshHome(t), host = await start(home)
-  const file = join(home, 'inflight.json')
-  await host.tool('message_bot', { to:'Writer', message:'Queued \uFFFD', when:'queue' }, 'a')
-  await settle(() => notes(home).queued?.b?.length === 1)
-  const original = readFileSync(file)
-  const marker = Buffer.from('\uFFFD')
-  const offset = original.indexOf(marker)
-  assert.notEqual(offset, -1)
-  const external = Buffer.concat([original.subarray(0, offset), Buffer.from([0xff]), original.subarray(offset + marker.length)])
-  assert.equal(external.toString('utf8'), original.toString('utf8'))
-  writeFileSync(file, external)
-  await assert.rejects(host.tool('message_bot', { to:'Writer', message:'Second', when:'queue' }, 'a'), /ECONFLICT/)
   assert.deepEqual(readFileSync(file), external)
 })
 
@@ -1751,55 +1451,4 @@ test('sender identity remains stable if the Bot is deleted during the write barr
     fsp.rename = originalRename
     syncBuiltinESMExports()
   }
-})
-
-test('a burst of queued deliveries coalesces recovery journal serialization', async t => {
-  const home = freshHome(t)
-  const host = await start(home)
-  const original = JSON.stringify
-  let journalSerializations = 0
-  JSON.stringify = function (value, ...args) {
-    if (value && typeof value === 'object' && Object.hasOwn(value, 'turns') && Object.hasOwn(value, 'queued')) journalSerializations++
-    return original.call(this, value, ...args)
-  }
-  try {
-    const deliveries = Array.from({length:20}, (_, index) => host.rt.deliver({
-      fromId:'a', toId:'b', role:'request', text:`queued ${index}`, exchangeId:`burst-${index}`,
-    }))
-    assert.equal(journalSerializations, 0, 'the full journal is encoded only when the pending write starts')
-    await Promise.all(deliveries)
-    await settle(() => notes(home).queued.b?.length === 20)
-    assert.ok(journalSerializations < 20)
-    assert.equal(new Set(notes(home).queued.b.map(item => item.args.exchangeId)).size, 20)
-  } finally {
-    JSON.stringify = original
-    await host.stop()
-  }
-})
-
-test('history-seen queue holds emit one summary and retain individual recovery diagnostics', async t => {
-  t.mock.timers.enable({apis:['setTimeout']})
-  const home = freshHome(t)
-  const records = Array.from({length:3}, (_, index) => ({
-    exchangeId:`held-burst-${index}`, toId:'b', fromId:'a', role:'request', text:'check',
-  }))
-  writeFileSync(join(home,'inflight.json'), JSON.stringify({queued:{
-    b:records.map(args => ({at:1,args})),
-  }}))
-  const logs = new Map([['b',records.map(source => ({type:'user/message',data:{source}}))]])
-  const host = await start(home, logs)
-  const warnings = [], notices = []
-  host.rt.warn = (...args) => warnings.push(args)
-  host.rt.noteFailure = entry => notices.push(entry)
-  let finished = false
-  host.rt.settleRoomBatches = () => { finished = true }
-  t.mock.timers.tick(3000)
-  await settle(() => finished)
-  assert.equal(host.agentOf('b').calls.length,0)
-  assert.equal(notes(home).queued.b.filter(item => item.recoveryHold === 'history-seen').length,3)
-  assert.equal(notices.filter(entry => entry.code === 'RESUME_DELIVERY_UNCERTAIN').length,3)
-  const summaries = warnings.filter(args => String(args[0]).includes('were not resent'))
-  assert.equal(summaries.length,1)
-  assert.deepEqual(summaries[0].slice(1),[3,'b',3,0])
-  await host.stop()
 })

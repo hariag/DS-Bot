@@ -1,7 +1,7 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
-import { ArrowUpIcon, CloseIcon, ArrowDownIcon, GoalIcon, MemoryIcon, SearchIcon } from './icons.js'
+import { ArrowUpIcon, CloseIcon, ArrowDownIcon, GoalIcon, MemoryIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { AgentBadge } from './agent-badge.js'
 import { ActivityIndicator } from './activity-row.js'
@@ -48,8 +48,7 @@ function MemoryNotice({ shown }) {
 
 export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
   const [boardOpen, setBoardOpen] = useState(false)
-  const [boardReview, setBoardReview] = useState(false)
-  useEffect(() => { setBoardOpen(false); setBoardReview(false) }, [sessionId])
+  useEffect(() => { setBoardOpen(false) }, [sessionId])
   const roster = useRoster(value => value)
   const selectedView = useStore?.(state => state.view)
   const away = useConversationViews?.(views => views.some(view => view.id === selectedView && view.id !== 'chat')) === true
@@ -139,16 +138,10 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow)))
   return h('div', { className: 'bt-head' },
-    showGoal ? h(GoalIsland, { room, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill, openReview: () => { actions.closeGoal?.(); setBoardReview(true); setBoardOpen(true) } }) : pill,
-    !away && (room || bot) ? h('button', { type: 'button', className: 'bt-board-launch', onClick: () => { setBoardReview(false); setBoardOpen(true) } }, t('Task board')) : null,
-    boardOpen && !away && (room || bot) ? h(TaskBoard, { key: room?.id ?? bot.id, scope: room ? { kind: 'room', id: room.id } : { kind: 'personal', id: bot.id }, title: name, goal: room?.goal, initialReview: boardReview, refreshGoal: actions.refreshTeam, currentRoomGoal: actions.currentRoomGoal, resolveReview: room ? (goalId, reviewId, evidence) => actions.goalReviewResolve(room.id, goalId, reviewId, evidence) : undefined, close: () => setBoardOpen(false) }) : null,
+    showGoal ? h(GoalIsland, { room, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill }) : pill,
+    !away && (room || bot) ? h('button', { type: 'button', className: 'bt-board-launch', onClick: () => setBoardOpen(true) }, t('Task board')) : null,
+    boardOpen && !away && (room || bot) ? h(TaskBoard, { key: room?.id ?? bot.id, scope: room ? { kind: 'room', id: room.id } : { kind: 'personal', id: bot.id }, title: name, close: () => setBoardOpen(false) }) : null,
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
-    room !== undefined && !away
-      ? h('button', {
-        type: 'button', className: 'bt-icon-btn bt-head-search', 'aria-label': t('Search this group'), title: t('Search this group'),
-        onClick: () => actions.openGroupSearch(room.id),
-      }, h(SearchIcon))
-      : null,
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions }))
 }

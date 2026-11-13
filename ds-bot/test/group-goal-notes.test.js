@@ -26,20 +26,6 @@ test('automatic status changes retain notes, but status cycles do not make them 
   assert.deepEqual([item(room).noteStatusVersion, item(room).noteStatus, item(room).noteAt], [3, 'pending', 5_000])
 })
 
-test('explicitly reapplying the same note binds legacy or historical evidence to the current status', () => {
-  const room = makeRoom('evidence')
-  update(room, { note: 'evidence' }, 1_000)
-  assert.match(taskNoteText(item(room), 1_000), /note recorded for this status/)
-  markTasks(room, 'b', 'pending', 'working', undefined, 2_000)
-  markTasks(room, 'b', 'working', 'pending', undefined, 3_000)
-  update(room, { note: 'evidence' }, 4_000)
-  assert.deepEqual([item(room).noteStatusVersion, item(room).noteAt], [2, 4_000])
-  item(room).noteHistory = [{ text: 'previous' }]
-  delete item(room).note
-  update(room, { note: '' }, 5_000)
-  assert.equal(item(room).noteHistory, undefined)
-})
-
 test('automatic failure replaces the current note without losing its previous evidence', () => {
   const room = makeRoom()
   update(room, { status: 'working', note: 'evidence: team/events/check.json' }, 1_000)

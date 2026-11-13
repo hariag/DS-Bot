@@ -2,14 +2,11 @@
 // what it sends out waits for the user. DSH does not fence reads, so this closes the
 // tools DS Bot owns and checks the paths that the file tools and the shell are given;
 // a shell can still reach any file the account can (see docs/plans).
-import { isAbsolute, join, resolve } from 'node:path'
-import { homedir } from 'node:os'
-import { lstatSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { within } from './folders.js'
 import { unquote } from './text.js'
-import { openSessions } from './threads.js'
 
-const FILE_TOOLS = { read: 'file_path', write: 'file_path', edit: 'file_path', read_image: 'file_path', str_replace_editor: 'path', read_document: 'path' }
+const FILE_TOOLS = { read: 'file_path', write: 'file_path', edit: 'file_path', read_image: 'file_path', str_replace_editor: 'path' }
 const WRITE_TOOLS = ['write', 'edit', 'str_replace_editor']
 const SEARCH_TOOLS = ['glob', 'grep']
 const SHELL_TOOLS = ['bash', 'pwsh', 'terminal_open', 'terminal_send']
@@ -26,45 +23,6 @@ const asShell = (path) => {
   return drive ? [slashed, `/${drive[1]}${slashed.slice(2)}`] : [slashed]
 }
 
-// This is a conservative inspection of explicit shell words, not a shell parser
-// or an OS sandbox. Preserve quoted path fragments so aliases can be resolved.
-
-// Here-document bodies are data, not commands. The word-level checks below (a
-// dynamic `cd`, an ancestor path) must not run on them: a script that merely
-// contains `cd "$WT/..."` was refused as a board read. The literal alias check
-// above still scans the whole text.
-function withoutHereDocuments(text) {
-  const lines = text.split('\n'), kept = []
-  let delimiter
-  for (const line of lines) {
-    if (delimiter !== undefined) {
-      if (line.trimEnd() === delimiter) delimiter = undefined
-      continue
-    }
-    kept.push(line)
-    const found = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1/.exec(line)
-    if (found) delimiter = found[2]
-  }
-  return kept.join('\n')
-}
-
-function shellWords(text) {
-  const words = []
-  let word = '', quote, escape = false
-  const add = () => { if (word !== '') words.push(word); word = '' }
-  for (const char of text) {
-    if (escape) { word += char; escape = false; continue }
-    if (char === '\\' && quote !== "'") { escape = true; continue }
-    if (quote) { if (char === quote) quote = undefined; else word += char; continue }
-    if (char === "'" || char === '"') { quote = char; continue }
-    if (/\s|[|;&()<>]/.test(char)) { add(); continue }
-    word += char
-  }
-  if (quote || escape) return undefined
-  add()
-  return words
-}
-
 export function install(rt) {
   const { ctx, state } = rt
 
@@ -72,10 +30,7 @@ export function install(rt) {
   const privateBots = () => Object.values(state.bots).filter(bot => bot.private === true)
   // Deleting a private Bot does not make the files and memory it leaves behind public.
   const protectedBots = () => [...new Map([...(state.privateArchives ?? []), ...privateBots()].map(bot => [bot.id, bot])).values()]
-  // Every Session a private Bot speaks from: its own chat, the parts it opened while it
-  // was busy (a background part reads and writes in that Bot's name), its earlier parts
-  // and its groups. A deleted Bot's archive lists them itself.
-  const sessionsOf = bot => [...new Set([bot.id, ...(bot.sessionIds ?? [rt.chatOf(bot.id), ...(bot.segments ?? []).map(segment => segment.sessionId), ...openSessions(bot), ...rt.groupSessionsOf(bot.id)])])]
+  const sessionsOf = bot => [...new Set([bot.id, ...(bot.sessionIds ?? [rt.chatOf(bot.id), ...(bot.segments ?? []).map(segment => segment.sessionId), ...rt.groupSessionsOf(bot.id)])])]
   const dataRoots = () => [rt.dshHome, rt.home, process.env.DS_BOT_USER_DSH_HOME?.trim()].filter(Boolean)
 
   // A path as it is and as the file system resolves it, folded for comparing. realBeyond
@@ -86,7 +41,6 @@ export function install(rt) {
   // parent chain, however many subagents sit between them.
   const callerOf = async (exec) => {
     const own = rt.selfOf(exec.agent?.id) ?? rt.selfOf(exec.agent?.session?.id)
-      ?? rt.userRedoOwner?.(exec.agent?.id)?.id ?? rt.userRedoOwner?.(exec.agent?.session?.id)?.id
     if (own !== undefined) return own
     let parent = exec.agent?.session?.header?.parentSession
     const seen = new Set()
@@ -123,7 +77,6 @@ export function install(rt) {
     join(rt.home, 'learning', 'state.json'),
     join(rt.home, 'ocr.json'),
     join(rt.home, 'secrets.json'),
-    join(rt.home, 'task-reports'),
     join(rt.home, 'memory', 'journal.jsonl'),
     join(rt.home, 'memory', 'journal.torn'),
     join(rt.home, 'memory', 'pending.json'),
@@ -253,9 +206,9 @@ export function install(rt) {
         if (bot) throw closed(bot, 'settings')
         return
       }
-      case 'bot_recall':
-      case 'bot_remember':
-      case 'bot_forget': {
+      case 'recall':
+      case 'remember':
+      case 'forget': {
         const bot = target(args.scope)
         if (bot) throw closed(bot, 'memory')
         return
@@ -353,132 +306,16 @@ export function install(rt) {
       const keys = await spellings(base === undefined ? path : resolve(base, path))
       return keys.some(key => roots.some(root => within(key, root) || (search && within(root, key))))
     }
-    let blocked = false, tooComplex = false
+    let blocked = false
     if (name in FILE_TOOLS) blocked = await matches(args[FILE_TOOLS[name]])
     else if (SEARCH_TOOLS.includes(name)) blocked = await matches(args.path || '.', true) || (typeof args.pattern === 'string' && await matches(args.pattern.replace(/[*?[{].*$/, ''), true))
     else if (name === 'subagent' || name === 'subagent_fork') blocked = await matches(args.cwd, true)
     else if (name === 'working_directory') blocked = await matches(args.cd, true)
     else if (SHELL_TOOLS.includes(name)) {
-      // A persistent terminal can change directory in an earlier send. Its
-      // current cwd is not exposed to this guard, so relative aliases cannot
-      // be checked reliably. The user can still operate their own terminal.
-      if (name === 'terminal_send') throw new Error('The terminal working directory cannot be verified. Use a one-shot shell with a known working directory.')
-      // Only fields the shell actually runs (and the folder it runs in). A free-text
-      // description is not shell: an apostrophe in it ("the other session's state")
-      // made the quote scan see an unterminated quote and refuse the whole call.
-      const text = ['command', 'text', 'workdir', 'cwd']
-        .filter(key => typeof args[key] === 'string').map(key => args[key]).join('\n')
-      const flat = fold(text.replace(/\\/g, '/'))
-      blocked = flat.includes('board-v1') || flat.includes('tasks.sqlite')
-        // The Bot's private home stays closed even when nested quoting hides the
-        // word from the tokenizer ($HOME may appear inside an awk program).
-        || /\$(?:HOME|\{HOME\})[^\s"\'`]*\.dsh\b/.test(flat) || /(?:^|[\s"\'`(=])\.dsh\/bot\b/.test(flat)
-      // A path to the ordinary workspace may share rt.home with board-v1.
-      // Resolve individual shell words (including symlinks) instead of blocking
-      // every command that mentions that home. Check directory arguments too.
-      if (!blocked) {
-        const words = shellWords(withoutHereDocuments(text))
-        // Bash's nested quoting (e.g. awk -F'"' inside a double-quoted string)
-        // can defeat this tokenizer even in ordinary, valid commands. Do not fail
-        // closed wholesale: block when the raw text can still hide a dynamic cd or
-        // a protected path, and otherwise keep the literal checks above.
-        if (words === undefined) {
-          const leaks = /(?:~|\$HOME|\$\{HOME\}|\$DSH|\$\{DSH\}|\.dsh\/bot|board-v1|tasks\.sqlite)/.test(text)
-          if (leaks) blocked = true
-          else {
-            // A cd through a variable is ordinary in worktree scripts. Accept it
-            // only when the same command assigns that variable exactly once to a
-            // literal path; an unassigned or rebuilt variable still fails closed.
-            for (const match of text.matchAll(/(?:^|[\s;&|(){}])cd\s+(?:-\S+\s+)*["']?\$([A-Za-z_][\w]*)([^\s;&|()]*)/g)) {
-              const literal = assignedLiteral(match[1])
-              if (!literal) { blocked = true; break }
-              const suffix = (match[2] ?? '').replace(/["']$/, '')
-              if (suffix.includes('..') || await matches(literal + suffix)) { blocked = true; break }
-            }
-            if (!blocked) for (const candidate of text.match(/(?:~|\/)[^\s"'`;|&<>()]*/g) ?? []) {
-              if (await matches(candidate)) { blocked = true; break }
-            }
-          }
-        }
-        else if (words.length > 4096) { blocked = true; tooComplex = true }
-        else {
-          const expand = (word, folder) => {
-            const assignment = /^(?:--?[\w-]+|[A-Za-z_][\w]*)=(.*)$/.exec(word)
-            let path = assignment ? assignment[1] : word
-            path = path.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, homedir())
-            path = path.replace(/^\$(?:PWD|\{PWD\})(?=\/|$)/, folder ?? base ?? process.cwd())
-            if (path === '~' || path.startsWith('~/')) path = homedir() + path.slice(1)
-            return path.replace(/[*?\[].*$/, '')
-          }
-          const requested = typeof args.cwd === 'string' ? args.cwd : typeof args.workdir === 'string' ? args.workdir : undefined
-          const requestedPath = requested === undefined ? undefined : expand(requested, base)
-          // The shell resolves a relative workdir against the Session cwd,
-          // never against the DSH service's own process cwd.
-          if ((!base && (!requestedPath || !isAbsolute(requestedPath))) || (requestedPath && /[$`]/.test(requestedPath))) blocked = true
-          // A cd through a variable is ordinary in scripts. Accept it only when
-          // this command assigns that variable exactly once to a literal absolute
-          // path; an unassigned or rebuilt variable still fails closed.
-          const assignedLiteral = name => {
-            const values = [...text.matchAll(new RegExp(`(?:^|[\\s;&|(){}])${name}=([^\\s;&|()]+)`, 'g'))]
-              .map(found => found[1].replace(/^["']|["']$/g, ''))
-            if (values.length !== 1) return undefined
-            // A literal absolute prefix is enough: OUT=/tmp/run-$(date) still cd's
-            // below /tmp. Anything under the private Bot home stays refused.
-            const prefix = /^[^$`]*/.exec(values[0])?.[0] ?? ''
-            if (!prefix.startsWith('/') || prefix.startsWith(homedir() + '/.dsh')) return undefined
-            return prefix
-          }
-          const firstBase = requestedPath ? resolve(base ?? process.cwd(), requestedPath) : base
-          if (!blocked && firstBase && await matches(firstBase, true)) blocked = true
-          const bases = [firstBase].filter(Boolean)
-          // Shell branches and subshells can leave the current directory at
-          // several earlier locations. Preserve the possible paths through
-          // every explicit cd; an excessive or dynamic set fails closed.
-          for (let i = 0; !blocked && i < words.length; i++) if (words[i] === 'cd') {
-            let j = i + 1
-            while (words[j] === '-L' || words[j] === '-P' || words[j] === '--') j++
-            if (words[j] === '-') { blocked = true; break }
-            for (const folder of [...bases]) {
-              let next = words[j] === undefined ? homedir() : expand(words[j], folder)
-              if (next && /[$`]/.test(next)) {
-                const variable = /^\$([A-Za-z_][\w]*)(\/.*)?$/.exec(next)
-                const literal = variable && assignedLiteral(variable[1])
-                if (literal) next = literal + (variable[2] ?? '')
-              }
-              if (!next || /[$`]/.test(next)) { blocked = true; break }
-              const target = resolve(folder, next)
-              if (await matches(target)) { blocked = true; break }
-              if (!bases.includes(target)) bases.push(target)
-              if (bases.length > 64) { blocked = true; tooComplex = true; break }
-            }
-          }
-          let inspected = 0
-          for (const word of words) {
-            if (blocked) break
-            for (const folder of bases.length ? bases : [undefined]) {
-              // Bound the product of possible directories and shell words.
-              // Complex commands can be split and retried as separate calls.
-              if (++inspected > 8192) { blocked = true; tooComplex = true; break }
-              const path = expand(word, folder)
-              if (!path || path.startsWith('-') || path === 'cd') continue
-              const absolute = folder === undefined ? path : resolve(folder, path)
-              // Bare shell words are usually commands or ordinary arguments;
-              // a bare symlink can still name a protected board alias.
-              if (!/[\\/]/.test(path) && path !== '.' && path !== '..') {
-                try { if (!lstatSync(resolve(absolute)).isSymbolicLink()) continue } catch { continue }
-              }
-              // A shell word that is an ancestor of the board (a bare /, /root or ~) is
-              // not an access to it: here-document bodies are command data and routinely
-              // carry a lone "/" in tables and units. Any word that resolves inside the
-              // board still blocks, and the literal alias check above catches named paths.
-              if (await matches(absolute)) { blocked = true; break }
-            }
-            if (blocked) break
-          }
-        }
-      }
+      const text = fold(strings(args).join('\n').replace(/\\/g, '/'))
+      const home = (await spellings(rt.home)).flatMap(asShell)
+      blocked = text.includes('board-v1') || text.includes('tasks.sqlite') || home.some(path => text.includes(path)) || text.includes('~/.dsh/bot')
     }
-    if (tooComplex) throw new Error('Shell command is too complex to verify; split it into smaller calls.')
     if (blocked) throw new Error('The instance user task board is private to the user.')
   }
 

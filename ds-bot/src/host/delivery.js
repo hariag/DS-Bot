@@ -1,6 +1,5 @@
 // Delivery: how one Bot, the user, or DS Bot itself puts a message into a Bot Session.
 import { randomUUID } from 'node:crypto'
-import { isDeepStrictEqual } from 'node:util'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { HISTORY_TIMEOUT_MS, LONG_HEAD, MESSAGE_INLINE_MAX, READ_LINE_MAX, SOURCE_KIND, TEXT_KEPT, TEXT_SHOW_MAX } from './constants.js'
 import { headOf, textOf } from './text.js'
@@ -15,7 +14,7 @@ export function install(rt) {
     return resolved.agent
   }
 
-  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false, retried = false, resent = false, abandoned = false, asker, botRequest = false } = {}) => {
+  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false, retried = false, resent = false, abandoned = false, asker } = {}) => {
     // What came back for work another Bot gave this one says where its answer goes.
     const goesOn = asker === undefined ? '' : ` · for the work ${asker} asked you for; your answer goes to ${asker} once everything you handed on is back`
     // A wait the user gave up reads as its own thing: the other Bot never answered.
@@ -39,7 +38,6 @@ export function install(rt) {
     if (role === 'update') return '[Your profile was updated — follow the latest version]'
     if (role === 'secret') return '[Secret card]'
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`
-    if (botRequest) return `[Message from ${fromName} · this request's turn returns your final reply]`
     return `[Message from ${fromName}]`
   }
 
@@ -49,28 +47,6 @@ export function install(rt) {
   // What two Bots say to each other is in the book of the pair (ledger.js), whole, written
   // before the message goes out. A message is shown once a record says it was delivered.
   const pairBook = (a, b) => `pair-${[String(a), String(b)].sort().join('-')}`
-  const deepFreeze = value => {
-    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-      for (const child of Object.values(value)) deepFreeze(child)
-      Object.freeze(value)
-    }
-    return value
-  }
-  const taskMessage = ({toId, sessionId, roomId, text, messageId, exchangeId, actionId, taskRevision, actionRevision}) => {
-    const bot = rt.botOf(toId), room = roomId ? rt.roomOf(roomId) : undefined
-    const role = roomId ? 'room' : 'request'
-    if (!bot || bot.private === true || typeof text !== 'string' || text.length === 0 || typeof messageId !== 'string' || !messageId
-      || typeof exchangeId !== 'string' || !exchangeId || typeof actionId !== 'string' || !actionId
-      || !Number.isSafeInteger(taskRevision) || !Number.isSafeInteger(actionRevision)) throw new Error('Invalid task delivery')
-    if (roomId && (!room || !room.members?.includes(toId) || room.sessions?.[toId] !== sessionId
-      || rt.groupOwners.get(sessionId)?.botId !== toId || rt.groupOwners.get(sessionId)?.roomId !== roomId)) throw new Error('Task recipient left the group')
-    if (!roomId && sessionId !== rt.chatOf(toId)) throw new Error('Task recipient Session changed')
-    const source = { kind:SOURCE_KIND, form:'relay', role, exchangeId, senderName:'You',
-      ...(roomId ? {roomId} : {}), taskAction:{id:actionId, taskRevision, actionRevision} }
-    const message = createUserMessage({source, content:[{type:'text',text:`${headerFor(role,'You',room?.name,undefined,roomId?'task from Trello':'new message')}\n${text}`}]})
-    return deepFreeze({...message, id:messageId})
-  }
-  rt.prepareBoardTaskMessage = taskMessage
   // A pair's book starts from the exchanges a team kept in state.json before the ledger.
   rt.ledger.importer('pair-', book => state.exchanges
     .filter(entry => entry.from !== undefined && entry.to !== undefined && pairBook(entry.from, entry.to) === book)
@@ -103,27 +79,11 @@ export function install(rt) {
   // which DSH projects for the recipient's model and tools. `length`: the whole message's
   // length when it went as a file (attachLong). `work`: the work (handoffs.js) a
   // result that came back goes on with. `merged`: a request that takes in an earlier
-  // one its recipient had not read, under that one's exchange. `fromPart`: the Session
-  // of the sending Bot, which a reply comes back to when that is a background part.
+  // one its recipient had not read, under that one's exchange.
   async function deliver(args, observation) {
     let admissionStarted = false
     try {
-      return await deliverToAgent({...args, preparedMessage:observation?.preparedMessage}, (agent, message) => {
-        const result = observation?.beforeAdmission?.(agent, message)
-        // Admission follows immediately; an async guard cannot establish a
-        // decision before then. Reject it instead of silently sending first.
-        if (result && typeof result.then === 'function') {
-          void Promise.resolve(result).catch(() => {})
-          throw new Error('Admission guard must be synchronous')
-        }
-        admissionStarted = true
-      }, (agent, message) => {
-        const result = observation?.afterAdmission?.(agent, message)
-        if (result && typeof result.then === 'function') {
-          void Promise.resolve(result).catch(() => {})
-          throw new Error('Admission receipt must be synchronous')
-        }
-      })
+      return await deliverToAgent(args, agent => { observation?.beforeAdmission?.(agent); admissionStarted = true })
     } catch (error) {
       // A followup/steer can enqueue the message before it throws. Only a
       // failure before entering that call proves this attempt was not admitted.
@@ -134,7 +94,7 @@ export function install(rt) {
     }
   }
 
-  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, fromPart, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, reviewReceipt, groupKickoff, taskAction, preparedMessage }, onAdmission, onAdmitted) {
+  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect }, onAdmission) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -150,13 +110,10 @@ export function install(rt) {
       senderName: fromName,
       ...(work ? { work } : {}),
       ...(fromId ? { senderSessionId: fromId } : {}),
-      ...(fromPart ? { senderPart: fromPart } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(roomId ? { roomId } : {}),
       ...(reviewId ? { reviewId } : {}),
       ...(reviewInspect ? { reviewInspect: true } : {}),
-      ...(reviewReceipt ? { reviewReceipt: true } : {}),
-      ...(groupKickoff === true ? { groupKickoff: true } : {}),
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
       ...(resumed ? { resumed: true } : {}),
@@ -166,8 +123,6 @@ export function install(rt) {
       ...(abandoned ? { abandoned: true } : {}),
       ...(Array.isArray(recoveryIds) && recoveryIds.length > 0 ? { recoveryIds: [...new Set(recoveryIds.filter(value => typeof value === 'string'))] } : {}),
       ...(typeof recoveryKey === 'string' ? { recoveryKey } : {}),
-      ...(taskAction && typeof taskAction.id === 'string' && Number.isSafeInteger(taskAction.taskRevision) && Number.isSafeInteger(taskAction.actionRevision)
-        ? {taskAction:{id:taskAction.id, taskRevision:taskAction.taskRevision, actionRevision:taskAction.actionRevision}} : {}),
     }
     const targetSessionId = sessionId ?? rt.chatOf(toId)
     // On disk before it goes out: a message the book could not keep is not sent, so none is
@@ -185,27 +140,17 @@ export function install(rt) {
     const agent = await resolveAgent(targetSessionId)
     // A steered message cuts into a running turn at its next step; a follow-up
     // queues for the next turn (see turns.js for how each is routed).
-    const generated = createUserMessage({
+    const message = createUserMessage({
       content: [
-        { type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed, retried, resent, abandoned, asker, botRequest: from !== undefined && role === 'request' })}\n${text}` },
+        { type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed, retried, resent, abandoned, asker })}\n${text}` },
         ...images.map(attachment => ({ type: 'image', attachment })),
         ...files.map(attachment => ({ type: 'file', attachment })),
       ],
       source,
     })
-    let message = generated
-    if (preparedMessage !== undefined) {
-      if (!preparedMessage || typeof preparedMessage.id !== 'string' || !preparedMessage.id || !isDeepStrictEqual({...preparedMessage, id:undefined}, {...generated, id:undefined})) {
-        throw new Error('Prepared task message does not match the live delivery')
-      }
-      message = deepFreeze({...generated, id:preparedMessage.id})
-    }
-    // The observer runs synchronously on the exact immutable message that is
-    // about to enter this agent. A rejection is known to precede admission.
-    onAdmission(agent, message)
+    onAdmission(agent)
     if (steer) agent.steer(message)
     else agent.followup(message)
-    onAdmitted(agent, message)
     await ctx.sessions.flush(agent.session)
     if (book !== undefined) {
       rt.ledger.append(book, { event: 'delivered', id: exchangeId, sessionId: targetSessionId, time: Date.now() })

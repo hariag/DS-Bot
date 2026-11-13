@@ -3,19 +3,10 @@ import assert from 'node:assert/strict'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { goalReviewGuard } from '../src/host/goals.js'
 
-test('a later allow policy cannot bypass the real inspection tool guard', async t => {
-  let NativeToolExecutor
-  try {
-    NativeToolExecutor = await import('@deepseek-ai/dsh-tool-executor-native')
-  } catch (error) {
-    if (error?.code === 'ERR_MODULE_NOT_FOUND' && error.message.includes('@deepseek-ai/dsh-tool-executor-native')) {
-      t.skip('this DSH version does not include the native tool executor')
-      return
-    }
-    throw error
-  }
+test('a later allow policy cannot bypass the real inspection tool guard', async () => {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -37,8 +28,7 @@ test('a later allow policy cannot bypass the real inspection tool guard', async 
     })
     const blocked = await call('review-admin')
     assert.equal(blocked.results[0].result.isError, true)
-    assert.match(blocked.results[0].result.content[0].text, /delivery inspection/i)
-    assert.match(blocked.results[0].result.content[0].text, /Allowed now: read, glob, grep/)
+    assert.match(blocked.results[0].result.content[0].text, /inspection only/)
     assert.equal(writes, 0)
     const allowed = await call('ordinary-agent')
     assert.equal(allowed.results[0].result.isError, false)
