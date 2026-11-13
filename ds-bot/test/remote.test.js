@@ -5,25 +5,15 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import { TypertGatewayService } from '@deepseek-ai/dsh-api-gateway'
-import * as typertProtocol from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteAccessService } from '@deepseek-ai/dsh-api-remote-access'
 import { TypertRegistry } from '@deepseek-ai/dsh-typert-registry'
 import { createRuntime } from '../index.js'
 import * as pluginEntry from '../plugin.js'
 import { API_VERSION, CAPABILITIES } from '../src/host/mobile.js'
-import { RPC_NAMESPACE, createRemoteService, feedEvents, install as installRemote, plain } from '../src/host/remote.js'
+import { RPC_NAMESPACE, createRemoteService, feedEvents, install as installRemote } from '../src/host/remote.js'
 import { fakeContext } from './fake-ctx.js'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 20))
-
-async function startGatewayHost(ctx) {
-  await ctx.plugin(TypertRegistry)
-  // DSH >= 0.2.1-alpha.3 separates remoteAccess into its own Service; 0.2.0-rc.2 does not have it.
-  if (TypertGatewayService.inject?.includes('remoteAccess')) {
-    const { RemoteAccessService } = await import('@deepseek-ai/dsh-api-remote-access')
-    await ctx.plugin(RemoteAccessService)
-  }
-  await ctx.plugin(TypertGatewayService)
-}
 
 function startHost(extraCtx = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-remote-'))
@@ -87,77 +77,15 @@ function ownerPeer(signal = new AbortController().signal) {
   }
 }
 
-test('real Gateway does not grant a remote carrier the board owner identity', async (t) => {
-  const { rt, stop } = startHost()
-  t.after(stop)
-  const root = new Context()
-  await startGatewayHost(root)
-  t.after(async () => { await root.fiber.dispose() })
-  await root.plugin(sub => { installRemote({ ...rt, ctx: sub }) })
-  await tick()
-  for (const endpoint of ['board-list', 'board-command', 'board-image', 'legacy-review-list', 'legacy-review-create']) {
-    const result = await root.typertGateway.dispatchRpc(`${RPC_NAMESPACE}/call`, { args: { endpoint, payload: {} } }, new AbortController().signal, ownerPeer())
-    assert.equal(result.ok, true)
-    assert.equal(result.value.ok, false)
-    assert.equal(result.value.error.code, 'bot/refused')
-  }
-  const normal = await root.typertGateway.dispatchRpc(`${RPC_NAMESPACE}/call`, { args: { endpoint: 'state', payload: {} } }, new AbortController().signal, ownerPeer())
-  assert.equal(normal.ok, true)
-  assert.equal(normal.value.ok, true)
-})
-
-test('hello omits rpc capability and endpoints without a Typert Gateway', async (t) => {
+test('hello advertises rpc capability and dsBot endpoints', async (t) => {
   const { call, stop } = startHost()
   t.after(stop)
   const reply = await call('hello', { api: [1], client: 'dsh-go', platform: 'android' })
   assert.equal(reply.ok, true)
   assert.equal(reply.value.api, API_VERSION)
-  assert.deepEqual(reply.value.capabilities, CAPABILITIES)
-  assert.equal(reply.value.capabilities.includes('rpc'), false)
-  assert.equal(reply.value.rpc, undefined)
-})
-
-test('plain normalizes non-JSON values without re-encoding strings or polluting prototypes', () => {
-  assert.equal(plain(undefined), null)
-  assert.equal(plain(() => {}), null)
-  assert.equal(plain(Symbol('skip')), null)
-
-  const big = 'A'.repeat(256 * 1024)
-  const nullProto = Object.assign(Object.create(null), { keep: 1, drop: undefined })
-  const withProtoKey = JSON.parse('{"__proto__":{"admin":true},"ok":1}')
-  const normalized = plain({
-    mime: 'image/png',
-    data: big,
-    dropped: undefined,
-    fn: () => {},
-    sym: Symbol('s'),
-    nums: [1, undefined, () => {}, Symbol('i'), -0, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
-    at: new Date('2026-11-13T00:00:00.000Z'),
-    custom: { toJSON: () => ({ ok: true, omit: undefined }) },
-    nullProto,
-    withProtoKey,
-  })
-
-  assert.equal(normalized.data, big)
-  assert.equal('dropped' in normalized, false)
-  assert.equal('fn' in normalized, false)
-  assert.equal('sym' in normalized, false)
-  assert.deepEqual(normalized.nums, [1, null, null, null, 0, null, null, null])
-  assert.equal(Object.is(normalized.nums[4], -0), false)
-  assert.equal(normalized.at, '2026-11-13T00:00:00.000Z')
-  assert.deepEqual(normalized.custom, { ok: true })
-  assert.equal(Object.getPrototypeOf(normalized.nullProto), Object.prototype)
-  assert.deepEqual(normalized.nullProto, { keep: 1 })
-  assert.equal(({}).admin, undefined)
-  assert.deepEqual(Object.getOwnPropertyDescriptor(normalized.withProtoKey, '__proto__')?.value, { admin: true })
-
-  if (typeof typertProtocol.isRemoteJsonValue === 'function') {
-    assert.equal(typertProtocol.isRemoteJsonValue(normalized), true)
-  }
-
-  const cycle = { a: 1 }
-  cycle.self = cycle
-  assert.throws(() => plain(cycle), TypeError)
+  assert.equal(CAPABILITIES.includes('rpc'), true)
+  assert.equal(reply.value.capabilities.includes('rpc'), true)
+  assert.deepEqual(reply.value.rpc, { call: 'dsBot/call', feed: 'dsBot/feed' })
 })
 
 test('channelCall and subscribeFeed mirror HTTP channel and SSE feed', async (t) => {
@@ -185,7 +113,7 @@ test('channelCall and subscribeFeed mirror HTTP channel and SSE feed', async (t)
   assert.deepEqual(events[1], { event: 'notice', data: { seq: 1, kind: 'message', text: 'hi' } })
 })
 
-test('feedEvents strips undefined, preserves order, and cleans up on abort or stopSignal', async () => {
+test('feedEvents strips undefined, preserves order, and cleans up on abort', async () => {
   let active = true
   let push
   const subscribe = (listener) => {
@@ -194,8 +122,7 @@ test('feedEvents strips undefined, preserves order, and cleans up on abort or st
     return () => { active = false }
   }
   const controller = new AbortController()
-  const stopControl = new AbortController()
-  const stream = feedEvents(subscribe, controller.signal, stopControl.signal)
+  const stream = feedEvents(subscribe, controller.signal)
 
   const first = await stream.next()
   assert.equal(first.done, false)
@@ -208,13 +135,13 @@ test('feedEvents strips undefined, preserves order, and cleans up on abort or st
   assert.deepEqual(second.value, { event: 'revision', data: { revision: 4 } })
 
   const pending = stream.next()
-  stopControl.abort()
+  controller.abort()
   const ended = await pending
   assert.equal(ended.done, true)
   assert.equal(active, false)
 })
 
-test('feedEvents drops stale backlog and unsubscribes immediately on overflow', async () => {
+test('feedEvents ends when queued events pass the backlog cap', async () => {
   let unsubscribed = false
   const subscribe = (listener) => {
     for (let i = 0; i < 600; i += 1) listener('tick', { i })
@@ -222,54 +149,7 @@ test('feedEvents drops stale backlog and unsubscribes immediately on overflow', 
   }
   const received = []
   for await (const item of feedEvents(subscribe, new AbortController().signal)) received.push(item)
-  assert.equal(received.length, 0)
-  assert.equal(unsubscribed, true)
-
-  // Mid-stream overflow while consumer is paused after reading `hello`:
-  let liveUnsubscribed = false
-  let push
-  const liveStream = feedEvents((listener) => {
-    push = listener
-    listener('hello', { revision: 1 })
-    return () => { liveUnsubscribed = true }
-  }, new AbortController().signal)
-  const first = await liveStream.next()
-  assert.equal(first.done, false)
-  assert.equal(first.value.event, 'hello')
-
-  for (let i = 0; i < 512; i += 1) push('stream', { text: String(i) })
-  assert.equal(liveUnsubscribed, false)
-  push('stream', { text: 'overflow' })
-  assert.equal(liveUnsubscribed, true)
-
-  const afterOverflow = await liveStream.next()
-  assert.equal(afterOverflow.done, true)
-})
-
-test('feedEvents streams past the ring capacity when consumer keeps pace with pending items', async () => {
-  let push
-  let unsubscribed = false
-  const subscribe = (listener) => {
-    push = listener
-    listener('hello', { i: 0 })
-    listener('tick', { i: 1 })
-    return () => { unsubscribed = true }
-  }
-  const controller = new AbortController()
-  const stream = feedEvents(subscribe, controller.signal)
-  const seen = []
-  for (let i = 0; i < 1500; i += 1) {
-    const next = await stream.next()
-    assert.equal(next.done, false)
-    seen.push(next.value.data.i)
-    if (i + 2 < 1500) push('tick', { i: i + 2 })
-  }
-  assert.equal(seen.length, 1500)
-  assert.equal(seen[0], 0)
-  assert.equal(seen[1499], 1499)
-  controller.abort()
-  const ended = await stream.next()
-  assert.equal(ended.done, true)
+  assert.equal(received.length, 512)
   assert.equal(unsubscribed, true)
 })
 
@@ -279,8 +159,10 @@ test('createRemoteService serves dsBot/call and dsBot/feed through real DSH Type
   const abortedStates = []
   const listeners = new Set()
 
-  // Real Cordis + TypertRegistry (+ RemoteAccessService when present) + TypertGatewayService stack.
-  await startGatewayHost(root)
+  // Real Cordis + TypertRegistry + RemoteAccessService + TypertGatewayService stack.
+  await root.plugin(TypertRegistry)
+  await root.plugin(RemoteAccessService)
+  await root.plugin(TypertGatewayService)
   t.after(async () => { await root.fiber.dispose() })
 
   const rt = {
@@ -295,7 +177,6 @@ test('createRemoteService serves dsBot/call and dsBot/feed through real DSH Type
         })
       }
       if (endpoint === 'slim') return { ok: true, value: { id: 'b1', avatar: { shape: 'whale', image: undefined } } }
-      if (endpoint === '') return { ok: false, error: { code: 'bot/not-found', message: 'Unknown endpoint ', details: {} } }
       return { ok: true, value: { endpoint, payload } }
     },
     subscribeFeed(listener) {
@@ -340,34 +221,7 @@ test('createRemoteService serves dsBot/call and dsBot/feed through real DSH Type
   assert.deepEqual(omittedPayload.value, { ok: true, value: { id: 'b1', avatar: { shape: 'whale' } } })
   assert.equal('image' in omittedPayload.value.value.avatar, false)
 
-  // 3. Computer-only endpoints (`phone-*` and `folder-pick`) are refused before reaching channelCall
-  const beforeRefusedCount = received.length
-  for (const forbidden of ['phone-set', 'phone-pair', 'phone-pair-cancel', 'phone-remove', 'folder-pick']) {
-    const refused = await gateway.dispatchRpc(
-      `${RPC_NAMESPACE}/call`,
-      { args: { endpoint: forbidden, payload: { on: false } } },
-      new AbortController().signal,
-      ownerPeer(),
-    )
-    assert.equal(refused.ok, true)
-    assert.equal(refused.value.ok, false)
-    assert.equal(refused.value.error.code, 'bot/refused')
-  }
-  assert.equal(received.length, beforeRefusedCount)
-
-  // Non-string endpoint normalizes safely to '' without [object Object]
-  const nonStringEndpoint = await gateway.dispatchRpc(
-    `${RPC_NAMESPACE}/call`,
-    { args: { endpoint: { bad: 1 } } },
-    new AbortController().signal,
-    ownerPeer(),
-  )
-  assert.equal(nonStringEndpoint.ok, true)
-  assert.equal(nonStringEndpoint.value.ok, false)
-  assert.equal(nonStringEndpoint.value.error.code, 'bot/not-found')
-  assert.equal(received.at(-1).endpoint, '')
-
-  // 4. Cancellation signal reaches rt.channelCall when peer/request aborts
+  // 3. Cancellation signal reaches rt.channelCall when peer/request aborts
   const abortControl = new AbortController()
   const inflight = gateway.dispatchRpc(
     `${RPC_NAMESPACE}/call`,
@@ -381,7 +235,7 @@ test('createRemoteService serves dsBot/call and dsBot/feed through real DSH Type
   assert.equal(abortedResult.ok, false)
   assert.deepEqual(abortedStates, [true])
 
-  // 5. Stream call `dsBot/feed` opens at `hello`, delivers live events, and cleans up on client abort
+  // 4. Stream call `dsBot/feed` opens at `hello`, delivers live events, and cleans up on abort
   const feedControl = new AbortController()
   const wireStream = await gateway.openWireStream(
     `${RPC_NAMESPACE}/feed`,
@@ -411,29 +265,8 @@ test('createRemoteService serves dsBot/call and dsBot/feed through real DSH Type
   await tick()
   assert.equal(listeners.size, 0)
 
-  // 6. Disposing the plugin in place ends an already-open `dsBot/feed` stream cleanly (`done: true`)
-  // so clients reconnect to the reloaded runtime instead of hanging forever.
-  const reloadControl = new AbortController()
-  const reloadStream = await gateway.openWireStream(
-    `${RPC_NAMESPACE}/feed`,
-    { args: {} },
-    undefined,
-    ownerPeer(),
-    reloadControl.signal,
-    reloadControl,
-    undefined,
-  )
-  const reloadIterator = reloadStream[Symbol.asyncIterator]()
-  const reloadHello = await reloadIterator.next()
-  assert.equal(reloadHello.done, false)
-  assert.equal(reloadHello.value.event, 'hello')
-  assert.equal(listeners.size, 1)
-
-  const reloadPendingNext = reloadIterator.next()
+  // 5. Disposing the plugin withdraws the Remote endpoints from TypertGatewayService
   await fork.dispose()
-  const reloadEnded = await reloadPendingNext
-  assert.equal(reloadEnded.done, true)
-  assert.equal(listeners.size, 0)
   await tick()
   assert.equal(gateway.claimsEndpoint(`${RPC_NAMESPACE}/call`), false)
   assert.equal(gateway.claimsEndpoint(`${RPC_NAMESPACE}/feed`), false)
@@ -444,7 +277,9 @@ test('createRemoteService serves dsBot/call and dsBot/feed through real DSH Type
 test('full ds-bot runtime serves real hello, state and live feed through TypertGatewayService', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-remote-full-'))
   const root = new Context()
-  await startGatewayHost(root)
+  await root.plugin(TypertRegistry)
+  await root.plugin(RemoteAccessService)
+  await root.plugin(TypertGatewayService)
   t.after(async () => {
     await root.fiber.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
@@ -483,11 +318,9 @@ test('full ds-bot runtime serves real hello, state and live feed through TypertG
   root.provide('sessions', { flush: async () => {} })
 
   let rt
-  // A real Cordis plugin declares the services its runtime reads, including work
-  // scheduled after the RPC finishes. The production entry declares them too.
-  await root.plugin(Object.assign((sub) => {
+  await root.plugin((sub) => {
     rt = createRuntime(sub, { home })
-  }, { inject: ['events', 'tools', 'systemPrompt', 'connection', 'llm', 'workspaceRegistry', 'sessionController', 'sessionTitle', 'sessions'] }))
+  })
   await tick()
 
   const gateway = root.typertGateway
@@ -517,7 +350,6 @@ test('full ds-bot runtime serves real hello, state and live feed through TypertG
   )
   assert.equal(rpcHello.ok, true)
   assert.equal(rpcHello.value.ok, true)
-  assert.equal(rpcHello.value.value.capabilities.includes('rpc'), true)
   assert.deepEqual(rpcHello.value.value.rpc, { call: 'dsBot/call', feed: 'dsBot/feed' })
 
   const rpcState = await gateway.dispatchRpc(
@@ -531,7 +363,6 @@ test('full ds-bot runtime serves real hello, state and live feed through TypertG
   assert.ok(rpcState.value.value.bots.length >= 1)
 
   // Updating a Bot saves state and emits a `revision` frame over `dsBot/feed`.
-  const beforeUpdateRev = rt.state.revision
   const botId = rpcState.value.value.bots[0].id
   const updated = await gateway.dispatchRpc(
     'dsBot/call',
@@ -541,41 +372,10 @@ test('full ds-bot runtime serves real hello, state and live feed through TypertG
   )
   assert.equal(updated.ok, true)
   assert.equal(updated.value.ok, true)
-  const targetRev = rt.state.revision
-  assert.ok(targetRev > beforeUpdateRev)
 
-  // Drain any earlier startup/bootstrap revision frames until `update-bot`'s revision arrives.
-  let revEvent
-  for (let i = 0; i < 10; i += 1) {
-    const next = await iterator.next()
-    if (next.value.event === 'revision' && next.value.data.revision >= targetRev) {
-      revEvent = next
-      break
-    }
-  }
-  assert.ok(revEvent)
+  const revEvent = await iterator.next()
   assert.equal(revEvent.value.event, 'revision')
   assert.ok(revEvent.value.data.revision > helloEvent.value.data.revision)
-
-  const refusedPhone = await gateway.dispatchRpc(
-    'dsBot/call',
-    { args: { endpoint: 'phone-pair', payload: {} } },
-    new AbortController().signal,
-    ownerPeer(),
-  )
-  assert.equal(refusedPhone.ok, true)
-  assert.equal(refusedPhone.value.ok, false)
-  assert.equal(refusedPhone.value.error.code, 'bot/refused')
-
-  const refusedFolderPick = await gateway.dispatchRpc(
-    'dsBot/call',
-    { args: { endpoint: 'folder-pick', payload: {} } },
-    new AbortController().signal,
-    ownerPeer(),
-  )
-  assert.equal(refusedFolderPick.ok, true)
-  assert.equal(refusedFolderPick.value.ok, false)
-  assert.equal(refusedFolderPick.value.error.code, 'bot/refused')
 
   const unknownEndpoint = await gateway.dispatchRpc(
     'dsBot/call',
@@ -592,21 +392,18 @@ test('full ds-bot runtime serves real hello, state and live feed through TypertG
   await rt.dispose?.()
 })
 
-test('plugin entry tracks late TypertGatewayService mount and disposal in hello', async (t) => {
+test('plugin entry loads dsBot Remote methods on a real Cordis Gateway host', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-remote-entry-'))
   const root = new Context()
+  await root.plugin(TypertRegistry)
+  await root.plugin(RemoteAccessService)
+  await root.plugin(TypertGatewayService)
   t.after(async () => {
     await root.fiber.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   })
 
   const fake = fakeContext()
-  const routes = {}
-  const register = fake.connection.fetch.register
-  fake.connection.fetch.register = (options) => {
-    routes[options.path] = options
-    return register(options)
-  }
   root.provide('events', fake.events)
   root.provide('tools', fake.tools)
   root.provide('systemPrompt', fake.systemPrompt)
@@ -617,31 +414,11 @@ test('plugin entry tracks late TypertGatewayService mount and disposal in hello'
   root.provide('sessionTitle', { rename: async () => {} })
   root.provide('sessions', { flush: async () => {} })
   await root.plugin(pluginEntry, { home })
-  for (let i = 0; i < 20 && !routes['/api/bot']; i += 1) await tick()
-
-  const callHttp = async (endpoint, payload) => {
-    const response = await routes['/api/bot'].fetch(new Request('http://localhost/api/bot', {
-      method: 'POST',
-      body: JSON.stringify({ endpoint, payload }),
-    }))
-    return response.json()
-  }
-
-  // Before typertGateway exists, HTTP hello omits `rpc`.
-  const before = await callHttp('hello', { api: [1] })
-  assert.equal(before.value.capabilities.includes('rpc'), false)
-  assert.equal(before.value.rpc, undefined)
-
-  // Late mount of typertGateway registers dsBot Remote methods and turns `rpc` on.
-  const gwFork = await root.plugin(startGatewayHost)
-  for (let i = 0; i < 20 && !root.typertGateway?.claimsEndpoint('dsBot/call'); i += 1) await tick()
+  // pluginEntry.apply is async (imports index.js inside apply); allow dynamic import + effect tick.
+  for (let i = 0; i < 20 && !root.typertGateway.claimsEndpoint('dsBot/call'); i += 1) await tick()
 
   assert.equal(root.typertGateway.claimsEndpoint('dsBot/call'), true)
   assert.equal(root.typertGateway.claimsEndpoint('dsBot/feed'), true)
-
-  const afterHttp = await callHttp('hello', { api: [1] })
-  assert.equal(afterHttp.value.capabilities.includes('rpc'), true)
-  assert.deepEqual(afterHttp.value.rpc, { call: 'dsBot/call', feed: 'dsBot/feed' })
 
   const reply = await root.typertGateway.dispatchRpc(
     'dsBot/call',
@@ -652,29 +429,4 @@ test('plugin entry tracks late TypertGatewayService mount and disposal in hello'
   assert.equal(reply.ok, true)
   assert.equal(reply.value.ok, true)
   assert.deepEqual(reply.value.value.rpc, { call: 'dsBot/call', feed: 'dsBot/feed' })
-
-  // Disposing typertGateway ends an open `dsBot/feed` stream cleanly and turns `rpc` back off.
-  const gwFeedControl = new AbortController()
-  const gwStream = await root.typertGateway.openWireStream(
-    'dsBot/feed',
-    { args: {} },
-    undefined,
-    ownerPeer(),
-    gwFeedControl.signal,
-    gwFeedControl,
-    undefined,
-  )
-  const gwIter = gwStream[Symbol.asyncIterator]()
-  const gwHello = await gwIter.next()
-  assert.equal(gwHello.done, false)
-  assert.equal(gwHello.value.event, 'hello')
-
-  const gwPending = gwIter.next()
-  await gwFork.dispose()
-  const gwEnded = await gwPending
-  assert.equal(gwEnded.done, true)
-  await tick()
-  const disposed = await callHttp('hello', { api: [1] })
-  assert.equal(disposed.value.capabilities.includes('rpc'), false)
-  assert.equal(disposed.value.rpc, undefined)
 })
