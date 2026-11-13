@@ -68,6 +68,29 @@ function Fact({ label, value }) {
   return h('div', { className: 'bt-board-fact' }, h('span', null, label), h('span', null, value))
 }
 
+// The host sends metadata only. This view has no commands to replay or close work.
+function HeldTurns({ recovery }) {
+  if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
+  const rows = Array.isArray(recovery.items) ? recovery.items : []
+  const sampled = Number.isSafeInteger(recovery.sampledAt) && recovery.sampledAt >= 0 && recovery.sampledAt <= 8_640_000_000_000_000
+    ? new Date(recovery.sampledAt).toISOString() : t('Unknown')
+  if (!rows.length && !recovery.incomplete) return h('p', { className:'bt-board-pending', role:'status' },
+    t('No interrupted turns in this snapshot.'), ' ', t('Snapshot time (UTC)'), ': ', sampled)
+  return h('details', { className: 'bt-board-held' },
+    h('summary', null, t('Interrupted turns awaiting review'), rows.length ? ` (${rows.length})` : ''),
+    h('p', null, t('Snapshot time (UTC)'), ': ', sampled),
+    h('p', null, t('These records are read-only. A result is unknown; no work is resent or closed here.')),
+    recovery.incomplete ? h('p', { role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
+    rows.map(item => h('article', { key: item.recoveryId, className: 'bt-board-held-record' },
+      h(Fact, { label: t('Bot'), value: item.botName || item.botId }),
+      h(Fact, { label: t('Session ID'), value: item.sessionId }),
+      h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
+      h(Fact, { label: t('Started at'), value: Number.isSafeInteger(item.startedAt) ? new Date(item.startedAt).toLocaleString() : t('Unknown') }),
+      h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }),
+      h(Fact, { label: t('Recovery ID'), value: item.recoveryId }),
+      h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))
+}
+
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   const options = (Array.isArray(tasks) ? tasks : []).filter(task => task && !task.legacy && typeof task.id === 'string' && task.id !== exclude)
   return h('label', null, t('Dependencies'), h('select', { 'aria-label': t('Dependencies'), multiple: true, value, disabled,
@@ -446,13 +469,15 @@ export function TaskBoard({ scope, title, close, request = call }) {
       h('header', { className: 'bt-board-header' }, h('div', null, h('h2', null, title || t('Task board')),
         h('p', null, scope.kind === 'room' ? t('Group task board') : t('Personal task board')),
         showCapacity ? h('p', null, t('Instance task capacity: {count} / {limit}', { count: capacity.taskCount, limit: capacity.taskLimit })) : null),
-      h('button', { type: 'button', onClick: dismiss }, t('Close'))),
+      h('div', null, h('button', { type:'button', onClick:() => void load() }, t('Refresh')), ' ',
+        h('button', { type: 'button', onClick: dismiss }, t('Close')))),
       error ? h('div', { className: 'bt-board-error', role: 'alert' }, error) : null,
       capacityReached ? h('div', { className: 'bt-board-pending', role: 'status' }, t('Task limit reached. New tasks cannot be created.')) : null,
       hasLegacy ? h('div', { className: 'bt-board-pending', role: 'note' }, t('Existing group goal aggregates are read only. A new card does not automatically link to or replace them.')) : null,
       pending ? h('div', { className: 'bt-board-pending', role: 'status' }, t('An action needs confirmation.'), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => check(pending) }, t('Check action')), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,
+      data ? h(HeldTurns, { recovery: data.recovery }) : null,
       data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? h(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks, onCreate: value => {
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
@@ -478,6 +503,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:6px 9px}
 .bt-board-dialog button:disabled,.bt-board-dialog select:disabled{opacity:.5}.bt-board-dialog button:not(:disabled){cursor:pointer}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
+.bt-board-held{padding:10px 20px;border-bottom:1px solid var(--bt-line);overflow:auto;max-height:35vh;font-size:12px}.bt-board-held summary{cursor:pointer;font-weight:600}.bt-board-held-record{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere}
 .bt-board-columns{display:flex;gap:12px;overflow:auto;padding:16px 20px 22px;align-items:flex-start;min-height:180px}
 .bt-board-column{flex:0 0 245px;min-width:0;border-radius:12px;background:var(--bt-tag-bg);padding:10px;box-sizing:border-box}
 .bt-board-column h3{font-size:13px;margin:0 0 10px}.bt-board-card{display:flex;flex-direction:column;gap:7px;padding:12px;background:var(--bt-card);border:1px solid var(--bt-line);border-radius:8px;margin-bottom:8px;overflow-wrap:anywhere}

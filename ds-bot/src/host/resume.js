@@ -10,16 +10,30 @@
 // that waits for it, and an outcome that cannot be read is said to be unknown. The
 // request itself is never sent again there.
 import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { constants, readFileSync } from 'node:fs'
+import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
 import { replaceFile } from './files.js'
 import { textOf } from './text.js'
+import { heldTurnsView } from './recovery-held.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
+const RECOVERY_VIEW_MAX_BYTES = 64 * 1024 * 1024
+const RECOVERY_VIEW_TIMEOUT_MS = 5000
+const unavailableRecoveryView = () => ({ available: false, incomplete: true, items: [] })
+
+// A stuck filesystem or writer must not keep a board request open indefinitely.
+export async function boundedRecoveryView(work, timeoutMs = RECOVERY_VIEW_TIMEOUT_MS) {
+  let timer
+  try {
+    return await Promise.race([work.catch(() => unavailableRecoveryView()), new Promise(resolve => {
+      timer = setTimeout(() => resolve(unavailableRecoveryView()), timeoutMs)
+    })])
+  } finally { clearTimeout(timer) }
+}
 
 export const resumeText = record => [
   'DeepSeek Harness restarted while you were working on this, so your last turn stopped before it finished.',
@@ -171,6 +185,72 @@ export function install(rt) {
   let queued = interrupted.queued
   let writing = Promise.resolve()
   let stopped = false
+  // A secondary host cannot know the live writer's current in-memory notes.
+  // Return no possibly stale records until this host can read its own state.
+  const unavailableHeld = unavailableRecoveryView
+  const ownsRecoveryView = () => {
+    if (blocked !== undefined || stopped || rt.readOnly() !== undefined) return false
+    // readOnly() alone does not cover an unusable lock or a lock whose token
+    // has been replaced before holder state is refreshed. Do not present this
+    // host's in-memory snapshot as current unless it actually owns the lock.
+    try { rt.requireHomeLock(); return true } catch { return false }
+  }
+  // Do not present a pending or externally changed file snapshot as current.
+  // Read the visible file bytes with a fixed memory bound, then
+  // recheck the path identity and the writer/lock after asynchronous I/O.
+  const readRecoveryForView = async () => {
+    let handle
+    try {
+      handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
+      const before = await handle.stat({ bigint: true })
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES)) return { ok:false }
+      const buffer = Buffer.alloc(Number(before.size) + 1)
+      let length = 0
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+        if (bytesRead === 0) break
+        length += bytesRead
+      }
+      const after = await handle.stat({ bigint: true })
+      const entry = await lstat(file, { bigint: true })
+      if (!entry.isFile() || BigInt(length) !== before.size) return { ok:false }
+      for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+        if (before[key] !== after[key] || after[key] !== entry[key]) return { ok:false }
+      }
+      return { ok:true, raw:buffer.subarray(0, length).toString('utf8') }
+    } catch (error) {
+      return error?.code === 'ENOENT' && !handle ? { ok:true, raw:undefined } : { ok:false }
+    } finally { await handle?.close().catch(() => {}) }
+  }
+  const sampleRecoveryHeld = async scope => {
+    if (ownsRecoveryView() !== true) return unavailableHeld()
+    const pendingWrite = writing
+    await pendingWrite
+    if (writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    const saved = expected
+    const disk = await readRecoveryForView()
+    if (!disk.ok || disk.raw !== saved || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    // Startup copies interrupted turns into memory before the first file
+    // replacement. Do not show those new holds as a saved snapshot until
+    // the visible recovery file contains exactly the same held records.
+    const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw)
+    const savedHolds = parsed?.heldTurns ?? {}
+    if (!savedHolds || typeof savedHolds !== 'object' || Array.isArray(savedHolds)
+      || JSON.stringify(savedHolds) !== JSON.stringify(heldTurns)) return unavailableHeld()
+    if (expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    return { ...heldTurnsView(savedHolds, scope, rt.state?.bots), sampledAt:Date.now() }
+  }
+  let recoverySample
+  rt.recoveryHeldView = async scope => {
+    // A slow filesystem read may outlive the caller's timeout. Never stack
+    // additional large reads while that earlier read is still running.
+    if (recoverySample) return unavailableHeld()
+    const work = sampleRecoveryHeld(scope)
+    recoverySample = work
+    void work.then(() => { if (recoverySample === work) recoverySample = undefined },
+      () => { if (recoverySample === work) recoverySample = undefined })
+    return boundedRecoveryView(work)
+  }
   let latest
   let due = false
   let pending

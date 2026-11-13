@@ -1,6 +1,16 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  "Snapshot time (UTC)": "Zeitpunkt der Momentaufnahme (UTC)",
+  "No interrupted turns in this snapshot.": "Diese Momentaufnahme enthält keine unterbrochenen Runden.",
+  "Interrupted turns awaiting review": "Unterbrochene Runden zur Prüfung",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "Diese Einträge sind schreibgeschützt. Das Ergebnis ist unbekannt; hier wird keine Arbeit erneut gesendet oder abgeschlossen.",
+  "Recovery records are unavailable or incomplete.": "Wiederherstellungseinträge sind nicht verfügbar oder unvollständig.",
+  "Session ID": "Sitzungs-ID",
+  "Original turn": "Ursprüngliche Runde",
+  "Started at": "Startzeit",
+  "Exchange ID": "Austausch-ID",
+  "Recovery ID": "Wiederherstellungs-ID",
   "Task board": "Aufgabenboard",
   "My task board": "Mein Aufgabenboard",
   "Dependencies": "Abhängigkeiten",

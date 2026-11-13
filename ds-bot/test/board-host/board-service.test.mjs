@@ -30,6 +30,17 @@ const request = payload => new Request('http://localhost/api/bot-board-upload', 
 const image = { uploadId:'img1', name:'a.png', mediaType:'image/png', data:pngjs.PNG.sync.write({ width:1, height:1, data:Buffer.from([0,0,0,255]) }).toString('base64') }
 const image2 = { ...image, uploadId:'img2', name:'b.png' }
 
+test('authenticated board view returns only the scoped read-only recovery projection', async t => {
+  const { rt } = fixture(t)
+  const seen = []
+  rt.recoveryHeldView = requested => { seen.push(requested); return { available:true, incomplete:false, items:[] } }
+  const result = await rt.boardCall('board-list', { scope })
+  assert.deepEqual(result.recovery, { available:true, incomplete:false, items:[] })
+  assert.deepEqual(seen, [scope])
+  await assert.rejects(rt.boardCall('board-list', { scope:{ kind:'room', id:'unknown' } }), /available/)
+  assert.equal(seen.length, 1, 'invalid scope must not reach recovery projection')
+})
+
 test('actual task journal backs the five instance-user endpoints with isolated group and personal views', async t => {
   const { rt, route } = fixture(t)
   assert.equal(route.requestBody, 'streaming')

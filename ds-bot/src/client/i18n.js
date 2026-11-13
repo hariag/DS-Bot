@@ -11,6 +11,16 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  "Snapshot time (UTC)": "快照时间（UTC）",
+  "No interrupted turns in this snapshot.": "此快照中没有待核对的中断回合。",
+  "Interrupted turns awaiting review": "待核对的中断回合",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "这些记录为只读，结果尚不明确；此处不会重发或关闭工作。",
+  "Recovery records are unavailable or incomplete.": "恢复记录不可用或不完整。",
+  "Session ID": "会话 ID",
+  "Original turn": "原回合",
+  "Started at": "开始时间",
+  "Exchange ID": "交接 ID",
+  "Recovery ID": "恢复记录 ID",
   'Task board': '任务看板',
   'My task board': '我的任务看板',
   'Group task board': '群任务看板',

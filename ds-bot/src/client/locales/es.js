@@ -1,6 +1,16 @@
 // Spanish (es) localization for DS Bot client and DSH settings namespaces.
 
 export const ES = {
+  "Snapshot time (UTC)": "Hora de la captura (UTC)",
+  "No interrupted turns in this snapshot.": "No hay turnos interrumpidos en esta captura.",
+  "Interrupted turns awaiting review": "Turnos interrumpidos pendientes de revisión",
+  "These records are read-only. A result is unknown; no work is resent or closed here.": "Estos registros son de solo lectura. El resultado es desconocido; aquí no se reenvía ni se cierra el trabajo.",
+  "Recovery records are unavailable or incomplete.": "Los registros de recuperación no están disponibles o están incompletos.",
+  "Session ID": "ID de sesión",
+  "Original turn": "Turno original",
+  "Started at": "Hora de inicio",
+  "Exchange ID": "ID de intercambio",
+  "Recovery ID": "ID de recuperación",
   "Task board": "Tablero de tareas",
   "My task board": "Mi tablero de tareas",
   "Dependencies": "Dependencias",
