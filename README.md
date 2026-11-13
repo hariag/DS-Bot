@@ -67,6 +67,8 @@ Each bot can have its own working folder and permission preset — just tell the
 
 ### Main bot
 
+Deployment-specific instructions can also be supplied to every Bot through `operatorInstructions`; do not include credentials, as Bots send these instructions to their models. See the [plugin configuration](ds-bot/README.md#configuration).
+
 The main bot is your chief. It has very high rights: it manages the other bots and the group chats. The first time you open DS Bot, there is already a main bot called Chief. Talk to it, and it walks you through the setup.
 
 In short: have a question? Ask the main bot.

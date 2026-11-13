@@ -93,12 +93,61 @@ function RowButton({ label, title, disabled, onClick, children }) {
   return h('button', { type: 'button', className: 'bt-queue-action', 'aria-label': label, title: title ?? label, disabled, onClick }, children)
 }
 
+// Host snapshots and the DSH projection are independent reads. Preserve every
+// identifiable row, but never turn a changing or unidentifiable snapshot into
+// an exact count. Same-part rows match by message ID; different parts by exchange ID.
+export function combineRoomPosts(projection, host, sessionId, available) {
+  const observed = projection.map(({ row }) => ({ sessionId, messageId: typeof row.id === 'string' && row.id !== '' ? row.id : undefined, exchangeId: typeof row.source?.exchangeId === 'string' && row.source.exchangeId !== '' ? row.source.exchangeId : undefined, row }))
+  const hostRows = host?.rows ?? []
+  const hostCurrent = hostRows.filter(item => item.sessionId === sessionId)
+  const projIds = new Set(observed.map(item => item.messageId).filter(Boolean))
+  const hostIds = new Set(hostCurrent.map(item => item.messageId).filter(Boolean))
+  let uncertain = !available || host?.unavailable !== false || observed.some(item => !item.messageId) || hostCurrent.some(item => !item.messageId)
+  if (projIds.size !== hostIds.size || [...projIds].some(id => !hostIds.has(id))) uncertain = true
+  const rows = []
+  const identities = new Map()
+  const byMessage = new Map()
+  // Earliest two distinct Sessions for each exchange suffice to find the
+  // earliest match that is not in the incoming Session.
+  const byExchange = new Map()
+  for (const item of [...observed, ...hostRows]) {
+    if (!item.messageId) uncertain = true
+    else {
+      const key = JSON.stringify([item.sessionId, item.messageId])
+      if (identities.has(key) && identities.get(key) !== item.exchangeId) uncertain = true
+      else identities.set(key, item.exchangeId)
+    }
+    const messageKey = item.messageId ? JSON.stringify([item.sessionId, item.messageId]) : undefined
+    const ownIndex = messageKey === undefined ? undefined : byMessage.get(messageKey)
+    const exchange = item.exchangeId ? byExchange.get(item.exchangeId) : undefined
+    const otherIndex = exchange === undefined ? undefined : exchange.first.sessionId === item.sessionId ? exchange.second?.index : exchange.first.index
+    // Both indexes refer to retained rows. The smaller index matches the old
+    // first-match semantics if both a same-part and a cross-part match exist.
+    const sameIndex = ownIndex === undefined ? otherIndex : otherIndex === undefined ? ownIndex : Math.min(ownIndex, otherIndex)
+    if (sameIndex !== undefined) continue
+    const index = rows.push(item) - 1
+    if (messageKey !== undefined) byMessage.set(messageKey, index)
+    if (item.exchangeId) {
+      const entry = { index, sessionId: item.sessionId }
+      if (exchange === undefined) byExchange.set(item.exchangeId, { first: entry })
+      else if (exchange.first.sessionId !== item.sessionId && exchange.second === undefined) exchange.second = entry
+    }
+  }
+  const sessions = new Set(rows.map(item => item.sessionId))
+  if (sessions.size > 1 && rows.some(item => !item.exchangeId)) uncertain = true
+  return { rows, uncertain }
+}
+
 // One item renders directly; several default to a collapsible count header; an
 // empty queue renders nothing. Rows still in flight show a sending state with
 // disabled actions until their queue rows arrive.
 export function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.('inbox')
   const botId = useRoster?.(roster => roster.byId?.[sessionId]?.id) ?? null
+  const roomId = useRoster?.(roster => roster.roomsById?.[sessionId]?.id) ?? null
+  const isRoom = roomId !== null
+  const roomStateJson = useWork?.(work => JSON.stringify({ posts: work.roomPostQueues?.[roomId] ?? { rows: [], unavailable: true }, pending: work.roomPending?.[roomId] ?? { relay: 0, next: 0 } })) ?? '{}'
+  const roomState = useMemo(() => JSON.parse(roomStateJson), [roomStateJson])
   const groupQueueJson = useWork?.(work => JSON.stringify(work.groupQueues?.[botId] ?? [])) ?? '[]'
   const groupQueue = useMemo(() => JSON.parse(groupQueueJson), [groupQueueJson])
   const earlierPrivateJson = useWork?.(work => JSON.stringify(work.earlierPrivateQueues?.[botId] ?? [])) ?? '[]'
@@ -117,23 +166,45 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     return pendingSubmissions.filter(submission => submission.placement === 'queued' && !admitted.has(submission.requestId))
   }, [pendingSubmissions, queue])
   const rowCount = queue.length + pendingQueue.length
-  const botQueue = useMemo(() => [
+  const allBotQueue = useMemo(() => [
     ...(inbox?.['next-step'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-step' })),
     ...(inbox?.['next-turn'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-turn' })),
   ], [inbox])
+  const roomPosts = isRoom ? allBotQueue.filter(({ row }) => row.source?.role === 'post') : EMPTY_QUEUE
+  const roomJoined = combineRoomPosts(roomPosts, roomState.posts, sessionId, inboxAvailable)
+  const roomUnknown = isRoom && roomJoined.uncertain
+  const roomPostCount = roomJoined.rows.length
+  const roomRelayCount = roomState.pending?.relay ?? 0
+  const roomNextCount = roomState.pending?.next ?? 0
+  const botQueue = isRoom ? allBotQueue.filter(({ row }) => row.source?.role !== 'post') : allBotQueue
   const earlierPrivate = useMemo(() => {
     const present = new Set(botQueue.map(({ row }) => row.source?.exchangeId).filter(Boolean))
     return earlierPrivateItems.filter(item => !item.exchangeId || !present.has(item.exchangeId))
   }, [botQueue, earlierPrivateItems])
   const privatePending = botQueue.length + earlierPrivate.filter(item => !item.unavailable).length
   const privateUnknown = (botId !== null && !inboxAvailable) || earlierPrivate.some(item => item.unavailable)
+  // A partial snapshot is not a reliable total (or even a numeric lower bound).
+  // Keep its uncertainty explicit whenever a real queued row makes the panel visible.
+  const botTitle = [
+    privatePending > 0 && (privateUnknown ? t('Bot private messages waiting; count unavailable') : t('Bot private {n}', { n: privatePending })),
+    groupPending > 0 && (groupUnknown ? t('Group messages waiting; count unavailable') : t('Group {n}', { n: groupPending })),
+  ].filter(Boolean).join(' + ')
+  const roomPendingTitle = [
+    roomRelayCount > 0 && t('Relay waiting items: {n}', { n: roomRelayCount }),
+    roomNextCount > 0 && t('Next-round items: {n}', { n: roomNextCount }),
+  ].filter(Boolean).join(' · ')
+  const roomTitle = [
+    roomPostCount > 0 && (roomUnknown ? t('Group posts awaiting dispatch; count unavailable') : t('Group posts awaiting dispatch: {n}', { n: roomPostCount })),
+    roomPendingTitle,
+  ].filter(Boolean).join(' · ')
   const [botExpandedSession, setBotExpandedSession] = useState(null)
   const botCollapsed = botExpandedSession !== sessionId
   const botListId = useId()
+  const roomListId = useId()
   useEffect(() => { setBotExpandedSession(null) }, [sessionId])
   useEffect(() => {
-    if (botQueue.length === 0 && earlierPrivate.length === 0 && groupQueue.length === 0 && !botCollapsed) setBotExpandedSession(null)
-  }, [botQueue.length, earlierPrivate.length, groupQueue.length, botCollapsed])
+    if (botTitle === '' && (!isRoom || roomTitle === '') && !botCollapsed) setBotExpandedSession(null)
+  }, [botTitle, roomTitle, isRoom, botCollapsed])
   const running = useSession?.((s) => s.running) === true
   const queueMutable = useSession?.((s) => s.subagent === null || s.subagent === undefined || s.subagent.address?.mode === 'continuable') ?? true
   const [editing, setEditing] = useState(null)
@@ -144,7 +215,7 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     if (rowCount === 0 && !collapsed) setCollapsed(true)
     if (editing !== null && (!queueMutable || !queue.some(row => row.id === editing.id))) setEditing(null)
   }, [collapsed, editing, queue, queueMutable, rowCount])
-  if (rowCount === 0 && botQueue.length === 0 && earlierPrivate.length === 0 && groupQueue.length === 0 && !privateUnknown) return null
+  if (rowCount === 0 && botTitle === '' && (!isRoom || roomTitle === '')) return null
   const interactionActive = queueMutable && (editing !== null || busy !== null)
   const expanded = !collapsed || interactionActive
   const listVisible = rowCount === 1 || expanded
@@ -173,10 +244,35 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     if (await applyAction(editing.id, { kind: 'edit', content: [{ type: 'text', text: editing.text }] }, t('Couldn’t edit the queued message — it may have started already.'))) setEditing(null)
   }
   return h('div', { className: 'bt-queue-dock', 'data-queue-dock': '' },
-    (botQueue.length > 0 || earlierPrivate.length > 0 || groupQueue.length > 0 || privateUnknown) && h('div', { className: 'bt-queue-panel bt-bot-queue-panel', 'data-bot-queue-dock': '' },
+    isRoom && roomTitle !== '' && h('div', { className: 'bt-queue-panel bt-bot-queue-panel', 'data-room-post-queue-dock': '' },
+      h('button', { type: 'button', className: 'bt-queue-head', 'aria-controls': roomListId, 'aria-expanded': !botCollapsed, onClick: () => setBotExpandedSession(value => value === sessionId ? null : sessionId) },
+        h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
+        h('span', { className: 'bt-queue-count' }, roomTitle),
+        h('span', { className: 'bt-queue-chev', 'aria-hidden': true }, !botCollapsed ? h(ChevronDownIcon) : h(ChevronUpIcon))),
+      (roomRelayCount > 0 || roomNextCount > 0) && h('div', { className: 'bt-bot-queue-row' }, t('Counts exclude items in transfer and may include control events.')),
+      h('ul', { id: roomListId, className: 'bt-queue-list bt-bot-queue-list', 'data-room-post-queue-list': '', hidden: botCollapsed },
+        roomUnknown && h('li', { className: 'bt-bot-queue-row' }, t('Group queue snapshot is incomplete or changing.')),
+        roomPendingTitle !== '' && h('li', { className: 'bt-bot-queue-row' }, roomPendingTitle),
+        h('li', { className: 'bt-bot-queue-row' }, t('Counts exclude items in transfer and may include control events.')),
+        !botCollapsed && roomJoined.rows.map((item, index) => {
+          const row = item.row
+          if (row === undefined) return h('li', { key: `${item.sessionId}:${item.id}:${index}`, className: 'bt-bot-queue-row', 'data-room-post-queue-row': '' },
+            h('div', { className: 'bt-bot-queue-meta' }, h('span', { className: 'bt-bot-queue-sender' }, item.senderName || t('Bot'))),
+            item.attachments > 0 && h('div', null, t('Attachments: {n}', { n: item.attachments })),
+            item.text && h('div', { className: 'bt-bot-queue-text' }, item.text))
+          const text = row.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+          const attachments = queueAttachments(row.content)
+          return h('li', { key: `${item.sessionId}:${item.messageId ?? index}`, className: 'bt-bot-queue-row', 'data-room-post-queue-row': '' },
+            h('div', { className: 'bt-bot-queue-meta' }, h('span', { className: 'bt-bot-queue-sender' }, row.source?.senderName || t('Bot'))),
+            attachments.length > 0 && h('span', { className: 'bt-queue-attachments' }, attachments.map((attachment, position) => attachment.type === 'image'
+              ? h(QueueThumb, { key: position, attachment: attachment.attachment, loadImage, label: t('Queued image') })
+              : h(QueueFile, { key: position, attachment: attachment.attachment, label: t('Queued file {name}', { name: attachment.attachment.name }) }))),
+            text && h('div', { className: 'bt-bot-queue-text' }, text.length > 400 ? `${text.slice(0, 400)}…` : text))
+        }))),
+    botTitle !== '' && h('div', { className: 'bt-queue-panel bt-bot-queue-panel', 'data-bot-queue-dock': '' },
       h('button', { type: 'button', className: 'bt-queue-head', 'data-bot-queue-head': '', 'aria-controls': botListId, 'aria-expanded': !botCollapsed, onClick: () => setBotExpandedSession(value => value === sessionId ? null : sessionId) },
         h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
-        h('span', { className: 'bt-queue-count' }, t('Bot private {private} + group {group}', { private: privateUnknown ? `${privatePending}+?` : privatePending, group: groupUnknown ? `${groupPending}+?` : groupPending })),
+        h('span', { className: 'bt-queue-count' }, botTitle),
         h('span', { className: 'bt-queue-chev', 'aria-hidden': true }, !botCollapsed ? h(ChevronDownIcon) : h(ChevronUpIcon))),
       h('ul', { id: botListId, className: 'bt-queue-list bt-bot-queue-list', 'data-bot-queue-list': '', hidden: botCollapsed },
         !botCollapsed && botQueue.map(({ row, placement }) => {

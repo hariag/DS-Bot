@@ -11,6 +11,7 @@ import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
 import { writeNotesAtomically } from '../src/host/resume.js'
+import { errorCode } from '../src/host/channel.js'
 
 // Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
@@ -734,6 +735,160 @@ test('a delivery whose flush fails stays queued for review after restart', async
   assert.equal(second.agentOf('b').calls.length, 0)
   assert.equal(notes(home).queued.b[0].recoveryHold, 'prepared')
 })
+
+for (const ErrorType of [TypeError, ReferenceError, RangeError, SyntaxError]) {
+  test(`pre-admission ${ErrorType.name} preserves identity and internal classification`, async (t) => {
+    const home = freshHome(t)
+    const host = await start(home)
+    const root = new Error('root cause')
+    const failure = Object.assign(new ErrorType('private detail', { cause: root }), { code: 'custom/lookup', status: 503, requestId: 'request-1' })
+    host.ctx.sessionController.resolveAgent = async () => { throw failure }
+    let notAdmitted = 0
+    const actual = await host.rt.deliver({ toId: 'b', role: 'reply', text: 'result' }, { onNotAdmitted: () => { notAdmitted += 1 } }).catch(error => error)
+    assert.equal(actual, failure)
+    assert.equal(actual.cause, root)
+    assert.equal(actual.code, 'custom/lookup')
+    assert.equal(actual.status, 503)
+    assert.equal(actual.requestId, 'request-1')
+    assert.equal(errorCode(actual), 'bot/internal')
+    assert.equal(notAdmitted, 1)
+    assert.equal(host.agentOf('b').calls.length, 0)
+  })
+}
+
+test('observers are per delivery even if the same error object is thrown concurrently', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  const failure = new Error('shared failure')
+  const ensure = host.rt.ensureCapabilities
+  host.rt.ensureCapabilities = sessionId => sessionId === 'b' ? Promise.reject(failure) : ensure(sessionId)
+  host.agentOf('a').followup = () => { throw failure }
+  const observed = []
+  const result = await Promise.allSettled([
+    host.rt.deliver({ toId: 'b', role: 'reply', text: 'first' }, { onNotAdmitted: () => observed.push('before') }),
+    host.rt.deliver({ toId: 'a', role: 'reply', text: 'second' }, { onNotAdmitted: () => observed.push('after') }),
+  ])
+  assert.deepEqual(result.map(item => item.reason), [failure, failure])
+  assert.deepEqual(observed, ['before'])
+})
+
+test('a failed recovery-note write does not report that the lower delivery was attempted', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {} }))
+  let notAdmitted = 0
+  const failure = await host.rt.deliver({ toId: 'b', role: 'reply', text: 'result' }, { onNotAdmitted: () => { notAdmitted += 1 } }).catch(error => error)
+  assert.equal(failure.code, 'ECONFLICT')
+  assert.equal(notAdmitted, 0)
+  assert.equal(host.agentOf('b').calls.length, 0)
+})
+
+test('a reply whose recovery-note write fails is not retried as a failure notice', async (t) => {
+  const state = seed()
+  state.bots.c = { id: 'c', name: 'Reviewer', sessionId: 'c', createdAt: 3 }
+  state.works = { y1: { from: 'b', to: 'c', open: [], results: [], at: 2 } }
+  const home = freshHome(t, state)
+  const host = await start(home)
+  run(host, 'c', 1, { content: [{ type: 'text', text: 'Check the numbers' }], source: { kind: 'bot', role: 'request', exchangeId: 'y1', senderSessionId: 'b' } })
+  await settle(() => notes(home).turns?.c?.trigger?.exchangeId === 'y1')
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {} }))
+  host.emit('c', 'assistant/message', { message: { content: [{ type: 'text', text: 'The numbers check out.' }] } })
+  host.emit('c', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const entries = await readDiagnostics(home, rows => rows.some(row => row.code === 'REPLY_DELIVERY_UNCERTAIN'))
+  assert.ok(entries.some(row => row.code === 'REPLY_DELIVERY_UNCERTAIN' && row.text.includes('y1')))
+  assert.equal(host.agentOf('b').calls.length, 0)
+})
+
+test('message construction failure signals non-admission and preserves the original error if the observer throws', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  let observed = 0
+  const failure = await host.rt.deliver({ toId: 'b', role: 'reply', text: 'result', images: null }, { onNotAdmitted: () => { observed += 1; throw new Error('observer failure') } }).catch(error => error)
+  assert.ok(failure instanceof TypeError)
+  assert.equal(errorCode(failure), 'bot/internal')
+  assert.equal(observed, 1)
+  assert.equal(host.agentOf('b').calls.length, 0)
+})
+
+for (const stage of ['ensureCapabilities', 'ledger.written']) {
+  test(`a reply failure during ${stage} sends one failure notice`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const state = seed()
+    state.bots.c = { id: 'c', name: 'Reviewer', sessionId: 'c', createdAt: 3 }
+    state.works = {
+      x1: { from: 'a', to: 'b', open: ['y1'], results: [], at: 1 },
+      y1: { from: 'b', to: 'c', parent: 'x1', open: [], results: [], at: 2 },
+    }
+    const home = freshHome(t, state)
+    const host = await start(home)
+    let fail = true
+    if (stage === 'ensureCapabilities') {
+      const original = host.rt.ensureCapabilities
+      host.rt.ensureCapabilities = async (...args) => {
+        if (fail) { fail = false; throw Object.assign(new Error('injected capability failure'), { code: 'CAP_FAIL' }) }
+        return original(...args)
+      }
+    } else {
+      const original = host.rt.ledger.written
+      host.rt.ledger.written = async (...args) => {
+        if (fail) { fail = false; throw Object.assign(new Error('injected ledger failure'), { code: 'LEDGER_FAIL' }) }
+        return original(...args)
+      }
+    }
+    run(host, 'c', 1, { content: [{ type: 'text', text: 'Check the numbers' }], source: { kind: 'bot', role: 'request', exchangeId: 'y1', senderSessionId: 'b' } })
+    host.emit('c', 'assistant/message', { message: { content: [{ type: 'text', text: 'The numbers check out.' }] } })
+    host.emit('c', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await settle(() => host.agentOf('b').calls.length === 1)
+    const notice = host.agentOf('b').calls[0]
+    assert.equal(notice.source.replyTo, 'y1')
+    assert.match(text(notice), /could not send its reply to you/)
+    await settleState(t, home, () => stateOf(home).works?.x1?.results[0]?.failed === true)
+    assert.equal(host.agentOf('b').calls.length, 1)
+  })
+}
+
+for (const failure of ['flush after insertion', 'insertion then synchronous throw', 'insertion then recipient removed', 'insertion then already read']) {
+  test(`an uncertain reply is not sent a second time: ${failure}`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const state = seed()
+    state.bots.c = { id: 'c', name: 'Reviewer', sessionId: 'c', createdAt: 3 }
+    state.works = {
+      x1: { from: 'a', to: 'b', open: ['y1'], results: [], at: 1 },
+      y1: { from: 'b', to: 'c', parent: 'x1', open: [], results: [], at: 2 },
+    }
+    const home = freshHome(t, state)
+    const host = await start(home)
+    const receiver = host.agentOf('b')
+    const send = receiver.followup
+    if (failure !== 'flush after insertion') {
+      receiver.followup = message => {
+        send(message)
+        if (failure === 'insertion then recipient removed') delete host.rt.state.bots.b
+        if (failure === 'insertion then already read') host.emit('b', 'user/message', { content: message.content, source: message.source })
+        throw Object.assign(new Error('wake failed'), { code: 'WAKE_FAILED' })
+      }
+    } else {
+      const flush = host.ctx.sessions.flush
+      host.ctx.sessions.flush = session => session?.id === 'b' ? Promise.reject(new Error('flush failed')) : flush(session)
+    }
+    run(host, 'c', 1, { content: [{ type: 'text', text: 'Check the numbers' }], source: { kind: 'bot', role: 'request', exchangeId: 'y1', senderSessionId: 'b' } })
+    host.emit('c', 'assistant/message', { message: { content: [{ type: 'text', text: 'The numbers check out.' }] } })
+    host.emit('c', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const entries = await readDiagnostics(home, rows => rows.some(row => row.code === 'REPLY_DELIVERY_UNCERTAIN' || /reply failure notice not delivered/.test(row.text)))
+    assert.equal(receiver.calls.length, 1)
+    assert.ok(entries.some(row => row.code === 'REPLY_DELIVERY_UNCERTAIN' && row.text.includes('y1')))
+    const sent = receiver.calls[0]
+    assert.equal(sent.source.replyTo, 'y1')
+    assert.match(text(sent), /The numbers check out\./)
+    if (failure === 'insertion then already read') {
+      await settle(() => !(notes(home).queued.b ?? []).some(item => item.args.exchangeId === sent.source.exchangeId))
+    } else {
+      await settle(() => (notes(home).queued.b ?? []).some(item => item.args.exchangeId === sent.source.exchangeId))
+      assert.equal(notes(home).queued.b.find(item => item.args.exchangeId === sent.source.exchangeId).recoveryHold, 'prepared')
+    }
+    assert.equal(stateOf(home).works.x1.results[0].failed, undefined)
+  })
+}
 
 test('a reply that fails to reach the asker reaches it as a failure notice carrying the answer', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })

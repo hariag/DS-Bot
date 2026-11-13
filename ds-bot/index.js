@@ -4,6 +4,7 @@
 import { join } from 'node:path'
 import * as diagnostics from './src/host/diagnostics.js'
 import * as store from './src/host/store.js'
+import * as boardService from './src/host/board-service.js'
 import * as models from './src/host/models.js'
 import * as providers from './src/host/providers.js'
 import * as permissions from './src/host/permissions.js'
@@ -43,7 +44,6 @@ import * as dshUpdate from './src/host/dsh-update.js'
 import * as thinking from './src/host/thinking.js'
 import * as phone from './src/host/phone.js'
 import * as channel from './src/host/channel.js'
-import * as remote from './src/host/remote.js'
 import * as mobile from './src/host/mobile.js'
 import * as feed from './src/host/feed.js'
 import * as im from './src/host/im/index.js'
@@ -53,14 +53,15 @@ import * as localAgents from './src/host/local-agents/index.js'
 
 export { COLORS } from './src/host/constants.js'
 
-export { name, inject } from './src/host/entry.js'
+export const name = 'ds-bot'
+export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'sessions', 'sessionTitle', 'workspaceRegistry', 'connection']
 
 // Each module's install(rt) registers its listeners, tools, and effects, and puts on `rt`
 // the functions other modules call; they call them through `rt` at run time, never during
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, ledger, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, approvals, resume, memory, parts, images, avatarLibrary, secrets, connectors, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, remote, officeSkills, goalSkills, localAgents]
+const MODULES = [diagnostics, store, boardService, ledger, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, approvals, resume, memory, parts, images, avatarLibrary, secrets, connectors, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, officeSkills, goalSkills, localAgents]
 
 export function apply(ctx, config = {}) {
   createRuntime(ctx, config)
@@ -84,6 +85,7 @@ export function createRuntime(ctx, config = {}) {
     },
   }
   for (const module of MODULES) module.install(rt)
+  ctx.effect(() => () => { rt.stopping = true }, 'ds-bot: stopping')
   // A live Agent can be scoped before the last module has added its tools (the memory
   // module starts a load during install): complete the scope now that every tool is in.
   rt.syncScopedTools?.()

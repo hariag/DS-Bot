@@ -3,7 +3,8 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readAvatar } from './avatar.js'
-import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, SOURCE_KIND } from './constants.js'
+import { roleMaterialTool } from './role-layers.js'
+import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES } from './constants.js'
 import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
 import { NAME_MAX } from './requests.js'
@@ -50,6 +51,9 @@ const WORKING_DIRECTORY_TOOL = 'working_directory'
 export function install(rt) {
   const { ctx, state } = rt
 
+  const roleMaterial = roleMaterialTool(rt, defineTool, output)
+  if (roleMaterial !== undefined) rt.teamTools.push(roleMaterial)
+
   const callerBot = (exec) => rt.botOf(rt.selfOf(exec.agent?.id))
   const callerRoom = (exec) => {
     const roomId = rt.groupOwners.get(exec.agent?.id)?.roomId
@@ -91,7 +95,7 @@ export function install(rt) {
         const section = sectionNameOf(bot.sectionId)
         const tags = [bot.role, section ? `section "${section}"` : '', model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.private === true ? 'private' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
         const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
-        const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id)}`
+        const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id, self)}`
         return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}${now}`
       })
       if (lines.length === 0) return 'No Bots yet.'
@@ -117,22 +121,6 @@ export function install(rt) {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
     return room ? `group "${room.name}"` : 'its own chat'
   }
-  // A Bot request still in the inbox: no step or turn has taken it out yet.
-  const unreadRequest = (agent, senderId, toUser) => {
-    for (const [message, steered] of [...(agent.inbox?.nextStep ?? []).map(message => [message, true]), ...(agent.inbox?.nextTurn ?? []).map(message => [message, false])]) {
-      const source = message.source
-      if (source?.kind === SOURCE_KIND && source.role === 'request' && source.senderSessionId === senderId
-        && (source.audience === 'user') === toUser && !source.deferred && !source.resumed) return { message, steered }
-    }
-    return undefined
-  }
-  // A message's own words and files, without its header line.
-  const bodyOf = (message) => {
-    const content = Array.isArray(message.content) ? message.content : []
-    const first = content.find(block => block?.type === 'text')?.text ?? ''
-    return { text: first.slice(first.indexOf('\n') + 1), files: content.filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment) }
-  }
-
   // A tool that throws shows as failed in the chat, instead of as sent or stopped.
   const refuse = (message) => { throw new Error(message) }
 
@@ -154,8 +142,13 @@ export function install(rt) {
 
   const callInGroup = async (exec, room, sender, target, message) => {
     const call = `@${target.name}`
+    const targetSession = room.sessions?.[target.id]
+    const inbox = targetSession === undefined ? undefined : ctx.get?.('agents')?.get?.(targetSession)?.inbox
+    const waiting = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+      ? [...inbox.nextStep, ...inbox.nextTurn].filter(item => item.source?.kind === 'bot').length : undefined
     await rt.roomStepText(exec.agent.id, rt.live.get(exec.agent.id)?.info, message.startsWith(call) ? message : `${call} ${message}`, false)
-    return `Called ${target.name} in "${room.name}" with your message, as writing "${call}" there does: it works on it in the group, and you answer its result there. Nothing went to its own chat.`
+    const queue = waiting === undefined ? 'The target group inbox count was unavailable.' : `Before this call, its inbox in this group had ${waiting} Bot message(s) waiting.`
+    return `Called ${target.name} in "${room.name}" with your message, as writing "${call}" there does: it works on it in the group, and you answer its result there. Nothing went to its own chat. ${queue}`
   }
 
   // The Bots each Session's post_to_group called by name in its current turn, so that
@@ -225,7 +218,23 @@ export function install(rt) {
       if (room !== undefined) {
         const refusal = groupRefusal(room, sender, target)
         if (refusal !== undefined) refuse(refusal)
-        const send = () => callInGroup(exec, room, sender, target, text.trim())
+        if (rt.goalDispatchBlocked?.(room, target.id)) refuse(`Not sent: work for ${target.name} in this group was stopped or its stop state is unknown. The user must explicitly resume the affected work first.`)
+        const reviewId = rt.live.get(exec.agent?.id)?.info?.reviewId
+        const blocked = () => rt.goalDispatchBlocked?.(room, target.id)
+          || (reviewId && !rt.goalReviewAllowed?.(room, reviewId))
+        const send = async () => {
+          // admitRequest persists the pending receipt before invoking this closure.
+          // The user may have stopped the room while that persistence yielded.
+          if (blocked()) {
+            if (request !== undefined) request.unsent = true
+            return `Not sent: work for ${target.name} was stopped before dispatch.`
+          }
+          const receipt = await callInGroup(exec, room, sender, target, text.trim())
+          // roomStepText can itself yield while saving. We cannot prove whether a
+          // post or dispatch happened before a concurrent stop; retain uncertainty.
+          if (blocked()) throw new Error('Group stop raced with dispatch; inspect the original message before retrying.')
+          return receipt
+        }
         return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
       }
       const posted = calledInPosts.get(exec.agent?.id)
@@ -243,31 +252,23 @@ export function install(rt) {
         const toUser = args.reply_to === 'user'
         const work = toUser ? undefined : works[0]
         const chat = rt.chatOf(target.id)
-        const agent = await rt.resolveAgent(chat)
-        const status = rt.statusOf(target.id)
-        // A request it has not read yet, sent for the same work, takes this one in, so
-        // messages to a Bot that cannot read them do not pile up.
-        const earlier = unreadRequest(agent, sender.id, toUser)
-        const joinable = earlier !== undefined && (toUser || rt.sameWork(earlier.message.source.exchangeId, work))
-        const before = joinable ? bodyOf(earlier.message) : undefined
-        let long = await rt.attachLong(before ? `${before.text}\n\n${text}` : text, `Message from ${sender.name}.txt`)
+        await rt.resolveAgent(chat)
+        const status = rt.statusOf(target.id, sender.id)
+        const long = await rt.attachLong(text, `Message from ${sender.name}.txt`)
         // Nothing went out, so a named request must not take this as a delivered
         // receipt: admitRequest drops the pending record instead, and a retry can send.
         if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
-        const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
-        if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
         const working = rt.live.get(chat)?.turn !== undefined
-        const steer = (args.when !== 'queue' && !toUser) || (joins && earlier.steered)
-        const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
-        if (joins) rt.forgetDelivery?.(exchangeId)
-        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
+        const steer = args.when !== 'queue' && !toUser
+        const exchangeId = randomUUID()
+        if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
         try {
-          await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: [...long.files, ...(joins ? before.files : [])], length: long.length, role: 'request', steer, exchangeId, ...(joins ? { merged: true } : {}), ...(toUser ? { audience: 'user' } : {}) })
+          await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) })
         } catch (error) {
           // The delivery stays noted for the next start while its Bot exists
           // (resume.js), and the resent request still answers up the tree, so the
           // work it opened stays too. Only a target that is gone drops the work.
-          if (!joins && rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
+          if (rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
           throw error
         }
         const sent = toUser
@@ -279,7 +280,6 @@ export function install(rt) {
               : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
         const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from)?.name : undefined
         const notes = [
-          joins ? `${target.name} had not read your earlier message yet, so this one was added to it, and it answers both at once.` : '',
           status === 'idle' ? '' : `${target.name} now: ${status}.`,
           asker ? `When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to ${asker} once all of it is back.` : '',
         ].filter(Boolean)
@@ -586,92 +586,6 @@ export function install(rt) {
     },
   }))
 
-  // The shared to-do list of a group: open items first, then done ones, each with the
-  // short id the check and remove actions take. Ids are UUIDs, and the first eight
-  // characters are what the list shows; a prefix is accepted when it names exactly one item.
-  const todoCount = (room) => {
-    const todos = room.todos ?? []
-    const open = todos.filter(item => item.done !== true).length
-    return { todos, open, done: todos.length - open }
-  }
-  const todoLines = (room) => {
-    const { todos, open, done } = todoCount(room)
-    if (todos.length === 0) return `The shared to-do list of "${room.name}" is empty. Add one with action "add".`
-    const order = [...todos].sort((a, b) => Number(a.done === true) - Number(b.done === true) || (a.createdAt ?? 0) - (b.createdAt ?? 0))
-    return [
-      `Shared to-do list of "${room.name}" (${open} open, ${done} done):`,
-      ...order.map(item => `- [${item.done === true ? 'x' : ' '}] ${item.text} (todo ${item.id.slice(0, 8)})`),
-    ].join('\n')
-  }
-  const findTodo = (room, ref) => {
-    const wanted = String(ref ?? '').trim()
-    if (wanted === '') return { error: 'Which to-do? Pass the id from the list.' }
-    const exact = (room.todos ?? []).find(item => item.id === wanted)
-    if (exact !== undefined) return { todo: exact }
-    const matches = (room.todos ?? []).filter(item => item.id.startsWith(wanted))
-    if (matches.length === 1) return { todo: matches[0] }
-    if (matches.length > 1) return { error: `Several to-dos start with "${wanted}". Use a longer id.` }
-    return { error: `No to-do with id "${wanted}" on the list.` }
-  }
-
-  rt.teamTools.push(defineTool({
-    name: 'group_todo',
-    description: 'The shared to-do list of a group chat. Every member reads and changes the same list, and the user sees it in the group\'s details. List it, add one item, tick an item done or not done, remove one item, or clear the completed items. The list holds at most 100 items; when it is full, remove an item or clear completed ones before adding. Nothing is dropped on its own. Add, remove, or clear only what the user asked for.',
-    parameters: {
-      group: GROUP_REF,
-      action: {
-        type: 'string',
-        enum: ['list', 'add', 'check', 'remove', 'clear'],
-        required: true,
-        description: '"list" reads the list; "add" adds one item with text; "check" ticks one item by id, or unticks it with done: false; "remove" deletes one item by id; "clear" deletes every completed item',
-      },
-      text: { type: 'string', description: 'The to-do item, one line, at most 200 characters (action "add")' },
-      id: { type: 'string', description: 'The to-do id from the list, or its first characters (action "check" or "remove")' },
-      done: { type: 'boolean', description: 'true ticks the item, false unticks it; defaults to true (action "check")' },
-    },
-    output,
-    async execute(args, exec) {
-      await rt.load()
-      const self = rt.selfOf(exec.agent?.id)
-      if (rt.botOf(self) === undefined) return 'Only Bots on the team can use a group to-do list.'
-      const { room, error } = pickRoom(args.group, self)
-      if (error) return error
-      const action = String(args.action ?? '').trim()
-      if (action === 'list') return todoLines(room)
-      try {
-        if (action === 'add') {
-          const item = await rt.addRoomTodo(room.id, args.text, self)
-          const { open } = todoCount(room)
-          return `Added "${item.text}" to the shared to-do list of "${room.name}" (${open} open, todo ${item.id.slice(0, 8)}).`
-        }
-        if (action === 'check') {
-          const found = findTodo(room, args.id)
-          if (found.error) return found.error
-          const item = await rt.setRoomTodoDone(room.id, found.todo.id, args.done === undefined ? true : args.done === true, self)
-          const { open } = todoCount(room)
-          return `${item.done === true ? 'Ticked' : 'Unticked'} "${item.text}" (${open} open).`
-        }
-        if (action === 'remove') {
-          const found = findTodo(room, args.id)
-          if (found.error) return found.error
-          const item = await rt.removeRoomTodo(room.id, found.todo.id)
-          const { open } = todoCount(room)
-          return `Removed "${item.text}" from the shared to-do list of "${room.name}" (${open} open).`
-        }
-        if (action === 'clear') {
-          const removed = await rt.clearDoneRoomTodos(room.id)
-          const { open } = todoCount(room)
-          if (removed.length === 0) return `No completed to-dos to clear on "${room.name}" (${open} open).`
-          const noun = removed.length === 1 ? 'to-do' : 'to-dos'
-          return `Cleared ${removed.length} completed ${noun} from "${room.name}" (${open} open).`
-        }
-        return 'Use action "list", "add", "check", "remove" or "clear".'
-      } catch (failure) {
-        return `Could not change the to-do list of "${room.name}": ${failure.message}`
-      }
-    },
-  }))
-
   rt.teamTools.push(defineTool({
     name: 'delete_group',
     description: 'Main Bot only. Delete a group chat; its history is archived. Only when the user asks.',
@@ -789,13 +703,9 @@ export function install(rt) {
         .filter(option => option.label !== '')
         .slice(0, 6)
       if (options.length === 0) return 'Give at least one option.'
-      // A hidden Bot-to-Bot turn shows none of its calls, so its card goes to the
-      // composer dock, which takes questions without a call.
-      const turn = rt.live.get(id)?.turn
-      const hidden = turn !== undefined && (state.exchangeTurns[id] ?? []).includes(turn)
       state.questions[id] = {
         id: randomUUID(),
-        ...(exec.callId && !hidden ? { callId: exec.callId } : {}),
+        ...(exec.callId ? { callId: exec.callId } : {}),
         question: String(args.question ?? '').trim(),
         ...(args.detail ? { detail: String(args.detail).trim() } : {}),
         options,
@@ -804,6 +714,7 @@ export function install(rt) {
         askedAt: Date.now(),
       }
       await rt.save()
+      rt.cardShown?.(id, 'question', state.questions[id].question)
       exec.concludeTurn?.()
       return 'The card is on screen; the user\'s answer arrives as their next message.'
     },
@@ -829,20 +740,15 @@ export function install(rt) {
       if (checked.interactive && args.await_reply === false) return 'This view has controls to submit, so it waits for the user\'s answer; call show_view without await_reply: false.'
       const awaitReply = args.await_reply ?? checked.interactive
       if (!awaitReply) return 'The view is on screen.'
-      // A hidden Bot-to-Bot turn shows none of its calls, so its card goes to the
-      // composer dock, which takes a card without a call.
-      const turn = rt.live.get(id)?.turn
-      const hidden = turn !== undefined && (state.exchangeTurns[id] ?? []).includes(turn)
       state.views[id] = {
         id: randomUUID(),
-        ...(exec.callId && !hidden ? { callId: exec.callId } : {}),
+        ...(exec.callId ? { callId: exec.callId } : {}),
         title,
         view,
         askedAt: Date.now(),
       }
-      // A new card supersedes the closed one the dock may still show.
-      if (state.closedViews !== undefined) delete state.closedViews[id]
       await rt.save()
+      rt.cardShown?.(id, 'view', title)
       exec.concludeTurn?.()
       return 'The view is on screen; the user\'s answer arrives as their next message.'
     },
@@ -867,6 +773,9 @@ export function install(rt) {
     const held = scoped.get(id)
     if (held === undefined) return
     scoped.delete(id)
+    for (const lift of held.connectorLifts ?? []) {
+      try { lift() } catch (error) { rt.warn('ds-bot: a connector restriction of %s was not removed: %s', id, error) }
+    }
     for (const dispose of held.disposers) {
       try {
         dispose()
@@ -1035,23 +944,34 @@ export function install(rt) {
   // tools matching each off connector's prefix. Re-applied on tools/change.
   const maskConnectorTools = (agent, held) => {
     if (typeof agent.ctx?.tools?.restrict !== 'function' || typeof ctx.tools?.schemas !== 'function') return
+    if (held.connectorUpdating) return
     const botId = rt.selfOf(agent.session?.id)
     const prefixes = rt.connectorOffFor?.(botId) ?? []
-    const served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
-    const deny = [...served].filter(name => prefixes.some(prefix => name.startsWith(prefix)))
     const before = held.connectorDenied ?? new Set()
+    if (prefixes.length === 0 && before.size === 0) return
+    const served = typeof ctx.tools.definitions === 'function' ? ctx.tools.definitions() : ctx.tools.schemas()
+    const deny = served.map(tool => tool.name).filter(name => prefixes.some(prefix => name.startsWith(prefix)))
     if (deny.length === before.size && deny.every(name => before.has(name))) return
-    for (const lift of held.connectorLifts ?? []) { try { lift() } catch { /* already lifted */ } }
-    held.connectorLifts = []
-    held.connectorDenied = new Set(deny)
-    for (const name of deny) {
-      try {
-        const lift = agent.ctx.tools.restrict({ deny: [name] })
-        if (typeof lift === 'function') held.connectorLifts.push(lift)
-      } catch { /* a scoped name cannot be restricted; connectors are global */ }
+    held.connectorUpdating = true
+    try {
+      for (const lift of held.connectorLifts ?? []) { try { lift() } catch { /* already lifted */ } }
+      held.connectorLifts = []
+      held.connectorDenied = new Set()
+      for (const name of deny) {
+        try {
+          const lift = agent.ctx.tools.restrict({ deny: [name] })
+          if (typeof lift === 'function') {
+            held.connectorLifts.push(lift)
+            held.connectorDenied.add(name)
+          }
+        } catch { /* a scoped name cannot be restricted; connectors are global */ }
+      }
+    } finally {
+      held.connectorUpdating = false
     }
   }
   const reapplyToolMasks = () => {
+    if (rt.stopping === true) return
     for (const held of scoped.values()) {
       if (held.agent === undefined) continue
       try { maskConnectorTools(held.agent, held) } catch (error) { rt.warn('ds-bot: connector mask failed: %s', error) }

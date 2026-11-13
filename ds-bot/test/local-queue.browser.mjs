@@ -6,7 +6,8 @@ import { dirname, join, resolve } from 'node:path'
 import assert from 'node:assert/strict'
 
 const plugin = resolve(import.meta.dirname, '..')
-const harness = process.env.DSH_HARNESS ?? '/data2t/working/deepseek-harness'
+const harness = process.env.DSH_HARNESS
+if (!harness) throw new Error('Set DSH_HARNESS to a DeepSeek Harness checkout')
 const req = createRequire(join(harness, 'apps/web/package.json'))
 const { chromium } = req('playwright')
 const react = join(dirname(req.resolve('react')), 'umd/react.development.js')
@@ -28,7 +29,7 @@ const keepScreenshots = process.env.DS_BOT_KEEP_SCREENSHOTS === '1'
 let browser
 const failures = []
 try {
-  browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? '/usr/bin/google-chrome', headless: true, env: { ...process.env, TMPDIR: work }, args: ['--no-sandbox', '--disable-background-networking'] })
+  browser = await chromium.launch({ ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}), headless: true, env: { ...process.env, TMPDIR: work }, args: ['--no-sandbox', '--disable-background-networking'] })
   const context = await browser.newContext({ viewport: { width: 1000, height: 720 }, locale: 'zh-CN' })
   await context.route('**/*', route => route.abort())
   const page = await context.newPage()
@@ -38,7 +39,7 @@ try {
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: `
     var ${reactBinding}=window.React;
-    var t=(s,params={})=>({'Bot private {private} + group {group}':'Bot 私聊 {private} 条 + 群聊 {group} 条','Next step':'当前回合下一步','Next turn':'下一回合'}[s]??s).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
+    var t=(s,params={})=>({'Bot private {n}':'Bot 私聊 {n} 条','Group {n}':'群聊 {n} 条','Bot private messages waiting; count unavailable':'Bot 私聊有待处理消息（数量待确认）','Group messages waiting; count unavailable':'群聊有待处理消息（数量待确认）','Next step':'当前回合下一步','Next turn':'下一回合'}[s]??s).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
     for(const name of ${JSON.stringify(icons)}) globalThis[name]=()=>React.createElement('span',{'aria-hidden':true},'·');
     ${production}
     const style=document.createElement('style');style.textContent=QUEUE_CSS;document.head.append(style);
@@ -79,13 +80,17 @@ try {
   assert.equal(await list.isVisible(), false)
 
   await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [], 'next-step': [] }, 'fixture-session-a', [{ id: 'g1', roomId: 'r1', roomName: '研发群', senderName: '架构师', text: '需要决策' }]))
-  assert.match(await head.innerText(), /私聊 0 条 \+ 群聊 1 条/)
+  assert.match(await head.innerText(), /群聊 1 条/)
+  assert.equal((await head.innerText()).includes('私聊 0'), false)
   await head.click()
   assert.match(await list.innerText(), /研发群/)
   assert.match(await list.innerText(), /需要决策/)
   await head.click()
   await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [], 'next-step': [] }, 'fixture-session-a', [{ id: 'unknown', roomId: 'r1', roomName: '研发群', unavailable: true }]))
-  assert.match(await head.innerText(), /群聊 0\+\? 条/)
+  assert.equal(await head.count(), 0, 'unknown-only queue must not create a count')
+  await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [{ id: 'known', source: { kind: 'bot', role: 'reply' }, content: [{ type: 'text', text: 'private' }] }], 'next-step': [] }, 'fixture-session-a', [{ id: 'unknown', roomId: 'r1', roomName: '研发群', unavailable: true }]))
+  assert.match(await head.innerText(), /私聊 1 条/)
+  assert.equal((await head.innerText()).includes('+?'), false)
   await head.click()
   assert.match(await list.innerText(), /Group inbox unavailable/)
   await head.click()

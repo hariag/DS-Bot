@@ -295,10 +295,35 @@ export function install(rt) {
     }
   }
 
+  // Board data belongs to the instance user even when no Bot is private.
+  // Like the existing shell guard, this catches explicit paths but is not an OS sandbox.
+  async function guardBoardFiles(exec) {
+    const args = exec.arguments ?? {}, name = exec.name
+    const base = rt.sessionFolder(exec.agent?.session ?? exec.agent)
+    const roots = await spellings(join(rt.home, 'board-v1'))
+    const matches = async (path, search = false) => {
+      if (typeof path !== 'string' || !path) return false
+      const keys = await spellings(base === undefined ? path : resolve(base, path))
+      return keys.some(key => roots.some(root => within(key, root) || (search && within(root, key))))
+    }
+    let blocked = false
+    if (name in FILE_TOOLS) blocked = await matches(args[FILE_TOOLS[name]])
+    else if (SEARCH_TOOLS.includes(name)) blocked = await matches(args.path || '.', true) || (typeof args.pattern === 'string' && await matches(args.pattern.replace(/[*?[{].*$/, ''), true))
+    else if (name === 'subagent' || name === 'subagent_fork') blocked = await matches(args.cwd, true)
+    else if (name === 'working_directory') blocked = await matches(args.cd, true)
+    else if (SHELL_TOOLS.includes(name)) {
+      const text = fold(strings(args).join('\n').replace(/\\/g, '/'))
+      const home = (await spellings(rt.home)).flatMap(asShell)
+      blocked = text.includes('board-v1') || text.includes('tasks.sqlite') || home.some(path => text.includes(path)) || text.includes('~/.dsh/bot')
+    }
+    if (blocked) throw new Error('The instance user task board is private to the user.')
+  }
+
   // Before the tools' own hooks, so that a closed call never reaches a card they show.
   ctx.on('tools/execute', async (exec, next) => {
-    if (protectedBots().length === 0) return next()
     const self = await callerOf(exec)
+    if (self !== undefined) await guardBoardFiles(exec)
+    if (protectedBots().length === 0) return next()
     await guardTeam(exec, self)
     await guardFiles(exec, self)
     return next()

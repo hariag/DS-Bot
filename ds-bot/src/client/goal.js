@@ -5,6 +5,7 @@ import { CheckIcon, ChevronDownIcon } from './icons.js'
 import { useEscape } from './overlay-hooks.js'
 import { SPRING_SHAPE, spring, useMorph } from './motion.js'
 import { t } from './i18n.js'
+import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
 
 // -------------------------------------------------------------------------
 // Group goal: the header island is the goal's status screen. One surface wraps
@@ -33,7 +34,10 @@ export function goalView(goal, { roster = {}, roomWork = [] } = {}) {
   const count = stages.length
   const at = goal.current
   const current = RUNNING.has(goal.status) ? stages[at] : undefined
-  const checking = current !== undefined && (current.tasks ?? []).every(task => REPORTED.has(task.status))
+  const currentTasks = Array.isArray(current?.tasks) ? current.tasks : []
+  const checking = currentTasks.length > 0 && currentTasks.every(task => REPORTED.has(task.status))
+  const automaticIdle = goal.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
+    && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
   // The capsule counts the stage the goal is at, not the stages done.
   const number = goal.status === 'drafting' ? undefined
     : goal.status === 'stopped' ? stages.filter(stage => stage.status === 'passed').length
@@ -44,9 +48,11 @@ export function goalView(goal, { roster = {}, roomWork = [] } = {}) {
       : goal.status === 'stopped' ? t('Stopped')
         : goal.status === 'complete' ? t('Goal reached')
           : goal.status === 'paused' ? (current ? t('Paused · {title}', { title: current.title }) : t('Paused'))
-            : goal.idle === true ? (current ? t('Waiting for you · {title}', { title: current.title }) : t('Waiting for you'))
+            : goal.idle === true && !automaticIdle ? (current ? t('Waiting for you · {title}', { title: current.title }) : t('Waiting for you'))
+              : ['uncertain', 'cancelled-uncertain'].includes(goal.reviewAttempt?.state) ? t('Periodic review needs attention')
+                : automaticIdle ? (current ? t('Periodic review pending · {title}', { title: current.title }) : t('Periodic review pending'))
               : current === undefined ? t('Final check')
-                : checking ? t('Checking · {title}', { title: current.title })
+                : checking ? t('Results reported · stage review pending: {title}', { title: current.title })
                   : current.title
   const segments = stages.map((stage, i) => (stage.status === 'passed' ? 'done'
     : i === at && goal.status === 'paused' ? 'paused'
@@ -70,13 +76,13 @@ export function goalView(goal, { roster = {}, roomWork = [] } = {}) {
     kind: stage.status === 'passed' ? 'passed'
       : i === at && RUNNING.has(goal.status) ? 'current'
         : 'upcoming',
-    tasks: (stage.tasks ?? []).map(task => ({ bot: roster.byId?.[task.botId], task: task.task, status: task.status })),
+    tasks: (stage.tasks ?? []).map(task => ({ bot: roster.byId?.[task.botId], task: task.task, status: task.status, ...(task.statusUpdatedAt !== undefined ? { statusUpdatedAt: task.statusUpdatedAt } : {}), ...(typeof task.note === 'string' && task.note !== '' ? { note: task.note, noteStatus: task.noteStatus, noteAt: task.noteAt, statusVersion: task.statusVersion, noteStatusVersion: task.noteStatusVersion } : {}) })),
     evidence: stage.evidence,
     reworks: stage.reworks ?? 0,
     feedback: stage.feedback,
   }))
   return {
-    status: goal.status, idle: goal.idle === true, title: goal.title ?? '',
+    status: goal.status, idle: goal.idle === true, automaticIdle, title: goal.title ?? '',
     number, count, segments, barLabel, faces, stages: stageViews,
   }
 }
@@ -128,18 +134,52 @@ function GoalBar({ view, open, room, actions }) {
     h('span', { className: 'bt-goal-chev', 'aria-hidden': true }, h(ChevronDownIcon)))
 }
 
-// One task in the selected stage: avatar carries the state (pulse while it
-// works, a small check once reported or done, dimmed before it starts).
+// Reported is a response, not an accepted result; always name the recorded status.
+function taskStatusText(status) {
+  switch (status) {
+    case 'pending': return t('Task pending')
+    case 'working': return t('Task working')
+    case 'reported': return t('Task reported')
+    case 'done': return t('Task marked done')
+    default: return t('Task status unknown')
+  }
+}
+
+// Render the source's absolute timestamp in UTC, without assuming that the
+// browser's local timezone matches the host. A future browser time is unknown.
+function goalTime(value) {
+  if (!validGoalTime(value)) return undefined
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('Z', ' UTC') : undefined
+}
+
+// A note may survive several status changes, including a return to an earlier
+// status. Versions distinguish that from a note written in this status.
+function taskNoteText(task) {
+  const context = goalNoteContext(task)
+  if (context.kind === 'conflict') return t('Note · time conflict; verify')
+  if (context.kind === 'historical') return t('Note · earlier status')
+  if (context.kind === 'current') return t('Note · recorded in this status')
+  return t('Note · context unknown')
+}
+
 function TaskRow({ task, working }) {
   const live = working.has(task.bot?.id) || task.status === 'working'
-  const returned = REPORTED.has(task.status)
+  const noteTime = goalTime(task.noteAt)
+  const statusTime = goalTime(task.statusUpdatedAt)
   return h('div', { className: 'bt-goal-task', 'data-task': task.status === 'pending' ? 'pending' : undefined },
     h('span', { className: 'bt-goal-tav' },
       task.bot ? h(BotAvatar, { bot: task.bot, size: 20, state: live ? 'working' : 'idle' }) : null,
-      returned ? h('span', { className: 'bt-goal-tdone', 'aria-hidden': true }, h(CheckIcon)) : null),
+      task.status === 'done' ? h('span', { className: 'bt-goal-tdone', 'aria-hidden': true }, h(CheckIcon)) : null),
     h('span', { className: 'bt-goal-ttext' },
       h('span', { className: 'bt-goal-tname', style: task.bot ? { color: inkText(colorOf(task.bot)) } : undefined }, task.bot?.name ?? t('a Bot')),
-      ' ', task.task))
+      ' ', task.task,
+      h('span', { className: 'bt-goal-tstatus' }, taskStatusText(task.status)),
+      h('span', { className: 'bt-goal-tstatus-time' }, statusTime === undefined ? t('Status change time unknown') : t('Status changed: {time}', { time: statusTime })),
+      task.note ? h('span', { className: 'bt-goal-tnote' },
+        h('span', { className: 'bt-goal-tnote-label' }, taskNoteText(task)),
+        ' · ', h('span', { className: 'bt-goal-tnote-time' }, noteTime === undefined ? t('Recorded time unknown') : t('Recorded: {time}', { time: noteTime })),
+        ': ', task.note) : null))
 }
 
 const STOP_ARM_MS = 3000
@@ -151,6 +191,9 @@ function GoalPanel({ goal, view, room, roster, actions, working }) {
   const [selected, setSelected] = useState(at)
   const [checks, setChecks] = useState(false)
   const [armed, setArmed] = useState(false)
+  const [reviewEvidence, setReviewEvidence] = useState('')
+  const [reviewConfirmed, setReviewConfirmed] = useState(false)
+  const [reviewSaving, setReviewSaving] = useState(false)
   // The selected stage follows the goal's current one as stages pass.
   useEffect(() => setSelected(RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1), [view.status, goal.current])
   useEffect(() => {
@@ -178,6 +221,18 @@ function GoalPanel({ goal, view, room, roster, actions, working }) {
   const hasChecks = goal.objective !== undefined || goal.acceptance !== undefined || goal.constraints?.length > 0
   const admin = roster.byId?.[room.admin]?.name ?? t('a Bot')
   const stopWork = () => void Promise.resolve(actions.stopRoomWork(room.id)).catch(error => actions.reportError(error, 'stop'))
+  const attempt = goal.reviewAttempt
+  const recoverable = view.status === 'active' && attempt && (['uncertain', 'cancelled-uncertain'].includes(attempt.state)
+    || (attempt.state === 'admitting' && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1000))
+    && !(goal.idle === true && (!['admin-pass', 'nudge-limit'].includes(goal.idleReason) || goal.idleRevision !== goal.revision))
+  const resolveReview = () => {
+    if (!recoverable || !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving) return
+    setReviewSaving(true)
+    void Promise.resolve(actions.goalReviewResolve(room.id, goal.id, attempt.id, reviewEvidence.trim())).then(
+      () => { setReviewEvidence(''); setReviewConfirmed(false); setReviewSaving(false) },
+      error => { setReviewSaving(false); actions.reportError(error, 'goal') },
+    )
+  }
   return h('div', { className: 'bt-goal-panel', role: 'region', 'aria-label': view.title },
     h('div', { className: 'bt-goal-body' },
     view.status === 'drafting' ? null : h('div', { ref: stepper, className: 'bt-goal-steps', role: 'group', 'aria-label': t('Stages') },
@@ -213,6 +268,11 @@ function GoalPanel({ goal, view, room, roster, actions, working }) {
       goal.acceptance ? sec('acceptance', t('Done when'), goal.acceptance) : null,
       goal.constraints?.length > 0 ? sec('rules', t('Rules'), h('ul', { className: 'bt-goal-rules' },
         goal.constraints.map((rule, i) => h('li', { key: i }, rule)))) : null) : null),
+    recoverable ? h('div', { className: 'bt-goal-sec' },
+      h('div', { className: 'bt-goal-text' }, t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
+      h('label', { className: 'bt-goal-text' }, t('What did you verify?'), h('textarea', { className: 'bt-input bt-input-area', value: reviewEvidence, onChange: event => setReviewEvidence(event.target.value) })),
+      h('label', { className: 'bt-goal-text' }, h('input', { type: 'checkbox', checked: reviewConfirmed, onChange: event => setReviewConfirmed(event.target.checked) }), t('I checked the original outcome and authorize future reviews.')),
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving, onClick: resolveReview }, t('Resume periodic reviews'))) : null,
     h('div', { className: 'bt-goal-foot' },
       hasChecks ? h('button', {
         type: 'button', className: 'bt-goal-checks', 'aria-expanded': checks, onClick: () => setChecks(!checks),
@@ -220,6 +280,7 @@ function GoalPanel({ goal, view, room, roster, actions, working }) {
       h('span', { className: 'bt-goal-facts' },
         view.status === 'paused' && working.size > 0 ? h('button', { type: 'button', className: 'bt-goal-back', onClick: stopWork }, t('Stop current work too')) : null,
         view.status === 'active' ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('pause') }, t('Pause')) : null,
+        view.status === 'active' && view.idle && !view.automaticIdle ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('resume') }, t('Resume')) : null,
         view.status === 'paused' ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => control('resume') }, t('Resume')) : null,
         view.status === 'active' || view.status === 'paused' ? h('button', {
           type: 'button', className: 'bt-soft bt-soft-sm bt-goal-danger', 'data-armed': armed || undefined,
@@ -376,12 +437,14 @@ export const GOAL_CSS = `
 .bt-goal-evi{margin-top:8px;font-size:12px;line-height:18px;color:var(--bt-ink-2);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .bt-goal-tasks{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 .bt-goal-task{display:flex;align-items:flex-start;gap:8px;min-width:0}
-.bt-goal-task[data-task=pending]{opacity:.55}
+.bt-goal-task[data-task=pending] .bt-goal-tav{opacity:.55}
 .bt-goal-tav{position:relative;flex:none;display:inline-flex;margin-top:1px}
 .bt-goal-tdone{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;background:var(--bt-green);color:var(--bt-main);display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px var(--bt-main)}
 .bt-goal-tdone svg{width:9px;height:9px}
 .bt-goal-ttext{flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
 .bt-goal-tname{font-weight:500}
+.bt-goal-tstatus,.bt-goal-tstatus-time,.bt-goal-tnote{display:block;color:var(--bt-ink-2);font-size:12px;line-height:17px}
+.bt-goal-tnote{white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-goal-ckbody{display:flex;flex-direction:column;gap:10px;padding:0 14px 10px;font-size:13px;line-height:18px;text-align:left}
 /* The bottom row: disclosure on the left, controls on the right. */
 .bt-goal-foot{display:flex;align-items:center;gap:8px;height:40px;flex:none;padding:0 8px 0 14px;border-top:.5px solid var(--bt-line)}

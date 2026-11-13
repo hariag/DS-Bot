@@ -75,6 +75,86 @@ async function collect(stream) {
 
 const options = (sessionId, messages, extra = {}) => ({ provider: 'local-acp-fake', model: 'default', sessionId, messages, tools: [{ name: 'message_bot' }], signal: AbortSignal.timeout(60_000), ...extra })
 
+for (const [kind, Engine, fixture] of [['Codex', CodexEngine, FIXTURES.codex], ['ACP', AcpEngine, FIXTURES.acp]]) {
+  test(`${kind} concurrent ensure calls wait for initialization`, async (t) => {
+    const engine = new Engine('test', { name: kind, command: process.execPath, args: [fixture, '--controlled-initialize'] }, { findExecutable: path => path })
+    let sawInitialize
+    const seen = new Promise(resolve => { sawInitialize = resolve })
+    const originalNotice = engine.onNotice.bind(engine)
+    engine.onNotice = (method, ...args) => {
+      if (method === 'fixture/initialize-received') sawInitialize()
+      return originalNotice(method, ...args)
+    }
+    const finished = Array(10).fill(false)
+    const calls = Array.from({ length: 10 }, (_, i) => engine.ensure().then(peer => { finished[i] = true; return peer }))
+    const settled = Promise.allSettled(calls)
+    t.after(async () => { await engine.close(); await settled })
+    await seen
+    assert.deepEqual(finished, Array(10).fill(false), 'no caller may obtain an uninitialized peer')
+    engine.peer.notify('fixture/release-initialize', {})
+    const result = await settled
+    assert.ok(result.every(item => item.status === 'fulfilled'))
+    assert.ok(result.every(item => item.value === result[0].value))
+    assert.equal(result[0].value.nextId, 1)
+  })
+  test(`${kind} failed initialization rejects all waiters, closes the child, and retries cleanly`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const spec = { name: kind, command: process.execPath, args: [fixture, '--stall-initialize'] }
+    const engine = new Engine('test', spec, { findExecutable: path => path })
+    t.after(() => engine.close())
+    const attempts = Array.from({ length: 10 }, () => engine.ensure())
+    const child = engine.child
+    const exited = new Promise(resolve => child.once('exit', (_, signal) => resolve(signal)))
+    const settled = Promise.allSettled(attempts)
+    t.mock.timers.tick(30_000)
+    const results = await settled
+    assert.ok(results.every(result => result.status === 'rejected' && result.reason === results[0].reason))
+    assert.match(results[0].reason.message, /initialize timed out/)
+    assert.equal(await exited, 'SIGTERM')
+    assert.equal(engine.child, undefined)
+    spec.args = [fixture]
+    const peer = await engine.ensure()
+    assert.equal(peer.nextId, 1)
+    assert.notEqual(engine.child, child)
+  })
+
+  test(`${kind} close cancels initialization and terminates its child`, async (t) => {
+    const engine = new Engine('test', { name: kind, command: process.execPath, args: [fixture, '--stall-initialize'] }, { findExecutable: path => path })
+    t.after(() => engine.close())
+    const attempts = Array.from({ length: 10 }, () => engine.ensure())
+    const child = engine.child
+    const exited = new Promise(resolve => child.once('exit', (_, signal) => resolve(signal)))
+    const settled = Promise.allSettled(attempts)
+    await engine.close()
+    const results = await settled
+    assert.ok(results.every(result => result.status === 'rejected' && result.reason === results[0].reason))
+    assert.match(results[0].reason.message, /closed/)
+    assert.equal(await exited, 'SIGTERM')
+    assert.equal(engine.child, undefined)
+  })
+
+  test(`${kind} an old child exiting cannot close a replacement started immediately`, async (t) => {
+    const spec = { name: kind, command: process.execPath, args: [fixture, '--stall-initialize'] }
+    const engine = new Engine('test', spec, { findExecutable: path => path })
+    t.after(() => engine.close())
+    const old = engine.ensure().catch(error => error)
+    const oldChild = engine.child
+    const exited = new Promise(resolve => oldChild.once('exit', resolve))
+    await engine.close()
+    spec.args = [fixture]
+    const fresh = engine.ensure()
+    const newChild = engine.child
+    assert.notEqual(newChild, oldChild)
+    assert.match((await old).message, /closed/)
+    await exited
+    const peer = await fresh
+    assert.equal(engine.child, newChild)
+    assert.equal(engine.peer, peer)
+    assert.equal(peer.nextId, 1)
+  })
+}
+
+
 test('session-title and compaction stay deterministic, no CLI is started', async () => {
   const adapter = makeAdapter()
   const title = await collect(adapter.stream(options('s1', [user('m1', 'Please review the auth changes')], { purpose: 'session-title' })))

@@ -7,9 +7,19 @@
 //   otherwise  -> an activity item, an agentMessage, turn/completed
 // `--exit-after-turn` exits once a turn completes, and `--text-only` sends no
 // activity items first: a test can then tell whether the one text event reached
-// the client.
+// the client. `--record <file>` appends the params of thread/start and thread/resume,
+// so a test can check the shape the client sent without a model call.
+import { appendFileSync } from 'node:fs'
+const controlledInitialize = process.argv.includes('--controlled-initialize')
+const stallInitialize = process.argv.includes('--stall-initialize')
+let initializeId
 const exitAfterTurn = process.argv.includes('--exit-after-turn')
 const textOnly = process.argv.includes('--text-only')
+const recordAt = process.argv.indexOf('--record')
+const recordPath = recordAt === -1 ? undefined : process.argv[recordAt + 1]
+const record = (method, params) => {
+  if (recordPath !== undefined) appendFileSync(recordPath, `${JSON.stringify({ method, params })}\n`)
+}
 // The fields Codex 0.166's app-server takes on thread/start and thread/resume
 // (from `codex app-server generate-json-schema`). The real server drops any
 // other field without a word, so the fake refuses it instead.
@@ -83,7 +93,13 @@ process.stdin.on('data', (chunk) => {
     }
     const { id, method, params = {} } = message
     switch (method) {
-      case 'initialize': reply(id, { userAgent: 'fake-codex' }); break
+      case 'initialize':
+        if (controlledInitialize) { initializeId = id; send({ jsonrpc: '2.0', method: 'fixture/initialize-received' }) }
+        else if (!stallInitialize) reply(id, { userAgent: 'fake-codex' })
+        break
+      case 'fixture/release-initialize':
+        if (initializeId !== undefined) { reply(initializeId, { userAgent: 'fake-codex' }); initializeId = undefined }
+        break
       case 'initialized': break
       case 'model/list':
         reply(id, {
@@ -100,14 +116,18 @@ process.stdin.on('data', (chunk) => {
         })
         break
       case 'thread/start': {
-        if (unknownField(params, THREAD_START)) { replyError(id, unknownField(params, THREAD_START)); break }
+        record('thread/start', params)
+        const extra = unknownField(params, THREAD_START)
+        if (extra !== undefined) { replyError(id, extra); break }
         const thread = { id: `thr-${++nextId}`, params }
         threads.set(thread.id, thread)
         reply(id, { thread: { id: thread.id } })
         break
       }
       case 'thread/resume': {
-        if (unknownField(params, THREAD_RESUME)) { replyError(id, unknownField(params, THREAD_RESUME)); break }
+        record('thread/resume', params)
+        const extra = unknownField(params, THREAD_RESUME)
+        if (extra !== undefined) { replyError(id, extra); break }
         const thread = threads.get(params.threadId) ?? { id: params.threadId }
         thread.params = params
         threads.set(thread.id, thread)

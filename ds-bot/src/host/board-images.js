@@ -3,15 +3,11 @@ import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readFil
 import { isAbsolute, join } from 'node:path'
 import pngjs from 'pngjs'
 import jpeg from 'jpeg-js'
-import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
-import { syncDirectorySync } from './directory-sync.mjs'
 
 const MAX_BYTES = 5 * 1024 * 1024
 const MAX_BATCH = 10
 const MAX_DIMENSION = 4096
 const MAX_PIXELS = 16_000_000
-const FILE_TYPES = new Set(['image/png', 'image/jpeg', 'application/pdf', 'application/zip', 'text/plain', 'text/markdown', 'application/json'])
-const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'application/json'])
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/
 const digest = value => createHash('sha256').update(value).digest('hex')
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
@@ -22,24 +18,6 @@ function typeOf(data) {
   if (data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png'
   if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg'
   return undefined
-}
-
-const textContent = bytes => {
-  if (bytes.includes(0)) return undefined
-  try { return new TextDecoder('utf-8', { fatal:true }).decode(bytes) } catch { return undefined }
-}
-
-function matchesFileType(bytes, mediaType) {
-  if (mediaType === 'image/png' || mediaType === 'image/jpeg') return typeOf(bytes) === mediaType
-  if (mediaType === 'application/pdf') return bytes.length >= 5 && bytes.toString('ascii', 0, 5) === '%PDF-'
-  if (mediaType === 'application/zip') return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && [0x03,0x05,0x06].includes(bytes[2])
-  if (TEXT_TYPES.has(mediaType)) {
-    const text = textContent(bytes)
-    if (text === undefined) return false
-    if (mediaType === 'application/json') { try { JSON.parse(text); return true } catch { return false } }
-    return true
-  }
-  return false
 }
 
 // Called in an isolated worker, never on the DSH event loop. Interlaced PNG is
@@ -65,7 +43,7 @@ function validateImage(bytes, mediaType) {
 function checkDir(dir) {
   if (!isAbsolute(dir)) throw invalid('Image directory must be absolute')
   const stat = lstatSync(dir)
-  if (!isPrivateDirectory(dir, stat)) throw invalid('Image directory is not private')
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.uid !== process.getuid()) throw invalid('Image directory is not private')
   return stat
 }
 
@@ -74,10 +52,10 @@ function decode(image) {
     || image.data.length > Math.ceil(MAX_BYTES / 3) * 4 || image.data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(image.data)) throw invalid('Invalid image data')
   const bytes = Buffer.from(image.data, 'base64')
   if (!bytes.length || bytes.length > MAX_BYTES || bytes.toString('base64') !== image.data) throw invalid('Image size or encoding is invalid')
-  const mediaType = image.mediaType
-  if (!FILE_TYPES.has(mediaType) || !matchesFileType(bytes, mediaType)) throw invalid('File format does not match its content')
-  if (mediaType === 'image/png' || mediaType === 'image/jpeg') validateImage(bytes, mediaType)
-  if (typeof image.name !== 'string' || !image.name.trim() || Buffer.byteLength(image.name) > 255 || /[\\/\x00-\x1f\x7f]/.test(image.name)) throw invalid('Invalid attachment name')
+  const mediaType = typeOf(bytes)
+  if (!mediaType || image.mediaType !== mediaType) throw invalid('Image format does not match its content')
+  validateImage(bytes, mediaType)
+  if (typeof image.name !== 'string' || !image.name.trim() || Buffer.byteLength(image.name) > 255 || /[\\/\x00-\x1f\x7f]/.test(image.name)) throw invalid('Invalid image name')
   return { bytes, id: image.uploadId, sha256: digest(bytes), mediaType, size: bytes.length, name: image.name }
 }
 
@@ -86,7 +64,7 @@ function readFileExact(path, limit = MAX_BYTES) {
   try {
     const stat = fstatSync(fd), pathStat = lstatSync(path)
     if (!stat.isFile() || pathStat.isSymbolicLink() || pathStat.dev !== stat.dev || pathStat.ino !== stat.ino
-      || !isPrivateFile(path, stat) || stat.size > limit) throw invalid('Image file is unavailable')
+      || (stat.mode & 0o077) || stat.uid !== process.getuid() || stat.size > limit) throw invalid('Image file is unavailable')
     return readFileSync(fd)
   } finally { closeSync(fd) }
 }
@@ -116,7 +94,8 @@ export function stageBoardImages({ directory, taskId, images, assertWriteLock })
         const existing = readFileExact(destination)
         if (digest(existing) !== entry.sha256 || existing.length !== entry.size) throw invalid('Upload ID already belongs to different content')
       }
-      syncDirectorySync(directory)
+      const dfd = openSync(directory, constants.O_RDONLY)
+      try { fsyncSync(dfd) } finally { closeSync(dfd) }
     } finally {
       if (fd !== undefined) closeSync(fd)
       try { unlinkSync(temporary) } catch (error) { if (error.code !== 'ENOENT') throw error }
@@ -130,6 +109,6 @@ export function readBoardImage({ directory, taskId, reference }) {
   checkDir(directory)
   if (typeof taskId !== 'string' || !taskId || !reference || !idPattern.test(reference.id ?? '') || !/^[a-f0-9]{64}$/.test(reference.sha256 ?? '')) throw invalid('Invalid image reference')
   const bytes = readFileExact(join(directory, nameOf(taskId, reference.id)))
-  if (bytes.length !== reference.size || digest(bytes) !== reference.sha256 || !matchesFileType(bytes, reference.mediaType)) throw invalid('Attachment content does not match the task record')
+  if (bytes.length !== reference.size || digest(bytes) !== reference.sha256 || typeOf(bytes) !== reference.mediaType) throw invalid('Image content does not match the task record')
   return { mediaType: reference.mediaType, data: bytes.toString('base64') }
 }
