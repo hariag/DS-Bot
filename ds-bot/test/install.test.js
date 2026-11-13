@@ -37,6 +37,9 @@ test('apply registers listeners and effects in a fixed order', (t) => {
   assert.deepEqual(ctx.calls, [
     'effect ds-bot: diagnostics log',
     'effect ds-bot: state lock',
+    'effect ds-bot: board streaming upload',
+    'route POST /api/bot-board-upload',
+    'effect ds-bot: board service',
     'effect ds-bot: ledger',
     'on llm/adapters-updated',
     'on credentials/reference-updated',
@@ -68,6 +71,8 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'effect ds-bot: group rounds',
     'effect ds-bot: group step lines',
     'on llm/stream',
+    'tools guard',
+    'effect ds-bot: periodic goal review',
     'on approval/request (prepend)',
     'on agent/inbox/discarded',
     'on session/event',

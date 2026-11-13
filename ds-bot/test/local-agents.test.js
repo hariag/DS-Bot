@@ -832,6 +832,7 @@ test('the steward leaves a local-agent Session alone', async () => {
     groupOwners: new Map(),
     pastOwners: new Map(),
     roomOwners: new Map(),
+    live: new Map(),
     partsOf: () => [],
     resolveAgent: async id => ({ id, session: { id, deriveMessages: () => [] }, status: 'idle' }),
     teamTools: [],

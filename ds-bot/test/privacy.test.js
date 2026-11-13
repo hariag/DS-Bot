@@ -128,6 +128,7 @@ async function start({ services = {}, privateBot = true, archives, memberPick = 
 }
 
 const CLOSED = /private Bot/
+const BOARD_CLOSED = /task board is private/
 
 test('board guard allows the ordinary workspace and rejects explicit board aliases', async (t) => {
   if (process.platform !== 'linux') return t.skip('symbolic-link fixture requires Linux')
@@ -291,10 +292,10 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
   const notes = join(diary, 'notes.txt')
   const posix = path => path.replace(/\\/g, '/')
   const gitBash = /^[a-z]:/i.test(diary) ? `/${diary[0].toLowerCase()}${posix(diary).slice(2)}` : posix(diary)
-  const refused = async (name, args, from = 'b') => {
+  const refused = async (name, args, from = 'b', reason = CLOSED) => {
     const result = await run(name, args, from)
     assert.equal(result.ran, false, `${name} ${JSON.stringify(args)}`)
-    assert.match(result.error, CLOSED)
+    assert.match(result.error, reason)
   }
   await refused('read', { file_path: notes })
   await refused('read', { file_path: relative(team, notes) })
@@ -312,10 +313,10 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
   await refused('read', { file_path: join(home, 'learning', 'state.json') })
   await refused('read', { file_path: join(home, 'memory', 'pending.json') })
   await refused('glob', { pattern: '**/*', path: diary })
-  await refused('glob', { pattern: '**/*.txt', path: root })
-  await refused('grep', { pattern: 'secret', path: root })
+  await refused('glob', { pattern: '**/*.txt', path: root }, 'b', BOARD_CLOSED)
+  await refused('grep', { pattern: 'secret', path: root }, 'b', BOARD_CLOSED)
   await refused('glob', { pattern: `${posix(diary)}/**` })
-  await refused('glob', { pattern: '**/*', path: home })
+  await refused('glob', { pattern: '**/*', path: home }, 'b', BOARD_CLOSED)
   await refused('bash', { command: `cat ${posix(notes)}` })
   await refused('bash', { command: `cat ${gitBash}/notes.txt` })
   await refused('pwsh', { command: `Get-Content '${notes}'`, workdir: project })
@@ -323,7 +324,7 @@ test('other Bots cannot read, write or search what a private Bot keeps', async (
   await refused('bash', { command: `cat ${posix(join(home, 'state.json'))}` })
   await refused('bash', { command: `cat ${posix(join(home, 'chat-index.sqlite'))}` })
   await refused('working_directory', { cd: diary })
-  await refused('working_directory', { cd: root })
+  await refused('working_directory', { cd: root }, 'b', BOARD_CLOSED)
   await refused('subagent', { cwd: diary, prompt: 'read notes.txt' })
   await refused('subagent_fork', { cwd: relative(team, diary), prompt: 'read notes.txt' })
   await refused('session_search', { query: 'x' })
@@ -373,8 +374,10 @@ test('the private Bot reads its own and the team\'s files; a Session it starts s
   t.after(stop)
   assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, P), { ran: true })
   assert.deepEqual(await run('glob', { pattern: '**/*', path: diary }, P), { ran: true })
-  // Its own data is no secret from it: with no other private Bot, the data folder is open to a search.
-  assert.deepEqual(await run('glob', { pattern: '**/*', path: home }, P), { ran: true })
+  // Its own memory is available, but the shared home also contains the user's board.
+  const sharedHome = await run('glob', { pattern: '**/*', path: home }, P)
+  assert.equal(sharedHome.ran, false)
+  assert.match(sharedHome.error, BOARD_CLOSED)
   assert.deepEqual(await run('read', { file_path: join(project, 'a.txt') }, P), { ran: true })
   assert.deepEqual(await run('glob', { pattern: '**/*', path: team }, P), { ran: true })
   assert.deepEqual(await run('read', { file_path: join(home, 'memory', 'team', 'MEMORY.md') }, P), { ran: true })
@@ -542,7 +545,7 @@ test('deleting a private Bot keeps its folder and archived memory closed', async
   ]) {
     const result = await run(name, args, 'b')
     assert.equal(result.ran, false, name)
-    assert.match(result.error, CLOSED)
+    assert.match(result.error, name === 'glob' ? BOARD_CLOSED : CLOSED)
   }
   await assert.rejects(rt.createBot({ name: 'Third', workDir: diary }), CLOSED)
   const third = await rt.createBot({ name: 'Third', workDir: project })
@@ -682,10 +685,13 @@ test('a kept Bot whose memory never moved does not close the archive folder', as
   assert.deepEqual(await run('glob', { pattern: '**/*', path: archiveRoot }, 'b'), { ran: true })
 })
 
-test('with no private Bot the tools run as they did', async (t) => {
+test('without a private Bot, the user board stays private while unrelated paths remain available', async (t) => {
   const { run, diary, stop } = await start({ privateBot: false })
   t.after(stop)
   assert.deepEqual(await run('read', { file_path: join(diary, 'notes.txt') }, 'b'), { ran: true })
   assert.deepEqual(await run('message_bot', { to: 'Diary', message: 'hi' }, 'a'), { ran: true })
-  assert.deepEqual(await run('glob', { pattern: '*', path: join(diary, '..') }, 'b'), { ran: true })
+  assert.deepEqual(await run('glob', { pattern: '*', path: diary }, 'b'), { ran: true })
+  const parent = await run('glob', { pattern: '*', path: join(diary, '..') }, 'b')
+  assert.equal(parent.ran, false)
+  assert.match(parent.error, BOARD_CLOSED)
 })
