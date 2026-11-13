@@ -2326,7 +2326,8 @@ test('a post waiting for the next round does not start one after the user stops 
   const at = host.agentOf('r1').calls.findIndex(call => call.source?.role === 'goal')
   const [draft] = host.agentOf('r1').calls.splice(at, 1)
   host.round('c2', { content: draft.content, source: draft.source })
-  await settle(() => true)
+  await settle(() => rt.roomLaterCount('r1') === 1)
+  assert.equal(rt.roomLaterCount('r1'), 1, 'queued next-round item is observable')
   rt.stopRoomRound('r1')
   host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'aborted' } })
   await settle(() => first() !== undefined)
@@ -2335,6 +2336,7 @@ test('a post waiting for the next round does not start one after the user stops 
   // The group's next message takes the draft with it: the admin is called for the goal.
   host.round('c3', host.say('继续'))
   await settle(() => host.agentOf('ga').calls.length === 1)
+  assert.equal(rt.roomLaterCount('r1'), 0, 'the item left the next-round queue')
   assert.match(text(host.agentOf('ga').calls[0]), /the user wants to set a goal/)
   host.begin('ga')
   host.finish('ga', '[PASS]')

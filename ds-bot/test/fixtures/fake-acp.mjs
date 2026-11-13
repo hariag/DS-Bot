@@ -13,6 +13,9 @@
 //   contains "show-mode"    -> answers with the mode the session is in
 // `--cursor-modes` lists the modes cursor-agent 2026.11.05 does (agent, plan, ask)
 // and refuses any other, as it does.
+const controlledInitialize = process.argv.includes('--controlled-initialize')
+const stallInitialize = process.argv.includes('--stall-initialize')
+let initializeId
 const exitAfterTurn = process.argv.includes('--exit-after-turn')
 const cursorModes = process.argv.includes('--cursor-modes')
 const MODES = cursorModes ? ['agent', 'plan', 'ask'] : ['ask', 'accept-edits', 'bypass']
@@ -153,7 +156,11 @@ process.stdin.on('data', (chunk) => {
     const { id, method, params = {} } = message
     switch (method) {
       case 'initialize':
-        reply(id, { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true, sse: false }, loadSession: true }, authMethods: [] })
+        if (controlledInitialize) { initializeId = id; send({ jsonrpc: '2.0', method: 'fixture/initialize-received' }) }
+        else if (!stallInitialize) reply(id, { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true, sse: false }, loadSession: true }, authMethods: [] })
+        break
+      case 'fixture/release-initialize':
+        if (initializeId !== undefined) { reply(initializeId, { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true, sse: false }, loadSession: true }, authMethods: [] }); initializeId = undefined }
         break
       case 'session/new': {
         const session = { id: `acp-${++nextId}`, mcp: undefined, mode: MODES[0] }

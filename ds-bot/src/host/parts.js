@@ -1267,6 +1267,15 @@ export function install(rt) {
   ctx.on('agent/pre-step', async (payload, next) => {
     await rt.load()
     const { agent } = payload
+    // An inspection must never be converted into an unrestricted handoff.
+    // Keep it in this part; if a switch is already in flight, reject safely.
+    const inspection = rt.live.get(agent.id)?.info?.reviewInspect === true ? rt.live.get(agent.id).info
+      : payload.messages?.find(message => message?.source?.reviewInspect === true)?.source
+    if (inspection !== undefined) {
+      if (!switches.has(agent.id) && !rt.pastOwners.has(agent.id)) return next()
+      rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Inspection ${inspection.reviewId ?? 'unknown'} was held because its session was moving.` })
+      return { kind: 'reject' }
+    }
     const past = rt.pastOwners.get(agent.id)
     if (past !== undefined && !rt.isBotSession(agent.id)) {
       await forward(past, payload.messages).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))

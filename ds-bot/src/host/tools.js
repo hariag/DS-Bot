@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readAvatar } from './avatar.js'
+import { roleMaterialTool } from './role-layers.js'
 import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES } from './constants.js'
 import { within } from './folders.js'
 import { absoluteLinks } from './links.js'
@@ -49,6 +50,9 @@ const WORKING_DIRECTORY_TOOL = 'working_directory'
 
 export function install(rt) {
   const { ctx, state } = rt
+
+  const roleMaterial = roleMaterialTool(rt, defineTool, output)
+  if (roleMaterial !== undefined) rt.teamTools.push(roleMaterial)
 
   const callerBot = (exec) => rt.botOf(rt.selfOf(exec.agent?.id))
   const callerRoom = (exec) => {
@@ -214,7 +218,23 @@ export function install(rt) {
       if (room !== undefined) {
         const refusal = groupRefusal(room, sender, target)
         if (refusal !== undefined) refuse(refusal)
-        const send = () => callInGroup(exec, room, sender, target, text.trim())
+        if (rt.goalDispatchBlocked?.(room, target.id)) refuse(`Not sent: work for ${target.name} in this group was stopped or its stop state is unknown. The user must explicitly resume the affected work first.`)
+        const reviewId = rt.live.get(exec.agent?.id)?.info?.reviewId
+        const blocked = () => rt.goalDispatchBlocked?.(room, target.id)
+          || (reviewId && !rt.goalReviewAllowed?.(room, reviewId))
+        const send = async () => {
+          // admitRequest persists the pending receipt before invoking this closure.
+          // The user may have stopped the room while that persistence yielded.
+          if (blocked()) {
+            if (request !== undefined) request.unsent = true
+            return `Not sent: work for ${target.name} was stopped before dispatch.`
+          }
+          const receipt = await callInGroup(exec, room, sender, target, text.trim())
+          // roomStepText can itself yield while saving. We cannot prove whether a
+          // post or dispatch happened before a concurrent stop; retain uncertainty.
+          if (blocked()) throw new Error('Group stop raced with dispatch; inspect the original message before retrying.')
+          return receipt
+        }
         return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
       }
       const posted = calledInPosts.get(exec.agent?.id)

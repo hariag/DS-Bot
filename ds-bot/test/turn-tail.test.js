@@ -102,6 +102,35 @@ test('the turn tail entry notes when the turn ended and shows the pause before t
   assert.equal(find(out, node => node.props?.className === 'bt-time-sep').length, 1)
 })
 
+test('silent internal reviews do not create orphan clocks or unread separators', () => {
+  const clock = { b: {
+    3: { first: 1_000, end: 2_000 },
+    4: { first: 31 * 60_000, end: 32 * 60_000, internalReview: true },
+    5: { first: 62 * 60_000, end: 63 * 60_000, internalReview: true },
+  } }
+  const draw = turn => TurnTailCell({ turn: { turn, end: { time: clock.b[turn].end } }, sessionId: 'b',
+    useTurnClock: select => select(clock), useUi: () => ({ seen: 1, entered: 99999999 }), actions: { noteTurnTime() {} } })
+  for (const turn of [3, 4, 5]) {
+    const out = draw(turn)
+    assert.equal(find(out, n => n.props?.className === 'bt-time-sep').length, 0)
+    assert.equal(find(out, n => n.props?.className === 'bt-new-sep').length, 0)
+  }
+})
+
+test('a visible review or a later user turn retains the correct time boundary', () => {
+  const clock = { b: {
+    3: { first: 1_000, end: 2_000 },
+    4: { first: 31 * 60_000, end: 32 * 60_000, internalReview: true },
+    5: { first: 62 * 60_000, end: 63 * 60_000, internalReview: true, visible: true },
+    6: { first: 94 * 60_000, end: 95 * 60_000 },
+  } }
+  const draw = turn => TurnTailCell({ turn: { turn, end: { time: clock.b[turn].end } }, sessionId: 'b',
+    useTurnClock: select => select(clock), useUi: () => undefined, actions: { noteTurnTime() {} } })
+  assert.equal(find(draw(3), n => n.props?.className === 'bt-time-sep').length, 1)
+  assert.equal(find(draw(4), n => n.props?.className === 'bt-time-sep').length, 0)
+  assert.equal(find(draw(5), n => n.props?.className === 'bt-time-sep').length, 1)
+})
+
 // #206: the user reads a Bot's reply in its own chat, so it folds only where rendering
 // all of it would slow the chat down.
 test('a Bot reply in its own chat stays whole up to 20,000 characters', () => {

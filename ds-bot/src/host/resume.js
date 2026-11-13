@@ -9,7 +9,7 @@
 // is settled from the Session's durable log: an answer that was produced goes to the Bot
 // that waits for it, and an outcome that cannot be read is said to be unknown. The
 // request itself is never sent again there.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -100,6 +100,8 @@ const triggerOf = info => ({
   ...(info.audience ? { audience: info.audience } : {}),
   ...(info.askedBy ? { askedBy: info.askedBy } : {}),
   ...(info.senderRoomId ? { senderRoomId: info.senderRoomId } : {}),
+  ...(info.reviewId ? { reviewId: info.reviewId } : {}),
+  ...(info.reviewInspect === true ? { reviewInspect: true } : {}),
 })
 
 const readNotes = (file) => {
@@ -107,16 +109,16 @@ const readNotes = (file) => {
   try {
     raw = readFileSync(file, 'utf8')
   } catch (error) {
-    return error?.code === 'ENOENT' ? { turns: {}, queued: {}, raw: undefined }
-      : { turns: {}, queued: {}, blocked: error?.code ?? error?.name ?? 'read error' }
+    return error?.code === 'ENOENT' ? { turns: {}, queued: {}, heldTurns: {}, raw: undefined }
+      : { turns: {}, queued: {}, heldTurns: {}, blocked: error?.code ?? error?.name ?? 'read error' }
   }
   try {
     const parsed = JSON.parse(raw)
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
-    if (!object(parsed) || (parsed.turns !== undefined && !object(parsed.turns)) || (parsed.queued !== undefined && !object(parsed.queued))) throw new Error('invalid notes')
-    return { turns: parsed.turns ?? {}, queued: parsed.queued ?? {}, raw }
+    if (!object(parsed) || (parsed.turns !== undefined && !object(parsed.turns)) || (parsed.queued !== undefined && !object(parsed.queued)) || (parsed.heldTurns !== undefined && !object(parsed.heldTurns))) throw new Error('invalid notes')
+    return { turns: parsed.turns ?? {}, queued: parsed.queued ?? {}, heldTurns: parsed.heldTurns ?? {}, raw }
   } catch {
-    return { turns: {}, queued: {}, blocked: 'invalid recovery notes' }
+    return { turns: {}, queued: {}, heldTurns: {}, blocked: 'invalid recovery notes' }
   }
 }
 
@@ -146,7 +148,24 @@ export function install(rt) {
   if (blocked !== undefined) rt.warn('ds-bot: recovery notes %s are unreadable (%s); the original file is preserved and Bot deliveries are paused until it is repaired and the plugin is reloaded', file, blocked)
 
   /** @type {Record<string, {botId:string, roomId?:string, since:number, trigger?:any, approval?:{tool:string, reason:string}, resumed?:boolean}>} */
-  let turns = {}
+  // Keep every original turn until recovery has actually inspected it: a
+  // crash while resumeAll prepares the queue must not erase other work either.
+  let turns = { ...interrupted.turns }
+  // A later turn in the same session must not overwrite an older uncertain
+  // interruption. Preserve it separately before the first possible snapshot.
+  const heldTurns = { ...interrupted.heldTurns }
+  const holdTurn = (sessionId, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interrupted turn; inspect recovery notes')
+    const { recoveryHold: _, ...record } = value
+    const id = createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex')
+    heldTurns[id] ??= { sessionId, record, reason: 'interrupted outcome unknown' }
+  }
+  for (const [sessionId, value] of Object.entries(interrupted.turns)) {
+    try { holdTurn(sessionId, value) } catch {
+      blocked = 'invalid interrupted turn'
+      rt.warn('ds-bot: invalid interrupted turn for %s; the original recovery notes are preserved for inspection', sessionId)
+    }
+  }
   // A new delivery can persist before recovery runs; it must keep the old queue.
   /** @type {Record<string, {at:number, args:any}[]>} deliveries no turn has taken up, by Session */
   let queued = interrupted.queued
@@ -161,7 +180,7 @@ export function install(rt) {
     if (stopped || blocked !== undefined || rt.readOnly() !== undefined) {
       return required ? Promise.reject(new Error('Recovery notes cannot be saved by this host.')) : writing
     }
-    latest = JSON.stringify({ turns, queued })
+    latest = JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) })
     // One write waits at a time and takes the latest notes, so a busy round does not
     // write the file once per change.
     if (due) return pending
@@ -222,7 +241,7 @@ export function install(rt) {
   }
 
   const deliver = rt.deliver
-  rt.deliver = async (args) => {
+  rt.deliver = async (args, observation) => {
     if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}); Bot delivery is paused until the notes are repaired and the plugin is reloaded.`)
     if (stopped || rt.readOnly() !== undefined) throw new Error('Recovery notes cannot be saved by this host.')
     // The sender can be removed or renamed while the write barrier is pending.
@@ -239,14 +258,19 @@ export function install(rt) {
     await persist({ required: true })
     if (stopped) throw new Error('Bot delivery stopped after its recovery note was saved; the note is retained for recovery.')
     rt.requireHomeLock()
+    let notAdmitted = false
     try {
-      const result = await deliver(noted)
+      const result = await deliver(noted, { beforeAdmission: observation?.beforeAdmission, onNotAdmitted: () => {
+        notAdmitted = true
+        try { observation?.onNotAdmitted?.() } catch {}
+      } })
       markSent(noted.exchangeId)
       return result
     } catch (error) {
       // The delivery outcome can be uncertain: its prepared note stays for review.
-      // One whose Bot is gone is dropped, since it can never be sent.
-      if (rt.botOf(noted.toId) === undefined) forgetQueued(noted.exchangeId)
+      // If admission was not reached and the Bot is gone, it cannot be sent.
+      // After a possible admission, keep the note even if the Bot was removed.
+      if (notAdmitted && rt.botOf(noted.toId) === undefined) forgetQueued(noted.exchangeId)
       throw error
     }
   }
@@ -353,29 +377,18 @@ export function install(rt) {
     : approval === undefined ? (({ approval: _, ...rest }) => rest)(record) : { ...record, approval }))
 
   async function resumeTurn(sessionId, record) {
-    const bot = rt.botOf(record.botId)
-    if (bot === undefined) return
-    const text = resumeText(record)
-    if (record.roomId !== undefined) {
-      const room = rt.roomOf(record.roomId)
-      if (room === undefined || !room.members.includes(bot.id)) return
-      await rt.postToRoom(room, bot, '', { resumed: true, quiet: true, ...(record.resumed ? { again: true } : {}) })
-      // A turn already picked up once and cut off again stays stopped: a restart loop
-      // must not run it forever.
-      if (record.resumed) return
-      await rt.deliver({ toId: bot.id, sessionId: room.sessions?.[bot.id] ?? sessionId, role: 'room', roomId: room.id, note: 'picking up after a restart', resumed: true, text, ...(record.trigger?.askedBy ? { askedBy: record.trigger.askedBy } : {}) })
-      return
+    // A restart does not prove whether an external effect happened. Keep the
+    // original trigger and do not generate a second, unrelated exchange ID.
+    holdTurn(sessionId, record)
+    update(sessionId, current => current === undefined || current === record
+      ? { ...record, recoveryHold: 'interrupted outcome unknown' } : current)
+    await persist({ required: true })
+    if (record.trigger?.reviewId) {
+      await rt.goalReviewFailed?.(rt.roomOf(record.roomId), sessionId, record.trigger.reviewId)
     }
-    if (record.resumed) return
-    const trigger = record.trigger
-    if ((trigger?.role === 'request' || trigger?.role === 'stopped') && trigger.senderSessionId && trigger.audience !== 'user' && rt.botOf(trigger.senderSessionId)) {
-      // The sender still waits for this turn's answer, so it goes on under the same exchange.
-      await rt.deliver({ fromId: trigger.senderSessionId, toId: bot.id, role: trigger.role, ...(trigger.exchangeId ? { exchangeId: trigger.exchangeId } : {}), ...(trigger.senderRoomId ? { fromRoomId: trigger.senderRoomId } : {}), resumed: true, text })
-      return
-    }
-    // A turn that went on with work another Bot asked for still owes that Bot its answer.
-    await rt.deliver({ toId: bot.id, role: 'resume', resumed: true, text, ...(trigger?.work ? { work: trigger.work } : {}) })
+    rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
   }
+  rt.holdInterruptedTurn = resumeTurn
 
   // Where a queued note goes now: its Session if it still is one, else the
   // current Session of its Bot, or of its group when the message went to one.
@@ -399,8 +412,31 @@ export function install(rt) {
     }
     for (const { args, resumeOrigins, recoveryHold } of fresh) {
       const target = sessionFor(sessionId, args)
+      const room = args.roomId && args.role === 'room' ? rt.roomOf(args.roomId) : undefined
+      const blocked = () => room !== undefined && rt.goalRecoveryBlocked?.(room, args.toId) === true
       if (!agents.has(target)) agents.set(target, await rt.resolveAgent(target))
       const agent = agents.get(target)
+      if (args.reviewId && args.role === 'room') {
+        const room = rt.roomOf(args.roomId)
+        const stillAllowed = rt.goalReviewAllowed?.(room, args.reviewId) === true
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        if (!stillAllowed) for (const message of waiting) agent.inbox?.remove?.(message.id)
+        held.add(args.exchangeId)
+        if (waiting.length === 0) {
+          await rt.goalReviewFailed?.(room, target, args.reviewId)
+          rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Goal review ${args.reviewId} was not resent after restart; inspect the original delivery before recovery.` })
+        }
+        continue
+      }
+      if (blocked()) {
+        held.add(args.exchangeId)
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
+        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_STOPPED_HOLD', text: `Queued group delivery ${args.exchangeId} is held because its work is stopped or its stop state is unknown.`, sessionId: target })
+        continue
+      }
       const waiting = () => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
         .some(message => message.source?.exchangeId === args.exchangeId)
       if (waiting()) { held.add(args.exchangeId); continue }
@@ -435,7 +471,9 @@ export function install(rt) {
       // A request that waited through a restart reaches its target late: the work
       // it is for is marked, so the answer that comes back says so.
       if (args.role === 'request' || args.role === 'stopped') rt.lateWork?.(args.exchangeId)
-      await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true })
+      await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true }, { beforeAdmission: () => {
+        if (blocked()) throw new Error('Queued group work was stopped before recovery admission')
+      } })
         .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
     }
   }
@@ -612,10 +650,16 @@ export function install(rt) {
 
   ctx.effect(() => {
     const pending = Object.keys(interrupted.turns).length > 0 || Object.keys(interrupted.queued).length > 0
+    const reportHolds = () => {
+      const count = Object.keys(heldTurns).length
+      if (!count) return
+      rt.warn('ds-bot: %d interrupted turn record(s) remain held in %s; inspect their original results before recovery', count, file)
+      rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_HELD_RECORDS', text: `${count} interrupted turn record(s) remain held in recovery notes; inspect their original results before recovery.` })
+    }
     // With nothing to pick up, the group batches a restart left are settled at once.
     const timer = pending
-      ? setTimeout(() => void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)), RESUME_DELAY_MS)
-      : setTimeout(() => void rt.load().then(() => rt.settleRoomBatches?.()).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)), 0)
+      ? setTimeout(() => { reportHolds(); void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)) }, RESUME_DELAY_MS)
+      : setTimeout(() => { reportHolds(); void rt.load().then(() => rt.settleRoomBatches?.()).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)) }, 0)
     timer?.unref?.()
     // What the turns stopped by this shutdown left stays as last noted.
     return () => {

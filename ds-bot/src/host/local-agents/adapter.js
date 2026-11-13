@@ -185,9 +185,14 @@ export class LocalAgentAdapter extends LlmAdapter {
       model: options.model,
     }
     live.push = (event) => {
-      clearTimeout(live.idle)
-      live.idle = setTimeout(() => void this.closeLive(live, { idle: true }), IDLE_CLOSE_MS)
-      live.idle.unref?.()
+      // Codex app-server keeps a resumed thread's original MCP configuration.
+      // Keep this live bridge until explicit close or plugin disposal so the
+      // shared server cannot retain the address of a closed idle listener.
+      if (live.spec.kind !== 'codex') {
+        clearTimeout(live.idle)
+        live.idle = setTimeout(() => void this.closeLive(live, { idle: true }), IDLE_CLOSE_MS)
+        live.idle.unref?.()
+      }
       const waiter = live.waiters.shift()
       if (waiter !== undefined) waiter(event)
       else live.events.push(event)

@@ -2,6 +2,9 @@
 // record, so the prefix stays byte-stable across turns and roster changes.
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
+import { rolePromptText } from './role-layers.js'
 
 const TEAM_RULES = [
   '## How your Bot team works',
@@ -46,8 +49,62 @@ const MAIN_RULES = [
   '- The team can have more than one Main Bot; list_bots marks them. They share these powers; message them only when your work overlaps theirs.',
 ].join('\n')
 
+function deploymentInstructions(config = {}) {
+  const direct = config.operatorInstructions
+  const path = config.operatorInstructionsFile
+  if (direct !== undefined && typeof direct !== 'string') throw new TypeError('operatorInstructions must be a string')
+  if (path === undefined) return direct?.trim()
+  if (typeof path !== 'string' || !path || direct !== undefined) throw new TypeError('operatorInstructionsFile requires a path and cannot be combined with operatorInstructions')
+  if (process.platform !== 'linux' || typeof constants.O_NOFOLLOW !== 'number' || typeof constants.O_DIRECTORY !== 'number') throw new Error('Secure deployment instruction files are not supported on this platform')
+  const handles = []
+  try {
+    if (!isAbsolute(path) || resolve(path) !== path) throw new Error('invalid path')
+    const parts = path.slice(1).split('/')
+    if (!parts.length || parts.length > 64 || parts.some(part => !part || part === '.' || part === '..')) throw new Error('invalid path')
+    const flags = constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0)
+    const owner = typeof process.getuid === 'function' ? BigInt(process.getuid()) : -1n
+    const checkDirectory = fd => {
+      const stat = fstatSync(fd, { bigint: true })
+      const trustedOwner = stat.uid === 0n || stat.uid === owner
+      const writableByOthers = (stat.mode & 0o022n) !== 0n
+      const rootSticky = stat.uid === 0n && (stat.mode & 0o1000n) !== 0n
+      if (!stat.isDirectory() || !trustedOwner || (writableByOthers && !rootSticky)) throw new Error('invalid directory')
+    }
+    let parent = openSync('/', flags | constants.O_DIRECTORY)
+    handles.push(parent)
+    checkDirectory(parent)
+    for (const part of parts.slice(0, -1)) {
+      parent = openSync(`/proc/self/fd/${parent}/${part}`, flags | constants.O_DIRECTORY)
+      handles.push(parent)
+      checkDirectory(parent)
+    }
+    const entry = `/proc/self/fd/${parent}/${parts.at(-1)}`
+    const fd = openSync(entry, flags)
+    handles.push(fd)
+    const stat = fstatSync(fd, { bigint: true })
+    if (!stat.isFile() || (stat.mode & 0o400n) === 0n || (stat.mode & 0o077n) !== 0n || stat.uid !== owner || stat.size > 65536n) throw new Error('invalid file')
+    const bytes = Buffer.alloc(65537)
+    let size = 0, n
+    while (size < bytes.length && (n = readSync(fd, bytes, size, bytes.length - size, size)) > 0) size += n
+    if (size > 65536) throw new Error('invalid file')
+    const after = fstatSync(fd, { bigint: true })
+    const current = lstatSync(entry, { bigint: true })
+    for (const key of ['dev', 'ino', 'mode', 'uid', 'size', 'mtimeNs', 'ctimeNs']) {
+      if (stat[key] !== after[key] || after[key] !== current[key]) throw new Error('file changed while reading')
+    }
+    const content = bytes.subarray(0, size).toString('utf8').trim()
+    if (!content) throw new Error('empty file')
+    return content
+  } catch {
+    throw new Error('Deployment instruction file is unavailable or insecure')
+  } finally {
+    for (const fd of handles.reverse()) closeSync(fd)
+  }
+}
+
 export function install(rt) {
   const { ctx } = rt
+  const operatorInstructions = deploymentInstructions(rt.config)
 
   ctx.on?.('agent/pre-step', async ({ agent, step, signal }, next) => {
     const decision = await next()
@@ -62,16 +119,17 @@ export function install(rt) {
   })
 
   // A group Session renders exactly its Bot's text, so both share one cached prefix.
-  const promptFor = (id) => {
+  const promptFor = (id, context) => {
     const self = rt.selfOf(id)
     const bot = rt.botOf(self)
     if (bot !== undefined) {
       return [
         '# Your identity',
         `You are ${bot.name}, a Bot on the user's team in DS Bot.${bot.role ? ` Your role: ${bot.role}.` : ''}`,
-        bot.instructions ? `\n${bot.instructions}` : '',
+        bot.instructions ? `\n${rolePromptText(rt, bot, context)}` : '',
         '',
         rt.isMain(self) ? `${MAIN_RULES}\n\n${TEAM_RULES}` : TEAM_RULES,
+        ...(operatorInstructions ? [`\n## Deployment instructions\n${operatorInstructions}`] : []),
       ].join('\n')
     }
     const room = rt.roomOf(id)
@@ -89,6 +147,6 @@ export function install(rt) {
     name: 'bot-identity',
     order: 640,
     interpolate: false,
-    text: context => promptFor(context?.agent?.id),
+    text: context => promptFor(context?.agent?.id, context),
   }), 'ds-bot: identity section')
 }

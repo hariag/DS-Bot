@@ -150,6 +150,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     stopRoomWork: roomId => after(call('stop-room-work', { roomId })),
     goalDraft: (roomId, text) => after(call('goal-draft', { roomId, text })),
     goalControl: (roomId, goalId, action, stopWork) => after(call('goal-control', { roomId, goalId, action, ...(stopWork ? { stopWork: true } : {}) })),
+    goalReviewResolve: (roomId, goalId, reviewId, evidence) => after(call('goal-control', { roomId, goalId, action: 'review-resolve', reviewId, evidence, confirmed: true })),
     // The goal island: `goalCompose` holds the room whose draft form is open,
     // `goalOpen` the room whose panel is open.
     composeGoal: roomId => ui.set(state => ({ ...state, goalCompose: roomId, goalOpen: roomId })),
@@ -235,6 +236,28 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
         const next = key === 'first' && entry.first !== undefined ? Math.min(entry.first, time) : time
         if (entry[key] === next) return state
         return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, [key]: next } } }
+      })
+    },
+    noteTurnReview: (sessionId, turn) => {
+      if (sessionId === undefined || !Number.isFinite(turn)) return
+      turnClock.set(state => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {}
+        return entry.internalReview === true ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, internalReview: true } } }
+      })
+    },
+    noteTurnVisible: (sessionId, turn) => {
+      if (sessionId === undefined || !Number.isFinite(turn)) return
+      turnClock.set(state => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {}
+        return entry.visible === true ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, visible: true } } }
+      })
+    },
+    noteTurnTail: (sessionId, turn, delta) => {
+      if (sessionId === undefined || !Number.isFinite(turn) || (delta !== 1 && delta !== -1)) return
+      turnClock.set(state => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {}
+        const tails = Math.max(0, (entry.tails ?? 0) + delta)
+        return entry.tails === tails ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, tails } } }
       })
     },
     noteTurnPeer: (sessionId, turn, peerId) => {

@@ -1,0 +1,297 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { DatabaseSync } from 'node:sqlite'
+import { openTaskStore } from '../../src/host/task-store.mjs'
+
+const hex = 'a'.repeat(40)
+const opts = { assertWriteLock() {}, authorize() { return true }, verifyRegistration() { return true }, verifyEvidence() { return true }, verifyReceipt() { return true }, verifyInvalidation() { return true }, verifyAttachment() { return true }, verifyAdmission() { return true } }
+function fixture(t, options = opts) {
+  const dir = mkdtempSync(join(tmpdir(), 'dsbot-task-test-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = join(dir, 'store.sqlite'), store = openTaskStore(path, options)
+  t.after(() => { try { store.close() } catch {} })
+  return { path, store }
+}
+const task = (id, dependencies = []) => ({ id, title: `task ${id}`, scope: 'personal:user', owner: 'owner', reviewer: 'reviewer', acceptance: 'independent acceptance', dependencies })
+const create = (s, id, deps = []) => s.create({ operationId: `create-${id}`, actor: 'user', task: task(id, deps) })
+const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({ operationId: op, taskId: id, expectedRevision: s.get(id).revision, actor, type, ...(value !== undefined ? { value } : {}) })
+const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
+const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
+const intentFor = action => ({ admissionId:`admission-${action.id}`, messageId:`message-${action.id}`, targetBotId:action.actor, targetSessionId:`session-${action.actor}`, payload:{ id:`message-${action.id}`, role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:`admission-${action.id}`} } })
+const claim = (store, action, intent = intentFor(action)) => store.claimAction({ actionId:action.id, actor:'scheduler', intent })
+function accept(s, id, kind) {
+  const a = s.listActions(id).find(x => x.kind === kind && x.state === 'pending')
+  assert.ok(a); claim(s, a); s.markAction({ actionId: a.id, actor: 'host', expectedState: 'claimed', state: 'accepted', receipt: 'verified' })
+  return a
+}
+function finish(s, id) {
+  accept(s, id, 'execute'); command(s, id, 'start', 'owner'); command(s, id, 'report', 'owner', evidence)
+  accept(s, id, 'review'); command(s, id, 'review', 'reviewer', { evidence: 'independent review', result: 'pass' })
+}
+
+test('delivery and independent review drive dependencies immediately and survive restart', t => {
+  const { store, path } = fixture(t)
+  create(store, 'a'); create(store, 'b', ['a']); register(store, 'a'); register(store, 'b')
+  assert.equal(store.get('a').status, 'ready'); assert.equal(store.get('b').status, 'waiting')
+  assert.throws(() => command(store, 'a', 'start', 'owner'), /receipt/)
+  finish(store, 'a'); assert.equal(store.get('a').status, 'done'); assert.equal(store.get('b').status, 'ready')
+  assert.equal(store.listActions('b').filter(x => x.state === 'pending').length, 1)
+  const restarted = openTaskStore(path, opts); t.after(() => restarted.close())
+  assert.equal(restarted.get('a').status, 'done'); assert.equal(restarted.get('b').status, 'ready')
+  assert.equal(restarted.operation('review-a').status, 'committed')
+})
+
+test('operation id is idempotent, payload conflicts and graph cycles are rejected', t => {
+  const { store } = fixture(t)
+  const input = { operationId: 'first', actor: 'user', task: task('a') }
+  assert.deepEqual(store.create(input), store.create(input))
+  assert.throws(() => store.create({ ...input, task: { ...input.task, title: 'changed' } }), /operation id conflict/)
+  create(store, 'b', ['a'])
+  assert.throws(() => command(store, 'a', 'dependencies', 'user', ['b']), /cycle/)
+  assert.equal(store.get('a').revision, 1)
+})
+
+test('refresh version advances only for committed changes and survives reopening', t => {
+  const { store, path } = fixture(t)
+  assert.equal(store.version(), 0)
+  const input = { operationId: 'versioned-create', actor: 'user', task: task('a') }
+  store.create(input)
+  const created = store.version(); assert.ok(created > 0)
+  store.create(input); assert.equal(store.version(), created)
+  assert.throws(() => store.create({ ...input, task: { ...input.task, title: 'conflict' } }), /operation id conflict/)
+  assert.equal(store.version(), created)
+  register(store, 'a'); assert.ok(store.version() > created)
+  const beforeClaim = store.version(), a = store.listActions('a')[0]
+  claim(store, a); assert.ok(store.version() > beforeClaim)
+  const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  assert.equal(reopened.version(), store.version())
+})
+
+test('admission intent is immutable and repeated claim is lookup-only', t => {
+  const { store } = fixture(t)
+  create(store, 'a'); register(store, 'a')
+  const a = store.listActions('a')[0], intent = intentFor(a), first = claim(store, a, intent)
+  assert.equal(first.claimedNow, true)
+  const version = store.version(), saved = store.admission(a.id)
+  assert.equal(saved.messageId, intent.messageId); assert.equal(saved.targetSessionId, intent.targetSessionId); assert.deepEqual(saved.payload, intent.payload)
+  assert.equal(claim(store, a, intent).claimedNow, false); assert.equal(store.version(), version)
+  assert.throws(() => claim(store, a, { ...intent, targetSessionId:'different-session' }), /intent conflict/)
+  assert.throws(() => claim(store, a, { ...intent, payload:{ ...intent.payload, content:[{type:'text',text:'different'}] } }), /intent conflict/)
+  assert.throws(() => claim(store, a, { ...intent, messageId:'other-message' }), /invalid admission payload/)
+  assert.deepEqual(store.admission(a.id), saved)
+  create(store, 'b'); register(store, 'b')
+  const b = store.listActions('b')[0]
+  const duplicateMessage = intentFor(b); duplicateMessage.messageId = intent.messageId; duplicateMessage.payload.id = intent.messageId
+  assert.throws(() => claim(store, b, duplicateMessage), /UNIQUE/)
+  assert.equal(store.listActions('b')[0].state, 'pending'); assert.equal(store.admission(b.id), undefined)
+})
+
+test('process death after admission intent commit preserves original identity without replay', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsbot-admission-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const path = join(dir, 'tasks.sqlite')
+  const child = spawnSync(process.execPath, [fileURLToPath(new URL('./admission-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
+  assert.equal(child.signal, 'SIGKILL')
+  const store = openTaskStore(path, opts); t.after(() => store.close())
+  const action = store.listActions('t')[0], saved = store.admission(action.id)
+  assert.equal(saved.state, 'claimed'); assert.equal(saved.admissionId, 'admission-1'); assert.equal(saved.targetSessionId, 'session-1')
+  const intent = { admissionId:'admission-1', messageId:'message-1', targetBotId:'bot', targetSessionId:'session-1', payload:{ id:'message-1', role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:'admission-1'} } }
+  assert.equal(store.claimAction({ actionId:action.id, actor:'scheduler', intent }).claimedNow, false)
+  assert.throws(() => store.claimAction({ actionId:action.id, actor:'scheduler', intent:{ ...intent, targetSessionId:'session-2' } }), /intent conflict/)
+})
+
+test('pending cancellation is durable, idempotent and does not claim delivery', t => {
+  const { store } = fixture(t); create(store, 'a'); register(store, 'a')
+  const action = store.listActions('a')[0], before = store.get('a')
+  const input = { operationId:'cancel-action-1', actor:'user', actionId:action.id, expectedTaskRevision:before.revision, expectedActionState:'pending', expectedAdmissionId:null, reason:'user stopped work' }
+  const result = store.cancelAction(input)
+  assert.equal(store.listActions('a')[0].state, 'cancelled'); assert.equal(store.admission(action.id), undefined)
+  assert.deepEqual(store.cancelAction(input), result)
+  assert.throws(() => store.cancelAction({ ...input, reason:'different' }), /operation id conflict/)
+  assert.throws(() => claim(store, action), /unavailable/)
+})
+
+test('cancelling a claimed message preserves intent and exact lookup remains unknown', t => {
+  const { store } = fixture(t); create(store, 'a'); register(store, 'a')
+  const action = store.listActions('a')[0]; claim(store, action)
+  const intent = store.admission(action.id), before = store.get('a')
+  store.cancelAction({ operationId:'cancel-claimed', actor:'user', actionId:action.id, expectedTaskRevision:before.revision, expectedActionState:'claimed', expectedAdmissionId:intent.admissionId, reason:'user stopped work' })
+  const held = store.admission(action.id)
+  assert.equal(held.state, 'uncertain'); assert.deepEqual(held.payload, intent.payload)
+  const criteria = { admissionId:intent.admissionId, messageId:intent.messageId, targetSessionId:intent.targetSessionId, payloadHash:intent.payloadHash }
+  assert.deepEqual(store.inspectAdmission(criteria), { decision:'unknown', actionId:action.id, actionRevision:intent.actionRevision, state:'uncertain' })
+  assert.deepEqual(store.inspectAdmission({ ...criteria, targetSessionId:'different' }), { decision:'unknown' })
+  assert.deepEqual(store.inspectAdmission({}), { decision:'unknown' })
+  assert.equal(claim(store, action).claimedNow, false)
+  assert.throws(() => store.markAction({ actionId:action.id, actor:'host', expectedState:'claimed', state:'accepted', receipt:'late' }), /conflict/)
+})
+
+test('cancellation and action state roll back together if the home lock is lost', t => {
+  let checks = 0, fail = false
+  const { store } = fixture(t, { ...opts, assertWriteLock() { if (fail && ++checks === 2) throw new Error('lock lost') } })
+  create(store, 'a'); register(store, 'a'); const action = store.listActions('a')[0]
+  const input = { operationId:'cancel-failed', actor:'user', actionId:action.id, expectedTaskRevision:store.get('a').revision, expectedActionState:'pending', expectedAdmissionId:null, reason:'user stopped' }
+  fail = true; assert.throws(() => store.cancelAction(input), /lock lost/)
+  assert.equal(store.listActions('a')[0].state, 'pending'); assert.equal(store.operation('cancel-failed'), undefined)
+})
+
+test('process death after cancellation commit retains uncertain intent and decision', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsbot-decision-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const path = join(dir, 'tasks.sqlite'), child = spawnSync(process.execPath, [fileURLToPath(new URL('./decision-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
+  assert.equal(child.signal, 'SIGKILL')
+  const store = openTaskStore(path, opts); t.after(() => store.close())
+  const action = store.listActions('t')[0], intent = store.admission(action.id)
+  assert.equal(action.state, 'uncertain'); assert.equal(intent.admissionId, 'admission-1'); assert.equal(store.operation('cancel-1').status, 'committed')
+  assert.equal(store.inspectAdmission({ admissionId:intent.admissionId, messageId:intent.messageId, targetSessionId:intent.targetSessionId, payloadHash:intent.payloadHash }).decision, 'unknown')
+})
+
+test('default host denies authorization and receipt verification', t => {
+  const { store } = fixture(t, { assertWriteLock() {} })
+  assert.throws(() => create(store, 'a'), /not authorized/)
+  assert.equal(store.list().length, 0)
+})
+
+test('unverified receipt cannot start work; unknown outcome is never reclaimed', t => {
+  const { store } = fixture(t, { ...opts, verifyReceipt(_row, state) { return state === 'uncertain' } })
+  create(store, 'a'); register(store, 'a')
+  const a = store.listActions('a')[0]; claim(store, a)
+  assert.throws(() => store.markAction({ actionId: a.id, actor: 'host', expectedState: 'claimed', state: 'accepted', receipt: 'unverified' }), /unverified/)
+  store.markAction({ actionId: a.id, actor: 'host', expectedState: 'claimed', state: 'uncertain', receipt: 'unknown' })
+  assert.equal(claim(store, a).claimedNow, false)
+  assert.throws(() => command(store, 'a', 'block', 'user', { reason: 'wait', condition: 'resolve', owner: 'owner' }), /unresolved/)
+  create(store, 'independent'); assert.equal(register(store, 'independent').status, 'ready')
+})
+
+test('stale evidence prevents further dependency work without retrying claimed actions', t => {
+  const { store } = fixture(t)
+  create(store, 'a'); create(store, 'b', ['a']); register(store, 'a'); register(store, 'b'); finish(store, 'a')
+  const action = store.listActions('b')[0]; claim(store, action)
+  command(store, 'a', 'invalidate', 'user', { reason: 'target changed', evidence: 'new revision' })
+  assert.equal(store.get('a').stale, true); assert.equal(store.get('b').stale, true)
+  assert.equal(store.listActions('b')[0].state, 'uncertain')
+  assert.equal(claim(store, action).claimedNow, false)
+  assert.throws(() => store.markAction({ actionId:action.id, actor:'host', expectedState:'claimed', state:'accepted', receipt:'late' }), /conflict/)
+  assert.throws(() => command(store, 'b', 'revalidate', 'reviewer', { evidence: 'updated' }), /cannot revalidate/)
+})
+
+test('invalidating a reported task holds its accepted review without deleting its intent', t => {
+  const { store } = fixture(t)
+  create(store, 'a'); register(store, 'a'); accept(store, 'a', 'execute'); command(store, 'a', 'start', 'owner'); command(store, 'a', 'report', 'owner', evidence)
+  const review = accept(store, 'a', 'review'), before = store.admission(review.id)
+  command(store, 'a', 'invalidate', 'user', { reason:'target changed', evidence:'new revision' })
+  const after = store.admission(review.id)
+  assert.equal(after.state, 'uncertain'); assert.equal(after.messageId, before.messageId); assert.deepEqual(after.payload, before.payload)
+  assert.throws(() => store.markAction({ actionId:review.id, actor:'host', expectedState:'accepted', state:'uncertain', receipt:'late' }), /conflict/)
+})
+
+test('SIGKILL after upstream invalidation preserves uncertain downstream intent', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsbot-invalidate-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const path = join(dir, 'tasks.sqlite'), child = spawnSync(process.execPath, [fileURLToPath(new URL('./invalidation-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
+  assert.equal(child.signal, 'SIGKILL')
+  const store = openTaskStore(path, opts); t.after(() => store.close())
+  const action = store.listActions('b')[0], intent = store.admission(action.id)
+  assert.equal(action.state, 'uncertain'); assert.equal(store.get('b').stale, true)
+  assert.equal(intent.state, 'uncertain'); assert.equal(intent.payload.id, intent.messageId)
+  assert.equal(claim(store, action).claimedNow, false)
+  assert.throws(() => store.markAction({ actionId:action.id, actor:'host', expectedState:'claimed', state:'accepted', receipt:'late' }), /conflict/)
+})
+
+test('malformed payloads are rejected before hashing', t => {
+  const { store } = fixture(t)
+  assert.throws(() => store.create({ operationId: 'nan', actor: 'user', task: { ...task('a'), extra: NaN } }), /invalid/)
+  const cyclic = task('b'); cyclic.extra = cyclic
+  assert.throws(() => store.create({ operationId: 'cycle', actor: 'user', task: cyclic }), /invalid/)
+  assert.throws(() => store.create({ operationId: 'large', actor: 'user', task: { ...task('c'), title: 'a'.repeat(9000) } }), /too long/)
+  assert.equal(store.list().length, 0)
+})
+
+test('home lock loss before commit rolls back task and operation together', t => {
+  let checks = 0, fail = false
+  const { store } = fixture(t, { ...opts, assertWriteLock() { if (fail && ++checks === 2) throw new Error('lock lost') } })
+  fail = true
+  assert.throws(() => create(store, 'a'), /lock lost/)
+  assert.equal(store.get('a'), undefined); assert.equal(store.operation('create-a'), undefined)
+  fail = false; assert.equal(create(store, 'a').id, 'a')
+})
+
+test('unknown database is never overwritten', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsbot-task-unknown-')); t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = join(dir, 'unknown.sqlite'); writeFileSync(path, 'not sqlite', { mode: 0o600 })
+  assert.throws(() => openTaskStore(path, opts))
+})
+
+test('edits use CAS, preserve admitted work, and responsibility changes require registration', t => {
+  const { store } = fixture(t)
+  create(store, 'a'); register(store, 'a')
+  const initial = store.get('a')
+  const fullEdit = { operationId: 'full-edit-a', taskId: 'a', expectedRevision: initial.revision, actor: 'user', type: 'edit', value: { title: 'new full title', owner: initial.owner, reviewer: initial.reviewer, acceptance: initial.acceptance, dependencies: initial.dependencies } }
+  const fullResult = store.command(fullEdit)
+  assert.equal(fullResult.status, 'ready'); assert.deepEqual(fullResult.authority, initial.authority)
+  assert.equal(store.listActions('a').filter(x => x.state === 'pending').length, 1)
+  assert.deepEqual(store.command(fullEdit), fullResult)
+  const a = accept(store, 'a', 'execute'), before = store.get('a')
+  const renamed = command(store, 'a', 'edit', 'user', { title: 'new title' })
+  assert.equal(renamed.actionRevision, before.actionRevision)
+  assert.equal(store.listActions('a').find(x => x.id === a.id).state, 'accepted')
+  assert.throws(() => store.command({ operationId: 'stale-edit', taskId: 'a', expectedRevision: before.revision, actor: 'user', type: 'edit', value: { title: 'stale' } }), /revision conflict/)
+  assert.throws(() => command(store, 'a', 'edit', 'user', { owner: 'other' }, 'owner-change'), /reconciliation/)
+  assert.equal(command(store, 'a', 'start', 'owner').status, 'working')
+  create(store, 'b'); register(store, 'b')
+  const changed = command(store, 'b', 'edit', 'user', { owner: 'other' }, 'owner-b')
+  assert.equal(changed.status, 'proposed'); assert.equal(changed.authority, null)
+  assert.equal(store.listActions('b')[0].state, 'cancelled')
+  assert.throws(() => command(store, 'b', 'edit', 'user', { reviewer: 'other' }, 'conflict-b'), /independent/)
+})
+
+test('multiple image references require host validation, revision and idempotent operations', t => {
+  const { store } = fixture(t, { ...opts, verifyAttachment(_task, item) { return item.id !== 'denied' } })
+  create(store, 'a'); register(store, 'a')
+  const before = store.get('a'), images = [{ id: 'photo-1', sha256: '1'.repeat(64), mediaType: 'image/png', size: 10, name: 'a.png' }, { id: 'photo-2', sha256: '2'.repeat(64), mediaType: 'image/png', size: 20, name: 'b.png' }]
+  const op = { operationId: 'images', taskId: 'a', expectedRevision: before.revision, actor: 'user', type: 'attach', value: { images } }
+  assert.equal(store.command(op).attachments.length, 2)
+  assert.deepEqual(store.command(op).attachments, images)
+  assert.throws(() => store.command({ ...op, value: { images: images.slice(0, 1) } }), /operation id conflict/)
+  assert.throws(() => command(store, 'a', 'attach', 'user', { images: [{ ...images[0], id: 'denied' }] }, 'bad-image'), /unverified/)
+  assert.throws(() => command(store, 'a', 'attach', 'user', { images: [{ ...images[0], id: 'photo-3', path: '/etc/passwd' }] }, 'bad-path'), /invalid fields/)
+  const pending = store.listActions('a').find(x => x.state === 'pending')
+  assert.equal(claim(store, pending).targetId, 'owner')
+  assert.equal(command(store, 'a', 'remove-image', 'user', { imageId: images[0].id }, 'remove-image').attachments.length, 1)
+  assert.equal(command(store, 'a', 'detach', 'user', { ids: [images[1].id] }, 'remove-images').attachments.length, 0)
+})
+
+test('cross-room grant revocation cancels pending and holds claimed work and transitive dependents', t => {
+  const { store } = fixture(t, { ...opts, verifyShare() { return true }, verifyDependency() { return true } })
+  const scoped = (id, scope, dependencies = [], dependencyGrants = []) => store.create({ operationId:`create-${id}`, actor:'user', task:{ ...task(id, dependencies), scope, dependencyGrants } })
+  scoped('source', 'room:source'); register(store, 'source'); finish(store, 'source')
+  const shared = command(store, 'source', 'share', 'user', { targetRoomId:'target', fields:['status'] }), grantId = shared.shares[0].id
+  for (const id of ['pending','claimed','done']) { scoped(id, 'room:target', ['source'], [{ taskId:'source', grantId }]); register(store, id) }
+  const claimed = store.listActions('claimed').find(action => action.state === 'pending')
+  claim(store, claimed)
+  finish(store, 'done'); scoped('downstream', 'room:target', ['done']); register(store, 'downstream')
+  assert.equal(store.get('downstream').status, 'ready')
+  command(store, 'source', 'unshare', 'user', { shareId:grantId })
+  assert.equal(store.listActions('pending')[0].state, 'cancelled')
+  assert.equal(store.listActions('claimed')[0].state, 'uncertain')
+  assert.equal(store.get('done').stale, true); assert.equal(store.get('downstream').stale, true)
+  assert.equal(store.listActions('downstream')[0].state, 'cancelled')
+  assert.throws(() => store.markAction({ actionId:claimed.id, actor:'host', expectedState:'claimed', state:'accepted', receipt:'late' }), /conflict/)
+  assert.equal(claim(store, claimed).claimedNow, false)
+})
+
+test('dependency index follows edits atomically and mismatches are rejected on reopen', t => {
+  const { store, path } = fixture(t)
+  create(store, 'a'); create(store, 'b', ['a'])
+  command(store, 'b', 'edit', 'user', { dependencies:[] })
+  const db = new DatabaseSync(path)
+  assert.equal(db.prepare("SELECT count(*) AS n FROM task_dependencies WHERE task_id='b'").get().n, 0)
+  db.close()
+  command(store, 'b', 'edit', 'user', { dependencies:['a'] }, 'restore-dep')
+  store.close()
+  const corrupt = new DatabaseSync(path); corrupt.exec("DELETE FROM task_dependencies WHERE task_id='b'"); corrupt.close()
+  assert.throws(() => openTaskStore(path, opts), /dependency index/)
+  const after = new DatabaseSync(path); assert.equal(after.prepare("SELECT count(*) AS n FROM task_dependencies WHERE task_id='b'").get().n, 0); after.close()
+})

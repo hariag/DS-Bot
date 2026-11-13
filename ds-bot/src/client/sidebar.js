@@ -17,6 +17,7 @@ import { showsDshRow } from './dsh-offer.js'
 import { quietly } from './diagnostics.js'
 import { frameLayout, dragColumn, RAIL_WIDTH, FALLBACK_SIDEBAR_WIDTH, userSidebarToggle } from './frame-layout.js'
 import { chatRoom, dshCollapsed } from './frame-watch.js'
+import { TaskBoard } from './task-board.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -968,6 +969,7 @@ const NO_SNAPSHOT = () => null
 // back in Agent mode; FooterAccount stands in while no seat exists at all.
 export function AccountLauncher({ seat = true, settingsOpen, actions }) {
   const [open, setOpen] = useState(false)
+  const [boardOpen, setBoardOpen] = useState(false)
   useLayoutEffect(() => {
     if (!seat) return undefined
     actions.seatAccount(true)
@@ -1043,6 +1045,7 @@ export function AccountLauncher({ seat = true, settingsOpen, actions }) {
   const openModels = actions.openModels
   const groups = [
     [
+      [t('My task board'), ClockIcon, () => setBoardOpen(true)],
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
       openModels ? [t('Models and API keys'), SlidersIcon, () => openModels()] : null,
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
@@ -1054,7 +1057,7 @@ export function AccountLauncher({ seat = true, settingsOpen, actions }) {
   if (signedIn) groups.push([[accountT('signOut'), SignOutIcon, askSignOut, undefined, true]])
   else if (signedOut) groups.push([[t('Sign in to DeepSeek'), SignInIcon, () => actions.signIn()]])
   return h(Fragment, null,
-    h('button', { ref: button, type: 'button', className: 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
+    h('button', { ref: button, type: 'button', className: seat ? 'bt-account bt-account-seat' : 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
       h('span', { className: 'bt-you', 'aria-hidden': true }, h(GearIcon))),
     open && box ? createPortal(h('div', { ref: menuRef, className: 'bt-menu bt-menu-up bt-account-menu', role: 'menu', 'aria-label': t('Account'), style: box },
       confirm !== null ? h('div', { className: 'bt-confirm', role: 'alertdialog', 'aria-label': accountT('signOut') },
@@ -1068,7 +1071,8 @@ export function AccountLauncher({ seat = true, settingsOpen, actions }) {
           group.map(([label, Icon, run, hint, stay]) => h('button', {
             key: label, type: 'button', role: 'menuitem',
             onClick: () => { if (stay !== true) setOpen(false); void Promise.resolve(run()).catch(error => actions.reportError(error, 'menu')) },
-          }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null)
+          }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null,
+    boardOpen ? h(TaskBoard, { scope: { kind: 'personal', id: 'user' }, title: t('My task board'), close: () => setBoardOpen(false) }) : null)
 }
 
 // The desktop app keeps its main window hidden until the team interface has drawn
@@ -1279,6 +1283,11 @@ export const SIDEBAR_CSS = `
 .bt-rail .bt-row{position:relative}
 .bt-rail .bt-pin{position:absolute;top:1px;left:calc(50% + 14px)}
 .bt-side .bt-read-only{margin:4px 8px 6px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);font-size:12px;line-height:1.45;text-align:left}
+/* The Bot column has its own account control. Keep the shell seat available
+   whenever that column is absent, and keep leaving controls out of tab order. */
+body:has(.bt-leftcol:not([data-leaving])) .bt-account-seat,
+body:has(.bt-leftcol:not([data-leaving])) .bt-foot-account{display:none!important}
+.bt-leftcol[data-leaving] .bt-leftcol-foot{visibility:hidden}
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}

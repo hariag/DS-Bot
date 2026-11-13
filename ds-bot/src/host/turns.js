@@ -49,6 +49,7 @@ export function answerSender(rt, id, source, text, long) {
   const body = marker === '' ? (long?.text ?? text) : `${marker}${long?.text ?? text}`
   const length = long === undefined ? undefined : late === undefined ? long.length : (long.length ?? text.length) + marker.length
   const exchangeId = randomUUID()
+  let notAdmitted = false
   void rt.deliver({
     fromId: rt.selfOf(id),
     toId: source.senderSessionId,
@@ -59,8 +60,15 @@ export function answerSender(rt, id, source, text, long) {
     replyTo: source.exchangeId,
     exchangeId,
     ...(work ? { work } : {}),
-  }).catch((error) => {
+  }, { onNotAdmitted: () => { notAdmitted = true } }).catch((error) => {
     rt.warn('ds-bot: reply delivery failed: %s', error)
+    if (!notAdmitted) {
+      // The agent may have accepted this reply before send or flush failed. A
+      // second notice would repeat its content under another exchange ID.
+      const detail = `Reply ${exchangeId} to request ${source.exchangeId} has an unknown delivery outcome. The original recovery note is retained when available; review the target Session before any retry.`
+      rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'REPLY_DELIVERY_UNCERTAIN', text: detail, sessionId: id })
+      return
+    }
     // The reply never reached the asker: its note goes — the notice below carries
     // what it answered — the result kept with the work is marked, and the failure
     // reaches the asker the way the reply would have, so the work goes on and its
@@ -750,9 +758,9 @@ export function install(rt) {
     })
   }
 
-  const businessInput = source => source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === 'schedule'
+  const businessInput = source => source?.reviewInspect !== true && (source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === 'schedule'
     || (source?.kind === SOURCE_KIND && !CONTROL_ROLES.has(source.role)
-      && !(source.role === 'continue' && (source.recoveryKey !== undefined || Array.isArray(source.recoveryIds))))
+      && !(source.role === 'continue' && (source.recoveryKey !== undefined || Array.isArray(source.recoveryIds)))))
 
   const removePending = (sessionId, ids) => {
     if (ids.size === 0) return false
@@ -1083,6 +1091,8 @@ export function install(rt) {
             text: textOf(event.data.content).replace(/^\[(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, ''),
             ...(source.goal !== undefined ? { goal: source.goal } : {}),
             ...(source.goalId !== undefined ? { goalId: source.goalId } : {}),
+            ...(source.reviewId !== undefined ? { reviewId: source.reviewId } : {}),
+            ...(source.reviewInspect === true ? { reviewInspect: true } : {}),
           })
         } else if (source?.kind === SOURCE_KIND) {
           if (entry.turn === undefined) {
@@ -1302,7 +1312,8 @@ export function install(rt) {
         const promisedOnly = !wroteCall && failure === undefined && reason?.kind === 'completed'
           && toolCount === 0 && lastCalled !== true && info?.role === 'room'
           && promisesWork(lastText) && !rt.callsRoomMember?.(id, info, lastText)
-        const retry = (wroteCall || promisedOnly) && info?.retried !== true && !(info?.role === 'room' && stoppedRoomTurns.has(info.exchangeId))
+        const inspectIncomplete = info?.reviewInspect === true && (wroteCall || promisedOnly)
+        const retry = !inspectIncomplete && (wroteCall || promisedOnly) && info?.retried !== true && !(info?.role === 'room' && stoppedRoomTurns.has(info.exchangeId))
         if (retry) {
           if (promisedOnly) {
             const opening = stripWrittenCalls(lastText ?? '')
@@ -1359,7 +1370,8 @@ export function install(rt) {
           roomWaiters.delete(info.exchangeId)
           const stopped = stoppedRoomTurns.delete(info.exchangeId)
           if (waiter !== undefined) {
-            if (failure !== undefined) waiter.fail(failure)
+            if (inspectIncomplete || (info.reviewId && reason?.kind !== 'completed' && reason?.kind !== 'aborted')) waiter.fail({ code: 'GOAL_REVIEW_INCOMPLETE', message: 'The goal review did not complete and was not automatically retried.' })
+            else if (failure !== undefined) waiter.fail(failure)
             else waiter.resolve(reason?.kind === 'aborted' ? null : groupReply())
           } else if (!stopped && reason?.kind !== 'aborted') {
             // The round moved on without this member; how its turn ends still reaches the group.
@@ -1396,6 +1408,11 @@ export function install(rt) {
             ...(request.info.senderRoomId ? { fromRoomId: request.info.senderRoomId } : {}),
             deferred: true,
           }).catch(error => rt.warn('ds-bot: deferred request delivery failed: %s', error))
+        }
+        if (watched && !retry && !inspectIncomplete && failure === undefined && reason?.kind === 'completed' && info?.role === 'room' && info.reviewId) {
+          void rt.goalReviewFinished?.(rt.roomOf(info.roomId), id, info.reviewId).catch(error => rt.warn('ds-bot: goal review completion in %s failed: %s', id, error))
+        } else if (watched && !retry && info?.role === 'room' && info.reviewId && (inspectIncomplete || reason?.kind !== 'completed')) {
+          void rt.goalReviewFailed?.(rt.roomOf(info.roomId), id, info.reviewId).catch(error => rt.warn('ds-bot: goal review failure in %s could not be recorded: %s', id, error))
         }
         if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', id, error))
         break

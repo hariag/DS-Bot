@@ -35,20 +35,34 @@ const MEMORY_LIMIT_MIN = 1_000
 const MEMORY_LIMIT_MAX = 200_000
 const QUEUE_PREVIEW_MAX = 400
 
+// Recovery notes are positive evidence of a delivery, not proof that an
+// unavailable Session inbox is empty: notes may be missing or unreadable.
+function recoveryNoted(unreadOf, sessionId) {
+  try {
+    const notes = unreadOf?.(sessionId)
+    return Array.isArray(notes) && notes.length > 0
+  } catch {
+    return false
+  }
+}
+
 export function groupQueueView(rooms, bots, getAgent, unreadOf) {
   const result = {}
   for (const room of Object.values(rooms ?? {})) {
     for (const [botId, currentId] of Object.entries(room.sessions ?? {})) {
       const earlier = (room.segments?.[botId] ?? []).map(segment => segment.sessionId).filter(Boolean)
       const seen = new Set()
-      for (const sessionId of new Set([currentId, ...earlier])) {
+      let unknown
+      for (const sessionId of new Set([currentId, ...earlier].filter(Boolean))) {
         const inbox = getAgent?.(sessionId)?.inbox
         const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
         if (!available) {
-          // A historical session only needs attention when its delivery ledger still names mail.
-          if (sessionId === currentId || (unreadOf?.(sessionId) ?? []).length > 0) {
-            ;(result[botId] ??= []).push({ id: `unavailable:${sessionId}`, roomId: room.id, roomName: room.name, unavailable: true, previous: sessionId !== currentId })
+          // A missing delivery note does not prove that an unloaded inbox is empty.
+          if (!unknown) {
+            unknown = { id: 'unavailable', roomId: room.id, roomName: room.name, unavailable: true }
+            ;(result[botId] ??= []).push(unknown)
           }
+          if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
           continue
         }
         for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
@@ -74,13 +88,16 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
   const result = {}
   for (const bot of Object.values(bots ?? {})) {
     const seen = new Set()
+    let unknown
     for (const sessionId of new Set((bot.segments ?? []).map(segment => segment.sessionId).filter(Boolean))) {
       const inbox = getAgent?.(sessionId)?.inbox
       const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
       if (!available) {
-        if ((unreadOf?.(sessionId) ?? []).length > 0) {
-          ;(result[bot.id] ??= []).push({ id: `unavailable:${sessionId}`, unavailable: true })
+        if (!unknown) {
+          unknown = { id: 'unavailable', unavailable: true }
+          ;(result[bot.id] ??= []).push(unknown)
         }
+        if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
         continue
       }
       for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
@@ -93,6 +110,29 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
         ;(result[bot.id] ??= []).push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
       }
     }
+  }
+  return result
+}
+
+// A group's own inbox is distinct from its members' inboxes. Include old parts;
+// missing agents are unknown, not empty. The client joins its live projection by ID.
+export function roomPostQueueView(rooms, sessionOfRoom, getAgent) {
+  const result = {}
+  for (const room of Object.values(rooms ?? {})) {
+    const rows = []
+    let unavailable = false
+    for (const sessionId of new Set([sessionOfRoom?.(room), ...(room.parts ?? []).map(part => part.sessionId)].filter(Boolean))) {
+      const inbox = getAgent?.(sessionId)?.inbox
+      if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) { unavailable = true; continue }
+      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+        if (item.source?.kind !== 'bot' || item.source?.role !== 'post') continue
+        const exchangeId = typeof item.source.exchangeId === 'string' && item.source.exchangeId !== '' ? item.source.exchangeId : undefined
+        const content = Array.isArray(item.content) ? item.content : []
+        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+        rows.push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, sessionId, ...(typeof item.id === 'string' && item.id !== '' ? { messageId: item.id } : {}), ...(exchangeId ? { exchangeId } : {}), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text, attachments: content.filter(block => block?.type === 'image' || block?.type === 'file').length })
+      }
+    }
+    result[room.id] = { rows, unavailable }
   }
   return result
 }
@@ -199,7 +239,7 @@ export function install(rt) {
   // and per Session, when its running turn began.
   const live = () => ({
     activity: rt.activityView(),
-    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {}, groupQueues: groupQueueView(state.rooms, state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), earlierPrivateQueues: earlierPrivateQueueView(state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf) },
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {}, groupQueues: groupQueueView(state.rooms, state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), earlierPrivateQueues: earlierPrivateQueueView(state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), roomPostQueues: roomPostQueueView(state.rooms, room => rt.sessionOfRoom(room), id => ctx.get?.('agents')?.get?.(id)), roomPending: Object.fromEntries(Object.values(state.rooms).map(room => [room.id, { relay: rt.roomInbox?.get(room.id)?.length ?? 0, next: rt.roomLaterCount?.(room.id) ?? 0 }])) },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     learning: rt.learningView(),
@@ -230,7 +270,7 @@ export function install(rt) {
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image'])
+  const READS = new Set(['board-list', 'board-operation', 'board-image', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -298,6 +338,14 @@ export function install(rt) {
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
+        case 'board-list':
+        case 'board-operation':
+        case 'board-command':
+        case 'board-operation-cancel':
+        case 'board-image':
+          return ok(await rt.boardCall(endpoint, body))
+        case 'board-upload':
+          return fail('Use the streaming image upload route.', 'bot/invalid')
         case 'state': {
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
           if (readOnly === undefined) await rt.bootstrap()
@@ -522,19 +570,34 @@ export function install(rt) {
         case 'approval-answer':
           rt.answerApproval(body.id, body.choice)
           return ok(true)
-        // A stop that fails partway still parks the goal, or it wakes the admin again.
-        case 'stop-member-work':
+        // Persist a stop fence before cancellation can yield. If that write
+        // fails, still try to stop running work, but report the failure.
+        case 'stop-member-work': {
+          const roomId = String(body.roomId ?? '')
+          const botId = String(body.botId ?? '')
+          rt.goalStopBegin?.(roomId)
           try {
-            return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
-          } finally {
-            rt.goalUserStopped?.(String(body.roomId ?? ''))
-          }
-        case 'stop-room-work':
+            await rt.load()
+            let token, fenceError
+            try { token = await rt.goalUserStopped?.(roomId, botId) } catch (error) { fenceError = error }
+            const stopped = await rt.stopMemberWork(roomId, botId)
+            if (fenceError !== undefined) throw fenceError
+            if (stopped === false) await rt.goalUndoEmptyMemberStop?.(roomId, token)
+            return ok(stopped)
+          } finally { rt.goalStopEnd?.(roomId) }
+        }
+        case 'stop-room-work': {
+          const roomId = String(body.roomId ?? '')
+          rt.goalStopBegin?.(roomId)
           try {
-            return ok(await rt.stopRoomWork(String(body.roomId ?? '')))
-          } finally {
-            rt.goalUserStopped?.(String(body.roomId ?? ''))
-          }
+            await rt.load()
+            let fenceError
+            try { await rt.goalUserStopped?.(roomId) } catch (error) { fenceError = error }
+            const stopped = await rt.stopRoomWork(roomId)
+            if (fenceError !== undefined) throw fenceError
+            return ok(stopped)
+          } finally { rt.goalStopEnd?.(roomId) }
+        }
         case 'goal-draft': {
           await rt.load()
           const result = await rt.goalDraft(String(body.roomId ?? ''), body.text)

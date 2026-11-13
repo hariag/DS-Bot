@@ -12,6 +12,7 @@ import { installSettingsShell, SETTINGS_SHELL_CSS } from './settings-shell.js'
 import { frameLayout, readSidebar, writeSidebar, toggledPref, DSH_NARROW } from './frame-layout.js'
 import { installFrameWatch } from './frame-watch.js'
 import { HeaderPill } from './header.js'
+import { TASK_BOARD_CSS } from './task-board.js'
 import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { BtwDock, BtwTurnTail } from './btw.js'
@@ -1059,6 +1060,7 @@ export function apply(ctx) {
     [MEMBER_CSS, 'members'],
     [IM_CSS, 'im'],
     [GOAL_CSS, 'goal'],
+    [TASK_BOARD_CSS, 'task-board'],
     [USER_MESSAGE_CSS, 'user-messages'],
     [WIDGET_CSS, 'widgets'],
     [HANDOFF_CSS, 'handoff'],

@@ -2,9 +2,10 @@
 // The state lives on the room (room.goal, archived into room.pastGoals), the admin
 // runs it with the group_goal tool, the user steers it from the goal endpoints,
 // and the relay wakes the admin when nothing runs and the goal is not done.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
 import { GOAL_IDLE_NUDGES, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
@@ -20,11 +21,73 @@ const STAGE_ACCEPTANCE_MAX = 1000
 const TASKS_MAX = 12
 const TASK_MAX = 500
 const NOTE_MAX = 300
+const NOTE_HISTORY_MAX = 5
 const REASON_MAX = 300
 const FEEDBACK_MAX = 1000
 const EVENT_TEXT_MAX = 300
 const EVENTS_MAX = 50
 const PAST_MAX = 5
+// A record proves only what the administrator explicitly reported, not the
+// truth of the underlying evidence. Include all task fields affecting review.
+const reviewFingerprint = task => createHash('sha256').update(JSON.stringify(task)).digest('hex')
+// Bind a generated ledger to the exact goal and stage it describes. This is
+// not proof that the model read the result or that an owner was checked.
+const inspectionFingerprint = goal => {
+  if (!goal || typeof goal.id !== 'string') return undefined
+  const stage = goal.stages?.[goal.current]
+  return createHash('sha256').update(JSON.stringify({
+    id: goal.id, revision: goal.revision, status: goal.status, title: goal.title,
+    objective: goal.objective, acceptance: goal.acceptance, constraints: goal.constraints,
+    current: goal.current, stage: stage === undefined ? null : {
+      id: stage.id, title: stage.title, acceptance: stage.acceptance, status: stage.status,
+      tasks: (stage.tasks ?? []).map(reviewFingerprint),
+    },
+  })).digest('hex')
+}
+
+const openReviewTasks = goal => (goal?.stages?.[goal.current]?.tasks ?? []).filter(task => task.status !== 'done')
+const reviewMissing = goal => {
+  const stage = goal?.stages?.[goal.current]
+  const review = goal?.ownerReview
+  return openReviewTasks(goal).filter(task => review?.stageId !== stage?.id
+    || review?.checks?.[task.id]?.fingerprint !== reviewFingerprint(task)
+    || review?.checks?.[task.id]?.unresolved === true)
+}
+// Short immediate checks are still bounded by GOAL_IDLE_NUDGES. Once that
+// budget is exhausted, review an unfinished automatic idle at most twice an hour.
+export const GOAL_REVIEW_INTERVAL_MS = 30 * 60 * 1000
+const GOAL_REVIEW_POLL_MS = 60 * 1000
+const AUTO_IDLE_REASONS = new Set(['admin-pass', 'nudge-limit'])
+
+function automaticIdle(goal) {
+  return goal?.status === 'active' && goal.idle === true
+    && AUTO_IDLE_REASONS.has(goal.idleReason)
+    && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
+}
+
+// Old versions did not distinguish automatic idle from a user stop. They may
+// be inspected, but no such inspection may authorize dispatch or mutation.
+function legacyIdle(goal) {
+  return goal?.status === 'active' && goal.idle === true && goal.idleReason === undefined
+}
+function memberStoppedIdle(goal) {
+  return goal?.status === 'active' && goal.idle === true && goal.idleReason === 'member-stop'
+}
+const inspectionOnlyIdle = goal => legacyIdle(goal) || memberStoppedIdle(goal)
+
+function clearIdle(goal) {
+  delete goal.idle
+  delete goal.idleReason
+  delete goal.idleRevision
+  delete goal.reviewAt
+}
+
+function clearAutomaticIdle(goal) {
+  // An older host may have recorded a user stop without understanding our
+  // provenance fields. Never infer that such an idle is safe to wake.
+  if (goal.idle === true && !automaticIdle(goal)) return
+  clearIdle(goal)
+}
 
 const tooLong = (what, max) => `${what} is too long: at most ${max}.`
 const tooMany = (what, max) => `At most ${max} ${what}.`
@@ -34,18 +97,84 @@ const wrongState = (room, goal, action, allowed) => `The goal of "${room.name}" 
 const pausedRun = room => `The goal of "${room.name}" is paused. The user resumes it; until then, talk with the user and write their corrections in with revise.`
 const allPassed = room => `Every stage of "${room.name}" has passed. Call group_goal complete with the evidence and a summary.`
 
+// The version follows actual status transitions, not the goal's revision: a
+// task can return to the same status while its earlier note is still historical.
+function setTaskStatus(task, status, now, source) {
+  if (task.status !== status) {
+    if (Number.isSafeInteger(task.statusVersion) && task.statusVersion >= 0 && task.statusVersion < Number.MAX_SAFE_INTEGER) task.statusVersion += 1
+    else {
+      task.statusVersion = 1
+      delete task.noteStatusVersion // legacy/overflow cannot prove an old note current
+    }
+    task.status = status
+    task.statusUpdatedAt = now
+    task.statusSource = source
+  }
+}
+
+function setTaskNote(task, note, now) {
+  if (!Number.isSafeInteger(task.statusVersion) || task.statusVersion < 0) task.statusVersion = 0
+  task.note = note
+  task.noteStatus = task.status
+  task.noteStatusVersion = task.statusVersion
+  task.noteAt = now
+}
+
+function clearTaskNotes(task) {
+  for (const field of ['note', 'noteStatus', 'noteStatusVersion', 'noteAt', 'noteHistory']) delete task[field]
+}
+
+// An automatic failure/stop explanation replaces the current note. Keep a
+// bounded trace of what was there; old notes without metadata remain unknown.
+function rememberTaskNote(task, now) {
+  if (typeof task.note !== 'string' || task.note === '') return
+  const prior = {
+    text: task.note.slice(0, NOTE_MAX),
+    ...(typeof task.noteStatus === 'string' ? { status: task.noteStatus } : {}),
+    ...(Number.isSafeInteger(task.noteStatusVersion) && task.noteStatusVersion >= 0 ? { statusVersion: task.noteStatusVersion } : {}),
+    ...(Number.isFinite(task.noteAt) && task.noteAt > 0 ? { at: task.noteAt } : {}),
+    supersededAt: now,
+  }
+  task.noteHistory = [...(Array.isArray(task.noteHistory) ? task.noteHistory.slice(-(NOTE_HISTORY_MAX - 1)) : []), prior]
+}
+
 export const TASK_LABEL = { pending: 'not started', working: 'working', reported: 'reported', done: 'done' }
+
+// Notes without trustworthy status/version/time metadata are historical clues,
+// not proof of the task's current condition. This also handles pre-upgrade data.
+export function taskNoteText(task, now = Date.now()) {
+  if (typeof task.note !== 'string' || task.note === '') return ''
+  const context = goalNoteContext(task, now)
+  const label = context.kind === 'current' ? 'note recorded for this status'
+    : context.kind === 'historical' ? 'historical note from an earlier status'
+      : context.kind === 'conflict' ? 'note provenance/time unknown; time conflict, verify' : 'note provenance/time unknown'
+  const time = context.noteTimeKnown ? `, ${new Date(task.noteAt).toISOString()}` : ''
+  const statusTime = context.statusTime === 'known' ? `; status changed ${new Date(task.statusUpdatedAt).toISOString()}` : '; status change time unknown'
+  const history = Array.isArray(task.noteHistory) ? task.noteHistory.filter(entry => typeof entry?.text === 'string' && entry.text !== '') : []
+  const previous = history.length > 0 ? `; ${history.length} earlier note(s), latest historical: ${headOf(history.at(-1).text, 160)}` : ''
+  return ` — [${label}${time}${statusTime}] ${task.note}${previous}`
+}
+
+function taskStatusTimeText(task, now = Date.now()) {
+  return validGoalTime(task.statusUpdatedAt, now)
+    ? ` — [status changed ${new Date(task.statusUpdatedAt).toISOString()}]`
+    : ' — [status change time unknown]'
+}
 
 const goalId = () => `goal-${randomUUID().replace(/-/g, '').slice(0, 8)}`
 
 // The goal's own stamp on every change: a new revision the client polls, the
 // change in its event list, and the idle bookkeeping reset.
 export function touchGoal(goal, event, now = Date.now(), { keepNudges = false } = {}) {
+  const autoIdle = automaticIdle(goal)
+  if (!keepNudges) clearAutomaticIdle(goal)
   goal.revision += 1
   goal.updatedAt = now
   if (!keepNudges) {
     goal.nudges = 0
-    delete goal.idle
+  } else if (autoIdle) {
+    // A known task update does not invalidate the reason we parked this goal.
+    goal.idleRevision = goal.revision
   }
   if (event !== undefined) goal.events = [...(goal.events ?? []), { at: now, ...event }].slice(-EVENTS_MAX)
 }
@@ -205,6 +334,8 @@ export function startGoal(room, input, by, memberOf, memberNames, now = Date.now
   next.stages = cleaned.stages.map((stage, index) => buildStage(next, stage, index, undefined, index === 0 ? 'active' : 'pending'))
   next.current = 0
   next.startedAt = now
+  // Task status updates must not indefinitely postpone the owner's review.
+  next.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
   delete next.endedAt
   delete next.summary
   delete next.evidence
@@ -269,12 +400,13 @@ export function taskGoal(room, input, by, memberOf, memberNames, now = Date.now(
   const note = input.note === undefined ? undefined : String(input.note).trim()
   if (status === undefined && note === undefined) return { error: required('status or note', 'task') }
   if (note !== undefined && note.length > NOTE_MAX) return { error: tooLong('note', NOTE_MAX) }
-  if (status !== undefined) task.status = status
+  const before = task.status
+  if (status !== undefined) setTaskStatus(task, status, now, 'manual')
   if (note !== undefined) {
-    if (note === '') delete task.note
-    else task.note = note
+    if (note === '') clearTaskNotes(task)
+    else setTaskNote(task, note, now)
   }
-  touchGoal(goal, { kind: 'task', by, stage: stage.id, text: headOf(note ?? status, EVENT_TEXT_MAX) }, now, { keepNudges: true })
+  touchGoal(goal, { kind: 'task', by, stage: stage.id, taskId: task.id, botId: task.botId, fromStatus: before, toStatus: task.status, text: headOf(note ?? status, EVENT_TEXT_MAX) }, now, { keepNudges: true })
   return { goal }
 }
 
@@ -291,7 +423,7 @@ export function passGoal(room, input, by, now = Date.now()) {
   stage.status = 'passed'
   stage.evidence = evidence
   stage.passedAt = now
-  for (const task of stage.tasks) task.status = 'done'
+  for (const task of stage.tasks) setTaskStatus(task, 'done', now, 'pass')
   goal.current += 1
   const next = goal.stages[goal.current]
   if (next !== undefined) next.status = 'active'
@@ -317,8 +449,8 @@ export function reworkGoal(room, input, by, memberOf, memberNames, now = Date.no
   }
   for (const task of stage.tasks) {
     if (only !== undefined && task.botId !== only.id) continue
-    task.status = 'pending'
-    delete task.note
+    setTaskStatus(task, 'pending', now, 'rework')
+    clearTaskNotes(task)
   }
   stage.reworks += 1
   stage.feedback = reason
@@ -352,6 +484,7 @@ export function pauseGoal(room, by, now = Date.now()) {
   if (goal === undefined) return { error: noGoal(room) }
   if (goal.status !== 'active') return { error: wrongState(room, goal, 'pause', 'active') }
   goal.status = 'paused'
+  if (goal.reviewAttempt) goal.reviewAttempt.state = 'cancelled-uncertain'
   goal.pausedBy = by
   touchGoal(goal, { kind: 'pause', by }, now)
   return { goal, reply: { event: 'pause', title: goal.title, count: goal.stages.length } }
@@ -363,6 +496,7 @@ export function resumeGoal(room, by, now = Date.now()) {
   if (goal.status !== 'paused') return { error: wrongState(room, goal, 'resume', 'paused') }
   goal.status = 'active'
   delete goal.pausedBy
+  clearIdle(goal)
   touchGoal(goal, { kind: 'resume', by }, now)
   return { goal, reply: { event: 'resume', title: goal.title, count: goal.stages.length } }
 }
@@ -377,6 +511,7 @@ export function stopGoal(room, reason, by, now = Date.now()) {
   if (text === '') return { error: required('reason', 'stop') }
   if (text.length > REASON_MAX) return { error: tooLong('reason', REASON_MAX) }
   goal.status = 'stopped'
+  if (goal.reviewAttempt) goal.reviewAttempt.state = 'cancelled-uncertain'
   goal.reason = text
   goal.endedAt = now
   touchGoal(goal, { kind: 'stop', by, text: headOf(text, EVENT_TEXT_MAX) }, now)
@@ -395,23 +530,24 @@ export function markTasks(room, botId, from, to, note, now = Date.now()) {
   let changed = false
   for (const task of stage.tasks) {
     if (task.botId !== botId || task.status !== from) continue
-    task.status = to
-    if (note === undefined) delete task.note
-    else task.note = note
+    if (note !== undefined && task.note !== note) rememberTaskNote(task, now)
+    setTaskStatus(task, to, now, 'automatic')
+    if (note !== undefined) setTaskNote(task, note, now)
     changed = true
   }
   if (!changed) return false
   goal.nudges = 0
-  delete goal.idle
+  clearAutomaticIdle(goal)
   goal.revision += 1
   goal.updatedAt = now
   return true
 }
 
 const DUTY_ACTIVE = "You run this goal. First check current task states, existing owners and work in other conversations, dependencies, authorization, resource locks and available capacity. Call only members whose tasks are ready and need assignment; members named in one message start together. Do not redispatch working or reported work without a concrete reason. Review every task in the current stage and every stage acceptance item with evidence; group_goal pass marks every stage task done, so pass only when each task to be marked done is actually complete and verified. If a task is no longer applicable, first record the authorized scope decision and safely reconcile the stage; never falsely mark it done just to advance. If a specific member must redo work, first verify that member has an affected task in the current stage, preserve evidence and the affected task notes before group_goal rework with that bot; targeted rework also clears that member's affected task notes, while leaving bot out resets every task and clears all task notes. If the member has no current task, track the work on the project board or use a safe scoped revision. Record external blockers and work on independent authorized actions rather than treating waiting as rework. Revise this goal for an explicit user correction, or for necessary task or dependency adjustments within its existing authorized objective and acceptance; never materially change the user objective or acceptance scope or weaken its standard without explicit user direction; refine verification details within the authorized original acceptance and record the change. Use task to update one member status without passing stages. Revising constraints replaces the entire list. Revising stages rebuilds current and future stages and loses task notes, stage rework and feedback, and original IDs; show omits complete future task definitions. Before such a replacement, retrieve and preserve the complete current and future definitions, task states, notes, feedback and evidence from verifiable records; if unavailable, do not guess or rebuild, and track the work on the project board. When calling revise, supply only fields that need changing and reconcile all affected work after the revision. Track independent new user goals separately without overwriting this goal. Each stage should have at most one aggregated task per Bot; track separate acceptance items on the project board. Pause or resume this goal only on an explicit user request; an external blocker is not a pause, and do not attribute a Bot action to the user. Stop can stop other group members and their work; use it only for an explicit request to stop this whole goal after assessing impact. Keep all work within applicable user authorization and rules. Ask the user only for decisions you cannot make."
+const OWNER_REVIEW = "At each periodic review, show the current stage and check every unfinished task and each distinct owner, including whether the original assignment was received or is still queued, their current work arrangement, progress, dependencies, blockers, next action and response deadline. Follow up each unfinished item with its responsible owner through the existing handoff, combining items for the same owner and giving task ID, requested status or action, evidence and response deadline. Reuse credible progress when the agreed deadline has not passed; do not duplicate an outstanding or uncertain message, change its request ID, redispatch work already underway or repeat a completed delivery. For reported work follow the assigned independent reviewer or request missing evidence, not the original implementation. For a paused or stopped goal, an authorization wait or an external blocker, respect the restriction and follow only the person empowered to unblock it. Escalate unconfirmed handoffs after their deadline or two cycles according to the reporting rules. Record the result and next review for each owner; if the 30-step turn budget is insufficient, leave a checkpoint and continue the remaining owners in the next turn."
 const DUTY_PASSED = 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
 const DUTY_PAUSED = "This group goal is paused. Do not assume who paused it without evidence, assign new work or pass stages for it. Continue unrelated user-authorized work that does not depend on the paused goal. Resume only on an explicit user request."
-const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : DUTY_ACTIVE)
+const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW}`)
 
 const DUTY_DRAFT = [
   'Establish the goal from the user request and available facts; follow goal-grill when available and ask only for decisions genuinely needed:',
@@ -419,11 +555,48 @@ const DUTY_DRAFT = [
   '2. List the decisions only the user can make. Ask them in one message, numbered, each with your recommended answer, so the user can reply "as recommended". Skip this when nothing is open.',
   '3. When the goal is sufficiently clear, call group_goal start with objective, acceptance, rules and stages; use at most one aggregated task per Bot in each stage and track independent items on the project board.',
 ].join('\n')
-const NUDGE_LINE = "Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. Check existing task states, ownership, dependencies and evidence before assigning anything. Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. If no authorized step can progress while waiting, record the unblock condition and reply [PASS]."
+const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. ${OWNER_REVIEW} Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. If no authorized step can progress while waiting, record the unblock condition and reply [PASS].`
+const INSPECTION_DUTY = 'This is a read-only goal inspection because earlier work or a stop is unresolved. Your first action must be group_goal show for the current group; read the result and identify the current stage, unfinished owners and evidence gaps. If needed, use read_group_chat for the current group only to inspect existing handoffs and evidence. Do not call review-check, assign, dispatch, send reminders, change task state, or take external actions. The shown goal is not proof that an owner accepted or completed work. If show fails, report the failure; otherwise give a short factual inspection or reply [PASS] if nothing changed. Full owner checks and follow-up remain pending.'
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
+
+export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined) => exec => {
+  const info = live?.get(exec.agent?.id)?.info
+  if (info?.reviewInspect !== true || !info.reviewId) return undefined
+  if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
+  const room = roomOf(info.roomId)
+  if (exec.name === 'read_group_chat' && room && typeof exec.arguments?.group === 'string'
+    && exec.arguments.group.trim() === room.name && pickRoom(exec.arguments.group, exec.agent?.id)?.room?.id === room.id) return undefined
+  return 'This goal review is inspection only because a stop or earlier group delivery is unresolved. Report evidence and do not assign or change work.'
+}
 
 export function install(rt) {
   const { ctx } = rt
+  let reviewDisposed = false
+  const reviewing = new Set()
+  const reviewNotified = new Set()
+  const stopsPending = new Map()
+  const goalStopBegin = roomId => stopsPending.set(roomId, (stopsPending.get(roomId) ?? 0) + 1)
+  const goalStopEnd = roomId => {
+    const remaining = (stopsPending.get(roomId) ?? 1) - 1
+    if (remaining > 0) stopsPending.set(roomId, remaining)
+    else stopsPending.delete(roomId)
+  }
+  const goalDispatchBlocked = (room, targetId) => {
+    if (stopsPending.has(room.id)) return true
+    const goal = room.goal
+    if (goal?.status === 'paused' || goal?.status === 'stopped') return true
+    if (goal?.status !== 'active' || goal.idle !== true) return false
+    if (goal.idleReason === 'user-stop' || goal.idleReason === undefined) return true
+    return goal.idleReason === 'member-stop' && (goal.stoppedMembers ?? []).includes(targetId)
+  }
+  const goalRecoveryBlocked = (room, targetId) => ['paused', 'stopped'].includes(room.goal?.status)
+    || goalDispatchBlocked(room, targetId)
+  // Old recovery notes can also include private or other-room messages. Only
+  // a delivery addressed to this room can block this room's review. A legacy
+  // same-room note without a review id remains ambiguous and must be inspected.
+  const hasUnreadRoomDeliveries = room => [rt.sessionOfRoom(room), ...Object.values(room.sessions ?? {})]
+    .some(sessionId => sessionId && (rt.unreadOf?.(sessionId) ?? []).some(args => args.role === 'room' && args.roomId === room.id))
+  const inspectionRequired = room => inspectionOnlyIdle(room.goal) || hasUnreadRoomDeliveries(room)
 
   const memberOf = room => (ref) => {
     const bot = rt.findBot(ref)
@@ -442,12 +615,14 @@ export function install(rt) {
       if (stage.status === 'passed') lines.push(`[passed] ${n}. ${stage.title}`)
       else if (index === goal.current) {
         lines.push(`[current] ${n}. ${stage.title} — done when: ${stage.acceptance}`)
-        for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${TASK_LABEL[task.status]}]${task.note ? ` — ${task.note}` : ''}`)
+        for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${TASK_LABEL[task.status] ?? 'status unknown'}]${taskNoteText(task) || taskStatusTimeText(task)} (stage ${stage.id}, task ${task.id}, review fingerprint ${reviewFingerprint(task)})`)
         if (stage.reworks > 0) lines.push(`  Sent back ${stage.reworks} ${stage.reworks === 1 ? 'time' : 'times'}. Latest feedback: ${stage.feedback ?? ''}`)
       } else lines.push(`[next] ${n}. ${stage.title}: ${[...new Set(stage.tasks.map(task => nameOf(task.botId)))].join(', ')}`)
     })
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
     if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
+    if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
+    if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(`Periodic owner review still needs: ${reviewMissing(goal).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
     return lines
   }
 
@@ -464,7 +639,7 @@ export function install(rt) {
       lines.push(`Current stage ${goal.current + 1} "${stage.title}", done when: ${stage.acceptance}`)
       const tasks = stage.tasks.filter(task => task.botId === member.id)
       if (tasks.length === 0) lines.push('You have no task in this stage.')
-      else for (const task of tasks) lines.push(`Your task in it: ${task.task} (${TASK_LABEL[task.status]}).`)
+      else for (const task of tasks) lines.push(`Your task in it: ${task.task} (${TASK_LABEL[task.status] ?? 'status unknown'}).${taskNoteText(task) || taskStatusTimeText(task)}`)
     }
     lines.push('Work toward this group goal and any other active goals explicitly requested by the user, within your assigned role and scope. A new request does not cancel an earlier goal unless the user clearly changes, pauses, or cancels it. When you finish your task, end your reply with the evidence: the files you changed, the commands you ran and what they printed.')
     if (goal.status === 'paused') lines.push('This group goal is paused: finish only work already underway for it and start no new work on this goal. Follow separate user requests within their authorization.')
@@ -473,7 +648,7 @@ export function install(rt) {
 
   // The <group_goal> block in every round's prompt; nudge and resume add a line
   // after it for the admin. No block at all with no goal or a finished one.
-  function goalBlock(room, member, { nudge = false, resume = false } = {}) {
+  function goalBlock(room, member, { nudge = false, resume = false, inspectOnly = false } = {}) {
     const goal = room.goal
     if (goal === undefined || goal.status === 'complete' || goal.status === 'stopped') return ''
     const isAdmin = rt.isAdminOf(room, member.id)
@@ -483,19 +658,19 @@ export function install(rt) {
         ? ['<group_goal status="drafting">', `The user wants this group to reach a goal: ${goal.brief ?? ''}`, DUTY_DRAFT, '</group_goal>'].join('\n')
         : ['<group_goal status="drafting">', `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`, '</group_goal>'].join('\n')
     } else if (isAdmin) {
-      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(goal), dutyOf(goal), '</group_goal>'].join('\n')
+      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(goal), inspectOnly ? INSPECTION_DUTY : dutyOf(goal), '</group_goal>'].join('\n')
     } else {
       const view = memberLines(room, goal, member)
       block = [`<group_goal status="${goal.status}" stage="${view.stage}">`, ...view.lines, '</group_goal>'].join('\n')
     }
     if (goal.status !== 'drafting') block += '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
-    if (isAdmin && nudge) block += `\n${NUDGE_LINE}`
+    if (isAdmin && nudge && !inspectOnly) block += `\n${NUDGE_LINE}\nFor each current unfinished task you actually checked, call group_goal review-check with its task ID and exact review fingerprint from show plus the requested structured fields and evidence. Unknown or unverified facts must be marked unknown and review_complete false; only set review_complete true when the required check is actually finished. The runtime records your assertion and will continue missing or changed tasks in another turn; it does not verify the truth of your evidence.`
     if (isAdmin && resume) block += `\n${RESUME_LINE}`
     return block
   }
 
   // The tool's answer: the ledger as the caller sees it, without the block's tags.
-  function goalLedger(room, member) {
+  function goalLedger(room, member, { showBackup = false } = {}) {
     const goal = room.goal
     if (goal === undefined) return noGoal(room)
     if (goal.status === 'complete') return `Goal "${goal.title}" is complete.`
@@ -505,7 +680,9 @@ export function install(rt) {
         ? `The user wants this group to reach a goal: ${goal.brief ?? ''}`
         : `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`
     }
-    if (rt.isAdminOf(room, member.id)) return ledgerLines(goal).join('\n')
+    // A Main Bot may audit a group it belongs to as the admin's backup, but
+    // only when it explicitly asks to show the goal; its routine prompt stays scoped.
+    if (rt.isAdminOf(room, member.id) || (showBackup && rt.isMain(member.id) && room.members.includes(member.id))) return ledgerLines(goal).join('\n')
     return memberLines(room, goal, member).lines.join('\n')
   }
 
@@ -517,13 +694,16 @@ export function install(rt) {
 
   // A goal message into the room's own Session, which relays it as a new round:
   // the user's draft request, a resume after the user continues, or an idle nudge.
-  async function queueGoalRelay(room, goal, text, senderName = 'You') {
-    const agent = await rt.resolveAgent(rt.sessionOfRoom(room))
+  async function queueGoalRelay(room, goal, text, senderName = 'You', options = {}) {
+    const agent = options.agent ?? await rt.resolveAgent(rt.sessionOfRoom(room))
+    if (options.valid !== undefined && !options.valid()) return false
     agent.followup(createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: SOURCE_KIND, form: 'relay', role: 'goal', goal, goalId: room.goal?.id, exchangeId: randomUUID(), senderName, roomId: room.id },
+    source: { kind: SOURCE_KIND, form: 'relay', role: 'goal', goal, goalId: room.goal?.id, exchangeId: options.reviewId ?? randomUUID(), ...(options.reviewId ? { reviewId: options.reviewId, ...(options.inspectOnly ? { reviewInspect: true } : {}) } : {}), senderName, roomId: room.id },
     }))
-    await ctx.sessions.flush(agent.session)
+    const flushed = await ctx.sessions.flush(agent.session)
+    if (options.reviewId && flushed === false) throw new Error('goal review persistence was not acknowledged')
+    return true
   }
 
   // goal-draft { roomId, text }: the user's one-line ask opens a drafting goal.
@@ -553,27 +733,70 @@ export function install(rt) {
     const goal = room.goal
     if (goal === undefined || goal.id !== String(body.goalId ?? '')) return { error: 'The goal has changed. Look again.', code: 'bot/stale' }
     const action = String(body.action ?? '')
+    if (action === 'review-resolve') {
+      const attempt = goal.reviewAttempt
+      const evidence = String(body.evidence ?? '').trim()
+      if (body.confirmed !== true || evidence.length < 8 || evidence.length > TEXT_MAX) return { error: 'Confirm that the original review was investigated and provide its outcome (8–2000 characters).', code: 'bot/invalid' }
+      if (!reviewEligible(goal) || attempt === undefined || attempt.id !== body.reviewId
+        || !['uncertain', 'admitting', 'cancelled-uncertain'].includes(attempt.state)
+        || (attempt.state === 'admitting' && (!Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS))) return { error: 'The review is not eligible for recovery, or the goal was paused or stopped.', code: 'bot/stale' }
+      if (room.admin !== attempt.adminId || !room.members.includes(attempt.adminId)
+        || rt.sessionOfRoom(room) !== attempt.rootSessionId || room.sessions?.[attempt.adminId] !== attempt.adminSessionId) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
+      const root = await rt.resolveAgent(attempt.rootSessionId)
+      const adminAgent = attempt.adminSessionId === undefined ? undefined : await rt.resolveAgent(attempt.adminSessionId)
+      const quietAgent = agent => Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
+        && agent.inbox.nextStep.length === 0 && agent.inbox.nextTurn.length === 0
+        && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
+        && rt.waitsForApproval?.(agent.session.id) !== true
+      if (rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt || !reviewEligible(goal)
+        || room.admin !== attempt.adminId || !room.members.includes(attempt.adminId)
+        || rt.sessionOfRoom(room) !== attempt.rootSessionId || room.sessions?.[attempt.adminId] !== attempt.adminSessionId
+        || !quietAgent(root) || (adminAgent !== undefined && !quietAgent(adminAgent)) || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
+        || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
+        || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
+      rt.requireHomeLock()
+      const wasAutomatic = automaticIdle(goal)
+      const now = Date.now()
+      delete goal.reviewAttempt
+      goal.revision += 1
+      goal.updatedAt = now
+      if (wasAutomatic) { goal.idleRevision = goal.revision; goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS }
+      goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by: 'user', reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
+      await rt.save({ required: true })
+      return {}
+    }
     if (action === 'pause') {
       if (goal.status !== 'active') return { error: wrongState(room, goal, 'pause', 'active') }
       const result = pauseGoal(room, 'user')
       announce(room, result.reply)
-      await rt.save()
+      await rt.save({ required: true })
       if (body.stopWork === true) await rt.stopRoomWork(room.id)
       return {}
     }
     if (action === 'resume') {
+      if (goal.status === 'active' && goal.idle === true && !automaticIdle(goal)) {
+        clearIdle(goal)
+        delete goal.stoppedMembers
+        goal.revision += 1
+        goal.updatedAt = Date.now()
+        goal.events = [...(goal.events ?? []), { kind: 'resume', by: 'user', at: goal.updatedAt }].slice(-EVENTS_MAX)
+        await rt.save({ required: true })
+        // An unresolved review must be investigated separately before new work.
+        if (goal.reviewAttempt === undefined) await queueGoalRelay(room, 'resume', '[Goal resumed]')
+        return {}
+      }
       if (goal.status !== 'paused') return { error: wrongState(room, goal, 'resume', 'paused') }
       const result = resumeGoal(room, 'user')
       announce(room, result.reply)
-      await rt.save()
-      await queueGoalRelay(room, 'resume', '[Goal resumed]')
+      await rt.save({ required: true })
+      if (goal.reviewAttempt === undefined) await queueGoalRelay(room, 'resume', '[Goal resumed]')
       return {}
     }
     if (action === 'stop') {
       if (!['drafting', 'active', 'paused'].includes(goal.status)) return { error: wrongState(room, goal, 'stop', 'drafting, active or paused') }
       const result = stopGoal(room, 'Stopped by the user', 'user')
       announce(room, result.reply)
-      await rt.save()
+      await rt.save({ required: true })
       await rt.stopRoomWork(room.id)
       return {}
     }
@@ -589,6 +812,252 @@ export function install(rt) {
     return { error: 'Nothing to do', code: 'bot/invalid' }
   }
 
+  const parkAutomatically = (goal, reason, now = Date.now()) => {
+    goal.idle = true
+    goal.idleReason = reason
+    goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS
+    if (goal.reviewAttempt) goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+    delete goal.reviewAttempt
+    goal.revision += 1
+    goal.idleRevision = goal.revision
+    goal.updatedAt = now
+  }
+
+  // Only an attempt whose provenance still matches this exact idle may pass
+  // through the group relay. This is rechecked after every asynchronous step.
+  const reviewEligible = goal => goal?.status === 'active' && (goal.idle !== true || automaticIdle(goal) || inspectionOnlyIdle(goal))
+  const goalReviewAllowed = (room, id) => reviewEligible(room?.goal)
+    && !stopsPending.has(room.id)
+    && room.goal.reviewAttempt?.saveOutcomeUnknown !== true
+    && room.goal.reviewAttempt?.id === id && ['admitting', 'uncertain'].includes(room.goal.reviewAttempt.state)
+    && (!inspectionOnlyIdle(room.goal) || room.goal.reviewAttempt.inspectOnly === true)
+    && room.goal.reviewAttempt.adminId === room.admin && room.members.includes(room.admin)
+    && room.goal.reviewAttempt.rootSessionId === rt.sessionOfRoom(room)
+    && room.goal.reviewAttempt.adminSessionId === room.sessions?.[room.admin] && !reviewDisposed
+
+  // When same-room recovery notes have unknown provenance, let the admin
+  // inspect and report, but do not permit tools with possible side effects.
+  ctx.tools.guard(exec => {
+    const info = rt.live.get(exec.agent?.id)?.info
+    if (info?.reviewId && !goalReviewAllowed(rt.roomOf(info.roomId), info.reviewId)) {
+      if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
+      return 'The goal review was stopped or its identity changed; no further action is allowed.'
+    }
+    return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)))(exec)
+  })
+
+  async function goalReviewBind(room, id, sessionId) {
+    const attempt = room?.goal?.reviewAttempt
+    if (!reviewEligible(room?.goal) || attempt?.id !== id || !['admitting', 'uncertain'].includes(attempt.state)
+      || attempt.adminId !== room.admin || !room.members.includes(room.admin)
+      || attempt.rootSessionId !== rt.sessionOfRoom(room) || room.sessions?.[room.admin] !== sessionId) return false
+    if (attempt.adminSessionId !== undefined) return attempt.adminSessionId === sessionId
+    attempt.adminSessionId = sessionId
+    await rt.save({ required: true })
+    return goalReviewAllowed(room, id)
+  }
+
+  const finishReview = (goal, reason, now = Date.now()) => {
+    const remaining = reviewMissing(goal)
+    const inspectOnly = goal.reviewAttempt?.inspectOnly === true
+    const checkedBefore = goal.reviewAttempt?.checkedBefore ?? 0
+    const checkedNow = openReviewTasks(goal).length - remaining.length
+    if (inspectOnly) {
+      const attempt = goal.reviewAttempt
+      const generated = Number.isFinite(attempt?.inspectionLedgerAt) && typeof attempt.inspectionLedgerFingerprint === 'string'
+      const current = generated && attempt.inspectionLedgerFingerprint === inspectionFingerprint(goal)
+      const status = current ? 'ledger-generated' : generated ? 'stale-ledger' : 'not-generated'
+      goal.lastInspection = { reviewId: attempt.id, at: now, status, ...(current ? { ledgerAt: attempt.inspectionLedgerAt, fingerprint: attempt.inspectionLedgerFingerprint } : {}) }
+      if (!current) rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_INSPECTION_INCOMPLETE', text: `Goal inspection ${attempt.id} did not produce a current goal ledger; owner checks remain pending.` })
+      if (!inspectionOnlyIdle(goal)) parkAutomatically(goal, reason, now)
+      else {
+        delete goal.reviewAttempt
+        goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+        goal.updatedAt = now
+        goal.revision += 1
+      }
+      return
+    }
+    if (!inspectionOnlyIdle(goal)) {
+      parkAutomatically(goal, reason, now)
+      if (remaining.length > 0) {
+        if (!inspectOnly && checkedNow > checkedBefore) goal.reviewAt = goal.ownerReviewAt = now + GOAL_REVIEW_POLL_MS
+      } else {
+        goal.lastOwnerReview = { ...goal.ownerReview, completedAt: now }
+        delete goal.ownerReview
+      }
+      return
+    }
+    // Do not convert an ambiguous historical stop into automatic idle.
+    delete goal.reviewAttempt
+    // An inspection-only turn is deliberately unable to record checks. Do not
+    // spin every minute while human investigation of the old stop is pending.
+    goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+    goal.updatedAt = now
+    goal.revision += 1
+  }
+
+  async function goalReviewFinished(room, sessionId, id) {
+    if (!goalReviewAllowed(room, id) || room.sessions?.[room.admin] !== sessionId) return
+    // The round may still be dispatching the admin's replies to other members.
+    // Keep the fence until the round finishes; a long-running admin turn whose
+    // round already ended must instead finish the check here.
+    if ([...rt.roomProgress.values()].some(round => round.roomId === room.id && round.goalReviewId === id)) {
+      room.goal.reviewAttempt.adminCompleted = true
+      await rt.save({ required: true })
+      return
+    }
+    finishReview(room.goal, 'admin-pass')
+    await rt.save({ required: true })
+  }
+
+  async function goalReviewFailed(room, sessionId, id) {
+    if (!goalReviewAllowed(room, id) || room.sessions?.[room.admin] !== sessionId) return
+    room.goal.reviewAttempt.state = 'uncertain'
+    try { await rt.save({ required: true }) } finally {
+      rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${id} for ${room.name} did not complete; inspect its original work before recovery.` })
+    }
+  }
+
+  // The root relay took this review into a batch but chose a different opener.
+  // No admin delivery exists for it, so it is safe to retire the intent and
+  // let the ordinary round-end driver or the next timer make a fresh check.
+  async function goalReviewNotOpened(room, id) {
+    const goal = room?.goal
+    if (goal?.reviewAttempt?.id !== id) return
+    const autoIdle = automaticIdle(goal)
+    delete goal.reviewAttempt
+    goal.revision += 1
+    goal.updatedAt = Date.now()
+    if (autoIdle) {
+      goal.idleRevision = goal.revision
+      goal.reviewAt = goal.updatedAt + GOAL_REVIEW_POLL_MS
+    }
+    if (goal.idle !== true || inspectionOnlyIdle(goal)) goal.ownerReviewAt = goal.updatedAt + GOAL_REVIEW_POLL_MS
+    await rt.save({ required: true })
+  }
+
+  async function goalReviewPoll(now = Date.now()) {
+    if (reviewDisposed) return
+    await rt.load()
+    if (reviewDisposed || rt.readOnly() !== undefined) return
+    const jobs = []
+    for (const room of Object.values(rt.state.rooms ?? {})) {
+      const goal = room.goal
+      const attempt = goal?.reviewAttempt
+      if (attempt && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
+        reviewNotified.add(attempt.id)
+        rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${attempt.id} for ${room.name} is still unresolved; inspect its original work before recovery.` })
+      }
+      if (attempt?.adminCompleted === true && goalReviewAllowed(room, attempt.id) && !reviewing.has(room.id)) {
+        reviewing.add(room.id)
+        jobs.push((async () => {
+          try {
+            const root = await rt.resolveAgent(attempt.rootSessionId)
+            const adminAgent = await rt.resolveAgent(attempt.adminSessionId)
+            const quiet = agent => Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
+              && agent.inbox.nextStep.length === 0 && agent.inbox.nextTurn.length === 0
+              && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
+              && rt.waitsForApproval?.(agent.session.id) !== true
+            if (!goalReviewAllowed(room, attempt.id) || !quiet(root) || !quiet(adminAgent)
+              || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
+              || (!attempt.inspectOnly && hasUnreadRoomDeliveries(room)) || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
+              || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return
+            finishReview(goal, 'admin-pass', now)
+            await rt.save({ required: true })
+          } catch (error) {
+            rt.warn('ds-bot: completed goal review recovery in %s failed: %s', room.name, error)
+          } finally { reviewing.delete(room.id) }
+        })())
+        continue
+      }
+      // A different owner's progress must not reset the period for everyone.
+      const due = goal?.idle === true && !inspectionOnlyIdle(goal) ? goal.reviewAt
+        : Number.isFinite(goal?.ownerReviewAt) ? goal.ownerReviewAt
+          : (goal?.startedAt ?? goal?.createdAt ?? goal?.updatedAt) + GOAL_REVIEW_INTERVAL_MS
+      if (reviewEligible(goal) && Number.isFinite(due) && due <= now && hasUnreadRoomDeliveries(room) && !reviewNotified.has(`unread:${room.id}`)) {
+        reviewNotified.add(`unread:${room.id}`)
+        rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_ROOM_DELIVERY_UNCERTAIN', text: `Group ${room.name} has unresolved delivery notes. Goal reviews are restricted to inspection until their outcome is known.` })
+      }
+      if (!reviewEligible(goal) || goal.reviewAttempt !== undefined || reviewing.has(room.id)
+        || !Number.isFinite(due) || due > now) continue
+      const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
+      if (admin === undefined || !room.members.includes(admin.id)) continue
+      const adminBusy = () => {
+        const sessionId = room.sessions?.[admin.id]
+        return sessionId !== undefined && (rt.live.get(sessionId)?.turn !== undefined
+          || rt.hasSubagents?.(sessionId) === true || rt.waitsForApproval?.(sessionId) === true)
+      }
+      if (adminBusy()) {
+        const key = `busy:${room.id}`
+        if (now - due >= GOAL_REVIEW_POLL_MS && !reviewNotified.has(key)) {
+          reviewNotified.add(key)
+          rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_DELAYED', text: `Goal review in ${room.name} is overdue while its administrator is busy; it will be checked again.` })
+        }
+        continue
+      }
+      reviewNotified.delete(`busy:${room.id}`)
+      reviewing.add(room.id)
+      jobs.push((async () => {
+      const id = randomUUID()
+      try {
+        const root = await rt.resolveAgent(rt.sessionOfRoom(room))
+        // Appending to nextTurn preserves existing room work and arrival order.
+        const canQueue = () => Array.isArray(root.inbox?.nextStep) && Array.isArray(root.inbox?.nextTurn)
+          && root.session?.id === rt.sessionOfRoom(room) && !adminBusy()
+        if (rt.roomOf(room.id) !== room || room.goal !== goal || !reviewEligible(goal) || goal.reviewAttempt !== undefined
+          || !canQueue()) return
+        rt.requireHomeLock()
+        const current = () => rt.roomOf(room.id) === room && room.goal === goal && goalReviewAllowed(room, id)
+          && room.admin === admin.id && room.members.includes(admin.id)
+          && root.session?.id === rt.sessionOfRoom(room)
+        const stageId = goal.stages[goal.current]?.id
+        if (goal.ownerReview?.stageId !== stageId) goal.ownerReview = { stageId, checks: {} }
+        goal.reviewAttempt = { id, at: now, state: 'admitting', adminId: admin.id, rootSessionId: root.session.id, adminSessionId: room.sessions?.[admin.id], checkedBefore: openReviewTasks(goal).length - reviewMissing(goal).length, ...(inspectionRequired(room) ? { inspectOnly: true } : {}) }
+        goal.revision += 1
+        if (goal.idle === true) goal.idleRevision = goal.revision
+        goal.updatedAt = now
+        // Persist before admission: if the host dies after this point, never
+        // guess whether the same check was sent or create another check.
+        await rt.save({ required: true })
+        if (!current() || !canQueue() || (inspectionRequired(room) && goal.reviewAttempt.inspectOnly !== true)) {
+          // The check has not been admitted, so this particular intent can be
+          // cancelled safely when other work appeared during the save.
+          if (room.goal === goal && goal.reviewAttempt?.id === id) {
+            const autoIdle = automaticIdle(goal)
+            delete goal.reviewAttempt
+            goal.revision += 1
+            if (autoIdle) goal.idleRevision = goal.revision
+            await rt.save({ required: true })
+          }
+          return
+        }
+        await queueGoalRelay(room, 'nudge', '[Goal check]', 'DS Bot', { reviewId: id, inspectOnly: goal.reviewAttempt.inspectOnly === true, valid: current, agent: root })
+      } catch (error) {
+        // followup can insert before it throws or before flush fails. Keep the
+        // attempt for inspection; neither timer nor restart may resend it.
+        if (goal.reviewAttempt?.id !== id) {
+          rt.warn('ds-bot: periodic goal review preparation for %s failed or already settled: %s', room.name, error)
+          return
+        }
+        rt.warn('ds-bot: periodic goal review for %s has an uncertain outcome: %s', room.name, error)
+        if (goal.reviewAttempt?.id === id && goal.reviewAttempt.state === 'admitting') goal.reviewAttempt.state = 'uncertain'
+        await rt.save({ required: true }).catch(() => {})
+        rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${id} for ${room.name} requires inspection before retry.` })
+      } finally {
+        reviewing.delete(room.id)
+      }
+      })())
+    }
+    await Promise.allSettled(jobs)
+  }
+
+  ctx.effect(() => {
+    const timer = setInterval(() => void goalReviewPoll().catch(error => rt.warn('ds-bot: periodic goal review failed: %s', error)), GOAL_REVIEW_POLL_MS)
+    timer.unref?.()
+    return () => { reviewDisposed = true; clearInterval(timer) }
+  }, 'ds-bot: periodic goal review')
+
   // The idle driver: once a round ends with the goal active and nothing running,
   // wake the admin for a goal check. Progress — a user message or a member's work
   // (the admin's own tools do not count) — only resets the check count; the round
@@ -597,14 +1066,23 @@ export function install(rt) {
   async function goalDrive(room, round) {
     const goal = room.goal
     const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
+    if (round.goalReviewId && goalReviewAllowed(room, round.goalReviewId)) {
+      const slot = round.slots.find(item => item.id === admin?.id)
+      if ((slot !== undefined && ['passed', 'posted'].includes(slot.status)) || goal.reviewAttempt?.adminCompleted === true) {
+        finishReview(goal, slot?.status === 'passed' ? 'admin-pass' : 'nudge-limit')
+        await rt.save({ required: true })
+      }
+      return
+    }
+    // A scheduled review may already have been consumed or admitted even if
+    // its outcome is unknown. The ordinary idle driver must not send another.
+    if (goal?.reviewAttempt !== undefined) return
     if (goal === undefined || goal.status !== 'active' || goal.idle === true || admin === undefined || !room.members.includes(admin.id)) return
     // A round nobody spoke in — e.g. a stop notice or a stale check — never nudges.
     if (round.stoppedOnly === true || round.slots.length === 0) return
     if (round.userMessage === true || round.slots.some(slot => slot.worked === true && slot.id !== admin.id)) goal.nudges = 0
     if (round.goalNudge === true && round.slots.some(slot => slot.id === admin.id && slot.status === 'passed')) {
-      goal.idle = true
-      goal.revision += 1
-      goal.updatedAt = Date.now()
+      parkAutomatically(goal, 'admin-pass')
       await rt.save()
       return
     }
@@ -612,9 +1090,7 @@ export function install(rt) {
     if (rt.roomBatchPending?.(room.id) === true) return
     if ((rt.roomInbox.get(room.id)?.length ?? 0) > 0) return
     if (goal.nudges >= GOAL_IDLE_NUDGES) {
-      goal.idle = true
-      goal.revision += 1
-      goal.updatedAt = Date.now()
+      parkAutomatically(goal, 'nudge-limit')
       await rt.save()
       return
     }
@@ -641,13 +1117,38 @@ export function install(rt) {
 
   // The user pressed stop in the group: the goal waits for them instead of
   // waking the admin through the stop-notice round.
-  const goalUserStopped = (roomId) => {
-    const goal = rt.roomOf(roomId)?.goal
+  const goalUserStopped = async (roomId, memberId) => {
+    const room = rt.roomOf(roomId)
+    const goal = room?.goal
     if (goal?.status !== 'active') return
+    if (memberId !== undefined && !room.members.includes(memberId)) return
+    if (memberId !== undefined && goal.idleReason === 'user-stop') return
+    const previous = Object.fromEntries(['idle', 'idleReason', 'idleRevision', 'stoppedMembers'].map(key => [key, goal[key]]))
     goal.idle = true
+    goal.idleReason = memberId === undefined ? 'user-stop' : 'member-stop'
+    if (memberId !== undefined) goal.stoppedMembers = [...new Set([...(goal.stoppedMembers ?? []), memberId])]
+    if (goal.reviewAttempt) goal.reviewAttempt.state = 'cancelled-uncertain'
     goal.revision += 1
     goal.updatedAt = Date.now()
-    void rt.save().catch(() => {})
+    const revision = goal.revision
+    await rt.save({ required: true })
+    return { goal, revision, previous }
+  }
+
+  // A stop-member command which proved that there was no running work did not
+  // stop this member. Restore only our own fence, and never overwrite a later
+  // goal update. A review cancelled during the fence stays uncertain.
+  async function goalUndoEmptyMemberStop(roomId, token) {
+    const goal = rt.roomOf(roomId)?.goal
+    if (!token || goal !== token.goal || goal.revision !== token.revision) return
+    for (const key of ['idle', 'idleReason', 'idleRevision', 'stoppedMembers']) {
+      if (token.previous[key] === undefined) delete goal[key]
+      else goal[key] = token.previous[key]
+    }
+    goal.revision += 1
+    if (goal.idle === true && AUTO_IDLE_REASONS.has(goal.idleReason)) goal.idleRevision = goal.revision
+    goal.updatedAt = Date.now()
+    await rt.save({ required: true })
   }
 
   // A user post in the room — its own message or a goal draft — brings the goal
@@ -655,7 +1156,8 @@ export function install(rt) {
   const goalUserMessage = (roomId) => {
     const goal = rt.roomOf(roomId)?.goal
     if (goal === undefined || (goal.idle === undefined && goal.nudges === 0)) return
-    delete goal.idle
+    if (goal.idle === true && !automaticIdle(goal)) return
+    clearIdle(goal)
     goal.nudges = 0
     goal.revision += 1
     goal.updatedAt = Date.now()
@@ -672,7 +1174,15 @@ export function install(rt) {
     description: "Set and run one group goal. Show an existing goal before changing it; independent goals are tracked separately. Start only when no active or paused group goal exists. Revise constraints replaces the full list; revise stages rebuilds current and later stages and loses notes, rework feedback and IDs, while show omits complete future task details. Update one status with task; before replacing stages, retrieve and preserve complete definitions and evidence, or do not rebuild. Register at most one aggregated task per Bot per stage. Pass marks every current-stage task done: first verify every task to be marked done is actually complete and all acceptance evidence is valid; handle inapplicable tasks by a documented scope decision and safe stage reconciliation, not a false done. Rework with bot targets one member; first verify the member has a task in the current stage and preserve evidence and notes. Targeted rework clears affected task notes; without bot it resets the whole stage and clears all task notes. Pause or resume only on explicit user request. Stop may stop other members working in the group; use only for an explicit request to stop the whole goal. Keep current user authorization and applicable rules.",
     parameters: {
       group: { type: 'string', description: 'Exact group chat name from list_bots; leave out inside that group' },
-      action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop'], description: 'What to do' },
+      action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop', 'review-check'], description: 'What to do' },
+      review_task: { type: 'string', description: 'review-check: current task ID from show' },
+      review_fingerprint: { type: 'string', description: 'review-check: exact current task review fingerprint from show' },
+      review_assignment: { type: 'string', description: 'review-check: received, queued, or unknown and source' },
+      review_progress: { type: 'string', description: 'review-check: work arrangement and progress, or unknown' },
+      review_dependencies: { type: 'string', description: 'review-check: dependencies and blockers, or unknown' },
+      review_next: { type: 'string', description: 'review-check: next action and responsible person, or unknown' },
+      review_deadline: { type: 'string', description: 'review-check: response/check time, or unknown' },
+      review_complete: { type: 'boolean', description: 'review-check: true only if the actual task/owner check is complete; false for unknown or incomplete checks' },
       title: { type: 'string', description: 'Short title, up to 80 characters' },
       brief: { type: 'string', description: 'draft: what the user wants, in their words' },
       objective: { type: 'string', description: 'start, revise: the one outcome the group must reach' },
@@ -741,8 +1251,59 @@ export function install(rt) {
       let next = ''
       let post
       switch (action) {
-        case 'show':
-          return goalLedger(room, member)
+        case 'show': {
+          const fingerprint = inspectionFingerprint(room.goal)
+          const ledger = goalLedger(room, member, { showBackup: true })
+          const info = rt.live.get(exec.agent?.id)?.info
+          const attempt = room.goal?.reviewAttempt
+          if (info?.reviewInspect === true && info.reviewId && rt.isAdminOf(room, self)
+            && attempt?.id === info.reviewId && goalReviewAllowed(room, info.reviewId)) {
+            if (!fingerprint || fingerprint !== inspectionFingerprint(room.goal)) return 'Goal changed while producing its ledger; do not dispatch or claim it complete.'
+            attempt.inspectionLedgerAt = Date.now()
+            attempt.inspectionLedgerFingerprint = fingerprint
+            try { await rt.save({ required: true }) } catch (error) {
+              delete attempt.inspectionLedgerAt
+              delete attempt.inspectionLedgerFingerprint
+              attempt.state = 'uncertain'
+              attempt.saveOutcomeUnknown = true
+              rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_INSPECTION_SAVE_UNCERTAIN', text: `The goal inspection ${info.reviewId} could not be durably confirmed.` })
+              return 'Goal inspection could not be durably confirmed; do not dispatch or retry until its outcome is inspected.'
+            }
+            if (!goalReviewAllowed(room, info.reviewId) || fingerprint !== inspectionFingerprint(room.goal)) return 'Goal inspection changed while saving; do not dispatch or claim it complete.'
+          }
+          return ledger
+        }
+        case 'review-check': {
+          const info = rt.live.get(exec.agent?.id)?.info
+          const goal = room.goal
+          const stage = goal?.stages?.[goal.current]
+          const reviewId = info?.reviewId
+          if (!reviewId || info.reviewInspect === true || !rt.isAdminOf(room, self) || !goalReviewAllowed(room, reviewId)) return 'Only the active, write-capable periodic review by this group administrator may record a check.'
+          const task = stage?.tasks?.find(item => item.id === args.review_task && item.status !== 'done')
+          if (!task || args.review_fingerprint !== reviewFingerprint(task)) return 'Task changed or is not an unfinished task in the current stage; show the goal again.'
+          const fields = ['review_assignment', 'review_progress', 'review_dependencies', 'review_next', 'review_deadline', 'evidence']
+          if (fields.some(key => typeof args[key] !== 'string' || !args[key].trim() || args[key].length > TEXT_MAX)) return 'Provide each review field and evidence, marking unknown facts explicitly.'
+          if (args.review_complete === true && fields.some(key => /\b(?:unknown|unverified|not verified|not checked|pending verification)\b|未知|未核|待核|不确定|待确认|无法确认/i.test(args[key]))) return 'Unknown or unverified facts require review_complete false; retain the task for a later check.'
+          const previous = goal.ownerReview
+          const checks = previous?.stageId === stage.id ? { ...previous.checks } : {}
+          checks[task.id] = { fingerprint: args.review_fingerprint, owner: task.botId, at: Date.now(), by: self, unresolved: args.review_complete !== true, ...Object.fromEntries(fields.map(key => [key, args[key].trim()])) }
+          const updated = { stageId: stage.id, checks }
+          goal.ownerReview = updated
+          try { await rt.save({ required: true }) } catch (error) {
+            // The atomic replacement may already have happened even if a later
+            // stamp failed. Never claim this assertion was not saved or let this
+            // review continue in the current host under an ambiguous outcome.
+            if (goal.ownerReview === updated) updated.checks[task.id].unresolved = true
+            if (goal.reviewAttempt?.id === reviewId) {
+              goal.reviewAttempt.state = 'uncertain'
+              goal.reviewAttempt.saveOutcomeUnknown = true
+            }
+            rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_SAVE_UNCERTAIN', text: `The owner review record for ${task.id} may have been saved; inspect before retrying.` })
+            throw error
+          }
+          if (!goalReviewAllowed(room, reviewId)) return 'The review stopped while saving. Its record must be inspected before further action.'
+          return `Recorded the administrator's check for ${task.id}; ${reviewMissing(goal).length} current task(s) remain unchecked or changed.`
+        }
         case 'draft':
           result = draftGoal(room, { brief: args.brief, title: args.title, by: self })
           next = 'Aligning. Ask the user only what is still open, then call group_goal start.'
@@ -802,7 +1363,7 @@ export function install(rt) {
   }))
 
   Object.assign(rt, {
-    goalBlock, goalLedger, goalDraft, goalControl, goalDrive, goalSettled, goalUserMessage, goalUserStopped,
+    goalBlock, goalLedger, goalDraft, goalControl, goalDrive, goalSettled, goalUserMessage, goalUserStopped, goalUndoEmptyMemberStop, goalStopBegin, goalStopEnd, goalDispatchBlocked, goalRecoveryBlocked, goalReviewPoll, goalReviewAllowed, goalReviewBind, goalReviewFinished, goalReviewFailed, goalReviewNotOpened,
     goalTaskWorking: (roomId, botId) => mark(roomId, botId, 'pending', 'working'),
     goalTaskReported: (roomId, botId) => mark(roomId, botId, 'working', 'reported'),
     goalTaskReset: (roomId, botId, note) => mark(roomId, botId, 'working', 'pending', note),

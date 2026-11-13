@@ -67,6 +67,8 @@ DS Bot 会把 `auto` 搜索 provider 选为整个 profile 的后端。禁用 `we
 
 ### Main bot
 
+也可以通过 `operatorInstructions` 向每个 Bot 提供部署环境指令；这些指令会发送给模型，请勿放入密码或密钥。参见[插件配置](ds-bot/README.md#configuration)。
+
 这个 bot 作为你的 chief，它拥有非常高的权限，可以管理其他 bot 和群聊。第一次进入 ds bot 时，默认会有一个 main bot 叫 Chief。你可以直接和它对话，让它引导你完成配置。
 
 总之，有问题，找 main bot。

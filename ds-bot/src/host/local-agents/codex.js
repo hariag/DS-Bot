@@ -14,6 +14,7 @@ export class CodexEngine {
     this.findExecutable = findExecutable
     this.child = undefined
     this.peer = undefined
+    this.starting = undefined
     this.threads = new Map()
   }
 
@@ -30,7 +31,14 @@ export class CodexEngine {
   }
 
   async ensure() {
+    if (this.starting !== undefined) return this.starting
     if (this.peer !== undefined) return this.peer
+    const starting = this.start()
+    this.starting = starting
+    try { return await starting } finally { if (this.starting === starting) this.starting = undefined }
+  }
+
+  async start() {
     const bin = this.findExecutable(this.engine.command)
     if (bin === undefined) throw Object.assign(new Error(`${this.engine.name} is not installed`), { code: 'NO_ADAPTER' })
     const child = spawnAgent(bin, this.engine.args ?? [], {
@@ -54,9 +62,15 @@ export class CodexEngine {
     })
     peer.notificationHandler = (method, params) => this.onNotice(method, params)
     peer.requestHandler = (method, params) => this.onRequest(method, params)
-    await peer.request('initialize', { clientInfo: { name: 'ds-bot', title: null, version: '1' } }, { timeout: 30_000 })
-    peer.notify('initialized', {})
-    return peer
+    try {
+      await peer.request('initialize', { clientInfo: { name: 'ds-bot', title: null, version: '1' } }, { timeout: 30_000 })
+      if (this.peer !== peer) throw new Error(`${this.engine.name} closed during initialization`)
+      peer.notify('initialized', {})
+      return peer
+    } catch (error) {
+      if (this.child === child) await this.close()
+      throw error
+    }
   }
 
   onNotice(method, params) {
@@ -200,8 +214,11 @@ export class CodexEngine {
 
   async close() {
     const child = this.child
+    const peer = this.peer
     this.child = undefined
     this.peer = undefined
+    this.starting = undefined
+    peer?.close(new Error(`${this.engine.name} closed`))
     if (child !== undefined) {
       child.kill('SIGTERM')
       setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, 5_000).unref?.()

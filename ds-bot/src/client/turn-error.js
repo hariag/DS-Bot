@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { createElement as h, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { currentPart, isHiddenTurn } from './text.js'
 import { CheckIcon, CopyIcon } from './icons.js'
 import { ModelKeyCard, manageModels } from './model-menu.js'
@@ -142,6 +142,7 @@ function TechnicalDetails({ facts }) {
 export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const roster = useRoster(value => value)
   const data = node?.data ?? {}
+  useLayoutEffect(() => { actions.noteTurnVisible?.(sessionId, data.turn) }, [actions, sessionId, data.turn])
   const bot = roster.byId?.[sessionId]
   // A later turn, or a later part of the Bot's chat, has moved past this failure.
   const later = useTurnClock(state => Object.keys(state[sessionId] ?? {}).some(turn => Number(turn) > data.turn))

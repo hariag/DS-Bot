@@ -10,6 +10,9 @@
 // the client. `--record <file>` appends the params of thread/start and thread/resume,
 // so a test can check the shape the client sent without a model call.
 import { appendFileSync } from 'node:fs'
+const controlledInitialize = process.argv.includes('--controlled-initialize')
+const stallInitialize = process.argv.includes('--stall-initialize')
+let initializeId
 const exitAfterTurn = process.argv.includes('--exit-after-turn')
 const textOnly = process.argv.includes('--text-only')
 const recordAt = process.argv.indexOf('--record')
@@ -90,7 +93,13 @@ process.stdin.on('data', (chunk) => {
     }
     const { id, method, params = {} } = message
     switch (method) {
-      case 'initialize': reply(id, { userAgent: 'fake-codex' }); break
+      case 'initialize':
+        if (controlledInitialize) { initializeId = id; send({ jsonrpc: '2.0', method: 'fixture/initialize-received' }) }
+        else if (!stallInitialize) reply(id, { userAgent: 'fake-codex' })
+        break
+      case 'fixture/release-initialize':
+        if (initializeId !== undefined) { reply(initializeId, { userAgent: 'fake-codex' }); initializeId = undefined }
+        break
       case 'initialized': break
       case 'model/list':
         reply(id, {

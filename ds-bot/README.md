@@ -68,6 +68,8 @@ Options go in the profile's `cordis.patch.yml`, under the `bot` entry. All of th
   config:
     workspace: /path/to/workspace   # where the Bots work; default <home>/workspace
     home: /path/to/bot-data         # where the team is saved; default $DSH_HOME/bot
+    # operatorInstructions: "..."    # optional deployment rules supplied to every Bot
+    # operatorInstructionsFile: /path/to/private-instructions  # alternative to the string above
     checkRatio: 0.8                 # share of the model's usable window where the steward decides
     browser: true                   # force the Bot browser on or off; default on in Desktop and the desktop app only
     memory: true                    # false turns memory off: no memory tools, section or panel
@@ -77,6 +79,8 @@ Options go in the profile's `cordis.patch.yml`, under the `bot` entry. All of th
     updateRegistry: https://registry.example/   # ask only this npm registry for updates
     github: false                   # hide the GitHub connector; default shown in Connectors
 ```
+
+`operatorInstructions` adds deployment-specific instructions to each Bot's identity, including its group sessions. On Linux, `operatorInstructionsFile` is an alternative that loads a private, nonempty file owned by the process user, with no group or other permissions, at startup. It rejects symlinks and untrusted parent directories and fails startup if it cannot read a consistent file securely. Do not set both options. Keep private files outside version control and restart the runtime after changing them. The instructions are sent to the selected model or local agent and may be retained with its session; never put passwords, API keys, or other credentials in them. These are instructions to the model, not technical restrictions on what a process can do.
 
 **Updates**: when a window opens, DS Bot asks where it was installed from for a newer release: the npm registry (the one the DSH plugin manager installs from, then its fallbacks), or the latest GitHub release for a `github:…#vX.Y.Z` install. A newer version shows a cloud button at the top right of the sidebar; **Update** reinstalls DS Bot through the DSH plugin manager, and the new version runs from the next DSH start. A linked or local checkout is never offered an update. Settings → About DS Bot shows the same state, with **Check for updates** to ask again at once.
 

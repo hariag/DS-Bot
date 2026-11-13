@@ -271,6 +271,9 @@ export function AssistantCell({ node, groupPart, sessionId, openFile, fileMentio
   const members = steps.length ? steps : [data]
   const shown = thinkingShown(roster.prefs)
   const reasoning = groupPart === 'response' || !shown ? '' : turnReasoning(steps, data)
+  useLayoutEffect(() => {
+    if (!hidden && (texts.length > 0 || reasoning !== '')) actions.noteTurnVisible?.(sessionId, data.turn)
+  }, [actions, sessionId, data.turn, hidden, texts.length, reasoning])
   // A live step of the same Turn keeps the row ticking even when it sits on an
   // earlier step's cell.
   const thinking = groupPart === 'response' || !shown ? undefined : thinkingStep(members)
@@ -655,6 +658,10 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   const deferred = source.kind === 'bot' && source.deferred === true
   const relayed = isRelayContext(data)
   const turn = node.location?.turn?.turn ?? data.turn
+  const internalReview = source.kind === 'bot' && source.role === 'goal' && typeof source.reviewId === 'string' && roster.roomsById?.[sessionId] !== undefined
+  useLayoutEffect(() => {
+    if (internalReview) actions.noteTurnReview?.(sessionId, turn)
+  }, [actions, sessionId, turn, internalReview])
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
     if (relayed) actions.noteTurnPeer(sessionId, turn, source.senderSessionId)
@@ -673,11 +680,22 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   const visit = useUi(state => state.visits?.[sessionId])
   const hiddenTurns = roster.exchangeTurns[sessionId]
   const unreadOpening = useTurnClock((state) => {
-    const first = openingTurn(state[sessionId], order, hiddenTurns)
-    return first?.turn === turn && unseenSince(visit, first.start) ? clockLabel(first.start) : ''
+    const turns = state[sessionId] ?? {}
+    const first = openingTurn(turns, order, hiddenTurns)
+    if (first?.turn !== turn || !unseenSince(visit, first.start)) return ''
+    // A mounted silent review tail can own this first visible boundary.
+    // Do not draw the same timestamp/unread divider again on the trigger.
+    const bridged = Object.entries(turns).some(([key, entry]) => {
+      const candidate = Number(key)
+      return candidate < turn && entry.tails > 0 && silentReviewTurn(entry)
+        && nextTurnNumber(turns, candidate) === turn
+        && separatorPlacement(turns, candidate, entry.end ?? entry.first) !== undefined
+    })
+    return bridged ? '' : clockLabel(first.start)
   })
+  const visibleReview = useTurnClock(state => state[sessionId]?.[turn]?.visible === true)
   const body = triggerBody()
-  return unreadOpening
+  return unreadOpening && (!internalReview || visibleReview)
     ? h(Fragment, null, h('div', { className: 'bt-open-new' }, h(NewDivider), h('div', { className: 'bt-time-sep', role: 'separator' }, unreadOpening)), body)
     : (body ?? h(CellEmpty))
 
@@ -768,7 +786,7 @@ export function TurnProcessCell({ node, sessionId, turnProcess, useRoster, useUi
   const visit = useUi(state => state.visits?.[sessionId])
   const fresh = useTurnClock((state) => {
     const own = state[sessionId]?.[turn]
-    return !hidden && typeof visit?.seen === 'number' && own?.first !== undefined && own.first <= visit.seen
+    return !hidden && !(own?.internalReview === true && own?.visible !== true) && typeof visit?.seen === 'number' && own?.first !== undefined && own.first <= visit.seen
       && own.end !== undefined && own.end > visit.seen && own.end <= visit.entered
   })
   return fresh ? h(NewDivider) : h(CellEmpty)
@@ -780,13 +798,39 @@ export { CellEmpty }
 
 // A pause longer than this splits the transcript with a time separator.
 const SEPARATOR_GAP_MS = 30 * 60 * 1000
-function nextTurnStart(turns, turn) {
+function silentReviewTurn(entry) { return entry?.internalReview === true && entry?.visible !== true }
+function nextTurnNumber(turns, turn) {
   let next
   for (const key in turns) {
     const candidate = Number(key)
-    if (candidate > turn && turns[key].first !== undefined && (next === undefined || candidate < next)) next = candidate
+    if (candidate > turn && turns[key].first !== undefined && !silentReviewTurn(turns[key]) && (next === undefined || candidate < next)) next = candidate
   }
-  return next === undefined ? undefined : turns[next].first
+  return next
+}
+function nextTurnStart(turns, turn) { const next = nextTurnNumber(turns, turn); return next === undefined ? undefined : turns[next].first }
+// A visible predecessor can be virtualized away while its clock remains cached.
+// Use exactly one mounted silent tail as a bridge to the next visible turn.
+function separatorPlacement(turns, turn, time) {
+  const next = nextTurnNumber(turns, turn)
+  if (next === undefined) return undefined
+  const tracked = Object.values(turns).some(entry => entry?.tails !== undefined)
+  if (!tracked) return silentReviewTurn(turns[turn]) ? undefined : { start: turns[next].first, base: time }
+  let previous
+  for (const key in turns) {
+    const candidate = Number(key), entry = turns[key]
+    if (candidate < next && entry.first !== undefined && !silentReviewTurn(entry) && (previous === undefined || candidate > previous)) previous = candidate
+  }
+  let owner = previous !== undefined && turns[previous]?.tails > 0 ? previous : undefined
+  if (owner === undefined) {
+    for (const key in turns) {
+      const candidate = Number(key), entry = turns[key]
+      if (candidate < next && (previous === undefined || candidate > previous) && entry.tails > 0 && silentReviewTurn(entry) && (owner === undefined || candidate > owner)) owner = candidate
+    }
+  }
+  if (owner !== turn) return undefined
+  // If the earlier visible turn is not in the loaded window, a silent
+  // review's end is not evidence that the user saw anything at that time.
+  return { start: turns[next].first, base: previous === turn ? time : turns[previous]?.end }
 }
 // The first turn the transcript shows: the earliest rendered start, with only hidden
 // exchange turns before it. `firstTurns` lists the outline's first turns.
@@ -794,10 +838,10 @@ export function openingTurn(turns, firstTurns, hiddenTurns) {
   if (!turns || !firstTurns) return null
   const start = nextTurnStart(turns, -Infinity)
   if (start === undefined) return null
-  const turn = Number(Object.keys(turns).filter(key => turns[key].first === start)[0])
+  const turn = Number(Object.keys(turns).find(key => turns[key].first === start && !(turns[key].internalReview === true && turns[key].visible !== true)))
   const listed = firstTurns.split(',').map(Number)
   const earlier = listed.filter(entry => entry < turn)
-  return listed.includes(turn) && earlier.every(entry => hiddenTurns?.includes(entry)) ? { turn, start } : null
+  return listed.includes(turn) && earlier.every(entry => hiddenTurns?.includes(entry) || (turns[entry]?.internalReview === true && turns[entry]?.visible !== true)) ? { turn, start } : null
 }
 // Began after the user last left the conversation and before this visit opened it.
 export const unseenSince = (visit, time) => typeof visit?.seen === 'number' && time > visit.seen && time <= visit.entered
@@ -809,19 +853,23 @@ export function TurnTailCell({ turn: location, sessionId, useTurnClock, useUi, a
   const turn = location.turn
   // DSH builds the tail from the turn's end, so it is there.
   const time = location.end.time
+  useLayoutEffect(() => {
+    actions.noteTurnTail?.(sessionId, turn, 1)
+    return () => actions.noteTurnTail?.(sessionId, turn, -1)
+  }, [actions, sessionId, turn])
   useEffect(() => { actions.noteTurnTime(sessionId, turn, 'end', time) }, [sessionId, turn, time])
-  const label = useTurnClock((state) => {
-    const start = nextTurnStart(state[sessionId] ?? {}, turn)
-    return start !== undefined && start - time >= SEPARATOR_GAP_MS ? clockLabel(start) : ''
+  // useTurnClock is backed by useSyncExternalStore: selectors must return a
+  // stable snapshot, not a newly allocated placement object on every read.
+  const placementKey = useTurnClock(state => {
+    const placement = separatorPlacement(state[sessionId] ?? {}, turn, time)
+    return placement === undefined ? '' : `${placement.start}:${Number.isFinite(placement.base) ? placement.base : '?'}`
   })
+  const placement = placementKey === '' ? undefined : (() => { const [start, base] = placementKey.split(':'); return { start: Number(start), base: base === '?' ? undefined : Number(base) } })()
+  const label = placement !== undefined && (!Number.isFinite(placement.base) || placement.start - placement.base >= SEPARATOR_GAP_MS) ? clockLabel(placement.start) : ''
   // The unread divider sits before the first turn that began after the last visit;
   // turns that begin while the conversation is open were watched live.
   const visit = useUi(state => state.visits?.[sessionId])
-  const fresh = useTurnClock((state) => {
-    if (typeof visit?.seen !== 'number' || time > visit.seen) return false
-    const start = nextTurnStart(state[sessionId] ?? {}, turn)
-    return start !== undefined && start > visit.seen && start <= visit.entered
-  })
+  const fresh = typeof visit?.seen === 'number' && placement !== undefined && (!Number.isFinite(placement.base) || placement.base <= visit.seen) && placement.start > visit.seen && placement.start <= visit.entered
   if (!label && !fresh) return null
   return h(Fragment, null,
     label ? h('div', { className: 'bt-time-sep', role: 'separator' }, label) : null,
@@ -974,7 +1022,7 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
 // Rows a later call closed do not change: each is read from the group's book once per page.
 const settledRows = new Map()
 
-function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi, useWork }) {
+function GroupReplies({ sessionId, turn, callId, done, content, roster, actions, useUi, useWork }) {
   const [live, setLive] = useState({ replies: [], speaking: [] })
   useEffect(() => {
     if (done) return undefined
@@ -1039,6 +1087,9 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     const tool = work.bots?.[id]?.tool
     return tool ? [tool, workPhrase(work.bots[id])] : []
   }))) ?? '[]')
+  useLayoutEffect(() => {
+    if (replies.length > 0 || broken) actions.noteTurnVisible?.(sessionId, turn)
+  }, [actions, sessionId, turn, replies.length, broken])
   if (replies.length === 0 && pending.length === 0) {
     // A pruned tool result left nothing to draw; keep a marker row instead of an
     // empty turn, which reads as a blank gap on a narrow first paint.
@@ -1106,7 +1157,7 @@ function useShownCards(actions, sessionId, callIds) {
   }, [sessionId, key])
 }
 
-function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot, heldCards, hooks }) {
+function renderCall(call, { sessionId, turn, roster, actions, useUi, useWork, findBot, heldCards, hooks }) {
   const tool = toolName(call)
   const done = call.kind === 'tool-result'
   const { text: arg, value: argValue } = toolArgs(call)
@@ -1132,7 +1183,7 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot,
       return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : h(CellEmpty)
     }
     case 'group_relay':
-      return h(GroupReplies, { sessionId, callId: call.callId, done, content: call.content, roster, actions, useUi, useWork })
+      return h(GroupReplies, { sessionId, turn, callId: call.callId, done, content: call.content, roster, actions, useUi, useWork })
     case 'create_group':
     case 'update_group':
     case 'delete_group':
@@ -1218,6 +1269,10 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCa
     ? callTree(root).filter(call => (toolName(call) === 'ask_user' || toolName(call) === 'show_view') && call.callId && closed?.[call.callId] !== undefined)
     : callTree(root)
   const drawn = calls.filter(call => DRAWN.has(toolName(call)) || isComputerCall(toolName(call)))
+  const hasOtherVisibleTool = drawn.some(call => toolName(call) !== 'group_relay')
+  useLayoutEffect(() => {
+    if (hasOtherVisibleTool) actions.noteTurnVisible?.(sessionId, turn)
+  }, [actions, sessionId, turn, hasOtherVisibleTool])
   // The newest call still running names the work, so a program reads as the tool it is in.
   const running = root.kind === 'tool-result' ? undefined : calls.findLast(call => call.kind !== 'tool-result')
   const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null
@@ -1225,6 +1280,6 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, useHeldCa
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note)
   useShownCards(actions, sessionId, drawn.filter(call => (CARDS.has(toolName(call)) || isComputerCall(toolName(call))) && call.callId).map(call => call.callId))
   if (drawn.length === 0) return h(CellEmpty)
-  const env = { sessionId, roster, actions, useUi, useWork, findBot, heldCards, hooks: { useBrowserHolds, useBrowserTabs, useBrowserPages, useComputer } }
+  const env = { sessionId, turn, roster, actions, useUi, useWork, findBot, heldCards, hooks: { useBrowserHolds, useBrowserTabs, useBrowserPages, useComputer } }
   return h(Fragment, null, drawn.map((call, index) => h(Fragment, { key: call.callId ?? index }, renderCall(call, env))))
 }
