@@ -12144,6 +12144,36 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Review sources are unavailable.": "复核来源暂不可用。",
+  "Review an existing work": "复核已有工作",
+  "Review notes do not send messages or close work. Sources are unverified; inspect the original records.": "复核笔记不会发送消息或关闭工作。来源尚未核实，请查阅原始记录。",
+  "Only works between existing Bots are currently supported.": "目前仅支持现有 Bot 之间的工作。",
+  "Find works awaiting inspection": "查找待核工作",
+  "The recovery list may be incomplete.": "恢复记录列表可能不完整。",
+  "Original work ID": "原工作 ID",
+  "Check": "查看",
+  "Recovery snapshot": "恢复记录快照",
+  "Not known": "未知",
+  "Queue": "队列",
+  "Held records": "待核记录",
+  "Observed in snapshot": "快照中已发现",
+  "Not observed in snapshot": "快照中未发现",
+  "Needs manual review": "待人工复核",
+  "Evidence still needed": "待补充证据",
+  "Work identity unverified": "工作身份待核实",
+  "Current recovery sources are unavailable.": "当前恢复来源暂不可用。",
+  "Create review": "创建复核记录",
+  "Status": "状态",
+  "The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.": "原工作不可用、已变更或身份尚未核实。此记录为只读，不能据此认定工作结果。",
+  "Source snapshot time (UTC)": "来源快照时间（UTC）",
+  "Original sessions": "原会话",
+  "Execution and external effects remain unknown.": "执行情况和外部影响仍不明确。",
+  "Review note": "复核笔记",
+  "Evidence references, one per line": "证据位置，每行一条",
+  "Unfinished items, one per line": "未完成事项，每行一条",
+  "Save review note": "保存复核笔记",
+  "Evidence references": "证据位置",
+  "Unfinished items": "未完成事项",
   "Snapshot time (UTC)": "快照时间（UTC）",
   "No interrupted turns in this snapshot.": "此快照中没有待核对的中断回合。",
   "Interrupted turns awaiting review": "待核对的中断回合",
@@ -13947,6 +13977,38 @@ var HOST_ZH = {
 };
 Object.assign(ZH, HOST_ZH);
 var ZH_TW = convertDict(ZH);
+Object.assign(ZH_TW, {
+  "Review sources are unavailable.": "復核來源暫時無法使用。",
+  "Review an existing work": "復核既有工作",
+  "Review notes do not send messages or close work. Sources are unverified; inspect the original records.": "復核筆記不會傳送訊息或關閉工作。來源尚未核實，請查閱原始紀錄。",
+  "Only works between existing Bots are currently supported.": "目前僅支援現有 Bot 之間的工作。",
+  "Find works awaiting inspection": "尋找待核工作",
+  "The recovery list may be incomplete.": "恢復紀錄清單可能不完整。",
+  "Original work ID": "原工作 ID",
+  "Check": "查看",
+  "Recovery snapshot": "恢復紀錄快照",
+  "Not known": "未知",
+  "Queue": "佇列",
+  "Held records": "待核紀錄",
+  "Observed in snapshot": "快照中已發現",
+  "Not observed in snapshot": "快照中未發現",
+  "Needs manual review": "待人工復核",
+  "Evidence still needed": "待補充證據",
+  "Work identity unverified": "工作身分待核實",
+  "Current recovery sources are unavailable.": "目前恢復來源暫時無法使用。",
+  "Create review": "建立復核紀錄",
+  "Status": "狀態",
+  "The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.": "原工作無法使用、已變更或身分尚未核實。此紀錄為唯讀，不能據此認定工作結果。",
+  "Source snapshot time (UTC)": "來源快照時間（UTC）",
+  "Original sessions": "原工作階段",
+  "Execution and external effects remain unknown.": "執行情況和外部影響仍不明確。",
+  "Review note": "復核筆記",
+  "Evidence references, one per line": "證據位置，每行一筆",
+  "Unfinished items, one per line": "未完成事項，每行一筆",
+  "Save review note": "儲存復核筆記",
+  "Evidence references": "證據位置",
+  "Unfinished items": "未完成事項"
+});
 var HOST_ERRORS_ZH_TW = convertHostErrors(HOST_ERRORS);
 var LANGUAGES = [
   { id: "zh-TW", label: "繁體中文", fallback: "zh" },
@@ -13956,14 +14018,46 @@ var LANGUAGES = [
   { id: "fr", label: "Français", fallback: "en" },
   { id: "de", label: "Deutsch", fallback: "en" }
 ];
+var LEGACY_REVIEW_EN_FALLBACK = Object.fromEntries([
+  "Observed in snapshot",
+  "Not observed in snapshot",
+  "Not known",
+  "Needs manual review",
+  "Evidence still needed",
+  "Work identity unverified",
+  "Review sources are unavailable.",
+  "Review an existing work",
+  "Review notes do not send messages or close work. Sources are unverified; inspect the original records.",
+  "Only works between existing Bots are currently supported.",
+  "Find works awaiting inspection",
+  "The recovery list may be incomplete.",
+  "Original work ID",
+  "Check",
+  "Recovery snapshot",
+  "Queue",
+  "Held records",
+  "Current recovery sources are unavailable.",
+  "Create review",
+  "Status",
+  "The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.",
+  "Source snapshot time (UTC)",
+  "Original sessions",
+  "Execution and external effects remain unknown.",
+  "Review note",
+  "Evidence references, one per line",
+  "Unfinished items, one per line",
+  "Save review note",
+  "Evidence references",
+  "Unfinished items"
+].map((key) => [key, key]));
 var DICTIONARY = {
   zh: ZH,
   "zh-TW": ZH_TW,
-  ja: JA,
-  ko: KO,
-  es: ES,
-  fr: FR,
-  de: DE
+  ja: { ...LEGACY_REVIEW_EN_FALLBACK, ...JA },
+  ko: { ...LEGACY_REVIEW_EN_FALLBACK, ...KO },
+  es: { ...LEGACY_REVIEW_EN_FALLBACK, ...ES },
+  fr: { ...LEGACY_REVIEW_EN_FALLBACK, ...FR },
+  de: { ...LEGACY_REVIEW_EN_FALLBACK, ...DE }
 };
 var HOST_ERROR_TABLE = {
   zh: HOST_ERRORS,
@@ -28010,6 +28104,8 @@ function HeldTurns({ recovery }) {
     ))
   );
 }
+var recoveryObservationText = (value) => value === "observed-present" ? t("Observed in snapshot") : value === "observed-absent" ? t("Not observed in snapshot") : t("Not known");
+var legacyReviewStateText = (value) => value === "needs-review" ? t("Needs manual review") : value === "evidence-needed" ? t("Evidence still needed") : value === "identity-unverified" ? t("Work identity unverified") : t("Not known");
 function LegacyWorkReview({ scope, request }) {
   const [workId, setWorkId] = (0, import_react34.useState)(""), [record, setRecord] = (0, import_react34.useState)(null);
   const [summary, setSummary] = (0, import_react34.useState)(""), [evidence, setEvidence] = (0, import_react34.useState)(""), [unfinished, setUnfinished] = (0, import_react34.useState)("");
@@ -28074,15 +28170,15 @@ function LegacyWorkReview({ scope, request }) {
     } })),
     " ",
     (0, import_react34.createElement)("button", { type: "button", disabled: busy || !workId, onClick: () => void run2("legacy-review-get", {}) }, t("Check")),
-    record?.liveRecovery ? (0, import_react34.createElement)("p", { role: "status" }, record.liveRecovery.available ? `${t("Recovery snapshot")} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt >= 0 && record.liveRecovery.sampledAt <= 864e13 ? new Date(record.liveRecovery.sampledAt).toISOString() : t("Unknown")}): ${record.liveRecovery.observed.queue} / ${record.liveRecovery.observed.held} · ${(record.liveRecovery.ids ?? []).join(", ")}` : t("Current recovery sources are unavailable.")) : null,
+    record?.liveRecovery ? (0, import_react34.createElement)("p", { role: "status" }, record.liveRecovery.available ? `${t("Recovery snapshot")} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt >= 0 && record.liveRecovery.sampledAt <= 864e13 ? new Date(record.liveRecovery.sampledAt).toISOString() : t("Not known")}): ${t("Queue")}: ${recoveryObservationText(record.liveRecovery.observed.queue)} · ${t("Held records")}: ${recoveryObservationText(record.liveRecovery.observed.held)} · ${(record.liveRecovery.ids ?? []).join(", ")}` : t("Current recovery sources are unavailable.")) : null,
     record?.state === "not-created" ? (0, import_react34.createElement)("button", { type: "button", disabled: busy, onClick: () => void run2("legacy-review-create", {}) }, t("Create review")) : null,
     record && record.state !== "not-created" ? (0, import_react34.createElement)(
       "div",
       null,
-      (0, import_react34.createElement)(Fact, { label: t("Status"), value: record.state }),
+      (0, import_react34.createElement)(Fact, { label: t("Status"), value: legacyReviewStateText(record.state) }),
       (0, import_react34.createElement)(Fact, { label: t("Owner"), value: record.owner }),
       record.archived ? (0, import_react34.createElement)("p", { role: "status" }, t("The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.")) : null,
-      (0, import_react34.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt >= 0 && record.snapshot.sampledAt <= 864e13 ? new Date(record.snapshot.sampledAt).toISOString() : t("Unknown") }),
+      (0, import_react34.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt >= 0 && record.snapshot.sampledAt <= 864e13 ? new Date(record.snapshot.sampledAt).toISOString() : t("Not known") }),
       (0, import_react34.createElement)(Fact, { label: t("Original sessions"), value: (record.snapshot?.sources ?? []).map((s) => s.sessionId).join(", ") }),
       (0, import_react34.createElement)("p", null, t("Execution and external effects remain unknown.")),
       !record.archived && ["needs-review", "evidence-needed"].includes(record.state) ? (0, import_react34.createElement)(
