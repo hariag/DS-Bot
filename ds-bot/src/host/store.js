@@ -38,6 +38,7 @@ export function install(rt) {
   // Bumped each time the in-memory state is replaced from the file, so a queued
   // save cannot write a snapshot taken of the state it replaced.
   let lockEpoch = 0
+  let homeLockGeneration = 0n
   const homeDrains = new Set()
   const requireHomeLock = () => {
     if (lockBroken || holder !== undefined || !lock.owns()) {
@@ -56,6 +57,8 @@ export function install(rt) {
   const lock = homeLock(join(home, 'state.lock'))
   const claimLock = () => {
     if (lockBroken) return
+    // A reclaim is a different lease, even when the state file appears unchanged.
+    homeLockGeneration += 1n
     try {
       mkdirSync(home, { recursive: true })
       holder = lock.claim()
@@ -594,6 +597,7 @@ export function install(rt) {
 
   Object.assign(rt, {
     state, load, save, refresh, readOnly, own, onSaved, closeCard, requireHomeLock, onHomeDrain,
+    homeLockVersion: () => { requireHomeLock(); return `${homeLockGeneration}:${lockEpoch}` },
     botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession,
     chatOwners, groupOwners, roomOwners, pastOwners,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
