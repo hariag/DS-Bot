@@ -92,6 +92,11 @@ function HeldTurns({ recovery }) {
 }
 
 // Owner-only manual notes on an existing work. This never dispatches or closes it.
+const recoveryObservationText = value => value === 'observed-present' ? t('Observed in snapshot')
+  : value === 'observed-absent' ? t('Not observed in snapshot') : t('Not known')
+const legacyReviewStateText = value => value === 'needs-review' ? t('Needs manual review')
+  : value === 'evidence-needed' ? t('Evidence still needed')
+    : value === 'identity-unverified' ? t('Work identity unverified') : t('Not known')
 function LegacyWorkReview({ scope, request }) {
   const [workId, setWorkId] = useState(''), [record, setRecord] = useState(null)
   const [summary, setSummary] = useState(''), [evidence, setEvidence] = useState(''), [unfinished, setUnfinished] = useState('')
@@ -120,14 +125,14 @@ function LegacyWorkReview({ scope, request }) {
     h('label', null, t('Original work ID'), ' ', h('input', { value:workId, disabled:busy, onChange:event => { setWorkId(event.target.value); setRecord(null) } })), ' ',
     h('button', { type:'button', disabled:busy||!workId, onClick:() => void run('legacy-review-get', {}) }, t('Check')),
     record?.liveRecovery ? h('p', {role:'status'}, record.liveRecovery.available
-      ? `${t('Recovery snapshot')} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt>=0 && record.liveRecovery.sampledAt<=8_640_000_000_000_000 ? new Date(record.liveRecovery.sampledAt).toISOString() : t('Unknown')}): ${record.liveRecovery.observed.queue} / ${record.liveRecovery.observed.held} · ${(record.liveRecovery.ids ?? []).join(', ')}`
+      ? `${t('Recovery snapshot')} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt>=0 && record.liveRecovery.sampledAt<=8_640_000_000_000_000 ? new Date(record.liveRecovery.sampledAt).toISOString() : t('Not known')}): ${t('Queue')}: ${recoveryObservationText(record.liveRecovery.observed.queue)} · ${t('Held records')}: ${recoveryObservationText(record.liveRecovery.observed.held)} · ${(record.liveRecovery.ids ?? []).join(', ')}`
       : t('Current recovery sources are unavailable.')) : null,
     record?.state === 'not-created' ? h('button', { type:'button', disabled:busy, onClick:() => void run('legacy-review-create', {}) }, t('Create review')) : null,
     record && record.state !== 'not-created' ? h('div', null,
-      h(Fact, { label:t('Status'), value:record.state }),
+      h(Fact, { label:t('Status'), value:legacyReviewStateText(record.state) }),
       h(Fact, { label:t('Owner'), value:record.owner }),
       record.archived ? h('p', {role:'status'}, t('The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.')) : null,
-      h(Fact, { label:t('Source snapshot time (UTC)'), value:Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt>=0 && record.snapshot.sampledAt<=8_640_000_000_000_000 ? new Date(record.snapshot.sampledAt).toISOString() : t('Unknown') }),
+      h(Fact, { label:t('Source snapshot time (UTC)'), value:Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt>=0 && record.snapshot.sampledAt<=8_640_000_000_000_000 ? new Date(record.snapshot.sampledAt).toISOString() : t('Not known') }),
       h(Fact, { label:t('Original sessions'), value:(record.snapshot?.sources ?? []).map(s=>s.sessionId).join(', ') }),
       h('p', null, t('Execution and external effects remain unknown.')),
       !record.archived && ['needs-review','evidence-needed'].includes(record.state) ? h('div', null,
