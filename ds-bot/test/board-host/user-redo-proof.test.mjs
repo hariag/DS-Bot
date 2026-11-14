@@ -15,12 +15,14 @@ const original = () => [
 
 function fixture(events = original(), timeoutMs = 15_000) {
   let current = true, flush = async () => {}, disk = structuredClone(events)
-  const session = { id:'source', seq:events.length, eventAt:index => events[index] }
-  const writer = { flushLiveSession:async () => flush(), open:async () => ({ read:async () => ({ events:disk }), close:async () => {} }) }
+  const session = { id:'source', seq:events.length, header:{ id:'source', version:4 }, inheritedEventCount:0, eventAt:index => events[index] }
+  const reader = { id:'source', header:{ ...session.header, delegationDepth:0 }, inheritedEventCount:0,
+    read:async () => ({ events:disk }), close:async () => {} }
+  const writer = { flushLiveSession:async () => flush(), open:async () => reader }
   const record = { botId:'bot', turn:5, trigger:{ role:'request', exchangeId:'ex', senderSessionId:'sender' } }
   const rt = { recoveryHeldOriginal:async () => ({ sessionId:'source', record, isCurrent:() => current }),
     ctx:{ sessions:{ get:() => session }, get:() => writer } }
-  return { proof:createUserRedoOriginalProof(rt, { timeoutMs }), writer, session, events, record, setCurrent:value => { current = value },
+  return { proof:createUserRedoOriginalProof(rt, { timeoutMs }), rt, reader, writer, session, events, record, setCurrent:value => { current = value },
     setFlush:value => { flush = value }, setDisk:value => { disk = value } }
 }
 
@@ -32,6 +34,25 @@ test('matches one stopped exchange through a fixed target-writer prefix', async 
   assert.equal(proof.isCurrent(), true)
   f.setCurrent(false)
   assert.equal(proof.isCurrent(), false)
+})
+
+test('rejects provider replacement and a mismatched stored handle', async () => {
+  const replaced = fixture()
+  replaced.setFlush(async () => { replaced.rt.ctx.get = () => ({ ...replaced.writer }) })
+  assert.equal(await replaced.proof(scope, recoveryId), undefined)
+  for (const field of ['id', 'header', 'inheritedEventCount']) {
+    const f = fixture()
+    if (field === 'id') f.reader.id = 'other'
+    if (field === 'header') f.reader.header = { ...f.reader.header, delegationDepth:1 }
+    if (field === 'inheritedEventCount') f.reader.inheritedEventCount = 1
+    assert.equal(await f.proof(scope, recoveryId), undefined, field)
+  }
+})
+
+test('rejects an entered message that differs from the originally enqueued message', async () => {
+  const events = original()
+  events[3] = entry(3, 'user/message', { ...message, content:[{ type:'text', text:'changed task' }] })
+  assert.equal(await fixture(events).proof(scope, recoveryId), undefined)
 })
 
 test('missing barrier, a changing Session, or a different disk prefix are unavailable', async () => {
@@ -76,10 +97,10 @@ test('a missing or different held turn cannot reuse an earlier exchange', async 
   assert.equal(await b.proof(scope, recoveryId), undefined)
 })
 
-test('old holds require a unique persisted start time containing the same input', async () => {
+test('old holds without a recorded turn remain unavailable even with a matching start time', async () => {
   const events = original(); events[1].time = 123456
   const a = fixture(events); delete a.record.turn; a.record.since = 123456
-  assert.equal((await a.proof(scope, recoveryId))?.turn, 5)
+  assert.equal(await a.proof(scope, recoveryId), undefined)
   const b = fixture(events); delete b.record.turn; b.record.since = 123457
   assert.equal(await b.proof(scope, recoveryId), undefined)
   const duplicate = structuredClone(events)
