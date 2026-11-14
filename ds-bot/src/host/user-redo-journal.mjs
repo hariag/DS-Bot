@@ -4,8 +4,9 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, isAbsolute } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { ISOLATED_REDO_WARNING } from '../shared/user-redo-warning.js'
 
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
@@ -45,6 +46,25 @@ export function userRedoConfirmation(scope, recoveryId, proof) {
   validateProof(proof, recoveryId)
   return digest(['ds-bot:user-redo-confirmation-v1', recoveryId, scope.kind, scope.id,
     proof.botId, proof.sessionId, proof.turn, proof.messageSeq, proof.message.id, digest(proof.message)])
+}
+
+// An execution confirmation is deliberately a different domain from the old
+// preview-only digest. The version names text shown to the user: a new action,
+// unknown original outcome, potentially repeated effects, and no auto-closure.
+export { ISOLATED_REDO_WARNING }
+export function isolatedRedoTargetValid(target) {
+  return !!target && typeof target === 'object' && !Array.isArray(target)
+    && typeof target.cwd === 'string' && target.cwd.length <= 4096 && isAbsolute(target.cwd) && !target.cwd.includes('\0')
+    && id(target.provider) && id(target.model)
+    && Object.keys(target).every(key => ['cwd', 'provider', 'model'].includes(key))
+}
+export function isolatedRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target } = {}) {
+  const identity = userRedoIdentity(operationId)
+  if (principal?.kind !== 'user' || principal.id !== 'user' || Object.keys(principal).some(key => !['kind', 'id'].includes(key))
+    || !isolatedRedoTargetValid(target)) throw new Error('isolated redo confirmation unavailable')
+  return digest(['ds-bot:isolated-redo-confirmation-v2', userRedoConfirmation(scope, recoveryId, proof),
+    principal.kind, principal.id, operationId, identity.sessionId, target.cwd, target.provider, target.model,
+    ISOLATED_REDO_WARNING.version, ISOLATED_REDO_WARNING.zh, ISOLATED_REDO_WARNING.en])
 }
 
 export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {

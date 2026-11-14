@@ -9,7 +9,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { install as installRedo } from '../../src/host/user-redo-session.mjs'
-import { userRedoConfirmation, userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
+import { isolatedRedoConfirmation, userRedoConfirmation, userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
 import { createIsolatedRedoSessionFactory } from '../../src/host/user-redo-create.mjs'
 import { createIsolatedRedoCreationFence } from '../../src/host/user-redo-create-fence.mjs'
 import { createIsolatedRedoJournal, createOriginalRedoJournal } from '../../src/host/original-redo-journal.mjs'
@@ -78,11 +78,16 @@ test('real dual-domain journal reserves one fixed isolated Session without admit
   const dependencies = { authorize:(gotScope, gotRecovery, gotPrincipal) => isEqual(gotScope, scope) && gotRecovery === recoveryId && isEqual(gotPrincipal, principal),
     proveOriginal:async () => proof, validateBinding:row => isEqual(row.target, target) && room.members.includes(row.original.botId) }
   const journal = createIsolatedRedoJournal(rt, dependencies)
-  const request = { operationId, recoveryId, scope, principal, target, acknowledged:true, confirmationDigest:userRedoConfirmation(scope, recoveryId, proof) }
+  const confirmationDigest = isolatedRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target })
+  const request = { operationId, recoveryId, scope, principal, target, acknowledged:true, confirmationDigest }
   const prepared = await journal.prepare(request)
   assert.deepEqual(prepared.identity, identity)
-  await assert.rejects(createOriginalRedoJournal(rt, dependencies).prepare({ ...request, target:undefined }), /unknown|already exists/)
-  await assert.rejects(journal.prepare({ ...request, target:{ ...target, cwd:'/different' } }), /conflict/)
+  await assert.rejects(createOriginalRedoJournal(rt, dependencies).prepare({ ...request, target:undefined,
+    confirmationDigest:userRedoConfirmation(scope, recoveryId, proof) }), /unknown|already exists/)
+  await assert.rejects(journal.prepare({ ...request, target:{ ...target, cwd:'/different' } }), /confirmation/)
+  await assert.rejects(journal.prepare({ ...request, target:{ ...target, model:'different' } }), /confirmation/)
+  await assert.rejects(journal.prepare({ ...request, confirmationDigest:userRedoConfirmation(scope, recoveryId, proof) }), /confirmation/)
+  await assert.rejects(journal.prepare({ ...request, operationId:'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454' }), /confirmation/)
   const fence = createIsolatedRedoCreationFence(rt, journal, principal)
   const create = createIsolatedRedoSessionFactory(rt, fence)
   const first = await create({ operationId, ...target })

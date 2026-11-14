@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { userRedoConfirmation, userRedoIdentity } from './user-redo-journal.mjs'
+import { isolatedRedoConfirmation, isolatedRedoTargetValid, userRedoConfirmation, userRedoIdentity } from './user-redo-journal.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -34,10 +34,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
   const namespace = isolated ? 'isolated-redo-v1' : 'original-redo-v1'
   const root = join(rt.home, namespace), marker = join(rt.home, `.${namespace}.identity`), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   const identityFor = isolated ? userRedoIdentity : originalRedoIdentity
-  const targetValid = target => target && typeof target.cwd === 'string' && isAbsolute(target.cwd) && !target.cwd.includes('\0')
-    && typeof target.provider === 'string' && target.provider.length > 0 && target.provider.length <= 256
-    && typeof target.model === 'string' && target.model.length > 0 && target.model.length <= 256
-    && Object.keys(target).every(key => ['cwd', 'provider', 'model'].includes(key))
+  const targetValid = isolatedRedoTargetValid
   let directoryIdentity
   function readMarker(path, sync = false) {
     const fd = openSync(path, constants.O_RDONLY | nofollow)
@@ -231,8 +228,10 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       return read(operationId)
     })
   }
-  function original(proof, recoveryId, scope, confirmationDigest) {
-    if (!digest(recoveryId) || !digest(confirmationDigest) || !scopeValid(scope) || userRedoConfirmation(scope, recoveryId, proof) !== confirmationDigest) throw Error('redo confirmation does not match')
+  function original(proof, recoveryId, scope, confirmationDigest, principal, operationId, target) {
+    const expected = isolated ? isolatedRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target })
+      : userRedoConfirmation(scope, recoveryId, proof)
+    if (!digest(recoveryId) || !digest(confirmationDigest) || !scopeValid(scope) || expected !== confirmationDigest) throw Error('redo confirmation does not match')
     return { botId:proof.botId, sessionId:proof.sessionId, turn:proof.turn, messageSeq:proof.messageSeq,
       messageId:proof.message.id, messageHash:hash(proof.message) }
   }
@@ -257,7 +256,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       const generation = lease(); directory(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true) throw Error('redo unavailable')
       const proof = await proveOriginal(copy(scope), recoveryId)
-      const source = original(proof, recoveryId, scope, confirmationDigest)
+      const source = original(proof, recoveryId, scope, confirmationDigest, principal, operationId, target)
       sameLease(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
       const rows = all(), existing = rows.find(row => row.operationId === operationId), reserved = readRecovery(recoveryId, generation)
@@ -299,7 +298,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       confirmPhase(row, generation)
       if (row.state !== 'prepared') return { state:'unknown', operationId }
       const proof = await proveOriginal(copy(row.scope), row.recoveryId)
-      const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest)
+      const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest, row.principal, row.operationId, row.target)
       checkAccess(row, generation)
       if (!isDeepStrictEqual(source, row.original) || proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo proof changed')
       if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding unavailable')
