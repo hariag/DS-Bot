@@ -54,7 +54,7 @@ const keysOnly = (value, allowed) => {
 }
 
 /** Open a private task journal. The containing directory must be private. */
-export function openTaskStore(path, { authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyReceipt = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
+export function openTaskStore(path, { enableExplicitTasks = false, assertExclusiveUpgrade = () => { throw new Error('exclusive upgrade guard required') }, verifyUserTask = () => false, captureUserAuthority, verifyTurnCompletion = () => false, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyReceipt = () => false, verifyReconciliation = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
   if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o077) || dir.uid !== process.getuid()) throw new Error('database directory must be private')
@@ -73,7 +73,8 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
   db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON')
   if (created) db.exec('PRAGMA journal_mode=DELETE')
   if (db.prepare('PRAGMA journal_mode').get().journal_mode !== 'delete') { db.close(); throw new Error('invalid task journal mode') }
-  if (!created && (db.prepare('PRAGMA application_id').get().application_id !== 0x44534254 || db.prepare('PRAGMA user_version').get().user_version !== 5 || db.prepare('PRAGMA quick_check').get().quick_check !== 'ok')) { db.close(); throw new Error('unknown or damaged task database') }
+  const currentVersion = created ? 5 : db.prepare('PRAGMA user_version').get().user_version
+  if (!created && (db.prepare('PRAGMA application_id').get().application_id !== 0x44534254 || ![5, ...(enableExplicitTasks ? [6] : [])].includes(currentVersion) || db.prepare('PRAGMA quick_check').get().quick_check !== 'ok')) { db.close(); throw new Error('unknown or damaged task database') }
   if (created) {
     db.exec('BEGIN IMMEDIATE')
     for (const item of schema.filter(item => item.type === 'table')) db.exec(item.sql)
@@ -98,6 +99,20 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     const edges = db.prepare('SELECT task_id,dependency_id,grant_id FROM task_dependencies').all()
     if (edges.length !== expected.size || edges.some(edge => !expected.has(JSON.stringify([edge.task_id,edge.dependency_id])) || expected.get(JSON.stringify([edge.task_id,edge.dependency_id])) !== edge.grant_id)) throw new Error('dependency index mismatch')
   } catch { db.close(); throw new Error('unknown or damaged task dependency index') }
+  // Version 6 changes the meaning of newly authorized task bodies. Older hosts
+  // must refuse the journal, rather than silently writing fields they do not
+  // understand. Existing v5 tables, events, attachments and task bodies remain.
+  if (enableExplicitTasks && currentVersion === 5) {
+    // A version bump cannot evict already-open old SQLite connections. The
+    // controlled launcher must hold the real shared lifecycle guard first.
+    let begun = false
+    try {
+      if (!created) assertExclusiveUpgrade()
+      assertWriteLock(); db.exec('BEGIN IMMEDIATE'); begun = true
+      if (!created) assertExclusiveUpgrade()
+      assertWriteLock(); db.exec('PRAGMA user_version=6'); db.exec('COMMIT'); begun = false
+    } catch (error) { try { if (begun) db.exec('ROLLBACK') } finally { db.close() }; throw error }
+  }
   const getRow = db.prepare('SELECT * FROM tasks WHERE id=?')
   const getTask = id => read(getRow.get(id))
   const getAll = () => db.prepare('SELECT body FROM tasks ORDER BY id').all().map(read)
@@ -120,8 +135,9 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
   }
   const addAction = db.prepare("INSERT OR IGNORE INTO actions(id,task_id,revision,kind,actor,state) VALUES(?,?,?,?,?,'pending')")
   const action = (task, kind, actor) => addAction.run(actionId(task.id, task.actionRevision, kind), task.id, task.actionRevision, kind, actor)
-  let poisoned = false, inTransaction = false
+  let poisoned = false, inTransaction = false, inGuardedClaim = false
   const tx = fn => {
+    if (inGuardedClaim) throw new Error('nested store operation during guarded claim')
     if (poisoned) throw new Error('task store requires reconciliation')
     if (inTransaction) return fn()
     assertWriteLock()
@@ -163,16 +179,41 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
   const dependenciesDone = task => task.dependencies.every(id => { const dep = getTask(id); return dep?.status === 'done' && dep.stale !== true && validDependency(task, dep) })
   const ready = task => {
     if (task.status !== 'waiting' || task.blocked || task.stale || !dependenciesDone(task)) return task
-    const next = { ...task, revision: task.revision + 1, actionRevision: task.revision + 1, status: 'ready' }; save(task, next); action(next, 'execute', next.owner); return next
+    // A newly created dependency-waiting task already owns a pending action.
+    // Once that action was explicitly cancelled, a new revision must create a
+    // new one; never create one while any earlier result remains uncertain.
+    if (unresolved(task.id)) return task
+    const existing = task.authority?.kind === 'user-created' && task.actionRevision != null
+      ? db.prepare("SELECT state FROM actions WHERE task_id=? AND revision=? AND kind='execute'").get(task.id,task.actionRevision) : undefined
+    const next = { ...task, revision: task.revision + 1, actionRevision: existing?.state === 'pending' ? task.actionRevision : task.revision + 1, status: 'ready' }; save(task, next); action(next, 'execute', next.owner); return next
   }
   const unresolved = id => db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain') LIMIT 1").get(id)
   const finishAction = (id, kind) => {
     const changes = db.prepare("UPDATE actions SET state='done' WHERE task_id=? AND kind=? AND state='accepted'").run(id, kind).changes
     if (changes !== 1) throw new Error('verified action receipt required')
   }
+  const reviewReady = task => task.authority?.kind !== 'user-created'
+    || !!db.prepare("SELECT 1 FROM actions WHERE task_id=? AND kind='execute' AND state='done'").get(task.id)
   return {
     close() { db.close() },
     limits() { return { tasks:MAX_TASKS, dependencies:100 } },
+    // Cooperation fence for Bot tools; unknown or multiple holders stay
+    // conservative. This cannot police non-cooperating external processes.
+    currentWriteLease() {
+      const rows=db.prepare("SELECT a.id,a.task_id,a.actor,a.state FROM actions a WHERE a.kind='execute' AND a.state IN ('claimed','accepted','uncertain') ORDER BY a.id").all()
+      const writers=rows.filter(row=>getTask(row.task_id)?.execution?.mode!=='read')
+      if(!writers.length)return undefined
+      if(writers.length!==1)return {ambiguous:true}
+      const row=writers[0],task=getTask(row.task_id)
+      return task ? {actionId:row.id,actor:row.actor,state:row.state,task} : {ambiguous:true}
+    },
+    currentReviewLease() {
+      const rows=db.prepare("SELECT a.id,a.task_id,a.actor,a.state FROM actions a WHERE a.kind='review' AND a.state IN ('claimed','accepted','uncertain') ORDER BY a.id").all()
+      if(!rows.length)return undefined
+      if(rows.length!==1)return {ambiguous:true}
+      const row=rows[0],task=getTask(row.task_id)
+      return task ? {actionId:row.id,actor:row.actor,state:row.state,task} : {ambiguous:true}
+    },
     // Internal refresh cursor only; callers must not expose global changes to
     // actors who cannot view every task in this database.
     version() {
@@ -188,6 +229,132 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
       requireId(id, 'action id')
       const row = db.prepare('SELECT i.*,a.state FROM admission_intents i JOIN actions a ON a.id=i.action_id WHERE i.action_id=?').get(id)
       return row ? { actionId:row.action_id, admissionId:row.admission_id, messageId:row.message_id, targetBotId:row.target_bot_id, targetSessionId:row.target_session_id, taskRevision:row.task_revision, actionRevision:row.action_revision, payloadHash:row.payload_hash, payload:JSON.parse(row.payload), state:row.state } : undefined
+    },
+    // This is an inspection request, not permission to execute or retry work.
+    requestGuardedInspection({actionId:id,actor}) {
+      requireId(id,'action id');requireId(actor,'actor')
+      return tx(()=>{
+        const row=db.prepare('SELECT * FROM actions WHERE id=?').get(id),intent=row&&db.prepare('SELECT * FROM admission_intents WHERE action_id=?').get(id),task=row&&getTask(row.task_id)
+        if(!row||!intent||!task||row.state!=='uncertain'||authorize({type:'guarded-inspect',actor,task,action:row})!==true)throw Error('inspection unavailable')
+        const operationId=`v5-readonly:${digest([id,intent.admission_id])}`
+        db.prepare('INSERT OR IGNORE INTO admission_decisions VALUES (?,?,?,?,?,?,?,?,?)').run(operationId,id,intent.admission_id,actor,task.revision,'uncertain','readonly-needed','original action requires evidence',new Date().toISOString())
+        return {operationId,actionId:id,admissionId:intent.admission_id,sessionId:intent.target_session_id,messageId:intent.message_id,payloadHash:intent.payload_hash,state:'readonly-needed'}
+      })
+    },
+    // A positive decision is possible only through a real Host verifier that
+    // proves the exact original action/session. Unknown never changes state.
+    reconcileGuarded({operationId,actor,actionId:id,expectedTaskRevision,admissionId,messageId,sessionId,payloadHash,outcome,proof,evidence}) {
+      requireId(id,'action id');requireId(actor,'actor');requireId(admissionId,'admission id');requireId(messageId,'message id');requireId(sessionId,'session id')
+      if(!Number.isSafeInteger(expectedTaskRevision)||expectedTaskRevision<1||!['not-started','completed'].includes(outcome)||typeof payloadHash!=='string'||!/^[0-9a-f]{64}$/.test(payloadHash)||!proof||typeof proof!=='object')throw Error('invalid reconciliation')
+      const payload={type:'guarded-reconcile',actor,actionId:id,expectedTaskRevision,admissionId,messageId,sessionId,payloadHash,outcome,proof,...(evidence===undefined?{}:{evidence})}
+      return transact(operationId,actor,payload,()=>({type:'guarded-reconcile',actor,action:db.prepare('SELECT * FROM actions WHERE id=?').get(id)}),()=>{
+        const row=db.prepare('SELECT * FROM actions WHERE id=?').get(id),intent=row&&db.prepare('SELECT * FROM admission_intents WHERE action_id=?').get(id),old=row&&getTask(row.task_id)
+        if(!row||!intent||!old||row.state!=='uncertain'||old.revision!==expectedTaskRevision||old.stale||old.blocked||!dependenciesDone(old)||old.actionRevision!==row.revision||intent.action_revision!==row.revision||intent.target_bot_id!==row.actor||intent.admission_id!==admissionId||intent.message_id!==messageId||intent.target_session_id!==sessionId||intent.payload_hash!==payloadHash||verifyReconciliation(old,row,intent,payload)!==true)throw Error('reconciliation unverified')
+        if(outcome==='not-started') {
+          if(evidence!==undefined||!(row.kind==='execute'&&old.status==='ready'||row.kind==='review'&&old.status==='reported'))throw Error('original action cannot resume')
+          db.prepare("UPDATE actions SET state='claimed' WHERE id=? AND state='uncertain'").run(id)
+        } else {
+          // Explicit user-created actions retain their write lease until the real
+          // turn completion is established; a reconciliation cannot bypass it.
+          if(old.authority?.kind==='user-created')throw Error('explicit action requires verified turn completion')
+          if(row.kind!=='execute'||!['ready','working'].includes(old.status)||!evidence||typeof evidence!=='object')throw Error('completion unverified')
+          keysOnly(evidence,['kind','evidence','targetCommit','targetBlob','acceptanceBlob','environment'])
+          string(evidence.evidence,'evidence');string(evidence.environment,'environment')
+          if(evidence.kind==='git'){for(const key of ['targetCommit','targetBlob','acceptanceBlob'])if(!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(evidence[key]))throw Error('invalid evidence identity')}
+          else if(evidence.kind!=='personal'||['targetCommit','targetBlob','acceptanceBlob'].some(key=>Object.hasOwn(evidence,key)))throw Error('invalid evidence kind')
+          if(verifyEvidence(old,evidence,old.owner,'report')!==true)throw Error('completion evidence unverified')
+          const next={...old,revision:old.revision+1,status:'reported',evidence:JSON.parse(JSON.stringify(evidence)),actionRevision:old.revision+1}
+          if(db.prepare("UPDATE actions SET state='done' WHERE id=? AND state='uncertain'").run(id).changes!==1)throw Error('action changed')
+          save(old,next);action(next,'review',next.reviewer)
+        }
+        db.prepare('INSERT INTO admission_decisions VALUES (?,?,?,?,?,?,?,?,?)').run(operationId,id,admissionId,actor,old.revision,'uncertain',`reconciled-${outcome}`,stable(proof),new Date().toISOString())
+        if(verifyReconciliation(old,row,intent,payload)!==true)throw Error('reconciliation changed')
+        return getTask(old.id)
+      })
+    },
+    // Experimental bridge: the v5 journal has no target column. This entrypoint
+    // permits only next-turn and records a durable reservation before invoking
+    // the synchronous Agent claim. It must never be used by the old writer.
+    holdGuardedAfterRestart({ actor }) {
+      return tx(() => {
+        if (authorize({ type:'guarded-recovery', actor }) !== true) throw new Error('recovery unauthorized')
+        const rows=db.prepare("SELECT a.* FROM actions a JOIN admission_intents i ON i.action_id=a.id WHERE a.state IN ('claimed','accepted')").all()
+        for(const row of rows) {
+          if(db.prepare("UPDATE actions SET state='uncertain' WHERE id=? AND state=?").run(row.id,row.state).changes!==1) throw new Error('recovery state changed')
+          addHistory.run(`v5-recovery:${row.id}`,actor,row.task_id,JSON.stringify(row),JSON.stringify({...row,state:'uncertain'}))
+        }
+        return {held:rows.length}
+      })
+    },
+    fencedGuardedClaim({ sessionId, inputs, actor, context }, claim) {
+      requireId(sessionId,'session id'); requireId(actor,'actor')
+      if(!Array.isArray(inputs)||inputs.length<1||inputs.length>16||typeof claim!=='function') throw new Error('invalid guarded claim')
+      // Host-issued session generation prevents turn-number reuse after restart.
+      const boundContext = context && typeof context === 'object' && !Array.isArray(context)
+        && validId(context.sessionGeneration) && Number.isSafeInteger(context.turn) && context.turn >= 0
+        && Number.isSafeInteger(context.turnStartSeq) && context.turnStartSeq >= 0
+        ? {sessionGeneration:context.sessionGeneration,turn:context.turn,turnStartSeq:context.turnStartSeq} : undefined
+      const seen=new Set()
+      const binding=inputs.map(input=>{
+        keysOnly(input,['admissionId','message','target']);requireId(input.admissionId,'admission id')
+        if(input.target!=='next-turn'||seen.has(input.admissionId))throw new Error('invalid guarded target')
+        seen.add(input.admissionId);const payload=stable(input.message)
+        return {admissionId:input.admissionId,messageId:input.message?.id,payload,payloadHash:createHash('sha256').update(payload).digest('hex')}
+      })
+      const batch=`v5-fence:${digest({sessionId,binding})}`
+      const validate=(item,state)=>{
+        const intent=db.prepare('SELECT * FROM admission_intents WHERE admission_id=?').get(item.admissionId)
+        const row=intent&&db.prepare('SELECT * FROM actions WHERE id=?').get(intent.action_id),task=row&&getTask(row.task_id)
+        if(!intent||!row||!task||row.state!==state||intent.target_session_id!==sessionId||intent.message_id!==item.messageId||intent.payload!==item.payload||intent.payload_hash!==item.payloadHash||intent.target_bot_id!==row.actor||intent.task_revision!==task.revision||intent.action_revision!==row.revision||task.actionRevision!==row.revision||task.stale||task.blocked||!dependenciesDone(task)||!(row.kind==='execute'&&task.status==='ready'||row.kind==='review'&&task.status==='reported'))throw new Error('guarded claim changed')
+        if(task.authority?.kind==='user-created'&&!boundContext)throw new Error('guarded turn identity unavailable')
+        const original={...row,state:'claimed'}, input={admissionId:intent.admission_id,messageId:intent.message_id,targetBotId:intent.target_bot_id,targetSessionId:intent.target_session_id,payload:JSON.parse(intent.payload)}
+        if(authorize({type:'guarded-claim',actor,task,action:original})!==true||verifyAdmission(task,original,input)!==true)throw new Error('guarded claim unauthorized')
+        return {intent,row,task}
+      }
+      const prepared=tx(()=>binding.map((item,index)=>{
+        const {intent,row,task}=validate(item,'claimed')
+        const last=db.prepare("SELECT outcome FROM admission_decisions WHERE admission_id=? AND outcome IN ('guarded-reserved','guarded-committed','reconciled-not-started') ORDER BY rowid DESC LIMIT 1").get(intent.admission_id)
+        if(last && last.outcome!=='reconciled-not-started')throw new Error('guarded claim already reserved')
+        const attempt=db.prepare("SELECT count(*) AS n FROM admission_decisions WHERE admission_id=? AND outcome IN ('guarded-reserved','guarded-committed')").get(intent.admission_id).n
+        if(attempt>100)throw new Error('guarded attempts exceeded')
+        const operationId=`${batch}:${index}:${attempt}`
+        db.prepare('INSERT INTO admission_decisions VALUES (?,?,?,?,?,?,?,?,?)').run(operationId,row.id,intent.admission_id,actor,task.revision,row.state,'guarded-reserved',boundContext ? stable(boundContext) : 'next-turn; outcome unknown until commit',new Date().toISOString())
+        if(db.prepare("UPDATE actions SET state='uncertain' WHERE id=? AND state='claimed'").run(row.id).changes!==1)throw new Error('guarded claim changed')
+        return {operationId,actionId:row.id}
+      }))
+      return tx(()=>{
+        for(const item of binding)validate(item,'uncertain')
+        inGuardedClaim=true
+        try {const result=claim();if(result!==undefined){if(result instanceof Promise)result.catch(()=>{});throw new Error('claim must be synchronous and void')}} finally {inGuardedClaim=false}
+        for(const item of prepared){
+          if(db.prepare("UPDATE actions SET state='accepted',receipt=? WHERE id=? AND state='uncertain'").run(`v5-receipt:${item.operationId}`,item.actionId).changes!==1)throw new Error('guarded claim state changed')
+          if(db.prepare("UPDATE admission_decisions SET outcome='guarded-committed',reason=? WHERE operation_id=? AND outcome='guarded-reserved'").run(boundContext ? stable(boundContext) : 'next-turn consumed',item.operationId).changes!==1)throw new Error('guarded reservation changed')
+        }
+        return 'committed'
+      })
+    },
+    // Old-format or uncertain receipts do not authorize a task tool call.
+    guardedContext(actionId) {
+      requireId(actionId,'action id')
+      const row=db.prepare("SELECT a.state,i.target_session_id,d.reason FROM actions a JOIN admission_intents i ON i.action_id=a.id JOIN admission_decisions d ON d.operation_id=substr(a.receipt,12) WHERE a.id=? AND d.outcome='guarded-committed'").get(actionId)
+      if(!row||row.state!=='accepted')return undefined
+      try {
+        const v=JSON.parse(row.reason)
+        if(!validId(v?.sessionGeneration)||!Number.isSafeInteger(v.turn)||v.turn<0||!Number.isSafeInteger(v.turnStartSeq)||v.turnStartSeq<0)return undefined
+        return {sessionId:row.target_session_id,sessionGeneration:v.sessionGeneration,turn:v.turn,turnStartSeq:v.turnStartSeq}
+      } catch {return undefined}
+    },
+    reportedForSession(sessionId) {
+      requireId(sessionId,'session id')
+      const rows=db.prepare("SELECT a.id,a.task_id FROM actions a JOIN admission_intents i ON i.action_id=a.id WHERE i.target_session_id=? AND a.kind='execute' AND a.state='accepted' ORDER BY a.id").all(sessionId)
+      return rows.map(row=>({actionId:row.id,task:getTask(row.task_id),binding:this.guardedContext(row.id)}))
+        .filter(row=>row.task?.authority?.kind==='user-created'&&row.task.status==='reported'&&row.binding)
+    },
+    pendingReviewsForSession(sessionId) {
+      requireId(sessionId,'session id')
+      const rows=db.prepare("SELECT a.id,a.task_id FROM actions a JOIN admission_intents i ON i.action_id=a.id WHERE i.target_session_id=? AND a.kind='review' AND a.state='accepted' ORDER BY a.id").all(sessionId)
+      return rows.map(row=>({actionId:row.id,task:getTask(row.task_id),binding:this.guardedContext(row.id)}))
+        .filter(row=>row.task?.authority?.kind==='user-created'&&row.task.status==='reported'&&row.task.pendingReview&&row.binding)
     },
     inspectAdmission({ admissionId, messageId, targetSessionId, payloadHash } = {}) {
       if (![admissionId, messageId, targetSessionId].every(validId) || typeof payloadHash !== 'string' || !/^[0-9a-f]{64}$/.test(payloadHash)) return { decision:'unknown' }
@@ -281,6 +448,40 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
       })
     },
+    // A newly authorized Bot task and its only initial action share the same
+    // commit. Earlier v5 proposals remain untouched and cannot enter this path.
+    createExplicit({ operationId, actor, task, execution }) {
+      if (!enableExplicitTasks || !task || typeof task !== 'object') throw new Error('explicit task creation unavailable')
+      requireId(actor, 'actor'); stable(task); stable(execution)
+      keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants'])
+      keysOnly(execution, ['mode','workspace','paths'])
+      if (!['read','write'].includes(execution.mode) || !validId(execution.workspace)
+        || !Array.isArray(execution.paths) || execution.paths.length < 1 || execution.paths.length > 64
+        || execution.paths.some(path => typeof path !== 'string' || !path || path.length > 1024 || path.startsWith('/') || /[\x00-\x1f\\]/.test(path)
+          || (path !== '.' && path.split('/').some(part => part === '..' || part === '' || part === '.')))
+        || new Set(execution.paths).size !== execution.paths.length) throw new Error('invalid execution scope')
+      const payload = { type:'create-explicit', actor, task, execution }
+      return transact(operationId, actor, payload, () => ({ type:'create-explicit', actor, task, execution }), () => {
+        const id = requireId(task.id, 'task id'), owner = requireId(task.owner, 'owner'), reviewer = requireId(task.reviewer, 'reviewer')
+        if (actor !== 'user' || owner === 'user' || owner === reviewer) throw new Error('independent Bot owner and reviewer required')
+        string(task.title, 'title'); string(task.acceptance, 'acceptance'); requireId(task.scope, 'scope')
+        if (getTask(id)) throw new Error('task id exists')
+        if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
+        const dependencies = task.dependencies ?? [], dependencyGrants = task.dependencyGrants ?? []
+        checkGraph(id, dependencies); checkBindings({ scope:task.scope, owner, reviewer }, dependencies, dependencyGrants)
+        if (verifyUserTask(task, execution, actor) !== true) throw new Error('user task authorization unavailable')
+        const binding = captureUserAuthority?.(task,execution,actor)
+        if (captureUserAuthority && (!binding || typeof binding !== 'object' || Array.isArray(binding))) throw new Error('user task binding unavailable')
+        if (binding) stable(binding)
+        const record = { id, title:task.title, owner, reviewer, scope:task.scope, acceptance:task.acceptance,
+          dependencies, dependencyGrants, execution:JSON.parse(JSON.stringify(execution)), attachments:[], shares:[],
+          revision:1, actionRevision:1, status:'waiting', authority:{kind:'user-created',...(binding ? {binding:JSON.parse(JSON.stringify(binding))} : {})}, evidence:null, blocked:null, stale:false }
+        record.status = dependenciesDone(record) ? 'ready' : 'waiting'
+        db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
+        action(record,'execute',owner)
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
+      })
+    },
     command({ operationId, taskId, expectedRevision, actor, type, value }) {
       requireId(taskId, 'task id'); requireId(actor, 'actor')
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
@@ -321,13 +522,20 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             } else throw new Error('invalid evidence kind')
             next.evidence = JSON.parse(JSON.stringify(value))
             if (verifyEvidence(old, value, actor, 'report') !== true) throw new Error('report evidence unverified')
-            finishAction(old.id, 'execute'); next.status = 'reported'; next.actionRevision = next.revision; break
+            if (old.authority?.kind !== 'user-created') finishAction(old.id, 'execute')
+            next.status = 'reported'; next.actionRevision = next.revision; break
           case 'review':
             if (old.status !== 'reported' || old.stale || old.blocked || actor !== old.reviewer || actor === old.owner || !dependenciesDone(old)) throw new Error('cannot review')
             keysOnly(value, ['evidence','result']); string(value.evidence, 'review evidence'); if (!['pass', 'rework'].includes(value.result)) throw new Error('invalid review')
             if (verifyEvidence(old, value, actor, 'review') !== true) throw new Error('review evidence unverified')
-            finishAction(old.id, 'review')
-            next.review = { result: value.result, evidence: value.evidence, actor }; next.status = value.result === 'pass' ? 'done' : 'waiting'; break
+            if (old.authority?.kind === 'user-created') {
+              if (old.pendingReview || !db.prepare("SELECT 1 FROM actions WHERE task_id=? AND kind='review' AND state='accepted'").get(old.id)) throw new Error('review already pending or unverified')
+              next.pendingReview = { result:value.result, evidence:value.evidence, actor }
+            } else {
+              finishAction(old.id, 'review')
+              next.review = { result: value.result, evidence: value.evidence, actor }; next.status = value.result === 'pass' ? 'done' : 'waiting'
+            }
+            break
           case 'block':
             if (['done', 'proposed'].includes(old.status)) throw new Error('cannot block')
             if (unresolved(old.id)) throw new Error('action outcome unresolved')
@@ -414,10 +622,10 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
           default: throw new Error('unknown command')
         }
         save(old, next)
-        if (type === 'report') action(next, 'review', next.reviewer)
-        if (type === 'register' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
-        if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
-        if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
+        if (type === 'report' && next.authority?.kind !== 'user-created') action(next, 'review', next.reviewer)
+        if (type === 'register' || type === 'review' && value.result === 'rework' && next.authority?.kind !== 'user-created' || type === 'unblock' || type === 'dependencies') next = ready(next)
+        if (type === 'unblock' && next.status === 'reported' && reviewReady(next)) action(next, 'review', next.reviewer)
+        if (type === 'review' && value.result === 'pass' && next.authority?.kind !== 'user-created') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
         if (type === 'invalidate') {
           db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(taskId)
           db.prepare("UPDATE actions SET state='uncertain',receipt=COALESCE(receipt,'evidence invalidated; outcome unknown') WHERE task_id=? AND state IN ('claimed','accepted')").run(taskId)
@@ -455,10 +663,47 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         }
         if (type === 'revalidate') {
           next = ready(next)
-          if (next.status === 'reported') action(next, 'review', next.reviewer)
+          if (next.status === 'reported' && reviewReady(next)) action(next, 'review', next.reviewer)
           if (next.status === 'done') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
         }
         return next
+      })
+    },
+    // Reporting is not the end of a running Agent turn. Retain the execution
+    // lease and withhold review dispatch until the Host verifies that exact turn
+    // has durably ended; unknown outcomes remain on the original action.
+    finishExplicitTurn({ operationId, actor, taskId, expectedRevision, proof }) {
+      if (!enableExplicitTasks) throw new Error('explicit task unavailable')
+      requireId(taskId,'task id'); requireId(actor,'actor'); stable(proof)
+      const payload={type:'finish-explicit-turn',actor,taskId,expectedRevision,proof}
+      return transact(operationId,actor,payload,()=>({type:'finish-explicit-turn',actor,task:getTask(taskId)}),()=>{
+        const task=getTask(taskId)
+        const active=db.prepare("SELECT * FROM actions WHERE task_id=? AND kind='execute' AND state='accepted'").all(taskId)
+        if (!task || task.authority?.kind !== 'user-created' || task.status !== 'reported' || task.revision !== expectedRevision || active.length !== 1
+          || verifyTurnCompletion(task,active[0],proof,actor) !== true) throw new Error('turn completion unverified')
+        finishAction(taskId,'execute'); action(task,'review',task.reviewer)
+        addHistory.run(operationId,actor,taskId,JSON.stringify(task),JSON.stringify(task)); return task
+      })
+    },
+    finishExplicitReview({ operationId, actor, taskId, expectedRevision, proof }) {
+      if (!enableExplicitTasks) throw new Error('explicit task unavailable')
+      requireId(taskId,'task id'); requireId(actor,'actor'); stable(proof)
+      const payload={type:'finish-explicit-review',actor,taskId,expectedRevision,proof}
+      return transact(operationId,actor,payload,()=>({type:'finish-explicit-review',actor,task:getTask(taskId)}),()=>{
+        const task=getTask(taskId)
+        const active=db.prepare("SELECT * FROM actions WHERE task_id=? AND kind='review' AND state='accepted'").all(taskId)
+        const pending=task?.pendingReview
+        if (!task || task.authority?.kind!=='user-created' || task.status!=='reported' || task.revision!==expectedRevision || active.length!==1
+          || !pending || task.stale || task.blocked || !dependenciesDone(task) || pending.actor!==task.reviewer
+          || verifyTurnCompletion(task,active[0],proof,actor)!==true
+          || verifyEvidence(task,{result:pending.result,evidence:pending.evidence},pending.actor,'review')!==true) throw new Error('review completion unverified')
+        finishAction(taskId,'review')
+        const next={...task,revision:task.revision+1,review:pending,status:pending.result==='pass'?'done':'waiting'}
+        delete next.pendingReview
+        save(task,next)
+        if(pending.result==='pass')for(const id of dependents(taskId)){const dependent=getTask(id);if(dependent)ready(dependent)}
+        else ready(next)
+        return getTask(taskId)
       })
     },
     claimAction({ actionId: id, actor, intent }) {
@@ -479,6 +724,18 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         }
         if (row.state !== 'pending') throw new Error('action unavailable')
         if (task.actionRevision !== row.revision || task.blocked || task.stale || (row.kind === 'execute' && (task.status !== 'ready' || !dependenciesDone(task))) || (row.kind === 'review' && task.status !== 'reported')) throw new Error('action stale or blocked')
+        if (row.kind === 'review' && !reviewReady(task)) throw new Error('execution turn not complete')
+        if (enableExplicitTasks && row.kind === 'review' && db.prepare("SELECT 1 FROM actions WHERE state IN ('claimed','accepted','uncertain') AND id<>? LIMIT 1").get(id)) throw new Error('cooperative review lease unavailable')
+        if (enableExplicitTasks && row.kind === 'execute' && db.prepare("SELECT 1 FROM actions WHERE kind='review' AND state IN ('claimed','accepted','uncertain') LIMIT 1").get()) throw new Error('cooperative review lease unavailable')
+        if (enableExplicitTasks && row.kind === 'execute') {
+          // Cooperative global write lease: keep it while the prior result is
+          // uncertain. This does not constrain external non-participating tools.
+          const active = db.prepare("SELECT t.body FROM actions a JOIN tasks t ON t.id=a.task_id WHERE a.kind='execute' AND a.state IN ('claimed','accepted','uncertain') AND a.id<>?").all(id)
+          for (const entry of active) {
+            const other = JSON.parse(entry.body)
+            if (task.execution?.mode !== 'read' || other.execution?.mode !== 'read') throw new Error('cooperative write lease unavailable')
+          }
+        }
         if (intent.targetBotId !== row.actor || verifyAdmission(task, row, intent) !== true) throw new Error('admission intent unverified')
         db.prepare('INSERT INTO admission_intents(action_id,admission_id,message_id,target_bot_id,target_session_id,task_revision,action_revision,payload_hash,payload) VALUES(?,?,?,?,?,?,?,?,?)').run(id, intent.admissionId, intent.messageId, intent.targetBotId, intent.targetSessionId, task.revision, row.revision, payloadHash, payload)
         db.prepare("UPDATE actions SET state='claimed' WHERE id=? AND state='pending'").run(id)

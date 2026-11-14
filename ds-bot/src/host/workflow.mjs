@@ -6,8 +6,8 @@ const actions = new Set(['start', 'report', 'review', 'block', 'unblock'])
 
 // This service is private to the host. The caller supplies a trusted runtime
 // and store, never a Bot name or actor claimed by a model/tool argument.
-export function createBotWorkflow({ rt, store, verifyBinding = () => false, verifyShare = () => false, wake = () => {}, onError = () => {} }) {
-  if (!rt || !store || typeof verifyBinding !== 'function' || typeof verifyShare !== 'function') throw new TypeError('Workflow dependencies required')
+export function createBotWorkflow({ rt, store, verifyBinding = () => false, verifyShare = () => false, verifyActionContext = () => false, wake = () => {}, onError = () => {} }) {
+  if (!rt || !store || typeof verifyBinding !== 'function' || typeof verifyShare !== 'function' || typeof verifyActionContext !== 'function') throw new TypeError('Workflow dependencies required')
   const scope = new AsyncLocalStorage()
 
   const identity = exec => {
@@ -55,20 +55,26 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
 
   const direct = (task, caller) => {
     if (!task || !id(task.id) || typeof task.scope !== 'string') return false
-    if (task.scope.startsWith('personal:')) return caller.roomId === undefined && task.scope.slice(9) === caller.actor
+    if (task.scope.startsWith('personal:')) return caller.roomId === undefined && (task.scope.slice(9) === caller.actor
+      || (task.authority?.kind === 'user-created' && task.reviewer === caller.actor))
     const origin = roomFor(task)
     if (!member(origin, caller.actor)) return false
     return caller.roomId === undefined || caller.roomId === origin.id
   }
 
-  const canMutate = (task, caller, action) => {
+  const canMutate = (task, caller, action, exec) => {
     if (!direct(task, caller) || !actions.has(action)) return false
     if (!task.authority || task.stale === true) return false
+    // A Bot can have other concurrent conversations. Its identity alone does
+    // not prove that this tool call belongs to the accepted task action.
+    if (task.authority.kind === 'user-created' && verifyActionContext(task,caller,action,exec) !== true) return false
     if (task.scope.startsWith('room:')) {
       const room = roomFor(task)
-      // A bound group task is eligible only when the durable binding has been
-      // verified and its current goal still allows the affected work.
-      if (verifyBinding(task, room) !== true || rt.goalDispatchBlocked?.(room, caller.actor) !== false) return false
+      // User-created board tasks have their own durable authority; they need
+      // not pretend to be imported group-goal tasks. Older goal-bound tasks
+      // still require the original binding proof. Both honor an actual stop.
+      if ((task.authority.kind !== 'user-created' && verifyBinding(task, room) !== true)
+        || rt.goalDispatchBlocked?.(room, caller.actor) !== false) return false
     }
     if (action === 'start' || action === 'report') return caller.actor === task.owner
     if (action === 'review') return caller.actor === task.reviewer && caller.actor !== task.owner
@@ -86,6 +92,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       id: task.id, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer, acceptance: task.acceptance, dependencies,
       ...(task.authority ? { authority: task.authority } : {}),
+      ...(task.execution ? { execution: task.execution } : {}),
       ...(task.blocked ? { blocked: task.blocked } : {}),
       ...(task.evidence ? { evidence: task.evidence } : {}),
       ...(task.stale ? { stale: true } : {}),
@@ -102,7 +109,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     try { caller = identity(pending.exec) } catch { return false }
     if (!sameIdentity(caller, pending.caller)) return false
     const current = store.get(pending.taskId)
-    return current?.revision === pending.revision && canMutate(current, caller, pending.action)
+    return current?.revision === pending.revision && canMutate(current, caller, pending.action, pending.exec)
   }
 
   async function invoke(exec, args) {
@@ -123,7 +130,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!['committed', 'rejected'].includes(record.status)) return { state: 'unknown' }
       return { state: record.status, ...(record.status === 'rejected' ? { message: record.message } : {}) }
     }
-    if (!actions.has(args.action) || !id(args.operationId) || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1 || !canMutate(task, caller, args.action)) throw refused()
+    if (!actions.has(args.action) || !id(args.operationId) || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1 || !canMutate(task, caller, args.action, exec)) throw refused()
     const context = { exec, caller, taskId: task.id, revision: args.expectedRevision, action: args.action }
     const command = { operationId: args.operationId, taskId: task.id, expectedRevision: args.expectedRevision,
       actor: caller.actor, type: args.action, ...(args.value === undefined ? {} : { value: args.value }) }
@@ -131,7 +138,14 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     // The transaction creates the durable next action. A lost notification
     // is recovered by scanning that journal; never replay a claimed input.
     try { await wake() } catch (error) { onError(error) }
-    return { task: projectDirect(result, caller) }
+    // The command already committed: if its caller or access changed while
+    // waking the driver, return only the receipt rather than stale task data.
+    const acknowledgement = { committed:true, operationId:args.operationId }
+    let currentCaller
+    try { currentCaller = identity(exec) } catch { return acknowledgement }
+    const current = store.get(args.taskId)
+    if (!sameIdentity(currentCaller, caller) || !direct(current, currentCaller)) return acknowledgement
+    return { task: projectDirect(current, currentCaller) }
   }
 
   return { invoke, authorize }
