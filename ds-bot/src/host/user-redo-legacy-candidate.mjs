@@ -3,12 +3,20 @@ import { symbols } from '@deepseek-ai/cordis'
 import { createInboxAudit } from './inbox-audit.js'
 
 const providerOf = service => service?.[symbols.original] ?? service
+const issued = new WeakSet(), readers = new WeakMap()
+export const isIssuedLegacyCandidateEvidence = evidence => !!evidence && issued.has(evidence)
+export const isLegacyCandidateReaderFor = (rt, reader) => typeof reader === 'function' && readers.get(reader)?.rt === rt
+export const isEvidenceFromLegacyCandidateReader = (rt, reader, evidence) => isLegacyCandidateReaderFor(rt, reader)
+  && readers.get(reader).issued.has(evidence)
 const comparableHeader = header => header && typeof header === 'object'
   ? { ...header, delegationDepth:header.delegationDepth === undefined ? 0 : header.delegationDepth } : header
 const noControl = source => source && ['request', 'room'].includes(source.role) && source.reviewInspect !== true
-  && source.groupKickoff !== true && source.reviewId === undefined
+  && source.groupKickoff !== true && source.reviewId === undefined && source.recoveryIds === undefined
+  && source.recoveryKey === undefined && source.resumed !== true && source.retried !== true
+  && source.abandoned !== true && source.deferred !== true
 const sameRoom = (scope, roomId) => scope?.kind === 'room' ? typeof scope.id === 'string' && roomId === scope.id
   : scope?.kind === 'personal' && roomId === undefined
+const sameOriginRoom = (scope, roomId) => roomId === undefined || (scope?.kind === 'room' && roomId === scope.id)
 export const LEGACY_CANDIDATE_WARNING = Object.freeze({
   zh:'这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。',
   en:'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.',
@@ -24,6 +32,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
   // Every probe may read a full Session prefix. Bound work across different
   // recovery ids too; a timed-out disk read must not invite a parallel flood.
   let pending = false
+  const ownIssued = new WeakSet()
   const read = async (scope, recoveryId) => {
     let reader
     try {
@@ -32,7 +41,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       if (!hold || record.turn !== undefined || !Number.isSafeInteger(record.since) || record.since < 0
         || !noControl(trigger) || typeof trigger.exchangeId !== 'string' || trigger.exchangeId === ''
         || (trigger.role === 'request' && (typeof trigger.senderSessionId !== 'string' || !trigger.senderSessionId))
-        || !sameRoom(scope, record.roomId ?? trigger.roomId) || !sameRoom(scope, trigger.roomId)
+        || !sameRoom(scope, record.roomId ?? trigger.roomId) || !sameRoom(scope, trigger.roomId) || !sameOriginRoom(scope, trigger.senderRoomId)
         || (record.roomId !== undefined && trigger.roomId !== record.roomId) || hold.isCurrent() !== true) return undefined
       const ctx = rt.ctx, getPersistence = () => ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
       const sessions = ctx.sessions, persistence = getPersistence()
@@ -68,7 +77,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       const inputs = events.filter(event => event.type === 'user/message' && event.seq > start.seq && event.seq < end.seq)
       if (inputs.length !== 1) return undefined
       const event = inputs[0], message = event.data, source = message?.source
-      if (source?.kind !== 'bot' || !noControl(source) || !sameRoom(scope, source.roomId)
+      if (source?.kind !== 'bot' || !noControl(source) || !sameRoom(scope, source.roomId) || !sameOriginRoom(scope, source.senderRoomId)
         || source.exchangeId !== trigger.exchangeId || Object.entries(trigger).some(([key, value]) => !isDeepStrictEqual(source[key], value))
         || typeof message.id !== 'string' || !message.id || message.role !== 'user'
         || !Array.isArray(message.content) || message.content.length < 1
@@ -87,14 +96,17 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       if (admissions.length !== 1 || admissions[0].status !== 'entered-in-log'
         || admissions[0].entered.length !== 1 || admissions[0].entered[0] !== event.seq
         || removals.length !== 1 || removals[0].id !== message.id || removals[0].batchSize !== 1 || !current()) return undefined
-      return { kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, recoveryId,
+      const view = Object.freeze({ kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, recoveryId,
         warning:LEGACY_CANDIDATE_WARNING,
         botId:record.botId, sessionId:hold.sessionId, ...(scope.kind === 'room' ? { roomId:scope.id } : {}),
         turn:start.data.turn, turnStartSeq:start.seq, messageSeq:event.seq, matchedTime:start.time,
-        textSegments:message.content.map(part => part.text) }
+        textSegments:Object.freeze(message.content.map(part => part.text)) })
+      const evidence = Object.freeze({ kind:'unverified-candidate-evidence-v1', view, isCurrent:current })
+      issued.add(evidence); ownIssued.add(evidence)
+      return evidence
     } catch { return undefined } finally { await reader?.close().catch(() => {}) }
   }
-  return async (scope, recoveryId) => {
+  const inspectEvidence = async (scope, recoveryId) => {
     if (pending) return undefined
     pending = true
     const work = read(scope, recoveryId)
@@ -103,4 +115,11 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
     try { return await Promise.race([work, new Promise(resolve => { timer = setTimeout(resolve, timeoutMs) })]) }
     finally { clearTimeout(timer) }
   }
+  const preview = async (scope, recoveryId) => (await inspectEvidence(scope, recoveryId))?.view
+  // Internal callers must not serialize the callback or treat this evidence as
+  // the original producer proof. It only certifies the inspected prefix is
+  // still the same physical candidate, under the previously checked scope.
+  Object.defineProperty(preview, 'inspectEvidence', { value:inspectEvidence })
+  readers.set(preview, { rt, issued:ownIssued })
+  return Object.freeze(preview)
 }
