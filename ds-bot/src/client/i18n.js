@@ -11,6 +11,7 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Check redo': '核实重做状态',
   'Redo': '重做',
   'Redo this specific interrupted work? External actions may happen again.': '重做这项中断的工作？外部操作可能再次发生。',
   'The redo outcome is unknown. Refresh to check; do not submit it again.': '重做结果暂不明确，请刷新核对；不要重复提交。',
