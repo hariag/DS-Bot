@@ -460,8 +460,9 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       return copy(next)
     } finally { busy.delete(operationId) }
   }
-  // Read only a completed, writer-verified result. Missing live writer or a
-  // changed scope is unknown, never a reason to dispatch the operation again.
+  // Read only a completed, writer-verified result. Isolated results use a
+  // private verified artifact after restart; a changed scope or unavailable
+  // artifact is unknown, never a reason to dispatch the operation again.
   async function readResult(operationId, principal) {
     if (!uuid(operationId) || busy.has(operationId) || (!isolated && typeof verifyResult !== 'function')) throw Error('redo result unavailable')
     busy.add(operationId)
