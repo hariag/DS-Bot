@@ -146,6 +146,39 @@ export function createGoalBoardEditor(rt) {
         if(result.error)throw invalid(result.error)
       } else touchGoal(clone,{kind:'board-task-edit',by:'user',stage:stage.id,taskId:task.id,botId:task.botId},now,{keepNudges:true})
       if(changedTitle&&(taskChanged||noteChanged))clone.events=[...(clone.events??[]),{at:now,kind:'board-task-edit',by:'user',stage:stage.id,taskId:task.id,botId:task.botId}].slice(-50)
+    } else if(kind==='details') {
+      const value=payload.value, bad=()=>invalid('Invalid card details')
+      if(!value||typeof value!=='object'||Array.isArray(value)||!Object.keys(value).length||Object.keys(value).some(key=>!['description','dueDate','labels','checklist'].includes(key)))throw bad()
+      const details={...(next.boardDetails??{})}
+      if(own(value,'description')) {
+        if(typeof value.description!=='string'||Buffer.byteLength(value.description)>8192)throw bad()
+        details.description=value.description
+      }
+      if(own(value,'dueDate')) {
+        const d=value.dueDate
+        if(d!==null) {
+          if(typeof d!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(d))throw bad()
+          const parsed=new Date(`${d}T00:00:00.000Z`)
+          if(!Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==d)throw bad()
+        }
+        details.dueDate=d
+      }
+      if(own(value,'labels')) {
+        if(!Array.isArray(value.labels)||value.labels.length>20||value.labels.some(label=>typeof label!=='string'||!label.trim()||Buffer.byteLength(label)>40))throw bad()
+        details.labels=value.labels.map(label=>label.trim())
+        if(new Set(details.labels).size!==details.labels.length)throw bad()
+      }
+      if(own(value,'checklist')) {
+        if(!Array.isArray(value.checklist)||value.checklist.length>100)throw bad()
+        const ids=new Set()
+        details.checklist=value.checklist.map(item=>{
+          if(!item||typeof item!=='object'||Array.isArray(item)||Object.keys(item).some(key=>!['id','text','checked'].includes(key))||!validId(item.id)||ids.has(item.id)||typeof item.text!=='string'||!item.text.trim()||Buffer.byteLength(item.text)>512||typeof item.checked!=='boolean')throw bad()
+          ids.add(item.id)
+          return {id:item.id,text:item.text.trim(),checked:item.checked}
+        })
+      }
+      next.boardDetails=details
+      touchGoal(clone,{kind:'board-task-details',by:'user',stage:stage.id,taskId:task.id,botId:task.botId},now,{keepNudges:true})
     } else if(kind==='attach') {
       if(!Array.isArray(images)||!images.length||images.length>10)throw invalid('Choose 1 to 10 images')
       const existing=Array.isArray(next.boardImages)?next.boardImages:[]
