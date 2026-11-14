@@ -626,6 +626,42 @@ test('only explicit investigated recovery can release an uncertain review', asyn
   assert.equal(host.agentOf('r1').calls.length, 2)
 })
 
+test('user can allow future inspections without claiming the previous result was checked', async (t) => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  host.ctx.sessions.flush = async () => { throw new Error('uncertain flush') }
+  await host.rt.goalReviewPoll(g.reviewAt)
+  host.ctx.sessions.flush = async () => true
+  const original = structuredClone(g.reviewAttempt)
+  const body = {roomId:'r1',goalId:g.id,action:'review-resolve',reviewId:original.id,decision:'allow-future',confirmed:true}
+  assert.ok((await host.call('goal-control',body)).error, 'queued original work still blocks the decision')
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  assert.equal((await host.call('goal-control',body)).ok,true)
+  assert.equal(g.reviewAttempt,undefined)
+  assert.deepEqual(g.reviewResolutions.at(-1).attempt,original)
+  assert.equal(g.reviewResolutions.at(-1).decision,'allow-future')
+  assert.match(g.events.at(-1).text,/remains unknown/)
+  assert.equal((await host.call('goal-control',body)).ok,true, 'same decision is idempotent')
+  assert.equal(g.reviewResolutions.filter(item=>item.id===original.id).length,1)
+})
+
+test('an unconfirmed inspection decision does not restart periodic work or claim success', async (t) => {
+  const host = await start(t), g = await parkForReview(host)
+  host.ctx.sessions.flush = async () => { throw new Error('uncertain flush') }
+  await host.rt.goalReviewPoll(g.reviewAt)
+  host.ctx.sessions.flush = async () => true
+  const body = {roomId:'r1',goalId:g.id,action:'review-resolve',reviewId:g.reviewAttempt.id,decision:'allow-future',confirmed:true}
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const save = host.rt.save
+  host.rt.save = async () => { throw new Error('decision save failed') }
+  try {
+    assert.equal((await host.call('goal-control',body)).ok,false)
+    assert.equal((await host.call('goal-control',body)).ok,false)
+    await host.rt.goalReviewPoll(Date.now()+3_600_000)
+    assert.equal(host.agentOf('r1').calls.length,1,'unconfirmed decision must not admit another inspection')
+  } finally { host.rt.save = save }
+})
+
 test('review recovery cannot bypass pause or user stop but works after explicit resume', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)

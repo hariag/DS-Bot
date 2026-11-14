@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, readFileSync } from 'node:fs'
 import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
 import { replaceFile } from './files.js'
@@ -362,6 +362,48 @@ export function install(rt) {
     })
     return run
   }
+  // A choice only annotates the original hold. It does not settle work, alter
+  // the inbox, or establish whether an external effect occurred.
+  const syncHeldDecision = async (recoveryId, entry) => {
+    rt.requireHomeLock()
+    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const before = await handle.stat()
+      if (!before.isFile()) throw new Error('Decision journal unavailable')
+      const saved = JSON.parse(await handle.readFile('utf8'))?.heldTurns?.[recoveryId]
+      if (!saved?.decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
+      await handle.sync()
+      const directory = await open(dirname(file),constants.O_RDONLY)
+      try { await directory.sync() } finally { await directory.close() }
+      const afterHandle = await handle.stat(), after = await lstat(file)
+      rt.requireHomeLock()
+      if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterHandle.size || before.mtimeMs !== afterHandle.mtimeMs
+        || rt.homeLockVersion() !== lease || !heldTurns[recoveryId]?.decisions?.includes(entry)) throw new Error('Decision changed during confirmation')
+    } finally { await handle.close() }
+  }
+  rt.setHeldDecision = async (scope, recoveryId, expectedRevision, choice) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId) || !Number.isSafeInteger(expectedRevision)
+      || expectedRevision < 0 || !['ignored', 'open'].includes(choice)) throw new Error('Invalid interrupted turn decision')
+    const view = await rt.recoveryHeldView(scope)
+    const item = view.available && view.items.find(row => row.recoveryId === recoveryId)
+    if (!item) throw new Error('Interrupted turn is unavailable; refresh the board')
+    const hold = heldTurns[recoveryId], history = hold?.decisions ?? []
+    if (!hold || !Array.isArray(history)) throw new Error('Interrupted turn is unavailable')
+    const previous = history[expectedRevision]
+    if (previous?.revision === expectedRevision + 1 && previous.choice === choice) { await syncHeldDecision(recoveryId,previous); return { decision:choice, revision:previous.revision } }
+    if (history.length !== expectedRevision || item.decisionRevision !== expectedRevision || history.length >= 100) throw new Error('Interrupted turn changed; refresh the board')
+    rt.requireHomeLock()
+    const entry = { revision:expectedRevision + 1, choice, by:'user', at:Date.now() }
+    hold.decisions = [...history, entry]
+    await persist({ required:true })
+    await syncHeldDecision(recoveryId,entry)
+    const verified = await sampleRecoveryHeld(scope)
+    const saved = verified.available && verified.items.find(row => row.recoveryId === recoveryId)
+    if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice) throw new Error('Decision outcome is unknown; refresh the board')
+    return { decision:choice, revision:saved.decisionRevision }
+  }
+
   const roomNotesForTurn = (sessionId, record) => {
     if (!record || typeof record !== 'object') return []
     const trigger = record?.trigger

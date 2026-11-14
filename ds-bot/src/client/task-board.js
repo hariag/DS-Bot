@@ -108,41 +108,56 @@ function recoveryGroups(rows, idOf, nameOf) {
 }
 
 // The host provides scoped metadata only. This view never replays or closes work.
-function HeldTurns({ recovery }) {
+function HeldTurns({ recovery, scope, request, onRefresh }) {
   const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(''), [error, setError] = useState('')
+  const inFlight = useRef(false)
+  const decide = async (item, choice) => {
+    if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return
+    inFlight.current = true; setBusy(item.recoveryId); setError('')
+    try {
+      await request('board-held-decision', { scope, recoveryId:item.recoveryId, expectedRevision:item.decisionRevision, choice })
+      await onRefresh()
+    } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
+    finally { inFlight.current = false; setBusy('') }
+  }
   if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
   const filtered = rows.filter(item => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]))
-  const groups = recoveryGroups(filtered, item => item.botId, item => item.botName)
+  const pendingRows = filtered.filter(item => item.decision !== 'ignored')
+  const ignoredRows = filtered.filter(item => item.decision === 'ignored')
+  const groups = recoveryGroups(pendingRows, item => item.botId, item => item.botName)
+  const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
+    h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
+    group.rows.map(item => h('details', { key: item.recoveryId, className: 'bt-board-held-record bt-recovery-record' },
+      h('summary', { className: 'bt-recovery-record-summary' }, h('span', { className: 'bt-recovery-record-id', title: item.sessionId }, shortIdentity(item.sessionId)),
+        h('span', { className: 'bt-recovery-record-time' }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t('Unknown')),
+        h('span', { className: 'bt-recovery-badge' }, t(item.decision === 'ignored' ? 'Ignored' : 'Status unknown'))),
+      h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Session ID'), value: item.sessionId }),
+        h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
+        h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }), h(Fact, { label: t('Recovery ID'), value: item.recoveryId })),
+      h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
+      item.decision !== 'ignored' ? h('p', { className:'bt-recovery-note' }, t('Redo is unavailable because the original input cannot be verified.')) : null,
+      h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))))))
   return h('details', { className: 'bt-recovery-panel' },
     h('summary', { className: 'bt-recovery-summary' },
       h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
-      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted turns awaiting review')),
-        h('small', null, t(rows.length ? 'Read only' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
-      h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !rows.length ? '—' : String(rows.length))),
+      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted work')),
+        h('small', null, t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
+      h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !rows.length ? '—' : String(rows.filter(item => item.decision !== 'ignored').length))),
     h('div', { className: 'bt-recovery-body' },
+      error ? h('p', { role:'alert', className:'bt-recovery-warning' }, error) : null,
       h('div', { className: 'bt-recovery-intro' },
-        h('p', null, t('These records are read-only. A result is unknown; no work is resent or closed here.')),
+        h('p', null, t('The outcome is unknown. Your choice does not mark the work complete.')),
         h('span', null, t('Snapshot time (UTC)'), ': ', snapshotTime(recovery.sampledAt))),
       recovery.incomplete ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
       rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
         h('input', { type: 'search', value: query, placeholder: t('Filter by Bot or ID'), onChange: event => setQuery(event.target.value) })) : null,
       !rows.length && !recovery.incomplete ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No interrupted turns in this snapshot.')) : null,
       rows.length && !filtered.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
-      groups.length ? h('div', { className: 'bt-recovery-groups' }, groups.map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
-        h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
-        group.rows.map(item => h('details', { key: item.recoveryId, className: 'bt-board-held-record bt-recovery-record' },
-          h('summary', { className: 'bt-recovery-record-summary' },
-            h('span', { className: 'bt-recovery-record-id', title: item.sessionId }, shortIdentity(item.sessionId)),
-            h('span', { className: 'bt-recovery-record-time' }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t('Unknown')),
-            h('span', { className: 'bt-recovery-badge' }, t('Status unknown'))),
-          h('div', { className: 'bt-recovery-facts' },
-            h(Fact, { label: t('Session ID'), value: item.sessionId }),
-            h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
-            h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }),
-            h(Fact, { label: t('Recovery ID'), value: item.recoveryId }),
-            h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))))) : null))
+      groups.length ? renderRows(pendingRows) : null,
+      ignoredRows.length ? h('details', null, h('summary', null, `${t('Ignored')} (${ignoredRows.length})`), renderRows(ignoredRows)) : null))
 }
 
 // Owner-only manual notes on an existing work. This never dispatches or closes it.
@@ -324,7 +339,6 @@ const periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?
 // This action only clears a specific periodic inspection's uncertainty fence.
 // The host independently rechecks the current goal, attempt, scope and activity.
 function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen }) {
-  const [draft, setDraft] = useState({ key: '', text: '' }), [confirmedKey, setConfirmedKey] = useState('')
   const [checking, setChecking] = useState(false), [saving, setSaving] = useState(false)
   const [checkedKey, setCheckedKey] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const generation = useRef(0), scopeGeneration = useRef(0), checkBusy = useRef(false), saveBusy = useRef(false)
@@ -336,8 +350,6 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
   const attemptKey = JSON.stringify([scopeId, goalId, attemptId])
   const previousAttempt = useRef(attemptKey)
   if (previousAttempt.current !== attemptKey) { previousAttempt.current = attemptKey; generation.current += 1 }
-  const evidence = draft.key === attemptKey ? draft.text : ''
-  const confirmed = confirmedKey === identity
   useEffect(() => { scopeGeneration.current += 1; setNotice(''); return () => { scopeGeneration.current += 1; generation.current += 1 } }, [scopeId])
   if (!scopeId || (!attempt && !notice && !error)) return null
   const automaticIdle = goal?.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
@@ -361,8 +373,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     finally { checkBusy.current = false; if (scopeGeneration.current === scopeAtStart) setChecking(false) }
   }
   const submit = async () => {
-    const text = evidence.trim()
-    if (!eligible || checkedKey !== identity || !confirmed || text.length < 8 || text.length > 2000
+    if (!eligible || checkedKey !== identity
       || checkBusy.current || saveBusy.current || typeof resolveReview !== 'function') return
     let fresh
     try { fresh = currentRoomGoal?.(scopeId) } catch { /* no verified current view */ }
@@ -372,9 +383,9 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     const current = generation.current, scopeAtStart = scopeGeneration.current
     saveBusy.current = true; setSaving(true); setError(''); setNotice('')
     try {
-      await resolveReview(goalId, attemptId, text)
+      await resolveReview(goalId, attemptId)
       if (scopeGeneration.current === scopeAtStart) setNotice(`${t('Request accepted. Refresh to verify the current review status.')} ${t('Review ID')}: ${attemptId}`)
-      if (generation.current === current) { setDraft({ key: attemptKey, text: '' }); setConfirmedKey(''); setCheckedKey('') }
+      if (generation.current === current) setCheckedKey('')
     } catch (err) {
       if (generation.current === current) setCheckedKey('')
       if (scopeGeneration.current === scopeAtStart) setError(['bot/stale', 'bot/invalid', 'bot/refused', 'bot/read-only'].includes(err?.code)
@@ -388,10 +399,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     : goal?.status !== 'active' ? t('The group goal must be active before reviews can resume.')
       : goal.idle === true && !automaticIdle ? t('The goal is paused or its idle state needs review.')
         : !eligible ? t('This review is not ready to resume. Refresh its status later.')
-          : checkedKey !== identity ? t('Refresh the group status before continuing.')
-            : evidence.trim().length < 8 ? t('Enter at least 8 characters describing what you verified.')
-              : evidence.trim().length > 2000 ? t('Use at most 2000 characters.')
-                : !confirmed ? t('Confirm that you checked the original outcome.') : ''
+          : checkedKey !== identity ? t('Refresh the group status before continuing.') : ''
   return h('details', { className: 'bt-recovery-panel bt-periodic-review', open: initiallyOpen || undefined,
     onToggle: event => { if (event.target === event.currentTarget && event.currentTarget.open && checkedKey !== identity && !checkBusy.current) void refresh() } },
     h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '!'),
@@ -399,7 +407,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
       attempt ? h('span', { className: 'bt-recovery-badge' }, t('Status unknown')) : null),
     h('div', { className: 'bt-recovery-body' },
       attempt ? h('div', { className: 'bt-periodic-context' },
-        h('p', { className: 'bt-recovery-note' }, t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
+        h('p', { className: 'bt-recovery-note' }, t('The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.')),
         h('p', { className: 'bt-recovery-note' }, t('This only resumes periodic inspections; it does not approve or complete tasks.')),
         h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Group ID'), value: scopeId }),
           h(Fact, { label: t('Goal ID'), value: goalId || t('Unknown') }), h(Fact, { label: t('Review ID'), value: attemptId || t('Unknown') })),
@@ -409,10 +417,8 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
       notice ? h('p', { className: 'bt-recovery-notice', role: 'status' }, notice) : null,
       error ? h('p', { className: 'bt-recovery-warning', role: 'alert' }, error) : null,
       attempt ? h('div', { className: 'bt-recovery-form' },
-        h('label', null, t('What did you verify?'), h('textarea', { value: evidence, maxLength: 2000, disabled: checking || saving, onChange: event => setDraft({ key: attemptKey, text: event.target.value }) })),
-        h('label', { className: 'bt-recovery-confirm' }, h('input', { type: 'checkbox', checked: confirmed, disabled: checking || saving, onChange: event => setConfirmedKey(event.target.checked ? identity : '') }), t('I checked the original outcome and authorize future reviews.')),
         reason ? h('p', { className: 'bt-recovery-note', role: 'status' }, reason) : null,
-        h('button', { type: 'button', disabled: !!reason || checking || saving || typeof resolveReview !== 'function', onClick: () => void submit() }, t('Resume periodic reviews'))) : null))
+        h('button', { type: 'button', disabled: !!reason || checking || saving || typeof resolveReview !== 'function', onClick: () => void submit() }, t('Allow future inspections'))) : null))
 }
 
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
@@ -1037,7 +1043,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh:() => load() }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },

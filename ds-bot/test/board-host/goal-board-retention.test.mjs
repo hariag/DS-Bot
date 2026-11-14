@@ -23,3 +23,12 @@ test('goal history retains comments beyond the ordinary five-goal window', () =>
   assert.equal(room.pastGoals.length,6)
   assert.equal(room.pastGoals[0].stages[0].tasks[0].boardComments[0].text,'Keep')
 })
+
+test('goal history retains a user inspection decision beyond the ordinary window', () => {
+  const old=structuredClone(goal)
+  old.id='retained-decision';old.reviewResolutions=[{id:'attempt',decision:'allow-future',by:'user',at:1,attempt:{id:'attempt',state:'uncertain'}}]
+  const room={pastGoals:[old,...Array.from({length:4},(_,i)=>({id:`earlier-${i}`,stages:[]}))],goal:{id:'last',stages:[]}}
+  archiveGoal(room)
+  assert.equal(room.pastGoals[0].id,'retained-decision')
+  assert.equal(room.pastGoals[0].reviewResolutions[0].attempt.state,'uncertain')
+})
