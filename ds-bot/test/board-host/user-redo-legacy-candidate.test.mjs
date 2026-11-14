@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createLegacyRedoCandidate, LEGACY_CANDIDATE_WARNING } from '../../src/host/user-redo-legacy-candidate.mjs'
 import { isolatedRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
+import { candidateRedoConfirmation } from '../../src/host/candidate-redo-confirmation.mjs'
 
 const recoveryId = 'b'.repeat(64), scope = { kind:'room', id:'room' }, timestamp = 123456
 const message = { id:'m1', role:'user', source:{ kind:'bot', form:'relay', role:'request', exchangeId:'ex', senderSessionId:'sender', roomId:'room' }, content:[{ type:'text', text:'candidate task' }] }
@@ -53,14 +54,16 @@ test('no timestamp, two matching starts, missing turn end or non-interrupted out
 })
 
 test('control records, attachments, multiple inputs and other group identities are refused', async () => {
-  for (const flag of ['reviewInspect', 'groupKickoff', 'reviewId']) {
-    const f = fixture(); f.record.trigger[flag] = flag === 'reviewId' ? 'review' : true
+  for (const flag of ['reviewInspect', 'groupKickoff', 'reviewId', 'recoveryIds', 'recoveryKey', 'resumed', 'retried', 'abandoned', 'deferred']) {
+    const f = fixture(); f.record.trigger[flag] = flag === 'reviewId' || flag === 'recoveryKey' ? 'control' : flag === 'recoveryIds' ? ['control'] : true
     assert.equal(await f.candidate(scope, recoveryId), undefined)
   }
   const otherRoom = fixture(); otherRoom.record.roomId = 'other'
   assert.equal(await otherRoom.candidate(scope, recoveryId), undefined)
   const wrongScope = fixture()
   assert.equal(await wrongScope.candidate({ kind:'room', id:'other' }, recoveryId), undefined)
+  const otherOrigin = fixture(); otherOrigin.record.trigger.senderRoomId = 'other'
+  assert.equal(await otherOrigin.candidate(scope, recoveryId), undefined)
   const attachment = original(); attachment[0].data.inserted[0].content.push({ type:'image', attachment:{ id:'image' } })
   attachment[3].data.content.push({ type:'image', attachment:{ id:'image' } })
   assert.equal(await fixture(attachment).candidate(scope, recoveryId), undefined)
@@ -99,4 +102,24 @@ test('a stuck barrier times out and does not start another read while it is pend
   await new Promise(resolve => setImmediate(resolve))
   f.setFlush(async () => {})
   assert.equal((await f.candidate(scope, recoveryId))?.kind, 'unverified-legacy-candidate')
+})
+
+test('candidate digest cannot be forged and changes with any authorized execution target', async () => {
+  const f = fixture(), evidence = await f.candidate.inspectEvidence(scope, recoveryId)
+  const principal = { kind:'user', id:'user' }, operationId = 'bb5b1723-7063-4e3e-b27e-12f44dd0033d'
+  const target = { cwd:'/work', provider:'p', model:'m' }
+  const digest = candidateRedoConfirmation(scope, recoveryId, evidence, { principal, operationId, target })
+  assert.match(digest, /^[a-f0-9]{64}$/)
+  for (const changed of [{ ...target, cwd:'/different' }, { ...target, provider:'other' }, { ...target, model:'other' }]) {
+    assert.notEqual(candidateRedoConfirmation(scope, recoveryId, evidence, { principal, operationId, target:changed }), digest)
+  }
+  assert.notEqual(candidateRedoConfirmation(scope, recoveryId, evidence,
+    { principal, operationId:'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454', target }), digest)
+  const forged = Object.freeze({ ...evidence, view:Object.freeze({ ...evidence.view,
+    textSegments:Object.freeze(['forged']) }), isCurrent:() => true })
+  assert.throws(() => candidateRedoConfirmation(scope, recoveryId, forged, { principal, operationId, target }), /unavailable/)
+  assert.throws(() => candidateRedoConfirmation(scope, recoveryId, evidence,
+    { principal:{ kind:'bot', id:'user' }, operationId, target }), /unavailable/)
+  f.setCurrent(false)
+  assert.throws(() => candidateRedoConfirmation(scope, recoveryId, evidence, { principal, operationId, target }), /unavailable|changed/)
 })

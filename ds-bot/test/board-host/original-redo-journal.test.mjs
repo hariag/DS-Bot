@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
-import { createOriginalRedoJournal, originalRedoIdentity } from '../../src/host/original-redo-journal.mjs'
-import { userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
+import { createOriginalRedoJournal, createIsolatedRedoJournal, originalRedoIdentity } from '../../src/host/original-redo-journal.mjs'
+import { isolatedRedoConfirmation, userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
 import { install as installStore } from '../../src/host/store.js'
 
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d', otherId = 'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454'
@@ -48,6 +48,35 @@ test('dispatch permission is granted once and survives restart without automatic
   assert.deepEqual(await f.journal.beginDispatch(operationId, f.request.principal), { operationId, state:'unknown' })
   const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
   assert.deepEqual(await restarted.beginDispatch(operationId, f.request.principal), { operationId, state:'unknown' })
+})
+
+test('same operation ID is fenced across modes and different recoveries even concurrently', async t => {
+  const f = await fixture(t), otherRecovery = 'c'.repeat(64), target = { cwd:'/work', provider:'p', model:'m' }
+  const otherProof = { ...f.proof, recoveryId:otherRecovery }
+  f.dependencies.proveOriginal = async (_scope, id) => id === recoveryId ? f.proof : otherProof
+  const isolated = createIsolatedRedoJournal(f.rt, f.dependencies)
+  const otherRequest = { ...f.request, recoveryId:otherRecovery, target,
+    confirmationDigest:isolatedRedoConfirmation(scope, otherRecovery, otherProof,
+      { principal:f.request.principal, operationId, target }) }
+  const [first, concurrent] = await Promise.allSettled([f.journal.prepare(f.request), isolated.prepare(otherRequest)])
+  assert.equal(first.status, 'fulfilled')
+  assert.equal(concurrent.status, 'rejected')
+  await assert.rejects(createIsolatedRedoJournal(f.rt, f.dependencies).prepare(otherRequest), /identity conflict/)
+})
+
+test('same operation ID is fenced when isolated mode claimed it first', async t => {
+  const f = await fixture(t), otherRecovery = 'c'.repeat(64), target = { cwd:'/work', provider:'p', model:'m' }
+  const otherProof = { ...f.proof, recoveryId:otherRecovery }
+  f.dependencies.proveOriginal = async (_scope, id) => id === recoveryId ? f.proof : otherProof
+  const isolatedRequest = { ...f.request, target, confirmationDigest:isolatedRedoConfirmation(scope, recoveryId, f.proof,
+    { principal:f.request.principal, operationId, target }) }
+  const originalRequest = { ...f.request, recoveryId:otherRecovery,
+    confirmationDigest:userRedoConfirmation(scope, otherRecovery, otherProof) }
+  const first = createIsolatedRedoJournal(f.rt, f.dependencies), second = createOriginalRedoJournal(f.rt, f.dependencies)
+  const [prepared, concurrent] = await Promise.allSettled([first.prepare(isolatedRequest), second.prepare(originalRequest)])
+  assert.equal(prepared.status, 'fulfilled')
+  assert.equal(concurrent.status, 'rejected')
+  await assert.rejects(createOriginalRedoJournal(f.rt, f.dependencies).prepare(originalRequest), /identity conflict/)
 })
 
 test('retries the parent directory durability barrier after a failed first creation', { skip:process.platform !== 'linux' }, async t => {

@@ -11,9 +11,12 @@ export const isEvidenceFromLegacyCandidateReader = (rt, reader, evidence) => isL
 const comparableHeader = header => header && typeof header === 'object'
   ? { ...header, delegationDepth:header.delegationDepth === undefined ? 0 : header.delegationDepth } : header
 const noControl = source => source && ['request', 'room'].includes(source.role) && source.reviewInspect !== true
-  && source.groupKickoff !== true && source.reviewId === undefined
+  && source.groupKickoff !== true && source.reviewId === undefined && source.recoveryIds === undefined
+  && source.recoveryKey === undefined && source.resumed !== true && source.retried !== true
+  && source.abandoned !== true && source.deferred !== true
 const sameRoom = (scope, roomId) => scope?.kind === 'room' ? typeof scope.id === 'string' && roomId === scope.id
   : scope?.kind === 'personal' && roomId === undefined
+const sameOriginRoom = (scope, roomId) => roomId === undefined || (scope?.kind === 'room' && roomId === scope.id)
 export const LEGACY_CANDIDATE_WARNING = Object.freeze({
   zh:'这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。',
   en:'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.',
@@ -38,7 +41,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       if (!hold || record.turn !== undefined || !Number.isSafeInteger(record.since) || record.since < 0
         || !noControl(trigger) || typeof trigger.exchangeId !== 'string' || trigger.exchangeId === ''
         || (trigger.role === 'request' && (typeof trigger.senderSessionId !== 'string' || !trigger.senderSessionId))
-        || !sameRoom(scope, record.roomId ?? trigger.roomId) || !sameRoom(scope, trigger.roomId)
+        || !sameRoom(scope, record.roomId ?? trigger.roomId) || !sameRoom(scope, trigger.roomId) || !sameOriginRoom(scope, trigger.senderRoomId)
         || (record.roomId !== undefined && trigger.roomId !== record.roomId) || hold.isCurrent() !== true) return undefined
       const ctx = rt.ctx, getPersistence = () => ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
       const sessions = ctx.sessions, persistence = getPersistence()
@@ -74,7 +77,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       const inputs = events.filter(event => event.type === 'user/message' && event.seq > start.seq && event.seq < end.seq)
       if (inputs.length !== 1) return undefined
       const event = inputs[0], message = event.data, source = message?.source
-      if (source?.kind !== 'bot' || !noControl(source) || !sameRoom(scope, source.roomId)
+      if (source?.kind !== 'bot' || !noControl(source) || !sameRoom(scope, source.roomId) || !sameOriginRoom(scope, source.senderRoomId)
         || source.exchangeId !== trigger.exchangeId || Object.entries(trigger).some(([key, value]) => !isDeepStrictEqual(source[key], value))
         || typeof message.id !== 'string' || !message.id || message.role !== 'user'
         || !Array.isArray(message.content) || message.content.length < 1

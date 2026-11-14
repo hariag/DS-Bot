@@ -2,7 +2,7 @@
 // JSONL writer and held-record scope lookup. Authentication is a fixture.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { test } from 'node:test'
@@ -36,6 +36,7 @@ test('legacy time-only candidate reads a real durable writer without becoming a 
   await writeFile(join(home, 'inflight.json'), JSON.stringify({ turns:{}, queued:{}, heldTurns:{
     [recoveryId]:{ sessionId:'bot', record, reason:'interrupted outcome unknown' },
   } }), { mode:0o600 })
+  const inflightBefore = await readFile(join(home, 'inflight.json'), 'utf8')
   const bot = { id:'bot', name:'Bot' }, scope = { kind:'personal', id:'bot' }
   const rt = { ctx, home, state:{ bots:{ bot }, rooms:{}, agents:{} }, chatOwners:new Map([['bot','bot']]),
     groupOwners:new Map(), pastOwners:new Map(), botOf:id => id === 'bot' ? bot : undefined,
@@ -53,4 +54,6 @@ test('legacy time-only candidate reads a real durable writer without becoming a 
   assert.equal(result?.messageSeq, 3)
   assert.equal(await createUserRedoOriginalProof(rt)(scope, recoveryId), undefined)
   assert.equal(await candidate({ kind:'room', id:'other' }, recoveryId), undefined)
+  assert.equal(await readFile(join(home, 'inflight.json'), 'utf8'), inflightBefore)
+  assert.deepEqual((await readdir(home)).sort(), ['inflight.json', 'sessions'])
 })

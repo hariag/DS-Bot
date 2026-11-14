@@ -3,8 +3,6 @@ import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openS
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { isolatedRedoConfirmation, isolatedRedoTargetValid, userRedoConfirmation, userRedoIdentity } from './user-redo-journal.mjs'
-import { candidateRedoConfirmation, candidateRedoSource } from './candidate-redo-confirmation.mjs'
-import { isEvidenceFromLegacyCandidateReader, isLegacyCandidateReaderFor } from './user-redo-legacy-candidate.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -25,27 +23,19 @@ export function originalRedoIdentity(operationId) {
 // writer and bind the current Agent, exact Session object and scope before use.
 export function createOriginalRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, false) }
 export function createIsolatedRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, true) }
-export function createCandidateRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, 'candidate') }
 
-function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, validateBinding, verifyResult } = {}, isolated) {
-  const candidate = isolated === 'candidate'
+function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, verifyResult } = {}, isolated) {
   if (typeof rt?.home !== 'string' || typeof rt.statePath !== 'string' || !rt.state || typeof rt.save !== 'function'
     || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
-    || typeof authorize !== 'function' || (candidate ? !isLegacyCandidateReaderFor(rt, candidateReader) : typeof proveOriginal !== 'function')
+    || typeof authorize !== 'function' || typeof proveOriginal !== 'function'
     || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
   // Both modes share the recovery witness and operation busy set, so one held
   // record cannot be dispatched once by each mode. Private files and phase
   // markers are otherwise separate and cannot be mistaken for one another.
-  const namespace = candidate ? 'candidate-redo-v1' : isolated ? 'isolated-redo-v1' : 'original-redo-v1'
+  const namespace = isolated ? 'isolated-redo-v1' : 'original-redo-v1'
   const root = join(rt.home, namespace), marker = join(rt.home, `.${namespace}.identity`), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   const identityFor = isolated ? userRedoIdentity : originalRedoIdentity
   const targetValid = isolatedRedoTargetValid
-  const readProof = async (scope, recoveryId) => {
-    if (!candidate) return proveOriginal(scope, recoveryId)
-    const proof = await candidateReader.inspectEvidence(scope, recoveryId)
-    if (!isEvidenceFromLegacyCandidateReader(rt, candidateReader, proof)) throw Error('legacy candidate unavailable')
-    return proof
-  }
   let directoryIdentity
   function readMarker(path, sync = false) {
     const fd = openSync(path, constants.O_RDONLY | nofollow)
@@ -137,7 +127,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, vali
   }
   function phasePath(operationId, phase) {
     if (!uuid(operationId) || !['dispatching', 'claiming', 'completed'].includes(phase)) throw Error('invalid redo phase')
-    return join(rt.home, `.${candidate ? 'candidate' : isolated ? 'isolated' : 'original'}-redo-${operationId}-${phase}`)
+    return join(rt.home, `.${isolated ? 'isolated' : 'original'}-redo-${operationId}-${phase}`)
   }
   function phaseEvidence(row, phase, turn) {
     return { version:1, operationId:row.operationId, recoveryId:row.recoveryId, bindingHash:witnessFor(row).bindingHash,
@@ -192,10 +182,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, vali
         || (isolated ? !targetValid(value.target) : value.target !== undefined)
         || !principalValid(value.principal) || !scopeValid(value.scope) || !digest(value.recoveryId) || !digest(value.confirmationDigest)
         || value.acknowledged !== true || !['prepared', 'dispatching', 'claiming', 'completed'].includes(value.state)
-        || !validId(source?.botId) || !validId(source.sessionId)
-        || (candidate ? (source.kind !== 'unverified-legacy-candidate' || source.producerVerified !== false || !digest(source.textHash)
-          || !Number.isSafeInteger(source.turnStartSeq) || source.turnStartSeq < 0 || !Number.isSafeInteger(source.matchedTime) || source.matchedTime < 0
-          || source.messageSeq <= source.turnStartSeq) : (!validId(source.messageId) || !digest(source.messageHash)))
+        || !validId(source?.botId) || !validId(source.sessionId) || !validId(source.messageId) || !digest(source.messageHash)
         || !Number.isSafeInteger(source.turn) || source.turn < 0 || !Number.isSafeInteger(source.messageSeq) || source.messageSeq < 0) throw Error('redo record unavailable')
       return value
     } finally { closeSync(fd) }
@@ -249,11 +236,9 @@ function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, vali
     })
   }
   function original(proof, recoveryId, scope, confirmationDigest, principal, operationId, target) {
-    const expected = candidate ? candidateRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target })
-      : isolated ? isolatedRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target })
+    const expected = isolated ? isolatedRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target })
       : userRedoConfirmation(scope, recoveryId, proof)
     if (!digest(recoveryId) || !digest(confirmationDigest) || !scopeValid(scope) || expected !== confirmationDigest) throw Error('redo confirmation does not match')
-    if (candidate) return candidateRedoSource(scope, recoveryId, proof)
     return { botId:proof.botId, sessionId:proof.sessionId, turn:proof.turn, messageSeq:proof.messageSeq,
       messageId:proof.message.id, messageHash:hash(proof.message) }
   }
@@ -277,7 +262,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, vali
       await previous
       const generation = lease(); directory(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true) throw Error('redo unavailable')
-      const proof = await readProof(copy(scope), recoveryId)
+      const proof = await proveOriginal(copy(scope), recoveryId)
       const source = original(proof, recoveryId, scope, confirmationDigest, principal, operationId, target)
       sameLease(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
@@ -320,7 +305,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, vali
       if (!isDeepStrictEqual(row.principal, principal)) throw Error('redo unavailable')
       confirmPhase(row, generation)
       if (row.state !== 'prepared') return { state:'unknown', operationId }
-      const proof = await readProof(copy(row.scope), row.recoveryId)
+      const proof = await proveOriginal(copy(row.scope), row.recoveryId)
       const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest, row.principal, row.operationId, row.target)
       checkAccess(row, generation)
       if (!isDeepStrictEqual(source, row.original) || proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo proof changed')
@@ -402,7 +387,5 @@ function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, vali
       return copy(next)
     } finally { busy.delete(operationId) }
   }
-  // This experimental mode records a decision only. Dispatch remains absent
-  // until separate admission, result, permission and recovery work is ready.
-  return candidate ? { prepare } : { prepare, beginDispatch, inspectDispatchSync, markClaimingSync, recordResult }
+  return { prepare, beginDispatch, inspectDispatchSync, markClaimingSync, recordResult }
 }
