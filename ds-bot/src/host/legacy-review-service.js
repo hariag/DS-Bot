@@ -1,7 +1,8 @@
 // Manual owner review only: no agent admission, work settlement, or dispatch.
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { constants, lstatSync, mkdirSync } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { openReviewLedger, readReviewReceipt } from './review-ledger.mjs'
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const valid = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value)
@@ -14,7 +15,7 @@ function operationId(kind,workId,payload) {
 }
 const validWorkTime = value => Number.isSafeInteger(value)&&value>=0&&value<=8_640_000_000_000_000
 export function install(rt) {
-  const {ctx}=rt;let ledger,closing=false
+  const {ctx}=rt;let ledger,closing=false,decisionBusy=false,decisionBlocked=false,confirmedTable,confirmedLease
   function writable(){if(closing||rt.stopping||rt.readOnly()!==undefined)throw Error('manual review unavailable');rt.requireHomeLock()}
   function scopeKey(scope,work){
     if(!scope||!['personal','room'].includes(scope.kind)||!valid(scope.id))throw Error('review unavailable')
@@ -24,6 +25,30 @@ export function install(rt) {
   }
   function workFor(workId){if(!valid(workId))throw Error('review unavailable');const work=rt.state.works?.[workId];if(!work||!valid(work.from)||!valid(work.to)||!rt.state.bots?.[work.from]||!rt.state.bots?.[work.to])throw Error('review unavailable');return work}
   function workHash(workId,work){return hash({workId,from:work.from,to:work.to,room:work.room??null,fromRoom:work.fromRoom??null,parent:work.parent??null,child:work.child??null,at:validWorkTime(work.at)?work.at:null})}
+  function decisions(){const table=rt.state.legacyWorkDecisions;if(table===undefined)return undefined;if(!table||typeof table!=='object'||Array.isArray(table))throw Error('work decision history unavailable');return table}
+  function decisionFor(workId,work){
+    const entry=decisions()?.[hash(workId)]
+    if(!entry)return {choice:'open',revision:0}
+    if(entry.workId!==workId || entry.fingerprint!==workHash(workId,work) || !Array.isArray(entry.history) || entry.history.length>100
+      || entry.history.some((item,index)=>!item||item.revision!==index+1||!['open','ignored','user-accepted'].includes(item.choice)||item.by!=='user'||typeof item.scope!=='string'||!Number.isSafeInteger(item.at))) throw Error('work identity or decision history changed')
+    return {choice:entry.history.at(-1)?.choice??'open',revision:entry.history.length}
+  }
+  async function syncDecisions(){
+    const table=decisions();if(table===undefined){if(decisionBlocked)throw Error('work decision outcome unknown');return}
+    writable();const lease=rt.homeLockVersion()
+    if(!decisionBlocked&&table===confirmedTable&&lease===confirmedLease)return
+    const file=await open(rt.statePath,constants.O_RDONLY | (constants.O_NOFOLLOW??0))
+    try {
+      const before=await file.stat();if(!before.isFile())throw Error('work decision journal unavailable')
+      const saved=JSON.parse(await file.readFile('utf8'))?.legacyWorkDecisions
+      if(JSON.stringify(saved)!==JSON.stringify(table))throw Error('work decisions are not saved')
+      await file.sync();const directory=await open(dirname(rt.statePath),constants.O_RDONLY)
+      try{await directory.sync()}finally{await directory.close()}
+      const afterFile=await file.stat(),after=await lstat(rt.statePath);writable()
+      if(!after.isFile()||after.isSymbolicLink()||before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.size!==afterFile.size||before.mtimeMs!==afterFile.mtimeMs||rt.homeLockVersion()!==lease||decisions()!==table)throw Error('work decisions changed during confirmation')
+      confirmedTable=table;confirmedLease=lease;decisionBlocked=false
+    } finally {await file.close()}
+  }
   function archiveAllowed(scope,snapshot){
     if(!scope||!valid(scope.id))return false
     if(scope.kind==='personal'&&scope.id==='user')return true
@@ -36,11 +61,34 @@ export function install(rt) {
   async function call(endpoint,payload={}){
     await rt.load();writable();const {workId,scope}=payload
     if(endpoint==='legacy-review-list'){
+      if(decisionBusy)throw Error('work decision outcome unknown')
+      await syncDecisions()
       if(!scope||!['personal','room'].includes(scope.kind)||!valid(scope.id)||(scope.kind==='room'&&!rt.state.rooms?.[scope.id])||(scope.kind==='personal'&&scope.id!=='user'&&!rt.state.bots?.[scope.id]))throw Error('review unavailable')
       const revision=rt.state.revision,sample=await rt.recoveryWorkCandidates?.();writable()
       if(!sample||!Array.isArray(sample.ids)||rt.state.revision!==revision)throw Error('review sources unavailable')
-      const items=[];for(const id of sample.ids){try{const w=workFor(id);scopeKey(scope,w);items.push({workId:id,owner:w.to})}catch{}}
-      return {items,incomplete:sample.incomplete===true}
+      let incomplete=sample.incomplete===true
+      const items=[];for(const id of sample.ids){let w;try{w=workFor(id);scopeKey(scope,w)}catch{continue}try{items.push({workId:id,owner:w.to,sender:w.from,canDecide:validWorkTime(w.at),...decisionFor(id,w)})}catch{incomplete=true}}
+      return {items,incomplete}
+    }
+    if(endpoint==='legacy-review-decision'){
+      if(decisionBusy)throw Error('work decision outcome unknown')
+      decisionBusy=true
+      try {
+        await syncDecisions()
+        const work=workFor(workId);scopeKey(scope,work)
+        if(!validWorkTime(work.at)||!Number.isSafeInteger(payload.expectedRevision)||payload.expectedRevision<0||!['open','ignored','user-accepted'].includes(payload.choice))throw Error('invalid work decision')
+        const fingerprint=workHash(workId,work),key=hash(workId),table=decisions()??{},entry=table[key],history=entry?.history??[]
+        decisionFor(workId,work)
+        const previous=history[payload.expectedRevision], scoped=JSON.stringify([scope.kind,scope.id])
+        if(previous?.revision===payload.expectedRevision+1&&previous.choice===payload.choice&&previous.scope===scoped)return {choice:previous.choice,revision:previous.revision}
+        if(history.length!==payload.expectedRevision||history.length>=100||Object.keys(table).length>=10000&&!entry)throw Error('work decision changed or history is full')
+        const next={workId,fingerprint,history:[...history,{revision:history.length+1,choice:payload.choice,by:'user',scope:scoped,at:Date.now()}]}
+        rt.state.legacyWorkDecisions={...table,[key]:next}
+        try {await rt.save({required:true});await syncDecisions()}catch(error){decisionBlocked=true;throw error}
+        const fresh=workFor(workId);scopeKey(scope,fresh)
+        if(workHash(workId,fresh)!==fingerprint)throw Error('work changed; inspect the decision')
+        return {choice:payload.choice,revision:next.history.length}
+      } finally {decisionBusy=false}
     }
     if(endpoint==='legacy-review-prepare'){
       const work=workFor(workId);scopeKey(scope,work)
