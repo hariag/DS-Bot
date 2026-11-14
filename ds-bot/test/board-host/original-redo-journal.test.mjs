@@ -441,3 +441,17 @@ test('claim inspection binds the exact durable row, principal and current author
   f.allowed(true); f.bound(false)
   assert.throws(() => f.journal.inspectClaimingSync(claimed, f.request.principal), /unavailable/)
 })
+
+test('claim inspection refuses a reentrant rollback before a model request', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const dispatch = await f.journal.beginDispatch(operationId, f.request.principal)
+  const claimed = f.journal.markClaimingSync(dispatch.binding, { turn:7, turnStartSeq:9 }, f.request.principal)
+  const path = join(f.home, 'original-redo-v1', `${operationId}.json`)
+  let called = false
+  const restarted = createOriginalRedoJournal(f.rt, { ...f.dependencies, validateBinding:() => {
+    if (!called) { called = true; fs.writeFileSync(path, JSON.stringify(dispatch.binding), { mode:0o600 }) }
+    return true
+  } })
+  assert.throws(() => restarted.inspectClaimingSync(claimed, f.request.principal), /unavailable|snapshot|changed|unknown/)
+  assert.equal(called, true)
+})
