@@ -99,7 +99,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       const view = Object.freeze({ kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, recoveryId,
         warning:LEGACY_CANDIDATE_WARNING,
         botId:record.botId, sessionId:hold.sessionId, ...(scope.kind === 'room' ? { roomId:scope.id } : {}),
-        turn:start.data.turn, turnStartSeq:start.seq, messageSeq:event.seq, matchedTime:start.time,
+        turn:start.data.turn, turnStartSeq:start.seq, messageSeq:event.seq, messageId:message.id, matchedTime:start.time,
         textSegments:Object.freeze(message.content.map(part => part.text)) })
       const evidence = Object.freeze({ kind:'unverified-candidate-evidence-v1', view, isCurrent:current })
       issued.add(evidence); ownIssued.add(evidence)

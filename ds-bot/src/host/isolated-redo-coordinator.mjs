@@ -9,12 +9,16 @@ import { createIsolatedRedoRequestGuard } from './isolated-redo-request-guard.mj
 export function createIsolatedRedoCoordinator(rt, { agent, journal, binding, principal, originalMessage, message }) {
   const row = structuredClone(binding), actor = structuredClone(principal), original = structuredClone(originalMessage)
   const input = structuredClone(message), identity = userRedoIdentity(row?.operationId)
-  const hash = createHash('sha256').update(JSON.stringify(original)).digest('hex')
+  const candidate = row?.original?.kind === 'unverified-legacy-candidate'
+  const segments = Array.isArray(original?.content) && original.content.every(part => part?.type === 'text' && typeof part.text === 'string')
+    ? original.content.map(part => part.text) : undefined
+  const hash = createHash('sha256').update(JSON.stringify(candidate ? segments : original)).digest('hex')
   if (!rt?.ctx || typeof rt.userRedoOwner !== 'function' || typeof rt.userRedoBinding !== 'function'
     || !(rt.userRedoTransient instanceof Map) || typeof journal?.markClaimingSync !== 'function'
     || typeof journal?.inspectClaimingSync !== 'function' || row?.state !== 'dispatching'
     || !isDeepStrictEqual(row.identity, identity) || !isDeepStrictEqual(row.principal, actor)
     || actor?.kind !== 'user' || actor.id !== 'user' || row.original?.messageHash !== hash
+    || (candidate && (row.original.producerVerified !== false || !segments?.length || original.id !== row.original.messageId))
     || input?.id !== identity.messageId || input.role !== 'user' || input.source?.kind !== 'ds-bot-user-redo'
     || Object.keys(input.source).some(key => key !== 'kind') || !isDeepStrictEqual(input.content, original?.content)
     || agent?.id !== identity.sessionId || agent?.session?.id !== identity.sessionId

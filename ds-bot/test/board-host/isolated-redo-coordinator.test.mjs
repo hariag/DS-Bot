@@ -56,3 +56,17 @@ test('rechecks durable authority and the current Session before a model call', (
     assert.equal(f.coordinator.beforeModelRequest(f.session, f.request(), { turn:2, step:1 }), false)
   }
 })
+
+test('candidate text may authorize only the separately confirmed unverified content', () => {
+  const f = fixture(), original = { id:'legacy-msg', content:[{ type:'text', text:'candidate task' }] }
+  const row = { ...f.row, original:{ botId:'bot', kind:'unverified-legacy-candidate', producerVerified:false,
+    messageId:original.id, messageHash:createHash('sha256').update(JSON.stringify(['candidate task'])).digest('hex') } }
+  const msg = { ...f.message, content:structuredClone(original.content) }
+  f.rt.userRedoTransient.set(row.operationId, row)
+  assert.doesNotThrow(() => createIsolatedRedoCoordinator(f.rt, { agent:f.agent, journal:f.journal,
+    binding:row, principal:f.actor, originalMessage:original, message:msg }))
+  assert.throws(() => createIsolatedRedoCoordinator(f.rt, { agent:f.agent, journal:f.journal, binding:row, principal:f.actor,
+    originalMessage:{ ...original, content:[{ type:'text', text:'changed' }] }, message:msg }), /unavailable/)
+  assert.throws(() => createIsolatedRedoCoordinator(f.rt, { agent:f.agent, journal:f.journal,
+    binding:{ ...row, original:{ ...row.original, producerVerified:true } }, principal:f.actor, originalMessage:original, message:msg }), /unavailable/)
+})

@@ -30,7 +30,7 @@ function fixture(events = original(), timeoutMs = 15_000) {
 test('returns a single physical candidate without claiming authenticated authorship or execution', async () => {
   const f = fixture(), candidate = await f.candidate(scope, recoveryId)
   assert.deepEqual(candidate, { kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false,
-    warning:LEGACY_CANDIDATE_WARNING, recoveryId, botId:'bot', sessionId:'source', roomId:'room', turn:5, turnStartSeq:1, messageSeq:3, matchedTime:timestamp,
+    warning:LEGACY_CANDIDATE_WARNING, recoveryId, botId:'bot', sessionId:'source', roomId:'room', turn:5, turnStartSeq:1, messageSeq:3, messageId:'m1', matchedTime:timestamp,
     textSegments:['candidate task'] })
   assert.throws(() => isolatedRedoConfirmation(scope, recoveryId, candidate, { principal:{ kind:'user', id:'user' },
     operationId:'bb5b1723-7063-4e3e-b27e-12f44dd0033d', target:{ cwd:'/work', provider:'p', model:'m' } }), /cannot be verified/)

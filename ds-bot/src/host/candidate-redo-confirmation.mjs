@@ -21,7 +21,7 @@ export function candidateRedoSource(scope, recoveryId, evidence) {
     || Object.keys(scope).some(key => !['kind', 'id'].includes(key))
     || (scope.kind === 'room' ? view.roomId !== scope.id : view.roomId !== undefined || !['user', view.botId].includes(scope.id))
     || !Number.isSafeInteger(view.turn) || view.turn < 0 || !Number.isSafeInteger(view.turnStartSeq) || view.turnStartSeq < 0
-    || !Number.isSafeInteger(view.messageSeq) || view.messageSeq <= view.turnStartSeq
+    || !Number.isSafeInteger(view.messageSeq) || view.messageSeq <= view.turnStartSeq || !id(view.messageId)
     || !Number.isSafeInteger(view.matchedTime) || view.matchedTime < 0
     || !Array.isArray(view.textSegments) || !view.textSegments.length || view.textSegments.some(part => typeof part !== 'string')
     || view.textSegments.every(part => !part.trim()) || Buffer.byteLength(JSON.stringify(view.textSegments)) > 65536) {
@@ -29,7 +29,7 @@ export function candidateRedoSource(scope, recoveryId, evidence) {
   }
   const result = Object.freeze({ kind:'unverified-legacy-candidate', producerVerified:false,
     botId:view.botId, sessionId:view.sessionId, turn:view.turn, turnStartSeq:view.turnStartSeq,
-    messageSeq:view.messageSeq, matchedTime:view.matchedTime, textHash:hash(view.textSegments) })
+    messageSeq:view.messageSeq, messageId:view.messageId, matchedTime:view.matchedTime, textHash:hash(view.textSegments) })
   if (evidence.isCurrent() !== true) throw new Error('legacy candidate changed')
   return result
 }
