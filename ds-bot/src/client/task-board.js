@@ -118,17 +118,6 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
     finally { inFlight.current = false; setBusy('') }
   }
-  const redo = async (item, checkOnly = false) => {
-    if (inFlight.current || (checkOnly ? item.redo?.state !== 'unknown' : item.redo?.available !== true)
-      || (!checkOnly && !globalThis.confirm(t('Redo this specific interrupted work? External actions may happen again.')))) return
-    inFlight.current = true; setBusy(item.recoveryId); setError('')
-    try {
-      const result = await request('board-held-redo', { scope, recoveryId:item.recoveryId, confirmed:true, ...(checkOnly ? {checkOnly:true} : {}) })
-      if (result?.state !== 'submitted') setError(t('The redo outcome is unknown. Refresh to check; do not submit it again.'))
-      await onRefresh()
-    } catch { setError(t('The redo outcome is unknown. Refresh to check; do not submit it again.')); await onRefresh() }
-    finally { inFlight.current = false; setBusy('') }
-  }
   if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
@@ -146,9 +135,7 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
         h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
         h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }), h(Fact, { label: t('Recovery ID'), value: item.recoveryId })),
       h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
-      item.decision !== 'ignored' && item.redo?.available === true ? h('button', { type:'button', disabled:!!busy, onClick:() => void redo(item) }, t('Redo')) : null,
-      item.decision !== 'ignored' && item.redo?.state === 'unknown' ? h('button', { type:'button', disabled:!!busy, onClick:() => void redo(item,true) }, t('Check redo')) : null,
-      item.decision !== 'ignored' && item.redo?.available !== true ? h('p', { className:'bt-recovery-note' }, t(item.redo?.state === 'submitted' ? 'Redo request submitted.' : item.redo?.state === 'unknown' ? 'The previous redo outcome is unknown.' : 'Redo is unavailable because the original input cannot be verified.')) : null,
+      item.decision !== 'ignored' ? h('p', { className:'bt-recovery-note' }, t('Redo is unavailable because the original input cannot be verified.')) : null,
       h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))))))
   return h('details', { className: 'bt-recovery-panel' },
     h('summary', { className: 'bt-recovery-summary' },
