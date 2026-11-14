@@ -1,8 +1,9 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,rmSync} from 'node:fs'
+import {mkdtempSync,rmSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {createHash} from 'node:crypto'
 import {install} from '../src/host/legacy-review-service.js'
 function fixture(){const home=mkdtempSync(join(tmpdir(),'owner-review-'));let own=true,origins=async()=>({ids:['session-old'],observed:{queue:'observed-present',held:'unknown',external:'unknown'}});const state={bots:{a:{},b:{}},rooms:{r:{members:['a','b']},other:{members:['a','b']}},works:{w:{from:'a',to:'b',room:'r',at:1}}};const rt={home,state,ctx:{effect(){}},readOnly:()=>own?undefined:'readonly',requireHomeLock(){if(!own)throw Error('lost')},onHomeDrain(){},load:async()=>{},recoveryWorkOrigins:id=>origins(id)};install(rt);return {rt,lose(){own=false},setOrigins(fn){origins=fn},close(){own=false;rmSync(home,{recursive:true,force:true})}}}
 const room={kind:'room',id:'r'},wrong={kind:'room',id:'other'}
@@ -21,3 +22,55 @@ test('frozen linked scopes retain read-only history without granting another gro
 
 test('recreated work with a different creation time or lineage leaves old review read-only',async()=>{const f=fixture();try{await f.rt.legacyReviewCall('legacy-review-create',{workId:'w',scope:room});f.rt.state.works.w={from:'a',to:'b',room:'r',at:2};assert.equal((await f.rt.legacyReviewCall('legacy-review-get',{workId:'w',scope:room})).archived,true);await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-create',{workId:'w',scope:room}),/unavailable/);f.rt.state.works.w={from:'a',to:'b',room:'r',at:1,parent:'new-parent'};assert.equal((await f.rt.legacyReviewCall('legacy-review-get',{workId:'w',scope:room})).archived,true)}finally{f.close()}})
 test('work without a trustworthy creation time is visible as unverified and cannot create notes',async()=>{const f=fixture();try{delete f.rt.state.works.w.at;const shown=await f.rt.legacyReviewCall('legacy-review-get',{workId:'w',scope:room});assert.equal(shown.state,'identity-unverified');assert.equal(shown.archived,true);assert.equal(shown.liveRecovery.available,true);await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-create',{workId:'w',scope:room}),/identity unavailable/)}finally{f.close()}})
+
+const op=value=>'manual-review:'+createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const createOp=op({kind:'create',workId:'w'})
+const findingOp=op({kind:'finding',workId:'w',expectedRevision:1,summary:'Check original evidence',evidenceRefs:[],unfinished:[]})
+const otherOp=op({kind:'create',workId:'other'})
+test('receipt lookup is read-only and missing does not mean uncommitted',async()=>{const f=fixture();try{
+  const query={scope:room,workId:'w',operationId:createOp,kind:'create'}
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',query),{status:'unknown'})
+  assert.equal(existsSync(join(f.rt.home,'legacy-reviews-v1')),false)
+  await f.rt.legacyReviewCall('legacy-review-create',{scope:room,workId:'w',operationId:createOp})
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',query),{status:'committed'})
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{...query,operationId:otherOp}),{status:'unknown'})
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{...query,kind:'finding'}),{status:'unknown'})
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{...query,scope:{kind:'personal',id:'user'}}),{status:'unknown'})
+  f.rt.state.works.w2={from:'a',to:'b',room:'r',at:2}
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{...query,workId:'w2'}),{status:'unknown'})
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-operation',{...query,scope:wrong}),/unavailable/)
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-operation',{...query,operationId:'review-create:forged'}),/invalid/)
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-operation',{...query,kind:'unknown'}),/invalid/)
+}finally{f.close()}})
+test('client operation ID replays one finding and rejects altered payload and scope',async()=>{const f=fixture();try{
+  await f.rt.legacyReviewCall('legacy-review-create',{scope:room,workId:'w',operationId:createOp})
+  const input={scope:room,workId:'w',operationId:findingOp,expectedRevision:1,summary:'Check original evidence',evidenceRefs:[],unfinished:[]}
+  assert.equal((await f.rt.legacyReviewCall('legacy-review-finding',input)).revision,2)
+  assert.equal((await f.rt.legacyReviewCall('legacy-review-finding',input)).history.length,1)
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{scope:room,workId:'w',operationId:findingOp,kind:'finding'}),{status:'committed'})
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-finding',{...input,expectedRevision:2}),/invalid operation/)
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-finding',{...input,summary:'Other note'}),/invalid operation/)
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-finding',{...input,scope:{kind:'personal',id:'user'}}),/conflict/)
+}finally{f.close()}})
+test('existing legacy review does not fabricate a new create receipt',async()=>{const f=fixture();try{
+  await f.rt.legacyReviewCall('legacy-review-create',{scope:room,workId:'w'})
+  await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-create',{scope:room,workId:'w',operationId:createOp}),/already has/)
+  assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{scope:room,workId:'w',operationId:createOp,kind:'create'}),{status:'unknown'})
+}finally{f.close()}})
+test('operation preparation validates scope and creates no journal',async()=>{const f=fixture();try{
+ const payload={scope:room,workId:'w',kind:'create'}
+ const a=await f.rt.legacyReviewCall('legacy-review-prepare',payload),b=await f.rt.legacyReviewCall('legacy-review-prepare',payload)
+ assert.equal(a.operationId,createOp)
+ assert.equal(a.operationId,b.operationId)
+ assert.equal((await f.rt.legacyReviewCall('legacy-review-prepare',{...payload,scope:{kind:'personal',id:'user'}})).operationId,createOp)
+ const finding={...payload,kind:'finding',expectedRevision:1,summary:'Check original evidence',evidenceRefs:[],unfinished:[]}
+ assert.equal((await f.rt.legacyReviewCall('legacy-review-prepare',finding)).operationId,findingOp)
+ await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-prepare',{...finding,summary:''}),/invalid/)
+ assert.equal(existsSync(join(f.rt.home,'legacy-reviews-v1')),false)
+ await assert.rejects(()=>f.rt.legacyReviewCall('legacy-review-prepare',{...payload,scope:wrong}),/unavailable/)
+}finally{f.close()}})
+test('receipt for a replaced work identity cannot confirm the new work',async()=>{const f=fixture();try{
+ await f.rt.legacyReviewCall('legacy-review-create',{scope:room,workId:'w',operationId:createOp})
+ f.rt.state.works.w={from:'a',to:'b',room:'r',at:2}
+ assert.deepEqual(await f.rt.legacyReviewCall('legacy-review-operation',{scope:room,workId:'w',operationId:createOp,kind:'create'}),{status:'unknown'})
+}finally{f.close()}})
