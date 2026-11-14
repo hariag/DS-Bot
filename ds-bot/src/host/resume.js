@@ -687,7 +687,7 @@ export function install(rt) {
       && held.observation !== 'output-limit' && JSON.stringify(held.record) === JSON.stringify(record))
     if (candidates.length === 0) return
     const events = await logOf(sessionId)
-    if (!observedOutputLimit(events, exchangeId, ended.turn) || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
+    if (!observedOutputLimit(events, exchangeId, ended.turn, record.trigger?.role) || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
     rt.requireHomeLock()
     let changed = false
     for (const [id, previous] of candidates) {

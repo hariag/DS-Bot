@@ -1528,7 +1528,7 @@ test('a received exact reply reconciles complete inline child results into the p
   const getService = host.ctx.get
   host.ctx.get = name => name === 'sessionPersistence' ? host.ctx.sessionPersistence : getService(name)
   t.mock.timers.tick(0)
-  await settleState(t, home, () => stateOf(home).works.x1 === undefined)
+  await settle(() => stateOf(home).works.x1 === undefined)
   const results = stateOf(home).works.p1.results
   assert.equal(results.length, 1)
   assert.equal(results[0].id, 'x1')
@@ -1606,16 +1606,19 @@ test('an observed output limit is retained once for review without resending wor
   second.emit('b', 'turn/end', { turn: 1, reason: { kind: 'max-tokens' } })
   t.mock.timers.tick(3000)
   await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.observation === 'output-limit'))
-  const entries = await readDiagnostics(home, rows => rows.some(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)))
-  assert.equal(entries.filter(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)).length, 1)
+  const observed = () => {
+    try { return readFileSync(join(home, 'logs', 'diagnostics.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+      .filter(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)) } catch { return [] }
+  }
+  await settle(() => observed().length === 1)
+  assert.equal(observed().length, 1)
   assert.ok(stateOf(home).works.x1)
   assert.deepEqual([second.agentOf('a').calls.length, second.agentOf('b').calls.length], [0, 0])
   await second.stop()
   const third = await start(home, logs)
   t.mock.timers.tick(0)
   await new Promise(resolve => setImmediate(resolve))
-  const after = await readDiagnostics(home)
-  assert.equal(after.filter(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)).length, 1)
+  assert.equal(observed().length, 1)
   assert.ok(Object.values(notes(home).heldTurns ?? {}).some(item => item.observation === 'output-limit'))
   assert.deepEqual([third.agentOf('a').calls.length, third.agentOf('b').calls.length], [0, 0])
 })

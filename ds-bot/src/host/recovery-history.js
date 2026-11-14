@@ -108,8 +108,8 @@ export function replyContainsInlineResults(reply, results, botName) {
 
 // This is an observation of a session turn, not proof that its work finished.
 // Only an exact, contiguous history with one matching message and turn qualifies.
-export function observedOutputLimit(events, exchangeId, turnId) {
-  if (!Array.isArray(events) || typeof exchangeId !== 'string' || exchangeId === '' || !Number.isSafeInteger(turnId) || turnId < 0) return false
+export function observedOutputLimit(events, exchangeId, turnId, role) {
+  if (!Array.isArray(events) || typeof exchangeId !== 'string' || exchangeId === '' || typeof role !== 'string' || role === '' || !Number.isSafeInteger(turnId) || turnId < 0) return false
   let current, starts = 0, matches = 0, inTarget = 0, ended = false
   for (let i = 0; i < events.length; i += 1) {
     const event = events[i]
@@ -121,7 +121,7 @@ export function observedOutputLimit(events, exchangeId, turnId) {
       if (current === turnId) starts += 1
     } else if (event.type === 'user/message' && event.data?.source?.exchangeId === exchangeId) {
       matches += 1
-      if (current === turnId) inTarget += 1
+      if (current === turnId && event.data?.source?.kind === 'bot' && event.data.source.role === role) inTarget += 1
     } else if (event.type === 'turn/end') {
       if (current === undefined || (event.data?.turn !== undefined && event.data.turn !== current)) return false
       if (current === turnId && event.data?.reason?.kind === 'max-tokens') ended = true

@@ -64,12 +64,13 @@ test('child results are reconciled only when the received reply contains each co
 
 test('output-limit observation requires one matching message and one contiguous matching turn', () => {
   const events = [event(0, 'turn/start', { turn: 4 }),
-    event(1, 'user/message', { source: { exchangeId: 'x' } }),
+    event(1, 'user/message', { source: { kind: 'bot', role: 'request', exchangeId: 'x' } }),
     event(2, 'turn/end', { turn: 4, reason: { kind: 'max-tokens' } })]
-  assert.equal(observedOutputLimit(events, 'x', 4), true)
-  assert.equal(observedOutputLimit(events, 'x', 5), false)
-  assert.equal(observedOutputLimit(events, 'other', 4), false)
-  assert.equal(observedOutputLimit([events[0], { ...events[1], seq: 9 }, events[2]], 'x', 4), false)
-  assert.equal(observedOutputLimit([...events, event(3, 'user/message', { source: { exchangeId: 'x' } })], 'x', 4), false)
-  assert.equal(observedOutputLimit([events[0], events[1], event(2, 'turn/end', { turn: 4, reason: { kind: 'completed' } })], 'x', 4), false)
+  assert.equal(observedOutputLimit(events, 'x', 4, 'request'), true)
+  assert.equal(observedOutputLimit(events, 'x', 5, 'request'), false)
+  assert.equal(observedOutputLimit(events, 'other', 4, 'request'), false)
+  assert.equal(observedOutputLimit(events, 'x', 4, 'reply'), false)
+  assert.equal(observedOutputLimit([events[0], { ...events[1], seq: 9 }, events[2]], 'x', 4, 'request'), false)
+  assert.equal(observedOutputLimit([...events, event(3, 'user/message', { source: { exchangeId: 'x' } })], 'x', 4, 'request'), false)
+  assert.equal(observedOutputLimit([events[0], events[1], event(2, 'turn/end', { turn: 4, reason: { kind: 'completed' } })], 'x', 4, 'request'), false)
 })
