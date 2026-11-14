@@ -428,3 +428,16 @@ test('a callback that restores the dispatch row and deletes claim phase cannot r
   const journal = createOriginalRedoJournal(f.rt, f.dependencies)
   assert.throws(() => journal.markClaimingSync(binding, { turn:9, turnStartSeq:72 }, f.request.principal), /unknown/)
 })
+
+test('claim inspection binds the exact durable row, principal and current authority', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const dispatch = await f.journal.beginDispatch(operationId, f.request.principal)
+  const claimed = f.journal.markClaimingSync(dispatch.binding, { turn:7, turnStartSeq:9 }, f.request.principal)
+  assert.deepEqual(f.journal.inspectClaimingSync(claimed, f.request.principal), claimed)
+  assert.throws(() => f.journal.inspectClaimingSync({ ...claimed, turn:{ turn:8, turnStartSeq:9 } }, f.request.principal), /unavailable/)
+  assert.throws(() => f.journal.inspectClaimingSync(claimed, { kind:'bot', id:'user' }), /unavailable/)
+  f.allowed(false)
+  assert.throws(() => f.journal.inspectClaimingSync(claimed, f.request.principal), /unavailable/)
+  f.allowed(true); f.bound(false)
+  assert.throws(() => f.journal.inspectClaimingSync(claimed, f.request.principal), /unavailable/)
+})

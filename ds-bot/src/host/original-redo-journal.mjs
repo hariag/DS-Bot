@@ -352,6 +352,25 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       return copy(next)
     } finally { busy.delete(operationId) }
   }
+  // Read and fsync the exact claiming state before a model request. A caller
+  // must still perform its own non-reentrant Agent/Session identity checks.
+  function inspectClaimingSync(binding, principal) {
+    const operationId = binding?.operationId
+    if (!uuid(operationId) || busy.has(operationId)) throw Error('redo outcome unknown')
+    busy.add(operationId)
+    try {
+      const generation = lease(); directory(generation)
+      const row = read(operationId); checkAccess(row, generation); confirmPhase(row, generation)
+      if (row.state !== 'claiming' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
+        || authorize(copy(row.scope), row.recoveryId, copy(principal)) !== true
+        || validateBinding(copy(row), copy(row.turn)) !== true) throw Error('redo claim unavailable')
+      confirm(row, generation); checkAccess(row, generation); confirmPhase(row, generation)
+      if (authorize(copy(row.scope), row.recoveryId, copy(principal)) !== true
+        || validateBinding(copy(row), copy(row.turn)) !== true) throw Error('redo claim changed')
+      checkAccess(row, generation); confirm(row, generation); confirmPhase(row, generation); confirmWitness(row, generation)
+      return copy(row)
+    } finally { busy.delete(operationId) }
+  }
   async function recordResult(operationId, principal) {
     if (!uuid(operationId) || busy.has(operationId) || typeof verifyResult !== 'function') throw Error('redo result unavailable')
     busy.add(operationId)
@@ -387,5 +406,5 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       return copy(next)
     } finally { busy.delete(operationId) }
   }
-  return { prepare, beginDispatch, inspectDispatchSync, markClaimingSync, recordResult }
+  return { prepare, beginDispatch, inspectDispatchSync, markClaimingSync, inspectClaimingSync, recordResult }
 }
