@@ -12484,6 +12484,21 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Work decisions": "处理已有工作",
+  "Choose an action for an existing work": "选择如何处理已有工作",
+  "Manual notes (optional)": "手工备注（可选）",
+  "Your choice does not close the work or establish its outcome.": "此选择不会关闭工作，也不代表工作结果已确认。",
+  "Work decisions are unavailable.": "暂时无法读取工作处理状态。",
+  "Decision outcome may be unknown. Refresh to verify it.": "处理结果可能未知，请刷新核对。",
+  "Needs a decision": "待处理",
+  "No work needs a decision.": "没有待处理的工作。",
+  "Handled": "已处理",
+  "The result remains unknown; this is not independent acceptance.": "工作结果仍然未知，此操作不代表独立验收。",
+  "The original work identity cannot be verified.": "无法确认原工作身份。",
+  "Record my acceptance": "记录我的认可",
+  "Accepted by you": "你已认可",
+  "Move back to needs a decision": "撤销并移回待处理",
+  "Record your acceptance of work {id} in {scope}? This does not complete the task or replace independent acceptance.": "确认认可 {scope} 中的工作 {id}？这不会完成任务，也不能代替独立验收。",
   "Current goal task": "当前目标任务",
   "Earlier goal stage": "先前目标阶段",
   "Upcoming goal stage": "后续目标阶段",
@@ -36981,6 +36996,102 @@ function putReviewMarker(marker) {
   if (globalThis.localStorage.getItem(key) !== JSON.stringify(marker)) throw new Error("Review storage unavailable");
   return key;
 }
+function WorkDecisions({ scope, request, actors }) {
+  const [items, setItems] = (0, import_react50.useState)(null), [selected, setSelected] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)(""), [busy, setBusy] = (0, import_react50.useState)(false);
+  const [incomplete, setIncomplete] = (0, import_react50.useState)(false), [query, setQuery] = (0, import_react50.useState)("");
+  const active = (0, import_react50.useRef)(false), epoch = (0, import_react50.useRef)(0), requested = (0, import_react50.useRef)(false);
+  (0, import_react50.useEffect)(() => () => {
+    epoch.current += 1;
+  }, []);
+  const fetchItems = async (current) => {
+    const result = await request("legacy-review-list", { scope }), ids = /* @__PURE__ */ new Set();
+    if (!result || !Array.isArray(result.items) || result.items.some((item2) => !item2 || typeof item2.workId !== "string" || !item2.workId || ids.has(item2.workId) || !["open", "ignored", "user-accepted"].includes(item2.choice) || !Number.isSafeInteger(item2.revision) || item2.revision < 0 || typeof item2.owner !== "string" || typeof item2.sender !== "string" || (ids.add(item2.workId), false))) throw Error("Invalid work decisions");
+    if (current === epoch.current) {
+      setItems(result.items);
+      setIncomplete(result.incomplete !== false);
+    }
+  };
+  const refresh = async () => {
+    if (active.current) return;
+    const current = epoch.current;
+    active.current = true;
+    requested.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await fetchItems(current);
+    } catch {
+      if (current === epoch.current) {
+        setItems(null);
+        setError(t("Work decisions are unavailable."));
+      }
+    } finally {
+      active.current = false;
+      if (current === epoch.current) setBusy(false);
+    }
+  };
+  const decide = async (item2, choice) => {
+    if (active.current || item2.canDecide !== true) return;
+    if (choice === "user-accepted" && !globalThis.confirm(t("Record your acceptance of work {id} in {scope}? This does not complete the task or replace independent acceptance.", { id: item2.workId, scope: scope.id }))) return;
+    const current = epoch.current;
+    active.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await request("legacy-review-decision", { scope, workId: item2.workId, expectedRevision: item2.revision, choice });
+      await fetchItems(current);
+    } catch {
+      try {
+        await fetchItems(current);
+      } catch {
+        if (current === epoch.current) setItems(null);
+      }
+      if (current === epoch.current) setError(t("Decision outcome may be unknown. Refresh to verify it."));
+    } finally {
+      active.current = false;
+      if (current === epoch.current) setBusy(false);
+    }
+  };
+  const rows2 = Array.isArray(items) ? items : [], needle = query.trim().toLocaleLowerCase();
+  const filtered = rows2.filter((item2) => matchesRecovery(needle, [item2.workId, item2.owner, item2.sender, actorLabel(item2.owner, actors), actorLabel(item2.sender, actors)]));
+  const open = filtered.filter((item2) => item2.choice === "open"), handled = filtered.filter((item2) => item2.choice !== "open"), item = rows2.find((row) => row.workId === selected);
+  const render = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-work-groups" }, list.map((row) => (0, import_react50.createElement)("button", { key: row.workId, type: "button", className: "bt-recovery-work-choice", disabled: busy, "aria-pressed": selected === row.workId, onClick: () => setSelected(row.workId), title: row.workId }, `${actorLabel(row.owner, actors)} · ${shortIdentity(row.workId)}`)));
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-recovery-panel", onToggle: (event) => {
+      if (event.target === event.currentTarget && event.currentTarget.open && !requested.current) void refresh();
+    } },
+    (0, import_react50.createElement)("summary", { className: "bt-recovery-summary" }, (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "✓"), (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Work decisions")), (0, import_react50.createElement)("small", null, t("Choose an action for an existing work"))), items ? (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, rows2.filter((row) => row.choice === "open").length) : null),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-body" },
+      (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Your choice does not close the work or establish its outcome.")),
+      incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("The recovery list may be incomplete.")) : null,
+      error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-workspace" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-work-list" },
+          (0, import_react50.createElement)("div", { className: "bt-recovery-list-header" }, (0, import_react50.createElement)("strong", null, t("Needs a decision")), (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void refresh() }, t("Refresh"))),
+          rows2.length ? (0, import_react50.createElement)("input", { type: "search", value: query, placeholder: t("Filter by Bot or ID"), disabled: busy, onChange: (event) => setQuery(event.target.value) }) : null,
+          items && open.length === 0 && !incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty" }, t("No work needs a decision.")) : null,
+          render(open),
+          handled.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Handled")} (${handled.length})`), render(handled)) : null
+        ),
+        (0, import_react50.createElement)("div", { className: "bt-recovery-detail" }, item ? (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-review" },
+          (0, import_react50.createElement)("div", { className: "bt-recovery-facts" }, (0, import_react50.createElement)(Fact, { label: t("Original work ID"), value: item.workId }), (0, import_react50.createElement)(Fact, { label: t("Board"), value: scope.id }), (0, import_react50.createElement)(Fact, { label: t("Sender"), value: actorLabel(item.sender, actors) }), (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(item.owner, actors) })),
+          (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("The result remains unknown; this is not independent acceptance.")),
+          item.canDecide !== true ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning" }, t("The original work identity cannot be verified.")) : null,
+          item.choice === "open" ? (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "button", disabled: busy || item.canDecide !== true, onClick: () => void decide(item, "ignored") }, t("Ignore")), " ", (0, import_react50.createElement)("button", { type: "button", disabled: busy || item.canDecide !== true, onClick: () => void decide(item, "user-accepted") }, t("Record my acceptance"))) : (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("strong", null, t(item.choice === "ignored" ? "Ignored" : "Accepted by you")), " ", (0, import_react50.createElement)("button", { type: "button", disabled: busy || item.canDecide !== true, onClick: () => void decide(item, "open") }, t("Move back to needs a decision")))
+        ) : (0, import_react50.createElement)("p", { className: "bt-recovery-empty" }, t("Choose a work to review.")))
+      )
+    )
+  );
+}
 function LegacyWorkReview({ scope, request, actors }) {
   const [workId, setWorkId] = (0, import_react50.useState)(""), [record, setRecord] = (0, import_react50.useState)(null);
   const [summary, setSummary] = (0, import_react50.useState)(""), [evidence, setEvidence] = (0, import_react50.useState)(""), [unfinished, setUnfinished] = (0, import_react50.useState)("");
@@ -37116,7 +37227,7 @@ function LegacyWorkReview({ scope, request, actors }) {
       "summary",
       { className: "bt-recovery-summary" },
       (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "≡"),
-      (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Review an existing work")), (0, import_react50.createElement)("small", null, t("Review note"))),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Manual notes (optional)")), (0, import_react50.createElement)("small", null, t("Review note"))),
       Array.isArray(candidates?.items) ? (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, String(rows2.length)) : null
     ),
     (0, import_react50.createElement)(
@@ -38358,7 +38469,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           }
         }) : null
       ),
-      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
+      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(WorkDecisions, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
       !data ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-empty" },
