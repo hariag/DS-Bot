@@ -11,6 +11,14 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Redo': '重做',
+  'Redo this specific interrupted work? External actions may happen again.': '重做这项中断的工作？外部操作可能再次发生。',
+  'The redo outcome is unknown. Refresh to check; do not submit it again.': '重做结果暂不明确，请刷新核对；不要重复提交。',
+  'Redo request submitted.': '已提交重做请求。',
+  'The previous redo outcome is unknown.': '之前的重做结果未知。',
+  'Redo is unavailable because the original input cannot be verified.': '无法确认原始输入，暂不能重做。',
+  'Allow future inspections': '允许后续巡检',
+  'The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.': '上次巡检结果仍然未知，允许后续巡检不代表确认了上次结果。',
   'Interrupted work': '中断的工作',
   'Choose what to do with each item': '逐项选择要如何处理',
   'Decision outcome is unknown. Refresh before trying again.': '操作结果暂不明确，请刷新后核对。',

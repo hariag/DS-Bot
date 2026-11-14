@@ -805,6 +805,7 @@ export function install(rt) {
 
   // goal-control { roomId, goalId, action, stopWork? }: the user's pause, resume,
   // stop and clear from the goal panel.
+  const pendingReviewResolutions = new Set()
   async function goalControl(roomId, body = {}) {
     const room = rt.roomOf(roomId)
     if (room === undefined) return { error: 'Unknown group chat' }
@@ -813,8 +814,15 @@ export function install(rt) {
     const action = String(body.action ?? '')
     if (action === 'review-resolve') {
       const attempt = goal.reviewAttempt
-      const evidence = String(body.evidence ?? '').trim()
-      if (body.confirmed !== true || evidence.length < 8 || evidence.length > TEXT_MAX) return { error: 'Confirm that the original review was investigated and provide its outcome (8–2000 characters).', code: 'bot/invalid' }
+      const allowFuture = body.decision === 'allow-future'
+      const evidence = allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
+      if (body.confirmed !== true || (!allowFuture && (evidence.length < 8 || evidence.length > TEXT_MAX))) return { error: 'Confirm the decision before continuing.', code: 'bot/invalid' }
+      const resolutions = goal.reviewResolutions ?? []
+      if (!Array.isArray(resolutions) || resolutions.length >= 10000) return { error:'Review decision history is unavailable or full.', code:'bot/refused' }
+      const resolutionKey = JSON.stringify([room.id,goal.id,body.reviewId])
+      if (pendingReviewResolutions.has(resolutionKey)) return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' }
+      if (resolutions.some(item => item?.id === body.reviewId)) return attempt?.id === body.reviewId
+        ? { error:'Review identity was reused; inspect it before continuing.', code:'bot/stale' } : {}
       if (!reviewEligible(goal) || attempt === undefined || attempt.id !== body.reviewId
         || !['uncertain', 'admitting', 'cancelled-uncertain'].includes(attempt.state)
         || (attempt.state === 'admitting' && (!Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS))) return { error: 'The review is not eligible for recovery, or the goal was paused or stopped.', code: 'bot/stale' }
@@ -835,12 +843,15 @@ export function install(rt) {
       rt.requireHomeLock()
       const wasAutomatic = automaticIdle(goal)
       const now = Date.now()
+      pendingReviewResolutions.add(resolutionKey)
+      goal.reviewResolutions = [...resolutions, { id:attempt.id, attempt:structuredClone(attempt), decision:allowFuture?'allow-future':'verified', by:'user', at:now }]
       delete goal.reviewAttempt
       goal.revision += 1
       goal.updatedAt = now
       if (wasAutomatic) { goal.idleRevision = goal.revision; goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS }
       goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by: 'user', reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
-      await rt.save({ required: true })
+      try { await rt.save({ required: true }); pendingReviewResolutions.delete(resolutionKey) }
+      catch (error) { throw error }
       return {}
     }
     if (action === 'pause') {

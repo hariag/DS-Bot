@@ -888,6 +888,80 @@ export function install(rt) {
     if (changed || cursorChanged) await rt.save()
   }
 
+  // A user-requested redo applies to exactly one known original input. Never
+  // infer a missing input from an absent receipt or reopen another session.
+  const heldRedoInflight = new Set()
+  rt.previewHeldRedo = (recoveryId, held) => {
+    const sessionId = held?.sessionId, record = held?.record, botId = record?.botId, trigger = record?.trigger
+    if (heldRedoInflight.has(recoveryId)) return { available:false, state:'unknown' }
+    if (state.heldRedoOperations !== undefined && (!state.heldRedoOperations || typeof state.heldRedoOperations !== 'object' || Array.isArray(state.heldRedoOperations))) return { available:false, state:'source-unavailable' }
+    const prior = state.heldRedoOperations?.[recoveryId]
+    if (prior) return { available:false, state:prior.state === 'submitted' ? 'submitted' : 'unknown' }
+    if (held?.decisions?.at(-1)?.choice === 'ignored' || !sessionId || !botId || !trigger?.exchangeId || !['request','room'].includes(trigger.role)
+      || trigger.reviewId || trigger.groupKickoff || rt.selfOf(sessionId) !== botId) return { available:false, state:'source-unavailable' }
+    const room = record.roomId ? rt.roomOf(record.roomId) : undefined
+    if (trigger.role === 'room' ? (!room || room.sessions?.[botId] !== sessionId || !room.members?.includes(botId) || rt.goalRecoveryBlocked?.(room,botId) === true)
+      : (record.roomId || rt.chatOf(botId) !== sessionId)) return { available:false, state:'source-unavailable' }
+    const pending = (state.pendingInputs?.[sessionId] ?? []).filter(item => item?.ownerId === botId
+      && item.exchangeId === trigger.exchangeId && Number.isSafeInteger(item.seq)
+      && item.id === `${sessionId}:${item.seq}` && (record.turn === undefined || item.turn === record.turn))
+    if (pending.length !== 1 || state.pendingRecovery?.[sessionId]) return { available:false, state:'source-unavailable' }
+    return { available:true, state:'ready', inputId:pending[0].id, seq:pending[0].seq }
+  }
+  rt.redoHeldTurn = async (recoveryId, held) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId)) throw new Error('Invalid interrupted turn')
+    rt.requireHomeLock()
+    const prior = state.heldRedoOperations?.[recoveryId]
+    if (prior) return { state:prior.state === 'submitted' ? 'submitted' : 'unknown' }
+    const sessionId = held?.sessionId, record = held?.record
+    if (typeof rt.eventsBackwards !== 'function') throw new Error('Original session history is unavailable')
+    await reconcilePending(sessionId)
+    let candidate = rt.previewHeldRedo(recoveryId,held)
+    if (!candidate.available) throw new Error('The original input is not uniquely available')
+    let source, originalTurn
+    for await (const event of rt.eventsBackwards(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS), Infinity)) {
+      if (event.seq === candidate.seq && event.type === 'user/message') source = event.data?.source
+      if (event.seq < candidate.seq && event.type === 'turn/start') { originalTurn = event.data?.turn; break }
+    }
+    if (source?.exchangeId !== record.trigger.exchangeId || source?.role !== record.trigger.role
+      || (record.turn !== undefined && originalTurn !== record.turn)) throw new Error('Original session identity cannot be verified')
+    const agent = await rt.resolveAgent(sessionId)
+    candidate = rt.previewHeldRedo(recoveryId,held)
+    const quiet = () => agent?.session?.id === sessionId && agent.status !== 'running' && live.get(sessionId)?.turn === undefined
+      && Array.isArray(agent.inbox?.nextStep) && agent.inbox.nextStep.length === 0
+      && Array.isArray(agent.inbox?.nextTurn) && agent.inbox.nextTurn.length === 0
+      && hasSubagents(sessionId) !== true && rt.waitsForApproval?.(sessionId) !== true
+    if (!candidate.available || !quiet()) throw new Error('The original session is busy or changed')
+    const recoveryKey = `manual-held-${recoveryId}`
+    const operation = { key:recoveryKey, sessionId, ownerId:record.botId, exchangeId:record.trigger.exchangeId, inputId:candidate.inputId, state:'prepared', at:Date.now() }
+    state.heldRedoOperations ??= {}
+    if (Object.keys(state.heldRedoOperations).length >= 10000) throw new Error('Redo history is full')
+    state.heldRedoOperations[recoveryId] = operation
+    state.pendingRecovery ??= {}
+    state.pendingRecovery[sessionId] = { key:recoveryKey, ids:[candidate.inputId], ownerId:record.botId, at:operation.at }
+    heldRedoInflight.add(recoveryId)
+    try {
+      await rt.save({ required:true })
+      await rt.deliver({ toId:record.botId, sessionId, role:'continue', recoveryIds:[candidate.inputId], recoveryKey,
+        text:'Continue the specific earlier message identified by this recovery request. Check existing results before repeating any side effect. Finish only that item or report what remains blocked.' },
+      { beforeAdmission: target => {
+        rt.requireHomeLock()
+        const room = record.roomId ? rt.roomOf(record.roomId) : undefined
+        if (target !== agent || !quiet() || held?.decisions?.at(-1)?.choice === 'ignored'
+          || rt.selfOf(sessionId) !== record.botId || state.pendingRecovery?.[sessionId]?.key !== recoveryKey
+          || !(state.pendingInputs?.[sessionId] ?? []).some(item => item.id === candidate.inputId && item.exchangeId === record.trigger.exchangeId)
+          || (record.roomId && (!room || room.sessions?.[record.botId] !== sessionId || rt.goalRecoveryBlocked?.(room,record.botId) === true))) throw new Error('Original session changed before admission')
+      } })
+      operation.state = 'submitted'
+      await rt.save({ required:true })
+      return { state:'submitted' }
+    } catch (error) {
+      operation.state = 'unknown'
+      await rt.save({ required:true }).catch(() => {})
+      throw error
+    } finally { heldRedoInflight.delete(recoveryId) }
+  }
+
   async function recoveryStatus(sessionId, recoveryKey) {
     if (typeof recoveryKey !== 'string' || rt.eventsBackwards === undefined) return 'missing'
     const events = []
@@ -923,6 +997,12 @@ export function install(rt) {
     entry.recoveryIds = [...new Set([...(entry.recoveryIds ?? []), ...inStep])]
     const key = decision.messages.findLast(message => typeof message?.source?.recoveryKey === 'string')?.source?.recoveryKey
     if (key !== undefined) entry.turnRecoveryKey = key
+    if (key?.startsWith('manual-held-')) {
+      const operation = state.heldRedoOperations?.[key.slice('manual-held-'.length)]
+      if (!operation || operation.key !== key || operation.sessionId !== agent.id || inStep.length !== 1 || inStep[0] !== operation.inputId) return { kind:'reject', reason:'Manual recovery identity changed' }
+      entry.recoveryInjected = true
+      return decision
+    }
     const currentIds = new Set([...(entry.turnInputs ?? []).map(item => item.id), ...(entry.recoveryIds ?? [])])
     const recoveryIds = pending.map(item => item.id).filter(id => !currentIds.has(id))
     if (recoveryIds.length === 0) {
