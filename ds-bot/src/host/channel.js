@@ -186,7 +186,12 @@ export function install(rt) {
     rooms: Object.values(state.rooms).map(({ log, seen, paused, sessions, segments, parts: ownParts, ...room }) => {
       const parts = [...Object.values(sessions ?? {}), ...Object.values(segments ?? {}).flat().map(segment => segment.sessionId), ...(ownParts ?? []).map(segment => segment.sessionId)]
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
-      return { ...room, sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      // Never expose a scoped check as complete without its live queue proof.
+      // If the goal subsystem is unavailable, mark every scoped assertion unresolved.
+      const goal = rt.goalView?.(rt.roomOf(room.id)) ?? (room.goal?.ownerReview?.checks ? {
+        ...room.goal, ownerReview: { ...room.goal.ownerReview, checks: Object.fromEntries(Object.entries(room.goal.ownerReview.checks).map(([id, check]) => [id, check?.scopedQueueVersion === undefined ? check : { ...check, unresolved: true }])) },
+      } : room.goal)
+      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -262,15 +267,25 @@ export function install(rt) {
   const liveRun = randomUUID()
   let liveSeq = 0
   let liveCache = null
+  const liveHistory = new Map()
+  const scopedReviewState = () => JSON.stringify(Object.values(state.rooms ?? {}).flatMap(room => {
+    const goal = rt.goalView?.(room)
+    return Object.entries(goal?.ownerReview?.checks ?? {})
+      .map(([id, check]) => [room.id, id, check?.unresolved === true])
+  }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
   const liveAnswer = () => {
     const value = live()
     const json = JSON.stringify(value)
-    if (liveCache?.json === json) return liveCache
-    return liveCache = { key: `${liveRun}:${++liveSeq}`, value, json }
+    const scope = scopedReviewState()
+    if (liveCache?.json === json && liveCache.scope === scope) return liveCache
+    liveCache = { key: `${liveRun}:${++liveSeq}`, value, json, scope }
+    liveHistory.set(liveCache.key, scope)
+    if (liveHistory.size > 64) liveHistory.delete(liveHistory.keys().next().value)
+    return liveCache
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['board-list', 'board-operation', 'board-image', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image'])
+  const READS = new Set(['board-list', 'board-history', 'board-operation', 'board-image', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'file-download'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -338,7 +353,18 @@ export function install(rt) {
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
+        // This handler is reached only through the authenticated instance-owner
+        // route; these endpoints record review notes and never dispatch work.
+        case 'legacy-review-list':
+        case 'legacy-review-get':
+        case 'legacy-review-prepare':
+        case 'legacy-review-operation':
+        case 'legacy-review-create':
+        case 'legacy-review-finding':
+        case 'legacy-review-decision':
+          return ok(await rt.legacyReviewCall(endpoint, body))
         case 'board-list':
+        case 'board-history':
         case 'board-redo-preview':
         case 'board-redo-confirm':
         case 'board-operation':
@@ -355,7 +381,8 @@ export function install(rt) {
           await rt.catalog()
           await rt.loadSecrets()
           const answer = liveAnswer()
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) {
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())
+            && (body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope))) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }
@@ -440,6 +467,14 @@ export function install(rt) {
           const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
           return ok([...rt.roomProgress.entries()].filter(([, entry]) => entry.roomId === (room?.id ?? body.roomId)).map(([callId, entry]) => ({ callId, replies: rt.groupRows(entry.roomId, entry.from), speaking: entry.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id) })))
         }
+        // Search a group's messages, newest first, each hit with its neighbours.
+        // `before` (a seq) or `offset` continues into older hits.
+        case 'group-search': {
+          await rt.load()
+          const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
+          if (room === undefined) return fail('Unknown group chat', 'bot/not-found')
+          return ok(rt.groupSearch(room.id, body.query, { before: body.before, offset: body.offset }))
+        }
         // The rows a settled round of a group chat shows, from its book.
         case 'group-rows': {
           await rt.load()
@@ -522,6 +557,23 @@ export function install(rt) {
             sectionId: body.sectionId,
           })
           return ok({ room: view().rooms.find(entry => entry.id === room.id), changes })
+        }
+        // The user ticks, removes, or clears completed shared to-dos in the group's
+        // details; members read and change the same list with the group_todo tool.
+        case 'room-todo': {
+          await rt.load()
+          const room = rt.roomOf(String(body.roomId ?? ''))
+          if (room === undefined) return fail('Unknown group chat', 'room/not-found')
+          if (body.action === 'clear') {
+            const removed = await rt.clearDoneRoomTodos(room.id)
+            return ok({ removed: removed.length, todos: room.todos ?? [] })
+          }
+          if (body.action === 'remove') {
+            const item = await rt.removeRoomTodo(room.id, String(body.id ?? ''))
+            return ok({ item, todos: room.todos ?? [] })
+          }
+          const item = await rt.setRoomTodoDone(room.id, String(body.id ?? ''), typeof body.done === 'boolean' ? body.done : undefined)
+          return ok({ item, todos: room.todos ?? [] })
         }
         case 'folders':
         case 'folder-pick':
@@ -691,6 +743,7 @@ export function install(rt) {
         case 'avatar':
         case 'room-chat':
         case 'image':
+        case 'file-download':
         case 'usage-summary':
         case 'memory-edit':
         case 'memory-add':
@@ -923,7 +976,13 @@ export function install(rt) {
     }
   }
 
-  rt.phoneServe(handle)
+  // Neither carrier supplies the authenticated owner identity used by boards.
+  // Reject those calls rather than letting a remote peer inherit that identity.
+  const carrierCall = (endpoint, payload, signal) => endpoint.startsWith('legacy-review-') || endpoint.startsWith('board-')
+    ? Promise.resolve(fail('Use the authenticated owner connection for this board.', 'bot/refused'))
+    : handle(endpoint, payload, signal)
+  rt.channelCall = carrierCall
+  rt.phoneServe(carrierCall)
 
   // How a user message reaches a Session: a Bot id, a group chat's id, or an earlier
   // part of either resolves to its current part. `content` is the prompt blocks DSH

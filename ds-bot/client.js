@@ -12484,6 +12484,72 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "View candidate text": "查看候选内容",
+  "This saved snapshot may omit other inputs and may be out of date.": "这是保存的历史快照，可能遗漏同回合的其他输入，也可能已过时。",
+  "Redo is not available. You can inspect candidate text without sending it.": "暂不能重做。你可以查看候选内容，不会发送或执行。",
+  "Candidate text is unavailable. The record may be missing, incomplete or changing.": "无法读取候选内容，记录可能不存在、不完整或正在变化。",
+  "This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.": "这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。",
+  "This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.": "这段文字是持久日志中的候选内容，发送者未经认证，仅供核对，不能执行。",
+  "Work decisions": "处理已有工作",
+  "Choose an action for an existing work": "选择如何处理已有工作",
+  "Manual notes (optional)": "手工备注（可选）",
+  "Your choice does not close the work or establish its outcome.": "此选择不会关闭工作，也不代表工作结果已确认。",
+  "Work decisions are unavailable.": "暂时无法读取工作处理状态。",
+  "Decision outcome may be unknown. Refresh to verify it.": "处理结果可能未知，请刷新核对。",
+  "Needs a decision": "待处理",
+  "No work needs a decision.": "没有待处理的工作。",
+  "Handled": "已处理",
+  "The result remains unknown; this is not independent acceptance.": "工作结果仍然未知，此操作不代表独立验收。",
+  "The original work identity cannot be verified.": "无法确认原工作身份。",
+  "Record my acceptance": "记录我的认可",
+  "Accepted by you": "你已认可",
+  "Move back to needs a decision": "撤销并移回待处理",
+  "Record your acceptance of work {id} in {scope}? This does not complete the task or replace independent acceptance.": "确认认可 {scope} 中的工作 {id}？这不会完成任务，也不能代替独立验收。",
+  "Current goal task": "当前目标任务",
+  "Earlier goal stage": "先前目标阶段",
+  "Upcoming goal stage": "后续目标阶段",
+  "Archived goal task": "已归档目标任务",
+  "Closed goal task": "已结束目标任务",
+  "Original task description": "原始任务说明",
+  "A card change is awaiting confirmation in its original board.": "卡片修改尚待确认，请在原看板核对结果。",
+  "The original task changed after this display title was corrected. Review the title.": "原任务在显示标题修订后已变化，请重新核对标题。",
+  "Correct card title": "修订卡片显示标题",
+  "Card display title": "卡片显示标题",
+  "Reason for correction": "修订说明",
+  "The original task and acceptance record remain unchanged.": "原任务和验收记录保持不变。",
+  "Card revision history": "卡片修订记录",
+  "Showing the latest 50 revisions.": "显示最近 50 个修订。",
+  "Revision": "修订版本",
+  "Before": "修改前",
+  "After": "修改后",
+  "Goal card details can be corrected without changing the original task or acceptance record.": "可修订目标卡片资料，原任务和验收记录保持不变。",
+  "Card details changed; refresh the board": "卡片资料已变化，请刷新看板。",
+  "Card stage changed; refresh the board": "任务阶段已变化，请刷新看板。",
+  "Provide a card title and a brief reason": "请填写卡片标题和简短修订说明。",
+  "Card history is full; preserve it before making more changes": "卡片修订记录已达上限，请先保全记录再继续修改。",
+  "These stages have card revision history. Preserve that history before rebuilding the stages.": "这些阶段包含卡片修订记录，重建阶段前请先保全。",
+  "Check redo": "核实重做状态",
+  "Redo": "重做",
+  "Redo this specific interrupted work? External actions may happen again.": "重做这项中断的工作？外部操作可能再次发生。",
+  "The redo outcome is unknown. Refresh to check; do not submit it again.": "重做结果暂不明确，请刷新核对；不要重复提交。",
+  "Redo request submitted.": "已提交重做请求。",
+  "The previous redo outcome is unknown.": "之前的重做结果未知。",
+  "Redo is unavailable because the original input cannot be verified.": "无法确认原始输入，暂不能重做。",
+  "A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.": "存在单独的重做记录，其执行情况和结果未知；原任务仍未解决。",
+  "Allow future inspections": "允许后续巡检",
+  "The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.": "上次巡检结果仍然未知，允许后续巡检不代表确认了上次结果。",
+  "Interrupted work": "中断的工作",
+  "Choose what to do with each item": "逐项选择要如何处理",
+  "Decision outcome is unknown. Refresh before trying again.": "操作结果暂不明确，请刷新后核对。",
+  "The outcome is unknown. Your choice does not mark the work complete.": "原工作结果未知，处理选择不会将任务标记为完成。",
+  "Ignoring keeps the record and does not complete the work.": "忽略会保留原记录，不会完成任务。",
+  "Ignored": "已忽略",
+  "Ignore": "忽略",
+  "Undo ignore": "撤销忽略",
+  "Task details": "任务详情",
+  "Close card": "关闭卡片",
+  "Previous columns": "上一组列表",
+  "Next columns": "下一组列表",
   "Comments": "评论",
   "No comments yet.": "暂无评论。",
   "Add a comment": "添加评论",
@@ -12526,6 +12592,37 @@ var ZH = {
   "Original group goal task": "群目标原任务",
   "Earlier group goal task · read only": "历史群目标任务 · 仅可查看",
   "Group goal cards edit the original task. Earlier stages remain read only.": "群目标卡片直接编辑原任务；历史阶段仅可查看。",
+  "A previous review action is still unconfirmed. Check again before saving.": "之前的复核操作尚未确认，请再次核查后再保存。",
+  "Review storage or verification is unavailable; saving is disabled.": "复核记录存储或核验不可用，暂时无法保存。",
+  "Group status changed. Refresh and review the current attempt.": "群状态已变化，请刷新并核对当前巡检记录。",
+  "Current status checked": "已核对当前状态",
+  "Filter by Bot or ID": "按 Bot 或 ID 筛选",
+  "No matching records.": "没有匹配的记录。",
+  "No work awaiting inspection.": "当前没有待核对的工作。",
+  "Choose a work to review.": "选择一项工作，或输入原工作 ID。",
+  "Open review workspace": "打开巡检异常处理",
+  "Periodic review issue": "周期巡检异常",
+  "Inspection recovery": "巡检恢复",
+  "Group ID": "群 ID",
+  "Goal ID": "目标 ID",
+  "Review ID": "巡检 ID",
+  "Group status": "群状态",
+  "Refresh status": "刷新状态",
+  "Review recovery is unavailable in this view.": "当前界面无法处理巡检恢复。",
+  "Group status is unavailable.": "无法读取群状态。",
+  "Review identity is unavailable.": "无法确认原巡检的身份。",
+  "The group goal must be active before reviews can resume.": "群目标处于进行中时才能恢复巡检。",
+  "The goal is paused or its idle state needs review.": "群目标已暂停，或其休眠状态需要核查。",
+  "This review is not ready to resume. Refresh its status later.": "本次巡检暂不满足恢复条件，请稍后刷新状态。",
+  "Refresh the group status before continuing.": "继续之前请刷新群状态。",
+  "Enter at least 8 characters describing what you verified.": "请用至少 8 个字符说明核查结果。",
+  "Use at most 2000 characters.": "最多输入 2000 个字符。",
+  "Confirm that you checked the original outcome.": "请确认已经核查原巡检结果。",
+  "Could not refresh the group status.": "无法刷新群状态。",
+  "Request accepted. Refresh to verify the current review status.": "请求已受理，请刷新并核对当前巡检状态。",
+  "The goal changed or related work is still pending. Check it before recovery.": "目标已变化或相关工作仍在处理，请核对后再恢复。",
+  "This only resumes periodic inspections; it does not approve or complete tasks.": "此操作只恢复周期巡检，不会审批或完成任务。",
+  "The server also checks the group and administrator sessions for pending work, approvals and subagents.": "提交时系统还会检查群和管理员会话是否仍有待处理工作、审批或子任务。",
   "Remote code changes": "远端代码变更",
   "Waiting for first check": "等待首次检查",
   "Monitor active": "监视运行中",
@@ -14480,6 +14577,35 @@ var LANGUAGES = [
   { id: "de", label: "Deutsch", fallback: "en" }
 ];
 var LEGACY_REVIEW_EN_FALLBACK = Object.fromEntries([
+  "Group status changed. Refresh and review the current attempt.",
+  "Current status checked",
+  "Filter by Bot or ID",
+  "No matching records.",
+  "No work awaiting inspection.",
+  "Choose a work to review.",
+  "Open review workspace",
+  "Periodic review issue",
+  "Inspection recovery",
+  "Group ID",
+  "Goal ID",
+  "Review ID",
+  "Group status",
+  "Refresh status",
+  "Review recovery is unavailable in this view.",
+  "Group status is unavailable.",
+  "Review identity is unavailable.",
+  "The group goal must be active before reviews can resume.",
+  "The goal is paused or its idle state needs review.",
+  "This review is not ready to resume. Refresh its status later.",
+  "Refresh the group status before continuing.",
+  "Enter at least 8 characters describing what you verified.",
+  "Use at most 2000 characters.",
+  "Confirm that you checked the original outcome.",
+  "Could not refresh the group status.",
+  "Request accepted. Refresh to verify the current review status.",
+  "The goal changed or related work is still pending. Check it before recovery.",
+  "This only resumes periodic inspections; it does not approve or complete tasks.",
+  "The server also checks the group and administrator sessions for pending work, approvals and subagents.",
   "Observed in snapshot",
   "Not observed in snapshot",
   "Not known",
@@ -15183,7 +15309,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     stopRoomWork: (roomId) => after(call2("stop-room-work", { roomId })),
     goalDraft: (roomId, text) => after(call2("goal-draft", { roomId, text })),
     goalControl: (roomId, goalId, action, stopWork) => after(call2("goal-control", { roomId, goalId, action, ...stopWork ? { stopWork: true } : {} })),
-    goalReviewResolve: (roomId, goalId, reviewId, evidence) => after(call2("goal-control", { roomId, goalId, action: "review-resolve", reviewId, evidence, confirmed: true })),
+    goalReviewResolve: (roomId, goalId, reviewId) => after(call2("goal-control", { roomId, goalId, action: "review-resolve", reviewId, decision: "allow-future", confirmed: true })),
     // The goal island: `goalCompose` holds the room whose draft form is open,
     // `goalOpen` the room whose panel is open.
     composeGoal: (roomId) => ui2.set((state) => ({ ...state, goalCompose: roomId, goalOpen: roomId })),
@@ -18278,14 +18404,11 @@ function TaskRow({ task, working }) {
   );
 }
 var STOP_ARM_MS = 3e3;
-function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
+function GoalPanel({ goal, view, room: room2, roster, actions, working, openReview }) {
   const at = RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1;
   const [selected, setSelected] = (0, import_react6.useState)(at);
   const [checks, setChecks] = (0, import_react6.useState)(false);
   const [armed, setArmed] = (0, import_react6.useState)(false);
-  const [reviewEvidence, setReviewEvidence] = (0, import_react6.useState)("");
-  const [reviewConfirmed, setReviewConfirmed] = (0, import_react6.useState)(false);
-  const [reviewSaving, setReviewSaving] = (0, import_react6.useState)(false);
   (0, import_react6.useEffect)(() => setSelected(RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1), [view.status, goal.current]);
   (0, import_react6.useEffect)(() => {
     if (!armed) return void 0;
@@ -18314,23 +18437,7 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
   const hasChecks = goal.objective !== void 0 || goal.acceptance !== void 0 || goal.constraints?.length > 0;
   const admin = roster.byId?.[room2.admin]?.name ?? t("a Bot");
   const stopWork = () => void Promise.resolve(actions.stopRoomWork(room2.id)).catch((error) => actions.reportError(error, "stop"));
-  const attempt = goal.reviewAttempt;
-  const recoverable = view.status === "active" && attempt && (["uncertain", "cancelled-uncertain"].includes(attempt.state) || attempt.state === "admitting" && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1e3) && !(goal.idle === true && (!["admin-pass", "nudge-limit"].includes(goal.idleReason) || goal.idleRevision !== goal.revision));
-  const resolveReview = () => {
-    if (!recoverable || !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving) return;
-    setReviewSaving(true);
-    void Promise.resolve(actions.goalReviewResolve(room2.id, goal.id, attempt.id, reviewEvidence.trim())).then(
-      () => {
-        setReviewEvidence("");
-        setReviewConfirmed(false);
-        setReviewSaving(false);
-      },
-      (error) => {
-        setReviewSaving(false);
-        actions.reportError(error, "goal");
-      }
-    );
-  };
+  const reviewIssue = goal.reviewAttempt && ["uncertain", "cancelled-uncertain", "admitting"].includes(goal.reviewAttempt.state);
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-goal-panel", role: "region", "aria-label": view.title },
@@ -18388,13 +18495,11 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
         )) : null
       ) : null
     ),
-    recoverable ? (0, import_react6.createElement)(
+    reviewIssue ? (0, import_react6.createElement)(
       "div",
       { className: "bt-goal-sec" },
       (0, import_react6.createElement)("div", { className: "bt-goal-text" }, t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
-      (0, import_react6.createElement)("label", { className: "bt-goal-text" }, t("What did you verify?"), (0, import_react6.createElement)("textarea", { className: "bt-input bt-input-area", value: reviewEvidence, onChange: (event) => setReviewEvidence(event.target.value) })),
-      (0, import_react6.createElement)("label", { className: "bt-goal-text" }, (0, import_react6.createElement)("input", { type: "checkbox", checked: reviewConfirmed, onChange: (event) => setReviewConfirmed(event.target.checked) }), t("I checked the original outcome and authorize future reviews.")),
-      (0, import_react6.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving, onClick: resolveReview }, t("Resume periodic reviews"))
+      (0, import_react6.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: typeof openReview !== "function", onClick: openReview }, t("Open review workspace"))
     ) : null,
     (0, import_react6.createElement)(
       "div",
@@ -18484,7 +18589,7 @@ function GoalCompose({ room: room2, roster, actions }) {
     )
   );
 }
-function GoalIsland({ room: room2, goal, view, open, composing, roomWork, roster, actions, pill }) {
+function GoalIsland({ room: room2, goal, view, open, composing, roomWork, roster, actions, pill, openReview }) {
   const island = (0, import_react6.useRef)(null);
   useMorph(island, open);
   const working = new Set((roomWork ?? []).map((entry) => entry.botId));
@@ -18510,7 +18615,7 @@ function GoalIsland({ room: room2, goal, view, open, composing, roomWork, roster
         import_react6.Fragment,
         null,
         (0, import_react6.createElement)(GoalBar, { view, open, room: room2, actions }),
-        open ? (0, import_react6.createElement)(GoalPanel, { goal, view, room: room2, roster, actions, working }) : null
+        open ? (0, import_react6.createElement)(GoalPanel, { goal, view, room: room2, roster, actions, working, openReview }) : null
       )
     )
   );
@@ -36692,6 +36797,9 @@ var IMAGE_BATCH_MAX_BYTES = 20 * 1024 * 1024;
 var finalOperation = (status) => status === "committed" || status === "rejected";
 var storageKey = (scope) => `ds-bot:board-pending:${scope.kind}:${scope.id}`;
 var textValue = (value) => typeof value === "string" ? value : "";
+var cardStamp = (task) => ({ revision: task.revision, ...task.legacy?.useOverlay ? { boardRevision: task.legacy.boardRevision, position: task.legacy.position } : {} });
+var sameCardStamp = (task, stamp) => JSON.stringify(cardStamp(task)) === JSON.stringify(stamp);
+var stampedTask = (task, stamp) => ({ ...task, revision: stamp.revision, ...task.legacy ? { legacy: { ...task.legacy, useOverlay: stamp.position !== void 0, boardRevision: stamp.boardRevision, position: stamp.position } } : {} });
 function boardColumns(tasks) {
   const columns2 = new Map(COLUMNS.map(([key]) => [key, []]));
   columns2.set("unknown", []);
@@ -36768,133 +36876,680 @@ function RemoteChanges({ monitor }) {
     ))
   );
 }
-function HeldTurns({ recovery }) {
-  if (!recovery || recovery.available !== true) return (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
-  const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
-  const sampled = Number.isSafeInteger(recovery.sampledAt) && recovery.sampledAt >= 0 && recovery.sampledAt <= 864e13 ? new Date(recovery.sampledAt).toISOString() : t("Unknown");
-  if (!rows2.length && !recovery.incomplete) return (0, import_react50.createElement)(
-    "p",
-    { className: "bt-board-recovery-clear", role: "status" },
-    t("No interrupted turns in this snapshot."),
-    " ",
-    t("Snapshot time (UTC)"),
-    ": ",
-    sampled
-  );
+var snapshotTime = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 864e13 ? new Date(value).toISOString() : t("Unknown");
+var shortIdentity = (value) => typeof value !== "string" ? t("Unknown") : value.length > 32 ? `${value.slice(0, 20)}…${value.slice(-8)}` : value;
+var matchesRecovery = (needle, values) => !needle || values.some((value) => textValue(value).toLocaleLowerCase().includes(needle));
+function recoveryGroups(rows2, idOf, nameOf2) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of rows2) {
+    const id = idOf(item) || "";
+    if (!groups.has(id)) groups.set(id, { id, name: nameOf2(item) || id || t("Unknown"), rows: [] });
+    groups.get(id).rows.push(item);
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+function HeldRecord({ item, scope, request, busy, decide }) {
+  const [candidate, setCandidate] = (0, import_react50.useState)(null), [loading, setLoading] = (0, import_react50.useState)(false), [error, setError] = (0, import_react50.useState)("");
+  const generation = (0, import_react50.useRef)(0), key = JSON.stringify([scope.kind, scope.id, item.recoveryId]), currentKey = (0, import_react50.useRef)(key);
+  if (currentKey.current !== key) {
+    currentKey.current = key;
+    generation.current += 1;
+  }
+  (0, import_react50.useEffect)(() => {
+    setCandidate(null);
+    setLoading(false);
+    setError("");
+    return () => {
+      generation.current += 1;
+    };
+  }, [key]);
+  const clear = () => {
+    generation.current += 1;
+    setCandidate(null);
+    setLoading(false);
+    setError("");
+  };
+  const inspect = async () => {
+    if (loading) return;
+    const at = ++generation.current;
+    setLoading(true);
+    setCandidate(null);
+    setError("");
+    try {
+      const result = await request("board-redo-preview", { scope, recoveryId: item.recoveryId });
+      if (at !== generation.current) return;
+      if (!result || result.recoveryId !== item.recoveryId || result.sessionId !== item.sessionId) throw Error("candidate changed");
+      const legacy = result.kind === "unverified-legacy-candidate";
+      const parts = legacy ? result.textSegments : result.content?.map((part) => part?.type === "text" ? part.text : null);
+      if (legacy && (result.producerVerified !== false || result.executeAllowed !== false) || !legacy && result.execution !== "disabled" || !Array.isArray(parts) || parts.length === 0 || parts.some((part) => typeof part !== "string") || parts.reduce((length, part) => length + part.length, 0) > 65536) throw Error("candidate unavailable");
+      setCandidate({ parts, legacy, snapshot: result.snapshotOnly === true, key });
+    } catch {
+      if (at === generation.current) setError(t("Candidate text is unavailable. The record may be missing, incomplete or changing."));
+    } finally {
+      if (at === generation.current) setLoading(false);
+    }
+  };
   return (0, import_react50.createElement)(
     "details",
-    { className: "bt-board-held" },
-    (0, import_react50.createElement)("summary", null, t("Interrupted turns awaiting review"), rows2.length ? ` (${rows2.length})` : ""),
-    (0, import_react50.createElement)("p", null, t("Snapshot time (UTC)"), ": ", sampled),
-    (0, import_react50.createElement)("p", null, t("These records are read-only. A result is unknown; no work is resent or closed here.")),
-    recovery.incomplete ? (0, import_react50.createElement)("p", { role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
-    rows2.map((item) => (0, import_react50.createElement)(
-      "article",
-      { key: item.recoveryId, className: "bt-board-held-record" },
-      (0, import_react50.createElement)(Fact, { label: t("Bot"), value: item.botName || item.botId }),
+    { className: "bt-board-held-record bt-recovery-record", onToggle: (event) => {
+      if (event.target === event.currentTarget && !event.currentTarget.open) clear();
+    } },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-record-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-record-id", title: item.sessionId }, shortIdentity(item.sessionId)),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-record-time" }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t("Unknown")),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t(item.decision === "ignored" ? "Ignored" : "Status unknown"))
+    ),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-facts" },
       (0, import_react50.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
       (0, import_react50.createElement)(Fact, { label: t("Original turn"), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t("Unknown") }),
-      (0, import_react50.createElement)(Fact, { label: t("Started at"), value: Number.isSafeInteger(item.startedAt) ? new Date(item.startedAt).toLocaleString() : t("Unknown") }),
       (0, import_react50.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
-      (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId }),
-      (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: "inflight.json" })
-    ))
+      (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId })
+    ),
+    (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring keeps the record and does not complete the work.")),
+    item.redo?.status === "unknown" ? (0, import_react50.createElement)("p", { className: "bt-recovery-note", role: "status" }, t("A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.")) : null,
+    (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Redo is not available. You can inspect candidate text without sending it.")),
+    (0, import_react50.createElement)("button", { type: "button", disabled: loading, onClick: () => void inspect() }, t(loading ? "Loading…" : "View candidate text")),
+    error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+    candidate?.key === key ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-candidate" },
+      (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t(candidate.legacy ? "This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly." : "This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.")),
+      candidate.snapshot ? (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This saved snapshot may omit other inputs and may be out of date.")) : null,
+      candidate.parts.map((part, index) => (0, import_react50.createElement)("pre", { key: index, className: "bt-recovery-candidate-text" }, part))
+    ) : null,
+    (0, import_react50.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore"))
+  );
+}
+function HeldTurns({ recovery, scope, request, onRefresh }) {
+  const [query, setQuery] = (0, import_react50.useState)("");
+  const [busy, setBusy] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)("");
+  const [panelEpoch, setPanelEpoch] = (0, import_react50.useState)(0);
+  const inFlight = (0, import_react50.useRef)(false);
+  const decide = async (item, choice) => {
+    if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return;
+    inFlight.current = true;
+    setBusy(item.recoveryId);
+    setError("");
+    try {
+      await request("board-held-decision", { scope, recoveryId: item.recoveryId, expectedRevision: item.decisionRevision, choice });
+      await onRefresh();
+    } catch {
+      setError(t("Decision outcome is unknown. Refresh before trying again."));
+    } finally {
+      inFlight.current = false;
+      setBusy("");
+    }
+  };
+  if (!recovery || recovery.available !== true) return (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
+  const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
+  const needle = query.trim().toLocaleLowerCase();
+  const filtered = rows2.filter((item) => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]));
+  const pendingRows = filtered.filter((item) => item.decision !== "ignored");
+  const ignoredRows = filtered.filter((item) => item.decision === "ignored");
+  const groups = recoveryGroups(pendingRows, (item) => item.botId, (item) => item.botName);
+  const renderRows = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-groups" }, recoveryGroups(list, (item) => item.botId, (item) => item.botName).map((group) => (0, import_react50.createElement)(
+    "section",
+    { key: group.id, className: "bt-recovery-group" },
+    (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
+    group.rows.map((item) => (0, import_react50.createElement)(HeldRecord, { key: `${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide }))
+  )));
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-recovery-panel", onToggle: (event) => {
+      if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch((value) => value + 1);
+    } },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "↻"),
+      (0, import_react50.createElement)(
+        "span",
+        { className: "bt-recovery-summary-text" },
+        (0, import_react50.createElement)("strong", null, t("Interrupted work")),
+        (0, import_react50.createElement)("small", null, t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
+      ),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !rows2.length ? "—" : String(rows2.filter((item) => item.decision !== "ignored").length))
+    ),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-body" },
+      error ? (0, import_react50.createElement)("p", { role: "alert", className: "bt-recovery-warning" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-intro" },
+        (0, import_react50.createElement)("p", null, t("The outcome is unknown. Your choice does not mark the work complete.")),
+        (0, import_react50.createElement)("span", null, t("Snapshot time (UTC)"), ": ", snapshotTime(recovery.sampledAt))
+      ),
+      recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
+      rows2.length ? (0, import_react50.createElement)(
+        "label",
+        { className: "bt-recovery-search" },
+        (0, import_react50.createElement)("span", { className: "bt-recovery-sr" }, t("Filter by Bot or ID")),
+        (0, import_react50.createElement)("input", { type: "search", value: query, placeholder: t("Filter by Bot or ID"), onChange: (event) => setQuery(event.target.value) })
+      ) : null,
+      !rows2.length && !recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No interrupted turns in this snapshot.")) : null,
+      rows2.length && !filtered.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
+      groups.length ? renderRows(pendingRows) : null,
+      ignoredRows.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Ignored")} (${ignoredRows.length})`), renderRows(ignoredRows)) : null
+    )
   );
 }
 var recoveryObservationText = (value) => value === "observed-present" ? t("Observed in snapshot") : value === "observed-absent" ? t("Not observed in snapshot") : t("Not known");
 var legacyReviewStateText = (value) => value === "needs-review" ? t("Needs manual review") : value === "evidence-needed" ? t("Evidence still needed") : value === "identity-unverified" ? t("Work identity unverified") : t("Not known");
-function LegacyWorkReview({ scope, request }) {
-  const [workId, setWorkId] = (0, import_react50.useState)(""), [record, setRecord] = (0, import_react50.useState)(null);
-  const [summary, setSummary] = (0, import_react50.useState)(""), [evidence, setEvidence] = (0, import_react50.useState)(""), [unfinished, setUnfinished] = (0, import_react50.useState)("");
-  const [error, setError] = (0, import_react50.useState)(""), [busy, setBusy] = (0, import_react50.useState)(false);
-  const [candidates, setCandidates] = (0, import_react50.useState)(null);
-  const epoch = (0, import_react50.useRef)(0), scopeKey = `${scope.kind}:${scope.id}`;
-  (0, import_react50.useEffect)(() => {
-    epoch.current++;
-    setWorkId("");
-    setRecord(null);
-    setCandidates(null);
-    setSummary("");
-    setEvidence("");
-    setUnfinished("");
-    setError("");
-    setBusy(false);
-    return () => {
-      epoch.current++;
-    };
-  }, [scopeKey]);
-  const run2 = async (endpoint, body) => {
+var reviewMarkerPrefix = "ds-bot:legacy-review-pending:";
+var reviewOperationPattern = /^manual-review:[a-f0-9]{64}$/;
+function reviewMarkers(workId) {
+  const storage = globalThis.localStorage;
+  if (!storage) throw new Error("Review storage unavailable");
+  const prefix = `${reviewMarkerPrefix}${encodeURIComponent(workId)}:`;
+  const markers = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key?.startsWith(prefix)) continue;
+    const marker = JSON.parse(storage.getItem(key));
+    if (!marker || marker.workId !== workId || !reviewOperationPattern.test(marker.operationId) || key !== `${prefix}${marker.operationId}` || !["create", "finding"].includes(marker.kind) || !["personal", "room"].includes(marker.scope?.kind) || typeof marker.scope.id !== "string" || !marker.scope.id) throw new Error("Invalid review marker");
+    markers.push({ key, ...marker });
+    if (markers.length > 100) throw new Error("Too many review markers");
+  }
+  return markers;
+}
+function putReviewMarker(marker) {
+  const key = `${reviewMarkerPrefix}${encodeURIComponent(marker.workId)}:${marker.operationId}`;
+  globalThis.localStorage.setItem(key, JSON.stringify(marker));
+  if (globalThis.localStorage.getItem(key) !== JSON.stringify(marker)) throw new Error("Review storage unavailable");
+  return key;
+}
+function WorkDecisions({ scope, request, actors }) {
+  const [items, setItems] = (0, import_react50.useState)(null), [selected, setSelected] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)(""), [busy, setBusy] = (0, import_react50.useState)(false);
+  const [incomplete, setIncomplete] = (0, import_react50.useState)(false), [query, setQuery] = (0, import_react50.useState)("");
+  const active = (0, import_react50.useRef)(false), epoch = (0, import_react50.useRef)(0), requested = (0, import_react50.useRef)(false);
+  (0, import_react50.useEffect)(() => () => {
+    epoch.current += 1;
+  }, []);
+  const fetchItems = async (current) => {
+    const result = await request("legacy-review-list", { scope }), ids = /* @__PURE__ */ new Set();
+    if (!result || !Array.isArray(result.items) || result.items.some((item2) => !item2 || typeof item2.workId !== "string" || !item2.workId || ids.has(item2.workId) || !["open", "ignored", "user-accepted"].includes(item2.choice) || !Number.isSafeInteger(item2.revision) || item2.revision < 0 || typeof item2.owner !== "string" || typeof item2.sender !== "string" || (ids.add(item2.workId), false))) throw Error("Invalid work decisions");
+    if (current === epoch.current) {
+      setItems(result.items);
+      setIncomplete(result.incomplete !== false);
+    }
+  };
+  const refresh = async () => {
+    if (active.current) return;
     const current = epoch.current;
+    active.current = true;
+    requested.current = true;
     setBusy(true);
     setError("");
     try {
-      const result = await request(endpoint, { scope, workId, ...body });
-      if (current === epoch.current) setRecord(result);
+      await fetchItems(current);
     } catch {
-      if (current === epoch.current) setError(t("Action outcome is unknown; check it before making another change."));
+      if (current === epoch.current) {
+        setItems(null);
+        setError(t("Work decisions are unavailable."));
+      }
     } finally {
+      active.current = false;
+      if (current === epoch.current) setBusy(false);
+    }
+  };
+  const decide = async (item2, choice) => {
+    if (active.current || item2.canDecide !== true) return;
+    if (choice === "user-accepted" && !globalThis.confirm(t("Record your acceptance of work {id} in {scope}? This does not complete the task or replace independent acceptance.", { id: item2.workId, scope: scope.id }))) return;
+    const current = epoch.current;
+    active.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await request("legacy-review-decision", { scope, workId: item2.workId, expectedRevision: item2.revision, choice });
+      await fetchItems(current);
+    } catch {
+      try {
+        await fetchItems(current);
+      } catch {
+        if (current === epoch.current) setItems(null);
+      }
+      if (current === epoch.current) setError(t("Decision outcome may be unknown. Refresh to verify it."));
+    } finally {
+      active.current = false;
+      if (current === epoch.current) setBusy(false);
+    }
+  };
+  const rows2 = Array.isArray(items) ? items : [], needle = query.trim().toLocaleLowerCase();
+  const filtered = rows2.filter((item2) => matchesRecovery(needle, [item2.workId, item2.owner, item2.sender, actorLabel(item2.owner, actors), actorLabel(item2.sender, actors)]));
+  const open = filtered.filter((item2) => item2.choice === "open"), handled = filtered.filter((item2) => item2.choice !== "open"), item = rows2.find((row) => row.workId === selected);
+  const render = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-work-groups" }, list.map((row) => (0, import_react50.createElement)("button", { key: row.workId, type: "button", className: "bt-recovery-work-choice", disabled: busy, "aria-pressed": selected === row.workId, onClick: () => setSelected(row.workId), title: row.workId }, `${actorLabel(row.owner, actors)} · ${shortIdentity(row.workId)}`)));
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-recovery-panel", onToggle: (event) => {
+      if (event.target === event.currentTarget && event.currentTarget.open && !requested.current) void refresh();
+    } },
+    (0, import_react50.createElement)("summary", { className: "bt-recovery-summary" }, (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "✓"), (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Work decisions")), (0, import_react50.createElement)("small", null, t("Choose an action for an existing work"))), items ? (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, rows2.filter((row) => row.choice === "open").length) : null),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-body" },
+      (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Your choice does not close the work or establish its outcome.")),
+      incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("The recovery list may be incomplete.")) : null,
+      error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-workspace" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-work-list" },
+          (0, import_react50.createElement)("div", { className: "bt-recovery-list-header" }, (0, import_react50.createElement)("strong", null, t("Needs a decision")), (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void refresh() }, t("Refresh"))),
+          rows2.length ? (0, import_react50.createElement)("input", { type: "search", value: query, placeholder: t("Filter by Bot or ID"), disabled: busy, onChange: (event) => setQuery(event.target.value) }) : null,
+          items && open.length === 0 && !incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty" }, t("No work needs a decision.")) : null,
+          render(open),
+          handled.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Handled")} (${handled.length})`), render(handled)) : null
+        ),
+        (0, import_react50.createElement)("div", { className: "bt-recovery-detail" }, item ? (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-review" },
+          (0, import_react50.createElement)("div", { className: "bt-recovery-facts" }, (0, import_react50.createElement)(Fact, { label: t("Original work ID"), value: item.workId }), (0, import_react50.createElement)(Fact, { label: t("Board"), value: scope.id }), (0, import_react50.createElement)(Fact, { label: t("Sender"), value: actorLabel(item.sender, actors) }), (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(item.owner, actors) })),
+          (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("The result remains unknown; this is not independent acceptance.")),
+          item.canDecide !== true ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning" }, t("The original work identity cannot be verified.")) : null,
+          item.choice === "open" ? (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "button", disabled: busy || item.canDecide !== true, onClick: () => void decide(item, "ignored") }, t("Ignore")), " ", (0, import_react50.createElement)("button", { type: "button", disabled: busy || item.canDecide !== true, onClick: () => void decide(item, "user-accepted") }, t("Record my acceptance"))) : (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("strong", null, t(item.choice === "ignored" ? "Ignored" : "Accepted by you")), " ", (0, import_react50.createElement)("button", { type: "button", disabled: busy || item.canDecide !== true, onClick: () => void decide(item, "open") }, t("Move back to needs a decision")))
+        ) : (0, import_react50.createElement)("p", { className: "bt-recovery-empty" }, t("Choose a work to review.")))
+      )
+    )
+  );
+}
+function LegacyWorkReview({ scope, request, actors }) {
+  const [workId, setWorkId] = (0, import_react50.useState)(""), [record, setRecord] = (0, import_react50.useState)(null);
+  const [summary, setSummary] = (0, import_react50.useState)(""), [evidence, setEvidence] = (0, import_react50.useState)(""), [unfinished, setUnfinished] = (0, import_react50.useState)("");
+  const [error, setError] = (0, import_react50.useState)(""), [busy, setBusy] = (0, import_react50.useState)(false), [query, setQuery] = (0, import_react50.useState)(""), [uncertain, setUncertain] = (0, import_react50.useState)(false);
+  const [candidates, setCandidates] = (0, import_react50.useState)(null);
+  const epoch = (0, import_react50.useRef)(0), requested = (0, import_react50.useRef)(false), inFlight = (0, import_react50.useRef)(false);
+  const selected = (0, import_react50.useRef)(""), recordFor = (0, import_react50.useRef)(""), uncertainRef = (0, import_react50.useRef)(false);
+  (0, import_react50.useEffect)(() => () => {
+    epoch.current += 1;
+  }, []);
+  (0, import_react50.useEffect)(() => {
+    const onStorage = (event) => {
+      if (event.key && !event.key.startsWith(reviewMarkerPrefix)) return;
+      try {
+        const pending = reviewMarkers(selected.current).length > 0;
+        uncertainRef.current = pending;
+        setUncertain(pending);
+      } catch {
+        uncertainRef.current = true;
+        setUncertain(true);
+      }
+    };
+    globalThis.addEventListener("storage", onStorage);
+    return () => globalThis.removeEventListener("storage", onStorage);
+  }, []);
+  const clearDraft = () => {
+    setSummary("");
+    setEvidence("");
+    setUnfinished("");
+  };
+  const run2 = async (endpoint, body, id = workId) => {
+    if (inFlight.current || typeof id !== "string" || id === "" || selected.current !== id || endpoint !== "legacy-review-get" && (recordFor.current !== id || uncertainRef.current)) return;
+    const current = epoch.current;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    let markerKey = "", mutationStarted = false;
+    try {
+      let markers = [], storageAvailable = true;
+      try {
+        markers = reviewMarkers(id);
+      } catch {
+        storageAvailable = false;
+      }
+      if (endpoint === "legacy-review-get") {
+        for (const marker of markers) {
+          const receipt = await request("legacy-review-operation", { scope: marker.scope, workId: id, operationId: marker.operationId, kind: marker.kind }).catch(() => null);
+          if (receipt?.status === "committed") globalThis.localStorage.removeItem(marker.key);
+        }
+        if (storageAvailable) markers = reviewMarkers(id);
+      } else {
+        if (!storageAvailable) throw new Error("Review storage unavailable");
+        if (markers.length) throw new Error("Pending review operation");
+        const kind = endpoint === "legacy-review-create" ? "create" : "finding";
+        const prepared = await request("legacy-review-prepare", { scope, workId: id, kind, ...body });
+        if (!reviewOperationPattern.test(prepared?.operationId)) throw new Error("Invalid review operation");
+        markerKey = putReviewMarker({ workId: id, operationId: prepared.operationId, kind, scope: { kind: scope.kind, id: scope.id } });
+        body = { ...body, operationId: prepared.operationId };
+      }
+      mutationStarted = endpoint !== "legacy-review-get";
+      const result = await request(endpoint, { scope, workId: id, ...body });
+      if (!result || typeof result !== "object" || Array.isArray(result) || result.workId !== void 0 && result.workId !== id || result.snapshot?.workId !== void 0 && result.snapshot.workId !== id) throw new Error("Review identity changed");
+      if (markerKey) globalThis.localStorage.removeItem(markerKey);
+      if (current === epoch.current && selected.current === id) {
+        recordFor.current = id;
+        setRecord(result);
+        uncertainRef.current = !storageAvailable || markers.length > 0;
+        setUncertain(!storageAvailable || markers.length > 0);
+        if (!storageAvailable) setError(t("Review storage or verification is unavailable; saving is disabled."));
+        if (markers.length) setError(t("A previous review action is still unconfirmed. Check again before saving."));
+        if (endpoint === "legacy-review-finding" || endpoint === "legacy-review-get" && storageAvailable && !markers.length && summary && (result.history ?? []).some((item) => item.finding?.summary === summary && JSON.stringify(item.finding?.evidenceRefs) === JSON.stringify(evidence.split("\n").map((s) => s.trim()).filter(Boolean)) && JSON.stringify(item.finding?.unfinished) === JSON.stringify(unfinished.split("\n").map((s) => s.trim()).filter(Boolean)))) clearDraft();
+      }
+    } catch {
+      if (current === epoch.current && selected.current === id) {
+        uncertainRef.current = true;
+        setUncertain(true);
+        setError(t(mutationStarted ? "Action outcome is unknown; check it before making another change." : "Review storage or verification is unavailable; saving is disabled."));
+      }
+    } finally {
+      inFlight.current = false;
       if (current === epoch.current) setBusy(false);
     }
   };
   const list = async () => {
+    if (inFlight.current) return;
     const current = epoch.current;
+    inFlight.current = true;
+    requested.current = true;
     setBusy(true);
     setError("");
+    setCandidates(null);
     try {
       const result = await request("legacy-review-list", { scope });
-      if (current === epoch.current) setCandidates(result);
+      const ids = /* @__PURE__ */ new Set();
+      if (!result || !Array.isArray(result.items) || result.items.some((item) => {
+        if (!item || typeof item.workId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(item.workId) || typeof item.owner !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(item.owner) || ids.has(item.workId)) return true;
+        ids.add(item.workId);
+        return false;
+      })) throw new Error("Invalid review sources");
+      if (current === epoch.current) setCandidates({ items: result.items, incomplete: result.incomplete !== false });
     } catch {
-      if (current === epoch.current) setError(t("Review sources are unavailable."));
+      if (current === epoch.current) {
+        recordFor.current = "";
+        setRecord(null);
+        setCandidates(null);
+        setError(t("Review sources are unavailable."));
+      }
     } finally {
+      inFlight.current = false;
       if (current === epoch.current) setBusy(false);
     }
   };
+  const choose = (item) => {
+    if (inFlight.current || typeof item?.workId !== "string" || item.workId === "") return;
+    selected.current = item.workId;
+    recordFor.current = "";
+    setWorkId(item.workId);
+    setRecord(null);
+    clearDraft();
+    void run2("legacy-review-get", {}, item.workId);
+  };
+  const rows2 = Array.isArray(candidates?.items) ? candidates.items : [];
+  const needle = query.trim().toLocaleLowerCase();
+  const filtered = rows2.filter((item) => matchesRecovery(needle, [item.workId, item.owner, actorLabel(item.owner, actors)]));
+  const groups = recoveryGroups(filtered, (item) => item.owner, (item) => actorLabel(item.owner, actors));
+  const live = record?.liveRecovery;
   return (0, import_react50.createElement)(
     "details",
-    { className: "bt-board-held" },
-    (0, import_react50.createElement)("summary", null, t("Review an existing work")),
-    (0, import_react50.createElement)("p", null, t("Review notes do not send messages or close work. Sources are unverified; inspect the original records.")),
-    (0, import_react50.createElement)("p", null, t("Only works between existing Bots are currently supported.")),
-    (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void list() }, t("Find works awaiting inspection")),
-    candidates?.incomplete ? (0, import_react50.createElement)("p", { role: "status" }, t("The recovery list may be incomplete.")) : null,
-    Array.isArray(candidates?.items) ? (0, import_react50.createElement)("div", null, candidates.items.map((item) => (0, import_react50.createElement)("button", { key: item.workId, type: "button", disabled: busy, onClick: () => {
-      setWorkId(item.workId);
-      setRecord(null);
-    } }, `${item.workId} · ${item.owner}`))) : null,
-    (0, import_react50.createElement)("label", null, t("Original work ID"), " ", (0, import_react50.createElement)("input", { value: workId, disabled: busy, onChange: (event) => {
-      setWorkId(event.target.value);
-      setRecord(null);
-    } })),
-    " ",
-    (0, import_react50.createElement)("button", { type: "button", disabled: busy || !workId, onClick: () => void run2("legacy-review-get", {}) }, t("Check")),
-    record?.liveRecovery ? (0, import_react50.createElement)("p", { role: "status" }, record.liveRecovery.available ? `${t("Recovery snapshot")} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt >= 0 && record.liveRecovery.sampledAt <= 864e13 ? new Date(record.liveRecovery.sampledAt).toISOString() : t("Not known")}): ${t("Queue")}: ${recoveryObservationText(record.liveRecovery.observed.queue)} · ${t("Held records")}: ${recoveryObservationText(record.liveRecovery.observed.held)} · ${(record.liveRecovery.ids ?? []).join(", ")}` : t("Current recovery sources are unavailable.")) : null,
-    record?.state === "not-created" ? (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void run2("legacy-review-create", {}) }, t("Create review")) : null,
-    record && record.state !== "not-created" ? (0, import_react50.createElement)(
+    { className: "bt-recovery-panel", onToggle: (event) => {
+      if (event.target === event.currentTarget && event.currentTarget.open && !requested.current && !inFlight.current) void list();
+    } },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "≡"),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Manual notes (optional)")), (0, import_react50.createElement)("small", null, t("Review note"))),
+      Array.isArray(candidates?.items) ? (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, String(rows2.length)) : null
+    ),
+    (0, import_react50.createElement)(
       "div",
-      null,
-      (0, import_react50.createElement)(Fact, { label: t("Status"), value: legacyReviewStateText(record.state) }),
-      (0, import_react50.createElement)(Fact, { label: t("Owner"), value: record.owner }),
-      record.archived ? (0, import_react50.createElement)("p", { role: "status" }, t("The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.")) : null,
-      (0, import_react50.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt >= 0 && record.snapshot.sampledAt <= 864e13 ? new Date(record.snapshot.sampledAt).toISOString() : t("Not known") }),
-      (0, import_react50.createElement)(Fact, { label: t("Original sessions"), value: (record.snapshot?.sources ?? []).map((s) => s.sessionId).join(", ") }),
-      (0, import_react50.createElement)("p", null, t("Execution and external effects remain unknown.")),
-      !record.archived && ["needs-review", "evidence-needed"].includes(record.state) ? (0, import_react50.createElement)(
+      { className: "bt-recovery-body" },
+      (0, import_react50.createElement)(
         "div",
-        null,
-        (0, import_react50.createElement)("label", null, t("Review note"), (0, import_react50.createElement)("textarea", { value: summary, disabled: busy, onChange: (event) => setSummary(event.target.value) })),
-        (0, import_react50.createElement)("label", null, t("Evidence references, one per line"), (0, import_react50.createElement)("textarea", { value: evidence, disabled: busy, onChange: (event) => setEvidence(event.target.value) })),
-        (0, import_react50.createElement)("label", null, t("Unfinished items, one per line"), (0, import_react50.createElement)("textarea", { value: unfinished, disabled: busy, onChange: (event) => setUnfinished(event.target.value) })),
-        (0, import_react50.createElement)("button", { type: "button", disabled: busy || !summary.trim(), onClick: () => void run2("legacy-review-finding", { expectedRevision: record.revision, summary, evidenceRefs: evidence.split("\n").map((s) => s.trim()).filter(Boolean), unfinished: unfinished.split("\n").map((s) => s.trim()).filter(Boolean) }) }, t("Save review note"))
+        { className: "bt-recovery-intro" },
+        (0, import_react50.createElement)("p", null, t("Review notes do not send messages or close work. Sources are unverified; inspect the original records.")),
+        (0, import_react50.createElement)("span", null, t("Only works between existing Bots are currently supported."))
+      ),
+      candidates?.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("The recovery list may be incomplete.")) : null,
+      error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-workspace" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-work-list" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-list-header" },
+            (0, import_react50.createElement)("strong", null, t("Find works awaiting inspection")),
+            (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void list() }, t("Refresh"))
+          ),
+          rows2.length ? (0, import_react50.createElement)(
+            "label",
+            { className: "bt-recovery-search" },
+            (0, import_react50.createElement)("span", { className: "bt-recovery-sr" }, t("Filter by Bot or ID")),
+            (0, import_react50.createElement)("input", { type: "search", value: query, disabled: busy, placeholder: t("Filter by Bot or ID"), onChange: (event) => setQuery(event.target.value) })
+          ) : null,
+          busy && candidates === null ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("Loading…")) : null,
+          !busy && candidates !== null && !candidates.incomplete && !rows2.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No work awaiting inspection.")) : null,
+          rows2.length && !filtered.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
+          (0, import_react50.createElement)("div", { className: "bt-recovery-work-groups" }, groups.map((group) => (0, import_react50.createElement)(
+            "section",
+            { key: group.id, className: "bt-recovery-work-group" },
+            (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
+            group.rows.map((item) => (0, import_react50.createElement)("button", {
+              key: item.workId,
+              type: "button",
+              className: "bt-recovery-work-choice",
+              disabled: busy,
+              "aria-pressed": workId === item.workId,
+              onClick: () => choose(item),
+              title: item.workId
+            }, shortIdentity(item.workId)))
+          )))
+        ),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-detail" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-manual" },
+            (0, import_react50.createElement)("label", null, t("Original work ID"), (0, import_react50.createElement)("input", { value: workId, disabled: busy, onChange: (event) => {
+              if (inFlight.current) return;
+              selected.current = event.target.value;
+              recordFor.current = "";
+              setWorkId(event.target.value);
+              setRecord(null);
+              clearDraft();
+            } })),
+            (0, import_react50.createElement)("button", { type: "button", disabled: busy || !workId.trim(), onClick: () => {
+              if (inFlight.current) return;
+              const id = workId.trim(), same = selected.current === id && recordFor.current === id;
+              selected.current = id;
+              recordFor.current = "";
+              setWorkId(id);
+              setRecord(null);
+              if (!same) clearDraft();
+              void run2("legacy-review-get", {}, id);
+            } }, t("Check"))
+          ),
+          !record && !busy ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty" }, t("Choose a work to review.")) : null,
+          live ? (0, import_react50.createElement)("div", { className: "bt-recovery-snapshot", role: "status" }, live.available ? (0, import_react50.createElement)(
+            "div",
+            null,
+            (0, import_react50.createElement)("strong", null, t("Recovery snapshot")),
+            " · ",
+            snapshotTime(live.sampledAt),
+            (0, import_react50.createElement)(
+              "div",
+              { className: "bt-recovery-facts" },
+              (0, import_react50.createElement)(Fact, { label: t("Queue"), value: recoveryObservationText(live.observed?.queue) }),
+              (0, import_react50.createElement)(Fact, { label: t("Held records"), value: recoveryObservationText(live.observed?.held) }),
+              (0, import_react50.createElement)(Fact, { label: t("Original sessions"), value: (live.ids ?? []).join(", ") || t("Not known") })
+            )
+          ) : t("Current recovery sources are unavailable.")) : null,
+          record?.state === "not-created" ? (0, import_react50.createElement)("button", { type: "button", disabled: busy || uncertain, onClick: () => void run2("legacy-review-create", {}) }, t("Create review")) : null,
+          record && record.state !== "not-created" ? (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-review" },
+            (0, import_react50.createElement)(
+              "div",
+              { className: "bt-recovery-facts" },
+              (0, import_react50.createElement)(Fact, { label: t("Status"), value: legacyReviewStateText(record.state) }),
+              (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(record.owner, actors) }),
+              (0, import_react50.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: snapshotTime(record.snapshot?.sampledAt) }),
+              (0, import_react50.createElement)(Fact, { label: t("Original sessions"), value: (record.snapshot?.sources ?? []).map((source) => source.sessionId).join(", ") || t("Not known") })
+            ),
+            record.archived ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.")) : null,
+            (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Execution and external effects remain unknown.")),
+            !record.archived && ["needs-review", "evidence-needed"].includes(record.state) ? (0, import_react50.createElement)(
+              "div",
+              { className: "bt-recovery-form" },
+              (0, import_react50.createElement)("label", null, t("Review note"), (0, import_react50.createElement)("textarea", { value: summary, disabled: busy || uncertain, onChange: (event) => {
+                if (!inFlight.current && !uncertainRef.current) setSummary(event.target.value);
+              } })),
+              (0, import_react50.createElement)("label", null, t("Evidence references, one per line"), (0, import_react50.createElement)("textarea", { value: evidence, disabled: busy || uncertain, onChange: (event) => {
+                if (!inFlight.current && !uncertainRef.current) setEvidence(event.target.value);
+              } })),
+              (0, import_react50.createElement)("label", null, t("Unfinished items, one per line"), (0, import_react50.createElement)("textarea", { value: unfinished, disabled: busy || uncertain, onChange: (event) => {
+                if (!inFlight.current && !uncertainRef.current) setUnfinished(event.target.value);
+              } })),
+              (0, import_react50.createElement)("button", { type: "button", disabled: busy || uncertain || !summary.trim(), onClick: () => void run2("legacy-review-finding", { expectedRevision: record.revision, summary, evidenceRefs: evidence.split("\n").map((s) => s.trim()).filter(Boolean), unfinished: unfinished.split("\n").map((s) => s.trim()).filter(Boolean) }) }, t("Save review note"))
+            ) : null,
+            (record.history ?? []).map((item) => (0, import_react50.createElement)(
+              "article",
+              { key: item.revision, className: "bt-recovery-history" },
+              (0, import_react50.createElement)(Fact, { label: t("Review note"), value: item.finding.summary }),
+              (0, import_react50.createElement)(Fact, { label: t("Evidence references"), value: item.finding.evidenceRefs.join(", ") }),
+              (0, import_react50.createElement)(Fact, { label: t("Unfinished items"), value: item.finding.unfinished.join(", ") })
+            ))
+          ) : null
+        )
+      )
+    )
+  );
+}
+var periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at]);
+function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen }) {
+  const [checking, setChecking] = (0, import_react50.useState)(false), [saving, setSaving] = (0, import_react50.useState)(false);
+  const [checkedKey, setCheckedKey] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)(""), [notice, setNotice] = (0, import_react50.useState)("");
+  const generation = (0, import_react50.useRef)(0), scopeGeneration = (0, import_react50.useRef)(0), checkBusy = (0, import_react50.useRef)(false), saveBusy = (0, import_react50.useRef)(false);
+  const attempt = goal?.reviewAttempt;
+  const scopeId = scope.kind === "room" ? scope.id : "";
+  const attemptId = typeof attempt?.id === "string" ? attempt.id : "";
+  const goalId = typeof goal?.id === "string" ? goal.id : "";
+  const identity = periodicReviewIdentity(scopeId, goal);
+  const attemptKey = JSON.stringify([scopeId, goalId, attemptId]);
+  const previousAttempt = (0, import_react50.useRef)(attemptKey);
+  if (previousAttempt.current !== attemptKey) {
+    previousAttempt.current = attemptKey;
+    generation.current += 1;
+  }
+  (0, import_react50.useEffect)(() => {
+    scopeGeneration.current += 1;
+    setNotice("");
+    return () => {
+      scopeGeneration.current += 1;
+      generation.current += 1;
+    };
+  }, [scopeId]);
+  if (!scopeId || !attempt && !notice && !error) return null;
+  const automaticIdle = goal?.idle === true && ["admin-pass", "nudge-limit"].includes(goal.idleReason) && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision;
+  const eligible = goal?.status === "active" && goalId && attemptId && (["uncertain", "cancelled-uncertain"].includes(attempt?.state) || attempt?.state === "admitting" && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1e3) && (goal.idle !== true || automaticIdle);
+  const refresh = async () => {
+    if (checkBusy.current || saveBusy.current || typeof refreshGoal !== "function") return;
+    const current = generation.current, scopeAtStart = scopeGeneration.current, key = identity;
+    checkBusy.current = true;
+    setChecking(true);
+    setError("");
+    setCheckedKey("");
+    try {
+      const snapshot = await refreshGoal();
+      if (generation.current === current) {
+        if (periodicReviewIdentity(scopeId, snapshot?.roomsById?.[scopeId]?.goal) === key) setCheckedKey(key);
+        else setError(t("Group status changed. Refresh and review the current attempt."));
+      }
+    } catch {
+      if (generation.current === current) setError(t("Could not refresh the group status."));
+    } finally {
+      checkBusy.current = false;
+      if (scopeGeneration.current === scopeAtStart) setChecking(false);
+    }
+  };
+  const submit = async () => {
+    if (!eligible || checkedKey !== identity || checkBusy.current || saveBusy.current || typeof resolveReview !== "function") return;
+    let fresh;
+    try {
+      fresh = currentRoomGoal?.(scopeId);
+    } catch {
+    }
+    if (periodicReviewIdentity(scopeId, fresh) !== identity) {
+      setCheckedKey("");
+      setError(t("Group status changed. Refresh and review the current attempt."));
+      return;
+    }
+    const current = generation.current, scopeAtStart = scopeGeneration.current;
+    saveBusy.current = true;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await resolveReview(goalId, attemptId);
+      if (scopeGeneration.current === scopeAtStart) setNotice(`${t("Request accepted. Refresh to verify the current review status.")} ${t("Review ID")}: ${attemptId}`);
+      if (generation.current === current) setCheckedKey("");
+    } catch (err) {
+      if (generation.current === current) setCheckedKey("");
+      if (scopeGeneration.current === scopeAtStart) setError(["bot/stale", "bot/invalid", "bot/refused", "bot/read-only"].includes(err?.code) ? t("The goal changed or related work is still pending. Check it before recovery.") : t("Action outcome is unknown; check it before making another change."));
+    } finally {
+      saveBusy.current = false;
+      if (scopeGeneration.current === scopeAtStart) setSaving(false);
+    }
+  };
+  const reason = typeof resolveReview !== "function" ? t("Review recovery is unavailable in this view.") : typeof refreshGoal !== "function" || typeof currentRoomGoal !== "function" ? t("Group status is unavailable.") : !goalId || !attemptId ? t("Review identity is unavailable.") : goal?.status !== "active" ? t("The group goal must be active before reviews can resume.") : goal.idle === true && !automaticIdle ? t("The goal is paused or its idle state needs review.") : !eligible ? t("This review is not ready to resume. Refresh its status later.") : checkedKey !== identity ? t("Refresh the group status before continuing.") : "";
+  return (0, import_react50.createElement)(
+    "details",
+    {
+      className: "bt-recovery-panel bt-periodic-review",
+      open: initiallyOpen || void 0,
+      onToggle: (event) => {
+        if (event.target === event.currentTarget && event.currentTarget.open && checkedKey !== identity && !checkBusy.current) void refresh();
+      }
+    },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "!"),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Periodic review issue")), (0, import_react50.createElement)("small", null, t("Inspection recovery"))),
+      attempt ? (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t("Status unknown")) : null
+    ),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-body" },
+      attempt ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-periodic-context" },
+        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.")),
+        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This only resumes periodic inspections; it does not approve or complete tasks.")),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-facts" },
+          (0, import_react50.createElement)(Fact, { label: t("Group ID"), value: scopeId }),
+          (0, import_react50.createElement)(Fact, { label: t("Goal ID"), value: goalId || t("Unknown") }),
+          (0, import_react50.createElement)(Fact, { label: t("Review ID"), value: attemptId || t("Unknown") })
+        ),
+        (0, import_react50.createElement)("p", { className: "bt-recovery-warning" }, t("The server also checks the group and administrator sessions for pending work, approvals and subagents."))
       ) : null,
-      (record.history ?? []).map((item) => (0, import_react50.createElement)(
-        "article",
-        { key: item.revision },
-        (0, import_react50.createElement)(Fact, { label: t("Review note"), value: item.finding.summary }),
-        (0, import_react50.createElement)(Fact, { label: t("Evidence references"), value: item.finding.evidenceRefs.join(", ") }),
-        (0, import_react50.createElement)(Fact, { label: t("Unfinished items"), value: item.finding.unfinished.join(", ") })
-      ))
-    ) : null,
-    error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-list-header" },
+        (0, import_react50.createElement)("span", null, checking ? t("Loading…") : checkedKey === identity ? t("Current status checked") : t("Group status")),
+        (0, import_react50.createElement)("button", { type: "button", disabled: checking || saving || typeof refreshGoal !== "function", onClick: () => void refresh() }, t("Refresh status"))
+      ),
+      notice ? (0, import_react50.createElement)("p", { className: "bt-recovery-notice", role: "status" }, notice) : null,
+      error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+      attempt ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-form" },
+        reason ? (0, import_react50.createElement)("p", { className: "bt-recovery-note", role: "status" }, reason) : null,
+        (0, import_react50.createElement)("button", { type: "button", disabled: !!reason || checking || saving || typeof resolveReview !== "function", onClick: () => void submit() }, t("Allow future inspections"))
+      ) : null
+    )
   );
 }
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
@@ -37027,15 +37682,15 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
   );
 }
 function CardDetails({ task, editable, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [draft, setDraft] = (0, import_react50.useState)({}), [entry, setEntry2] = (0, import_react50.useState)("");
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [draft, setDraft] = (0, import_react50.useState)({}), [entry, setEntry2] = (0, import_react50.useState)("");
   const reset = () => {
-    setBase(task.revision);
+    setBase(cardStamp(task));
     setEntry2("");
     setDraft({ description: textValue(task.description), dueDate: textValue(task.dueDate), labels: (Array.isArray(task.labels) ? task.labels : []).join("\n"), checklist: (Array.isArray(task.checklist) ? task.checklist : []).map((item) => ({ ...item })) });
   };
   const checklist = Array.isArray(task.checklist) ? task.checklist : [];
   const labels2 = Array.isArray(task.labels) ? task.labels : [];
-  const changed = task.revision !== base;
+  const changed = !sameCardStamp(task, base);
   const labelValues = (draft.labels ?? "").split("\n").map((value) => value.trim()).filter(Boolean);
   const bytes = (value) => new TextEncoder().encode(value).length;
   const valid = bytes(draft.description ?? "") <= 8192 && labelValues.length <= 20 && new Set(labelValues).size === labelValues.length && labelValues.every((value) => bytes(value) <= 40) && (draft.checklist ?? []).length <= 100 && (draft.checklist ?? []).every((item) => item.text.trim() && bytes(item.text.trim()) <= 512);
@@ -37063,7 +37718,7 @@ function CardDetails({ task, editable, disabled, onEdit }) {
       { className: "bt-board-actions", onSubmit: (event) => {
         event.preventDefault();
         if (disabled || changed || !valid) return;
-        void onEdit({ ...task, revision: base }, { description: draft.description, dueDate: draft.dueDate || null, labels: labelValues, checklist: draft.checklist.map((item) => ({ ...item, text: item.text.trim() })) }).then((result) => {
+        void onEdit(stampedTask(task, base), { description: draft.description, dueDate: draft.dueDate || null, labels: labelValues, checklist: draft.checklist.map((item) => ({ ...item, text: item.text.trim() })) }).then((result) => {
           if (result === "committed") setOpen(false);
         });
       } },
@@ -37134,18 +37789,18 @@ function CardConversation({ task, commands, disabled, onCommand }) {
   );
 }
 function EditGoalTask({ task, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
   const reset = () => {
-    setBase(task.revision);
-    setTitle(textValue(task.title));
+    setBase(cardStamp(task));
+    setTitle(textValue(task.legacy?.originalTitle ?? task.title));
     setNote(textValue(task.goalNote));
     setStatus(task.legacy?.originalStatus ?? "");
   };
-  const changed = task.revision !== base, original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
+  const changed = !sameCardStamp(task, base), original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
   const titleLocked = ["reported", "done"].includes(original);
   const next = original === "pending" ? "working" : original === "working" ? "reported" : void 0;
   const statuses = [original, ...!paused && next ? [next] : []].filter(Boolean);
-  const modified = title.trim() !== textValue(task.title) || note !== textValue(task.goalNote) || status !== original;
+  const modified = title.trim() !== textValue(task.legacy?.originalTitle ?? task.title) || note !== textValue(task.goalNote) || status !== original;
   const valid = title.trim() && modified && (!status || status === original || note.trim());
   if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
     reset();
@@ -37157,10 +37812,10 @@ function EditGoalTask({ task, disabled, onEdit }) {
       event.preventDefault();
       if (disabled || changed || !valid) return;
       const value = {};
-      if (title.trim() !== textValue(task.title)) value.title = title.trim();
+      if (title.trim() !== textValue(task.legacy?.originalTitle ?? task.title)) value.title = title.trim();
       if (note !== textValue(task.goalNote) || status !== original) value.note = note;
       if (status !== original) value.status = status;
-      void onEdit({ ...task, revision: base }, value).then((result) => {
+      void onEdit(stampedTask(task, base), value).then((result) => {
         if (result === "committed") setOpen(false);
       });
     } },
@@ -37174,6 +37829,35 @@ function EditGoalTask({ task, disabled, onEdit }) {
     )),
     (0, import_react50.createElement)("label", null, t("Goal task note"), (0, import_react50.createElement)("textarea", { "aria-label": t("Goal task note"), value: note, disabled: disabled || paused, onChange: (event) => setNote(event.target.value) })),
     (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Owner, acceptance and completed status are managed by the group goal.")),
+    (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
+  );
+}
+function EditHistoryTitle({ task, disabled, onEdit }) {
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [reason, setReason] = (0, import_react50.useState)("");
+  const reset = () => {
+    setBase(cardStamp(task));
+    setTitle(textValue(task.title));
+    setReason("");
+  };
+  const changed = !sameCardStamp(task, base);
+  const valid = title.trim() && title.trim().length <= 500 && title.trim() !== task.title && reason.trim() && reason.length <= 300;
+  if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
+    reset();
+    setOpen(true);
+  } }, t("Correct card title"));
+  return (0, import_react50.createElement)(
+    "form",
+    { className: "bt-board-actions", onSubmit: (event) => {
+      event.preventDefault();
+      if (disabled || changed || !valid) return;
+      void onEdit(stampedTask(task, base), { title: title.trim(), reason: reason.trim() }).then((result) => {
+        if (result === "committed") setOpen(false);
+      });
+    } },
+    changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
+    (0, import_react50.createElement)("label", null, t("Card display title"), (0, import_react50.createElement)("input", { "aria-label": t("Card display title"), value: title, disabled, onChange: (event) => setTitle(event.target.value) })),
+    (0, import_react50.createElement)("label", null, t("Reason for correction"), (0, import_react50.createElement)("textarea", { "aria-label": t("Reason for correction"), value: reason, disabled, onChange: (event) => setReason(event.target.value) })),
+    (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("The original task and acceptance record remain unchanged.")),
     (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
   );
 }
@@ -37265,8 +37949,8 @@ function BoardImage({ scope, taskId, image, request, disabled, onRemove, canRemo
 function UploadImages({ task, disabled, onUpload }) {
   const [images, setImages] = (0, import_react50.useState)([]);
   const [error, setError] = (0, import_react50.useState)("");
-  const [base, setBase] = (0, import_react50.useState)(task.revision);
-  const changed = images.length > 0 && base !== task.revision;
+  const [base, setBase] = (0, import_react50.useState)(() => cardStamp(task));
+  const changed = images.length > 0 && !sameCardStamp(task, base);
   const urls = (0, import_react50.useRef)(/* @__PURE__ */ new Set());
   (0, import_react50.useEffect)(() => () => {
     for (const url of urls.current) URL.revokeObjectURL(url);
@@ -37280,7 +37964,7 @@ function UploadImages({ task, disabled, onUpload }) {
   const choose = (event) => {
     const files = [...event.target.files ?? []];
     event.target.value = "";
-    if (!images.length) setBase(task.revision);
+    if (!images.length) setBase(cardStamp(task));
     const count = (Array.isArray(task.images) ? task.images.length : 0) + images.length + files.length;
     const bytes = images.reduce((sum, image) => sum + image.file.size, 0) + files.reduce((sum, file) => sum + file.size, 0);
     if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || images.length + files.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || files.some((file) => !IMAGE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
@@ -37318,7 +38002,7 @@ function UploadImages({ task, disabled, onUpload }) {
       (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => remove(image) }, t("Remove image"))
     ))),
     images.length ? (0, import_react50.createElement)("button", { type: "button", disabled: disabled || changed, onClick: () => {
-      void onUpload({ ...task, revision: base }, images).then((result) => {
+      void onUpload(stampedTask(task, base), images).then((result) => {
         if (result !== "committed") return;
         for (const image of images) {
           URL.revokeObjectURL(image.url);
@@ -37329,9 +38013,38 @@ function UploadImages({ task, disabled, onUpload }) {
     } }, t("Upload images")) : null
   );
 }
-function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request }) {
+function ColumnRail({ label, personal, children }) {
+  const rail = (0, import_react50.useRef)(null);
+  const move = (direction) => {
+    const node = rail.current;
+    if (node) node.scrollBy({ left: direction * Math.max(240, node.clientWidth * 0.8), behavior: "smooth" });
+  };
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-board-rail" },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-board-rail-controls" },
+      (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Previous columns"), onClick: () => move(-1) }, "←"),
+      (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Next columns"), onClick: () => move(1) }, "→")
+    ),
+    (0, import_react50.createElement)("div", {
+      ref: rail,
+      className: `bt-board-columns${personal ? " bt-board-columns-personal" : ""}`,
+      role: "region",
+      "aria-label": label,
+      tabIndex: 0,
+      onKeyDown: (event) => {
+        if (event.target === event.currentTarget && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+          event.preventDefault();
+          move(event.key === "ArrowLeft" ? -1 : 1);
+        }
+      }
+    }, children)
+  );
+}
+function TaskCard({ scope, task, commands, actors, uncertain, onOpen }) {
   const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
-  const evidence = Array.isArray(task.evidence) ? task.evidence.map(asText2).filter(Boolean).join(" · ") : asText2(task.evidence);
   const blocker = asText2(task.blocked);
   const canMove = commands.some((command) => command.type === "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
   const owner = scope.kind === "personal" && scope.id === "user" && task.owner === "user" ? "" : actorLabel(task.owner, actors);
@@ -37339,6 +38052,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
     "article",
     {
       className: "bt-board-card",
+      "data-task-id": task.id,
       draggable: canMove && !uncertain,
       onDragStart: (event) => {
         if (canMove && !uncertain) {
@@ -37348,26 +38062,155 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
       }
     },
     (0, import_react50.createElement)(
-      "details",
-      { className: "bt-board-card-details" },
+      "button",
+      { type: "button", className: "bt-board-card-summary", onClick: (event) => onOpen(task.id, event.currentTarget) },
+      (0, import_react50.createElement)("strong", { className: "bt-board-title" }, textValue(task.title) || task.id),
       (0, import_react50.createElement)(
-        "summary",
-        { className: "bt-board-card-summary" },
-        (0, import_react50.createElement)("strong", { className: "bt-board-title" }, textValue(task.title) || task.id),
-        (0, import_react50.createElement)(
-          "span",
-          { className: "bt-board-card-meta" },
-          owner ? (0, import_react50.createElement)("span", { className: "bt-board-owner" }, owner) : null,
-          task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("Shared task · read only")) : null,
-          blocker ? (0, import_react50.createElement)("span", { className: "bt-board-chip bt-board-chip-blocked" }, t("Blocked")) : null,
-          dependencies.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} dependencies", { count: dependencies.length })) : null,
-          task.dueDate ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${t("Due date")}: ${textValue(task.dueDate)}`) : null,
-          Array.isArray(task.labels) ? task.labels.slice(0, 3).map((label) => (0, import_react50.createElement)("span", { key: label, className: "bt-board-chip" }, label)) : null,
-          Array.isArray(task.checklist) && task.checklist.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${task.checklist.filter((item) => item.checked).length}/${task.checklist.length} ${t("Checklist")}`) : null,
-          task.images?.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} images", { count: task.images.length })) : null,
-          (0, import_react50.createElement)("span", { className: "bt-board-open-hint" }, t("View details"))
-        )
+        "span",
+        { className: "bt-board-card-meta" },
+        owner ? (0, import_react50.createElement)("span", { className: "bt-board-owner" }, owner) : null,
+        task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("Shared task · read only")) : null,
+        blocker ? (0, import_react50.createElement)("span", { className: "bt-board-chip bt-board-chip-blocked" }, t("Blocked")) : null,
+        dependencies.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} dependencies", { count: dependencies.length })) : null,
+        task.dueDate ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${t("Due date")}: ${textValue(task.dueDate)}`) : null,
+        Array.isArray(task.labels) ? task.labels.slice(0, 3).map((label) => (0, import_react50.createElement)("span", { key: label, className: "bt-board-chip" }, label)) : null,
+        Array.isArray(task.checklist) && task.checklist.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${task.checklist.filter((item) => item.checked).length}/${task.checklist.length} ${t("Checklist")}`) : null,
+        task.images?.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} images", { count: task.images.length })) : null,
+        (0, import_react50.createElement)("span", { className: "bt-board-open-hint" }, t("View details"))
+      )
+    )
+  );
+}
+function TaskHistory({ scope, task, request }) {
+  const [history, setHistory] = (0, import_react50.useState)(null);
+  const [error, setError] = (0, import_react50.useState)("");
+  const sequence = (0, import_react50.useRef)(0);
+  (0, import_react50.useEffect)(() => {
+    setHistory(null);
+    setError("");
+    sequence.current++;
+    return () => {
+      sequence.current++;
+    };
+  }, [task.id, task.revision]);
+  const load = async (event) => {
+    if (!event.currentTarget.open || history) return;
+    const id = ++sequence.current;
+    try {
+      const result = await request("board-history", { scope, taskId: task.id });
+      if (sequence.current === id) setHistory(result);
+    } catch (err) {
+      if (sequence.current === id) setError(err?.message || t("Board unavailable"));
+    }
+  };
+  const fields = { title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description", dueDate: "Due date", labels: "Labels", checklist: "Checklist" };
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-board-history", onToggle: load },
+    (0, import_react50.createElement)("summary", null, t("Card revision history")),
+    error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null,
+    !history && !error ? (0, import_react50.createElement)("p", null, t("Loading…")) : null,
+    history?.truncated ? (0, import_react50.createElement)("p", null, t("Showing the latest 50 revisions.")) : null,
+    (history?.entries ?? []).map((entry) => {
+      const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null));
+      if (!changed.length) return null;
+      return (0, import_react50.createElement)(
+        "article",
+        { key: entry.after.revision },
+        (0, import_react50.createElement)("strong", null, `${t("Revision")} ${entry.after.revision}`),
+        changed.map(([key, label]) => (0, import_react50.createElement)(
+          "div",
+          { key },
+          (0, import_react50.createElement)("strong", null, t(label)),
+          (0, import_react50.createElement)("p", null, `${t("Before")}: ${typeof entry.before?.[key] === "string" ? entry.before[key] : JSON.stringify(entry.before?.[key] ?? "")}`),
+          (0, import_react50.createElement)("p", null, `${t("After")}: ${typeof entry.after?.[key] === "string" ? entry.after[key] : JSON.stringify(entry.after?.[key] ?? "")}`)
+        ))
+      );
+    })
+  );
+}
+function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy }) {
+  const modal = (0, import_react50.useRef)(null);
+  const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
+  const evidence = Array.isArray(task.evidence) ? task.evidence.map(asText2).filter(Boolean).join(" · ") : asText2(task.evidence);
+  const blocker = asText2(task.blocked);
+  const canMove = commands.some((command) => command.type === "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
+  (0, import_react50.useEffect)(() => {
+    const popup = modal.current, backdrop = popup?.parentElement, parent = backdrop?.parentElement;
+    const keyDown = (event) => {
+      if (!popup || !["Tab", "Escape"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      const choices = [...popup.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter((item) => item.tabIndex >= 0 && !item.closest("[inert]") && item.getClientRects().length > 0);
+      if (!choices.length) {
+        popup.focus();
+        return;
+      }
+      const current = choices.indexOf(document.activeElement);
+      const index = event.shiftKey ? current <= 0 ? choices.length - 1 : current - 1 : current < 0 || current === choices.length - 1 ? 0 : current + 1;
+      choices[index].focus();
+    };
+    const keepFocus = (event) => {
+      if (popup?.isConnected && !popup.contains(event.target)) popup.focus();
+    };
+    const previous = /* @__PURE__ */ new Map();
+    const hideBackground = () => {
+      for (const item of parent?.children ?? []) {
+        if (item === backdrop) continue;
+        if (!previous.has(item)) previous.set(item, { inert: item.inert, hidden: item.getAttribute("aria-hidden") });
+        item.inert = true;
+        item.setAttribute("aria-hidden", "true");
+      }
+    };
+    popup?.focus();
+    hideBackground();
+    const observer = new MutationObserver(hideBackground);
+    if (parent) observer.observe(parent, { childList: true });
+    window.addEventListener("keydown", keyDown, true);
+    document.addEventListener("focusin", keepFocus, true);
+    return () => {
+      window.removeEventListener("keydown", keyDown, true);
+      document.removeEventListener("focusin", keepFocus, true);
+      observer.disconnect();
+      for (const [item, { inert, hidden }] of previous) {
+        item.inert = inert;
+        if (hidden === null) item.removeAttribute("aria-hidden");
+        else item.setAttribute("aria-hidden", hidden);
+      }
+      const replacement = [...boardRef.current?.querySelectorAll("[data-task-id]") ?? []].find((item) => item.dataset.taskId === task.id)?.querySelector(".bt-board-card-summary");
+      if (focusReturn.current?.isConnected) focusReturn.current.focus();
+      else if (replacement) replacement.focus();
+      else boardRef.current?.focus();
+    };
+  }, []);
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-modal-backdrop", onMouseDown: (event) => {
+      if (event.target === event.currentTarget) onClose();
+    } },
+    (0, import_react50.createElement)(
+      "section",
+      { ref: modal, className: "bt-card-modal", role: "dialog", "aria-modal": "true", "aria-label": textValue(task.title) || task.id, tabIndex: -1, onWheel: (event) => event.stopPropagation() },
+      (0, import_react50.createElement)(
+        "header",
+        { className: "bt-card-modal-header" },
+        (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("p", null, t("Task details")), (0, import_react50.createElement)("h2", null, textValue(task.title) || task.id)),
+        (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Close card"), "data-close-card": "true", onClick: onClose }, "×")
       ),
+      pending ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-card-modal-status", role: "status" },
+        t(busy ? "Saving…" : "An action needs confirmation."),
+        " ",
+        (0, import_react50.createElement)("button", { type: "button", onClick: () => onCheck(pending) }, t("Check action")),
+        " ",
+        (0, import_react50.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => onCancel(pending) }, t("Safely cancel pending request")),
+        error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null
+      ) : error ? (0, import_react50.createElement)("div", { className: "bt-card-modal-status", role: "alert" }, error) : null,
       (0, import_react50.createElement)(
         "div",
         { className: "bt-board-card-body" },
@@ -37389,7 +38232,10 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
           )
         ) : null,
         (0, import_react50.createElement)("span", { className: "bt-board-id" }, task.id),
-        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t(task.legacy.current ? "Original group goal task" : "Earlier group goal task · read only")) : null,
+        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t({ current: "Current goal task", previous: "Earlier goal stage", future: "Upcoming goal stage", archived: "Archived goal task", closed: "Closed goal task" }[task.legacy.position] ?? (task.legacy.current ? "Current goal task" : "Earlier goal stage"))) : null,
+        task.legacy?.useOverlay ? (0, import_react50.createElement)(Fact, { label: t("Original task description"), value: textValue(task.legacy.originalTitle) }) : null,
+        task.legacy?.titleStale ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("The original task changed after this display title was corrected. Review the title.")) : null,
+        task.legacy?.pending ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("A card change is awaiting confirmation in its original board.")) : null,
         task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Shared task · read only")) : null,
         task.legacy && !KNOWN.has(task.status) ? (0, import_react50.createElement)(Fact, { label: t("Original status"), value: textValue(task.legacy.originalStatus) || t("Status unknown") }) : null,
         (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(task.owner, actors) }),
@@ -37416,17 +38262,34 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
         }))) : null,
         uploadEnabled && commands.some((command) => command.type === "upload") ? (0, import_react50.createElement)(UploadImages, { task, disabled: uncertain, onUpload }) : null,
         (0, import_react50.createElement)(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
+        !task.legacy && !task.shared ? (0, import_react50.createElement)(TaskHistory, { scope, task, request }) : null,
+        commands.some((command) => command.type === "goal-history-title") ? (0, import_react50.createElement)(EditHistoryTitle, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-history-title" }, value) }) : null,
+        Array.isArray(task.boardHistory) && task.boardHistory.length ? (0, import_react50.createElement)(
+          "details",
+          { className: "bt-board-history" },
+          (0, import_react50.createElement)("summary", null, t("Card revision history")),
+          task.boardHistory.map((entry) => (0, import_react50.createElement)(
+            "article",
+            { key: entry.operationId },
+            (0, import_react50.createElement)("strong", null, `${Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString() : ""} · ${t("You")} · ${entry.kind}`),
+            entry.reason ? (0, import_react50.createElement)("p", null, entry.reason) : null,
+            (0, import_react50.createElement)("p", null, `${t("Before")}: ${JSON.stringify(entry.before)}`),
+            (0, import_react50.createElement)("p", null, `${t("After")}: ${JSON.stringify(entry.after)}`)
+          ))
+        ) : null,
         commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)(EditGoalTask, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-task-edit" }, value) }) : null,
-        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["goal-task-edit", "goal-image-remove", "remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
+        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["goal-task-edit", "goal-history-title", "goal-card-details", "goal-card-comment", "goal-image-remove", "remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
       )
     )
   );
 }
-function TaskBoard({ scope, title, close, request = call }) {
+function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false }) {
   const [visible, setVisible] = (0, import_react50.useState)(true);
   const [snapshot, setData] = (0, import_react50.useState)(null);
   const [error, setError] = (0, import_react50.useState)("");
   const [search, setSearch] = (0, import_react50.useState)("");
+  const [selectedCard, setSelectedCard] = (0, import_react50.useState)(null);
+  const cardOpener = (0, import_react50.useRef)(null);
   const [pending, setPending] = (0, import_react50.useState)(() => pendingStore(scope)?.current ?? "");
   const [busy, setBusy] = (0, import_react50.useState)(false);
   const [cancelBusy, setCancelBusy] = (0, import_react50.useState)(false);
@@ -37452,9 +38315,11 @@ function TaskBoard({ scope, title, close, request = call }) {
       boardColumns(next.tasks);
       setData({ key, value: next });
       if (!pendingRef.current && !preserveError) setError("");
+      return true;
     } catch (err) {
       if (current(epoch) && sequence === loadSequence.current) setError(err?.message || t("Unable to load board"));
     }
+    return false;
   };
   const settle = async (id, result, epoch) => {
     if (!current(epoch) || pendingRef.current !== id) return;
@@ -37462,6 +38327,9 @@ function TaskBoard({ scope, title, close, request = call }) {
       setError(t("Action outcome is unknown; check it before making another change."));
       return;
     }
+    if (result.state === "rejected") setError(result.message ? hostText(result.message) : t("Action rejected"));
+    const refreshed = await load(epoch, true);
+    if (!refreshed || !current(epoch) || pendingRef.current !== id) return;
     store.current?.clear();
     pendingRef.current = "";
     setPending("");
@@ -37469,10 +38337,7 @@ function TaskBoard({ scope, title, close, request = call }) {
       fetching.current = null;
       setBusy(false);
     }
-    if (result.state === "rejected") {
-      setError(result.message ? hostText(result.message) : t("Action rejected"));
-      await load(epoch, true);
-    } else await load(epoch);
+    if (result.state === "committed") setError("");
     return result.state;
   };
   const check = async (id, epoch = generation.current) => {
@@ -37526,16 +38391,20 @@ function TaskBoard({ scope, title, close, request = call }) {
     if (operation) void check(operation, epoch);
     dialog.current?.focus();
     const keyDown = (event) => {
+      const modal = dialog.current?.querySelector(".bt-card-modal");
       if (event.key === "Escape") {
+        event.preventDefault();
         event.stopPropagation();
-        dismiss();
+        if (modal) modal.querySelector("[data-close-card]")?.click();
+        else dismiss();
         return;
       }
       if (event.key !== "Tab" || !dialog.current) return;
-      const focusable = [...dialog.current.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]')];
+      const root = modal ?? dialog.current;
+      const focusable = [...root.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter((item) => !item.closest("[inert]") && item.getClientRects().length > 0);
       if (!focusable.length) {
         event.preventDefault();
-        dialog.current.focus();
+        root.focus();
         return;
       }
       const index = focusable.indexOf(document.activeElement);
@@ -37578,6 +38447,7 @@ function TaskBoard({ scope, title, close, request = call }) {
         operationId,
         taskId: task.id,
         ...Number.isSafeInteger(task.revision) ? { expectedRevision: task.revision } : {},
+        ...task.legacy?.useOverlay ? { expectedBoardRevision: task.legacy.boardRevision, expectedPosition: task.legacy.position } : {},
         type: command.type,
         ...value !== void 0 ? { value } : {}
       });
@@ -37616,7 +38486,7 @@ function TaskBoard({ scope, title, close, request = call }) {
       pendingRef.current = operationId;
       fetching.current = operationId;
       setPending(operationId);
-      await request("board-upload", { scope, taskId: task.id, expectedRevision: task.revision, operationId, images: encoded });
+      await request("board-upload", { scope, taskId: task.id, expectedRevision: task.revision, ...task.legacy?.useOverlay ? { expectedBoardRevision: task.legacy.boardRevision, expectedPosition: task.legacy.position } : {}, operationId, images: encoded });
       return await check(operationId, epoch);
     } catch (err) {
       if (current(epoch) && operationId && pendingRef.current === operationId) return await check(operationId, epoch);
@@ -37641,20 +38511,23 @@ function TaskBoard({ scope, title, close, request = call }) {
   const personalIds = new Set(personalTasks.map((task) => task.id));
   const columns2 = boardColumns(filtered.filter((task) => !personalIds.has(task.id)));
   const listed = [...COLUMNS.filter(([status]) => !["legacy-pending", "legacy-done"].includes(status) || columns2.get(status).length), ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const commandsFor = (task) => !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter((command) => command && typeof command.type === "string") : [];
   const card = (task) => (0, import_react50.createElement)(TaskCard, {
     key: task.id,
     scope,
     task,
-    tasks: data.tasks,
-    request,
-    onUpload: upload,
-    commands: !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter((command) => command && typeof command.type === "string") : [],
+    commands: commandsFor(task),
     actors: data?.capabilities?.actors,
-    targets: data?.capabilities?.shareTargets?.[task.id],
-    uploadEnabled: data?.capabilities?.upload === true,
     uncertain: !canAct,
-    onCommand: run2
+    onOpen: (id, opener) => {
+      cardOpener.current = opener;
+      setSelectedCard({ key, id });
+    }
   });
+  const selected = selectedCard?.key === key ? data?.tasks?.find((task) => task.id === selectedCard.id) : void 0;
+  (0, import_react50.useEffect)(() => {
+    if (selectedCard && (selectedCard.key !== key || data && !selected)) setSelectedCard(null);
+  }, [key, data, selectedCard, selected]);
   if (!visible) return null;
   return (0, import_react_dom8.createPortal)((0, import_react50.createElement)(
     "div",
@@ -37682,7 +38555,7 @@ function TaskBoard({ scope, title, close, request = call }) {
       ),
       error ? (0, import_react50.createElement)("div", { className: "bt-board-error", role: "alert" }, error) : null,
       capacityReached ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "status" }, t("Task limit reached. New tasks cannot be created.")) : null,
-      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Group goal cards edit the original task. Earlier stages remain read only.")) : null,
+      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Goal card details can be corrected without changing the original task or acceptance record.")) : null,
       pending ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-pending", role: "status" },
@@ -37712,7 +38585,7 @@ function TaskBoard({ scope, title, close, request = call }) {
           }
         }) : null
       ),
-      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { recovery: data.recovery }), (0, import_react50.createElement)(LegacyWorkReview, { scope, request }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
+      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(WorkDecisions, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
       !data ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-empty" },
@@ -37730,7 +38603,7 @@ function TaskBoard({ scope, title, close, request = call }) {
             (0, import_react50.createElement)("h3", null, t("Personal progress")),
             (0, import_react50.createElement)("p", null, t("Drag a card or use its progress menu."), " ", t("Your own progress markers do not complete shared work or unblock dependencies."))
           ),
-          (0, import_react50.createElement)("div", { className: "bt-board-columns bt-board-columns-personal" }, PERSONAL_COLUMNS.map(([progress, label]) => {
+          (0, import_react50.createElement)(ColumnRail, { label: t("Personal progress"), personal: true }, PERSONAL_COLUMNS.map(([progress, label]) => {
             const tasks = personalTasks.filter((task) => task.personalProgress === progress);
             const accepts = (event) => canAct && [...event.dataTransfer.types].includes("application/x-ds-bot-personal-task");
             return (0, import_react50.createElement)(
@@ -37763,7 +38636,7 @@ function TaskBoard({ scope, title, close, request = call }) {
           "section",
           { className: "bt-board-section", "aria-label": t("Workflow") },
           personal ? (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("Shared workflow")), (0, import_react50.createElement)("p", null, t("These statuses reflect the shared task workflow."))) : null,
-          (0, import_react50.createElement)("div", { className: "bt-board-columns" }, listed.map(([status, label]) => {
+          (0, import_react50.createElement)(ColumnRail, { label: t("Workflow") }, listed.map(([status, label]) => {
             const tasks = columns2.get(status);
             return (0, import_react50.createElement)(
               "section",
@@ -37773,14 +38646,37 @@ function TaskBoard({ scope, title, close, request = call }) {
             );
           }))
         ) : null
-      )
+      ),
+      selected ? (0, import_react50.createElement)(TaskCardDialog, {
+        key: selected.id,
+        scope,
+        task: selected,
+        tasks: data.tasks,
+        commands: commandsFor(selected),
+        actors: data.capabilities?.actors,
+        targets: data.capabilities?.shareTargets?.[selected.id],
+        uploadEnabled: data.capabilities?.upload === true,
+        uncertain: !canAct,
+        onCommand: run2,
+        onUpload: upload,
+        request,
+        onClose: () => setSelectedCard(null),
+        focusReturn: cardOpener,
+        boardRef: dialog,
+        pending,
+        busy,
+        error,
+        onCheck: check,
+        onCancel: cancel,
+        cancelBusy
+      }) : null
     )
   ), document.body);
 }
 var TASK_BOARD_CSS = `
 .bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:4px 8px;cursor:pointer}
-.bt-board-backdrop{position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.46);display:flex;align-items:center;justify-content:center;padding:18px}
-.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(860px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1440px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
+.bt-board-backdrop{--bt-main:var(--dsw-alias-bg-base,#fcfcfc);--bt-sidebar:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-card:var(--dsw-alias-bg-layer-1,#fff);--bt-ink:var(--dsw-alias-label-primary,#141414);--bt-ink-2:var(--dsw-alias-label-secondary,#555);--bt-ink-3:var(--dsw-alias-label-tertiary,#777);--bt-line:var(--dsw-alias-border-l2,rgba(0,0,0,.1));--bt-line-2:var(--dsw-alias-border-l3,rgba(0,0,0,.12));--bt-hover:var(--dsw-alias-interactive-bg-hover-solid,#f5f5f5);--bt-tag-bg:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-accent:var(--dsw-alias-button-info-fill,#4176e6);--bt-accent-ink:var(--dsw-alias-label-on-color,#fff);position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
+.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
 .bt-board-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 26px 16px;border-bottom:1px solid var(--bt-line);flex:none}
 .bt-board-header h2{font-size:20px;line-height:1.3;letter-spacing:-.025em;margin:0}.bt-board-header p{font-size:12px;color:var(--bt-ink-2);margin:4px 0 0}
 .bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea,.bt-board-dialog input{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:7px 10px}
@@ -37793,13 +38689,28 @@ var TASK_BOARD_CSS = `
 .bt-board-search{display:flex;align-items:center;gap:8px;min-width:200px;max-width:360px;flex:1;color:var(--bt-ink-2);background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding-left:11px}
 .bt-board-search-icon{font-size:20px;line-height:1}.bt-board-dialog .bt-board-search input{min-width:0;width:100%;border:0;background:transparent;outline:none;padding:9px 8px 9px 0}
 .bt-board-search:focus-within{outline:2px solid var(--bt-accent);outline-offset:2px}
-.bt-board-review-tools{display:flex;gap:8px;flex-wrap:wrap;padding:0 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:30%;overflow:auto}
+.bt-board-review-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));align-items:start;gap:10px;padding:10px 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:min(46vh,480px);overflow:auto}
 .bt-board-recovery-clear{font-size:12px;color:var(--bt-ink-2);padding:10px 0;margin:0}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
 .bt-board-held{padding:10px 0;overflow:auto;max-height:30vh;font-size:12px}.bt-board-held summary{cursor:pointer;font-weight:600;color:var(--bt-ink-2)}.bt-board-held-record{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere}
-.bt-board-content{overflow:auto;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:min(68vh,680px)}
+.bt-recovery-panel{min-width:0;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 2px 6px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
+.bt-recovery-panel[open]{grid-column:1/-1}.bt-recovery-summary{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;list-style:none;padding:12px 14px}.bt-recovery-summary::-webkit-details-marker,.bt-recovery-record-summary::-webkit-details-marker{display:none}
+.bt-recovery-summary:focus-visible,.bt-recovery-record-summary:focus-visible,.bt-recovery-work-choice:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}.bt-recovery-summary-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bt-recovery-summary-text strong{font-size:13px;line-height:1.35}.bt-recovery-summary-text small{font-size:11px;color:var(--bt-ink-2)}
+.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:9px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
+.bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
+.bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
+.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
+.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:9px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:9px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
+.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
+.bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+@media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
+
+.bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:var(--dsw-alias-bg-base,var(--bt-main))}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
-.bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:visible;padding:2px 2px 20px;align-items:flex-start;min-height:190px}
+.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
+.bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 20px;align-items:flex-start;min-height:190px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.bt-board-columns::-webkit-scrollbar{display:none}
 .bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:14px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent)}
 .bt-board-columns-personal>.bt-board-column{flex:0 0 300px;min-height:150px}
 .bt-board-column h3{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;margin:4px 4px 14px}.bt-board-count{min-width:20px;padding:2px 6px;text-align:center;background:color-mix(in srgb,var(--bt-ink) 8%,var(--bt-card));color:var(--bt-ink-2);border-radius:8px;font-size:11px;font-weight:600}
@@ -37808,6 +38719,11 @@ var TASK_BOARD_CSS = `
 .bt-board-column:is([data-stage=finished],[data-stage=done]) h3>span:first-child:before{background:var(--bt-green)}
 .bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:9px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 .bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
+.bt-board-dialog .bt-board-card-summary{box-sizing:border-box;display:flex;width:100%;text-align:left;background:transparent;border:0;border-radius:10px;padding:11px 12px}
+.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.52);overscroll-behavior:contain}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.3)}
+.bt-card-modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--bt-line);flex:none}.bt-card-modal-header p{margin:0 0 5px;color:var(--bt-ink-2);font-size:12px}.bt-card-modal-header h2{margin:0;font-size:21px;line-height:1.3;overflow-wrap:anywhere}.bt-card-modal-header button{font-size:22px;line-height:1;min-width:38px}
+.bt-card-modal .bt-board-card-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px;overflow-wrap:anywhere}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
 .bt-board-conversation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:10px}.bt-board-conversation form,.bt-board-conversation label{display:flex;flex-direction:column;gap:6px}.bt-board-comment{padding:8px;border-radius:8px;background:var(--bt-sidebar);white-space:pre-wrap;overflow-wrap:anywhere}.bt-board-comment p{margin:4px 0 0}.bt-board-comment small{color:var(--bt-ink-2)}
 .bt-board-card-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.bt-board-owner,.bt-board-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);padding:3px 7px;font-size:11px}.bt-board-chip-blocked{color:var(--bt-danger);background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card))}
@@ -37818,7 +38734,7 @@ var TASK_BOARD_CSS = `
 .bt-board-shares{display:flex;flex-direction:column;gap:6px;font-size:12px}.bt-board-share-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.bt-board-actions .bt-board-share-check{flex-direction:row;align-items:center}
 .bt-board-create{display:flex;gap:10px;flex-wrap:wrap;width:100%;padding:14px;background:var(--bt-sidebar);border:1px solid var(--bt-line);border-radius:10px}.bt-board-create p{width:100%;font-size:12px;margin:0;color:var(--bt-ink-2)}.bt-board-create label{display:flex;flex-direction:column;gap:4px;font-size:12px;flex:1 1 160px}.bt-board-create>div{display:flex;align-items:flex-end;gap:6px}
 .bt-board-images{display:flex;gap:6px;flex-wrap:wrap}.bt-board-photo{display:flex;flex-direction:column;gap:4px;max-width:100px;font-size:11px}.bt-board-photo img{width:92px;height:72px;object-fit:cover;border-radius:6px}.bt-board-photo button{font-size:11px;padding:3px}.bt-board-upload{display:flex;flex-direction:column;gap:6px;font-size:12px}.bt-board-upload input{width:100%;font-size:11px}
-@media(max-width:600px){.bt-board-backdrop{padding:0}.bt-board-dialog{height:100%;max-height:none;border-radius:0}.bt-board-header{padding:14px 16px}.bt-board-toolbar{padding:12px 16px}.bt-board-review-tools{padding:0 16px}.bt-board-content{padding:16px}.bt-board-column,.bt-board-columns-personal>.bt-board-column{flex:0 0 min(82vw,274px)}}
+@media(max-width:600px){.bt-board-backdrop{padding:0}.bt-board-dialog{height:100%;max-height:none;border-radius:0}.bt-board-header{padding:14px 16px}.bt-board-toolbar{padding:12px 16px}.bt-board-review-tools{padding:0 16px}.bt-board-content{padding:16px}.bt-board-column,.bt-board-columns-personal>.bt-board-column{flex:0 0 min(82vw,274px)}.bt-card-modal-backdrop{padding:0}.bt-card-modal{width:100%;height:100dvh;max-height:100dvh;border-radius:0}.bt-card-modal-header{padding:16px}.bt-card-modal .bt-board-card-body{padding:16px 16px 28px}}
 `;
 
 // src/client/header.js
@@ -37854,8 +38770,10 @@ function MemoryNotice({ shown }) {
 }
 function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
   const [boardOpen, setBoardOpen] = (0, import_react51.useState)(false);
+  const [boardReview, setBoardReview] = (0, import_react51.useState)(false);
   (0, import_react51.useEffect)(() => {
     setBoardOpen(false);
+    setBoardReview(false);
   }, [sessionId]);
   const roster = useRoster((value) => value);
   const selectedView = useStore?.((state) => state.view);
@@ -37945,9 +38863,16 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   return (0, import_react51.createElement)(
     "div",
     { className: "bt-head" },
-    showGoal ? (0, import_react51.createElement)(GoalIsland, { room: room2, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill }) : pill,
-    !away && (room2 || bot) ? (0, import_react51.createElement)("button", { type: "button", className: "bt-board-launch", onClick: () => setBoardOpen(true) }, t("Task board")) : null,
-    boardOpen && !away && (room2 || bot) ? (0, import_react51.createElement)(TaskBoard, { key: room2?.id ?? bot.id, scope: room2 ? { kind: "room", id: room2.id } : { kind: "personal", id: bot.id }, title: name, close: () => setBoardOpen(false) }) : null,
+    showGoal ? (0, import_react51.createElement)(GoalIsland, { room: room2, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill, openReview: () => {
+      actions.closeGoal?.();
+      setBoardReview(true);
+      setBoardOpen(true);
+    } }) : pill,
+    !away && (room2 || bot) ? (0, import_react51.createElement)("button", { type: "button", className: "bt-board-launch", onClick: () => {
+      setBoardReview(false);
+      setBoardOpen(true);
+    } }, t("Task board")) : null,
+    boardOpen && !away && (room2 || bot) ? (0, import_react51.createElement)(TaskBoard, { key: room2?.id ?? bot.id, scope: room2 ? { kind: "room", id: room2.id } : { kind: "personal", id: bot.id }, title: name, goal: room2?.goal, initialReview: boardReview, refreshGoal: actions.refreshTeam, currentRoomGoal: actions.currentRoomGoal, resolveReview: room2 ? (goalId, reviewId, evidence) => actions.goalReviewResolve(room2.id, goalId, reviewId, evidence) : void 0, close: () => setBoardOpen(false) }) : null,
     (0, import_react51.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
     room2 !== void 0 && !away ? (0, import_react51.createElement)("button", {
       type: "button",
@@ -45236,6 +46161,11 @@ function apply(ctx) {
   };
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock, panelFolded }),
+    refreshTeam: async () => {
+      await pull();
+      return roster.getSnapshot();
+    },
+    currentRoomGoal: (roomId) => roster.getSnapshot().roomsById?.[roomId]?.goal,
     learningAnswer: (id, approve) => after(call("learning-answer", { id, approve })),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
     // or the click appears to do nothing.
