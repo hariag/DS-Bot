@@ -155,6 +155,10 @@ export function install(rt) {
       case 'board-operation':
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:')) {api.list(scope,principal);return goalEditor.operation(scope,payload.operationId)}
         return api.operation(scope, principal, payload.operationId)
+      case 'board-held-decision':
+        api.list(scope,principal)
+        if (typeof rt.setHeldDecision !== 'function') throw new Error('Interrupted turn decisions are unavailable')
+        return rt.setHeldDecision(scope,payload.recoveryId,payload.expectedRevision,payload.choice)
       case 'board-operation-cancel': {
         api.list(scope, principal)
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))return goalEditor.cancel(scope,payload.operationId)
