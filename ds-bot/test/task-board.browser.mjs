@@ -65,6 +65,11 @@ async function request(endpoint,payload){
   if(state.mode==='review-invalid-list')return {items:'invalid',incomplete:false};
   return {items:['work-a','work-b'].map((workId,index)=>({workId,owner:index?'b':'a',sender:index?'a':'b',canDecide:true,...(state.workDecisions[workId]??{choice:'open',revision:0})})),incomplete:false};
  }
+ if(endpoint==='board-redo-preview'){
+  if(state.candidateHold)await new Promise(resolve=>{state.resolvers['candidate']=resolve});
+  if(state.candidateFail)throw Error('writer unavailable');
+  return {kind:'unverified-legacy-candidate',producerVerified:false,executeAllowed:false,recoveryId:payload.recoveryId,sessionId:'session-original',textSegments:['Candidate task\\nSecond line']};
+ }
  if(endpoint==='legacy-review-decision'){const old=state.workDecisions[payload.workId]??{choice:'open',revision:0};if(old.revision!==payload.expectedRevision)throw Error('stale');state.workDecisions[payload.workId]={choice:payload.choice,revision:old.revision+1};return state.workDecisions[payload.workId]}
  if(endpoint==='legacy-review-prepare')return {operationId:'manual-review:'+ (payload.kind==='create'?'a':'b').repeat(64)};
  if(endpoint==='legacy-review-operation')return {status:state.reviewReceipt?'committed':'unknown'};
@@ -187,8 +192,17 @@ try {
   assert.match(await ignored.innerText(), /does not complete the work/)
   await ignored.getByRole('button',{name:'Undo ignore'}).click()
   await original.locator('summary').click()
-  await original.getByText('Redo is unavailable because the original input cannot be verified.').waitFor()
+  await original.getByText('Redo is not available. You can inspect candidate text without sending it.').waitFor()
   assert.equal(await original.getByRole('button',{name:'Redo',exact:true}).count(),0)
+  await original.getByRole('button',{name:'View candidate text'}).click()
+  await original.getByText('This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.').waitFor()
+  assert.equal(await original.locator('.bt-recovery-candidate-text').innerText(),'Candidate task\nSecond line')
+  await original.locator('summary').click(); await original.locator('summary').click()
+  assert.equal(await original.locator('.bt-recovery-candidate-text').count(),0,'closing clears candidate text')
+  await page.evaluate(() => { globalThis.fixture.candidateFail = true })
+  await original.getByRole('button',{name:'View candidate text'}).click()
+  await original.getByRole('alert').getByText('Candidate text is unavailable. The session or its durable writer may be unavailable.').waitFor()
+  await page.evaluate(() => { globalThis.fixture.candidateFail = false })
   if (process.env.RECOVERY_SCREENSHOT) await page.screenshot({ path:process.env.RECOVERY_SCREENSHOT })
   await page.getByText('Snapshot time (UTC): 2023-11-14T22:13:20.000Z').waitFor()
   const beforeRefresh = await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)
@@ -199,6 +213,15 @@ try {
   await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal'))
   await page.getByText('Personal task', {exact:true}).waitFor()
   assert.equal(await page.locator('.bt-board-held-record').count(), 0, 'scope change must not retain old recovery rows')
+  await page.evaluate(() => { globalThis.fixture.recoveryEmpty = false; globalThis.fixture.candidateHold = true; globalThis.renderFixture({ kind:'room', id:'g1' }, 'recovery') })
+  const delayedRecovery = page.locator('.bt-recovery-panel').filter({hasText:'Interrupted work'})
+  await delayedRecovery.locator('summary').first().click()
+  const delayedRecord = delayedRecovery.locator('.bt-recovery-record').filter({hasText:'session-original'})
+  await delayedRecord.locator('summary').click(); await delayedRecord.getByRole('button',{name:'View candidate text'}).click()
+  await page.waitForFunction(() => typeof globalThis.fixture.resolvers.candidate === 'function')
+  await page.evaluate(() => { globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal'); globalThis.fixture.resolvers.candidate(); globalThis.fixture.candidateHold = false })
+  await page.getByText('Personal task', {exact:true}).waitFor()
+  assert.equal(await page.locator('.bt-recovery-candidate-text').count(),0,'late response must not leak into a different scope')
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'normal'))
   const decisions = page.locator('.bt-recovery-panel').filter({hasText:'Work decisions'})

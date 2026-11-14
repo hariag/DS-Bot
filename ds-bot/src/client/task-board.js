@@ -107,10 +107,54 @@ function recoveryGroups(rows, idOf, nameOf) {
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
+function HeldRecord({ item, scope, request, busy, decide }) {
+  const [candidate, setCandidate] = useState(null), [loading, setLoading] = useState(false), [error, setError] = useState('')
+  const generation = useRef(0), key = JSON.stringify([scope.kind, scope.id, item.recoveryId]), currentKey = useRef(key)
+  if (currentKey.current !== key) { currentKey.current = key; generation.current += 1 }
+  useEffect(() => { setCandidate(null); setLoading(false); setError(''); return () => { generation.current += 1 } }, [key])
+  const clear = () => { generation.current += 1; setCandidate(null); setLoading(false); setError('') }
+  const inspect = async () => {
+    if (loading) return
+    const at = ++generation.current
+    setLoading(true); setCandidate(null); setError('')
+    try {
+      const result = await request('board-redo-preview', { scope, recoveryId:item.recoveryId })
+      if (at !== generation.current) return
+      if (!result || result.recoveryId !== item.recoveryId || result.sessionId !== item.sessionId) throw Error('candidate changed')
+      const legacy = result.kind === 'unverified-legacy-candidate'
+      const parts = legacy ? result.textSegments : result.content?.map(part => part?.type === 'text' ? part.text : null)
+      if ((legacy && (result.producerVerified !== false || result.executeAllowed !== false)) || (!legacy && result.execution !== 'disabled')
+        || !Array.isArray(parts) || parts.length === 0 || parts.some(part => typeof part !== 'string')
+        || parts.reduce((length, part) => length + part.length, 0) > 65536) throw Error('candidate unavailable')
+      setCandidate({ parts, legacy, key })
+    } catch { if (at === generation.current) setError(t('Candidate text is unavailable. The session or its durable writer may be unavailable.')) }
+    finally { if (at === generation.current) setLoading(false) }
+  }
+  return h('details', { className:'bt-board-held-record bt-recovery-record', onToggle:event => { if (event.target === event.currentTarget && !event.currentTarget.open) clear() } },
+    h('summary', { className:'bt-recovery-record-summary' }, h('span', { className:'bt-recovery-record-id', title:item.sessionId }, shortIdentity(item.sessionId)),
+      h('span', { className:'bt-recovery-record-time' }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t('Unknown')),
+      h('span', { className:'bt-recovery-badge' }, t(item.decision === 'ignored' ? 'Ignored' : 'Status unknown'))),
+    h('div', { className:'bt-recovery-facts' }, h(Fact, { label:t('Session ID'), value:item.sessionId }),
+      h(Fact, { label:t('Original turn'), value:Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
+      h(Fact, { label:t('Exchange ID'), value:item.exchangeId || t('Unknown') }), h(Fact, { label:t('Recovery ID'), value:item.recoveryId })),
+    h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
+    item.redo?.status === 'unknown' ? h('p', { className:'bt-recovery-note', role:'status' }, t('A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.')) : null,
+    h('p', { className:'bt-recovery-note' }, t('Redo is not available. You can inspect candidate text without sending it.')),
+    h('button', { type:'button', disabled:loading, onClick:() => void inspect() }, t(loading ? 'Loading…' : 'View candidate text')),
+    error ? h('p', { className:'bt-recovery-warning', role:'alert' }, error) : null,
+    candidate?.key === key ? h('div', { className:'bt-recovery-candidate' },
+      h('p', { className:'bt-recovery-warning', role:'status' }, t(candidate.legacy
+        ? 'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.'
+        : 'This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.')),
+      candidate.parts.map((part,index) => h('pre', { key:index, className:'bt-recovery-candidate-text' }, part))) : null,
+    h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))
+}
+
 // The host provides scoped metadata only. This view never replays or closes work.
 function HeldTurns({ recovery, scope, request, onRefresh }) {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(''), [error, setError] = useState('')
+  const [panelEpoch, setPanelEpoch] = useState(0)
   const inFlight = useRef(false)
   const decide = async (item, choice) => {
     if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return
@@ -130,18 +174,8 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const groups = recoveryGroups(pendingRows, item => item.botId, item => item.botName)
   const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
     h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
-    group.rows.map(item => h('details', { key: item.recoveryId, className: 'bt-board-held-record bt-recovery-record' },
-      h('summary', { className: 'bt-recovery-record-summary' }, h('span', { className: 'bt-recovery-record-id', title: item.sessionId }, shortIdentity(item.sessionId)),
-        h('span', { className: 'bt-recovery-record-time' }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t('Unknown')),
-        h('span', { className: 'bt-recovery-badge' }, t(item.decision === 'ignored' ? 'Ignored' : 'Status unknown'))),
-      h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Session ID'), value: item.sessionId }),
-        h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
-        h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }), h(Fact, { label: t('Recovery ID'), value: item.recoveryId })),
-      h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
-      item.redo?.status === 'unknown' ? h('p', { className:'bt-recovery-note', role:'status' }, t('A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.')) : null,
-      item.decision !== 'ignored' ? h('p', { className:'bt-recovery-note' }, t('Redo is unavailable because the original input cannot be verified.')) : null,
-      h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))))))
-  return h('details', { className: 'bt-recovery-panel' },
+    group.rows.map(item => h(HeldRecord, { key:`${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide })))))
+  return h('details', { className: 'bt-recovery-panel', onToggle:event => { if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch(value => value + 1) } },
     h('summary', { className: 'bt-recovery-summary' },
       h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
       h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted work')),
@@ -1149,6 +1183,7 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:9px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
 .bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:9px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
 .bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
+.bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
 
 .bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
