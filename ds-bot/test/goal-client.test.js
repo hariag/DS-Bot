@@ -244,13 +244,18 @@ test('the open island draws a stepper, the current stage and the goal controls, 
 })
 
 test('an uncertain review opens its separate workspace rather than approving in the goal panel', () => {
-  const node = renderHeader(team(running({ reviewAttempt: { id: 'review-1', state: 'uncertain', at: 1 } })), { goalOpen: 'r1' })
+  let closed = 0, submitted = 0
+  const node = renderHeader(team(running({ reviewAttempt: { id: 'review-1', state: 'uncertain', at: 1 } })), { goalOpen: 'r1' }, {}, {
+    closeGoal: () => { closed += 1 }, goalReviewResolve: () => { submitted += 1 },
+  })
   const panel = find(node, 'bt-goal-panel')
   assert.match(text(panel), /unknown outcome/)
   assert.doesNotMatch(text(panel), /What did you verify|Resume periodic reviews/)
   const button = all(panel, 'bt-soft').find(item => text(item) === 'Open review workspace')
   assert.equal(button.props.disabled, false)
-  assert.equal(typeof button.props.onClick, 'function')
+  button.props.onClick()
+  assert.equal(closed, 1)
+  assert.equal(submitted, 0, 'opening the workspace must not authorize recovery')
 })
 
 test('a passed stage shows its evidence and the rework line grows with the count', () => {

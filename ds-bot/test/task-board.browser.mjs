@@ -76,7 +76,7 @@ async function request(endpoint,payload){
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));
 globalThis.renderFixture=(scope,mode='normal')=>{state.scope=scope;state.mode=mode;
- const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:'active',reviewAttempt:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
+ const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:mode==='periodic-paused'?'paused':'active',reviewAttempt:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
  const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline')};
  const resolveReview=async(goalId,reviewId,evidence)=>{state.calls.push({endpoint:'review-resolve',scope,payload:{goalId,reviewId,evidence}});if(mode==='periodic-error')throw Object.assign(Error('stale'),{code:'bot/stale'});if(mode==='periodic-network')throw Error('offline')};
  root.render(h(TaskBoard,{scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
@@ -114,8 +114,8 @@ try {
   await recovery.getByText('Bob', {exact:true}).waitFor()
   const recoverySearch = recovery.getByPlaceholder('Filter by Bot or ID')
   await recoverySearch.fill('exchange-2')
-  assert.equal(await recovery.getByText('session-other', {exact:true}).count(), 1)
-  assert.equal(await recovery.getByText('session-original', {exact:true}).count(), 0)
+  assert.equal(await recovery.locator('.bt-recovery-record').filter({hasText:'session-other'}).count(), 1)
+  assert.equal(await recovery.locator('.bt-recovery-record').filter({hasText:'session-original'}).count(), 0)
   await recoverySearch.fill('missing')
   await recovery.getByText('No matching records.').waitFor()
   await recoverySearch.fill('')
@@ -150,6 +150,7 @@ try {
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'legacy-review-get' && x.payload.workId === 'work-b' && x.payload.scope.id === 'g1')), true)
   await manual.getByRole('button', {name:'Create review'}).click()
   await manual.getByLabel('Review note', {exact:true}).fill('Checked the original session')
+  if (process.env.REVIEW_SCREENSHOT) { await manual.scrollIntoViewIfNeeded(); await page.screenshot({ path:process.env.REVIEW_SCREENSHOT }) }
   await manual.getByRole('button', {name:'Save review note'}).click()
   await manual.getByText('Checked the original session').waitFor()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'legacy-review-finding' && x.payload.workId === 'work-b' && x.payload.expectedRevision === 1)), true)
@@ -160,6 +161,7 @@ try {
   await periodic.getByText('The server also checks the group and administrator sessions for pending work, approvals and subagents.').waitFor()
   const resume = periodic.getByRole('button', {name:'Resume periodic reviews'})
   assert.equal(await resume.isDisabled(), true)
+  if (process.env.PERIODIC_SCREENSHOT) { await periodic.scrollIntoViewIfNeeded(); await page.screenshot({ path:process.env.PERIODIC_SCREENSHOT }) }
   await periodic.getByLabel('What did you verify?').fill('Checked original work')
   assert.equal(await resume.isDisabled(), true, 'confirmation must be explicit')
   await periodic.getByLabel('I checked the original outcome and authorize future reviews.').check()
@@ -172,12 +174,33 @@ try {
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g2' }, 'periodic-error'))
   const refused = page.locator('.bt-periodic-review')
+  await refused.getByText('g2', {exact:true}).waitFor()
   await refused.getByLabel('What did you verify?').fill('Checked original work')
   await refused.getByLabel('I checked the original outcome and authorize future reviews.').check()
   await refused.getByRole('button', {name:'Refresh status'}).click()
   await refused.getByRole('button', {name:'Resume periodic reviews'}).click()
   await refused.getByRole('alert').getByText('The goal changed or related work is still pending. Check it before recovery.').waitFor()
   assert.equal(await refused.getByRole('button', {name:'Resume periodic reviews'}).isDisabled(), true)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g3' }, 'periodic-paused'))
+  const paused = page.locator('.bt-periodic-review')
+  await paused.getByText('g3', {exact:true}).waitFor()
+  await paused.getByText('The group goal must be active before reviews can resume.').waitFor()
+  await paused.getByLabel('What did you verify?').fill('Checked original work')
+  await paused.getByLabel('I checked the original outcome and authorize future reviews.').check()
+  assert.equal(await paused.getByRole('button', {name:'Resume periodic reviews'}).isDisabled(), true)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g4' }, 'periodic-network'))
+  const unknown = page.locator('.bt-periodic-review')
+  await unknown.getByText('g4', {exact:true}).waitFor()
+  await unknown.getByLabel('What did you verify?').fill('Checked original work')
+  await unknown.getByLabel('I checked the original outcome and authorize future reviews.').check()
+  await unknown.getByRole('button', {name:'Refresh status'}).click()
+  const priorAttempts = await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'review-resolve').length)
+  await unknown.getByRole('button', {name:'Resume periodic reviews'}).click()
+  await unknown.getByRole('alert').getByText('Action outcome is unknown; check it before making another change.').waitFor()
+  assert.equal(await unknown.getByRole('button', {name:'Resume periodic reviews'}).isDisabled(), true)
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'review-resolve').length), priorAttempts + 1, 'an uncertain request is not repeated automatically')
 
   await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'capacity'))
   await page.getByText('Instance task capacity: 1000 / 1000').waitFor()
