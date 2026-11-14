@@ -117,6 +117,7 @@ const triggerOf = info => ({
   ...(info.senderRoomId ? { senderRoomId: info.senderRoomId } : {}),
   ...(info.reviewId ? { reviewId: info.reviewId } : {}),
   ...(info.reviewInspect === true ? { reviewInspect: true } : {}),
+  ...(info.groupKickoff === true ? { groupKickoff: true } : {}),
 })
 
 const readNotes = (file) => {
