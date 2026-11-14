@@ -24,15 +24,27 @@ export function originalRedoIdentity(operationId) {
 export function createOriginalRedoJournal(rt, { authorize, proveOriginal, validateBinding, verifyResult } = {}) {
   if (typeof rt?.home !== 'string' || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
     || typeof authorize !== 'function' || typeof proveOriginal !== 'function' || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
-  const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), busy = rt.originalRedoBusy ??= new Set()
+  const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   let directoryIdentity
+  function readMarker(path, sync = false) {
+    const fd = openSync(path, constants.O_RDONLY | nofollow)
+    try {
+      const stat = fstatSync(fd)
+      if (!stat.isFile() || stat.size > 1024 || (stat.mode & 0o077) || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw Error('redo identity unavailable')
+      const value = JSON.parse(readFileSync(fd, 'utf8'))
+      if (sync) fsyncSync(fd)
+      return value
+    } finally { closeSync(fd) }
+  }
   const lease = () => { rt.requireHomeLock(); const v = rt.homeLockVersion(); if (v == null) throw Error('redo lease unavailable'); return v }
   const sameLease = generation => {
     if (lease() !== generation) throw Error('redo lease changed')
     if (directoryIdentity) {
       const current = lstatSync(root), home = lstatSync(rt.home)
       if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino
-        || !home.isDirectory() || home.isSymbolicLink() || home.dev !== directoryIdentity.homeDev || home.ino !== directoryIdentity.homeIno) throw Error('redo directory changed')
+        || (current.mode & 0o077) || (typeof process.getuid === 'function' && current.uid !== process.getuid())
+        || !home.isDirectory() || home.isSymbolicLink() || home.dev !== directoryIdentity.homeDev || home.ino !== directoryIdentity.homeIno
+        || !isDeepStrictEqual(readMarker(marker), directoryIdentity) || !isDeepStrictEqual(readMarker(innerMarker), { token:directoryIdentity.token })) throw Error('redo directory changed')
     }
   }
   const dirSync = path => { const fd = openSync(path, constants.O_RDONLY | nofollow); try { fsyncSync(fd) } finally { closeSync(fd) } }
@@ -42,23 +54,22 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     const stat = lstatSync(root), home = lstatSync(rt.home)
     if (!stat.isDirectory() || stat.isSymbolicLink() || (typeof process.getuid === 'function' && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('redo directory unavailable')
     if (!home.isDirectory() || home.isSymbolicLink()) throw Error('redo directory unavailable')
-    const identity = { dev:stat.dev, ino:stat.ino, homeDev:home.dev, homeIno:home.ino }
-    let fd
+    let identity
     try {
-      fd = openSync(marker, constants.O_RDONLY | nofollow)
+      identity = readMarker(marker, true)
     } catch (error) {
       if (error.code !== 'ENOENT' || readdirSync(root).length !== 0) throw Error('redo identity unavailable')
+      identity = { dev:stat.dev, ino:stat.ino, homeDev:home.dev, homeIno:home.ino, token:randomUUID() }
+      const inside = openSync(innerMarker, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
+      try { writeFileSync(inside, JSON.stringify({ token:identity.token })); fsyncSync(inside) } finally { closeSync(inside) }
+      dirSync(root)
       const created = openSync(marker, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
       try { writeFileSync(created, JSON.stringify(identity)); fsyncSync(created) } finally { closeSync(created) }
       dirSync(rt.home)
-      fd = openSync(marker, constants.O_RDONLY | nofollow)
     }
-    try {
-      const state = fstatSync(fd)
-      if (!state.isFile() || state.size > 1024 || (state.mode & 0o077) || (typeof process.getuid === 'function' && state.uid !== process.getuid())
-        || !isDeepStrictEqual(JSON.parse(readFileSync(fd, 'utf8')), identity)) throw Error('redo identity unavailable')
-      fsyncSync(fd)
-    } finally { closeSync(fd) }
+    if (!uuid(identity?.token) || identity.dev !== stat.dev || identity.ino !== stat.ino || identity.homeDev !== home.dev || identity.homeIno !== home.ino
+      || !isDeepStrictEqual(readMarker(innerMarker, true), { token:identity.token })) throw Error('redo identity unavailable')
+    dirSync(root)
     dirSync(rt.home)
     const after = lstatSync(root)
     if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== stat.dev || after.ino !== stat.ino) throw Error('redo directory changed')
@@ -67,6 +78,21 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     sameLease(generation)
   }
   function pathFor(operationId) { if (!uuid(operationId)) throw Error('invalid redo operation'); return join(root, `${operationId}.json`) }
+  function recoveryMarker(recoveryId) { if (!digest(recoveryId)) throw Error('invalid recovery'); return join(root, `.recovery-${recoveryId}`) }
+  function readRecovery(recoveryId, generation) {
+    let data
+    try { data = readMarker(recoveryMarker(recoveryId), true) }
+    catch (error) { if (error.code === 'ENOENT') return undefined; throw error }
+    if (data?.recoveryId !== recoveryId || !uuid(data.operationId) || Object.keys(data).some(key => !['recoveryId', 'operationId'].includes(key))) throw Error('redo recovery marker unavailable')
+    dirSync(root); sameLease(generation)
+    return data
+  }
+  function reserveRecovery(recoveryId, operationId, generation) {
+    const fd = openSync(recoveryMarker(recoveryId), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
+    try { writeFileSync(fd, JSON.stringify({ recoveryId, operationId })); fsyncSync(fd) } finally { closeSync(fd) }
+    dirSync(root); sameLease(generation)
+    if (!isDeepStrictEqual(readRecovery(recoveryId, generation), { recoveryId, operationId })) throw Error('redo recovery marker unavailable')
+  }
   function read(operationId) {
     const fd = openSync(pathFor(operationId), constants.O_RDONLY | nofollow)
     try {
@@ -130,6 +156,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function checkAccess(row, generation) {
     sameLease(generation)
     if (authorize(copy(row.scope), row.recoveryId, copy(row.principal)) !== true) throw Error('redo unavailable')
+    if (!isDeepStrictEqual(readRecovery(row.recoveryId, generation), { recoveryId:row.recoveryId, operationId:row.operationId })) throw Error('redo recovery marker unavailable')
   }
   async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest }) {
     const identity = originalRedoIdentity(operationId)
@@ -145,8 +172,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const source = original(proof, recoveryId, scope, confirmationDigest)
       sameLease(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
-      const rows = all(), existing = rows.find(row => row.operationId === operationId)
+      const rows = all(), existing = rows.find(row => row.operationId === operationId), reserved = readRecovery(recoveryId, generation)
+      if (reserved && (!existing || reserved.operationId !== operationId)) throw Error('redo already exists; inspect outcome')
       if (existing) {
+        if (!reserved) throw Error('redo preparation outcome unknown')
         if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest
           || !isDeepStrictEqual(existing.original, source)) throw Error('redo identity conflict')
         try { confirm(existing, generation); checkAccess(existing, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
@@ -156,7 +185,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (rows.some(row => row.recoveryId === recoveryId)) throw Error('redo already exists; inspect outcome')
       const row = { version:1, operationId, recoveryId, scope:copy(scope), principal:copy(principal), identity, original:source, confirmationDigest,
         acknowledged:true, state:'prepared', createdAt:Date.now() }
-      try { write(row, generation); checkAccess(row, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
+      try { reserveRecovery(recoveryId, operationId, generation); write(row, generation); checkAccess(row, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
       catch { throw Error('redo preparation outcome unknown') }
       return copy(row)
     } finally { busy.delete(operationId) }
@@ -198,15 +227,18 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function markClaimingSync(binding, turn, principal) {
     const operationId = binding?.operationId
     if (!uuid(operationId) || busy.has(operationId)) throw Error('redo outcome unknown')
+    if (!turn || Object.keys(turn).some(key => !['turn', 'turnStartSeq'].includes(key))
+      || !Number.isSafeInteger(turn.turn) || turn.turn < 0 || !Number.isSafeInteger(turn.turnStartSeq) || turn.turnStartSeq < 0) throw Error('redo claim unavailable')
+    const boundary = Object.freeze({ turn:turn.turn, turnStartSeq:turn.turnStartSeq })
     busy.add(operationId)
     try {
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
-      if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal) || !Number.isSafeInteger(turn?.turn) || turn.turn < 0
-        || !Number.isSafeInteger(turn?.turnStartSeq) || turn.turnStartSeq < 0 || validateBinding(copy(row), turn) !== true) throw Error('redo claim unavailable')
+      if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
+        || validateBinding(copy(row), boundary) !== true) throw Error('redo claim unavailable')
       checkAccess(row, generation); sameLease(generation)
-      const next = { ...row, state:'claiming', turn:{ turn:turn.turn, turnStartSeq:turn.turnStartSeq } }
-      try { write(next, generation); checkAccess(next, generation); if (validateBinding(copy(next), turn) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation) }
+      const next = { ...row, state:'claiming', turn:boundary }
+      try { write(next, generation); checkAccess(next, generation); if (validateBinding(copy(next), boundary) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation) }
       catch { throw Error('redo claim outcome unknown') }
       return copy(next)
     } finally { busy.delete(operationId) }
