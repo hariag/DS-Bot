@@ -1,5 +1,6 @@
 import { boardList } from './board-query.js'
 import { createUserRedoOriginalProof } from './user-redo-proof.mjs'
+import { createLegacyRedoCandidate } from './user-redo-legacy-candidate.mjs'
 import { userRedoConfirmation } from './user-redo-journal.mjs'
 import { createHash } from 'node:crypto'
 
@@ -11,6 +12,7 @@ const presented = digest => createHash('sha256').update(JSON.stringify(['ds-bot:
 // Preview and confirmation are read-only; neither creates a request or Agent.
 export function createUserRedoPreparation(rt) {
   const proveOriginal = createUserRedoOriginalProof(rt)
+  const legacyCandidate = createLegacyRedoCandidate(rt)
   const authorize = (scope, _recoveryId, principal) => {
     if (principal?.kind !== 'user' || principal.id !== 'user') return false
     try { boardList({ scope, principal:user, rooms:rt.state.rooms, bots:rt.state.bots }); return true }
@@ -19,6 +21,13 @@ export function createUserRedoPreparation(rt) {
   async function preview({ scope, recoveryId }) {
     rt.requireHomeLock()
     if (!authorize(scope, recoveryId, user)) throw Error('redo unavailable')
+    const held = await rt.recoveryHeldOriginal(scope, recoveryId)
+    if (!held || held.isCurrent() !== true || !authorize(scope, recoveryId, user)) throw Error('redo unavailable')
+    if (held.record.turn === undefined) {
+      const candidate = await legacyCandidate(scope, recoveryId)
+      if (!candidate || held.isCurrent() !== true || !authorize(scope, recoveryId, user)) throw Error('redo unavailable')
+      return candidate
+    }
     const proof = await proveOriginal(scope, recoveryId)
     if (!proof || !authorize(scope, recoveryId, user) || proof.isCurrent() !== true) throw Error('redo unavailable')
     const confirmationDigest = presented(userRedoConfirmation(scope, recoveryId, proof))
@@ -29,6 +38,8 @@ export function createUserRedoPreparation(rt) {
   }
   async function confirm({ scope, recoveryId, confirmationDigest, acknowledged }) {
     if (acknowledged !== true || !authorize(scope, recoveryId, user)) throw Error('redo unavailable')
+    const held = await rt.recoveryHeldOriginal(scope, recoveryId)
+    if (!held || held.record.turn === undefined || held.isCurrent() !== true) throw Error('redo unavailable')
     const proof = await proveOriginal(scope, recoveryId)
     if (!proof || proof.isCurrent() !== true || !authorize(scope, recoveryId, user)) throw Error('redo unavailable')
     const originalDigest = userRedoConfirmation(scope, recoveryId, proof)
