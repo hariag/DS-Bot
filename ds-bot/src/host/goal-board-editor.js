@@ -69,7 +69,8 @@ export function createGoalBoardEditor(rt) {
       record={scope:key,fingerprint,state:'rejected',message:String(error.message).slice(0,500)}
     }
     history[id]=record
-    inflight.set(id,{scope:key,working:true})
+    const taskId=request?.payload?.taskId
+    inflight.set(id,{scope:key,taskId,working:true})
     try {
       await rt.save({required:true})
       await durable(id,record)
@@ -78,7 +79,7 @@ export function createGoalBoardEditor(rt) {
       return record.state==='committed'?{state:'committed',result:record.result}:{state:'rejected',message:record.message}
     } catch(error) {
       // Keep this ID fenced in memory until restart or explicit investigation.
-      inflight.set(id,{scope:key,working:false})
+      inflight.set(id,{scope:key,taskId,working:false})
       rt.warn?.('ds-bot: goal board edit outcome uncertain: %s',error?.message||'unknown error')
       return {state:'unknown'}
     }
@@ -165,6 +166,9 @@ export function createGoalBoardEditor(rt) {
     return {taskId:card.id,revision:goal.revision}
   }
   const imageReference=(scope,taskId,imageId)=>{
+    // An image reference in memory is not proof that its state snapshot was
+    // committed. Fail closed until the original receipt is confirmed.
+    if([...inflight.values()].some(pending=>pending.taskId===taskId))throw invalid('Image is unavailable while a goal edit is being confirmed')
     const cards=legacyGoalCards({scope,principal:{kind:'user'},rooms:rt.state.rooms,bots:rt.state.bots}).filter(card=>card.id===taskId)
     if(cards.length!==1||!validId(imageId))throw invalid('Image is unavailable')
     const card=cards[0],room=rt.roomOf(card.originRoomId)
