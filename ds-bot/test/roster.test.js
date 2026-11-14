@@ -311,7 +311,9 @@ test('the state reports a changed model list without a new revision', async (t) 
   const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   const first = (await call('state', {})).value
-  assert.equal((await call('state', { since: first.revision, models: first.modelsKey })).value.unchanged, true)
+  const withoutLiveKey = (await call('state', { since: first.revision, models: first.modelsKey })).value
+  assert.equal(withoutLiveKey.unchanged, undefined)
+  assert.ok(Array.isArray(withoutLiveKey.rooms), 'without a known live key the client must refresh scoped goal projections')
   assert.equal((await call('state', { since: first.revision, models: 'stale' })).value.unchanged, undefined)
 })
 
@@ -330,7 +332,8 @@ test('an unchanged state answer skips the live fields a window already holds', a
   assert.equal(quiet.connectors, undefined)
   // A key that names an older answer still gets the fields with the current one.
   const stale = (await call('state', { since: first.revision, models: first.modelsKey, live: 'an older answer' })).value
-  assert.equal(stale.unchanged, true)
+  assert.equal(stale.unchanged, undefined)
+  assert.ok(Array.isArray(stale.rooms), 'an unknown live key cannot reuse scoped goal projections')
   assert.equal(stale.liveKey, first.liveKey)
   assert.equal(typeof stale.activity, 'object')
   assert.equal(typeof stale.work, 'object')
@@ -365,7 +368,8 @@ test('a window holding live state gets fresh fields after the host restarts at t
   const second = start(saved)
   t.after(second.stop)
   const now = (await second.call('state', { since: held.revision, models: held.modelsKey, live: held.liveKey })).value
-  assert.equal(now.unchanged, true)
+  assert.equal(now.unchanged, undefined)
+  assert.ok(Array.isArray(now.rooms), 'a key from a previous host cannot reuse scoped goal projections')
   assert.equal(now.revision, held.revision)
   assert.deepEqual(now.work?.bots, {})
   assert.deepEqual(now.activity, {})
@@ -757,6 +761,80 @@ test('Retry recovers all dequeued inputs once without resending their original m
   assert.equal(saved.pendingInputs?.[chief], undefined)
   assert.equal(saved.pendingRecovery?.[chief], undefined)
   assert.equal((await botIn(call, chief)).waiting, undefined)
+})
+
+test('manual redo binds a single original input and never re-enqueues the same decision', async (t) => {
+  const { call, stop, sent, ctx } = start(undefined, { models:['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  await call('update-bot', { id:chief, model:'deepseek/deepseek-v4-flash' })
+  await until(() => sent.length === 1)
+  runTurn(ctx,chief,1,sent[0].message,{kind:'completed'})
+  const source = {kind:'bot',role:'request',exchangeId:'manual-original'}
+  const [inputId] = runTurn(ctx,chief,2,{source,content:[{type:'text',text:'original request'}]},failed('QUOTA',{status:402}))
+  await settle()
+  const session = {id:chief,get seq(){return Math.max(0,...(eventLogsByContext.get(ctx).get(chief) ?? []).map(event=>event.seq+1))}}
+  const agent = {id:chief,status:'idle',session,inbox:{nextStep:[],nextTurn:[]},followup:message=>sent.push({sessionId:chief,message})}
+  ctx.sessionController.resolveAgent = async id => ({agent:id===chief?agent:undefined})
+  const held = {sessionId:chief,record:{botId:chief,turn:2,trigger:source}}
+  const recoveryId = 'a'.repeat(64)
+  assert.equal(rt.previewHeldRedo(recoveryId,held).available,true)
+  assert.deepEqual(await rt.redoHeldTurn(recoveryId,held),{state:'submitted'})
+  assert.equal(sent.length,2)
+  assert.deepEqual(sent[1].message.source.recoveryIds,[inputId])
+  assert.equal(sent[1].message.source.recoveryKey,`manual-held-${recoveryId}`)
+  assert.deepEqual(await rt.redoHeldTurn(recoveryId,held),{state:'submitted'})
+  assert.equal(sent.length,2)
+  assert.equal(rt.previewHeldRedo('b'.repeat(64),{...held,record:{...held.record,trigger:{...source,exchangeId:'other'}}}).available,false)
+})
+
+test('Retry retains its identity when followup succeeds but the Session flush fails', async (t) => {
+  const { call, stop, sent, ctx, home } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
+  await until(() => sent.length === 1)
+  runTurn(ctx, chief, 1, sent[0].message, { kind: 'completed' })
+  const failedInputs = runTurn(ctx, chief, 2, typed('Finish the work'), failed('QUOTA', { status: 402 }))
+  await settle()
+  ctx.sessions.flush = async () => { throw new Error('Session flush failed') }
+  assert.equal((await call('resume', { botId: chief })).ok, false)
+  assert.equal(sent.length, 2, 'followup happened before flush failed')
+  const recoveryKey = sent[1].message.source.recoveryKey
+  assert.deepEqual(sent[1].message.source.recoveryIds, failedInputs)
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(saved.pendingRecovery[chief].key, recoveryKey)
+  assert.equal(saved.pendingRecovery[chief].uncertain, true)
+  ctx.sessions.flush = async () => {}
+  // A missing log receipt remains uncertain even after the former 60-second window.
+  rt.state.pendingRecovery[chief].at = 0
+  await rt.save()
+  const retry = await call('resume', { botId: chief })
+  assert.equal(retry.ok, false)
+  assert.equal(sent.length, 2, 'Retry must not enqueue a second recovery')
+  assert.equal(rt.state.pendingRecovery[chief].key, recoveryKey)
+})
+
+test('Retry does not deliver if its recovery marker cannot be saved', async (t) => {
+  const { call, stop, sent, ctx } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
+  await until(() => sent.length === 1)
+  runTurn(ctx, chief, 1, sent[0].message, { kind: 'completed' })
+  runTurn(ctx, chief, 2, typed('Finish the work'), failed('QUOTA', { status: 402 }))
+  await settle()
+  const save = rt.save
+  rt.save = async options => {
+    if (options?.required) throw new Error('required save failed')
+    return save(options)
+  }
+  try {
+    assert.equal((await call('resume', { botId: chief })).ok, false)
+    assert.equal(sent.length, 1)
+  } finally {
+    rt.save = save
+  }
 })
 
 // The record a DeepSeek account sign-in writes.

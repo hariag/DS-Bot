@@ -52,3 +52,16 @@ test('invalid or excessive records are signalled as incomplete without leaking d
   assert.equal(bounded.items.length, 0)
   assert.equal(bounded.incomplete, true, 'large unrelated sets must not look completely scanned')
 })
+
+test('ignored turns remain visible with their original unknown status and decision revision', () => {
+  const original = held[key(1)]
+  const value = { ...original, decisions:[{revision:1,choice:'ignored',by:'user',at:1700000000000}] }
+  const row = heldTurnsView({[key(1)]:value}, {kind:'personal',id:'one'}, bots).items[0]
+  assert.equal(row.status,'uncertain')
+  assert.equal(row.decision,'ignored')
+  assert.equal(row.decisionRevision,1)
+  assert.doesNotMatch(JSON.stringify(row),/SECRET/)
+  const broken = heldTurnsView({[key(1)]:{...value,decisions:[{revision:2,choice:'ignored',by:'user',at:1}]}}, {kind:'personal',id:'one'}, bots)
+  assert.equal(broken.incomplete,true)
+  assert.equal(broken.items.length,0)
+})
