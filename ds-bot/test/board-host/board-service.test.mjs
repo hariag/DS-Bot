@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -258,13 +258,66 @@ test('cross-group dependency binds active grant and revocation blocks dependent 
   assert.deepEqual(board.tasks[0].dependencies, [])
 })
 
-test('existing goal tasks are shown as read-only legacy items without claiming acceptance', async t => {
+test('existing goal tasks expose their original status and the goal-specific edit capability', async t => {
   const { rt } = fixture(t)
   rt.state.rooms.group.goal = { id:'goal', status:'active', current:0, revision:1, stages:[{ id:'s3', title:'Repair', acceptance:'Independent proof', tasks:[{ id:'t9', botId:'one', task:'Original work', status:'done' }] }] }
   const board = await rt.boardCall('board-list', { scope })
   const old = board.tasks.find(task => task.legacy?.taskId === 't9')
-  assert.ok(old); assert.equal(old.status, 'legacy-unverified'); assert.equal(board.capabilities.commands[old.id], undefined)
+  assert.ok(old); assert.equal(old.status, 'legacy-done'); assert.ok(board.capabilities.commands[old.id].some(command=>command.type==='goal-task-edit'))
   await assert.rejects(rt.boardCall('board-command', { scope, taskId:old.id, operationId:'edit-legacy', expectedRevision:1, type:'edit', value:{} }))
+})
+
+function goalFixture(t) {
+  const context=fixture(t), {rt,home}=context
+  rt.statePath=join(home,'state.json')
+  rt.homeLockVersion=()=>1
+  rt.roomOf=id=>rt.state.rooms[id]
+  rt.state.rooms.group.goal={id:'goal',title:'Goal',status:'active',current:0,revision:1,events:[],stages:[{id:'s1',title:'Repair',acceptance:'Independent review',tasks:[{id:'t1',botId:'one',task:'Original',status:'pending'}]}]}
+  rt.save=async()=>{const tmp=join(home,'state.next');writeFileSync(tmp,JSON.stringify(rt.state));renameSync(tmp,rt.statePath)}
+  writeFileSync(rt.statePath,JSON.stringify(rt.state))
+  return context
+}
+
+test('real image worker edits the original goal and preserves two authorized images across stage changes', async t => {
+  const {rt,route}=goalFixture(t)
+  const before=await rt.boardCall('board-list',{scope}), card=before.tasks.find(task=>task.legacy)
+  const edit={scope,operationId:'goal:edit',taskId:card.id,expectedRevision:1,type:'goal-task-edit',value:{title:'Revised',status:'working',note:'Started'}}
+  assert.equal((await rt.boardCall('board-command',edit)).state,'committed')
+  assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].task,'Revised')
+  assert.equal((await rt.boardCall('board-command',edit)).state,'committed')
+  assert.equal(rt.state.rooms.group.goal.revision,2)
+  const invalid={...edit,operationId:'goal:done',expectedRevision:2,value:{status:'done',note:'No review'}}
+  assert.equal((await rt.boardCall('board-command',invalid)).state,'rejected')
+  assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'working')
+  const stale={...edit,operationId:'goal:stale',value:{title:'Stale'}}
+  assert.equal((await rt.boardCall('board-command',stale)).state,'rejected')
+  const upload={scope,taskId:card.id,operationId:'goal:upload',expectedRevision:2,images:[image,image2]}
+  assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
+  assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
+  assert.equal(rt.state.rooms.group.goal.revision,3)
+  assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
+  const goal=rt.state.rooms.group.goal
+  goal.stages.push({id:'s2',title:'Next',tasks:[]});goal.current=1;goal.revision++
+  await rt.save()
+  const historical=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
+  assert.equal(historical.images.length,2)
+  assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img2'})).data,image2.data)
+  assert.equal((await rt.boardCall('board-list',{scope})).capabilities.commands[card.id].length,0)
+  rt.state.rooms.group.members=[]
+  await assert.rejects(rt.boardCall('board-image',{scope:{kind:'personal',id:'one'},taskId:card.id,imageId:'img1'}),/not available|unavailable/i)
+  await assert.rejects(rt.boardCall('board-command',{...edit,operationId:'goal:bad-namespace',type:'edit'}),/Goal operation ID/)
+})
+
+test('real upload cannot expose published files when goal snapshot save fails', async t => {
+  const {rt,route,home}=goalFixture(t), card=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.legacy)
+  rt.save=async()=>{throw new Error('simulated failure before state write')}
+  const upload={scope,taskId:card.id,operationId:'goal:uncertain-image',expectedRevision:1,images:[image]}
+  const result=await (await route.fetch(request(upload))).json()
+  assert.equal(result.ok,false)
+  assert.equal(readdirSync(join(home,'board-v1','images')).length,1,'actual worker published an immutable orphan')
+  assert.equal((await rt.boardCall('board-operation',{scope,operationId:upload.operationId})).state,'unknown')
+  await assert.rejects(rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'}),/unavailable/i)
+  assert.equal((await (await route.fetch(request(upload))).json()).ok,false)
 })
 
 test('explicit share exposes only approved fields, freezes title, and revocation hides it', async t => {

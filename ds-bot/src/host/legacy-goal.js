@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 const own = (table, key) => table && Object.hasOwn(table, key) ? table[key] : undefined
 const keyOf = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-const statuses = new Map([['pending','legacy-pending'],['working','working'],['reported','reported'],['done','done']])
+const statuses = new Map([['pending','legacy-pending'],['working','working'],['reported','reported'],['done','legacy-done']])
 
 // This identifies the original goal task across edits; it is not a second
 // task registration and cannot confer permission by itself.
