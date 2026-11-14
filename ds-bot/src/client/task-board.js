@@ -279,6 +279,27 @@ function CardDetails({task,editable,disabled,onEdit}) {
       h('div',null,h('button',{type:'submit',disabled:disabled||changed||!valid},t('Save changes')),' ',h('button',{type:'button',disabled,onClick:()=>setOpen(false)},t('Cancel')))))
 }
 
+function CardConversation({task,commands,disabled,onCommand}) {
+  const [text,setText]=useState('')
+  const comments=Array.isArray(task.comments)?task.comments:[]
+  const activity=Array.isArray(task.boardActivity)?task.boardActivity:[]
+  const type=task.legacy?'goal-card-comment':'card-comment'
+  const labels={edit:'Task edited',details:'Card details updated','card-details':'Card details updated',comment:'Comment added','card-comment':'Comment added',attach:'Images added','remove-image':'Image removed','personal-progress':'Personal progress updated',share:'Task shared',unshare:'Share revoked'}
+  const when=value=>Number.isFinite(value)?new Date(value).toLocaleString():''
+  return h('section',{className:'bt-board-conversation'},
+    h('strong',null,t('Comments')),
+    comments.length?comments.map(comment=>h('div',{key:comment.id,className:'bt-board-comment'},
+      h('small',null,`${t('You')} · ${when(comment.at)}`),h('p',null,textValue(comment.text)))):h('p',{className:'bt-board-readonly'},t('No comments yet.')),
+    commands.some(command=>command.type===type)?h('form',{onSubmit:event=>{
+      event.preventDefault();if(disabled||!text.trim()||new TextEncoder().encode(text)>2048)return
+      const submitted=text
+      void onCommand(task,{type},{text:submitted}).then(result=>{if(result==='committed')setText(current=>current===submitted?'':current)})
+    }},h('label',null,t('Add a comment'),h('textarea',{'aria-label':t('Add a comment'),value:text,disabled,onChange:event=>setText(event.target.value)})),
+    h('button',{type:'submit',disabled:disabled||!text.trim()||new TextEncoder().encode(text)>2048},t('Post comment'))):null,
+    activity.length?h('details',null,h('summary',null,t('Recent card activity')),
+      h('ul',null,activity.map(item=>h('li',{key:item.id},`${when(item.at)} · ${t(labels[item.type]??'Card updated')}`)))):null)
+}
+
 function EditGoalTask({task,disabled,onEdit}) {
   const [open,setOpen]=useState(false),[base,setBase]=useState(task.revision),[title,setTitle]=useState(''),[note,setNote]=useState(''),[status,setStatus]=useState('')
   const reset=()=>{setBase(task.revision);setTitle(textValue(task.title));setNote(textValue(task.goalNote));setStatus(task.legacy?.originalStatus??'')}
@@ -446,6 +467,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
     h(Fact, { label: t('Evidence'), value: evidence }),
     h(Fact, { label: t('Target version'), value: asText(task.authority) }),
     !task.shared ? h(CardDetails,{task,editable:commands.some(command=>command.type===(task.legacy?'goal-card-details':'card-details')),disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:task.legacy?'goal-card-details':'card-details'},value)}) : null,
+    !task.shared ? h(CardConversation,{task,commands,disabled:uncertain,onCommand}) : null,
     !canMove && !commands.some(command=>command.type==='goal-task-edit') ? h('span', { className:'bt-board-readonly' }, t('Status changes are not available for this task.')) : null,
     Array.isArray(task.images) && task.images.length ? h('div', { className: 'bt-board-images' }, task.images.map(image => h(BoardImage, {
       key: image.id, scope, taskId: task.id, image, request, disabled: uncertain,
@@ -727,6 +749,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:9px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 .bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
+.bt-board-conversation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:10px}.bt-board-conversation form,.bt-board-conversation label{display:flex;flex-direction:column;gap:6px}.bt-board-comment{padding:8px;border-radius:8px;background:var(--bt-sidebar);white-space:pre-wrap;overflow-wrap:anywhere}.bt-board-comment p{margin:4px 0 0}.bt-board-comment small{color:var(--bt-ink-2)}
 .bt-board-card-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.bt-board-owner,.bt-board-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);padding:3px 7px;font-size:11px}.bt-board-chip-blocked{color:var(--bt-danger);background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card))}
 .bt-board-open-hint{font-size:11px;color:var(--bt-ink-2);margin-left:auto}.bt-board-card-details[open] .bt-board-open-hint{display:none}.bt-board-card-body{display:flex;flex-direction:column;gap:8px;padding:0 13px 13px}.bt-board-move{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--bt-line);font-size:12px;color:var(--bt-ink-2)}.bt-board-dialog .bt-board-move select{max-width:60%;font-size:12px;padding:4px 6px}
 .bt-board-title{font-size:14px;line-height:1.4}.bt-board-id{font-size:11px;color:var(--bt-ink-3)}.bt-board-fact{display:flex;flex-direction:column;font-size:12px;gap:2px}.bt-board-fact>:first-child{color:var(--bt-ink-2)}

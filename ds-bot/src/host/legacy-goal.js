@@ -35,6 +35,8 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {} }) {
         dueDate:typeof task.boardDetails?.dueDate==='string'?task.boardDetails.dueDate:null,
         labels:Array.isArray(task.boardDetails?.labels)?task.boardDetails.labels:[],
         checklist:Array.isArray(task.boardDetails?.checklist)?task.boardDetails.checklist:[],
+        comments:Array.isArray(task.boardComments)?task.boardComments:[],
+        boardActivity:Array.isArray(task.boardActivity)?task.boardActivity:[],
         ...(typeof task.note === 'string' ? { goalNote:task.note } : {}),
         ...(Array.isArray(task.boardImages) ? { images:task.boardImages.filter(image=>image && typeof image.id==='string').map(({ id,name,mediaType })=>({id,name,mediaType})) } : {}),
         legacy: { goalId: goal.id, stageId: stage.id, stageTitle: stage.title,
