@@ -10,14 +10,14 @@ const SCHEMA = "CREATE TABLE redo_intents (operation_id TEXT PRIMARY KEY, recove
 const id = value => typeof value === 'string' && ID.test(value)
 const digest = value => createHash('sha256').update(value).digest('hex')
 const stable = value => JSON.stringify(value, function (_key, current) {
-  if (current && typeof current === 'object' && !Array.isArray(current)) return Object.fromEntries(Object.entries(current).sort(([a],[b]) => a.localeCompare(b)))
+  if (current && typeof current === 'object' && !Array.isArray(current)) return Object.fromEntries(Object.entries(current).sort(([a],[b]) => a<b?-1:a>b?1:0))
   return current
 })
 const object = value => value && typeof value === 'object' && !Array.isArray(value)
 const keys = (value, allowed) => object(value) && Object.keys(value).every(key => allowed.includes(key))
 function assertJson(value, seen = new Set()) {
   if (value===null || typeof value==='string' || typeof value==='boolean')return
-  if (typeof value==='number' && Number.isFinite(value))return
+  if (typeof value==='number' && Number.isFinite(value) && !Object.is(value,-0) && (!Number.isInteger(value)||Number.isSafeInteger(value)))return
   if (!value || typeof value!=='object' || seen.has(value))throw Error('non-JSON redo data')
   if (!Array.isArray(value) && Object.getPrototypeOf(value)!==Object.prototype && Object.getPrototypeOf(value)!==null)throw Error('non-JSON redo object')
   for(const key of Reflect.ownKeys(value)) {
@@ -28,7 +28,7 @@ function assertJson(value, seen = new Set()) {
   seen.add(value)
   if(Array.isArray(value)) {
     for(let index=0;index<value.length;index+=1){if(!Object.hasOwn(value,index))throw Error('sparse redo data');assertJson(value[index],seen)}
-    if(Object.keys(value).some(key=>!/^\d+$/.test(key)||Number(key)>=value.length))throw Error('invalid redo array')
+    if(Object.keys(value).some(key=>!/^\d+$/.test(key)||!Number.isSafeInteger(Number(key))||String(Number(key))!==key||Number(key)>=value.length))throw Error('invalid redo array')
   } else for(const key of Object.keys(value))assertJson(value[key],seen)
   seen.delete(value)
 }
@@ -47,9 +47,9 @@ export const redoSnapshot = value => freeze(JSON.parse(exactJson(value)))
 // This version is intentionally narrow: one original bot request, one message,
 // and an explicitly validated work association. Other histories remain held.
 export function normalizeRedoBinding(value) {
-  if (!keys(value,['recoveryId','scope','sessionId','turn','messageSeq','throughSeq','exchangeId','workId','senderId','recipientId','roomId','sourceHash'])) throw Error('invalid redo binding')
+  if (!keys(value,['recoveryId','scope','sessionId','turn','messageSeq','throughSeq','originalMessageId','exchangeId','workId','senderId','recipientId','roomId','sourceHash'])) throw Error('invalid redo binding')
   if (!HEX.test(value.recoveryId) || !HEX.test(value.sourceHash) || !id(value.sessionId) || !id(value.exchangeId)
-    || !id(value.workId) || !id(value.senderId) || !id(value.recipientId)
+    || !id(value.originalMessageId) || !id(value.workId) || !id(value.senderId) || !id(value.recipientId)
     || !Number.isSafeInteger(value.turn) || value.turn<0 || !Number.isSafeInteger(value.messageSeq) || value.messageSeq<0
     || !Number.isSafeInteger(value.throughSeq) || value.throughSeq<=value.messageSeq) throw Error('invalid original identity')
   if (!keys(value.scope,['kind','id']) || !['room','personal'].includes(value.scope.kind) || !id(value.scope.id)) throw Error('invalid redo scope')
@@ -58,6 +58,7 @@ export function normalizeRedoBinding(value) {
   if (value.scope.kind==='personal' && !['user',value.senderId,value.recipientId].includes(value.scope.id)) throw Error('redo scope mismatch')
   return redoSnapshot(value)
 }
+export const redoSourceHash = (source,content) => digest(exactJson({source,content}))
 
 export function redoIdentity(binding) {
   const normalized = normalizeRedoBinding(binding)
@@ -73,7 +74,7 @@ export function validateRedoMessage(binding,message) {
     ||message.source.roomId!==value.roomId||!Array.isArray(message.content)||message.content.length===0
     ||message.content.some(part=>!keys(part,['type','text'])||part.type!=='text'||typeof part.text!=='string')
     ||message.content.every(part=>part.text.trim()===''))throw Error('unsupported original message')
-  if(digest(exactJson({source:message.source,content:message.content}))!==value.sourceHash)throw Error('original message changed')
+  if(redoSourceHash(message.source,message.content)!==value.sourceHash)throw Error('original message changed')
   exactJson(message)
   return true
 }

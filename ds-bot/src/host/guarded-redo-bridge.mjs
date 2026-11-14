@@ -40,16 +40,16 @@ export function createGuardedRedoBridge({enabled=false,journal,verifyOriginal,re
         proof=await verifyOriginal(value)
         if(!proof||proof.complete!==true||proof.durability!=='target-writer-v1'||!['unfinished','aborted','failed'].includes(proof.originalOutcome)
           ||proof.sessionId!==value.sessionId||proof.throughSeq!==value.throughSeq
-          ||proof.messageSeq!==value.messageSeq||proof.turn!==value.turn||!proof.message||leaseVersion()!==lease)return unavailable('original work cannot be verified')
+          ||proof.messageSeq!==value.messageSeq||proof.turn!==value.turn||!proof.message||typeof proof.isCurrent!=='function'||proof.isCurrent()!==true||leaseVersion()!==lease)return unavailable('original work cannot be verified')
         original=redoSnapshot(proof.message)
         settlement=await resultAuthority(value,proof)
         if(!settlement||settlement.version!=='durable-original-result-v1'||typeof settlement.claimOriginalResult!=='function'
           ||typeof settlement.readResultReceipt!=='function'||typeof settlement.isCurrent!=='function'||settlement.isCurrent()!==true
-          ||leaseVersion()!==lease)return unavailable('original work result cannot be safely reconciled')
+          ||proof.isCurrent()!==true||leaseVersion()!==lease)return unavailable('original work result cannot be safely reconciled')
         agent=await resolveAgent(value.sessionId)
         if(!agent||agent.id!==value.sessionId||agent.session?.id!==value.sessionId||agent.durableAdmissionVersion!==1
           ||agent.guardedClaimTurnVersion!==1||typeof agent.guardedSend!=='function'||coordinatorReady(agent)!==true||isResultRouterBound(agent,settlement)!==true||settlement.isCurrent()!==true
-          ||isCurrent(value,proof,agent)!==true||leaseVersion()!==lease)return unavailable('guarded target is unavailable')
+          ||proof.isCurrent()!==true||isCurrent(value,proof,agent)!==true||leaseVersion()!==lease)return unavailable('guarded target is unavailable')
         const identity=redoIdentity(value)
         if(JSON.stringify(redoSnapshot(proof.message))!==JSON.stringify(original))return unavailable('original message changed')
         message=redoSnapshot(makeMessage(original,identity.messageId))
@@ -61,7 +61,7 @@ export function createGuardedRedoBridge({enabled=false,journal,verifyOriginal,re
         const reserved=journal.reserve({binding:value,message,confirmed:true})
         if(reserved.state!=='prepared')return unknown()
         journal.beginSend({binding:value,message})
-        if(leaseVersion()!==lease||isCurrent(value,proof,agent)!==true||coordinatorReady(agent)!==true||isResultRouterBound(agent,settlement)!==true||settlement.isCurrent()!==true)return unknown()
+        if(leaseVersion()!==lease||proof.isCurrent()!==true||isCurrent(value,proof,agent)!==true||coordinatorReady(agent)!==true||isResultRouterBound(agent,settlement)!==true||settlement.isCurrent()!==true)return unknown()
         await agent.guardedSend(message,'next-turn',identity.admissionId)
         if(leaseVersion()!==lease||isCurrent(value,proof,agent)!==true||coordinatorReady(agent)!==true||isResultRouterBound(agent,settlement)!==true||settlement.isCurrent()!==true)return unknown()
         journal.markQueued({binding:value,message})
