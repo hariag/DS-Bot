@@ -37,8 +37,11 @@ test('real store and writer require a current scoped owner and held input before
   session.append('turn/end', { turn:1, reason:{ kind:'interrupted' } })
   const record = { botId:'bot', turn:1, trigger:{ role:'request', exchangeId:'exchange', senderSessionId:'sender' } }
   const recoveryId = createHash('sha256').update(JSON.stringify(['bot', record])).digest('hex')
+  const legacy = { botId:'bot', since:session.eventAt(1).time, trigger:record.trigger }
+  const legacyRecovery = createHash('sha256').update(JSON.stringify(['bot', legacy])).digest('hex')
   await writeFile(join(home, 'inflight.json'), JSON.stringify({ turns:{}, queued:{}, heldTurns:{
     [recoveryId]:{ sessionId:'bot', record, reason:'interrupted outcome unknown' },
+    [legacyRecovery]:{ sessionId:'bot', record:legacy, reason:'interrupted outcome unknown' },
   } }), { mode:0o600 })
   const rt = { ctx, home, statePath, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {} }
   installStore(rt); await rt.load(); await rt.save({ required:true })
@@ -67,6 +70,11 @@ test('real store and writer require a current scoped owner and held input before
   await assert.rejects(preparation.confirm({ ...request, confirmationDigest:'b'.repeat(64) }), Error)
   await assert.rejects(preparation.confirm({ ...request, acknowledged:false }), Error)
   assert.equal((await preparation.confirm(request)).execution, 'disabled')
+  const candidate = await preparation.preview({ scope, recoveryId:legacyRecovery })
+  assert.equal(candidate.kind, 'unverified-legacy-candidate'); assert.equal(candidate.producerVerified, false)
+  assert.equal(candidate.executeAllowed, false); assert.deepEqual(candidate.textSegments, ['synthetic original input'])
+  assert.match(candidate.warning.zh, /无法确认发送者/)
+  await assert.rejects(preparation.confirm({ scope, recoveryId:legacyRecovery, acknowledged:true, confirmationDigest:preview.confirmationDigest }), Error)
   await assert.rejects(journal.beginDispatch(operationId, principal), Error)
   const permissiveBinding = createOriginalRedoJournal(rt, { authorize, proveOriginal:proof, validateBinding:() => true })
   await assert.rejects(permissiveBinding.beginDispatch(operationId, principal), Error)
