@@ -364,6 +364,8 @@ export function install(rt) {
         case 'legacy-review-decision':
           return ok(await rt.legacyReviewCall(endpoint, body))
         case 'board-list':
+        case 'board-redo-preview':
+        case 'board-redo-confirm':
         case 'board-operation':
         case 'board-command':
         case 'board-held-decision':
