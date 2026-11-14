@@ -35,35 +35,40 @@ export function createGuardedRedoBridge({enabled=false,journal,verifyOriginal,re
   return {
     available:()=>ready()===true,
     async request({binding,confirmed}={}) {
-      if(!ready())return unavailable('guarded redo authority is unavailable')
       if(confirmed!==true)return unavailable('explicit user confirmation is required')
       let value,lease,proof,agent,message,original,settlement,started=false
+      try {value=normalizeRedoBinding(binding)} catch {return unavailable('invalid original work identity')}
+      if(!journal||typeof journal.prior!=='function')return unknown()
+      const beforeStartFailure=reason=>{
+        try {return journal.prior({binding:value})?.present===false?unavailable(reason):unknown()} catch {return unknown()}
+      }
       try {
-        value=normalizeRedoBinding(binding);lease=leaseVersion()
-        if(lease===undefined)return unavailable('host lease is unavailable')
         let prior
         try { prior=journal.prior({binding:value}) } catch {return unknown()}
         if(!prior||prior.present!==false)return unknown()
+        if(!ready())return beforeStartFailure('guarded redo authority is unavailable')
+        lease=leaseVersion()
+        if(lease===undefined)return beforeStartFailure('host lease is unavailable')
         proof=await verifyOriginal(value)
         if(!proof||proof.complete!==true||proof.durability!=='target-writer-v1'||!['unfinished','aborted','failed'].includes(proof.originalOutcome)
           ||proof.sessionId!==value.sessionId||proof.throughSeq!==value.throughSeq
-          ||proof.messageSeq!==value.messageSeq||proof.turn!==value.turn||!proof.message||typeof proof.isCurrent!=='function'||typeof proof.isSameSession!=='function'||proof.isCurrent()!==true||leaseVersion()!==lease)return unavailable('original work cannot be verified')
+          ||proof.messageSeq!==value.messageSeq||proof.turn!==value.turn||!proof.message||typeof proof.isCurrent!=='function'||typeof proof.isSameSession!=='function'||proof.isCurrent()!==true||leaseVersion()!==lease)return beforeStartFailure('original work cannot be verified')
         original=redoSnapshot(proof.message)
         settlement=await resultAuthority(value,proof)
         if(!settlement||settlement.version!=='durable-original-result-v1'||typeof settlement.claimOriginalResult!=='function'
           ||typeof settlement.readResultReceipt!=='function'||typeof settlement.isCurrent!=='function'||settlement.isCurrent()!==true
-          ||proof.isCurrent()!==true||leaseVersion()!==lease)return unavailable('original work result cannot be safely reconciled')
+          ||proof.isCurrent()!==true||leaseVersion()!==lease)return beforeStartFailure('original work result cannot be safely reconciled')
         agent=await resolveAgent(value.sessionId)
         if(!agent||agent.id!==value.sessionId||agent.session?.id!==value.sessionId||agent.durableAdmissionVersion!==1
           ||agent.guardedClaimTurnVersion!==1||typeof agent.guardedSend!=='function'||coordinatorReady(agent)!==true||isResultRouterBound(agent,settlement)!==true||settlement.isCurrent()!==true
-          ||proof.isCurrent()!==true||isBeforeAdmission(value,proof,agent)!==true||leaseVersion()!==lease)return unavailable('guarded target is unavailable')
+          ||proof.isCurrent()!==true||isBeforeAdmission(value,proof,agent)!==true||leaseVersion()!==lease)return beforeStartFailure('guarded target is unavailable')
         const identity=redoIdentity(value)
-        if(JSON.stringify(redoSnapshot(proof.message))!==JSON.stringify(original))return unavailable('original message changed')
+        if(JSON.stringify(redoSnapshot(proof.message))!==JSON.stringify(original))return beforeStartFailure('original message changed')
         message=redoSnapshot(makeMessage(original,identity.messageId))
         validateRedoMessage(value,message)
         // The new user message may have a new message ID but cannot replace,
         // truncate, summarize or mix the selected original input.
-        if(JSON.stringify(message.content)!==JSON.stringify(original.content)||JSON.stringify(message.source)!==JSON.stringify(original.source))return unavailable('original message cannot be reproduced exactly')
+        if(JSON.stringify(message.content)!==JSON.stringify(original.content)||JSON.stringify(message.source)!==JSON.stringify(original.source))return beforeStartFailure('original message cannot be reproduced exactly')
         started=true
         const reserved=journal.reserve({binding:value,message,confirmed:true})
         if(reserved.state!=='prepared')return unknown()
@@ -74,7 +79,7 @@ export function createGuardedRedoBridge({enabled=false,journal,verifyOriginal,re
         journal.markQueued({binding:value,message})
         // Admission is not completion or an external exactly-once guarantee.
         return {state:'submitted',operationId:identity.operationId}
-      } catch {return started?unknown():unavailable('original work cannot be verified')}
+      } catch {return started?unknown():beforeStartFailure('original work cannot be verified')}
     },
   }
 }

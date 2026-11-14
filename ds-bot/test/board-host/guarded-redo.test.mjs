@@ -20,7 +20,7 @@ function fixture(t){
   const identity=redoIdentity(binding),original={role:'user',id:'original-message',source,content}
   const message={...original,id:identity.messageId}
   let owns=true, allowed=true, settled=true, generation=1, journal
-  const opts={assertLease:()=>owns,leaseVersion:()=>generation,authorizeIntent:()=>allowed,authorizeClaim:()=>allowed}
+  const opts={assertLease:()=>owns,leaseVersion:()=>generation,authorizePrior:()=>allowed,authorizeIntent:()=>allowed,authorizeClaim:()=>allowed}
   const reopen=()=>{journal?.close();journal=openGuardedRedoJournal(path,opts);return journal}
   reopen()
   const agent={id:'session',session:{id:'session',eventAt:index=>index===20?{seq:20,type:'turn/start',data:{turn:8}}:undefined},durableAdmissionVersion:1,guardedClaimTurnVersion:1}
@@ -78,8 +78,21 @@ test('lost guarded-send result remains unknown across journal restart',async t=>
   f.agent.guardedSend=async()=>{sends+=1;throw Error('outcome lost after enqueue')}
   assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
   f.reopen()
-  f.proof.message=undefined
+  f.proof.message=undefined;f.noSettlement()
   assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
+  assert.equal(sends,1)
+})
+
+test('an async preflight failure does not hide a concurrent prior admission',async t=>{
+  const f=fixture(t);let enter,release,sends=0
+  const entered=new Promise(resolve=>{enter=resolve}),gate=new Promise(resolve=>{release=resolve})
+  f.agent.guardedSend=async()=>{sends+=1}
+  const slow=createGuardedRedoBridge({enabled:true,journal:f.journal,verifyOriginal:async()=>{enter();await gate;return undefined},resolveAgent:async()=>f.agent,isBeforeAdmission:()=>true,isAfterAdmission:()=>true,resultAuthority:()=>undefined,isResultRouterBound:()=>true,makeMessage:(m,id)=>({...m,id}),leaseVersion:()=>1,coordinatorReady:()=>true})
+  const pending=slow.request({binding:f.binding,confirmed:true})
+  await entered
+  assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'submitted')
+  release()
+  assert.equal((await pending).state,'unknown')
   assert.equal(sends,1)
 })
 
@@ -118,6 +131,14 @@ test('scope changes, incomplete content and changed source cannot reuse an ident
   f.revoke();assert.throws(()=>f.journal.prior({binding:f.binding}),/unauthorized/);assert.throws(()=>f.journal.beginSend({binding:f.binding,message:f.message}),/unauthorized|unavailable/)
 })
 
+test('prior lookup requires scope authority even when no receipt exists',async t=>{
+  const f=fixture(t);let sends=0
+  f.agent.guardedSend=async()=>{sends+=1};f.revoke()
+  assert.throws(()=>f.journal.prior({binding:f.binding}),/unauthorized/)
+  assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
+  assert.equal(sends,0)
+})
+
 test('redo snapshots reject lossy JSON and use locale-independent key order',()=>{
   assert.throws(()=>redoSnapshot({number:-0}),/non-JSON/)
   const bad=['first'];bad['00']='silently ignored by JSON'
@@ -129,7 +150,7 @@ test('redo snapshots reject lossy JSON and use locale-independent key order',()=
 test('an unheld lease creates no file and unknown SQLite input remains byte-for-byte untouched',t=>{
   const home=mkdtempSync(join(tmpdir(),'redo-unknown-')),path=join(home,'unknown.sqlite')
   t.after(()=>rmSync(home,{recursive:true,force:true}))
-  const denied={assertLease:()=>false,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true}
+  const denied={assertLease:()=>false,leaseVersion:()=>1,authorizePrior:()=>true,authorizeIntent:()=>true,authorizeClaim:()=>true}
   assert.throws(()=>openGuardedRedoJournal(path,denied),/lease/)
   assert.equal(existsSync(path),false)
   assert.deepEqual(readdirSync(home),[])
@@ -161,7 +182,7 @@ test('an existing recovery sidecar is retained and blocks reopening',t=>{
   const f=fixture(t),sidecar=`${f.path}-journal`,bytes=Buffer.from('unreconciled journal')
   writeFileSync(sidecar,bytes,{mode:0o600})
   const stamp=statSync(sidecar,{bigint:true}),entries=readdirSync(dirname(f.path)).sort()
-  assert.throws(()=>openGuardedRedoJournal(f.path,{assertLease:()=>true,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true}),/offline recovery/)
+  assert.throws(()=>openGuardedRedoJournal(f.path,{assertLease:()=>true,leaseVersion:()=>1,authorizePrior:()=>true,authorizeIntent:()=>true,authorizeClaim:()=>true}),/offline recovery/)
   assert.deepEqual(readFileSync(sidecar),bytes)
   assert.equal(statSync(sidecar,{bigint:true}).mtimeNs,stamp.mtimeNs)
   assert.deepEqual(readdirSync(dirname(f.path)).sort(),entries)
@@ -200,14 +221,14 @@ test('process death inside claim leaves a durable fence, not a replayable admiss
   f.journal.beginSend({binding:f.binding,message:f.message})
   const moduleUrl=pathToFileURL(new URL('../../src/host/guarded-redo-journal.mjs',import.meta.url).pathname).href
   const script=`import {openGuardedRedoJournal} from ${JSON.stringify(moduleUrl)};
-    const journal=openGuardedRedoJournal(process.argv[1],{assertLease:()=>true,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true});
+    const journal=openGuardedRedoJournal(process.argv[1],{assertLease:()=>true,leaseVersion:()=>1,authorizePrior:()=>true,authorizeIntent:()=>true,authorizeClaim:()=>true});
     journal.claim('session',${JSON.stringify(input)},${JSON.stringify(turn)},()=>process.exit(42));`
   const child=spawnSync(process.execPath,['--input-type=module','-e',script,f.path],{encoding:'utf8',env:{PATH:process.env.PATH}})
   assert.equal(child.status,42,child.stderr)
   const sidecar=`${f.path}-journal`
   if(existsSync(sidecar)){
     const before=readFileSync(sidecar),stamp=statSync(sidecar,{bigint:true}),entries=readdirSync(dirname(f.path)).sort()
-    assert.throws(()=>openGuardedRedoJournal(f.path,{assertLease:()=>true,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true}),/offline recovery/)
+    assert.throws(()=>openGuardedRedoJournal(f.path,{assertLease:()=>true,leaseVersion:()=>1,authorizePrior:()=>true,authorizeIntent:()=>true,authorizeClaim:()=>true}),/offline recovery/)
     assert.deepEqual(readFileSync(sidecar),before)
     assert.equal(statSync(sidecar,{bigint:true}).mtimeNs,stamp.mtimeNs)
     assert.deepEqual(readdirSync(dirname(f.path)).sort(),entries)

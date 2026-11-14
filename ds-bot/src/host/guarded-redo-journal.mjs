@@ -86,8 +86,8 @@ export function validateRedoMessage(binding,message) {
   return true
 }
 
-export function openGuardedRedoJournal(path, { assertLease, leaseVersion, authorizeIntent, authorizeClaim } = {}) {
-  if (![assertLease,leaseVersion,authorizeIntent,authorizeClaim].every(fn => typeof fn === 'function')) throw Error('redo authority unavailable')
+export function openGuardedRedoJournal(path, { assertLease, leaseVersion, authorizePrior, authorizeIntent, authorizeClaim } = {}) {
+  if (![assertLease,leaseVersion,authorizePrior,authorizeIntent,authorizeClaim].every(fn => typeof fn === 'function')) throw Error('redo authority unavailable')
   if (!isAbsolute(path)) throw Error('redo journal requires an absolute path')
   const dir=lstatSync(dirname(path))
   if(!dir.isDirectory()||dir.isSymbolicLink()||dir.uid!==process.getuid()||(dir.mode&0o077)!==0) throw Error('redo directory unavailable')
@@ -162,6 +162,7 @@ export function openGuardedRedoJournal(path, { assertLease, leaseVersion, author
       if(inTransaction)throw Error('nested redo transaction')
       const normalized=normalizeRedoBinding(binding),identity=redoIdentity(normalized)
       lease()
+      if(authorizePrior(normalized)!==true)throw Error('redo inspection unauthorized')
       const row=read(identity.operationId)
       // Absence is only a routing hint, never proof that earlier work or an
       // external side effect did not occur.
