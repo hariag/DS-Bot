@@ -94,7 +94,7 @@ export function install(rt) {
     }
   }
 
-  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect }, onAdmission) {
+  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, groupKickoff }, onAdmission) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -114,6 +114,7 @@ export function install(rt) {
       ...(roomId ? { roomId } : {}),
       ...(reviewId ? { reviewId } : {}),
       ...(reviewInspect ? { reviewInspect: true } : {}),
+      ...(groupKickoff === true ? { groupKickoff: true } : {}),
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
       ...(resumed ? { resumed: true } : {}),

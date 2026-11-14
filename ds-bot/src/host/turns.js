@@ -197,6 +197,7 @@ export function install(rt) {
       ...(info?.work ? { work: info.work } : {}),
       ...(keeps && info.audience ? { audience: info.audience } : {}),
       ...(keeps && info.askedBy ? { askedBy: info.askedBy } : {}),
+      ...(keeps && info.groupKickoff === true ? { groupKickoff: true } : {}),
       ...(keeps && info.senderRoomId ? { fromRoomId: info.senderRoomId } : {}),
       note,
       retried: true,

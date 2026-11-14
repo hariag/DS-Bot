@@ -139,6 +139,62 @@ const settle = async (check) => {
 const text = message => message.content.map(block => block.text ?? '').join('\n')
 const kinds = result => result.replies.map(reply => [reply.kind ?? 'message', reply.name])
 
+test('a new group greeting cannot import private chat or dispatch work, while a later group user request can', async t => {
+  const host=await start(t,{sessions:{b:'gb',c:'gc'}})
+  let reads=0
+  rt.ownChatBrief=async()=>{reads++;return 'PRIVATE_PROJECT_SECRET: deploy another project'}
+  const kickoff=host.round('kickoff',{content:[{type:'text',text:'hello'}],source:{kind:'bot',role:'kickoff',roomId:'r1'}})
+  await settle(()=>host.agentOf('s1').calls.length===1)
+  const message=host.begin('s1')
+  assert.equal(reads,0)
+  assert.doesNotMatch(text(message),/PRIVATE_PROJECT_SECRET/)
+  assert.match(text(message),/Current group: "Ops"/)
+  assert.equal(message.source.groupKickoff,true)
+  const guard=host.ctx.guards.find(fn=>String(fn).includes('kickoffRestricted'))
+  assert.ok(guard)
+  for(const name of ['message_bot','post_to_group','bash','write_file','run_code','spawn_agent']) {
+    assert.match(guard({agent:{id:'s1'},name,arguments:{}}),/group greeting/)
+  }
+  host.finish('s1','@Writer Start unrelated work')
+  await settle(()=>kickoff()!==undefined)
+  assert.equal(host.agentOf('gb').calls.length,0)
+  assert.match(kickoff().replies.find(row=>row.text)?.text,/No work was sent/)
+  assert.doesNotMatch(kickoff().replies.find(row=>row.text)?.text,/@Writer/)
+  // A completed round must not lose the restriction when a delayed reply or
+  // progress message enters the group's own relay as a fresh post.
+  await rt.lateRoomReply('s1',message.source,'@Writer late unrelated work')
+  const late=host.agentOf('r1').calls.at(-1)
+  assert.equal(late.source.quiet,true)
+  assert.doesNotMatch(text(late),/@Writer/)
+  const lateRound=host.round('late',{content:late.content,source:late.source})
+  await settle(()=>lateRound()!==undefined)
+  assert.equal(host.agentOf('gb').calls.length,0)
+  await rt.roomStepText('s1',message.source,'@Writer progress unrelated work',true)
+  const progress=host.agentOf('r1').calls.at(-1)
+  assert.equal(progress.source.quiet,true)
+  assert.doesNotMatch(text(progress),/@Writer/)
+  const progressRound=host.round('progress',{content:progress.content,source:progress.source})
+  await settle(()=>progressRound()!==undefined)
+  assert.equal(host.agentOf('gb').calls.length,0)
+  const request=host.round('user-request',host.say('@Writer 请处理本群需求'))
+  await settle(()=>host.agentOf('gb').calls.length===1)
+  const asked=host.begin('gb')
+  assert.equal(asked.source.groupKickoff,undefined)
+  assert.equal(guard({agent:{id:'gb'},name:'bash',arguments:{}}),undefined)
+  host.finish('gb','已接收。')
+  await settle(()=>request()!==undefined)
+})
+
+test('a group session can still coordinate with another group outside a restricted greeting', async t => {
+  const host=await start(t,undefined,undefined,{r2:{id:'r2',name:'Other',named:true,members:['a','b'],mode:'admin',admin:'a',sessions:{},log:[],seq:0,seen:{}}})
+  const result=await host.tool('post_to_group',{group:'Other',message:'@Writer unrelated'},'ga')
+  assert.match(result,/Posted in "Other"/)
+  assert.equal(host.agentOf('r2').calls.length,1)
+  const bridge=await host.tool('post_to_group',{group:'Other',message:'@Writer a user-directed handoff'},'a')
+  assert.match(bridge,/Posted in "Other"/)
+  assert.equal(host.agentOf('r2').calls.length,2)
+})
+
 test('work past the grace lets the round go on, and the member that asked answers the result', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)

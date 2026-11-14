@@ -618,6 +618,35 @@ test('a group conversation cut off with nothing written moves on too', async (t)
   assert.deepEqual(host.archived, [['gb', { stopActivity: true }]])
 })
 
+test('a model switch preserves a restricted group kickoff and neutralizes delayed mentions', async t => {
+  const host=await start({state:GROUP_TEAM})
+  t.after(host.stop)
+  const agent=host.agentOf('gb')
+  agent.status='running'
+  agent.session.requestHeader=()=>({config:{provider:'old',model:'old'}})
+  host.rt.engineOfBot=()=> 'new-engine'
+  host.rt.engineOf=()=> 'old-engine'
+  host.emit('gb','turn/start',{turn:1})
+  host.emit('gb','user/message',{content:[{type:'text',text:'Group greeting'}],source:{kind:'bot',form:'relay',role:'room',roomId:'r1',exchangeId:'kickoff-exchange',groupKickoff:true}})
+  assert.equal(host.rt.live.get('gb').info.groupKickoff,true)
+  assert.deepEqual(await host.preStep('gb',[],2),{kind:'reject'})
+  await until(()=>host.state().rooms.r1.sessions.b==='s1')
+  await until(()=>host.agentOf('s1').calls.some(([kind,message])=>kind==='followup'&&message.source?.handoff))
+  const handoff=host.agentOf('s1').calls.find(([kind,message])=>kind==='followup'&&message.source?.handoff)[1]
+  assert.equal(handoff.source.groupKickoff,true)
+  assert.equal(handoff.source.roomId,'r1')
+  assert.match(text(handoff),/Group boundary: room ID/)
+  host.emit('s1','turn/start',{turn:1})
+  host.emit('s1','user/message',{content:handoff.content,source:handoff.source})
+  const guard=host.ctx.guards.find(fn=>String(fn).includes('kickoffRestricted'))
+  assert.match(guard({agent:{id:'s1'},name:'run_code',arguments:{}}),/group greeting/)
+  await host.rt.lateRoomReply('s1',handoff.source,'@Chief unrelated task')
+  const post=host.agentOf('r1').calls.find(([kind,message])=>kind==='followup'&&message.source?.late)
+  assert.ok(post)
+  assert.equal(post[1].source.quiet,true)
+  assert.doesNotMatch(text(post[1]),/@Chief/)
+})
+
 test('stream-only usage on assistant/message also detects premature window cut-offs', async (t) => {
   const host = await start({ services: cutOffServices })
   t.after(host.stop)
