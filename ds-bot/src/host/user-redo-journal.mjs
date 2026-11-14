@@ -89,7 +89,7 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
       if (authorize(scope, recoveryId) !== true) throw new Error('redo is unavailable')
       const previous = table()[operationId]
       if (previous) {
-        if (previous.recoveryId !== recoveryId || !isDeepStrictEqual(previous.scope, scope)
+        if (previous.recoveryId !== recoveryId || previous.confirmationDigest !== confirmationDigest || !isDeepStrictEqual(previous.scope, scope)
           || !isDeepStrictEqual(previous.identity, identity)) throw new Error('redo operation identity conflict')
         const proof = await proveOriginal(scope, recoveryId)
         validateProof(proof, recoveryId)
@@ -109,7 +109,7 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
       const original = { botId:proof.botId, sessionId:proof.sessionId, messageSeq:proof.messageSeq, turn:proof.turn,
         messageId:proof.message.id, messageHash:digest(proof.message) }
       if (userRedoConfirmation(scope, recoveryId, proof) !== confirmationDigest) throw new Error('redo confirmation does not match the input')
-      const entry = { operationId, identity, recoveryId, scope:clone(scope), original, state:'prepared', acknowledged:true, createdAt:Date.now() }
+      const entry = { operationId, identity, recoveryId, scope:clone(scope), original, confirmationDigest, state:'prepared', acknowledged:true, createdAt:Date.now() }
       rt.state.userRedos = { ...table(), [operationId]:entry }
       try {
         await rt.save({ required:true })
