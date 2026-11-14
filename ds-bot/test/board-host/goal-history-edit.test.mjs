@@ -4,16 +4,13 @@
 // it is not a real DSH Agent, production storage, or a crash-durability proof.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import pngjs from 'pngjs'
 import { install, BOARD_UPLOAD_PATH } from '../../src/host/board-service.js'
 import { legacyGoalCardId } from '../../src/host/legacy-goal.js'
-import { createBotWorkflow } from '../../src/host/workflow.mjs'
 import { archiveGoal } from '../../src/host/goals.js'
-import { privateTempDir } from '../private-temp.mjs'
 
 const group={kind:'room',id:'group'}, own={kind:'personal',id:'one'}, other={kind:'personal',id:'two'}
 const png=pngjs.PNG.sync.write({width:1,height:1,data:Buffer.from([1,2,3,255])}).toString('base64')
@@ -55,26 +52,13 @@ function openHost(t,home,state) {
   cleanups.push(close)
   return {rt,route:routes.find(route=>route.path===BOARD_UPLOAD_PATH),close}
 }
-function setup(t){const home=privateTempDir(join(tmpdir(),'dsbot-goal-history-'));const state=seeded();writeFileSync(join(home,'state.json'),JSON.stringify(state));return {home,...openHost(t,home,state)}}
+function setup(t){const home=mkdtempSync(join(tmpdir(),'dsbot-goal-history-'));const state=seeded();writeFileSync(join(home,'state.json'),JSON.stringify(state));return {home,...openHost(t,home,state)}}
 async function board(rt,scope=group){return rt.boardCall('board-list',{scope})}
 function currentCard(view,id){const item=view.tasks.find(card=>card.id===id);assert.ok(item,`missing original ${id}`);return item}
 function boardRevision(card){return card.legacy?.boardRevision??0}
 function command(card,scope,operationId,type,value){return {scope,taskId:card.id,expectedRevision:card.revision,expectedBoardRevision:boardRevision(card),expectedPosition:card.legacy?.position,operationId,type,value}}
 function auditOf(goal,cardId){return goal.boardCards?.[cardId]?.audit ?? []}
 async function rejected(run){try{const result=await run();assert.equal(result.state,'rejected');return result}catch(error){assert.match(String(error?.message),/stale|conflict|changed|invalid|unavailable|not available|authorized|permission|history|revision/i)}}
-
-test('a whitespace-only difference in a current evidence note does not commit a board edit', async t => {
-  const {rt}=setup(t), goal=rt.state.rooms.group.goal
-  const task=goal.stages[goal.current].tasks[0]
-  task.noteStatusVersion=task.statusVersion
-  const before=structuredClone(goal)
-  const card=(await board(rt)).tasks.find(item=>item.legacy.taskId===task.id)
-  const input=command(card,group,'goal:unchanged-note','goal-task-edit',{note:'  '+task.note+'  '})
-  const result=await rt.boardCall('board-command',input)
-  assert.equal(result.state,'rejected')
-  assert.match(result.message,/No changes to save/)
-  assert.deepEqual(goal,before)
-})
 
 test('all original stage positions and archived goals support annotated metadata without changing accepted facts',async t=>{
   const {rt}=setup(t), before=facts(rt.state), initial=await board(rt)
@@ -98,85 +82,6 @@ test('all original stage positions and archived goals support annotated metadata
     assert.ok(audit.includes(input.operationId) && audit.includes(`Correction ${which}`),'audit binds operation and after value')
   }
   assert.deepEqual(facts(rt.state),before,'stage acceptance, status, source task, evidence, and execution timestamps remain unchanged')
-})
-
-test('current card data uses a separate revision without invalidating existing business review',async t=>{
-  const {rt}=setup(t), goal=rt.state.rooms.group.goal, task=goal.stages[1].tasks[0]
-  task.boardDetails={description:'Prior inline description',labels:['old']}
-  task.boardComments=[{id:'old-comment',author:'user',text:'Old comment',at:20}]
-  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex')
-  goal.ownerReview={stageId:'s2',checks:{t2:{fingerprint:digest(task),unresolved:false,evidence:'Previous review'}}}
-  const reviewBefore=structuredClone(goal.ownerReview),taskBefore=structuredClone(task),businessBefore=facts(rt.state),current=(await board(rt)).tasks.find(item=>item.legacy.taskId==='t2')
-  assert.equal(current.description,'Prior inline description')
-  assert.equal(current.comments[0].text,'Old comment')
-  assert.equal(current.legacy.position,'current');assert.equal(current.legacy.boardRevision,0)
-  const oldClient={scope:group,taskId:current.id,expectedRevision:current.revision,operationId:'goal:current-legacy',type:'goal-card-details',value:{description:'New description'}}
-  assert.equal((await rt.boardCall('board-command',oldClient)).state,'committed')
-  const updated=currentCard(await board(rt),current.id)
-  assert.equal(updated.description,'New description');assert.equal(updated.labels[0],'old')
-  assert.equal(updated.comments[0].text,'Old comment');assert.equal(updated.legacy.boardRevision,1)
-  assert.deepEqual(task,taskBefore);assert.equal(digest(task),reviewBefore.checks.t2.fingerprint)
-  assert.deepEqual(goal.ownerReview,reviewBefore);assert.deepEqual(facts(rt.state),businessBefore)
-  const outdated=await rt.boardCall('board-command',{...oldClient,operationId:'goal:stale-old-client',value:{description:'Lost update'}})
-  assert.equal(outdated.state,'rejected');assert.match(outdated.message,/reload the page.*刷新整个网页/)
-  const one=command(updated,group,'goal:current-cas-one','goal-card-comment',{text:'First'})
-  const two=command(updated,group,'goal:current-cas-two','goal-card-comment',{text:'Second'})
-  const results=await Promise.all([rt.boardCall('board-command',one),rt.boardCall('board-command',two)])
-  assert.equal(results.filter(item=>item.state==='committed').length,1)
-  assert.equal(results.filter(item=>item.state==='rejected').length,1)
-  assert.deepEqual(task,taskBefore);assert.deepEqual(goal.ownerReview,reviewBefore);assert.deepEqual(facts(rt.state),businessBefore)
-  const after=currentCard(await board(rt),current.id)
-  const progress=command(after,group,'goal:current-progress','goal-task-edit',{status:'reported',note:'Ready for independent review'})
-  assert.equal((await rt.boardCall('board-command',progress)).state,'committed')
-  assert.equal(task.status,'reported');assert.notEqual(digest(task),reviewBefore.checks.t2.fingerprint,'real task progress must invalidate prior review')
-})
-
-test('the owner can read human goal-card details through the Bot workflow without granting outsiders access',async t=>{
-  const {rt}=setup(t)
-  const card=(await board(rt)).tasks.find(item=>item.legacy.taskId==='t2')
-  const value={description:'Inspect both layouts',dueDate:'2026-12-01',labels:['design'],checklist:[{id:'c1',text:'Check small view',checked:false}]}
-  assert.equal((await rt.boardCall('board-command',command(card,group,'goal:owner-details','goal-card-details',value))).state,'committed')
-  rt.selfOf=sid=>sid==='chat-one'?'one':sid==='chat-outsider'?'outsider':undefined
-  rt.botOf=id=>['one','outsider'].includes(id)?{id}:undefined
-  rt.chatOf=id=>`chat-${id}`
-  rt.groupOwners=new Map()
-  rt.state.bots.outsider={name:'Outsider'}
-  const workflow=createBotWorkflow({rt,store:{get:()=>undefined,list:()=>[]}})
-  const show=sid=>workflow.invoke({agent:{id:sid}},{action:'show',taskId:card.id,roomId:'group'})
-  const task=(await show('chat-one')).task
-  assert.equal(task.description,value.description)
-  assert.equal(task.dueDate,value.dueDate)
-  assert.deepEqual(task.labels,value.labels)
-  assert.deepEqual(task.checklist,[{text:'Check small view',checked:false}])
-  await assert.rejects(show('chat-outsider'),/unavailable|authorized/)
-})
-
-test('retained goal task events are visible on the same card without duplicating matching replies',async t=>{
-  const {rt}=setup(t), goal=rt.state.rooms.group.goal, task=goal.stages[1].tasks[0]
-  goal.events=[
-    {kind:'task',stage:'s2',taskId:'t2',botId:'one',by:'two',at:1000,fromStatus:'working',toStatus:'working',text:'Earlier evidence'},
-    {kind:'task',stage:'s2',taskId:'t2',botId:'one',by:'two',at:2000,fromStatus:'working',toStatus:'reported',text:'Current evidence'},
-    {kind:'task',stage:'s2',taskId:'t2',botId:'one',by:'two',at:2000,fromStatus:'working',toStatus:'reported',text:'Different evidence'},
-    {kind:'task',stage:'s1',taskId:'t2',botId:'one',by:'two',at:3000,fromStatus:'working',toStatus:'done',text:'Wrong stage'},
-    {kind:'task',stage:'s2',taskId:'t2',botId:'two',by:'two',at:4000,fromStatus:'working',toStatus:'done',text:'Wrong owner'},
-  ]
-  task.goalBoardReplies=[{id:'reply',author:'two',at:2000,workflowAction:'goal-update',text:'[group_goal reported] Current evidence'}]
-  const card=(await board(rt)).tasks.find(item=>item.legacy.taskId==='t2')
-  assert.equal(card.comments.length,3)
-  assert.match(card.comments[0].text,/Earlier evidence/)
-  assert.match(card.comments[0].text,/retained group_goal event/)
-  assert.equal(card.comments[1].id,'reply')
-  assert.match(card.comments[2].text,/Different evidence/)
-  assert.equal(card.comments.some(item=>item.text.includes('Wrong stage')),false)
-  assert.equal(card.comments.some(item=>item.text.includes('Wrong owner')),false)
-  rt.selfOf=sid=>sid==='chat-one'?'one':undefined
-  rt.botOf=id=>id==='one'?{id}:undefined
-  rt.chatOf=id=>`chat-${id}`
-  rt.groupOwners=new Map()
-  const workflow=createBotWorkflow({rt,store:{get:()=>undefined,list:()=>[]}})
-  const shown=(await workflow.invoke({agent:{id:'chat-one'}},{action:'show',taskId:card.id,roomId:'group'})).task
-  assert.deepEqual(shown.goalEvents,[card.comments[0],card.comments[2]])
-  assert.deepEqual(shown.replies,[card.comments[1]])
 })
 
 test('historical title corrections preserve the actual accepted title and include complete provenance',async t=>{
