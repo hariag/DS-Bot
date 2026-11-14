@@ -109,6 +109,37 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function confirmWitness(row, generation) {
     if (!isDeepStrictEqual(confirmWitnessTable(generation)[row.recoveryId], witnessFor(row))) throw Error('redo witness unavailable')
   }
+  function phasePath(operationId, phase) {
+    if (!uuid(operationId) || !['dispatching', 'claiming', 'completed'].includes(phase)) throw Error('invalid redo phase')
+    return join(rt.home, `.original-redo-${operationId}-${phase}`)
+  }
+  function phaseEvidence(row, phase, turn) {
+    return { version:1, operationId:row.operationId, recoveryId:row.recoveryId, bindingHash:witnessFor(row).bindingHash,
+      phase, ...(turn ? { turn:copy(turn) } : {}), ...(phase === 'completed' ? { result:copy(row.result) } : {}) }
+  }
+  function readPhase(row, phase, generation) {
+    let value
+    try { value = readMarker(phasePath(row.operationId, phase), true) }
+    catch (error) { if (error.code === 'ENOENT') return undefined; throw error }
+    dirSync(rt.home); sameLease(generation)
+    return value
+  }
+  function markPhase(row, phase, generation, turn) {
+    const value = phaseEvidence(row, phase, turn)
+    const fd = openSync(phasePath(row.operationId, phase), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
+    try { writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd) } finally { closeSync(fd) }
+    dirSync(rt.home); sameLease(generation)
+    if (!isDeepStrictEqual(readPhase(row, phase, generation), value)) throw Error('redo phase unavailable')
+  }
+  function confirmPhase(row, generation) {
+    const dispatched = readPhase(row, 'dispatching', generation), claimed = readPhase(row, 'claiming', generation), completed = readPhase(row, 'completed', generation)
+    if (row.state === 'prepared') {
+      if (dispatched || claimed || completed) throw Error('redo phase outcome unknown')
+    } else if (!isDeepStrictEqual(dispatched, phaseEvidence(row, 'dispatching'))
+      || (row.state === 'dispatching' ? claimed !== undefined
+        : !isDeepStrictEqual(claimed, phaseEvidence(row, 'claiming', row.turn)))
+      || (row.state === 'completed' ? !isDeepStrictEqual(completed, phaseEvidence(row, 'completed')) : completed !== undefined)) throw Error('redo phase outcome unknown')
+  }
   function recoveryMarker(recoveryId) { if (!digest(recoveryId)) throw Error('invalid recovery'); return join(root, `.recovery-${recoveryId}`) }
   function readRecovery(recoveryId, generation) {
     let data
@@ -151,14 +182,21 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
         || before.size !== after.size || before.mtimeMs !== after.mtimeMs || !isDeepStrictEqual(read(row.operationId), row)) throw Error('redo snapshot changed')
     } finally { closeSync(fd) }
   }
-  function write(row, generation) {
+  function write(row, generation, previous) {
+    const checkPrior = () => {
+      if (previous === null) {
+        try { lstatSync(pathFor(row.operationId)); throw Error('redo snapshot already exists') }
+        catch (error) { if (error.code !== 'ENOENT') throw error }
+      } else if (!isDeepStrictEqual(read(row.operationId), previous)) throw Error('redo snapshot changed')
+    }
     sameLease(generation)
+    checkPrior()
     const dest = pathFor(row.operationId), temp = join(root, `.pending-${randomUUID()}`), data = JSON.stringify(row)
     let fd, failure
     try {
       fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
       writeFileSync(fd, data); fsyncSync(fd); closeSync(fd); fd = undefined
-      sameLease(generation); renameSync(temp, dest); dirSync(root)
+      sameLease(generation); checkPrior(); renameSync(temp, dest); dirSync(root)
       const saved = read(row.operationId)
       sameLease(generation)
       if (!isDeepStrictEqual(saved, row)) throw Error('redo snapshot changed')
@@ -198,7 +236,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     scope = copy(scope); principal = copy(principal)
     if (busy.has(operationId)) throw Error('redo outcome unknown')
     busy.add(operationId)
+    const previous = rt.originalRedoPrepareTail ?? Promise.resolve(), release = Promise.withResolvers()
+    rt.originalRedoPrepareTail = release.promise
     try {
+      await previous
       const generation = lease(); directory(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true) throw Error('redo unavailable')
       const proof = await proveOriginal(copy(scope), recoveryId)
@@ -214,7 +255,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
         if (!reserved) throw Error('redo preparation outcome unknown')
         if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest
           || !isDeepStrictEqual(existing.original, source)) throw Error('redo identity conflict')
-        try { confirm(existing, generation); checkAccess(existing, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
+        try { confirm(existing, generation); checkAccess(existing, generation); confirmPhase(existing, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
         catch { throw Error('redo preparation outcome unknown') }
         return copy(existing)
       }
@@ -226,12 +267,12 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
         await rt.save({ required:true })
         confirmWitness(row, generation)
         if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
-        reserveRecovery(recoveryId, operationId, generation); write(row, generation); checkAccess(row, generation)
+        reserveRecovery(recoveryId, operationId, generation); write(row, generation, null); checkAccess(row, generation)
         if (proof.isCurrent() !== true) throw Error('redo proof changed')
       }
       catch { throw Error('redo preparation outcome unknown') }
       return copy(row)
-    } finally { busy.delete(operationId) }
+    } finally { busy.delete(operationId); release.resolve(); if (rt.originalRedoPrepareTail === release.promise) delete rt.originalRedoPrepareTail }
   }
   async function beginDispatch(operationId, principal) {
     if (busy.has(operationId)) throw Error('redo outcome unknown')
@@ -240,6 +281,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
       if (!isDeepStrictEqual(row.principal, principal)) throw Error('redo unavailable')
+      confirmPhase(row, generation)
       if (row.state !== 'prepared') return { state:'unknown', operationId }
       const proof = await proveOriginal(copy(row.scope), row.recoveryId)
       const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest)
@@ -248,7 +290,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding unavailable')
       checkAccess(row, generation); sameLease(generation)
       const next = { ...row, state:'dispatching' }
-      try { write(next, generation); checkAccess(next, generation); if (proof.isCurrent() !== true || validateBinding(copy(next), undefined) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
+      try { markPhase(row, 'dispatching', generation); write(next, generation, row); checkAccess(next, generation); confirmPhase(next, generation); if (proof.isCurrent() !== true || validateBinding(copy(next), undefined) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
       catch { throw Error('redo dispatch outcome unknown') }
       return { state:'dispatching', operationId, perform:true, binding:copy(next) }
     } finally { busy.delete(operationId) }
@@ -260,9 +302,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     try {
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
+      confirmPhase(row, generation)
       if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
         || validateBinding(copy(row), undefined) !== true) throw Error('redo dispatch unavailable')
-      try { confirm(row, generation); checkAccess(row, generation); if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding changed'); checkAccess(row, generation); sameLease(generation) }
+      try { confirm(row, generation); checkAccess(row, generation); confirmPhase(row, generation); if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding changed'); checkAccess(row, generation); sameLease(generation) }
       catch { throw Error('redo dispatch outcome unknown') }
       return copy(row)
     } finally { busy.delete(operationId) }
@@ -277,11 +320,12 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     try {
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
+      confirmPhase(row, generation)
       if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
         || validateBinding(copy(row), boundary) !== true) throw Error('redo claim unavailable')
       checkAccess(row, generation); sameLease(generation)
       const next = { ...row, state:'claiming', turn:boundary }
-      try { write(next, generation); checkAccess(next, generation); if (validateBinding(copy(next), boundary) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation) }
+      try { markPhase(row, 'claiming', generation, boundary); write(next, generation, row); checkAccess(next, generation); confirmPhase(next, generation); if (validateBinding(copy(next), boundary) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation) }
       catch { throw Error('redo claim outcome unknown') }
       return copy(next)
     } finally { busy.delete(operationId) }
@@ -292,6 +336,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     try {
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
+      confirmPhase(row, generation)
       if (!isDeepStrictEqual(row.principal, principal) || !['claiming', 'completed'].includes(row.state)) throw Error('redo result unavailable')
       const proof = await verifyResult(copy(row))
       const evidence = { durability:proof?.durability, sessionId:proof?.sessionId, messageId:proof?.messageId, admissionId:proof?.admissionId,
@@ -311,8 +356,9 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const next = row.state === 'completed' ? row : { ...row, state:'completed', result }
       try {
         if (row.state === 'completed') confirm(row, generation)
-        else write(next, generation)
+        else { markPhase(next, 'completed', generation); write(next, generation, row) }
         checkAccess(next, generation)
+        confirmPhase(next, generation)
         if (proof.isCurrent() !== true) throw Error('redo result changed')
       } catch { throw Error('redo result outcome unknown') }
       return copy(next)

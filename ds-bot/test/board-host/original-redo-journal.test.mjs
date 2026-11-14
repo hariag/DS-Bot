@@ -298,3 +298,81 @@ test('the actual store preserves the witness through normalization, save and rel
   assert.deepEqual(await createOriginalRedoJournal(restored, f.dependencies).prepare(f.request), saved)
   for (const dispose of disposers.splice(0)) await dispose()
 })
+
+test('different recoveries serialize their state witness saves rather than conflicting', async t => {
+  const f = await fixture(t), secondRecovery = 'c'.repeat(64)
+  const secondProof = { ...f.proof, recoveryId:secondRecovery }
+  f.dependencies.proveOriginal = async (_scope, id) => id === recoveryId ? f.proof : secondProof
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies), entered = Promise.withResolvers(), release = Promise.withResolvers(), save = f.rt.save
+  let calls = 0
+  f.rt.save = async () => { if (++calls === 1) { entered.resolve(); await release.promise }; await save() }
+  const first = journal.prepare(f.request)
+  await entered.promise
+  const second = journal.prepare({ ...f.request, operationId:otherId, recoveryId:secondRecovery,
+    confirmationDigest:userRedoConfirmation(scope, secondRecovery, secondProof) })
+  release.resolve()
+  const rows = await Promise.all([first, second])
+  assert.equal(rows.length, 2); assert.equal(Object.keys(f.rt.state.originalRedoWitness).length, 2)
+})
+
+test('phase witness refuses an operation record rolled back to prepared after dispatch', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const path = join(f.home, 'original-redo-v1', `${operationId}.json`), before = await readFile(path)
+  await f.journal.beginDispatch(operationId, f.request.principal)
+  await writeFile(path, before)
+  const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(restarted.beginDispatch(operationId, f.request.principal), Error)
+})
+
+test('phase witness refuses a claiming operation rolled back to dispatching', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), path = join(f.home, 'original-redo-v1', `${operationId}.json`)
+  const before = await readFile(path), turn = { turn:9, turnStartSeq:72 }
+  f.journal.markClaimingSync(binding, turn, f.request.principal)
+  await writeFile(path, before)
+  assert.throws(() => f.journal.markClaimingSync(binding, turn, f.request.principal), Error)
+})
+
+test('altered phase identity cannot authorize a claim', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal)
+  const marker = join(f.home, `.original-redo-${operationId}-dispatching`)
+  const data = JSON.parse(await readFile(marker, 'utf8')); data.bindingHash = 'd'.repeat(64)
+  await writeFile(marker, JSON.stringify(data))
+  assert.throws(() => f.journal.markClaimingSync(binding, { turn:9, turnStartSeq:72 }, f.request.principal), Error)
+})
+
+test('phase witness refuses a completed record rolled back to claiming', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), turn = { turn:9, turnStartSeq:72 }
+  f.journal.markClaimingSync(binding, turn, f.request.principal)
+  const path = join(f.home, 'original-redo-v1', `${operationId}.json`), before = await readFile(path)
+  f.resultProof({ durability:'target-writer-v1', sessionId:'original-session', messageId:binding.identity.messageId,
+    admissionId:binding.identity.admissionId, turn, throughSeq:80, resultDigest:'b'.repeat(64),
+    resultRef:{ kind:'session-events', sessionId:'original-session', firstSeq:75, lastSeq:78 }, isCurrent:() => true })
+  await f.journal.recordResult(operationId, f.request.principal)
+  await writeFile(path, before)
+  await assert.rejects(f.journal.recordResult(operationId, f.request.principal), Error)
+})
+
+test('phase directory fsync failure fences a retry', { skip:process.platform !== 'linux' }, async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const original = fs.fsyncSync, marker = join(f.home, `.original-redo-${operationId}-dispatching`)
+  fs.fsyncSync = fd => {
+    if (fs.readlinkSync(`/proc/self/fd/${fd}`) === f.home && fs.existsSync(marker)) throw Error('injected phase fsync failure')
+    return original(fd)
+  }
+  syncBuiltinESMExports()
+  try { await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /unknown/) }
+  finally { fs.fsyncSync = original; syncBuiltinESMExports() }
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), Error)
+})
+
+test('a reentrant callback cannot overwrite a changed private operation record', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const path = join(f.home, 'original-redo-v1', `${operationId}.json`)
+  f.dependencies.validateBinding = row => { fs.writeFileSync(path, JSON.stringify({ ...row, state:'claiming', turn:{ turn:99, turnStartSeq:99 } })); return true }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /unknown/)
+  assert.equal(JSON.parse(await readFile(path, 'utf8')).state, 'claiming')
+})
