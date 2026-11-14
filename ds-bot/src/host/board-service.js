@@ -125,7 +125,7 @@ export function install(rt) {
     void run(() => instance?.driver.wake()).catch(error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error'))
   }
   const mutate = (endpoint, payload) => {
-    const { api, store, goalEditor } = service(), scope = payload.scope
+    const { api, store } = service(), scope = payload.scope
     const outcome = store.request({ operationId: payload.operationId, actor: 'user', taskId: payload.taskId, payload: requestKey(endpoint, payload), isRejection: rejected }, () => {
       if (payload.type === 'create') {
         if (!payload.value || typeof payload.value !== 'object' || Array.isArray(payload.value)) throw Object.assign(new Error('Invalid task proposal'), { code: 'bot/invalid' })
