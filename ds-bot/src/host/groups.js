@@ -462,6 +462,13 @@ export function install(rt) {
     await rt.ensureCapabilities(id)
     return { id }
   }
+  rt.ensureGroupTaskSession = async (roomId, botId) => {
+    const room = rt.roomOf(roomId), member = rt.botOf(botId)
+    if (!room || !member || !room.members?.includes(botId) || member.private === true) throw new Error('Task recipient is not in this group')
+    const session = await groupSessionFor(room, member)
+    if (!session?.id || rt.roomOf(roomId) !== room || !room.members.includes(botId) || room.sessions?.[botId] !== session.id) throw new Error('Group task Session is unavailable')
+    return session.id
+  }
 
   // Lines from before the round's opening message are kept apart from this round, so
   // an earlier round (an old count-off, say) never reads as part of the current one.

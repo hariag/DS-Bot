@@ -2,9 +2,14 @@ import { createHash } from 'node:crypto'
 
 // A trigger is not delivery. The real host must provide a separately verified
 // durable admission implementation; without it even claiming is forbidden.
-export function createTaskDriver({ store, admission, authorized = () => false, onError = () => {}, maxPerPass = 20 }) {
+export function createTaskDriver({ store, admission, authorized = () => false, authorizedNow = () => false, onError = () => {}, maxPerPass = 20 }) {
   if (!store || !Number.isSafeInteger(maxPerPass) || maxPerPass < 1 || maxPerPass > 100) throw new TypeError('invalid task driver')
-  let active, stopped = false, retrigger = false, cursor = 0
+  let active, stopped = false, retrigger = false, cursor = 0, retryTimer
+  const retryLater = () => {
+    if (stopped || retryTimer) return
+    retryTimer = setTimeout(() => { retryTimer = undefined; void wake() }, 60_000)
+    retryTimer.unref?.()
+  }
   const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
   // A journal payload is parsed JSON. Reproduce the store's sorted-key digest
   // and reject unsupported values rather than accepting a changed message.
@@ -32,20 +37,20 @@ export function createTaskDriver({ store, admission, authorized = () => false, o
     if (!Array.isArray(tasks) || !tasks.length) return
     const start = cursor % tasks.length
     const ordered = tasks.slice(start).concat(tasks.slice(0, start))
-    let claimedCount = 0
+    let claimedCount = 0, retry = false
     for (const task of ordered) {
       if (stopped) return
       const action = store.listActions(task.id).find(item => item.state === 'pending')
-      if (!action) continue
+      if (!action || action.actor === 'user') continue
       let intent, claim
       try {
-        if (await authorized(action, task) !== true || stopped) continue
+        if (await authorized(action, task) !== true || stopped) { retry = !stopped; continue }
         // Preparation has no side effect and does not put a message in DSH.
         intent = await admission.prepare(action, task)
         if (stopped || !intent || intent.targetBotId !== action.actor ||
-          !validId(intent.targetSessionId) || !validId(intent.messageId) || !validId(intent.admissionId) || intent.payload === undefined) continue
+          !validId(intent.targetSessionId) || !validId(intent.messageId) || !validId(intent.admissionId) || intent.payload === undefined) { retry = !stopped; continue }
         claim = store.claimAction({ actionId:action.id, actor:'scheduler', intent })
-      } catch (error) { onError(error, action); continue }
+      } catch (error) { retry = true; onError(error, action); continue }
       // An already claimed action is only reconciled by the original identity.
       // A duplicate claim response is NEVER permission to send again.
       if (claim?.claimedNow !== true) continue
@@ -59,18 +64,33 @@ export function createTaskDriver({ store, admission, authorized = () => false, o
           const latest = store.get(task.id), saved = store.admission(action.id)
           return !stopped && !!latest && matches(saved, action, latest, persistedIntent) && await authorized(action, latest, saved) === true
         }
+        const revalidateNow = () => {
+          const latest = store.get(task.id), saved = store.admission(action.id)
+          return !stopped && !!latest && matches(saved, action, latest, persistedIntent)
+            && authorizedNow(action, latest, saved) === true
+        }
         // Required contract: admit holds the target input until the host's
         // current authority/grants are rechecked at its durable release gate.
-        const receipt = await admission.admit({ action, task:current, intent:persistedIntent, revalidate })
-        store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'accepted', receipt })
+        let accepted = false
+        const commitReceipt = receipt => {
+          if (accepted) throw new Error('Admission receipt already committed')
+          store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'accepted', receipt })
+          accepted = true
+        }
+        const receipt = await admission.admit({ action, task:current, intent:persistedIntent, revalidate, revalidateNow, commitReceipt })
+        if (!accepted) commitReceipt(receipt)
       } catch (error) {
-        try { store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'uncertain', receipt:'admission outcome unknown' }) }
-        catch (recordError) { onError(recordError, action) }
+        try {
+          const state = store.listActions(task.id).find(item => item.id === action.id)?.state
+          if (state === 'claimed') store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'uncertain', receipt:'admission outcome unknown' })
+          else if (state === 'accepted') store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'accepted', state:'uncertain', receipt:'admission outcome unknown' })
+        } catch (recordError) { onError(recordError, action) }
         onError(error, action)
       }
       cursor = (cursor + 1) % tasks.length
       if (claimedCount >= maxPerPass) { retrigger = true; return }
     }
+    if (retry) retryLater()
   }
   function wake() {
     if (stopped) return Promise.resolve()
@@ -79,5 +99,5 @@ export function createTaskDriver({ store, admission, authorized = () => false, o
     active = (async () => { while (!stopped && retrigger) { retrigger = false; await pass() } })().finally(() => { active = undefined })
     return active
   }
-  return { wake, async close() { stopped = true; if (active) await active } }
+  return { wake, async close() { stopped = true; clearTimeout(retryTimer); retryTimer = undefined; if (active) await active } }
 }

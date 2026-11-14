@@ -195,7 +195,7 @@ async function openRoomTurn(t, host) {
   return () => result
 }
 
-test('a group turn cut off by a restart is picked up once, and the group is told', async (t) => {
+test('a group turn cut off by a restart is held for review and never replayed', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -207,34 +207,18 @@ test('a group turn cut off by a restart is picked up once, and the group is told
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => second.agentOf('gb').calls.length === 1)
-  const post = second.agentOf('r1').calls[0]
-  assert.deepEqual([post.source.role, post.source.resumed, post.source.quiet, post.source.senderSessionId], ['post', true, true, 'b'])
-  const resumed = second.agentOf('gb').calls[0]
-  assert.deepEqual([resumed.source.role, resumed.source.resumed, resumed.source.roomId], ['room', true, 'r1'])
-  assert.match(text(resumed), /^\[Group chat "Ops" · picking up after a restart\]/)
-  assert.match(text(resumed), /approval to run pwsh \(escalate sandbox\)/)
-  await settle(() => Object.keys(inflight(home)).length === 0)
-
-  // The group shows the event, and the admin reads it on its next turn.
-  second.emit('r1', 'user/message', { content: post.content, source: post.source })
-  const relay = await afterRound(rt, 'r1', await second.tool('group_relay', {}, 'r1', { callId: 'c2', signal: new AbortController().signal }))
-  assert.deepEqual(relay.replies.map(reply => [reply.kind, reply.name]), [['resumed', 'Writer']])
-  const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
-  assert.equal(state.rooms.r1.log.at(-1).kind, 'resumed')
-
-  // Cut off again while picking it up: the group hears it, and the turn stays stopped.
-  run(second, 'gb', 2, resumed)
-  await settle(() => inflight(home).gb?.resumed === true)
-  await second.stop()
-  const third = await start(home)
-  t.mock.timers.tick(3000)
-  await settle(() => third.agentOf('r1').calls.length === 1)
-  assert.equal(third.agentOf('r1').calls[0].source.again, true)
-  assert.equal(third.agentOf('gb').calls.length, 0)
+  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'gb'))
+  assert.equal(second.agentOf('gb').calls.length, 0)
+  assert.equal(second.agentOf('r1').calls.length, 0)
+  const held = Object.values(notes(home).heldTurns).find(item => item.sessionId === 'gb')
+  assert.deepEqual([held.record.botId, held.record.roomId, held.record.approval?.tool], ['b', 'r1', 'pwsh'])
+  const recovery = (await second.rt.boardCall('board-list', { scope: { kind: 'room', id: 'r1' } })).recovery
+  assert.equal(recovery.available, true)
+  assert.equal(recovery.items.find(item => item.sessionId === 'gb')?.status, 'uncertain')
+  assert.equal(second.agentOf('gb').calls.length, 0, 'reading the recovery view must not replay work')
 })
 
-test('a request cut off by a restart goes on under the same exchange; own-chat work resumes in the chat', async (t) => {
+test('a request cut off by a restart is held for review with its original exchange', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -245,18 +229,18 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
 
   const second = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => second.agentOf('b').calls.length === 1 && second.agentOf('a').calls.length === 1)
-  const request = second.agentOf('b').calls[0]
-  assert.deepEqual([request.source.role, request.source.exchangeId, request.source.senderSessionId, request.source.resumed], ['request', 'x1', 'a', true])
-  assert.match(text(request), /^\[Message from Chief · DeepSeek Harness restarted while you were working on it\]/)
-  const own = second.agentOf('a').calls[0]
-  assert.deepEqual([own.source.role, own.source.resumed], ['resume', true])
-  assert.match(text(own), /^\[DeepSeek Harness restarted while you were working\]/)
+  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'b')
+    && Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'a'))
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.equal(second.agentOf('a').calls.length, 0)
+  const held = Object.values(notes(home).heldTurns).find(item => item.sessionId === 'b')
+  assert.equal(held.record.trigger.exchangeId, 'x1')
+  assert.equal(held.record.trigger.role, 'request')
   const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   assert.equal(state.exchanges.length, 0)
 })
 
-test('when only DS Bot restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
+test('when only DS Bot restarts, live work is not picked up; a later interrupted turn stays held', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
@@ -283,8 +267,10 @@ test('when only DS Bot restarts, a turn still running or finished meanwhile is n
   await second.stop()
   const third = await start(home)
   t.mock.timers.tick(3000)
-  await settle(() => third.agentOf('b').calls.length === 1)
-  assert.deepEqual([third.agentOf('b').calls[0].source.exchangeId, third.agentOf('a').calls.length], ['x1', 0])
+  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.sessionId === 'b'))
+  assert.deepEqual([third.agentOf('b').calls.length, third.agentOf('a').calls.length], [0, 0])
+  const held = Object.values(notes(home).heldTurns).find(item => item.sessionId === 'b')
+  assert.equal(held.record.trigger.exchangeId, 'x1')
 })
 
 // Chief asks Writer for the plan; Writer's turn takes it up and the work waits.

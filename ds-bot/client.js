@@ -12521,6 +12521,22 @@ var ZH = {
   "Showing the latest 50 revisions.": "显示最近 50 个修订。",
   "Revision": "修订版本",
   "Personal progress does not dispatch a Bot or complete shared work.": "个人进度不会派发 Bot，也不会完成共享任务。",
+  "Add task": "添加任务",
+  "Add and schedule": "添加并派发",
+  "Add follow-up": "添加后续任务",
+  "Create and schedule": "创建并派发",
+  "Create follow-up": "创建后续任务",
+  "Schedule Bot": "派发 Bot",
+  "This task will be sent to its Bot owner when its dependencies are met.": "依赖满足后，任务将发送给负责的 Bot。",
+  "This creates a follow-up in Preparing; reported and completed work cannot be created without evidence.": "这会在「准备中」创建后续任务；没有证据时不能直接创建已汇报或已完成的工作。",
+  "Reported and completed work cannot be created without evidence.": "没有证据时，不能直接创建已汇报或已完成的工作。",
+  "Bot queued": "已排队待派发",
+  "Preparing delivery": "正在准备派发",
+  "Sent to Bot": "已发送给 Bot",
+  "Delivery needs review": "派发结果待核对",
+  "The Bot message may or may not have reached its Session. Check the delivery before scheduling again.": "Bot 消息是否进入会话尚不确定。请先核对派发结果，再决定是否重新派发。",
+  "This change is being worked as a separate task; the original stays unchanged.": "此变更作为独立任务推进；原任务保持不变。",
+  "This change waits for the original task to complete. It has not been dispatched.": "此变更等待原任务完成，尚未派发。",
   "Saving creates a separate change proposal after the original task.": "保存后将创建独立的需求变更提案，并等待原任务完成。",
   "Requirement change": "需求变更",
   "Original task": "原任务",
@@ -12701,6 +12717,8 @@ var ZH = {
   "Exchange ID": "交接 ID",
   "Recovery ID": "恢复记录 ID",
   "Task board": "任务看板",
+  "Board": "看板",
+  "Sender": "发送者",
   "My task board": "我的任务看板",
   "Group task board": "群任务看板",
   "Personal task board": "个人任务看板",
@@ -14642,14 +14660,15 @@ var LEGACY_REVIEW_EN_FALLBACK = Object.fromEntries([
   "Evidence references",
   "Unfinished items"
 ].map((key) => [key, key]));
+var CLIENT_EN_FALLBACK = Object.fromEntries(Object.keys(ZH).map((key) => [key, key]));
 var DICTIONARY = {
   zh: ZH,
   "zh-TW": ZH_TW,
-  ja: { ...LEGACY_REVIEW_EN_FALLBACK, ...JA },
-  ko: { ...LEGACY_REVIEW_EN_FALLBACK, ...KO },
-  es: { ...LEGACY_REVIEW_EN_FALLBACK, ...ES },
-  fr: { ...LEGACY_REVIEW_EN_FALLBACK, ...FR },
-  de: { ...LEGACY_REVIEW_EN_FALLBACK, ...DE }
+  ja: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...JA },
+  ko: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...KO },
+  es: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...ES },
+  fr: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...FR },
+  de: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...DE }
 };
 var HOST_ERROR_TABLE = {
   zh: HOST_ERRORS,
@@ -37571,21 +37590,23 @@ function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
     options.map((task) => (0, import_react50.createElement)("option", { key: task.id, value: task.id }, `${textValue(task.title) || t("Shared task")} · ${task.id}`))
   ));
 }
-function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", personalProgress }) {
+function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", ownerOnly = false, personalProgress, scheduleOnCreate = false, followup = false }) {
   const [open, setOpen] = (0, import_react50.useState)(false);
   const [title, setTitle] = (0, import_react50.useState)("");
   const [owner, setOwner] = (0, import_react50.useState)(defaultOwner);
   const [reviewer, setReviewer] = (0, import_react50.useState)("");
   const [acceptance, setAcceptance] = (0, import_react50.useState)("");
   const [dependencies, setDependencies] = (0, import_react50.useState)([]);
-  const valid = title.trim() && owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim();
-  if (!open) return (0, import_react50.createElement)("button", { className: "bt-board-primary", type: "button", disabled, onClick: () => setOpen(true) }, (0, import_react50.createElement)("span", { "aria-hidden": "true" }, "+ "), t("Create task"));
+  (0, import_react50.useEffect)(() => setOwner(defaultOwner), [defaultOwner]);
+  const valid = title.trim() && owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim() && (!scheduleOnCreate || owner.trim() !== "user" && reviewer.trim() !== "user");
+  const buttonLabel = followup ? "Add follow-up" : scheduleOnCreate ? "Add and schedule" : personalProgress !== void 0 ? "Add task" : "Create task";
+  if (!open) return (0, import_react50.createElement)("button", { className: "bt-board-primary", type: "button", disabled, onClick: () => setOpen(true) }, (0, import_react50.createElement)("span", { "aria-hidden": "true" }, "+ "), t(buttonLabel));
   const field = (label, value, update) => (0, import_react50.createElement)("label", null, t(label), (0, import_react50.createElement)("input", { "aria-label": t(label), value, disabled, onChange: (event) => update(event.target.value) }));
   const actorField = (label, value, update) => Array.isArray(actors) ? (0, import_react50.createElement)("label", null, t(label), (0, import_react50.createElement)(
     "select",
     { "aria-label": t(label), value, disabled, onChange: (event) => update(event.target.value) },
     (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
-    actors.filter((actor) => typeof actor?.id === "string" && (label !== "Owner ID" || personalProgress === void 0 || actor.id === "user")).map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+    actors.filter((actor) => typeof actor?.id === "string" && (label !== "Owner ID" || !ownerOnly || actor.id === defaultOwner) && (!scheduleOnCreate || actor.id !== "user")).map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
   )) : field(label, value, update);
   return (0, import_react50.createElement)(
     "form",
@@ -37598,7 +37619,8 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", pers
         reviewer: reviewer.trim(),
         acceptance: acceptance.trim(),
         dependencies,
-        ...personalProgress !== void 0 ? { personalProgress } : {}
+        ...personalProgress !== void 0 ? { personalProgress } : {},
+        ...scheduleOnCreate ? { schedule: true } : {}
       }).then((result) => {
         if (result !== "committed") return;
         setTitle("");
@@ -37609,7 +37631,7 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", pers
         setOpen(false);
       });
     } },
-    (0, import_react50.createElement)("p", null, t(personalProgress !== void 0 ? "Personal progress does not dispatch a Bot or complete shared work." : "New tasks start in Preparing.")),
+    (0, import_react50.createElement)("p", null, t(personalProgress !== void 0 ? "Personal progress does not dispatch a Bot or complete shared work." : scheduleOnCreate ? "This task will be sent to its Bot owner when its dependencies are met." : followup ? "This creates a follow-up in Preparing; reported and completed work cannot be created without evidence." : "New tasks start in Preparing.")),
     field("Title", title, setTitle),
     actorField("Owner ID", owner, setOwner),
     actorField("Independent reviewer ID", reviewer, setReviewer),
@@ -37618,7 +37640,7 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", pers
     (0, import_react50.createElement)(
       "div",
       null,
-      (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || !valid }, t("Submit proposal")),
+      (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || !valid }, t(scheduleOnCreate ? "Create and schedule" : followup ? "Create follow-up" : "Submit proposal")),
       " ",
       (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel"))
     )
@@ -38022,16 +38044,39 @@ function UploadImages({ task, disabled, onUpload }) {
 }
 function ColumnRail({ label, personal, children }) {
   const rail = (0, import_react50.useRef)(null);
+  const [overflow, setOverflow] = (0, import_react50.useState)(false);
   const move = (direction) => {
     const node = rail.current;
     if (node) node.scrollBy({ left: direction * Math.max(240, node.clientWidth * 0.8), behavior: "smooth" });
   };
+  (0, import_react50.useEffect)(() => {
+    const node = rail.current;
+    if (!node) return;
+    const update = () => setOverflow(node.scrollWidth > node.clientWidth + 1);
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
+    const mutation = typeof MutationObserver === "function" ? new MutationObserver(() => {
+      resize?.disconnect();
+      resize?.observe(node);
+      for (const child of node.children) resize?.observe(child);
+      update();
+    }) : null;
+    resize?.observe(node);
+    for (const child of node.children) resize?.observe(child);
+    mutation?.observe(node, { childList: true, subtree: true, attributes: true });
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      resize?.disconnect();
+      mutation?.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
   return (0, import_react50.createElement)(
     "div",
     { className: "bt-board-rail" },
     (0, import_react50.createElement)(
       "div",
-      { className: "bt-board-rail-controls" },
+      { className: "bt-board-rail-controls", hidden: !overflow },
       (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Previous columns"), onClick: () => move(-1) }, "←"),
       (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Next columns"), onClick: () => move(1) }, "→")
     ),
@@ -38054,17 +38099,22 @@ function TaskCard({ scope, task, commands, actors, uncertain, onOpen }) {
   const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
   const blocker = asText2(task.blocked);
   const canMove = commands.some((command) => command.type === "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
+  const canSchedule = commands.some((command) => command.type === "schedule") && ["proposed", "waiting"].includes(task.status);
+  const deliveryLabel = task.dispatchState === "uncertain" ? "Delivery needs review" : task.dispatchState === "accepted" ? "Sent to Bot" : task.dispatchState === "claimed" ? "Preparing delivery" : task.dispatchState === "pending" ? "Bot queued" : "";
   const owner = scope.kind === "personal" && scope.id === "user" && task.owner === "user" ? "" : actorLabel(task.owner, actors);
   return (0, import_react50.createElement)(
     "article",
     {
       className: "bt-board-card",
       "data-task-id": task.id,
-      draggable: canMove && !uncertain,
+      draggable: (canMove || canSchedule) && !uncertain,
       onDragStart: (event) => {
         if (canMove && !uncertain) {
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("application/x-ds-bot-personal-task", task.id);
+        } else if (canSchedule && !uncertain) {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("application/x-ds-bot-task", task.id);
         }
       }
     },
@@ -38077,6 +38127,7 @@ function TaskCard({ scope, task, commands, actors, uncertain, onOpen }) {
         { className: "bt-board-card-meta" },
         owner ? (0, import_react50.createElement)("span", { className: "bt-board-owner" }, owner) : null,
         task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("Shared task · read only")) : null,
+        deliveryLabel ? (0, import_react50.createElement)("span", { className: `bt-board-chip${task.dispatchState === "uncertain" ? " bt-board-chip-blocked" : ""}`, role: task.dispatchState === "uncertain" ? "status" : void 0 }, t(deliveryLabel)) : null,
         blocker ? (0, import_react50.createElement)("span", { className: "bt-board-chip bt-board-chip-blocked" }, t("Blocked")) : null,
         dependencies.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} dependencies", { count: dependencies.length })) : null,
         task.dueDate ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${t("Due date")}: ${textValue(task.dueDate)}`) : null,
@@ -38139,7 +38190,7 @@ function TaskHistory({ scope, task, request }) {
 function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy }) {
   const modal = (0, import_react50.useRef)(null);
   const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
-  const evidence = Array.isArray(task.evidence) ? task.evidence.map(asText2).filter(Boolean).join(" · ") : asText2(task.evidence);
+  const evidence = task.evidence && typeof task.evidence === "object" ? [textValue(task.evidence.evidence), textValue(task.evidence.environment)].filter(Boolean).join(" · ") : Array.isArray(task.evidence) ? task.evidence.map(asText2).filter(Boolean).join(" · ") : asText2(task.evidence);
   const blocker = asText2(task.blocked);
   const canMove = commands.some((command) => command.type === "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
   (0, import_react50.useEffect)(() => {
@@ -38244,6 +38295,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         task.legacy?.titleStale ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("The original task changed after this display title was corrected. Review the title.")) : null,
         task.legacy?.pending ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("A card change is awaiting confirmation in its original board.")) : null,
         task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Shared task · read only")) : null,
+        task.dispatchState === "uncertain" ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
+        commands.some((command) => command.type === "schedule") ? (0, import_react50.createElement)("button", { type: "button", disabled: uncertain, onClick: () => void onCommand(task, { type: "schedule" }) }, t("Schedule Bot")) : null,
         task.legacy && !KNOWN.has(task.status) ? (0, import_react50.createElement)(Fact, { label: t("Original status"), value: textValue(task.legacy.originalStatus) || t("Status unknown") }) : null,
         (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(task.owner, actors) }),
         (0, import_react50.createElement)(Fact, { label: t("Reviewer"), value: actorLabel(task.reviewer, actors) }),
@@ -38259,8 +38312,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           { className: "bt-board-actions" },
           (0, import_react50.createElement)("strong", null, t("Requirement change")),
           (0, import_react50.createElement)(Fact, { label: t("Original task"), value: `${task.change.sourceTaskId} · ${t("Revision")} ${task.change.sourceRevision}` }),
-          (0, import_react50.createElement)("p", { role: "status" }, t("This proposal waits for the original task. It has not been dispatched.")),
-          Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies" }).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field, label]) => (0, import_react50.createElement)(
+          (0, import_react50.createElement)("p", { role: "status" }, t(task.status === "working" ? "This change is being worked as a separate task; the original stays unchanged." : task.status === "ready" ? "The source task is complete; this requirement change is queued as its own task." : "This change waits for the original task to complete. It has not been dispatched.")),
+          Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description" }).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field, label]) => (0, import_react50.createElement)(
             "div",
             { key: field },
             (0, import_react50.createElement)("strong", null, t(label)),
@@ -38599,13 +38652,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           (0, import_react50.createElement)("span", { className: "bt-board-search-icon", "aria-hidden": "true" }, "⌕"),
           (0, import_react50.createElement)("input", { type: "search", "aria-label": t("Search tasks"), placeholder: t("Search tasks"), value: search, onChange: (event) => setSearch(event.target.value) })
         ),
-        data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? (0, import_react50.createElement)(CreateTask, {
-          disabled: !canAct || capacityReached,
-          actors: data.capabilities.actors,
-          tasks: data.tasks,
-          defaultOwner: scope.kind === "personal" ? scope.id : "",
-          onCreate: createCard
-        }) : null
+        null
       ),
       data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(WorkDecisions, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
       !data ? (0, import_react50.createElement)(
@@ -38656,6 +38703,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
                 actors: data.capabilities.actors,
                 tasks: data.tasks,
                 defaultOwner: "user",
+                ownerOnly: true,
                 personalProgress: progress,
                 onCreate: createCard
               }) : null
@@ -38668,16 +38716,47 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           personal ? (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("Shared workflow")), (0, import_react50.createElement)("p", null, t("These statuses reflect the shared task workflow."))) : null,
           (0, import_react50.createElement)(ColumnRail, { label: t("Workflow") }, listed.map(([status, label]) => {
             const tasks = columns2.get(status);
+            const acceptsTask = ["waiting", "ready", "working"].includes(status);
+            const acceptDrop = (event) => canAct && acceptsTask && [...event.dataTransfer.types].includes("application/x-ds-bot-task");
+            const addInThisColumn = ["proposed", "waiting", "ready", "working", "reported", "done", "legacy-pending", "legacy-done", "unknown"].includes(status);
+            const scheduleOnCreate = !personal && ["waiting", "ready", "working"].includes(status);
+            const followup = personal || ["reported", "done", "legacy-pending", "legacy-done", "unknown"].includes(status);
             return (0, import_react50.createElement)(
               "section",
-              { className: "bt-board-column", key: status, "aria-label": t(label), "data-stage": status },
+              {
+                className: "bt-board-column",
+                key: status,
+                "aria-label": t(label),
+                "data-stage": status,
+                onDragOver: (event) => {
+                  if (acceptDrop(event)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    event.currentTarget.dataset.dropActive = "true";
+                  }
+                },
+                onDragLeave: (event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) delete event.currentTarget.dataset.dropActive;
+                },
+                onDrop: (event) => {
+                  delete event.currentTarget.dataset.dropActive;
+                  if (!acceptDrop(event)) return;
+                  event.preventDefault();
+                  const id = event.dataTransfer.getData("application/x-ds-bot-task"), task = filtered.find((item) => item.id === id);
+                  if (task && commandsFor(task).some((command) => command.type === "schedule")) void run2(task, { type: "schedule" });
+                }
+              },
               (0, import_react50.createElement)("h3", null, (0, import_react50.createElement)("span", null, t(label)), tasks.length ? (0, import_react50.createElement)("span", { className: "bt-board-count" }, tasks.length) : null),
               tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-lane-empty" }, t("No tasks")),
-              status === "proposed" && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? (0, import_react50.createElement)(CreateTask, {
+              addInThisColumn && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? (0, import_react50.createElement)(CreateTask, {
                 disabled: !canAct || capacityReached,
                 actors: data.capabilities.actors,
                 tasks: data.tasks,
-                defaultOwner: scope.kind === "personal" ? scope.id : "",
+                defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "",
+                ownerOnly: scope.kind === "personal",
+                personalProgress: personal ? "todo" : void 0,
+                scheduleOnCreate,
+                followup,
                 onCreate: createCard
               }) : null
             );
@@ -38712,8 +38791,8 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
 }
 var TASK_BOARD_CSS = `
 .bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:4px 8px;cursor:pointer}
-.bt-board-backdrop{--bt-main:var(--dsw-alias-bg-base,#fcfcfc);--bt-sidebar:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-card:var(--dsw-alias-bg-layer-1,#fff);--bt-ink:var(--dsw-alias-label-primary,#141414);--bt-ink-2:var(--dsw-alias-label-secondary,#555);--bt-ink-3:var(--dsw-alias-label-tertiary,#777);--bt-line:var(--dsw-alias-border-l2,rgba(0,0,0,.1));--bt-line-2:var(--dsw-alias-border-l3,rgba(0,0,0,.12));--bt-hover:var(--dsw-alias-interactive-bg-hover-solid,#f5f5f5);--bt-tag-bg:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-accent:var(--dsw-alias-button-info-fill,#4176e6);--bt-accent-ink:var(--dsw-alias-label-on-color,#fff);position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
-.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
+.bt-board-backdrop{position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
+.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:var(--bt-dialog-shadow,0 24px 70px color-mix(in srgb,var(--bt-ink) 22%,transparent));overflow:hidden}
 .bt-board-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 26px 16px;border-bottom:1px solid var(--bt-line);flex:none}
 .bt-board-header h2{font-size:20px;line-height:1.3;letter-spacing:-.025em;margin:0}.bt-board-header p{font-size:12px;color:var(--bt-ink-2);margin:4px 0 0}
 .bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea,.bt-board-dialog input{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:7px 10px}
@@ -38734,31 +38813,32 @@ var TASK_BOARD_CSS = `
 .bt-recovery-panel{min-width:0;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 2px 6px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
 .bt-recovery-panel[open]{grid-column:1/-1}.bt-recovery-summary{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;list-style:none;padding:12px 14px}.bt-recovery-summary::-webkit-details-marker,.bt-recovery-record-summary::-webkit-details-marker{display:none}
 .bt-recovery-summary:focus-visible,.bt-recovery-record-summary:focus-visible,.bt-recovery-work-choice:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}.bt-recovery-summary-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bt-recovery-summary-text strong{font-size:13px;line-height:1.35}.bt-recovery-summary-text small{font-size:11px;color:var(--bt-ink-2)}
-.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:9px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
+.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:8px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
 .bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
 .bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
 .bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
-.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:9px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
-.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:9px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
-.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
+.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:8px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:8px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
+.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:8px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
 .bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
 
 .bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:var(--dsw-alias-bg-base,var(--bt-main))}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
-.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
+.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-rail-controls[hidden]{display:none}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
 .bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 20px;align-items:flex-start;min-height:190px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.bt-board-columns::-webkit-scrollbar{display:none}
-.bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:14px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent)}
-.bt-board-columns-personal>.bt-board-column{flex:0 0 300px;min-height:150px}
+.bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:12px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent);transition:border-color .15s,background-color .15s,box-shadow .15s}
+.bt-board-column[data-drop-active=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 7%,var(--bt-card));box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 20%,transparent)}
+.bt-board-columns-personal>.bt-board-column{flex:1 0 300px;max-width:420px;min-height:150px}
 .bt-board-column h3{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;margin:4px 4px 14px}.bt-board-count{min-width:20px;padding:2px 6px;text-align:center;background:color-mix(in srgb,var(--bt-ink) 8%,var(--bt-card));color:var(--bt-ink-2);border-radius:8px;font-size:11px;font-weight:600}
 .bt-board-column h3>span:first-child{display:flex;align-items:center;gap:8px}.bt-board-column h3>span:first-child:before{content:'';width:8px;height:8px;border-radius:50%;background:var(--bt-ink-3)}
 .bt-board-column:is([data-stage=doing],[data-stage=working],[data-stage=reported]) h3>span:first-child:before{background:var(--bt-accent)}
 .bt-board-column:is([data-stage=finished],[data-stage=done]) h3>span:first-child:before{background:var(--bt-green)}
-.bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:9px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
+.bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:8px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 .bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
 .bt-board-dialog .bt-board-card-summary{box-sizing:border-box;display:flex;width:100%;text-align:left;background:transparent;border:0;border-radius:10px;padding:11px 12px}
-.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.52);overscroll-behavior:contain}
-.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.3)}
+.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));overscroll-behavior:contain}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:var(--bt-dialog-shadow,0 24px 70px color-mix(in srgb,var(--bt-ink) 22%,transparent))}
 .bt-card-modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--bt-line);flex:none}.bt-card-modal-header p{margin:0 0 5px;color:var(--bt-ink-2);font-size:12px}.bt-card-modal-header h2{margin:0;font-size:21px;line-height:1.3;overflow-wrap:anywhere}.bt-card-modal-header button{font-size:22px;line-height:1;min-width:38px}
 .bt-card-modal .bt-board-card-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px;overflow-wrap:anywhere}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
