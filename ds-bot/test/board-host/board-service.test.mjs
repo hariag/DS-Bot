@@ -312,9 +312,14 @@ test('real image worker edits the original goal and preserves two authorized ima
   assert.equal(shown.checklist[0].checked,true)
   assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported','checking items does not pass acceptance')
   assert.equal(rt.state.rooms.group.goal.revision,5)
-  const invalidDetails={...details,operationId:'goal:invalid-details',expectedRevision:5,value:{dueDate:'2026-02-30'}}
+  const comment={scope:personal,operationId:'goal:comment',taskId:card.id,expectedRevision:5,type:'goal-card-comment',value:{text:'Ready for the reviewer'}}
+  assert.equal((await rt.boardCall('board-command',comment)).state,'committed')
+  assert.equal((await rt.boardCall('board-command',comment)).state,'committed')
+  assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id).comments.length,1)
+  assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported')
+  const invalidDetails={...details,operationId:'goal:invalid-details',expectedRevision:6,value:{dueDate:'2026-02-30'}}
   assert.equal((await rt.boardCall('board-command',invalidDetails)).state,'rejected')
-  assert.equal(rt.state.rooms.group.goal.revision,5)
+  assert.equal(rt.state.rooms.group.goal.revision,6)
   const goal=rt.state.rooms.group.goal
   goal.stages.push({id:'s2',title:'Next',tasks:[]});goal.current=1;goal.revision++
   await rt.save()
@@ -328,10 +333,29 @@ test('real image worker edits the original goal and preserves two authorized ima
   const archived=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
   assert.equal(archived.legacy.archived,true)
   assert.equal(archived.description,'Read before review')
+  assert.equal(archived.comments[0].text,'Ready for the reviewer')
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
   rt.state.rooms.group.members=[]
   await assert.rejects(rt.boardCall('board-image',{scope:{kind:'personal',id:'one'},taskId:card.id,imageId:'img1'}),/not available|unavailable/i)
   await assert.rejects(rt.boardCall('board-command',{...edit,operationId:'goal:bad-namespace',type:'edit'}),/Goal operation ID/)
+})
+
+test('native card comments are idempotent and excluded from shared status projections', async t => {
+  const {rt}=fixture(t); rt.state.rooms.other={members:['one','two']}
+  await rt.boardCall('board-command',create)
+  const comment={scope,operationId:'comment-1',taskId:'t1',expectedRevision:1,type:'card-comment',value:{text:'Private review note'}}
+  await rt.boardCall('board-command',comment)
+  await rt.boardCall('board-command',comment)
+  const shown=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id==='t1')
+  assert.equal(shown.comments.length,1)
+  assert.equal(shown.comments[0].text,'Private review note')
+  assert.equal(shown.status,'proposed')
+  assert.equal(shown.boardActivity.at(-1).type,'card-comment')
+  await rt.boardCall('board-command',{scope,operationId:'share-comment',taskId:'t1',expectedRevision:2,type:'share',value:{targetRoomId:'other',fields:['status']}})
+  const shared=(await rt.boardCall('board-list',{scope:{kind:'room',id:'other'}})).tasks.find(task=>task.id==='t1')
+  assert.equal(shared.shared,true)
+  assert.equal(shared.comments,undefined)
+  assert.equal(shared.boardActivity,undefined)
 })
 
 test('real upload confirms a snapshot written before the save response is lost', async t => {

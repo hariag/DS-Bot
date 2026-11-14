@@ -179,6 +179,13 @@ export function createGoalBoardEditor(rt) {
       }
       next.boardDetails=details
       touchGoal(clone,{kind:'board-task-details',by:'user',stage:stage.id,taskId:task.id,botId:task.botId},now,{keepNudges:true})
+    } else if(kind==='comment') {
+      const value=payload.value
+      if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>key!=='text')||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw invalid('Invalid card comment')
+      const comments=Array.isArray(next.boardComments)?next.boardComments:[]
+      if(comments.length>=100)throw invalid('Card comment limit reached')
+      next.boardComments=[...comments,{id:payload.operationId,author:'user',text:value.text.trim(),at:now}]
+      touchGoal(clone,{kind:'board-task-comment',by:'user',stage:stage.id,taskId:task.id,botId:task.botId},now,{keepNudges:true})
     } else if(kind==='attach') {
       if(!Array.isArray(images)||!images.length||images.length>10)throw invalid('Choose 1 to 10 images')
       const existing=Array.isArray(next.boardImages)?next.boardImages:[]
@@ -191,6 +198,8 @@ export function createGoalBoardEditor(rt) {
       next.boardImages=existing.filter(image=>image.id!==id)
       touchGoal(clone,{kind:'board-task-image',by:'user',stage:stage.id,taskId:task.id,botId:task.botId,text:'image removed'},now,{keepNudges:true})
     } else throw invalid('Unsupported goal task action')
+    const activity=Array.isArray(next.boardActivity)?next.boardActivity:[]
+    next.boardActivity=[...activity,{id:payload.operationId,actor:'user',type:kind,at:now}].slice(-50)
     if(rt.roomOf(card.originRoomId)!==room||room.goal!==goal||goal.revision!==payload.expectedRevision)throw invalid('Goal task changed; refresh the board')
     for(const key of Object.keys(task))delete task[key]
     Object.assign(task,next)

@@ -183,7 +183,7 @@ export function touchGoal(goal, event, now = Date.now(), { keepNudges = false } 
 const goalHasBoardImages = goal => (goal?.stages ?? []).some(stage => (stage?.tasks ?? []).some(task => Array.isArray(task?.boardImages) && task.boardImages.length>0))
 const goalHasBoardDetails = goal => (goal?.stages ?? []).some(stage => (stage?.tasks ?? []).some(task => {
   const data=task?.boardDetails
-  return !!(data?.description || data?.dueDate || data?.labels?.length || data?.checklist?.length)
+  return !!(data?.description || data?.dueDate || data?.labels?.length || data?.checklist?.length || task?.boardComments?.length)
 }))
 
 export function archiveGoal(room) {
@@ -375,7 +375,7 @@ export function reviseGoal(room, input, by, memberOf, memberNames, now = Date.no
       return {error:'These stages contain board images. Download and remove the images before rebuilding the stages.'}
     }
     if(goal.stages.slice(Math.max(0,goal.current)).some(stage=>goalHasBoardDetails({stages:[stage]}))) {
-      return {error:'These stages contain board details. Preserve and clear the details before rebuilding the stages.'}
+      return {error:'These stages contain board details or comments. Preserve them before rebuilding the stages.'}
     }
     cleaned = cleanStages(room, input.stages, 'revise', memberOf, memberNames)
     if (cleaned.error !== undefined) return cleaned
