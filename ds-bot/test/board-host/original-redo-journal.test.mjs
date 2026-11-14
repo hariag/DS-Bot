@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, chmod } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, chmod, rename, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { createOriginalRedoJournal, originalRedoIdentity } from '../../src/host/original-redo-journal.mjs'
 import { userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
 
@@ -35,16 +37,35 @@ test('prepares only a fixed original session and keeps plaintext and original wo
 
 test('dispatch permission is granted once and survives restart without automatic reissue', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
-  const first = await f.journal.beginDispatch(operationId)
+  await assert.rejects(f.journal.beginDispatch(operationId, { kind:'bot', id:'user' }), /unavailable/)
+  await assert.rejects(f.journal.beginDispatch(operationId), /unavailable/)
+  const first = await f.journal.beginDispatch(operationId, f.request.principal)
   assert.equal(first.perform, true)
-  assert.deepEqual(await f.journal.beginDispatch(operationId), { operationId, state:'unknown' })
+  assert.deepEqual(await f.journal.beginDispatch(operationId, f.request.principal), { operationId, state:'unknown' })
   const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
-  assert.deepEqual(await restarted.beginDispatch(operationId), { operationId, state:'unknown' })
+  assert.deepEqual(await restarted.beginDispatch(operationId, f.request.principal), { operationId, state:'unknown' })
+})
+
+test('retries the parent directory durability barrier after a failed first creation', { skip:process.platform !== 'linux' }, async t => {
+  const f = await fixture(t), original = fs.fsyncSync
+  let count = 0, fail = true
+  fs.fsyncSync = fd => {
+    if (fs.readlinkSync(`/proc/self/fd/${fd}`) === f.home) { count++; if (fail) throw Error('injected parent fsync failure') }
+    return original(fd)
+  }
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(f.journal.prepare(f.request), /injected parent fsync failure/)
+    fail = false
+    const row = await f.journal.prepare(f.request)
+    assert.equal(row.state, 'prepared')
+    assert.ok(count >= 2)
+  } finally { fs.fsyncSync = original; syncBuiltinESMExports() }
 })
 
 test('sync claiming fence is durable before the caller may claim, and cannot be consumed twice', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
-  const { binding } = await f.journal.beginDispatch(operationId), turn = { turn:9, turnStartSeq:72 }
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), turn = { turn:9, turnStartSeq:72 }
   assert.deepEqual(f.journal.inspectDispatchSync(binding, f.request.principal), binding)
   const row = f.journal.markClaimingSync(binding, turn, f.request.principal)
   assert.equal(row.state, 'claiming'); assert.deepEqual(row.turn, turn)
@@ -56,10 +77,10 @@ test('sync claiming fence is durable before the caller may claim, and cannot be 
 test('source change, revoked authorization and changed target fail before dispatch', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
   f.proof.message.content[0].text = 'different'
-  await assert.rejects(f.journal.beginDispatch(operationId), /confirmation/)
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /confirmation/)
   f.proof.message.content[0].text = 'sensitive original task'
-  f.allowed(false); await assert.rejects(f.journal.beginDispatch(operationId), /unavailable/)
-  f.allowed(true); f.bound(false); await assert.rejects(f.journal.beginDispatch(operationId), /binding/)
+  f.allowed(false); await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /unavailable/)
+  f.allowed(true); f.bound(false); await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /binding/)
   assert.equal(JSON.parse(await readFile(join(f.home, 'original-redo-v1', `${operationId}.json`), 'utf8')).state, 'prepared')
 })
 
@@ -73,7 +94,7 @@ test('rejects two operations for one recovery and conflicting reused identity', 
 
 test('does not claim with changed admission binding, invalid turn or revoked scope', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
-  const { binding } = await f.journal.beginDispatch(operationId)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal)
   assert.throws(() => f.journal.markClaimingSync({ ...binding, identity:{ ...binding.identity, admissionId:'other' } }, { turn:9, turnStartSeq:72 }, f.request.principal), /unavailable/)
   assert.throws(() => f.journal.markClaimingSync(binding, { turn:9, turnStartSeq:-1 }, f.request.principal), /unavailable/)
   assert.throws(() => f.journal.inspectDispatchSync(binding, { kind:'bot', id:'bot' }), /unavailable/)
@@ -86,7 +107,7 @@ test('rejects a private directory whose permissions were widened', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
   const dir = join(f.home, 'original-redo-v1'); await chmod(dir, 0o755)
   t.after(() => chmod(dir, 0o700).catch(() => {}))
-  await assert.rejects(f.journal.beginDispatch(operationId), /directory unavailable/)
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /directory unavailable/)
 })
 
 test('a permission change after the durable dispatch transition returns unknown and does not permit resend', async t => {
@@ -94,15 +115,15 @@ test('a permission change after the durable dispatch transition returns unknown 
   let checks = 0
   f.dependencies.validateBinding = () => { if (++checks === 2) { f.allowed(false); return false }; return true }
   const journal = createOriginalRedoJournal(f.rt, f.dependencies)
-  await assert.rejects(journal.beginDispatch(operationId), /outcome unknown/)
+  await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /outcome unknown/)
   assert.equal(JSON.parse(await readFile(join(f.home, 'original-redo-v1', `${operationId}.json`), 'utf8')).state, 'dispatching')
   f.allowed(true)
-  assert.deepEqual(await journal.beginDispatch(operationId), { operationId, state:'unknown' })
+  assert.deepEqual(await journal.beginDispatch(operationId, f.request.principal), { operationId, state:'unknown' })
 })
 
 test('a lost claim confirmation fences the durable claiming record after restart', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
-  const { binding } = await f.journal.beginDispatch(operationId)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal)
   let checks = 0
   f.dependencies.validateBinding = () => ++checks < 2
   const journal = createOriginalRedoJournal(f.rt, f.dependencies), turn = { turn:9, turnStartSeq:72 }
@@ -112,9 +133,31 @@ test('a lost claim confirmation fences the durable claiming record after restart
   assert.throws(() => createOriginalRedoJournal(f.rt, f.dependencies).markClaimingSync(binding, turn, f.request.principal), /unavailable/)
 })
 
+test('reentrant binding validation cannot grant dispatch or claim after lease or access changes', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  f.dependencies.validateBinding = () => { f.generation(2); return true }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /lease changed/)
+  f.dependencies.validateBinding = () => true
+  const { binding } = await journal.beginDispatch(operationId, f.request.principal)
+  f.dependencies.validateBinding = () => { f.allowed(false); return true }
+  const changed = createOriginalRedoJournal(f.rt, f.dependencies)
+  assert.throws(() => changed.markClaimingSync(binding, { turn:9, turnStartSeq:72 }, f.request.principal), /unavailable/)
+})
+
+test('replacement or loss of a previously initialized journal directory fails closed after restart', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const root = join(f.home, 'original-redo-v1')
+  await rename(root, `${root}.moved`)
+  await mkdir(root, { mode:0o700 })
+  const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }), /identity unavailable|directory changed/)
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /directory changed/)
+})
+
 test('stores only a matching writer-verified result reference and requires authorization on repeat reads', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
-  const { binding } = await f.journal.beginDispatch(operationId), turn = { turn:9, turnStartSeq:72 }
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), turn = { turn:9, turnStartSeq:72 }
   f.journal.markClaimingSync(binding, turn, f.request.principal)
   const result = { durability:'target-writer-v1', sessionId:'original-session', messageId:binding.identity.messageId,
     admissionId:binding.identity.admissionId, turn, throughSeq:80, resultDigest:'b'.repeat(64),
@@ -124,6 +167,7 @@ test('stores only a matching writer-verified result reference and requires autho
   f.resultProof(result)
   const receipt = await f.journal.recordResult(operationId, f.request.principal)
   assert.equal(receipt.state, 'completed'); assert.equal(receipt.result.digest, 'b'.repeat(64))
+  f.resultProof({ ...result, throughSeq:95 })
   assert.deepEqual(await f.journal.recordResult(operationId, f.request.principal), receipt)
   f.allowed(false)
   await assert.rejects(f.journal.recordResult(operationId, f.request.principal), /unavailable/)
@@ -133,4 +177,14 @@ test('rejects a non-user principal before creating a record', async t => {
   const f = await fixture(t)
   await assert.rejects(f.journal.prepare({ ...f.request, principal:{ kind:'bot', id:'user' } }), /confirmation/)
   await assert.rejects(readdir(join(f.home, 'original-redo-v1')), { code:'ENOENT' })
+})
+
+test('authorization callbacks cannot mutate the requested or persisted scope and principal', async t => {
+  const f = await fixture(t)
+  f.dependencies.authorize = (inputScope, _id, principal) => { inputScope.id = 'mutated'; principal.id = 'mutated'; return true }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies), row = await journal.prepare(f.request)
+  assert.equal(row.scope.id, 'room-1'); assert.equal(row.principal.id, 'user')
+  assert.equal(f.request.scope.id, 'room-1'); assert.equal(f.request.principal.id, 'user')
+  const dispatched = await journal.beginDispatch(operationId, f.request.principal)
+  assert.equal(dispatched.binding.scope.id, 'room-1'); assert.equal(dispatched.binding.principal.id, 'user')
 })
