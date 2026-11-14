@@ -23,7 +23,7 @@ function fixture() {
       const input = JSON.stringify({ taskId, expectedRevision, type, value }), found = operations.get(operationId)
       if (found) { if (found.input !== input) throw new Error('operation conflict'); return found.result }
       if (task.revision !== expectedRevision) throw new Error('revision conflict')
-      if (type === 'edit') Object.assign(task, value)
+      if (type === 'edit' || type === 'card-details') Object.assign(task, value)
       else if (type === 'personal-progress') task.personalProgress = value.progress
       else if (type === 'attach') task.attachments.push(...value.images)
       else if (type === 'remove-image') task.attachments = task.attachments.filter(image => image.id !== value.imageId)
@@ -85,6 +85,23 @@ test('an authorized user edits a card without impersonating its Bot owner', () =
   const edited = f.api.command(room, user, { operationId: 'edit-1', taskId: 'task1', expectedRevision: 1, type: 'edit', value })
   assert.equal(edited.title, 'New title'); assert.equal(edited.owner, 'one'); assert.equal(edited.revision, 2)
   assert.deepEqual(f.api.command(room, user, { operationId: 'edit-1', taskId: 'task1', expectedRevision: 1, type: 'edit', value }), edited)
+})
+
+test('card details are scoped, explicit capabilities and do not leak into shared projections', () => {
+  const f = fixture(); f.api.create(room, user, proposal)
+  const before=f.api.list(room,user)
+  assert.deepEqual({ description:before.tasks[0].description, dueDate:before.tasks[0].dueDate, labels:before.tasks[0].labels, checklist:before.tasks[0].checklist },
+    { description:'', dueDate:null, labels:[], checklist:[] })
+  assert.ok(before.capabilities.commands.task1.some(item => item.type === 'card-details'))
+  const request={operationId:'details',taskId:'task1',expectedRevision:1,type:'card-details',value:{description:'Context',labels:['urgent'],checklist:[{id:'one',text:'Check',checked:false}],dueDate:'2028-02-29'}}
+  assert.equal(f.api.command(room,user,request).description, 'Context')
+  assert.equal(f.api.list(room,user).tasks[0].description, 'Context')
+  f.state.rooms.other={members:['one','two']}
+  assert.throws(()=>f.api.command({kind:'room',id:'other'},user,{...request,operationId:'bad',expectedRevision:2}),/not available/)
+  assert.throws(()=>f.api.command(room,{kind:'bot',id:'one'},{...request,operationId:'bot',expectedRevision:2}),/Only the instance user/)
+  f.setWritable(false)
+  assert.equal(f.api.list(room,user).capabilities.commands.task1.length,0)
+  assert.throws(()=>f.api.command(room,user,{...request,operationId:'locked',expectedRevision:2}),/locked/)
 })
 
 test('a task on another group board cannot be edited from the wrong scope', () => {

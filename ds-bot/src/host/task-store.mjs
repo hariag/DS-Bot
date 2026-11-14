@@ -298,6 +298,42 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             keysOnly(value, ['progress'])
             if (!['todo', 'doing', 'finished'].includes(value.progress)) throw new Error('invalid personal progress')
             next.personalProgress = value.progress; break
+          case 'card-details': {
+            // Card presentation is distinct from acceptance and workflow.
+            // An item ticked here never completes a task or a dependency.
+            keysOnly(value, ['description', 'dueDate', 'labels', 'checklist'])
+            if (!Object.keys(value).length) throw new Error('invalid card details')
+            if (Object.hasOwn(value, 'description')) {
+              if (typeof value.description !== 'string' || Buffer.byteLength(value.description) > 8192) throw new Error('invalid card details')
+              next.description = value.description
+            }
+            if (Object.hasOwn(value, 'dueDate')) {
+              const d = value.dueDate
+              if (d !== null) {
+                if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new Error('invalid card details')
+                const parsed = new Date(`${d}T00:00:00.000Z`)
+                if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== d) throw new Error('invalid card details')
+              }
+              next.dueDate = d
+            }
+            if (Object.hasOwn(value, 'labels')) {
+              if (!Array.isArray(value.labels) || value.labels.length > 20 || value.labels.some(label => typeof label !== 'string' || !label.trim() || Buffer.byteLength(label) > 40)) throw new Error('invalid card details')
+              const labels = value.labels.map(label => label.trim())
+              if (new Set(labels).size !== labels.length) throw new Error('invalid card details')
+              next.labels = labels
+            }
+            if (Object.hasOwn(value, 'checklist')) {
+              if (!Array.isArray(value.checklist) || value.checklist.length > 100) throw new Error('invalid card details')
+              const ids = new Set()
+              next.checklist = value.checklist.map(item => {
+                keysOnly(item, ['id', 'text', 'checked'])
+                if (!validId(item.id) || ids.has(item.id) || typeof item.text !== 'string' || !item.text.trim() || Buffer.byteLength(item.text) > 512 || typeof item.checked !== 'boolean') throw new Error('invalid card details')
+                ids.add(item.id)
+                return { id: item.id, text: item.text.trim(), checked: item.checked }
+              })
+            }
+            break
+          }
           case 'register':
             if (old.status !== 'proposed') throw new Error('invalid state')
             keysOnly(value, ['kind','commit','blob','reference'])

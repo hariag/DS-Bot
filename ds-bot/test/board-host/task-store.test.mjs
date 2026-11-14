@@ -23,6 +23,40 @@ const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({
 const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
 
+test('card details persist with CAS and idempotency without completing dependencies', t => {
+  const { store, path } = fixture(t)
+  create(store, 'card'); create(store, 'dependent', ['card']); register(store, 'dependent')
+  const value = { description:'Notes\nwith details', dueDate:'2028-02-29', labels:['Urgent', '后端'], checklist:[{id:'item-1', text:'Verify', checked:true}] }
+  const input = { operationId:'details-1', taskId:'card', expectedRevision:1, actor:'user', type:'card-details', value }
+  const result = store.command(input)
+  assert.equal(result.status, 'proposed'); assert.deepEqual(result.checklist, value.checklist)
+  assert.deepEqual(store.command(input), result)
+  assert.throws(() => store.command({ ...input, value:{ ...value, description:'changed' } }), /operation id conflict/)
+  assert.throws(() => store.command({ ...input, operationId:'stale' }), /revision conflict/)
+  assert.equal(store.get('dependent').status, 'waiting')
+  assert.equal(store.listActions('card').length, 0)
+  command(store, 'card', 'card-details', 'user', { dueDate:null, labels:[] }, 'details-2')
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  const saved = reopened.get('card')
+  assert.equal(saved.description, value.description); assert.equal(saved.dueDate, null)
+  assert.deepEqual(saved.labels, []); assert.deepEqual(saved.checklist, value.checklist)
+  assert.equal(reopened.get('dependent').status, 'waiting')
+})
+
+test('card details reject malformed or oversized fields without partial writes', t => {
+  const { store } = fixture(t); create(store, 'card')
+  const bad = [
+    {}, { dueDate:'2027-02-29' }, { dueDate:'tomorrow' }, { description:'x'.repeat(8193) },
+    { labels:['same', 'same'] }, { labels:Array(21).fill('a') }, { labels:['x'.repeat(41)] },
+    { checklist:[{id:'x',text:'a',checked:true},{id:'x',text:'b',checked:false}] },
+    { checklist:[{id:'x',text:'a',checked:'yes'}] }, { checklist:[{id:'x',text:' ',checked:false}] },
+    { description:'would save', unrelated:true },
+  ]
+  for (const [index, value] of bad.entries()) assert.throws(() => command(store, 'card', 'card-details', 'user', value, `bad-details-${index}`))
+  assert.equal(store.get('card').revision, 1)
+  assert.equal(store.get('card').description, undefined)
+})
+
 test('personal progress is durable, scoped and never completes a dependency', t => {
   const { store, path } = fixture(t)
   const mine = { ...task('mine'), owner:'user', reviewer:'reviewer' }
@@ -55,6 +89,17 @@ function finish(s, id) {
   accept(s, id, 'execute'); command(s, id, 'start', 'owner'); command(s, id, 'report', 'owner', evidence)
   accept(s, id, 'review'); command(s, id, 'review', 'reviewer', { evidence: 'independent review', result: 'pass' })
 }
+
+test('card details do not disrupt an already accepted work and its independent review', t => {
+  const { store } = fixture(t); create(store, 'active'); register(store, 'active')
+  accept(store, 'active', 'execute'); command(store, 'active', 'start', 'owner')
+  const before = store.get('active')
+  const updated = command(store, 'active', 'card-details', 'user', { checklist:[{id:'check',text:'Review facts',checked:true}] })
+  assert.equal(updated.status, 'working'); assert.equal(updated.actionRevision, before.actionRevision)
+  command(store, 'active', 'report', 'owner', evidence)
+  accept(store, 'active', 'review'); command(store, 'active', 'review', 'reviewer', { evidence:'independent review', result:'pass' })
+  assert.equal(store.get('active').status, 'done')
+})
 
 test('delivery and independent review drive dependencies immediately and survive restart', t => {
   const { store, path } = fixture(t)
