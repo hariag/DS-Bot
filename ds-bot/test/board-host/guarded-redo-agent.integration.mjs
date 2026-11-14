@@ -13,6 +13,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { install as installTurns } from '../../src/host/turns.js'
 import { install as installResume } from '../../src/host/resume.js'
 import { createGuardedRedoTurnRoute } from '../../src/host/guarded-redo-turn-route.mjs'
+import { captureGuardedRedoResult } from '../../src/host/guarded-redo-result.mjs'
 
 class ScriptedAdapter extends LlmAdapter {
   requests = []
@@ -88,6 +89,19 @@ test('real guarded Agent isolates redo while retaining a later ordinary input', 
   assert.doesNotMatch(JSON.stringify(adapter.requests[0].messages), /later ordinary input|Some earlier messages in this conversation/)
   assert.match(JSON.stringify(adapter.requests[1].messages), /later ordinary input/)
   assert.equal(agent.inbox.nextTurn.length, 0)
+  const recordedStart = agent.session.snapshotEvents().find(event => event.type === 'turn/start' && event.data.turn === 1)
+  const captured = await captureGuardedRedoResult({ ctx, session:agent.session, input:redo, admissionId:'redo-admission',
+    turn:{ turn:1, turnStartSeq:recordedStart.seq }, isCurrent:() => true })
+  if (captured === undefined) console.error('redo-prefix-diagnostic', JSON.stringify(agent.session.snapshotEvents().map(event => ({
+    seq:event.seq, type:event.type, turn:event.data?.turn, target:event.data?.target, start:event.data?.start,
+    removedCount:event.data?.removedCount, inserted:event.data?.inserted?.map(item => ({ id:item.id, source:item.source })),
+    messageId:event.data?.messageId, admissionId:event.data?.admissionId,
+    userId:event.type === 'user/message' ? event.data?.id : undefined,
+    userSource:event.type === 'user/message' ? event.data?.source : undefined,
+    assistantContent:event.type === 'assistant/message' ? event.data?.message?.content?.map(part => part.type) : undefined,
+    reason:event.type === 'turn/end' ? event.data?.reason?.kind : undefined,
+  }))))
+  assert.equal(captured?.text, 'redo output')
   await ctx.sessionPersistence.flushLiveSession(agent.id)
   const reader = await ctx.sessionPersistence.open(agent.id, 'read')
   try {
