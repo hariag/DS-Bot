@@ -12520,6 +12520,10 @@ var ZH = {
   "Card revision history": "卡片修订记录",
   "Showing the latest 50 revisions.": "显示最近 50 个修订。",
   "Revision": "修订版本",
+  "Saving creates a separate change proposal after the original task.": "保存后将创建独立的需求变更提案，并等待原任务完成。",
+  "Requirement change": "需求变更",
+  "Original task": "原任务",
+  "This proposal waits for the original task. It has not been dispatched.": "此提案等待原任务完成，尚未派发。",
   "Before": "修改前",
   "After": "修改后",
   "Goal card details can be corrected without changing the original task or acceptance record.": "可修订目标卡片资料，原任务和验收记录保持不变。",
@@ -37667,6 +37671,7 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
       " ",
       (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))
     ) : null,
+    ["working", "reported", "done"].includes(task.status) ? (0, import_react50.createElement)("p", { role: "note" }, t("Saving creates a separate change proposal after the original task.")) : null,
     field("Title", "title"),
     actorField("Owner ID", "owner"),
     actorField("Independent reviewer ID", "reviewer"),
@@ -38247,6 +38252,20 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         (0, import_react50.createElement)(Fact, { label: t("Blocked"), value: blocker }),
         (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: evidence }),
         (0, import_react50.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
+        task.change ? (0, import_react50.createElement)(
+          "div",
+          { className: "bt-board-actions" },
+          (0, import_react50.createElement)("strong", null, t("Requirement change")),
+          (0, import_react50.createElement)(Fact, { label: t("Original task"), value: `${task.change.sourceTaskId} · ${t("Revision")} ${task.change.sourceRevision}` }),
+          (0, import_react50.createElement)("p", { role: "status" }, t("This proposal waits for the original task. It has not been dispatched.")),
+          Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies" }).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field, label]) => (0, import_react50.createElement)(
+            "div",
+            { key: field },
+            (0, import_react50.createElement)("strong", null, t(label)),
+            (0, import_react50.createElement)("p", null, `${t("Before")}: ${typeof task.change.before?.[field] === "string" ? task.change.before[field] : JSON.stringify(task.change.before?.[field] ?? "")}`),
+            (0, import_react50.createElement)("p", null, `${t("After")}: ${typeof task.change.after?.[field] === "string" ? task.change.after[field] : JSON.stringify(task.change.after?.[field] ?? "")}`)
+          ))
+        ) : null,
         !task.shared ? (0, import_react50.createElement)(CardDetails, { task, editable: commands.some((command) => command.type === (task.legacy ? "goal-card-details" : "card-details")), disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: task.legacy ? "goal-card-details" : "card-details" }, value) }) : null,
         !task.shared ? (0, import_react50.createElement)(CardConversation, { task, commands, disabled: uncertain, onCommand }) : null,
         !canMove && !commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Status changes are not available for this task.")) : null,
