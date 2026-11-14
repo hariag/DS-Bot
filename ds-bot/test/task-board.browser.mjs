@@ -40,7 +40,7 @@ const state=globalThis.fixture={calls:[],mode:'normal',revision:1,heldDecisions:
 const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
 const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').split(',')[1]},jpeg:{mediaType:'image/jpeg',data:canvas.toDataURL('image/jpeg').split(',')[1]},bad:{mediaType:'image/png',data:'YWJj'}};
 state.images=images;
-function record(scope){return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status:state.mode==='manual'?'proposed':'reported',...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
+function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
  if(endpoint==='board-list'){
@@ -55,9 +55,9 @@ async function request(endpoint,payload){
   }
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const position=state.mode.startsWith('history-')?state.mode.slice(8):null;
-  const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',owner:'a',revision:1,status:'legacy-pending',legacy:{originalStatus:'pending',current:true,goalStatus:'active'}}]:position?[{id:'history',title:state.historyTitle??'Original historical task',owner:'a',revision:5,status:position==='future'?'waiting':'legacy-done',legacy:{originalTitle:'Original historical task',originalStatus:position==='future'?'pending':'done',position,current:false,goalStatus:'active',useOverlay:true,boardRevision:state.historyRevision??0},boardHistory:state.historyAudit??[]}]:[];
-  const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
-  return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',decision:state.heldDecisions['rec-1']?.choice??'open',decisionRevision:state.heldDecisions['rec-1']?.revision??0,redo:{operationId:'attempt-1',status:'unknown'},evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',decision:'open',decisionRevision:0,redo:{available:false,state:'source-unavailable'},evidence:'inflight.json',secret:'SECRET-HIDDEN'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'card-details'},{type:'card-comment'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'goal-task-edit'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],history:[{type:'goal-history-title'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',owner:'a',revision:1,status:'legacy-pending',legacy:{originalStatus:'pending',current:true,goalStatus:'active'}},{id:'old-done',title:'Completed goal task',owner:'b',revision:1,status:'legacy-done',legacy:{originalTitle:'Completed goal task',originalStatus:'done',position:'previous',current:false,goalStatus:'active',useOverlay:true,boardRevision:0}}]:position?[{id:'history',title:state.historyTitle??'Original historical task',owner:'a',revision:5,status:position==='future'?'waiting':'legacy-done',legacy:{originalTitle:'Original historical task',originalStatus:position==='future'?'pending':'done',position,current:false,goalStatus:'active',useOverlay:true,boardRevision:state.historyRevision??0},boardHistory:state.historyAudit??[]}]:[];
+  const shared=[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}];
+  return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',decision:state.heldDecisions['rec-1']?.choice??'open',decisionRevision:state.heldDecisions['rec-1']?.revision??0,redo:{operationId:'attempt-1',status:'unknown'},evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',decision:'open',decisionRevision:0,redo:{available:false,state:'source-unavailable'},evidence:'inflight.json',secret:'SECRET-HIDDEN'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'card-details'},{type:'card-comment'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[]),...(state.mode==='schedule'?[{type:'schedule'}]:[])],old:[{type:'goal-task-edit'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],history:[{type:'goal-history-title'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
  if(endpoint==='board-held-decision'){state.heldDecisions[payload.recoveryId]={choice:payload.choice,revision:payload.expectedRevision+1};return {decision:payload.choice,revision:payload.expectedRevision+1}}
  if(endpoint==='board-held-redo'){if(payload.confirmed!==true)throw Error('confirmation required');state.heldRedos[payload.recoveryId]=true;return {state:'submitted'}}
@@ -87,7 +87,7 @@ async function request(endpoint,payload){
   return {state:'evidence-needed',owner:'a',revision:2,snapshot:{workId:payload.workId,sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[{revision:2,finding:{summary:payload.summary,evidenceRefs:payload.evidenceRefs,unfinished:payload.unfinished}}]};
  }
  if(endpoint==='board-image')return images[payload.imageId];
- if(endpoint==='board-command'||endpoint==='board-upload'){
+  if(endpoint==='board-command'||endpoint==='board-upload'){
   if(state.mode==='lost')throw Error('network lost');
   if(endpoint==='board-upload'&&state.mode==='invalid-image')throw Error('rejected by host');
   if(state.mode==='hang'){
@@ -97,6 +97,7 @@ async function request(endpoint,payload){
   }
   if(state.mode==='conflict')state.revision=2;
   if(endpoint==='board-command'&&payload.type==='personal-progress'){state.progress=payload.value.progress;state.revision++}
+  if(endpoint==='board-command'&&payload.type==='schedule')state.boardStatus='ready'
   if(endpoint==='board-command'&&payload.type==='goal-history-title'){state.historyTitle=payload.value.title;state.historyRevision=(state.historyRevision??0)+1;state.historyAudit=[{operationId:payload.operationId,at:1700000000000,kind:'title',reason:payload.value.reason,before:{title:'Original historical task'},after:{title:payload.value.title}}]}
   return {};
  }
@@ -360,7 +361,7 @@ try {
   await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'capacity'))
   await page.getByText('Instance task capacity: 1000 / 1000').waitFor()
   await page.getByText('Task limit reached. New tasks cannot be created.').waitFor()
-  assert.equal(await page.locator('.bt-board-toolbar').getByRole('button', {name:'Create task'}).isDisabled(), true)
+  assert.equal(await page.locator('.bt-board-columns-personal > [data-stage="todo"]').getByRole('button', {name:'Add task'}).isDisabled(), true)
   await page.evaluate(() => globalThis.renderFixture({ kind: 'room', id: 'g1' }, 'readonly'))
   await page.getByRole('heading', { name: 'Awaiting review 1' }).waitFor()
   await exerciseColumns(page,page.locator('.bt-board-rail').first())
@@ -375,9 +376,61 @@ try {
   await page.getByText('Image unavailable').waitFor()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-image' && x.payload.scope.id === 'g1' && x.payload.taskId === 'T1')), true)
 
-  await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal'))
+  await page.keyboard.press('Escape')
+  await page.locator('.bt-card-modal').waitFor({state:'detached'})
+  await page.evaluate(() => {globalThis.fixture.calls=[];globalThis.renderFixture({kind:'room',id:'g1'},'schedule')})
+  await page.getByRole('button',{name:'Refresh',exact:true}).click()
+  await page.locator('[aria-label="Preparing"] article').waitFor()
+  for(const [lane,label] of [['Preparing','Create task'],['Waiting','Add and schedule'],['Ready','Add and schedule'],['In progress','Add and schedule'],['Awaiting review','Add follow-up'],['Done','Add follow-up']])
+    assert.equal(await page.locator(`[aria-label="${lane}"]`).getByRole('button',{name:label}).count(),1,`${lane} has a task creation entry`)
+  const proposedLane=page.locator('[aria-label="Preparing"]'),workingLane=page.locator('[aria-label="In progress"]')
+  await proposedLane.locator('article').dragTo(workingLane)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='schedule'))
+  const dragSchedule=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='schedule'))
+  assert.equal(dragSchedule.payload.taskId,'T1','dragging a Bot task to In progress schedules the original card')
+  assert.equal(dragSchedule.payload.scope.id,'g1')
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'))
+  await page.getByText('Saving…').waitFor({state:'hidden'})
+  const waitingLane=page.locator('[aria-label="Waiting"]')
+  await page.locator('[aria-label="Ready"] [data-task-id="T1"]').waitFor()
+  assert.equal(await page.locator('[aria-label="In progress"] [data-task-id="T1"]').count(),0,'a queued Bot action stays ready until the owner starts it')
+  await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardStatus='waiting';globalThis.renderFixture({kind:'room',id:'g1'},'schedule')})
+  await page.getByRole('button',{name:'Refresh',exact:true}).click()
+  await page.locator('[aria-label="Waiting"] [data-task-id="T1"]').waitFor()
+  await page.locator('[aria-label="Waiting"] [data-task-id="T1"]').dragTo(workingLane)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='schedule'))
+  const waitingDrag=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='schedule'))
+  assert.equal(waitingDrag.payload.taskId,'T1','dragging Waiting to In progress schedules the task')
+  assert.equal(waitingDrag.payload.scope.id,'g1')
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'))
+  await page.getByText('Saving…').waitFor({state:'hidden'})
+  await page.locator('[aria-label="Ready"] [data-task-id="T1"]').waitFor()
+  if(process.env.GROUP_BOARD_SCREENSHOT){await page.screenshot({path:process.env.GROUP_BOARD_SCREENSHOT})}
+  await waitingLane.getByRole('button',{name:'Add and schedule'}).click()
+  await waitingLane.getByLabel('Title',{exact:true}).fill('Created from waiting')
+  await waitingLane.getByLabel('Owner ID',{exact:true}).selectOption('a')
+  await waitingLane.getByLabel('Independent reviewer ID',{exact:true}).selectOption('b')
+  await waitingLane.getByLabel('Dependencies',{exact:true}).selectOption('T2')
+  await waitingLane.getByLabel('Acceptance criteria').fill('Evidence')
+  await waitingLane.getByRole('button',{name:'Create and schedule'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created from waiting'))
+  const scheduledCreate=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created from waiting'))
+  assert.equal(scheduledCreate.payload.value.schedule,true)
+  assert.deepEqual(scheduledCreate.payload.value.dependencies,['T2'],'a visible shared group dependency can be selected')
+  assert.equal(await page.locator('[aria-label="Awaiting review"]').getByRole('button',{name:'Add follow-up'}).count(),1)
+  assert.equal(await page.locator('[aria-label="Done"]').getByRole('button',{name:'Add follow-up'}).count(),1)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'manual'))
   await page.getByText('Personal task', { exact: true }).waitFor()
   assert.equal(await page.getByText('Group task', { exact: true }).count(), 0, 'group data must not persist in another scope')
+  await page.setViewportSize({width:1600,height:900})
+  const personalRail=page.locator('.bt-board-columns-personal')
+  await personalRail.waitFor()
+  await page.waitForFunction(()=>{const el=document.querySelector('.bt-board-columns-personal');return el&&el.scrollWidth<=el.clientWidth+1})
+  assert.equal(await personalRail.locator('..').locator('.bt-board-rail-controls').isVisible(),false,'column controls are hidden when all personal columns fit')
+  await page.setViewportSize({width:1280,height:720})
+  await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal'))
+  await page.getByText('Personal task', { exact: true }).waitFor()
   const namedCardTrigger = page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary')
   await namedCardTrigger.click()
   const namedCard = page.locator('.bt-card-modal')
@@ -404,19 +457,19 @@ try {
   assert.match(await namedCard.locator('.bt-board-fact').filter({hasText:'Reviewer'}).innerText(), /Bob/)
   await page.keyboard.press('Escape')
   await namedCard.waitFor({state:'detached'})
-  await page.locator('.bt-board-toolbar').getByRole('button', { name: 'Create task' }).click()
+  await page.locator('[aria-label="Preparing"]').getByRole('button', { name: 'Create task' }).click()
+  assert.equal(await page.getByLabel('Owner ID',{exact:true}).inputValue(),'a','a personal Bot board defaults new work to its owner')
   await page.getByLabel('Title', { exact: true }).fill('New task')
   await page.getByLabel('Owner ID', { exact: true }).selectOption('a')
   await page.getByLabel('Independent reviewer ID', { exact: true }).selectOption('b')
   await page.getByLabel('Acceptance criteria').fill('Review evidence')
-  await page.getByLabel('Dependencies', {exact:true}).selectOption('T2')
   await page.getByRole('button', { name: 'Submit proposal' }).click()
-  await page.locator('.bt-board-toolbar').getByRole('button', { name: 'Create task' }).waitFor()
-  const proposal = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'board-command' && x.payload.type === 'create'))
+  await page.locator('[aria-label="Preparing"]').getByRole('button', { name: 'Create task' }).waitFor()
+  const proposal = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'board-command' && x.payload.type === 'create' && x.payload.value.title==='New task'))
   assert.equal(proposal.payload.type, 'create')
   assert.equal(proposal.payload.value.owner, 'a')
   assert.equal(proposal.payload.value.reviewer, 'b')
-  assert.deepEqual(proposal.payload.value.dependencies, ['T2'], 'only a visible shared task may be selected as a dependency')
+  assert.deepEqual(proposal.payload.value.dependencies, [], 'personal tasks do not inherit a group dependency')
   assert.equal(await page.evaluate(id => globalThis.fixture.calls.some(x => x.endpoint === 'board-operation' && x.payload.operationId === id), proposal.payload.operationId), true)
 
   const shared = page.locator('article').filter({hasText:'Shared dependency'})
@@ -502,7 +555,7 @@ try {
   await page.keyboard.press('Escape')
   await namedCard.waitFor({state:'detached'})
   await page.evaluate(() => { globalThis.fixture.mode='lost' })
-  await page.locator('.bt-board-toolbar').getByRole('button', { name:'Create task' }).click()
+  await page.locator('[aria-label="Preparing"]').getByRole('button', { name:'Create task' }).click()
   await page.getByLabel('Title', { exact:true }).fill('Potentially sent')
   await page.getByLabel('Owner ID', { exact:true }).selectOption('a')
   await page.getByLabel('Independent reviewer ID', { exact:true }).selectOption('b')
@@ -533,7 +586,7 @@ try {
   assert.equal(await page.evaluate(id => globalThis.fixture.calls.some(call => call.endpoint==='board-operation-cancel' && call.payload.operationId===id), originalId), true)
 
   await page.evaluate(() => { globalThis.fixture.mode='hang' })
-  await page.locator('.bt-board-toolbar').getByRole('button', { name:'Create task' }).click()
+  await page.locator('[aria-label="Preparing"]').getByRole('button', { name:'Create task' }).click()
   await page.getByLabel('Title', { exact:true }).fill('First pending')
   await page.getByLabel('Owner ID', { exact:true }).selectOption('a')
   await page.getByLabel('Independent reviewer ID', { exact:true }).selectOption('b')
@@ -558,8 +611,24 @@ try {
   await page.evaluate(() => { sessionStorage.clear(); globalThis.fixture.revision=1; globalThis.fixture.progress='todo'; globalThis.renderFixture({kind:'personal',id:'user'},'manual') })
   await page.locator('[aria-label="To do"] article').getByText('Personal task',{exact:true}).waitFor()
   await page.getByText('Your own progress markers do not complete shared work or unblock dependencies.').waitFor()
+  const userWorkflow=page.locator('.bt-board-content section[aria-label="Workflow"]')
+  for(const lane of ['Preparing','Waiting','Ready','In progress','Awaiting review','Done'])
+    assert.equal(await userWorkflow.locator(`[aria-label="${lane}"]`).getByRole('button',{name:'Add follow-up'}).count(),1,`the personal board's ${lane} workflow lane can add a personal follow-up`)
+  await page.evaluate(()=>{globalThis.fixture.calls=[]})
+  const userDone=userWorkflow.locator('[aria-label="Done"]')
+  await userDone.getByRole('button',{name:'Add follow-up'}).click()
+  await userDone.getByLabel('Title',{exact:true}).fill('Personal follow-up')
+  await userDone.getByLabel('Independent reviewer ID',{exact:true}).selectOption('b')
+  await userDone.getByLabel('Acceptance criteria').fill('Review result')
+  await userDone.getByRole('button',{name:'Create follow-up'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Personal follow-up'))
+  const personalFollowup=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Personal follow-up'))
+  assert.equal(personalFollowup.payload.value.personalProgress,'todo')
+  assert.equal(personalFollowup.payload.value.owner,'user')
+  assert.equal(personalFollowup.payload.value.schedule,undefined,'a personal follow-up does not dispatch shared work')
+  await page.getByText('Saving…').waitFor({state:'hidden'})
   const doingLane = page.locator('.bt-board-columns-personal > [data-stage="doing"]')
-  await doingLane.getByRole('button', {name:'Create task'}).click()
+  await doingLane.getByRole('button', {name:'Add task'}).click()
   await doingLane.getByLabel('Title', {exact:true}).fill('Created in doing')
   await doingLane.getByLabel('Independent reviewer ID', {exact:true}).selectOption('b')
   await doingLane.getByLabel('Acceptance criteria').fill('Review result')
@@ -568,8 +637,8 @@ try {
   const laneCreate = await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created in doing'))
   assert.equal(laneCreate.payload.value.personalProgress, 'doing')
   assert.equal(laneCreate.payload.value.owner, 'user')
-  await doingLane.getByRole('button', {name:'Create task'}).waitFor()
-  if (process.env.BOARD_SCREENSHOT) await page.screenshot({ path:process.env.BOARD_SCREENSHOT })
+  await doingLane.getByRole('button', {name:'Add task'}).waitFor()
+  if (process.env.BOARD_SCREENSHOT) { await page.locator('.bt-board-content').evaluate(el=>el.scrollTop=0); await page.screenshot({ path:process.env.BOARD_SCREENSHOT }) }
   await page.locator('[aria-label="To do"] article .bt-board-card-summary').click()
   await page.locator('.bt-card-modal').waitFor()
   await page.getByLabel('Move personal task').focus()
@@ -591,6 +660,8 @@ try {
   await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'},'legacy'))
   await page.getByText('Legacy task', {exact:true}).waitFor()
   await page.getByText('Goal card details can be corrected without changing the original task or acceptance record.').waitFor()
+  assert.equal(await page.locator('[aria-label="Not started"]').getByRole('button',{name:'Add follow-up'}).count(),1,'the legacy not-started list can add a follow-up without editing its goal task')
+  assert.equal(await page.locator('[aria-label="Goal marked done"]').getByRole('button',{name:'Add follow-up'}).count(),1,'the legacy completed list can add a follow-up without rewriting its history')
   await page.locator('article').filter({hasText:'Legacy task'}).locator('.bt-board-card-summary').click()
   const legacy = page.locator('.bt-card-modal')
   await legacy.waitFor()

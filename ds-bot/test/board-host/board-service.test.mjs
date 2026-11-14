@@ -9,21 +9,37 @@ import { DatabaseSync } from 'node:sqlite'
 import pngjs from 'pngjs'
 import { randomFillSync } from 'node:crypto'
 import { install, BOARD_UPLOAD_PATH, BOARD_UPLOAD_MAX_BYTES } from '../../src/host/board-service.js'
+import { install as installDelivery } from '../../src/host/delivery.js'
 import { install as installPrivacy } from '../../src/host/privacy.js'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
 
 function fixture(t) {
   const home = mkdtempSync(join(tmpdir(), 'dsbot-board-host-'))
-  const effects = [], routes = [], drains = []
-  const rt = {
-    home, teamTools: [], state: { revision: 1, rooms: { group: { members: ['one','two'] } }, bots: { one: { name:'One' }, two: { name:'Two' } } },
-    ctx: { effect(fn) { const dispose = fn(); effects.push(dispose) }, connection: { fetch: { register(route) { routes.push(route); return () => {} } } } },
-    onHomeDrain(fn) { drains.push(fn) }, async load() {}, readOnly() {}, requireHomeLock() {}, warn(...args) { console.log(...args) },
+  const effects = [], routes = [], drains = [], deliveries = [], agents = new Map()
+  const agentFor = id => {
+    if (!agents.has(id)) {
+      const session = { id }, agent = { id, session, followup:message => deliveries.push({ sessionId:id, message }), steer:message => deliveries.push({ sessionId:id, message }) }
+      agents.set(id, agent)
+    }
+    return agents.get(id)
   }
+  const rt = {
+    home, teamTools: [], groupOwners:new Map(), state: { revision: 1, exchanges:[], works:{}, rooms: { group: { name:'Group', members: ['one','two'], sessions:{}, seen:{} } }, bots: { one: { name:'One' }, two: { name:'Two' } } },
+    ctx: { sessionController:{ resolveAgent:async id=>({agent:agentFor(id)}) }, sessions:{flush:async()=>{}},
+      effect(fn) { const dispose = fn(); effects.push(dispose) }, connection: { fetch: { register(route) { routes.push(route); return () => {} } } } },
+    onHomeDrain(fn) { drains.push(fn) }, async load() {}, readOnly() {}, requireHomeLock() {}, warn(...args) { console.log(...args) },
+    botOf:id=>Object.hasOwn(rt.state.bots,id)?{id,...rt.state.bots[id]}:undefined,
+    roomOf:id=>Object.hasOwn(rt.state.rooms,id)?rt.state.rooms[id]:undefined,
+    chatOf:id=>`chat-${id}`, ensureGroupTaskSession:async(roomId,botId)=>{
+      const sessionId=`${roomId}-${botId}`;rt.state.rooms[roomId].sessions[botId]=sessionId;rt.groupOwners.set(sessionId,{botId,roomId});return sessionId
+    }, ensureCapabilities:async()=>{}, hideBotUnusedTools(){}, save:async()=>{},
+    ledger:{importer(){},records(){return []},append(){},written:async()=>{}}, goalDispatchBlocked:()=>false,
+  }
+  installDelivery(rt)
   install(rt)
   t.after(async () => { for (const dispose of effects.reverse()) await dispose?.(); for (const drain of drains) await drain(); rmSync(home, { recursive: true, force: true }) })
-  return { rt, route: routes.find(route => route.path === BOARD_UPLOAD_PATH), home }
+  return { rt, route: routes.find(route => route.path === BOARD_UPLOAD_PATH), home, deliveries }
 }
 const scope = { kind:'room', id:'group' }
 const create = { scope, operationId:'create-1', taskId:'t1', type:'create', value:{ title:'Task', owner:'one', reviewer:'two', acceptance:'Independent proof', dependencies:[] } }
@@ -90,6 +106,47 @@ test('actual task journal backs the five instance-user endpoints with isolated g
   assert.equal((await rt.boardCall('board-list', { scope })).tasks[0].images.length, 1)
   await assert.rejects(rt.boardCall('board-image', { scope, taskId:'t1', imageId:'img1' }), /unavailable/)
   assert.equal(readdirSync(join(rt.home, 'board-v1', 'images')).length, 2)
+})
+
+test('a scheduled task enters the real DSH Session once with a revision-bound message', async t => {
+  const {rt,deliveries}=fixture(t), scope={kind:'room',id:'group'}
+  const created=await rt.boardCall('board-command',{scope,operationId:'scheduled-create',taskId:'scheduled-task',type:'create',value:{
+    title:'Run the task',owner:'one',reviewer:'two',acceptance:'Independent evidence',dependencies:[],
+  }})
+  assert.equal(created.status,'proposed')
+  const scheduled=await rt.boardCall('board-command',{scope,operationId:'scheduled-run',taskId:created.id,expectedRevision:created.revision,type:'schedule'})
+  assert.equal(scheduled.status,'ready')
+  const deadline=Date.now()+3000
+  while(!deliveries.length&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
+  assert.equal(deliveries.length,1)
+  const {sessionId,message}=deliveries[0]
+  assert.equal(sessionId,'group-one');assert.equal(message.role,'user')
+  assert.equal(message.source.taskAction.id.length,64);assert.equal(message.source.taskAction.taskRevision,scheduled.revision)
+  assert.equal(message.source.taskAction.actionRevision,scheduled.actionRevision)
+  assert.match(message.content[0].text,/Independent evidence/)
+  assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===created.id).dispatchState,'accepted')
+  await rt.boardCall('board-command',{scope,operationId:'scheduled-repeat',taskId:created.id,expectedRevision:scheduled.revision,type:'schedule'}).then(
+    () => assert.fail('a ready task must not be admitted a second time'),
+    error => assert.match(error.message,/not ready to schedule|schedulable/i))
+  await new Promise(resolve=>setTimeout(resolve,30))
+  assert.equal(deliveries.length,1)
+})
+
+test('a personal Bot task can be created and delivered to its private Session', async t => {
+  const {rt,deliveries}=fixture(t),scope={kind:'personal',id:'one'}
+  const created=await rt.boardCall('board-command',{scope,operationId:'personal-scheduled-create',taskId:'personal-scheduled',type:'create',value:{
+    title:'Private task',owner:'one',reviewer:'two',acceptance:'Independent evidence',dependencies:[],
+  }})
+  assert.equal(created.status,'proposed')
+  const scheduled=await rt.boardCall('board-command',{scope,operationId:'personal-scheduled-run',taskId:created.id,expectedRevision:created.revision,type:'schedule'})
+  assert.equal(scheduled.status,'ready')
+  const deadline=Date.now()+3000
+  while(!deliveries.length&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
+  assert.equal(deliveries.length,1)
+  const {sessionId,message}=deliveries[0]
+  assert.equal(sessionId,'chat-one');assert.equal(message.role,'user');assert.equal(message.source.role,'request')
+  assert.equal(message.source.taskAction.taskRevision,scheduled.revision)
+  assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===created.id).dispatchState,'accepted')
 })
 
 test('owner moves a personal card with a durable receipt without changing shared workflow', async t => {

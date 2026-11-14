@@ -508,34 +508,41 @@ function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   options.map(task => h('option', { key: task.id, value: task.id }, `${textValue(task.title) || t('Shared task')} · ${task.id}`))))
 }
 
-function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = '', personalProgress }) {
+function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = '', ownerOnly = false, personalProgress, scheduleOnCreate = false, followup = false }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [owner, setOwner] = useState(defaultOwner)
   const [reviewer, setReviewer] = useState('')
   const [acceptance, setAcceptance] = useState('')
   const [dependencies, setDependencies] = useState([])
+  useEffect(() => setOwner(defaultOwner), [defaultOwner])
   const valid = title.trim() && owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim()
-  if (!open) return h('button', { className: 'bt-board-primary', type: 'button', disabled, onClick: () => setOpen(true) }, h('span', { 'aria-hidden': 'true' }, '+ '), t('Create task'))
+    && (!scheduleOnCreate || owner.trim() !== 'user' && reviewer.trim() !== 'user')
+  const buttonLabel = followup ? 'Add follow-up' : scheduleOnCreate ? 'Add and schedule' : personalProgress !== undefined ? 'Add task' : 'Create task'
+  if (!open) return h('button', { className: 'bt-board-primary', type: 'button', disabled, onClick: () => setOpen(true) }, h('span', { 'aria-hidden': 'true' }, '+ '), t(buttonLabel))
   const field = (label, value, update) => h('label', null, t(label), h('input', { 'aria-label': t(label), value, disabled, onChange: event => update(event.target.value) }))
   const actorField = (label, value, update) => Array.isArray(actors)
     ? h('label', null, t(label), h('select', { 'aria-label': t(label), value, disabled, onChange: event => update(event.target.value) },
       h('option', { value: '' }, t('Choose a Bot')),
-      actors.filter(actor => typeof actor?.id === 'string' && (label !== 'Owner ID' || personalProgress === undefined || actor.id === 'user')).map(actor => h('option', { key: actor.id, value: actor.id }, actor.name || actor.id))))
+      actors.filter(actor => typeof actor?.id === 'string'
+        && (label !== 'Owner ID' || !ownerOnly || actor.id === defaultOwner)
+        && (!scheduleOnCreate || actor.id !== 'user')).map(actor => h('option', { key: actor.id, value: actor.id }, actor.name || actor.id))))
     : field(label, value, update)
   return h('form', { className: 'bt-board-create', onSubmit: event => {
     event.preventDefault()
     if (!valid || disabled) return
     void onCreate({ title: title.trim(), owner: owner.trim(), reviewer: reviewer.trim(), acceptance: acceptance.trim(),
-      dependencies, ...(personalProgress !== undefined ? {personalProgress} : {}) }).then(result => {
+      dependencies, ...(personalProgress !== undefined ? {personalProgress} : {}), ...(scheduleOnCreate ? {schedule:true} : {}) }).then(result => {
       if (result !== 'committed') return
       setTitle(''); setOwner(defaultOwner); setReviewer(''); setAcceptance(''); setDependencies([]); setOpen(false)
     })
   } },
-  h('p', null, t(personalProgress !== undefined ? 'Personal progress does not dispatch a Bot or complete shared work.' : 'New tasks start in Preparing.')),
+  h('p', null, t(personalProgress !== undefined ? 'Personal progress does not dispatch a Bot or complete shared work.'
+    : scheduleOnCreate ? 'This task will be sent to its Bot owner when its dependencies are met.'
+      : followup ? 'This creates a follow-up in Preparing; reported and completed work cannot be created without evidence.' : 'New tasks start in Preparing.')),
   field('Title', title, setTitle), actorField('Owner ID', owner, setOwner), actorField('Independent reviewer ID', reviewer, setReviewer),
   field('Acceptance criteria', acceptance, setAcceptance), h(DependenciesField, { tasks, value: dependencies, disabled, onChange: setDependencies }),
-  h('div', null, h('button', { type: 'submit', disabled: disabled || !valid }, t('Submit proposal')), ' ',
+  h('div', null, h('button', { type: 'submit', disabled: disabled || !valid }, t(scheduleOnCreate ? 'Create and schedule' : followup ? 'Create follow-up' : 'Submit proposal')), ' ',
     h('button', { type: 'button', disabled, onClick: () => setOpen(false) }, t('Cancel'))))
 }
 
@@ -781,9 +788,27 @@ function UploadImages({ task, disabled, onUpload }) {
 
 function ColumnRail({label,personal,children}) {
   const rail=useRef(null)
+  const [overflow,setOverflow]=useState(false)
   const move=direction=>{const node=rail.current;if(node)node.scrollBy({left:direction*Math.max(240,node.clientWidth*.8),behavior:'smooth'})}
+  useEffect(()=>{
+    const node=rail.current
+    if(!node)return
+    const update=()=>setOverflow(node.scrollWidth>node.clientWidth+1)
+    const resize=typeof ResizeObserver==='function'?new ResizeObserver(update):null
+    const mutation=typeof MutationObserver==='function'?new MutationObserver(()=>{
+      resize?.disconnect();resize?.observe(node)
+      for(const child of node.children)resize?.observe(child)
+      update()
+    }):null
+    resize?.observe(node)
+    for(const child of node.children)resize?.observe(child)
+    mutation?.observe(node,{childList:true,subtree:true,attributes:true})
+    window.addEventListener('resize',update)
+    update()
+    return()=>{resize?.disconnect();mutation?.disconnect();window.removeEventListener('resize',update)}
+  },[])
   return h('div',{className:'bt-board-rail'},
-    h('div',{className:'bt-board-rail-controls'},
+    h('div',{className:'bt-board-rail-controls',hidden:!overflow},
       h('button',{type:'button','aria-label':t('Previous columns'),onClick:()=>move(-1)},'←'),
       h('button',{type:'button','aria-label':t('Next columns'),onClick:()=>move(1)},'→')),
     h('div',{ref:rail,className:`bt-board-columns${personal?' bt-board-columns-personal':''}`,role:'region','aria-label':label,tabIndex:0,
@@ -794,13 +819,17 @@ function TaskCard({scope,task,commands,actors,uncertain,onOpen}) {
   const dependencies=Array.isArray(task.dependencies)?task.dependencies.map(asText).filter(Boolean):[]
   const blocker=asText(task.blocked)
   const canMove=commands.some(command=>command.type==='personal-progress')&&PERSONAL_COLUMNS.some(([id])=>id===task.personalProgress)
+  const canSchedule=commands.some(command=>command.type==='schedule')&&['proposed','waiting'].includes(task.status)
+  const deliveryLabel=task.dispatchState==='uncertain'?'Delivery needs review':task.dispatchState==='accepted'?'Sent to Bot':task.dispatchState==='claimed'?'Preparing delivery':task.dispatchState==='pending'?'Bot queued':''
   const owner=scope.kind==='personal'&&scope.id==='user'&&task.owner==='user'?'':actorLabel(task.owner,actors)
-  return h('article', { className: 'bt-board-card', 'data-task-id':task.id, draggable: canMove && !uncertain,
-    onDragStart: event => { if (canMove && !uncertain) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-ds-bot-personal-task', task.id) } } },
+  return h('article', { className: 'bt-board-card', 'data-task-id':task.id, draggable: (canMove || canSchedule) && !uncertain,
+    onDragStart: event => { if (canMove && !uncertain) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-ds-bot-personal-task', task.id) }
+      else if (canSchedule && !uncertain) { event.dataTransfer.effectAllowed='move'; event.dataTransfer.setData('application/x-ds-bot-task',task.id) } } },
     h('button',{type:'button',className:'bt-board-card-summary',onClick:event=>onOpen(task.id,event.currentTarget)},
       h('strong', { className: 'bt-board-title' }, textValue(task.title) || task.id),
       h('span', { className: 'bt-board-card-meta' }, owner ? h('span', { className:'bt-board-owner' }, owner) : null,
         task.shared ? h('span', { className:'bt-board-chip' }, t('Shared task · read only')) : null,
+        deliveryLabel ? h('span', {className:`bt-board-chip${task.dispatchState==='uncertain'?' bt-board-chip-blocked':''}`,role:task.dispatchState==='uncertain'?'status':undefined},t(deliveryLabel)) : null,
         blocker ? h('span', { className:'bt-board-chip bt-board-chip-blocked' }, t('Blocked')) : null,
         dependencies.length ? h('span', { className:'bt-board-chip' }, t('{count} dependencies', { count:dependencies.length })) : null,
         task.dueDate ? h('span',{className:'bt-board-chip'},`${t('Due date')}: ${textValue(task.dueDate)}`) : null,
@@ -839,7 +868,9 @@ function TaskHistory({scope, task, request}) {
 function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,uncertain,onCommand,onUpload,request,onClose,focusReturn,boardRef,pending,busy,error,onCheck,onCancel,cancelBusy}) {
   const modal=useRef(null)
   const dependencies=Array.isArray(task.dependencies)?task.dependencies.map(asText).filter(Boolean):[]
-  const evidence=Array.isArray(task.evidence)?task.evidence.map(asText).filter(Boolean).join(' · '):asText(task.evidence)
+  const evidence=task.evidence&&typeof task.evidence==='object'
+    ? [textValue(task.evidence.evidence),textValue(task.evidence.environment)].filter(Boolean).join(' · ')
+    : Array.isArray(task.evidence)?task.evidence.map(asText).filter(Boolean).join(' · '):asText(task.evidence)
   const blocker=asText(task.blocked)
   const canMove=commands.some(command=>command.type==='personal-progress')&&PERSONAL_COLUMNS.some(([id])=>id===task.personalProgress)
   useEffect(()=>{
@@ -898,6 +929,8 @@ function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,
     task.legacy?.titleStale ? h('p',{className:'bt-board-pending',role:'status'},t('The original task changed after this display title was corrected. Review the title.')) : null,
     task.legacy?.pending ? h('p',{className:'bt-board-pending',role:'status'},t('A card change is awaiting confirmation in its original board.')) : null,
     task.shared ? h('span', { className: 'bt-board-legacy' }, t('Shared task · read only')) : null,
+    task.dispatchState==='uncertain' ? h('p',{className:'bt-board-pending',role:'status'},t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
+    commands.some(command=>command.type==='schedule') ? h('button',{type:'button',disabled:uncertain,onClick:()=>void onCommand(task,{type:'schedule'})},t('Schedule Bot')) : null,
     task.legacy && !KNOWN.has(task.status) ? h(Fact, { label: t('Original status'), value: textValue(task.legacy.originalStatus) || t('Status unknown') }) : null,
     h(Fact, { label: t('Owner'), value: actorLabel(task.owner, actors) }),
     h(Fact, { label: t('Reviewer'), value: actorLabel(task.reviewer, actors) }),
@@ -910,8 +943,8 @@ function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,
     h(Fact, { label: t('Target version'), value: asText(task.authority) }),
     task.change ? h('div', {className:'bt-board-actions'}, h('strong', null, t('Requirement change')),
       h(Fact, {label:t('Original task'), value:`${task.change.sourceTaskId} · ${t('Revision')} ${task.change.sourceRevision}`}),
-      h('p', {role:'status'}, t('This proposal waits for the original task. It has not been dispatched.')),
-      Object.entries({title:'Title', owner:'Owner', reviewer:'Reviewer', acceptance:'Acceptance criteria', dependencies:'Dependencies'}).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field,label]) => h('div', {key:field}, h('strong', null, t(label)),
+      h('p', {role:'status'}, t(task.status==='working'?'This change is being worked as a separate task; the original stays unchanged.':task.status==='ready'?'The source task is complete; this requirement change is queued as its own task.':'This change waits for the original task to complete. It has not been dispatched.')),
+      Object.entries({title:'Title', owner:'Owner', reviewer:'Reviewer', acceptance:'Acceptance criteria', dependencies:'Dependencies',description:'Description'}).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field,label]) => h('div', {key:field}, h('strong', null, t(label)),
         h('p', null, `${t('Before')}: ${typeof task.change.before?.[field] === 'string' ? task.change.before[field] : JSON.stringify(task.change.before?.[field] ?? '')}`),
         h('p', null, `${t('After')}: ${typeof task.change.after?.[field] === 'string' ? task.change.after[field] : JSON.stringify(task.change.after?.[field] ?? '')}`)))) : null,
     !task.shared ? h(CardDetails,{task,editable:commands.some(command=>command.type===(task.legacy?'goal-card-details':'card-details')),disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:task.legacy?'goal-card-details':'card-details'},value)}) : null,
@@ -1156,8 +1189,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       h('div', { className:'bt-board-toolbar' },
       h('label', { className:'bt-board-search' }, h('span', { className:'bt-board-search-icon', 'aria-hidden':'true' }, '⌕'),
         h('input', { type:'search', 'aria-label':t('Search tasks'), placeholder:t('Search tasks'), value:search, onChange:event => setSearch(event.target.value) })),
-      data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? h(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks,
-        defaultOwner:scope.kind === 'personal' ? scope.id : '', onCreate:createCard }) : null),
+      null),
       data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh:() => load() }), h(WorkDecisions, { key, scope, request, actors:data.capabilities?.actors }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
@@ -1175,18 +1207,29 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
               h('h3', null, h('span', null,t(label)), h('span', { className:'bt-board-count' },tasks.length)),
               tasks.length ? tasks.map(card) : h('p', { className:'bt-board-drop-hint' },t('Drag a card here')),
               data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? h(CreateTask, { disabled:!canAct || capacityReached,
-                actors:data.capabilities.actors, tasks:data.tasks, defaultOwner:'user', personalProgress:progress, onCreate:createCard }) : null)
+                actors:data.capabilities.actors, tasks:data.tasks, defaultOwner:'user', ownerOnly:true, personalProgress:progress, onCreate:createCard }) : null)
           }))) : null,
         !personal || filtered.some(task => !personalIds.has(task.id)) ? h('section', { className:'bt-board-section', 'aria-label':t('Workflow') },
           personal ? h('div', { className:'bt-board-section-heading' },h('h3',null,t('Shared workflow')),h('p',null,t('These statuses reflect the shared task workflow.'))) : null,
           h(ColumnRail, {label:t('Workflow')}, listed.map(([status, label]) => {
           const tasks = columns.get(status)
-          return h('section', { className: 'bt-board-column', key: status, 'aria-label': t(label), 'data-stage':status },
+          const acceptsTask = ['waiting','ready','working'].includes(status)
+          const acceptDrop = event => canAct && acceptsTask && [...event.dataTransfer.types].includes('application/x-ds-bot-task')
+          const addInThisColumn = ['proposed','waiting','ready','working','reported','done','legacy-pending','legacy-done','unknown'].includes(status)
+          const scheduleOnCreate = !personal && ['waiting','ready','working'].includes(status)
+          const followup = personal || ['reported','done','legacy-pending','legacy-done','unknown'].includes(status)
+          return h('section', { className: 'bt-board-column', key: status, 'aria-label': t(label), 'data-stage':status,
+            onDragOver:event=>{if(acceptDrop(event)){event.preventDefault();event.dataTransfer.dropEffect='move';event.currentTarget.dataset.dropActive='true'}},
+            onDragLeave:event=>{if(!event.currentTarget.contains(event.relatedTarget))delete event.currentTarget.dataset.dropActive},
+            onDrop:event=>{delete event.currentTarget.dataset.dropActive;if(!acceptDrop(event))return;event.preventDefault()
+              const id=event.dataTransfer.getData('application/x-ds-bot-task'),task=filtered.find(item=>item.id===id)
+              if(task&&commandsFor(task).some(command=>command.type==='schedule'))void run(task,{type:'schedule'})}},
             h('h3', null, h('span',null,t(label)), tasks.length ? h('span', { className:'bt-board-count' },tasks.length) : null),
             tasks.length ? tasks.map(card) : h('p', { className:'bt-board-lane-empty' },t('No tasks')),
-            status === 'proposed' && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? h(CreateTask, {
+            addInThisColumn && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? h(CreateTask, {
               disabled:!canAct || capacityReached, actors:data.capabilities.actors, tasks:data.tasks,
-              defaultOwner:scope.kind === 'personal' ? scope.id : '', onCreate:createCard }) : null)
+              defaultOwner:personal?'user':scope.kind==='personal'?scope.id:'', ownerOnly:scope.kind==='personal',
+              personalProgress:personal?'todo':undefined,scheduleOnCreate,followup,onCreate:createCard }) : null)
         }))) : null),
         selected ? h(TaskCardDialog,{key:selected.id,scope,task:selected,tasks:data.tasks,commands:commandsFor(selected),actors:data.capabilities?.actors,
           targets:data.capabilities?.shareTargets?.[selected.id],uploadEnabled:data.capabilities?.upload===true,uncertain:!canAct,onCommand:run,onUpload:upload,request,
@@ -1195,8 +1238,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
 
 export const TASK_BOARD_CSS = `
 .bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:4px 8px;cursor:pointer}
-.bt-board-backdrop{--bt-main:var(--dsw-alias-bg-base,#fcfcfc);--bt-sidebar:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-card:var(--dsw-alias-bg-layer-1,#fff);--bt-ink:var(--dsw-alias-label-primary,#141414);--bt-ink-2:var(--dsw-alias-label-secondary,#555);--bt-ink-3:var(--dsw-alias-label-tertiary,#777);--bt-line:var(--dsw-alias-border-l2,rgba(0,0,0,.1));--bt-line-2:var(--dsw-alias-border-l3,rgba(0,0,0,.12));--bt-hover:var(--dsw-alias-interactive-bg-hover-solid,#f5f5f5);--bt-tag-bg:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-accent:var(--dsw-alias-button-info-fill,#4176e6);--bt-accent-ink:var(--dsw-alias-label-on-color,#fff);position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
-.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
+.bt-board-backdrop{position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
+.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:var(--bt-dialog-shadow,0 24px 70px color-mix(in srgb,var(--bt-ink) 22%,transparent));overflow:hidden}
 .bt-board-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 26px 16px;border-bottom:1px solid var(--bt-line);flex:none}
 .bt-board-header h2{font-size:20px;line-height:1.3;letter-spacing:-.025em;margin:0}.bt-board-header p{font-size:12px;color:var(--bt-ink-2);margin:4px 0 0}
 .bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea,.bt-board-dialog input{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:7px 10px}
@@ -1217,31 +1260,32 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-panel{min-width:0;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 2px 6px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
 .bt-recovery-panel[open]{grid-column:1/-1}.bt-recovery-summary{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;list-style:none;padding:12px 14px}.bt-recovery-summary::-webkit-details-marker,.bt-recovery-record-summary::-webkit-details-marker{display:none}
 .bt-recovery-summary:focus-visible,.bt-recovery-record-summary:focus-visible,.bt-recovery-work-choice:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}.bt-recovery-summary-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bt-recovery-summary-text strong{font-size:13px;line-height:1.35}.bt-recovery-summary-text small{font-size:11px;color:var(--bt-ink-2)}
-.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:9px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
+.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:8px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
 .bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
 .bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
 .bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
-.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:9px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
-.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:9px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
-.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
+.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:8px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:8px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
+.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:8px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
 .bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
 
 .bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:var(--dsw-alias-bg-base,var(--bt-main))}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
-.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
+.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-rail-controls[hidden]{display:none}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
 .bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 20px;align-items:flex-start;min-height:190px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.bt-board-columns::-webkit-scrollbar{display:none}
-.bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:14px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent)}
-.bt-board-columns-personal>.bt-board-column{flex:0 0 300px;min-height:150px}
+.bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:12px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent);transition:border-color .15s,background-color .15s,box-shadow .15s}
+.bt-board-column[data-drop-active=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 7%,var(--bt-card));box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 20%,transparent)}
+.bt-board-columns-personal>.bt-board-column{flex:1 0 300px;max-width:420px;min-height:150px}
 .bt-board-column h3{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;margin:4px 4px 14px}.bt-board-count{min-width:20px;padding:2px 6px;text-align:center;background:color-mix(in srgb,var(--bt-ink) 8%,var(--bt-card));color:var(--bt-ink-2);border-radius:8px;font-size:11px;font-weight:600}
 .bt-board-column h3>span:first-child{display:flex;align-items:center;gap:8px}.bt-board-column h3>span:first-child:before{content:'';width:8px;height:8px;border-radius:50%;background:var(--bt-ink-3)}
 .bt-board-column:is([data-stage=doing],[data-stage=working],[data-stage=reported]) h3>span:first-child:before{background:var(--bt-accent)}
 .bt-board-column:is([data-stage=finished],[data-stage=done]) h3>span:first-child:before{background:var(--bt-green)}
-.bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:9px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
+.bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:8px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 .bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
 .bt-board-dialog .bt-board-card-summary{box-sizing:border-box;display:flex;width:100%;text-align:left;background:transparent;border:0;border-radius:10px;padding:11px 12px}
-.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.52);overscroll-behavior:contain}
-.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.3)}
+.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));overscroll-behavior:contain}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:var(--bt-dialog-shadow,0 24px 70px color-mix(in srgb,var(--bt-ink) 22%,transparent))}
 .bt-card-modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--bt-line);flex:none}.bt-card-modal-header p{margin:0 0 5px;color:var(--bt-ink-2);font-size:12px}.bt-card-modal-header h2{margin:0;font-size:21px;line-height:1.3;overflow-wrap:anywhere}.bt-card-modal-header button{font-size:22px;line-height:1;min-width:38px}
 .bt-card-modal .bt-board-card-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px;overflow-wrap:anywhere}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}

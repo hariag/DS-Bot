@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
-import { openTaskStore } from './task-store.mjs'
+import { boardRegistrationReference, openTaskStore } from './task-store.mjs'
 import { createBoardApi } from './board-api.js'
 import { readBoardImage } from './board-images.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -21,7 +21,7 @@ const principal = Object.freeze({ kind: 'user', id: 'user' })
 const fail = (message, code = 'bot/invalid') => ({ ok: false, error: { code, message, details: {} } })
 const ok = value => ({ ok: true, value })
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } })
-const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid card details', 'invalid card comment', 'card comment limit reached', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress'])
+const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid card details', 'invalid card comment', 'card comment limit reached', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress', 'authority evidence unverified', 'task authority unavailable', 'task is not schedulable', 'task action unavailable'])
 const rejected = error => error?.code === 'bot/invalid' || (!error?.code && typeof error?.message === 'string' && (rejectedMessages.has(error.message) || ['change proposal unavailable','change proposal already exists','change proposal is immutable'].includes(error.message) || /^invalid (task id|operation id|actor|owner|reviewer|scope|title|acceptance|attachment id|image id|revision)$/.test(error.message)))
 const requestKey = (endpoint, payload) => {
   if (endpoint !== 'board-upload' || !Array.isArray(payload?.images)) return { endpoint, payload }
@@ -55,10 +55,79 @@ export function install(rt) {
     const pending = (async () => { await rt.load(); if (closing || rt.stopping) throw new Error('Board service is closing'); return fn() })()
     active.add(pending); return pending.finally(() => active.delete(pending))
   }
+  const validBoardAuthority = task => {
+    const reference = task?.authority?.reference
+    const prefix = `board:${task?.id}:`
+    if (task?.authority?.kind !== 'personal' || typeof task.id !== 'string' || typeof reference !== 'string' || !reference.startsWith(prefix)) return false
+    const revision = Number(reference.slice(prefix.length))
+    return Number.isSafeInteger(revision) && revision > 0 && revision <= task.revision && reference === boardRegistrationReference({ id:task.id, revision })
+  }
+  const currentBinding = task => {
+    if (!validBoardAuthority(task) || !task.scope || typeof task.scope !== 'string') return false
+    const participants = [task.owner, task.reviewer]
+    if (task.scope.startsWith('room:')) {
+      const room = rt.roomOf(task.scope.slice(5))
+      return !!room && Array.isArray(room.members) && participants.every(id => id === 'user'
+        || (Object.hasOwn(rt.state.bots, id) && rt.state.bots[id]?.private !== true && room.members.includes(id)))
+    }
+    if (!task.scope.startsWith('personal:') || task.scope.slice(9) !== task.owner) return false
+    return participants.every(id => id === 'user' || (Object.hasOwn(rt.state.bots, id) && rt.state.bots[id]?.private !== true))
+  }
+  const taskParticipant = (task, actor) => {
+    if (!currentBinding(task) || actor === 'user' || ![task.owner, task.reviewer].includes(actor)) return false
+    const bot = rt.botOf(actor)
+    if (!bot || bot.private === true) return false
+    if (task.scope.startsWith('room:')) return rt.roomOf(task.scope.slice(5))?.members?.includes(actor) === true
+    return task.scope.slice(9) === task.owner
+  }
+  const goalAllows = (task, actor) => {
+    if (!task.scope.startsWith('room:')) return true
+    const room = rt.roomOf(task.scope.slice(5))
+    return !!room && typeof rt.goalDispatchBlocked === 'function' && rt.goalDispatchBlocked(room, actor) === false
+  }
+  const dependenciesReady = task => (task.dependencies ?? []).every(id => {
+    const dependency = instance?.store.get(id)
+    if (!dependency || dependency.status !== 'done' || dependency.stale === true) return false
+    if (dependency.scope === task.scope) return true
+    const binding = (task.dependencyGrants ?? []).find(item => item.taskId === id)
+    const grant = dependency.shares?.find(item => item.id === binding?.grantId && !item.revoked)
+    return !!grant && instance.shareAllowed(dependency, task.scope.slice(5))
+      && instance?.store && instance.dependencyAllowed?.(task, dependency, grant) === true
+  })
+  const allowedAction = (task, action) => {
+    if (!task || !action || action.actor === 'user' || !taskParticipant(task, action.actor) || !goalAllows(task, action.actor)
+      || task.blocked || task.stale || !dependenciesReady(task)) return false
+    return action.kind === 'execute'
+      ? task.owner === action.actor && task.status === 'ready' && task.actionRevision === action.revision
+      : action.kind === 'review' && task.reviewer === action.actor && task.reviewer !== task.owner && task.status === 'reported' && task.actionRevision === action.revision
+  }
+  const taskPrompt = (task, action) => {
+    const detail = [
+      `Task ID: ${task.id} (revision ${task.revision})`,
+      `Title: ${task.title}`,
+      `Acceptance criteria: ${task.acceptance}`,
+      ...(task.description ? [`Description: ${task.description}`] : []),
+      ...(task.dependencies?.length ? [`Dependencies: ${task.dependencies.join(', ')}`] : []),
+    ]
+    if (task.change) detail.push(`Requirement change from ${task.change.sourceTaskId} revision ${task.change.sourceRevision}. The original task remains unchanged.`,
+      `Before: ${JSON.stringify(task.change.before)}`, `After: ${JSON.stringify(task.change.after)}`)
+    if (action.kind === 'review') detail.push(`Owner report: ${JSON.stringify(task.evidence)}`,
+      'Independently compare the report with the acceptance criteria. Do not repeat the owner’s work. Use board_task review with evidence and pass or rework.')
+    else detail.push('Use board_task show first. As the assigned owner, use board_task start, do only this task and its stated dependencies, then report evidence with board_task report. Respect this task’s scope, all authorization limits and the 30-step turn budget.')
+    return detail.join('\n')
+  }
+  const botWorkflowEvidence = (task, value, actor, phase) => currentBinding(task) && goalAllows(task, actor)
+    && (phase === 'report' ? actor === task.owner && taskParticipant(task, actor) && value?.kind === 'personal'
+      : (phase === 'review' || phase === 'revalidate') && actor === task.reviewer && actor !== task.owner
+        && (actor === 'user' || taskParticipant(task, actor)) && value?.kind !== 'git')
   const botWorkflow = installHostWorkflow(rt, {
     defineTool, run, getStore: () => service().store,
     wake: () => instance?.driver.wake(),
-    // Binding, receipt and evidence have no production verifier yet. Fail closed.
+    verifyBinding: (task, room) => {
+      const current = instance?.store.get(task.id)
+      return !!current && current.revision === task.revision && currentBinding(current) && current.scope === `room:${room?.id}`
+    },
+    verifyEvidence: botWorkflowEvidence,
     verifyShare: (task, grant, target) => {
       const current = instance?.store.get(task.id)
       const saved = current?.shares?.find(item => item.id === grant?.id)
@@ -84,10 +153,21 @@ export function install(rt) {
       const member = id => id === 'user' || (Object.hasOwn(bots, id) && bots[id]?.private !== true && room.members.includes(id))
       return member(task.owner) && member(task.reviewer)
     }
-    const proofs = new Map()
+    const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable,
-      authorize: input => (input.actor === 'user' && ['create', 'edit', 'card-details', 'card-comment', 'attach', 'remove-image', 'cancel', 'share', 'unshare', 'personal-progress'].includes(input.type)) || botWorkflow.authorize(input),
+      authorize: input => (input.actor === 'user' && ['create', 'edit', 'card-details', 'card-comment', 'attach', 'remove-image', 'cancel', 'share', 'unshare', 'personal-progress', 'schedule'].includes(input.type))
+        || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
+        || botWorkflow.authorize(input),
+      verifyRegistration: (task, value, actor) => {
+        if (actor !== 'user' || value?.kind !== 'personal' || !task || !currentBinding({ ...task, authority:value })) return false
+        const prefix = `board:${task.id}:`
+        if (typeof value.reference !== 'string' || !value.reference.startsWith(prefix)) return false
+        const revision = Number(value.reference.slice(prefix.length))
+        return Number.isSafeInteger(revision) && revision > 0 && revision <= task.revision
+          && value.reference === boardRegistrationReference({ id:task.id, revision })
+      },
+      verifyEvidence: (task, value, actor, phase) => botWorkflowEvidence(task, value, actor, phase),
       verifyShare: (task, value, actor) => actor === 'user' && shareAllowed(task, value.targetRoomId),
       verifyDependency: dependencyAllowed,
       verifyAttachment: (task, item, actor) => {
@@ -100,8 +180,73 @@ export function install(rt) {
             && s.dev === proof.stat.dev && s.ino === proof.stat.ino && s.size === proof.stat.size && s.mtimeMs === proof.stat.mtimeMs
         } catch { return false }
       },
-      // No unverified registration, evidence, receipt, invalidation, or dispatch.
+      verifyAdmission: (task, action, intent) => {
+        if (!allowedAction(task, action) || typeof rt.prepareBoardTaskMessage !== 'function') return false
+        try {
+          const source = intent?.payload?.source, roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
+          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId, roomId,
+            text:taskPrompt(task, action), messageId:intent.messageId, exchangeId:source?.exchangeId,
+            actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
+          return intent.targetBotId === action.actor && isDeepStrictEqual(expected, intent.payload)
+        } catch { return false }
+      },
+      verifyReceipt: (action, state, receipt, intent) => {
+        const saved = store.admission(action.id), proof = admissionProofs.get(action.id)
+        const sameIntent = saved && saved.admissionId === intent?.admission_id && saved.messageId === intent?.message_id
+          && saved.targetSessionId === intent?.target_session_id && saved.targetBotId === intent?.target_bot_id
+        if (!sameIntent) return false
+        if (state === 'uncertain' && action.state === 'claimed' && receipt === 'admission outcome unknown') return true
+        return !!proof && proof.receipt === receipt && proof.messageId === intent.message_id
+          && proof.targetSessionId === intent.target_session_id && proof.actionId === action.id
+          && (state === 'accepted' && action.state === 'claimed' || state === 'uncertain' && action.state === 'accepted')
+      },
     })
+    const interrupted = store.holdInterruptedAdmissions()
+    if (interrupted) rt.warn?.('ds-bot: board scheduler: held %s interrupted admission(s) for review', interrupted)
+    const busySession = (sessionId, actionId) => store.list().some(task => store.listActions(task.id).some(action => {
+      if (action.id === actionId || !['claimed','accepted','uncertain'].includes(action.state)) return false
+      return store.admission(action.id)?.targetSessionId === sessionId
+    }))
+    const admission = {
+      available: async () => {
+        if (closing || rt.stopping || typeof rt.deliver !== 'function' || typeof rt.prepareBoardTaskMessage !== 'function') return false
+        try { writable(); return true } catch { return false }
+      },
+      prepare: async (action, task) => {
+        if (!allowedAction(task, action)) return undefined
+        const roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
+        const sessionId = roomId
+          ? await rt.ensureGroupTaskSession?.(roomId, action.actor)
+          : rt.chatOf(action.actor)
+        if (typeof sessionId !== 'string' || !sessionId || busySession(sessionId, action.id)) return undefined
+        if (!allowedAction(store.get(task.id), action)) return undefined
+        const messageId = randomUUID(), exchangeId = randomUUID()
+        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, roomId, text:taskPrompt(task, action),
+          messageId, exchangeId, actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
+        return { admissionId:`board:${action.id}:${randomUUID()}`, messageId, targetBotId:action.actor, targetSessionId:sessionId, payload }
+      },
+      admit: async ({ action, task, intent, revalidateNow, commitReceipt }) => {
+        const source = intent.payload.source, roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
+        const receipt = `dsh-message:${intent.messageId}`
+        let committed = false
+        const sameMessage = (agent, message) => agent?.id === intent.targetSessionId && isDeepStrictEqual(message, intent.payload)
+        const result = await rt.deliver({ toId:action.actor, fromName:'You', sessionId:intent.targetSessionId, roomId,
+          role:roomId ? 'room' : 'request', note:roomId ? 'task from Trello' : 'new message', text:taskPrompt(task, action),
+          exchangeId:source.exchangeId, taskAction:source.taskAction }, {
+          preparedMessage:intent.payload,
+          beforeAdmission: (agent, message) => {
+            if (!sameMessage(agent, message) || !revalidateNow()) throw new Error('Task authorization changed before DSH admission')
+          },
+          afterAdmission: (agent, message) => {
+            if (!sameMessage(agent, message)) throw new Error('DSH admitted a different task message')
+            admissionProofs.set(action.id, { receipt, messageId:intent.messageId, targetSessionId:intent.targetSessionId, actionId:action.id })
+            commitReceipt(receipt); committed = true
+          },
+        })
+        if (!committed || result !== source.exchangeId) throw new Error('Task delivery receipt is incomplete')
+        return receipt
+      },
+    }
     const images = {
       read: (taskId, reference) => readBoardImage({ directory: imageDir, taskId, reference }),
     }
@@ -115,10 +260,11 @@ export function install(rt) {
         && shareAllowed(task, scope.id) && (viewer.kind === 'user' || (viewer.kind === 'bot' && rt.state.rooms[scope.id].members?.includes(viewer.id))) })
     try {
       botWorkflow.bind(store)
-      // No real admission capability or proof verifiers are installed here.
-      // Wakeups scan nothing until the separately reviewed gate is supplied.
-      const driver = createTaskDriver({ store, onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
-      instance = { store, api, root, imageDir, proofs, shareAllowed, driver, goalEditor }
+      const driver = createTaskDriver({ store, admission,
+        authorized: (action, task) => allowedAction(store.get(task.id), action),
+        authorizedNow: (action, task) => allowedAction(store.get(task.id), action),
+        onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
+      instance = { store, api, root, imageDir, proofs, admissionProofs, shareAllowed, dependencyAllowed, driver, goalEditor }
       queueMicrotask(notifyDriver)
       return instance
     } catch (error) { store.close(); throw error }
@@ -132,7 +278,11 @@ export function install(rt) {
     const outcome = store.request({ operationId: payload.operationId, actor: 'user', taskId: payload.taskId, payload: requestKey(endpoint, payload), isRejection: rejected }, () => {
       if (payload.type === 'create') {
         if (!payload.value || typeof payload.value !== 'object' || Array.isArray(payload.value)) throw Object.assign(new Error('Invalid task proposal'), { code: 'bot/invalid' })
-        return api.create(scope, principal, { ...payload.value, operationId: payload.operationId, taskId: payload.taskId })
+        const { schedule, ...value } = payload.value
+        const created = api.create(scope, principal, { ...value, operationId: payload.operationId, taskId: payload.taskId })
+        if (schedule !== true) return created
+        return api.command(scope, principal, { operationId:`${payload.operationId}:schedule`, taskId:created.id,
+          expectedRevision:created.revision, type:'schedule' })
       }
       return api.command(scope, principal, payload)
     })
