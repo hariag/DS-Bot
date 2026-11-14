@@ -81,7 +81,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function pathFor(operationId) { if (!uuid(operationId)) throw Error('invalid redo operation'); return join(root, `${operationId}.json`) }
   function witnessFor(row) {
     return { version:1, recoveryId:row.recoveryId, operationId:row.operationId,
-      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest, row.previewOnly === true]) }
+      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest]) }
   }
   function witnessTable() {
     const table = rt.state.originalRedoWitness
@@ -229,10 +229,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     if (!isDeepStrictEqual(readRecovery(row.recoveryId, generation), { recoveryId:row.recoveryId, operationId:row.operationId })) throw Error('redo recovery marker unavailable')
     confirmWitness(row, generation)
   }
-  async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest, previewOnly = false }) {
+  async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest }) {
     const identity = originalRedoIdentity(operationId)
     if (!principalValid(principal)
-      || typeof previewOnly !== 'boolean' || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)) throw Error('redo confirmation required')
+      || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)) throw Error('redo confirmation required')
     scope = copy(scope); principal = copy(principal)
     if (busy.has(operationId)) throw Error('redo outcome unknown')
     busy.add(operationId)
@@ -253,7 +253,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (reserved && (!existing || reserved.operationId !== operationId)) throw Error('redo already exists; inspect outcome')
       if (existing) {
         if (!reserved) throw Error('redo preparation outcome unknown')
-        if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest || (existing.previewOnly === true) !== previewOnly
+        if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest
           || !isDeepStrictEqual(existing.original, source)) throw Error('redo identity conflict')
         try { confirm(existing, generation); checkAccess(existing, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed'); confirm(existing, generation); confirmPhase(existing, generation); confirmWitness(existing, generation) }
         catch { throw Error('redo preparation outcome unknown') }
@@ -261,7 +261,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       }
       if (rows.some(row => row.recoveryId === recoveryId)) throw Error('redo already exists; inspect outcome')
       const row = { version:1, operationId, recoveryId, scope:copy(scope), principal:copy(principal), identity, original:source, confirmationDigest,
-        acknowledged:true, previewOnly, state:'prepared', createdAt:Date.now() }
+        acknowledged:true, state:'prepared', createdAt:Date.now() }
       try {
         rt.state.originalRedoWitness = { ...witnessTable(), [recoveryId]:witnessFor(row) }
         await rt.save({ required:true })
@@ -282,7 +282,6 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
       if (!isDeepStrictEqual(row.principal, principal)) throw Error('redo unavailable')
-      if (row.previewOnly === true) throw Error('redo execution was not authorized')
       confirmPhase(row, generation)
       if (row.state !== 'prepared') return { state:'unknown', operationId }
       const proof = await proveOriginal(copy(row.scope), row.recoveryId)
