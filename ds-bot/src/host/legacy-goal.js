@@ -59,7 +59,7 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
         legacy: { goalId: goal.id, stageId: stage.id, stageTitle: stage.title,
           taskId: task.id, originalStatus: task.status, goalStatus: goal.status, goalTitle:goal.title,
           originalTitle:task.task, titleStale:typeof overlay?.title==='string' && overlay.titleSource!==task.task,
-          position, boardRevision:overlay?.revision??0, useOverlay:!isCurrent||!!overlay, pending:!!pending,
+          position, boardRevision:overlay?.revision??0, useOverlay:true, pending:!!pending,
           archived:goal!==room.goal, current:isCurrent, ambiguous },
       })
         }

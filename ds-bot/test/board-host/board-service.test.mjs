@@ -294,16 +294,16 @@ test('real image worker edits the original goal and preserves two authorized ima
   const upload={scope,taskId:card.id,operationId:'goal:upload',expectedRevision:2,images:[image,image2]}
   assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
   assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
-  assert.equal(rt.state.rooms.group.goal.revision,3)
+  assert.equal(rt.state.rooms.group.goal.revision,2)
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
   const personal={kind:'personal',id:'one'}
   const personalCard=(await rt.boardCall('board-list',{scope:personal})).tasks.find(task=>task.id===card.id)
   assert.ok(personalCard,'the original group task is also visible on its owner’s board')
-  const progress={scope:personal,operationId:'goal:personal-progress',taskId:card.id,expectedRevision:3,type:'goal-task-edit',value:{status:'reported',note:'Ready for review'}}
+  const progress={scope:personal,operationId:'goal:personal-progress',taskId:card.id,expectedRevision:2,expectedBoardRevision:personalCard.legacy.boardRevision,expectedPosition:'current',type:'goal-task-edit',value:{status:'reported',note:'Ready for review'}}
   assert.equal((await rt.boardCall('board-command',progress)).state,'committed')
   assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported')
-  assert.equal(rt.state.rooms.group.goal.revision,4)
-  const details={scope:personal,operationId:'goal:details',taskId:card.id,expectedRevision:4,type:'goal-card-details',value:{description:'Read before review',dueDate:'2026-12-01',labels:['Design'],checklist:[{id:'check-1',text:'Inspect layout',checked:true}]}}
+  assert.equal(rt.state.rooms.group.goal.revision,3)
+  const details={scope:personal,operationId:'goal:details',taskId:card.id,expectedRevision:3,expectedBoardRevision:personalCard.legacy.boardRevision,expectedPosition:'current',type:'goal-card-details',value:{description:'Read before review',dueDate:'2026-12-01',labels:['Design'],checklist:[{id:'check-1',text:'Inspect layout',checked:true}]}}
   assert.equal((await rt.boardCall('board-command',details)).state,'committed')
   assert.equal((await rt.boardCall('board-command',details)).state,'committed')
   const shown=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
@@ -311,22 +311,22 @@ test('real image worker edits the original goal and preserves two authorized ima
   assert.deepEqual(shown.labels,['Design'])
   assert.equal(shown.checklist[0].checked,true)
   assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported','checking items does not pass acceptance')
-  assert.equal(rt.state.rooms.group.goal.revision,5)
-  const comment={scope:personal,operationId:'goal:comment',taskId:card.id,expectedRevision:5,type:'goal-card-comment',value:{text:'Ready for the reviewer'}}
+  assert.equal(rt.state.rooms.group.goal.revision,3)
+  const comment={scope:personal,operationId:'goal:comment',taskId:card.id,expectedRevision:3,expectedBoardRevision:shown.legacy.boardRevision,expectedPosition:'current',type:'goal-card-comment',value:{text:'Ready for the reviewer'}}
   assert.equal((await rt.boardCall('board-command',comment)).state,'committed')
   assert.equal((await rt.boardCall('board-command',comment)).state,'committed')
   assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id).comments.length,1)
   assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported')
-  const invalidDetails={...details,operationId:'goal:invalid-details',expectedRevision:6,value:{dueDate:'2026-02-30'}}
+  const invalidDetails={...details,operationId:'goal:invalid-details',expectedRevision:3,expectedBoardRevision:shown.legacy.boardRevision+1,value:{dueDate:'2026-02-30'}}
   assert.equal((await rt.boardCall('board-command',invalidDetails)).state,'rejected')
-  assert.equal(rt.state.rooms.group.goal.revision,6)
+  assert.equal(rt.state.rooms.group.goal.revision,3)
   const goal=rt.state.rooms.group.goal
   goal.stages.push({id:'s2',title:'Next',tasks:[]});goal.current=1;goal.revision++
   await rt.save()
   const historical=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
   assert.equal(historical.images.length,2)
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img2'})).data,image2.data)
-  assert.equal((await rt.boardCall('board-list',{scope})).capabilities.commands[card.id].length,0)
+  assert.ok((await rt.boardCall('board-list',{scope})).capabilities.commands[card.id].some(command=>command.type==='goal-card-details'))
   rt.state.rooms.group.pastGoals=[goal]
   rt.state.rooms.group.goal={id:'new-goal',status:'active',current:0,revision:1,events:[],stages:[{id:'new-stage',tasks:[]}]}
   await rt.save()
@@ -371,7 +371,7 @@ test('real upload confirms a snapshot written before the save response is lost',
   assert.equal((await rt.boardCall('board-operation',{scope,operationId:upload.operationId})).state,'committed')
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
   assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
-  assert.equal(rt.state.rooms.group.goal.revision,2)
+  assert.equal(rt.state.rooms.group.goal.revision,1)
 })
 
 test('invalid image worker input records a rejected original goal upload without changing the task', async t => {
