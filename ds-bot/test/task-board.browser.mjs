@@ -36,7 +36,7 @@ window.removeEventListener=(type,fn,options)=>{if(type==='keydown')keyListeners.
 globalThis.listenerCount=()=>keyListeners.size;
 const sheet=document.createElement('style');sheet.textContent=\`body{font-family:system-ui,sans-serif;--bt-main:#fcfcfc;--bt-sidebar:#f7f7f7;--bt-card:#fff;--bt-ink:#141414;--bt-ink-2:#666;--bt-ink-3:#999;--bt-line:#e8e8e8;--bt-line-2:#d9d9d9;--bt-hover:#eee;--bt-accent:#4d6bfe;--bt-accent-ink:#fff;--bt-tag-bg:#eee;--bt-green:#00c972;--bt-danger:#e02135;--bt-danger-soft:#faeeee;--bt-glass-shadow:0 18px 50px #0003}\`+TASK_BOARD_CSS;document.head.append(sheet);
 const actors=[{id:'a',name:'Alice'},{id:'b',name:'Bob'},{id:'user',name:'You'}];
-const state=globalThis.fixture={calls:[],mode:'normal',revision:1,heldDecisions:{},heldRedos:{},scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{},boardPlans:{},boardStarted:[],boardFinished:[],receiptPlans:{},receiptStarted:[],boardTitles:{}};
+const state=globalThis.fixture={calls:[],mode:'normal',revision:1,heldDecisions:{},heldRedos:{},workDecisions:{},scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{},boardPlans:{},boardStarted:[],boardFinished:[],receiptPlans:{},receiptStarted:[],boardTitles:{}};
 const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
 const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').split(',')[1]},jpeg:{mediaType:'image/jpeg',data:canvas.toDataURL('image/jpeg').split(',')[1]},bad:{mediaType:'image/png',data:'YWJj'}};
 state.images=images;
@@ -63,8 +63,9 @@ async function request(endpoint,payload){
  if(endpoint==='board-held-redo'){if(payload.confirmed!==true)throw Error('confirmation required');state.heldRedos[payload.recoveryId]=true;return {state:'submitted'}}
  if(endpoint==='legacy-review-list'){
   if(state.mode==='review-invalid-list')return {items:'invalid',incomplete:false};
-  return {items:[{workId:'work-a',owner:'a'},{workId:'work-b',owner:'b'}],incomplete:false};
+  return {items:['work-a','work-b'].map((workId,index)=>({workId,owner:index?'b':'a',sender:index?'a':'b',canDecide:true,...(state.workDecisions[workId]??{choice:'open',revision:0})})),incomplete:false};
  }
+ if(endpoint==='legacy-review-decision'){const old=state.workDecisions[payload.workId]??{choice:'open',revision:0};if(old.revision!==payload.expectedRevision)throw Error('stale');state.workDecisions[payload.workId]={choice:payload.choice,revision:old.revision+1};return state.workDecisions[payload.workId]}
  if(endpoint==='legacy-review-prepare')return {operationId:'manual-review:'+ (payload.kind==='create'?'a':'b').repeat(64)};
  if(endpoint==='legacy-review-operation')return {status:state.reviewReceipt?'committed':'unknown'};
  if(endpoint==='legacy-review-get'){
@@ -199,7 +200,20 @@ try {
   assert.equal(await page.locator('.bt-board-held-record').count(), 0, 'scope change must not retain old recovery rows')
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'normal'))
-  const manual = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  const decisions = page.locator('.bt-recovery-panel').filter({hasText:'Work decisions'})
+  await decisions.locator('summary').first().click()
+  await decisions.locator('button[title="work-a"]').click()
+  await decisions.getByRole('button',{name:'Ignore',exact:true}).click()
+  await decisions.getByText('Ignored',{exact:true}).waitFor()
+  await decisions.getByRole('button',{name:'Move back to needs a decision'}).click()
+  await decisions.getByRole('button',{name:'Record my acceptance'}).waitFor()
+  page.once('dialog', dialog => dialog.accept())
+  await decisions.getByRole('button',{name:'Record my acceptance'}).click()
+  await decisions.getByText('Accepted by you').waitFor()
+  assert.equal(await decisions.getByText('The result remains unknown; this is not independent acceptance.').count(),1)
+  assert.deepEqual(await page.evaluate(() => globalThis.fixture.calls.filter(x=>x.endpoint==='legacy-review-decision').map(x=>x.payload.choice)),['ignored','open','user-accepted'])
+  assert.equal(await decisions.locator('textarea').count(),0,'no reason or note is required')
+  const manual = page.locator('.bt-recovery-panel').filter({hasText:'Manual notes (optional)'})
   await manual.locator('summary').first().click()
   await manual.getByText('Alice', {exact:true}).waitFor()
   await manual.getByText('Bob', {exact:true}).waitFor()
@@ -218,12 +232,12 @@ try {
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g5' }, 'review-slow'))
   await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g5'))
-  const slowReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  const slowReview = page.locator('.bt-recovery-panel').filter({hasText:'Manual notes (optional)'})
   await slowReview.locator('summary').first().click()
   await slowReview.getByRole('button', {name:'work-a'}).waitFor()
   await slowReview.getByRole('button', {name:'work-b'}).waitFor()
   await page.evaluate(() => {
-    const panel = [...document.querySelectorAll('.bt-recovery-panel')].find(el => el.textContent.includes('Review an existing work'))
+    const panel = [...document.querySelectorAll('.bt-recovery-panel')].find(el => el.textContent.includes('Manual notes (optional)'))
     const buttons = [...panel.querySelectorAll('button')]
     buttons.find(button => button.textContent === 'work-a').click()
     buttons.find(button => button.textContent === 'work-b').click()
@@ -233,7 +247,7 @@ try {
   assert.deepEqual(simultaneous, ['work-a'], 'a second candidate cannot start while the first request is pending')
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g6' }, 'normal'))
   await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g6'))
-  const nextReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  const nextReview = page.locator('.bt-recovery-panel').filter({hasText:'Manual notes (optional)'})
   await nextReview.locator('summary').first().click()
   await nextReview.getByRole('button', {name:'work-b'}).click()
   await nextReview.getByRole('button', {name:'Create review'}).waitFor()
@@ -245,14 +259,14 @@ try {
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g7' }, 'review-invalid-list'))
   await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g7'))
-  const invalidReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  const invalidReview = page.locator('.bt-recovery-panel').filter({hasText:'Manual notes (optional)'})
   await invalidReview.locator('summary').first().click()
   await invalidReview.getByRole('alert').getByText('Review sources are unavailable.').waitFor()
   assert.equal(await invalidReview.getByText('No work awaiting inspection.').count(), 0, 'unreadable sources are not an empty list')
 
   await page.evaluate(() => { globalThis.fixture.reviewSaved=false; globalThis.fixture.reviewReceipt=false; globalThis.renderFixture({ kind:'room', id:'g8' }, 'review-lost') })
   await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g8'))
-  const lostReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  const lostReview = page.locator('.bt-recovery-panel').filter({hasText:'Manual notes (optional)'})
   await lostReview.locator('summary').first().click()
   await lostReview.getByRole('button', {name:'work-a'}).click()
   await lostReview.getByRole('button', {name:'Create review'}).click()
@@ -267,7 +281,7 @@ try {
   assert.equal(await lostReview.getByRole('button', {name:'Save review note'}).isDisabled(), true, 'a newer revision without a receipt must not enable another save')
   assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('A verified result')), false, 'pending markers must not contain note content')
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g9' }, 'review-lost'))
-  const switchedReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  const switchedReview = page.locator('.bt-recovery-panel').filter({hasText:'Manual notes (optional)'})
   await switchedReview.locator('summary').first().click()
   await switchedReview.getByRole('button', {name:'work-a'}).click()
   await switchedReview.getByText('Evidence still needed').waitFor()
