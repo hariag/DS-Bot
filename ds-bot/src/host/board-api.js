@@ -44,7 +44,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
-      return [task.id, [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }, {type:'card-comment',label:'Add comment'}, ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
+      return [task.id, [...(!source?.change ? [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }] : []), {type:'card-comment',label:'Add comment'}, ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
         ...(scope.kind === 'personal' && scope.id === 'user' && source?.scope === 'personal:user' && source.owner === 'user'
           && source.status === 'proposed' && source.actionRevision == null && !source.evidence && !source.blocked && !source.stale
           ? [{ type:'personal-progress', label:'Move personal task' }] : []),
@@ -149,6 +149,8 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         const dependencies = [...new Set([...value.dependencies, ...hidden])]
         const dependencyGrants = bindingsFor(taskScope(task), principal, { ...task, owner:value.owner, reviewer:value.reviewer }, dependencies)
         value = { title: value.title, owner: value.owner, reviewer: value.reviewer, acceptance: value.acceptance, dependencies, dependencyGrants }
+        if (['working','reported','done'].includes(task.status)) return store.proposeChange({ operationId:input.operationId, taskId:task.id,
+          expectedRevision:input.expectedRevision, actor:'user', value })
       } else if (input.type === 'card-details' || input.type === 'card-comment') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid card details')
       } else if (input.type === 'personal-progress') {

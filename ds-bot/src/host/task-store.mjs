@@ -292,6 +292,38 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
       })
     },
+    proposeChange({ operationId, actor, taskId, expectedRevision, value }) {
+      requireId(actor, 'actor'); requireId(taskId, 'task id')
+      if (actor !== 'user' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
+      keysOnly(value, ['title','owner','reviewer','acceptance','dependencies','dependencyGrants'])
+      const payload = { type:'propose-change', actor, taskId, expectedRevision, value }; stable(payload)
+      return transact(operationId, actor, payload, () => ({type:'edit', actor, task:getTask(taskId)}), () => {
+        const old = getTask(taskId)
+        if (!old) throw new Error('unknown task')
+        if (old.revision !== expectedRevision) throw new Error('revision conflict')
+        if (!['working','reported','done'].includes(old.status)) throw new Error('change proposal unavailable')
+        if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
+        const fields = ['title','owner','reviewer','acceptance','dependencies']
+        const before = Object.fromEntries(fields.map(field => [field, old[field]]))
+        const after = Object.fromEntries(fields.map(field => [field, value[field]]))
+        string(after.title, 'title'); string(after.acceptance, 'acceptance')
+        requireId(after.owner, 'owner'); requireId(after.reviewer, 'reviewer')
+        if (after.owner === after.reviewer) throw new Error('reviewer must be independent')
+        if (!Array.isArray(after.dependencies)) throw new Error('invalid dependencies')
+        if (stable(before) === stable(after)) throw new Error('empty edit')
+        const dependencies = [...new Set([taskId, ...after.dependencies])], grants = value.dependencyGrants ?? []
+        const id = `change-${digest([operationId, taskId])}`
+        checkGraph(id, dependencies); checkBindings({scope:old.scope, owner:after.owner, reviewer:after.reviewer}, dependencies, grants)
+        const change = { sourceTaskId:taskId, sourceRevision:old.revision, before, after }
+        const duplicate = getAll().some(item => item.change?.sourceTaskId === taskId && item.change?.sourceRevision === old.revision && stable(item.change.after) === stable(after))
+        if (duplicate) throw new Error('change proposal already exists')
+        const record = { id, title:after.title, owner:after.owner, reviewer:after.reviewer, scope:old.scope,
+          acceptance:after.acceptance, dependencies, dependencyGrants:grants, attachments:[], shares:[], revision:1,
+          actionRevision:null, status:'proposed', authority:null, evidence:null, blocked:null, stale:false, change }
+        db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
+      })
+    },
     command({ operationId, taskId, expectedRevision, actor, type, value }) {
       requireId(taskId, 'task id'); requireId(actor, 'actor')
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
@@ -299,6 +331,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
       return transact(operationId, actor, payload, () => ({ type, actor, task: getTask(taskId) }), () => {
         const old = getTask(taskId); if (!old) throw new Error('unknown task')
         if (old.revision !== expectedRevision) throw new Error('revision conflict')
+        if (old.change && ['edit','card-details'].includes(type)) throw new Error('change proposal is immutable')
         let next = { ...old, revision: old.revision + 1 }
         switch (type) {
           case 'personal-progress':

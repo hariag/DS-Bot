@@ -12,6 +12,7 @@ function fixture() {
     get: id => rows.find(row => row.id === id),
     operation: id => operations.get(id),
     history: id => ({ entries:[{ after:{ revision:1, title:id } }], truncated:false }),
+    proposeChange: input => ({ id:'change', source:input.taskId, value:input.value }),
     create: ({ operationId, actor, task }) => {
       const found = operations.get(operationId)
       if (found) { if (found.input !== JSON.stringify(task)) throw new Error('operation conflict'); return found.result }
@@ -94,6 +95,17 @@ test('an authorized user edits a card without impersonating its Bot owner', () =
   const edited = f.api.command(room, user, { operationId: 'edit-1', taskId: 'task1', expectedRevision: 1, type: 'edit', value })
   assert.equal(edited.title, 'New title'); assert.equal(edited.owner, 'one'); assert.equal(edited.revision, 2)
   assert.deepEqual(f.api.command(room, user, { operationId: 'edit-1', taskId: 'task1', expectedRevision: 1, type: 'edit', value }), edited)
+})
+
+test('editing an active task creates a change request without overwriting the original', () => {
+  const f = fixture(); f.api.create(room, user, proposal)
+  f.rows[0].status = 'working'
+  const value = {title:'New title', owner:'one', reviewer:'two', acceptance:'New acceptance', dependencies:[]}
+  const changed = f.api.command(room, user, {operationId:'change', taskId:'task1', expectedRevision:1, type:'edit', value})
+  assert.equal(changed.source, 'task1'); assert.equal(changed.value.acceptance, 'New acceptance')
+  assert.equal(f.rows[0].title, 'Build'); assert.equal(f.rows[0].status, 'working')
+  f.state.rooms.other = {members:['one','two']}
+  assert.throws(() => f.api.command({kind:'room',id:'other'}, user, {operationId:'bad',taskId:'task1',expectedRevision:1,type:'edit',value}))
 })
 
 test('card details are scoped, explicit capabilities and do not leak into shared projections', () => {

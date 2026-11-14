@@ -115,6 +115,28 @@ test('card details do not disrupt an already accepted work and its independent r
   assert.equal(store.get('active').status, 'done')
 })
 
+test('editing running work creates one separate change proposal with an immutable baseline', t => {
+  const {store, path} = fixture(t); create(store, 'active'); register(store, 'active')
+  accept(store, 'active', 'execute'); command(store, 'active', 'start', 'owner')
+  const old = store.get('active')
+  const value = {title:'Changed', owner:old.owner, reviewer:old.reviewer, acceptance:'New acceptance', dependencies:[], dependencyGrants:[]}
+  const input = {operationId:'change-op', actor:'user', taskId:old.id, expectedRevision:old.revision, value}
+  const proposal = store.proposeChange(input)
+  assert.deepEqual(store.proposeChange(input), proposal)
+  assert.equal(store.get('active').title, old.title)
+  assert.equal(store.get('active').status, 'working')
+  assert.equal(proposal.status, 'proposed'); assert.deepEqual(proposal.dependencies, ['active'])
+  assert.equal(proposal.change.before.acceptance, old.acceptance); assert.equal(proposal.change.after.acceptance, 'New acceptance')
+  assert.equal(store.listActions(proposal.id).length, 0)
+  assert.throws(() => command(store, proposal.id, 'edit', 'user', {title:'Overwrite'}), /immutable/)
+  assert.throws(() => command(store, proposal.id, 'card-details', 'user', {description:'Overwrite'}), /immutable/)
+  assert.throws(() => store.proposeChange({...input, operationId:'duplicate'}), /already exists/)
+  assert.throws(() => store.proposeChange({...input, operationId:'stale', expectedRevision:old.revision-1}), /revision conflict/)
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  assert.deepEqual(reopened.get(proposal.id).change, proposal.change)
+  assert.deepEqual(reopened.proposeChange(input), proposal)
+})
+
 test('delivery and independent review drive dependencies immediately and survive restart', t => {
   const { store, path } = fixture(t)
   create(store, 'a'); create(store, 'b', ['a']); register(store, 'a'); register(store, 'b')
