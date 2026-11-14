@@ -445,7 +445,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
     h(Fact, { label: t('Blocked'), value: blocker }),
     h(Fact, { label: t('Evidence'), value: evidence }),
     h(Fact, { label: t('Target version'), value: asText(task.authority) }),
-    !task.legacy&&!task.shared ? h(CardDetails,{task,editable:commands.some(command=>command.type==='card-details'),disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:'card-details'},value)}) : null,
+    !task.shared ? h(CardDetails,{task,editable:commands.some(command=>command.type===(task.legacy?'goal-card-details':'card-details')),disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:task.legacy?'goal-card-details':'card-details'},value)}) : null,
     !canMove && !commands.some(command=>command.type==='goal-task-edit') ? h('span', { className:'bt-board-readonly' }, t('Status changes are not available for this task.')) : null,
     Array.isArray(task.images) && task.images.length ? h('div', { className: 'bt-board-images' }, task.images.map(image => h(BoardImage, {
       key: image.id, scope, taskId: task.id, image, request, disabled: uncertain,

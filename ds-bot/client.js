@@ -37343,7 +37343,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
         (0, import_react50.createElement)(Fact, { label: t("Blocked"), value: blocker }),
         (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: evidence }),
         (0, import_react50.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
-        !task.legacy && !task.shared ? (0, import_react50.createElement)(CardDetails, { task, editable: commands.some((command) => command.type === "card-details"), disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "card-details" }, value) }) : null,
+        !task.shared ? (0, import_react50.createElement)(CardDetails, { task, editable: commands.some((command) => command.type === (task.legacy ? "goal-card-details" : "card-details")), disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: task.legacy ? "goal-card-details" : "card-details" }, value) }) : null,
         !canMove && !commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Status changes are not available for this task.")) : null,
         Array.isArray(task.images) && task.images.length ? (0, import_react50.createElement)("div", { className: "bt-board-images" }, task.images.map((image) => (0, import_react50.createElement)(BoardImage, {
           key: image.id,

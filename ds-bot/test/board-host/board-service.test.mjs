@@ -296,6 +296,25 @@ test('real image worker edits the original goal and preserves two authorized ima
   assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
   assert.equal(rt.state.rooms.group.goal.revision,3)
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
+  const personal={kind:'personal',id:'one'}
+  const personalCard=(await rt.boardCall('board-list',{scope:personal})).tasks.find(task=>task.id===card.id)
+  assert.ok(personalCard,'the original group task is also visible on its owner’s board')
+  const progress={scope:personal,operationId:'goal:personal-progress',taskId:card.id,expectedRevision:3,type:'goal-task-edit',value:{status:'reported',note:'Ready for review'}}
+  assert.equal((await rt.boardCall('board-command',progress)).state,'committed')
+  assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported')
+  assert.equal(rt.state.rooms.group.goal.revision,4)
+  const details={scope:personal,operationId:'goal:details',taskId:card.id,expectedRevision:4,type:'goal-card-details',value:{description:'Read before review',dueDate:'2026-12-01',labels:['Design'],checklist:[{id:'check-1',text:'Inspect layout',checked:true}]}}
+  assert.equal((await rt.boardCall('board-command',details)).state,'committed')
+  assert.equal((await rt.boardCall('board-command',details)).state,'committed')
+  const shown=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
+  assert.equal(shown.description,'Read before review')
+  assert.deepEqual(shown.labels,['Design'])
+  assert.equal(shown.checklist[0].checked,true)
+  assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported','checking items does not pass acceptance')
+  assert.equal(rt.state.rooms.group.goal.revision,5)
+  const invalidDetails={...details,operationId:'goal:invalid-details',expectedRevision:5,value:{dueDate:'2026-02-30'}}
+  assert.equal((await rt.boardCall('board-command',invalidDetails)).state,'rejected')
+  assert.equal(rt.state.rooms.group.goal.revision,5)
   const goal=rt.state.rooms.group.goal
   goal.stages.push({id:'s2',title:'Next',tasks:[]});goal.current=1;goal.revision++
   await rt.save()
@@ -303,9 +322,38 @@ test('real image worker edits the original goal and preserves two authorized ima
   assert.equal(historical.images.length,2)
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img2'})).data,image2.data)
   assert.equal((await rt.boardCall('board-list',{scope})).capabilities.commands[card.id].length,0)
+  rt.state.rooms.group.pastGoals=[goal]
+  rt.state.rooms.group.goal={id:'new-goal',status:'active',current:0,revision:1,events:[],stages:[{id:'new-stage',tasks:[]}]}
+  await rt.save()
+  const archived=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
+  assert.equal(archived.legacy.archived,true)
+  assert.equal(archived.description,'Read before review')
+  assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
   rt.state.rooms.group.members=[]
   await assert.rejects(rt.boardCall('board-image',{scope:{kind:'personal',id:'one'},taskId:card.id,imageId:'img1'}),/not available|unavailable/i)
   await assert.rejects(rt.boardCall('board-command',{...edit,operationId:'goal:bad-namespace',type:'edit'}),/Goal operation ID/)
+})
+
+test('real upload confirms a snapshot written before the save response is lost', async t => {
+  const {rt,route}=goalFixture(t), card=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.legacy)
+  const save=rt.save
+  rt.save=async()=>{await save();throw new Error('simulated lost save response')}
+  const upload={scope,taskId:card.id,operationId:'goal:written-image',expectedRevision:1,images:[image]}
+  assert.equal((await (await route.fetch(request(upload))).json()).ok,false)
+  assert.equal((await rt.boardCall('board-operation',{scope,operationId:upload.operationId})).state,'committed')
+  assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
+  assert.equal((await (await route.fetch(request(upload))).json()).ok,true)
+  assert.equal(rt.state.rooms.group.goal.revision,2)
+})
+
+test('invalid image worker input records a rejected original goal upload without changing the task', async t => {
+  const {rt,route,home}=goalFixture(t), card=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.legacy)
+  const broken={...image,data:Buffer.from(image.data,'base64').subarray(0,8).toString('base64')}
+  const upload={scope,taskId:card.id,operationId:'goal:invalid-image',expectedRevision:1,images:[broken]}
+  assert.equal((await (await route.fetch(request(upload))).json()).ok,false)
+  assert.equal((await rt.boardCall('board-operation',{scope,operationId:upload.operationId})).state,'rejected')
+  assert.equal(rt.state.rooms.group.goal.revision,1)
+  assert.equal(readdirSync(join(home,'board-v1','images')).length,0)
 })
 
 test('real upload cannot expose published files when goal snapshot save fails', async t => {
