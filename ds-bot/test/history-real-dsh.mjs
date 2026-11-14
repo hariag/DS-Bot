@@ -40,6 +40,19 @@ async function open(url){
   page=await browser.newPage(); page.setDefaultTimeout(15_000)
   await page.route('**/*',route=>{const u=new URL(route.request().url());return ['127.0.0.1','localhost'].includes(u.hostname)?route.continue():route.abort()})
   await page.goto(url); await page.waitForLoadState('domcontentloaded')
+  // The web listener can become ready before the plugin has registered its
+  // route. Retry only that 404, and surface any other response or early exit.
+  const until=Date.now()+60_000
+  while(Date.now()<until){
+    const probe=await page.evaluate(async()=>{const r=await fetch('/api/bot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint:'state',payload:{}})});return {status:r.status,text:await r.text()}})
+    if(probe.status!==404){let data;try{data=JSON.parse(probe.text)}catch{throw Error(`Plugin readiness returned non-JSON HTTP ${probe.status}: ${probe.text.slice(0,300)}`)}
+      if(!data.ok)throw Error(`Plugin readiness failed HTTP ${probe.status}: ${JSON.stringify(data.error)}`)
+      return
+    }
+    if(host.exitCode!==null)throw Error(`Host exited ${host.exitCode} before plugin readiness`)
+    await sleep(200)
+  }
+  throw Error('Plugin route did not become ready in 60 seconds')
 }
 async function api(endpoint,payload={}){
   const data=await page.evaluate(async ({endpoint,payload})=>fetch('/api/bot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint,payload})}).then(r=>r.json()),{endpoint,payload})
@@ -158,5 +171,5 @@ try {
   console.log(`Synthetic home retained: ${home}`)
 } catch(error) {
   if(page)await page.screenshot({path:join(base,'history-real-failure.png')}).catch(()=>{})
-  console.error('FAIL:',error.stack||error);console.error(`Synthetic home retained: ${home}`);process.exitCode=1
+  console.error('FAIL:',error.stack||error);console.error('Host output:',output.replace(/token=[^\s]+/g,'token=[redacted]').slice(-5000));console.error(`Synthetic home retained: ${home}`);process.exitCode=1
 } finally {await page?.close().catch(()=>{});await browser?.close().catch(()=>{});await stop()}
