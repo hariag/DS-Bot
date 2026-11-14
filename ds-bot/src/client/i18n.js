@@ -11,6 +11,23 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Search tasks': '搜索任务',
+  'View details': '查看详情',
+  'No tasks': '暂无任务',
+  'To do': '待办',
+  'Doing': '进行中',
+  'Personally finished': '本人已完成',
+  'Personal progress': '个人进度',
+  'Move personal task': '移动个人任务',
+  'Drag a card or use its progress menu.': '拖动卡片或使用进度菜单。',
+  'Drag a card here': '拖动卡片到这里',
+  'Your own progress markers do not complete shared work or unblock dependencies.': '个人进度标记不会完成共享任务或解除依赖。',
+  Workflow: '任务流程',
+  'Shared workflow': '共享任务流程',
+  'These statuses reflect the shared task workflow.': '这些状态反映共享任务的流程。',
+  'New tasks start in Preparing.': '新任务从待准备开始。',
+  'Status changes are not available for this task.': '此任务暂不支持修改状态。',
+  '{count} dependencies': '{count} 个依赖',
   'Review sources are unavailable.': '复核来源暂不可用。',
   'Review an existing work': '复核已有工作',
   'Review notes do not send messages or close work. Sources are unverified; inspect the original records.': '复核笔记不会发送消息或关闭工作。来源尚未核实，请查阅原始记录。',

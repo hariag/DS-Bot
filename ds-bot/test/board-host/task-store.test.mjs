@@ -22,6 +22,28 @@ const create = (s, id, deps = []) => s.create({ operationId: `create-${id}`, act
 const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({ operationId: op, taskId: id, expectedRevision: s.get(id).revision, actor, type, ...(value !== undefined ? { value } : {}) })
 const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
+
+test('personal progress is durable, scoped and never completes a dependency', t => {
+  const { store, path } = fixture(t)
+  const mine = { ...task('mine'), owner:'user', reviewer:'reviewer' }
+  store.create({ operationId:'create-mine', actor:'user', task:mine })
+  create(store, 'dependent', ['mine']); register(store, 'dependent')
+  const input = { operationId:'move-mine', taskId:'mine', expectedRevision:1, actor:'user', type:'personal-progress', value:{progress:'finished'} }
+  const result = store.command(input)
+  assert.equal(result.personalProgress, 'finished'); assert.equal(result.status, 'proposed')
+  assert.deepEqual(store.command(input), result)
+  assert.throws(() => store.command({ ...input, value:{progress:'doing'} }), /operation id conflict/)
+  assert.equal(store.get('dependent').status, 'waiting')
+  assert.equal(store.listActions('mine').length, 0)
+  assert.throws(() => store.command({ ...input, operationId:'stale', value:{progress:'doing'} }), /revision conflict/)
+  assert.throws(() => command(store, 'mine', 'personal-progress', 'reviewer', {progress:'doing'}), /personal progress unavailable/)
+  create(store, 'bot')
+  assert.throws(() => command(store, 'bot', 'personal-progress', 'user', {progress:'doing'}), /personal progress unavailable/)
+  assert.throws(() => command(store, 'mine', 'personal-progress', 'user', {progress:'done'}), /invalid personal progress/)
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  assert.equal(reopened.get('mine').personalProgress, 'finished'); assert.equal(reopened.get('mine').status, 'proposed')
+  assert.equal(reopened.get('dependent').status, 'waiting')
+})
 const intentFor = action => ({ admissionId:`admission-${action.id}`, messageId:`message-${action.id}`, targetBotId:action.actor, targetSessionId:`session-${action.actor}`, payload:{ id:`message-${action.id}`, role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:`admission-${action.id}`} } })
 const claim = (store, action, intent = intentFor(action)) => store.claimAction({ actionId:action.id, actor:'scheduler', intent })
 function accept(s, id, kind) {

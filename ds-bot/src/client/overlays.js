@@ -10,6 +10,8 @@ import { PANEL_LINGER_MS, BotPanel } from './browser-pane.js'
 import { frameLayout, FALLBACK_SIDEBAR_WIDTH } from './frame-layout.js'
 import { MemoryDialog } from './memory-panel.js'
 import { useLinger } from './motion.js'
+import { TaskBoard } from './task-board.js'
+import { t } from './i18n.js'
 
 // How long a closing dialog or menu stays for its exit (see their [data-leaving] CSS).
 const DIALOG_EXIT_MS = 160
@@ -29,6 +31,14 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
     if (previous.current === current) return
     previous.current = current
     if (current) actions.followPanel?.(current)
+  }, [current])
+  // Ignore a transient empty main view during responsive shell remounts, but
+  // dismiss the board when the user actually selects a different session.
+  const boardSession = useRef(current)
+  useEffect(() => {
+    if (!current || boardSession.current === current) return
+    if (boardSession.current) actions.closePersonalBoard?.()
+    boardSession.current = current
   }, [current])
   const open = ui.details ? { id: ui.details, view: ui.view ?? 'details', renaming: ui.renaming, tab: ui.tab, side: ui.side } : null
   // A panel that no longer fits folds away: its state stays open, it just is not
@@ -61,6 +71,7 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
   const owner = memory ? memoryOwner(memory) : null
   const [menu, menuLeaving] = useLinger(ui.menu, MENU_EXIT_MS)
   return h(Fragment, null,
+    ui.personalBoard ? h(TaskBoard, { scope:{kind:'personal',id:'user'}, title:t('My task board'), close:actions.closePersonalBoard }) : null,
     pane ? createPortal(h(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === 'overlay', roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
     ui.newChat ? createPortal(h(NewChat, { key: `${ui.newChat}:${ui.newChatSection ?? ''}`, mode: ui.newChat, sectionId: ui.newChatSection ?? null, paneLeft: layout.column, roster, actions }), document.body) : null,
     ui.palette ? createPortal(h(CommandPalette, { key: ui.palette.token, start: ui.palette.query, token: ui.palette.token, roster, actions, useSessions }), document.body) : null,

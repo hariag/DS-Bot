@@ -290,6 +290,14 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         if (old.revision !== expectedRevision) throw new Error('revision conflict')
         let next = { ...old, revision: old.revision + 1 }
         switch (type) {
+          case 'personal-progress':
+            // A personal reminder is separate from the verified workflow and
+            // cannot complete a dependency or grant an Agent an action.
+            if (actor !== 'user' || old.owner !== 'user' || old.scope !== 'personal:user'
+              || old.status !== 'proposed' || old.actionRevision != null || old.evidence || old.blocked || old.stale) throw new Error('personal progress unavailable')
+            keysOnly(value, ['progress'])
+            if (!['todo', 'doing', 'finished'].includes(value.progress)) throw new Error('invalid personal progress')
+            next.personalProgress = value.progress; break
           case 'register':
             if (old.status !== 'proposed') throw new Error('invalid state')
             keysOnly(value, ['kind','commit','blob','reference'])

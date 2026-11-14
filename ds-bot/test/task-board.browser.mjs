@@ -34,13 +34,13 @@ const add=window.addEventListener.bind(window), remove=window.removeEventListene
 window.addEventListener=(type,fn,options)=>{if(type==='keydown')keyListeners.add(fn);return add(type,fn,options)};
 window.removeEventListener=(type,fn,options)=>{if(type==='keydown')keyListeners.delete(fn);return remove(type,fn,options)};
 globalThis.listenerCount=()=>keyListeners.size;
-const sheet=document.createElement('style');sheet.textContent=TASK_BOARD_CSS;document.head.append(sheet);
-const actors=[{id:'a',name:'Alice'},{id:'b',name:'Bob'}];
+const sheet=document.createElement('style');sheet.textContent=\`body{font-family:system-ui,sans-serif;--bt-main:#fcfcfc;--bt-sidebar:#f7f7f7;--bt-card:#fff;--bt-ink:#141414;--bt-ink-2:#666;--bt-ink-3:#999;--bt-line:#e8e8e8;--bt-line-2:#d9d9d9;--bt-hover:#eee;--bt-accent:#4d6bfe;--bt-accent-ink:#fff;--bt-tag-bg:#eee;--bt-green:#00c972;--bt-danger:#e02135;--bt-danger-soft:#faeeee;--bt-glass-shadow:0 18px 50px #0003}\`+TASK_BOARD_CSS;document.head.append(sheet);
+const actors=[{id:'a',name:'Alice'},{id:'b',name:'Bob'},{id:'user',name:'You'}];
 const state=globalThis.fixture={calls:[],mode:'normal',revision:1,scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{}};
 const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
 const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').split(',')[1]},jpeg:{mediaType:'image/jpeg',data:canvas.toDataURL('image/jpeg').split(',')[1]},bad:{mediaType:'image/png',data:'YWJj'}};
 state.images=images;
-function record(scope){return {id:'T1',title:scope.id==='g1'?'Group task':'Personal task',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status:'reported',shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
+function record(scope){return {id:'T1',title:scope.id==='g1'?'Group task':'Personal task',owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status:state.mode==='manual'?'proposed':'reported',...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
  if(endpoint==='board-list'){
@@ -48,7 +48,7 @@ async function request(endpoint,payload){
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',status:'legacy-unverified',legacy:{originalStatus:'done'}}]:[];
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
-  return {tasks:[task,...legacy,...shared],recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'}],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  return {tasks:[task,...legacy,...shared],recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
  if(endpoint==='board-image')return images[payload.imageId];
  if(endpoint==='board-command'||endpoint==='board-upload'){
@@ -60,6 +60,7 @@ async function request(endpoint,payload){
    if(state.sealed.has(id))throw Error('sealed');
   }
   if(state.mode==='conflict')state.revision=2;
+  if(endpoint==='board-command'&&payload.type==='personal-progress'){state.progress=payload.value.progress;state.revision++}
   return {};
  }
  if(endpoint==='board-operation-cancel'){
@@ -109,13 +110,14 @@ try {
   await page.evaluate(() => renderFixture({ kind: 'personal', id: 'user' }, 'capacity'))
   await page.getByText('Instance task capacity: 1000 / 1000').waitFor()
   await page.getByText('Task limit reached. New tasks cannot be created.').waitFor()
-  assert.equal(await page.getByRole('button', {name:'Propose task'}).isDisabled(), true)
+  assert.equal(await page.getByRole('button', {name:'Create task'}).isDisabled(), true)
   await page.evaluate(() => renderFixture({ kind: 'room', id: 'g1' }, 'readonly'))
   await page.getByRole('heading', { name: 'Awaiting review 1' }).waitFor()
   assert.equal(await page.locator('[aria-label="Done"] article').count(), 0, 'reported must not be displayed as done')
-  assert.equal(await page.getByRole('button', { name: 'Propose task' }).count(), 0, 'missing capability is read only')
+  assert.equal(await page.getByRole('button', { name: 'Create task' }).count(), 0, 'missing capability is read only')
   assert.equal(await page.getByText('Read only').count(), 1)
   assert.equal(await page.getByText('Instance task capacity: 1000 / 1000').count(), 0, 'capacity is not shown when the host omits it')
+  await page.locator('article').filter({hasText:'Group task'}).locator('summary').click()
   assert.match(await page.locator('article').filter({hasText:'Group task'}).locator('.bt-board-fact').filter({hasText:'Owner'}).innerText(), /\ba\b/, 'missing actor name falls back to ID')
   await page.waitForFunction(() => {const imgs=[...document.querySelectorAll('.bt-board-photo img')];return imgs.length===2&&imgs.every(img=>img.complete&&img.naturalWidth===2&&img.naturalHeight===2)})
   await page.getByText('Image unavailable').waitFor()
@@ -125,16 +127,17 @@ try {
   await page.getByText('Personal task', { exact: true }).waitFor()
   assert.equal(await page.getByText('Group task', { exact: true }).count(), 0, 'group data must not persist in another scope')
   const namedCard = page.locator('article').filter({hasText:'Personal task'})
+  await namedCard.locator('summary').click()
   assert.match(await namedCard.locator('.bt-board-fact').filter({hasText:'Owner'}).innerText(), /Alice/)
   assert.match(await namedCard.locator('.bt-board-fact').filter({hasText:'Reviewer'}).innerText(), /Bob/)
-  await page.getByRole('button', { name: 'Propose task' }).click()
+  await page.getByRole('button', { name: 'Create task' }).click()
   await page.getByLabel('Title', { exact: true }).fill('New task')
   await page.getByLabel('Owner ID', { exact: true }).selectOption('a')
   await page.getByLabel('Independent reviewer ID', { exact: true }).selectOption('b')
   await page.getByLabel('Acceptance criteria').fill('Review evidence')
   await page.getByLabel('Dependencies', {exact:true}).selectOption('T2')
   await page.getByRole('button', { name: 'Submit proposal' }).click()
-  await page.getByRole('button', { name: 'Propose task' }).waitFor()
+  await page.getByRole('button', { name: 'Create task' }).waitFor()
   const proposal = await page.evaluate(() => fixture.calls.find(x => x.endpoint === 'board-command'))
   assert.equal(proposal.payload.type, 'create')
   assert.equal(proposal.payload.value.owner, 'a')
@@ -216,7 +219,7 @@ try {
 
   await page.locator('.bt-board-actions').getByRole('button', { name:'Cancel' }).click()
   await page.evaluate(() => { fixture.mode='lost' })
-  await page.getByRole('button', { name:'Propose task' }).click()
+  await page.getByRole('button', { name:'Create task' }).click()
   await page.getByLabel('Title', { exact:true }).fill('Potentially sent')
   await page.getByLabel('Owner ID', { exact:true }).selectOption('a')
   await page.getByLabel('Independent reviewer ID', { exact:true }).selectOption('b')
@@ -247,38 +250,60 @@ try {
   assert.equal(await page.evaluate(id => fixture.calls.some(call => call.endpoint==='board-operation-cancel' && call.payload.operationId===id), originalId), true)
 
   await page.evaluate(() => { fixture.mode='hang' })
-  await page.getByRole('button', { name:'Propose task' }).click()
+  await page.getByRole('button', { name:'Create task' }).click()
   await page.getByLabel('Title', { exact:true }).fill('First pending')
   await page.getByLabel('Owner ID', { exact:true }).selectOption('a')
   await page.getByLabel('Independent reviewer ID', { exact:true }).selectOption('b')
   await page.getByLabel('Acceptance criteria').fill('Evidence')
   await page.getByRole('button', { name:'Submit proposal' }).click()
-  await page.getByText('An action needs confirmation.').waitFor()
+  await page.getByText('Saving…').waitFor()
   const firstId = await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   await page.getByRole('button', { name:'Safely cancel pending request' }).click()
-  await page.getByText('An action needs confirmation.').waitFor({state:'hidden'})
+  await page.getByText('Saving…').waitFor({state:'hidden'})
   await page.getByLabel('Title', { exact:true }).fill('Second pending')
   await page.getByRole('button', { name:'Submit proposal' }).click()
-  await page.getByText('An action needs confirmation.').waitFor()
+  await page.getByText('Saving…').waitFor()
   const secondId = await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   assert.notEqual(firstId, secondId)
   await page.evaluate(id => fixture.resolvers[id](), firstId)
   await page.waitForTimeout(100)
   assert.equal(await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a')), secondId, 'late first request must not clear the next pending action')
   await page.getByRole('button', { name:'Safely cancel pending request' }).click()
-  await page.getByText('An action needs confirmation.').waitFor({state:'hidden'})
+  await page.getByText('Saving…').waitFor({state:'hidden'})
   await page.evaluate(id => fixture.resolvers[id](), secondId)
+
+  await page.evaluate(() => { sessionStorage.clear(); fixture.revision=1; fixture.progress='todo'; renderFixture({kind:'personal',id:'user'},'manual') })
+  await page.locator('[aria-label="To do"] article').getByText('Personal task',{exact:true}).waitFor()
+  await page.getByText('Your own progress markers do not complete shared work or unblock dependencies.').waitFor()
+  if (process.env.BOARD_SCREENSHOT) await page.screenshot({ path:process.env.BOARD_SCREENSHOT })
+  await page.locator('[aria-label="To do"] article summary').click()
+  await page.getByLabel('Move personal task').focus()
+  await page.keyboard.press('ArrowDown')
+  await page.locator('[aria-label="Doing"] article').getByText('Personal task',{exact:true}).waitFor()
+  const move = await page.evaluate(() => fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='personal-progress'))
+  assert.equal(move.payload.value.progress,'doing')
+  assert.ok(move.payload.operationId)
+  assert.equal(await page.evaluate(id=>fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),move.payload.operationId),true)
+  await page.locator('[aria-label="Doing"] article').dragTo(page.locator('[aria-label="Personally finished"]'))
+  await page.locator('[aria-label="Personally finished"] article').getByText('Personal task',{exact:true}).waitFor()
+  await page.getByLabel('Search tasks').fill('no matching title')
+  assert.equal(await page.getByText('Personal task',{exact:true}).count(),0)
+  await page.getByLabel('Search tasks').fill('')
+  await page.locator('[aria-label="Personally finished"] article').getByText('Personal task',{exact:true}).waitFor()
 
   await page.evaluate(() => renderFixture({kind:'room',id:'g1'},'legacy'))
   await page.getByText('Legacy task', {exact:true}).waitFor()
   await page.getByText('Existing group goal aggregates are read only. A new card does not automatically link to or replace them.').waitFor()
   const legacy = page.locator('article').filter({hasText:'Legacy task'})
+  await legacy.locator('summary').click()
   assert.match(await legacy.innerText(), /Existing group goal aggregate; child tasks not yet linked/)
   assert.match(await legacy.innerText(), /Original status/)
   assert.equal(await legacy.getByRole('button', {name:'Edit task'}).count(), 0, 'legacy card is read only even if capability is incorrectly supplied')
 
   await page.evaluate(() => renderFixture({kind:'personal',id:'a'},'normal'))
   await page.getByText('Personal task', { exact:true }).waitFor()
+  const previousVisible = await page.evaluate(() => { ReactDOM.flushSync(()=>renderFixture({kind:'room',id:'g1'},'slow')); return document.querySelector('.bt-board-dialog')?.textContent.includes('Personal task') })
+  assert.equal(previousVisible,false,'a scope change must immediately hide the previous scope')
   await page.evaluate(() => { sessionStorage.clear(); renderFixture({kind:'room',id:'g1'},'slow'); setTimeout(()=>renderFixture({kind:'personal',id:'a'},'normal'),20) })
   await page.getByText('Personal task', { exact:true }).waitFor()
   await page.waitForTimeout(600)
