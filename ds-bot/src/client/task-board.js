@@ -19,6 +19,9 @@ const IMAGE_BATCH_MAX_BYTES = 20 * 1024 * 1024
 const finalOperation = status => status === 'committed' || status === 'rejected'
 const storageKey = scope => `ds-bot:board-pending:${scope.kind}:${scope.id}`
 const textValue = value => typeof value === 'string' ? value : ''
+const cardStamp = task => ({revision:task.revision,...(task.legacy?.useOverlay?{boardRevision:task.legacy.boardRevision,position:task.legacy.position}:{})})
+const sameCardStamp = (task,stamp) => JSON.stringify(cardStamp(task))===JSON.stringify(stamp)
+const stampedTask = (task,stamp) => ({...task,revision:stamp.revision,...(task.legacy?{legacy:{...task.legacy,useOverlay:stamp.position!==undefined,boardRevision:stamp.boardRevision,position:stamp.position}}:{})})
 
 /** Group task cards into display columns without inferring completion. */
 export function boardColumns(tasks) {
@@ -483,11 +486,11 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
 }
 
 function CardDetails({task,editable,disabled,onEdit}) {
-  const [open,setOpen]=useState(false),[base,setBase]=useState(task.revision),[draft,setDraft]=useState({}),[entry,setEntry]=useState('')
-  const reset=()=>{setBase(task.revision);setEntry('');setDraft({description:textValue(task.description),dueDate:textValue(task.dueDate),labels:(Array.isArray(task.labels)?task.labels:[]).join('\n'),checklist:(Array.isArray(task.checklist)?task.checklist:[]).map(item=>({...item}))})}
+  const [open,setOpen]=useState(false),[base,setBase]=useState(()=>cardStamp(task)),[draft,setDraft]=useState({}),[entry,setEntry]=useState('')
+  const reset=()=>{setBase(cardStamp(task));setEntry('');setDraft({description:textValue(task.description),dueDate:textValue(task.dueDate),labels:(Array.isArray(task.labels)?task.labels:[]).join('\n'),checklist:(Array.isArray(task.checklist)?task.checklist:[]).map(item=>({...item}))})}
   const checklist=Array.isArray(task.checklist)?task.checklist:[]
   const labels=Array.isArray(task.labels)?task.labels:[]
-  const changed=task.revision!==base
+  const changed=!sameCardStamp(task,base)
   const labelValues=(draft.labels??'').split('\n').map(value=>value.trim()).filter(Boolean)
   const bytes=value=>new TextEncoder().encode(value).length
   const valid=bytes(draft.description??'')<=8192&&labelValues.length<=20&&new Set(labelValues).size===labelValues.length
@@ -503,7 +506,7 @@ function CardDetails({task,editable,disabled,onEdit}) {
       editable?h('button',{type:'button',disabled,onClick:()=>{reset();setOpen(true)}},t('Edit card details')):null)
       : h('form',{className:'bt-board-actions',onSubmit:event=>{
         event.preventDefault();if(disabled||changed||!valid)return
-        void onEdit({...task,revision:base},{description:draft.description,dueDate:draft.dueDate||null,labels:labelValues,checklist:draft.checklist.map(item=>({...item,text:item.text.trim()}))})
+        void onEdit(stampedTask(task,base),{description:draft.description,dueDate:draft.dueDate||null,labels:labelValues,checklist:draft.checklist.map(item=>({...item,text:item.text.trim()}))})
           .then(result=>{if(result==='committed')setOpen(false)})
       }},
       changed?h('div',{role:'alert'},t('Task changed. Reload its current values before saving.'),' ',h('button',{type:'button',disabled,onClick:reset},t('Reload values'))):null,
@@ -547,22 +550,22 @@ function CardConversation({task,commands,disabled,onCommand}) {
 }
 
 function EditGoalTask({task,disabled,onEdit}) {
-  const [open,setOpen]=useState(false),[base,setBase]=useState(task.revision),[title,setTitle]=useState(''),[note,setNote]=useState(''),[status,setStatus]=useState('')
-  const reset=()=>{setBase(task.revision);setTitle(textValue(task.title));setNote(textValue(task.goalNote));setStatus(task.legacy?.originalStatus??'')}
-  const changed=task.revision!==base,original=task.legacy?.originalStatus,paused=task.legacy?.goalStatus!=='active'
+  const [open,setOpen]=useState(false),[base,setBase]=useState(()=>cardStamp(task)),[title,setTitle]=useState(''),[note,setNote]=useState(''),[status,setStatus]=useState('')
+  const reset=()=>{setBase(cardStamp(task));setTitle(textValue(task.legacy?.originalTitle??task.title));setNote(textValue(task.goalNote));setStatus(task.legacy?.originalStatus??'')}
+  const changed=!sameCardStamp(task,base),original=task.legacy?.originalStatus,paused=task.legacy?.goalStatus!=='active'
   const titleLocked=['reported','done'].includes(original)
   const next=original==='pending'?'working':original==='working'?'reported':undefined
   const statuses=[original,...(!paused&&next?[next]:[])].filter(Boolean)
-  const modified=title.trim()!==textValue(task.title)||note!==textValue(task.goalNote)||status!==original
+  const modified=title.trim()!==textValue(task.legacy?.originalTitle??task.title)||note!==textValue(task.goalNote)||status!==original
   const valid=title.trim()&&modified&&(!status||status===original||note.trim())
   if(!open)return h('button',{type:'button',disabled,onClick:()=>{reset();setOpen(true)}},t('Edit goal task'))
   return h('form',{className:'bt-board-actions',onSubmit:event=>{
     event.preventDefault();if(disabled||changed||!valid)return
     const value={}
-    if(title.trim()!==textValue(task.title))value.title=title.trim()
+    if(title.trim()!==textValue(task.legacy?.originalTitle??task.title))value.title=title.trim()
     if(note!==textValue(task.goalNote)||status!==original)value.note=note
     if(status!==original)value.status=status
-    void onEdit({...task,revision:base},value).then(result=>{if(result==='committed')setOpen(false)})
+    void onEdit(stampedTask(task,base),value).then(result=>{if(result==='committed')setOpen(false)})
   }},
   changed?h('div',{role:'alert'},t('Task changed. Reload its current values before saving.'),' ',h('button',{type:'button',disabled,onClick:reset},t('Reload values'))):null,
   h('label',null,t('Task description'),h('textarea',{'aria-label':t('Task description'),value:title,disabled:disabled||titleLocked,onChange:event=>setTitle(event.target.value)})),
@@ -572,6 +575,21 @@ function EditGoalTask({task,disabled,onEdit}) {
   h('label',null,t('Goal task note'),h('textarea',{'aria-label':t('Goal task note'),value:note,disabled:disabled||paused,onChange:event=>setNote(event.target.value)})),
   h('p',{className:'bt-board-readonly'},t('Owner, acceptance and completed status are managed by the group goal.')),
   h('div',null,h('button',{type:'submit',disabled:disabled||changed||!valid},t('Save changes')),' ',h('button',{type:'button',disabled,onClick:()=>setOpen(false)},t('Cancel'))))
+}
+
+function EditHistoryTitle({task,disabled,onEdit}) {
+  const [open,setOpen]=useState(false),[base,setBase]=useState(()=>cardStamp(task)),[title,setTitle]=useState(''),[reason,setReason]=useState('')
+  const reset=()=>{setBase(cardStamp(task));setTitle(textValue(task.title));setReason('')}
+  const changed=!sameCardStamp(task,base)
+  const valid=title.trim() && title.trim().length<=500 && title.trim()!==task.title && reason.trim() && reason.length<=300
+  if(!open)return h('button',{type:'button',disabled,onClick:()=>{reset();setOpen(true)}},t('Correct card title'))
+  return h('form',{className:'bt-board-actions',onSubmit:event=>{event.preventDefault();if(disabled||changed||!valid)return
+    void onEdit(stampedTask(task,base),{title:title.trim(),reason:reason.trim()}).then(result=>{if(result==='committed')setOpen(false)})}},
+    changed?h('div',{role:'alert'},t('Task changed. Reload its current values before saving.'),' ',h('button',{type:'button',disabled,onClick:reset},t('Reload values'))):null,
+    h('label',null,t('Card display title'),h('input',{'aria-label':t('Card display title'),value:title,disabled,onChange:event=>setTitle(event.target.value)})),
+    h('label',null,t('Reason for correction'),h('textarea',{'aria-label':t('Reason for correction'),value:reason,disabled,onChange:event=>setReason(event.target.value)})),
+    h('p',{className:'bt-board-readonly'},t('The original task and acceptance record remain unchanged.')),
+    h('div',null,h('button',{type:'submit',disabled:disabled||changed||!valid},t('Save changes')),' ',h('button',{type:'button',disabled,onClick:()=>setOpen(false)},t('Cancel'))))
 }
 
 function ShareTask({ task, commands, targets, disabled, onCommand }) {
@@ -627,8 +645,8 @@ function BoardImage({ scope, taskId, image, request, disabled, onRemove, canRemo
 function UploadImages({ task, disabled, onUpload }) {
   const [images, setImages] = useState([])
   const [error, setError] = useState('')
-  const [base, setBase] = useState(task.revision)
-  const changed = images.length > 0 && base !== task.revision
+  const [base, setBase] = useState(()=>cardStamp(task))
+  const changed = images.length > 0 && !sameCardStamp(task,base)
   const urls = useRef(new Set())
   useEffect(() => () => { for (const url of urls.current) URL.revokeObjectURL(url); urls.current.clear() }, [])
   const remove = image => {
@@ -639,7 +657,7 @@ function UploadImages({ task, disabled, onUpload }) {
   const choose = event => {
     const files = [...(event.target.files ?? [])]
     event.target.value = ''
-    if (!images.length) setBase(task.revision)
+    if (!images.length) setBase(cardStamp(task))
     const count = (Array.isArray(task.images) ? task.images.length : 0) + images.length + files.length
     const bytes = images.reduce((sum, image) => sum + image.file.size, 0) + files.reduce((sum, file) => sum + file.size, 0)
     if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || images.length + files.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || files.some(file => !IMAGE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
@@ -667,7 +685,7 @@ function UploadImages({ task, disabled, onUpload }) {
     h('div', { className: 'bt-board-images' }, images.map(image => h('div', { className: 'bt-board-photo', key: image.uploadId },
       h('img', { src: image.url, alt: image.file.name }),
       h('button', { type: 'button', disabled, onClick: () => remove(image) }, t('Remove image'))))),
-    images.length ? h('button', { type: 'button', disabled: disabled || changed, onClick: () => { void onUpload({ ...task, revision: base }, images).then(result => {
+    images.length ? h('button', { type: 'button', disabled: disabled || changed, onClick: () => { void onUpload(stampedTask(task,base), images).then(result => {
       if (result !== 'committed') return
       for (const image of images) { URL.revokeObjectURL(image.url); urls.current.delete(image.url) }
       setImages([])
@@ -762,7 +780,10 @@ function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,
         onChange:event => { void onCommand(task, { type:'personal-progress' }, { progress:event.target.value }) } },
       PERSONAL_COLUMNS.map(([id,label]) => h('option', { key:id, value:id }, t(label))))) : null,
     h('span', { className: 'bt-board-id' }, task.id),
-    task.legacy ? h('span', { className: 'bt-board-legacy' }, t(task.legacy.current ? 'Original group goal task' : 'Earlier group goal task · read only')) : null,
+    task.legacy ? h('span', { className: 'bt-board-legacy' }, t(({current:'Current goal task',previous:'Earlier goal stage',future:'Upcoming goal stage',archived:'Archived goal task',closed:'Closed goal task'})[task.legacy.position] ?? (task.legacy.current?'Current goal task':'Earlier goal stage'))) : null,
+    task.legacy?.useOverlay ? h(Fact,{label:t('Original task description'),value:textValue(task.legacy.originalTitle)}) : null,
+    task.legacy?.titleStale ? h('p',{className:'bt-board-pending',role:'status'},t('The original task changed after this display title was corrected. Review the title.')) : null,
+    task.legacy?.pending ? h('p',{className:'bt-board-pending',role:'status'},t('A card change is awaiting confirmation in its original board.')) : null,
     task.shared ? h('span', { className: 'bt-board-legacy' }, t('Shared task · read only')) : null,
     task.legacy && !KNOWN.has(task.status) ? h(Fact, { label: t('Original status'), value: textValue(task.legacy.originalStatus) || t('Status unknown') }) : null,
     h(Fact, { label: t('Owner'), value: actorLabel(task.owner, actors) }),
@@ -784,10 +805,14 @@ function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,
     }))) : null,
     uploadEnabled && commands.some(command => command.type === 'upload') ? h(UploadImages, { task, disabled: uncertain, onUpload }) : null,
     h(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
+    commands.some(command=>command.type==='goal-history-title') ? h(EditHistoryTitle,{task,disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:'goal-history-title'},value)}) : null,
+    Array.isArray(task.boardHistory)&&task.boardHistory.length ? h('details',{className:'bt-board-history'},h('summary',null,t('Card revision history')),
+      task.boardHistory.map(entry=>h('article',{key:entry.operationId},h('strong',null,`${Number.isFinite(entry.at)?new Date(entry.at).toLocaleString():''} · ${t('You')} · ${entry.kind}`),
+        entry.reason?h('p',null,entry.reason):null,h('p',null,`${t('Before')}: ${JSON.stringify(entry.before)}`),h('p',null,`${t('After')}: ${JSON.stringify(entry.after)}`)))) : null,
     commands.some(command=>command.type==='goal-task-edit') ? h(EditGoalTask,{task,disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:'goal-task-edit'},value)}) : null,
     commands.some(command => command.type === 'edit') && Array.isArray(actors)
       ? h(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: 'edit' }, value) })
-      : !commands.some(command => ['goal-task-edit','goal-image-remove','remove-image', 'share', 'unshare'].includes(command.type) || (uploadEnabled && command.type === 'upload'))
+      : !commands.some(command => ['goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove','remove-image', 'share', 'unshare'].includes(command.type) || (uploadEnabled && command.type === 'upload'))
         ? h('span', { className: 'bt-board-readonly' }, t('Read only')) : null)))
 }
 
@@ -931,6 +956,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setBusy(true)
       await request('board-command', { scope, operationId, taskId: task.id,
         ...(Number.isSafeInteger(task.revision) ? { expectedRevision: task.revision } : {}),
+        ...(task.legacy?.useOverlay ? {expectedBoardRevision:task.legacy.boardRevision,expectedPosition:task.legacy.position} : {}),
         type: command.type, ...(value !== undefined ? { value } : {}) })
       return await check(operationId, epoch)
     } catch (err) {
@@ -962,7 +988,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       pendingRef.current = operationId
       fetching.current = operationId
       setPending(operationId)
-      await request('board-upload', { scope, taskId: task.id, expectedRevision: task.revision, operationId, images: encoded })
+      await request('board-upload', { scope, taskId: task.id, expectedRevision: task.revision, ...(task.legacy?.useOverlay ? {expectedBoardRevision:task.legacy.boardRevision,expectedPosition:task.legacy.position} : {}), operationId, images: encoded })
       return await check(operationId, epoch)
     } catch (err) {
       if (current(epoch) && operationId && pendingRef.current === operationId) return await check(operationId, epoch)
@@ -999,7 +1025,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('button', { type: 'button', onClick: dismiss }, t('Close')))),
       error ? h('div', { className: 'bt-board-error', role: 'alert' }, error) : null,
       capacityReached ? h('div', { className: 'bt-board-pending', role: 'status' }, t('Task limit reached. New tasks cannot be created.')) : null,
-      hasLegacy ? h('div', { className: 'bt-board-pending', role: 'note' }, t('Group goal cards edit the original task. Earlier stages remain read only.')) : null,
+      hasLegacy ? h('div', { className: 'bt-board-pending', role: 'note' }, t('Goal card details can be corrected without changing the original task or acceptance record.')) : null,
       pending ? h('div', { className: 'bt-board-pending', role: 'status' }, t(busy ? 'Saving…' : 'An action needs confirmation.'), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => check(pending) }, t('Check action')), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,

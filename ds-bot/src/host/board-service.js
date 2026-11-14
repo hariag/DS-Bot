@@ -106,6 +106,7 @@ export function install(rt) {
     const goalEditor=createGoalBoardEditor(rt)
     const api = createBoardApi({ store, images, assertWritable: writable, roster: () => rt.state, verifyDependency: dependencyAllowed,
       goalImageReference:(scope,taskId,imageId)=>goalEditor.imageReference(scope,taskId,imageId),
+      goalCardSnapshot:taskId=>goalEditor.pendingCard(taskId),
       shareTargets: task => Object.entries(rt.state.rooms).filter(([id]) => shareAllowed(task, id)).map(([id, room]) => ({ id, name:typeof room.name === 'string' && room.name ? room.name : id })),
       verifyShare: (task, grant, scope, viewer) => grant?.taskId === task.id && grant.grantedBy === 'user' && !grant.revoked && grant.targetRoomId === scope.id
         && Array.isArray(grant.fields) && grant.fields.includes('status') && grant.fields.every(field => ['status','title'].includes(field))
@@ -161,9 +162,9 @@ export function install(rt) {
         return store.cancelRequest({ operationId: payload.operationId, actor: 'user' })
       }
       case 'board-command': {
-        if(['goal-task-edit','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type)) {
+        if(['goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type)) {
           api.list(scope,principal)
-          const kind=payload.type==='goal-task-edit'?'edit':payload.type==='goal-card-details'?'details':payload.type==='goal-card-comment'?'comment':'remove-image'
+          const kind=payload.type==='goal-task-edit'?'edit':payload.type==='goal-history-title'?'title':payload.type==='goal-card-details'?'details':payload.type==='goal-card-comment'?'comment':'remove-image'
           return goalEditor.execute(scope,payload.operationId,{endpoint,payload},()=>goalEditor.mutate(scope,payload,kind))
         }
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))throw new Error('Goal operation ID requires a goal task action')
@@ -292,7 +293,7 @@ export function install(rt) {
         }
         // Both the visible scope and the exact goal revision are checked
         // before and after the worker and immutable-file publication.
-        try {inst.goalEditor.lookup(meta.scope,meta.taskId,meta.expectedRevision)} catch(error) {
+        try {inst.goalEditor.lookup(meta.scope,meta.taskId,meta.expectedRevision,meta.expectedBoardRevision,meta.expectedPosition)} catch(error) {
           const outcome=await inst.goalEditor.execute(meta.scope,meta.operationId,identity,()=>{throw error})
           return response(fail(outcome.message||'Image upload outcome is unknown'))
         }

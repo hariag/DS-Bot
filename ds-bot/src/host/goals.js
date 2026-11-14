@@ -185,13 +185,15 @@ const goalHasBoardDetails = goal => (goal?.stages ?? []).some(stage => (stage?.t
   const data=task?.boardDetails
   return !!(data?.description || data?.dueDate || data?.labels?.length || data?.checklist?.length || task?.boardComments?.length)
 }))
+const goalHasCardRevisions = goal => goal?.boardCards !== undefined && (!goal.boardCards || typeof goal.boardCards!=='object'
+  || Array.isArray(goal.boardCards) || Object.keys(goal.boardCards).length>0)
 
 export function archiveGoal(room) {
   const goal = room.goal
   if (goal === undefined) return
   const all=[...(room.pastGoals ?? []),goal]
   // Keep the sole copy of board data when ordinary goal history rolls over.
-  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goal=>goalHasBoardImages(goal)||goalHasBoardDetails(goal)),...all.slice(-PAST_MAX)]
+  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goal=>goalHasBoardImages(goal)||goalHasBoardDetails(goal)||goalHasCardRevisions(goal)),...all.slice(-PAST_MAX)]
   delete room.goal
 }
 
@@ -371,6 +373,13 @@ export function reviseGoal(room, input, by, memberOf, memberNames, now = Date.no
   let cleaned
   let keep = []
   if (input.stages !== undefined) {
+    if(goalHasCardRevisions(goal)) {
+      const stageIds=new Set(goal.stages.slice(Math.max(0,goal.current)).map(stage=>stage.id))
+      const records=goal.boardCards && typeof goal.boardCards==='object' && !Array.isArray(goal.boardCards)?Object.values(goal.boardCards):[]
+      if(!records.length || records.some(record=>!record || typeof record.stageId!=='string' || stageIds.has(record.stageId))) {
+        return {error:'These stages have card revision history. Preserve that history before rebuilding the stages.'}
+      }
+    }
     if(goal.stages.slice(Math.max(0,goal.current)).some(stage=>goalHasBoardImages({stages:[stage]}))) {
       return {error:'These stages contain board images. Download and remove the images before rebuilding the stages.'}
     }
