@@ -1,6 +1,6 @@
 # Task boards and continuous execution
 
-Status: implementation and local verification complete on `wip/board-change-requests-20261114`; push/merge to the fork and production deployment remain pending. Production history and queue state have not been verified because 10.10.0.215 was unreachable from the build host.
+Status: merged to `hariag/DS-Bot` `main` at `fa8a8045f9c20d84415ad813392106ed6c3f1b19` and installed into the active DSH Web profile on `server` (`dsh-web-4f60762.service`) on 2026-11-14. The service restarted at 21:40:37 CST. SSH to the separate `10.10.0.215` address still returns `No route to host`, so its network identity was not independently checked.
 
 ## Goals
 
@@ -38,16 +38,21 @@ The task ledger and DSH session log are separate stores. Their writes must not b
 
 No local fence can guarantee exactly-once effects in an external system that has no transactional or idempotency support. An uncertain external side effect must remain pending investigation rather than being retried under a new identity.
 
-## Local verification and remaining rollout
+## Verification, deployment and remaining checks
 
 The implementation now connects the durable task driver to DSH's synchronous message-admission boundary. It records the task intent before admission, fences a changed authorization/dependency state immediately before the message enters the Session, writes a receipt after admission, and retains uncertain outcomes for reconciliation instead of replaying them. Startup recovery and cancellation use the same stable action identity. Active/completed edits become separate change requests with before/after values; lane drops and per-lane creation go through the durable board operation API.
 
-The locally verified revision contains the upstream `main` history and fork `main` as ancestors. Verification on 2026-11-14: `npm run build` passed; `npm test` passed (2,834 passed, 4 skipped, 0 failed); the browser board suite passed; isolated mock-host smoke passed all 52 steps; `npm run lint` exited 0 with existing warnings; generated-client and diff checks passed. The browser and smoke fixtures used synthetic data and were stopped after the run.
+The merged revision contains the fetched upstream `main` history and fork `main` as ancestors. Verification on 2026-11-14: `npm run build` passed; `npm test` passed (2,834 passed, 4 skipped, 0 failed); the browser board suite passed; isolated mock-host smoke passed all 52 steps; `npm run lint` exited 0 with existing warnings; generated-client and diff checks passed. The browser and smoke fixtures used synthetic data and were stopped after the run.
 
-Remaining rollout work:
+The active Web profile's `ds-bot` package was atomically replaced from the merged source; `board-service.js`, `task-store.mjs`, `parts.js` and `client.js` matched the merged tree after installation. The previous package is backed up at `/tmp/ds-bot-deploy-564de787/installed-before.tgz` (SHA-256 `3c7620f6eb0a52862048bbd65f944086546de97a3476a6a65e31633381e0b03a`). After restart the unit was active with PID 952508; ports 3080 and 9230 listened, and an unauthenticated request to `/` returned the expected 401. No authenticated production board action was run.
 
-- Push the reviewed branch to `hariag/DS-Bot`, open and merge a pull request into the fork's verified default branch (`main`), then re-fetch and compare the merged content.
-- Review production task queues, uncertain receipts and service logs on 10.10.0.215, then deploy the merged revision with a verified backup and post-deployment health/UI checks. The build host currently reports `No route to host` for 10.10.0.215, so production history and deployment are not yet verified. Do not use or restart 10.10.0.180; its 8888 proxy must remain available.
-- Before changing any existing board database, define an explicitly guarded, backed-up migration; absence of a lock alone does not prove a running host is offline.
+The `journalctl --user-unit=dsh-web-4f60762.service --since '24 hours ago'` filter returned 173 records before deployment. None matched error/warning, fatal, uncaught exception, `ERR_STREAM_WRITE_AFTER_END`, handoff hard-line failure, checkpoint truncation, disposed-initiator, or scheduler-uncertain patterns. A scan from the restart timestamp through 21:45:16 CST found no matching error/warning records. This service journal contains no task-queue length, so it cannot establish whether production tasks are backlogged or all Bot work is progressing. The user-supplied historical traces are the evidence for the older failures; the write-after-end guard is present in the merged code, and the hard-context handoff now avoids a second full-history summary call.
+
+Remaining checks:
+
+- Review live task states and uncertain receipts through an authorized read-only board view; no session or board database was opened for this deployment check.
+- Confirm whether `10.10.0.215` maps to the active `server` Web unit. The active unit was deployed directly on this host, but the SSH alias remains unreachable.
+- The `agent initiator scope is disposed` trace was not present in the available journal window and was not independently reproduced. Keep it open for targeted diagnosis if it recurs; do not claim this deployment fixed its root cause.
+- Do not use or restart 10.10.0.180; its 8888 proxy must remain available.
 
 The board host tests are part of `npm test` in `ds-bot/`. The separate browser fixture runs with `npm run test:board:browser` after installing the plugin's development dependencies and setting `DSH_HARNESS` to a local Harness checkout. Set `CHROME_PATH` if Chrome is not at its default executable path. Both use synthetic data; neither should use a real user's DSH data.
