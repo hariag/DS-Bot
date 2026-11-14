@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { openGuardedRedoJournal, redoIdentity, redoSnapshot } from '../../src/host/guarded-redo-journal.mjs'
@@ -155,6 +155,16 @@ test('lease generation changes permanently fence the old journal before guarded 
   assert.equal(sends,0)
 })
 
+test('an existing recovery sidecar is retained and blocks reopening',t=>{
+  const f=fixture(t),sidecar=`${f.path}-journal`,bytes=Buffer.from('unreconciled journal')
+  writeFileSync(sidecar,bytes,{mode:0o600})
+  const stamp=statSync(sidecar,{bigint:true}),entries=readdirSync(dirname(f.path)).sort()
+  assert.throws(()=>openGuardedRedoJournal(f.path,{assertLease:()=>true,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true}),/offline recovery/)
+  assert.deepEqual(readFileSync(sidecar),bytes)
+  assert.equal(statSync(sidecar,{bigint:true}).mtimeNs,stamp.mtimeNs)
+  assert.deepEqual(readdirSync(dirname(f.path)).sort(),entries)
+})
+
 test('only the exact complete target-writer prefix proves an interrupted original input',async t=>{
   const f=fixture(t),original={...f.message,id:f.binding.originalMessageId}
   let events=[
@@ -192,7 +202,16 @@ test('process death inside claim leaves a durable fence, not a replayable admiss
     journal.claim('session',${JSON.stringify(input)},${JSON.stringify(turn)},()=>process.exit(42));`
   const child=spawnSync(process.execPath,['--input-type=module','-e',script,f.path],{encoding:'utf8',env:{PATH:process.env.PATH}})
   assert.equal(child.status,42,child.stderr)
-  f.reopen()
-  assert.equal(f.journal.inspect({binding:f.binding,message:f.message}).state,'unknown')
-  assert.throws(()=>f.journal.claim('session',input,turn,()=>{}),/already reserved/)
+  const sidecar=`${f.path}-journal`
+  if(existsSync(sidecar)){
+    const before=readFileSync(sidecar),stamp=statSync(sidecar,{bigint:true}),entries=readdirSync(dirname(f.path)).sort()
+    assert.throws(()=>openGuardedRedoJournal(f.path,{assertLease:()=>true,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true}),/offline recovery/)
+    assert.deepEqual(readFileSync(sidecar),before)
+    assert.equal(statSync(sidecar,{bigint:true}).mtimeNs,stamp.mtimeNs)
+    assert.deepEqual(readdirSync(dirname(f.path)).sort(),entries)
+  } else {
+    f.reopen()
+    assert.equal(f.journal.inspect({binding:f.binding,message:f.message}).state,'unknown')
+    assert.throws(()=>f.journal.claim('session',input,turn,()=>{}),/already reserved/)
+  }
 })
