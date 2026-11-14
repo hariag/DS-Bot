@@ -58,6 +58,12 @@ prompt, but there is no Session creation or dispatch path. Denying every tool
 is a fail-closed floor, not evidence that original-scope tools are available
 or that a redo can usefully finish. Actual Agent setup must also establish the
 non-tool boundaries before enabling any input.
+The separate tool-parity helper is diagnostic only. Equal preset, sandbox
+policy and tool definition cannot establish equal authorization: scope-aware
+guards and wrappers can differ per Agent, actual backends may not enforce the
+resolved policy, dynamic cwd can differ, and shell can bypass tool-name
+restrictions or continue in the background. Group file read boundaries and
+revocation need independently verified enforcement before any tool is allowed.
 
 The ordinary routing indexes are not suitable for this new identity. In
 `turns.js`, original room inputs can enter the group waiter and late-reply

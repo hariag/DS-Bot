@@ -1,15 +1,23 @@
 import { isDeepStrictEqual } from 'node:util'
 import { createHash } from 'node:crypto'
+import { isAbsolute } from 'node:path'
 import { userRedoConfirmation, userRedoIdentity } from './user-redo-journal.mjs'
 
-// Candidate policy only; never installed as the live guard. It can permit a
-// small set of original-session file tools if their actual definitions and
-// effective permission/sandbox state match the target. Team messaging,
-// delegation, connectors and run_code stay denied. A real Host must prove the
-// original, journal and Agent setup before binding this to dispatch.
+// Diagnostic parity check only. A positive result is NOT authorization and
+// must never open the live guard: file roots, dynamic cwd, shell/network and
+// external effects are not confined here. The guard remains deny-all.
 const FILE_TOOLS = new Set(['read', 'write', 'edit', 'glob', 'grep', 'bash'])
+const sandboxPolicy = (policy, sessionId) => {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy) || policy.sessionId !== sessionId
+    || Object.keys(policy).some(key => !['mode', 'workspaceRoot', 'additionalWritableRoots', 'sessionId'].includes(key))
+    || !['read-only', 'workspace-write', 'danger-full-access'].includes(policy.mode)
+    || typeof policy.workspaceRoot !== 'string' || !isAbsolute(policy.workspaceRoot) || policy.workspaceRoot.includes('\0')
+    || (policy.additionalWritableRoots !== undefined && (!Array.isArray(policy.additionalWritableRoots)
+      || policy.additionalWritableRoots.some(root => typeof root !== 'string' || !isAbsolute(root) || root.includes('\0'))))) return undefined
+  return { mode:policy.mode, workspaceRoot:policy.workspaceRoot, additionalWritableRoots:policy.additionalWritableRoots ?? [] }
+}
 
-export function checkRedoFileTool(rt, { operationId, target, sourceProof, confirmationDigest, exec }) {
+export function sameRedoToolRuntime(rt, { operationId, target, sourceProof, confirmationDigest, exec }) {
   try {
     const ctx = rt.ctx, entry = rt.state.userRedos?.[operationId], identity = userRedoIdentity(operationId)
     if (!entry || !isDeepStrictEqual(entry.identity, identity) || entry.operationId !== operationId
@@ -33,14 +41,17 @@ export function checkRedoFileTool(rt, { operationId, target, sourceProof, confir
     if (typeof preset !== 'string' || !preset || ['auto', 'custom'].includes(preset)
       || permissions.current(target.session) !== preset) return false
     const spec = permissions.resolve(preset)
-    const originalSandbox = sandbox.resolve({ session:original.session }), targetSandbox = sandbox.resolve({ session:target.session })
+    const originalSandbox = sandboxPolicy(sandbox.resolve({ session:original.session }), original.id)
+    const targetSandbox = sandboxPolicy(sandbox.resolve({ session:target.session }), target.id)
     if (!spec || typeof spec.sandbox !== 'string' || typeof spec.approval !== 'string' || originalSandbox?.mode !== spec.sandbox
-      || !isDeepStrictEqual(originalSandbox, targetSandbox)) return false
-    const definitions = ctx.tools?.definitions
-    if (typeof definitions !== 'function') return false
-    const originalDefs = definitions.call(ctx.tools, original).filter(def => def.name === exec.name)
-    const targetDefs = definitions.call(ctx.tools, target, exec.toolSet).filter(def => def.name === exec.name)
-    return originalDefs.length === 1 && targetDefs.length === 1 && originalDefs[0] === targetDefs[0]
+      || !targetSandbox || !isDeepStrictEqual(originalSandbox, targetSandbox)) return false
+    const executable = ctx.tools?.executable
+    // Without a resolved original step set, conditional registrations cannot
+    // be shown to be executable and are deliberately unavailable.
+    if (typeof executable !== 'function' || !exec.toolSet) return false
+    const originalDef = executable.call(ctx.tools, exec.name, original)
+    const targetDef = executable.call(ctx.tools, exec.name, target, exec.toolSet)
+    return !!originalDef && originalDef === targetDef
       && sourceProof.isCurrent() === true && rt.userRedoOwner(identity.sessionId)?.id === entry.original.botId
   } catch { return false }
 }
