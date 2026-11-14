@@ -53,6 +53,12 @@ Before enabling this path, implementation and real Host tests must establish:
   change, Session collision, mixed inbox, failed save and lost-response tests,
   followed by real fake-home DSH and browser checks.
 
+The separate Session identity currently has a deny-all tool guard and a role
+prompt, but there is no Session creation or dispatch path. Denying every tool
+is a fail-closed floor, not evidence that original-scope tools are available
+or that a redo can usefully finish. Actual Agent setup must also establish the
+non-tool boundaries before enabling any input.
+
 The ordinary routing indexes are not suitable for this new identity. In
 `turns.js`, original room inputs can enter the group waiter and late-reply
 paths, while request inputs can settle the referenced work. `turns.js` also
