@@ -1,13 +1,13 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { call } from './api.js'
-import { t } from './i18n.js'
+import { hostText, t } from './i18n.js'
 
 // The server supplies already-authorized tasks; never infer membership or filter
 // another actor's private tasks in the browser.
 const COLUMNS = [
   ['proposed', 'Preparing'], ['waiting', 'Waiting'], ['ready', 'Ready'],
-  ['working', 'In progress'], ['reported', 'Awaiting review'], ['done', 'Done'],
+  ['legacy-pending', 'Not started'], ['working', 'In progress'], ['reported', 'Awaiting review'], ['done', 'Done'],
 ]
 const PERSONAL_COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['finished', 'Personally finished']]
 const KNOWN = new Set(COLUMNS.map(([status]) => status))
@@ -236,6 +236,34 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
     h('button', { type: 'button', disabled, onClick: () => setOpen(false) }, t('Cancel'))))
 }
 
+function EditGoalTask({task,disabled,onEdit}) {
+  const [open,setOpen]=useState(false),[base,setBase]=useState(task.revision),[title,setTitle]=useState(''),[note,setNote]=useState(''),[status,setStatus]=useState('')
+  const reset=()=>{setBase(task.revision);setTitle(textValue(task.title));setNote(textValue(task.goalNote));setStatus(task.legacy?.originalStatus??'')}
+  const changed=task.revision!==base,original=task.legacy?.originalStatus,paused=task.legacy?.goalStatus!=='active'
+  const titleLocked=['reported','done'].includes(original)
+  const next=original==='pending'?'working':original==='working'?'reported':undefined
+  const statuses=[original,...(!paused&&next?[next]:[])].filter(Boolean)
+  const modified=title.trim()!==textValue(task.title)||note!==textValue(task.goalNote)||status!==original
+  const valid=title.trim()&&modified&&(!status||status===original||note.trim())
+  if(!open)return h('button',{type:'button',disabled,onClick:()=>{reset();setOpen(true)}},t('Edit goal task'))
+  return h('form',{className:'bt-board-actions',onSubmit:event=>{
+    event.preventDefault();if(disabled||changed||!valid)return
+    const value={}
+    if(title.trim()!==textValue(task.title))value.title=title.trim()
+    if(note!==textValue(task.goalNote)||status!==original)value.note=note
+    if(status!==original)value.status=status
+    void onEdit({...task,revision:base},value).then(result=>{if(result==='committed')setOpen(false)})
+  }},
+  changed?h('div',{role:'alert'},t('Task changed. Reload its current values before saving.'),' ',h('button',{type:'button',disabled,onClick:reset},t('Reload values'))):null,
+  h('label',null,t('Task description'),h('textarea',{'aria-label':t('Task description'),value:title,disabled:disabled||titleLocked,onChange:event=>setTitle(event.target.value)})),
+  titleLocked?h('p',{className:'bt-board-readonly'},t('Reported or completed work must be reconciled before changing its description.')):null,
+  h('label',null,t('Goal task status'),h('select',{'aria-label':t('Goal task status'),value:status,disabled:disabled||paused,onChange:event=>setStatus(event.target.value)},
+    statuses.map(value=>h('option',{key:value,value},t(({pending:'Not started',working:'In progress',reported:'Awaiting review',done:'Done'})[value]??'Status unknown'))))),
+  h('label',null,t('Goal task note'),h('textarea',{'aria-label':t('Goal task note'),value:note,disabled:disabled||paused,onChange:event=>setNote(event.target.value)})),
+  h('p',{className:'bt-board-readonly'},t('Owner, acceptance and completed status are managed by the group goal.')),
+  h('div',null,h('button',{type:'submit',disabled:disabled||changed||!valid},t('Save changes')),' ',h('button',{type:'button',disabled,onClick:()=>setOpen(false)},t('Cancel'))))
+}
+
 function ShareTask({ task, commands, targets, disabled, onCommand }) {
   const [open, setOpen] = useState(false)
   const [base, setBase] = useState(task.revision)
@@ -359,12 +387,13 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
         onChange:event => { void onCommand(task, { type:'personal-progress' }, { progress:event.target.value }) } },
       PERSONAL_COLUMNS.map(([id,label]) => h('option', { key:id, value:id }, t(label))))) : null,
     h('span', { className: 'bt-board-id' }, task.id),
-    task.legacy ? h('span', { className: 'bt-board-legacy' }, t('Existing group goal aggregate; child tasks not yet linked')) : null,
+    task.legacy ? h('span', { className: 'bt-board-legacy' }, t(task.legacy.current ? 'Original group goal task' : 'Earlier group goal task · read only')) : null,
     task.shared ? h('span', { className: 'bt-board-legacy' }, t('Shared task · read only')) : null,
     task.legacy && !KNOWN.has(task.status) ? h(Fact, { label: t('Original status'), value: textValue(task.legacy.originalStatus) || t('Status unknown') }) : null,
     h(Fact, { label: t('Owner'), value: actorLabel(task.owner, actors) }),
     h(Fact, { label: t('Reviewer'), value: actorLabel(task.reviewer, actors) }),
     h(Fact, { label: t('Acceptance criteria'), value: textValue(task.acceptance) }),
+    task.legacy ? h(Fact,{label:t('Goal task note'),value:textValue(task.goalNote)}) : null,
     h(Fact, { label: t('Dependencies'), value: dependencies.join(' · ') }),
     h(Fact, { label: t('Next action'), value: asText(task.nextAction) }),
     h(Fact, { label: t('Blocked'), value: blocker }),
@@ -373,14 +402,15 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
     !canMove ? h('span', { className:'bt-board-readonly' }, t('Status changes are not available for this task.')) : null,
     Array.isArray(task.images) && task.images.length ? h('div', { className: 'bt-board-images' }, task.images.map(image => h(BoardImage, {
       key: image.id, scope, taskId: task.id, image, request, disabled: uncertain,
-      canRemove: commands.some(command => command.type === 'remove-image'),
-      onRemove: (_, imageId) => onCommand(task, { type: 'remove-image' }, { imageId }),
+      canRemove: commands.some(command => command.type === (task.legacy?'goal-image-remove':'remove-image')),
+      onRemove: (_, imageId) => onCommand(task, { type: task.legacy?'goal-image-remove':'remove-image' }, { imageId }),
     }))) : null,
     uploadEnabled && commands.some(command => command.type === 'upload') ? h(UploadImages, { task, disabled: uncertain, onUpload }) : null,
     h(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
+    commands.some(command=>command.type==='goal-task-edit') ? h(EditGoalTask,{task,disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:'goal-task-edit'},value)}) : null,
     commands.some(command => command.type === 'edit') && Array.isArray(actors)
       ? h(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: 'edit' }, value) })
-      : !commands.some(command => ['remove-image', 'share', 'unshare'].includes(command.type) || (uploadEnabled && command.type === 'upload'))
+      : !commands.some(command => ['goal-task-edit','goal-image-remove','remove-image', 'share', 'unshare'].includes(command.type) || (uploadEnabled && command.type === 'upload'))
         ? h('span', { className: 'bt-board-readonly' }, t('Read only')) : null)))
 }
 
@@ -429,7 +459,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
     pendingRef.current = ''
     setPending('')
     if (fetching.current === id) { fetching.current = null; setBusy(false) }
-    if (result.state === 'rejected') { setError(result.message || t('Action rejected')); await load(epoch, true) }
+    if (result.state === 'rejected') { setError(result.message ? hostText(result.message) : t('Action rejected')); await load(epoch, true) }
     else await load(epoch)
     return result.state
   }
@@ -502,7 +532,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
 
   const run = async (task, command, value) => {
     if (fetching.current || pendingRef.current || !store.current || !window.crypto?.randomUUID) return
-    const operationId = window.crypto.randomUUID()
+    const operationId = `${command.type.startsWith('goal-')?'goal:':''}${window.crypto.randomUUID()}`
     fetching.current = operationId
     const epoch = generation.current
     try {
@@ -539,7 +569,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
         reader.readAsDataURL(image.file)
       })))
       if (!current(epoch)) return
-      operationId = window.crypto.randomUUID()
+      operationId = `${task.legacy?'goal:':''}${window.crypto.randomUUID()}`
       store.current.put(operationId)
       pendingRef.current = operationId
       fetching.current = operationId
@@ -565,9 +595,9 @@ export function TaskBoard({ scope, title, close, request = call }) {
   const personalTasks = personal ? filtered.filter(task => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : []
   const personalIds = new Set(personalTasks.map(task => task.id))
   const columns = boardColumns(filtered.filter(task => !personalIds.has(task.id)))
-  const listed = [...COLUMNS, ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
+  const listed = [...COLUMNS.filter(([status])=>status!=='legacy-pending'||columns.get(status).length), ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
   const card = task => h(TaskCard, { key: task.id, scope, task, tasks: data.tasks, request, onUpload: upload,
-    commands: !task.legacy && !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : [],
+    commands: !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : [],
     actors: data?.capabilities?.actors, targets: data?.capabilities?.shareTargets?.[task.id], uploadEnabled: data?.capabilities?.upload === true, uncertain: !canAct, onCommand: run })
   if (!visible) return null
   return createPortal(h('div', { className: 'bt-board-backdrop' },
@@ -579,7 +609,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
         h('button', { type: 'button', onClick: dismiss }, t('Close')))),
       error ? h('div', { className: 'bt-board-error', role: 'alert' }, error) : null,
       capacityReached ? h('div', { className: 'bt-board-pending', role: 'status' }, t('Task limit reached. New tasks cannot be created.')) : null,
-      hasLegacy ? h('div', { className: 'bt-board-pending', role: 'note' }, t('Existing group goal aggregates are read only. A new card does not automatically link to or replace them.')) : null,
+      hasLegacy ? h('div', { className: 'bt-board-pending', role: 'note' }, t('Group goal cards edit the original task. Earlier stages remain read only.')) : null,
       pending ? h('div', { className: 'bt-board-pending', role: 'status' }, t(busy ? 'Saving…' : 'An action needs confirmation.'), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => check(pending) }, t('Check action')), ' ',
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,

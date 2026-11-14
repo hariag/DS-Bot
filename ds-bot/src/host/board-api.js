@@ -8,7 +8,7 @@ const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' 
 
 // `principal` comes from the authenticated route, never from a request body.
 // The current browser principal represents the instance owner, not a Bot.
-export function createBoardApi({ store, roster, assertWritable, images, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [] }) {
+export function createBoardApi({ store, roster, assertWritable, images, goalImageReference, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [] }) {
   const current = () => {
     const value = roster()
     if (!value || !value.rooms || !value.bots) throw fail('Team is unavailable')
@@ -20,10 +20,13 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
     const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, verifyShare, verifyDependency })
     const addLegacy = () => {
       const ids = new Set(board.tasks.map(task => task.id))
-      board.tasks.push(...legacyGoalCards({ scope, principal, rooms: state.rooms, bots: state.bots }).filter(task => !ids.has(task.id)))
+      for(const task of legacyGoalCards({ scope, principal, rooms: state.rooms, bots: state.bots })) {
+        if(!ids.has(task.id)){ids.add(task.id);board.tasks.push(task)}
+      }
       return board
     }
-    if (principal?.kind !== 'user') return addLegacy()
+    addLegacy()
+    if (principal?.kind !== 'user') return board
     const isPublic = id => has(state.bots, id) && state.bots[id]?.private !== true
     const ids = scope.kind === 'room'
       ? ['user', ...(state.rooms[scope.id].members ?? []).filter(isPublic)]
@@ -34,6 +37,9 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
     const availableTargets = Object.create(null)
     const commands = Object.fromEntries(board.tasks.map(task => {
       if (!writable || task.shared) return [task.id, []]
+      if (task.legacy) return [task.id, task.legacy.current && !task.legacy.ambiguous && Number.isSafeInteger(task.revision)
+        && ['active','paused'].includes(task.legacy.goalStatus)
+        ? [{type:'goal-task-edit',label:'Edit goal task'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
       const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
@@ -47,7 +53,7 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
     const taskLimitReached = Number.isSafeInteger(taskLimit) && tasks.length >= taskLimit
     board.capabilities = { commands, create: writable && !taskLimitReached, upload: writable && !!images, actors, shareTargets:availableTargets,
       ...(Number.isSafeInteger(taskLimit) ? { taskCount:tasks.length, taskLimit, taskLimitReached } : {}) }
-    return addLegacy()
+    return board
   }
   const visibleTask = (scope, principal, taskId) => {
     if (!nonempty(taskId)) throw fail('Invalid task ID')
@@ -178,6 +184,11 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
     },
     image(scope, principal, taskId, imageId) {
       if (!images || !nonempty(imageId)) throw fail('Image is unavailable')
+      const shown=view(scope,principal).tasks.find(item=>item.id===taskId)
+      if(shown?.legacy && typeof goalImageReference==='function') {
+        const item=goalImageReference(scope,taskId,imageId)
+        return images.read(item.taskId,item.reference)
+      }
       const { task } = visibleTask(scope, principal, taskId)
       const reference = task.attachments?.find(item => item.id === imageId)
       if (!reference) throw fail('Image is unavailable')
@@ -185,6 +196,8 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
     },
     imageReference(scope, principal, taskId, imageId) {
       if (!images || !nonempty(imageId)) throw fail('Image is unavailable')
+      const shown=view(scope,principal).tasks.find(item=>item.id===taskId)
+      if(shown?.legacy && typeof goalImageReference==='function')return goalImageReference(scope,taskId,imageId)
       const { task } = visibleTask(scope, principal, taskId)
       const reference = task.attachments?.find(item => item.id === imageId)
       if (!reference) throw fail('Image is unavailable')

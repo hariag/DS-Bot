@@ -11,6 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isDeepStrictEqual } from 'node:util'
 import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
+import { createGoalBoardEditor } from './goal-board-editor.js'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -102,7 +103,9 @@ export function install(rt) {
     const images = {
       read: (taskId, reference) => readBoardImage({ directory: imageDir, taskId, reference }),
     }
+    const goalEditor=createGoalBoardEditor(rt)
     const api = createBoardApi({ store, images, assertWritable: writable, roster: () => rt.state, verifyDependency: dependencyAllowed,
+      goalImageReference:(scope,taskId,imageId)=>goalEditor.imageReference(scope,taskId,imageId),
       shareTargets: task => Object.entries(rt.state.rooms).filter(([id]) => shareAllowed(task, id)).map(([id, room]) => ({ id, name:typeof room.name === 'string' && room.name ? room.name : id })),
       verifyShare: (task, grant, scope, viewer) => grant?.taskId === task.id && grant.grantedBy === 'user' && !grant.revoked && grant.targetRoomId === scope.id
         && Array.isArray(grant.fields) && grant.fields.includes('status') && grant.fields.every(field => ['status','title'].includes(field))
@@ -112,7 +115,7 @@ export function install(rt) {
       // No real admission capability or proof verifiers are installed here.
       // Wakeups scan nothing until the separately reviewed gate is supplied.
       const driver = createTaskDriver({ store, onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
-      instance = { store, api, root, imageDir, proofs, shareAllowed, driver }
+      instance = { store, api, root, imageDir, proofs, shareAllowed, driver, goalEditor }
       queueMicrotask(notifyDriver)
       return instance
     } catch (error) { store.close(); throw error }
@@ -122,7 +125,7 @@ export function install(rt) {
     void run(() => instance?.driver.wake()).catch(error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error'))
   }
   const mutate = (endpoint, payload) => {
-    const { api, store } = service(), scope = payload.scope
+    const { api, store, goalEditor } = service(), scope = payload.scope
     const outcome = store.request({ operationId: payload.operationId, actor: 'user', taskId: payload.taskId, payload: requestKey(endpoint, payload), isRejection: rejected }, () => {
       if (payload.type === 'create') {
         if (!payload.value || typeof payload.value !== 'object' || Array.isArray(payload.value)) throw Object.assign(new Error('Invalid task proposal'), { code: 'bot/invalid' })
@@ -149,12 +152,21 @@ export function install(rt) {
         }
         throw new Error('Board changed; refresh the board')
       }
-      case 'board-operation': return api.operation(scope, principal, payload.operationId)
+      case 'board-operation':
+        if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:')) {api.list(scope,principal);return goalEditor.operation(scope,payload.operationId)}
+        return api.operation(scope, principal, payload.operationId)
       case 'board-operation-cancel': {
         api.list(scope, principal)
+        if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))return goalEditor.cancel(scope,payload.operationId)
         return store.cancelRequest({ operationId: payload.operationId, actor: 'user' })
       }
-      case 'board-command': { const result = mutate(endpoint, payload); notifyDriver(); return result }
+      case 'board-command': {
+        if(['goal-task-edit','goal-image-remove'].includes(payload.type)) {
+          api.list(scope,principal)
+          return goalEditor.execute(scope,payload.operationId,{endpoint,payload},()=>goalEditor.mutate(scope,payload,payload.type==='goal-task-edit'?'edit':'remove-image'))
+        }
+        const result = mutate(endpoint, payload); notifyDriver(); return result
+      }
       default: throw new Error('Unknown board endpoint')
     }
   })
@@ -268,6 +280,32 @@ export function install(rt) {
       if (closing || rt.stopping) throw new Error('Board service is closing')
       const { meta, identity, references } = prepared
       const options = { operationId:meta.operationId, actor:'user', taskId:meta.taskId, payload:identity, isRejection:rejected }
+      if(typeof meta.operationId==='string'&&meta.operationId.startsWith('goal:')) {
+        inst.api.list(meta.scope,principal)
+        const prior=await inst.goalEditor.prior(meta.scope,meta.operationId,identity)
+        if(prior)return response(prior.state==='committed'?ok(prior.result):fail(prior.message||'Image upload outcome is unknown'))
+        if(prepared.rejected) {
+          const outcome=await inst.goalEditor.execute(meta.scope,meta.operationId,identity,()=>{throw Object.assign(new Error(prepared.message),{code:'bot/invalid'})})
+          return response(outcome.state==='committed'?ok(outcome.result):fail(outcome.message||'Image upload outcome is unknown'))
+        }
+        // Both the visible scope and the exact goal revision are checked
+        // before and after the worker and immutable-file publication.
+        try {inst.goalEditor.lookup(meta.scope,meta.taskId,meta.expectedRevision)} catch(error) {
+          const outcome=await inst.goalEditor.execute(meta.scope,meta.operationId,identity,()=>{throw error})
+          return response(fail(outcome.message||'Image upload outcome is unknown'))
+        }
+        const verified=await publishImages(prepared,stagingDir,inst)
+        const outcome=await inst.goalEditor.execute(meta.scope,meta.operationId,identity,()=>{
+          for(const item of references) {
+            const proof=verified.get(item.id)
+            if(!proof||proof.taskId!==meta.taskId||JSON.stringify(proof.reference)!==JSON.stringify(item))throw Object.assign(new Error('Image proof unavailable'),{code:'bot/invalid'})
+            const actual=lstatSync(join(inst.imageDir,proof.name))
+            if(!actual.isFile()||actual.isSymbolicLink()||!sameStat(actual,proof.stat))throw Object.assign(new Error('Image identity changed'),{code:'bot/invalid'})
+          }
+          return inst.goalEditor.mutate(meta.scope,meta,'attach',references)
+        })
+        return response(outcome.state==='committed'?ok(outcome.result):fail(outcome.message||'Image upload outcome is unknown'))
+      }
       if (prepared.rejected) {
         const outcome = inst.store.request(options, () => {
           inst.api.list(meta.scope, principal)
