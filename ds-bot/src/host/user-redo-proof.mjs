@@ -1,5 +1,10 @@
 import { isDeepStrictEqual } from 'node:util'
+import { symbols } from '@deepseek-ai/cordis'
 import { createInboxAudit } from './inbox-audit.js'
+
+const providerOf = service => service?.[symbols.original] ?? service
+const comparableHeader = header => header && typeof header === 'object'
+  ? { ...header, delegationDepth:header.delegationDepth === undefined ? 0 : header.delegationDepth } : header
 
 // Read only: an unknown or incomplete prefix is never evidence of absence.
 // This intentionally supports only a uniquely recorded Bot exchange from a
@@ -16,31 +21,31 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
         || trigger.groupKickoff === true || trigger.reviewId !== undefined || typeof trigger.exchangeId !== 'string'
         || trigger.exchangeId === '' || (hold.record.turn !== undefined
           && (!Number.isSafeInteger(hold.record.turn) || hold.record.turn < 0)) || hold.isCurrent() !== true) return undefined
-      const ctx = rt.ctx, persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
-      const session = ctx.sessions?.get?.(hold.sessionId), through = session?.seq
+      const ctx = rt.ctx, getPersistence = () => ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
+      const sessions = ctx.sessions, persistence = getPersistence()
+      const sessionsProvider = providerOf(sessions), persistenceProvider = providerOf(persistence)
+      const session = sessions?.get?.(hold.sessionId), through = session?.seq
       if (!session || session.id !== hold.sessionId || typeof session.eventAt !== 'function'
         || !Number.isSafeInteger(through) || through < 1 || through > 200_000
         || typeof persistence?.flushLiveSession !== 'function' || typeof persistence?.open !== 'function') return undefined
-      const current = () => hold.isCurrent() === true && ctx.sessions.get(hold.sessionId) === session && session.seq === through
+      const current = () => hold.isCurrent() === true && providerOf(ctx.sessions) === sessionsProvider
+        && providerOf(getPersistence()) === persistenceProvider && sessions.get(hold.sessionId) === session && session.seq === through
       const signal = AbortSignal.timeout(timeoutMs)
       await persistence.flushLiveSession(hold.sessionId)
       if (signal.aborted || !current()) return undefined
       reader = await persistence.open(hold.sessionId, 'read', { signal })
+      if (!current() || reader?.id !== hold.sessionId
+        || !isDeepStrictEqual(comparableHeader(reader.header), comparableHeader(session.header))
+        || reader.inheritedEventCount !== session.inheritedEventCount) return undefined
       const result = await reader.read(0, through, { signal })
       if (signal.aborted || !current() || !Array.isArray(result?.events) || result.events.length !== through
         || result.events.some((event, index) => event?.seq !== index || !isDeepStrictEqual(event, session.eventAt(index)))) return undefined
       const events = result.events, audit = createInboxAudit(hold.sessionId)
-      let expectedTurn = hold.record.turn
-      if (expectedTurn === undefined) {
-        if (!Number.isSafeInteger(hold.record.since) || hold.record.since < 0) return undefined
-        const starts = events.filter(event => event.type === 'turn/start')
-        // If any start has no persisted time, since could be Date.now() from
-        // that event and coincidentally equal a different turn's timestamp.
-        if (starts.some(event => !Number.isSafeInteger(event.time) || event.time < 0)) return undefined
-        const matchingStarts = starts.filter(event => event.time === hold.record.since)
-        if (matchingStarts.length !== 1 || !Number.isSafeInteger(matchingStarts[0].data?.turn)) return undefined
-        expectedTurn = matchingStarts[0].data.turn
-      } else if (hold.record.since !== undefined) {
+      const expectedTurn = hold.record.turn
+      // Legacy `since` can have been synthesized with Date.now(), so even an
+      // exact timestamp match cannot establish which persisted turn it meant.
+      if (!Number.isSafeInteger(expectedTurn) || expectedTurn < 0) return undefined
+      if (hold.record.since !== undefined) {
         if (!Number.isSafeInteger(hold.record.since) || hold.record.since < 0) return undefined
         const starts = events.filter(event => event.type === 'turn/start' && event.data?.turn === expectedTurn)
         if (starts.length !== 1 || (starts[0].time !== undefined && starts[0].time !== hold.record.since)) return undefined
@@ -51,6 +56,9 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
         && event.data.source.exchangeId === trigger.exchangeId)
       if (matches.length !== 1) return undefined
       const event = matches[0], source = event.data.source
+      const insertions = events.flatMap(entry => entry.type === 'agent/inbox/spliced'
+        ? (entry.data?.inserted ?? []).filter(item => item?.id === event.data.id) : [])
+      if (insertions.length !== 1 || !isDeepStrictEqual(insertions[0], event.data)) return undefined
       if (!['request', 'room'].includes(source.role) || source.reviewInspect === true
         || source.groupKickoff === true || source.reviewId !== undefined) return undefined
       if (Object.entries(trigger).some(([key, value]) => !isDeepStrictEqual(source[key], value))) return undefined
