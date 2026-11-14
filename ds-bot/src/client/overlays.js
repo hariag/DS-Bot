@@ -1,7 +1,6 @@
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CommandPalette } from './palette.js'
-import { GroupSearch } from './group-search.js'
 import { NewChat } from './new-chat.js'
 import { ExchangeDialog } from './exchange.js'
 import { VoiceMode } from './voice.js'
@@ -11,7 +10,8 @@ import { PANEL_LINGER_MS, BotPanel } from './browser-pane.js'
 import { frameLayout, FALLBACK_SIDEBAR_WIDTH } from './frame-layout.js'
 import { MemoryDialog } from './memory-panel.js'
 import { useLinger } from './motion.js'
-import { OpeningCover, openingModel } from './opening.js'
+import { TaskBoard } from './task-board.js'
+import { t } from './i18n.js'
 
 // How long a closing dialog or menu stays for its exit (see their [data-leaving] CSS).
 const DIALOG_EXIT_MS = 160
@@ -31,6 +31,14 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
     if (previous.current === current) return
     previous.current = current
     if (current) actions.followPanel?.(current)
+  }, [current])
+  // Ignore a transient empty main view during responsive shell remounts, but
+  // dismiss the board when the user actually selects a different session.
+  const boardSession = useRef(current)
+  useEffect(() => {
+    if (!current || boardSession.current === current) return
+    if (boardSession.current) actions.closePersonalBoard?.()
+    boardSession.current = current
   }, [current])
   const open = ui.details ? { id: ui.details, view: ui.view ?? 'details', renaming: ui.renaming, tab: ui.tab, side: ui.side } : null
   // A panel that no longer fits folds away: its state stays open, it just is not
@@ -62,17 +70,11 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
   const [memory, memoryLeaving] = useLinger(ui.memory && memoryOwner(ui.memory) ? ui.memory : null, DIALOG_EXIT_MS)
   const owner = memory ? memoryOwner(memory) : null
   const [menu, menuLeaving] = useLinger(ui.menu, MENU_EXIT_MS)
-  // A Session the Host made a moment ago is not in the shell's list yet: the asked-for
-  // Bot fills the conversation area instead of the chat that was there before.
-  const opening = openingModel({ pending: ui.pendingOpen ?? null, current, roster })
   return h(Fragment, null,
-    opening ? createPortal(h(OpeningCover, { model: opening, column: layout.column }), document.body) : null,
+    ui.personalBoard ? h(TaskBoard, { scope:{kind:'personal',id:'user'}, title:t('My task board'), close:actions.closePersonalBoard }) : null,
     pane ? createPortal(h(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === 'overlay', roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
     ui.newChat ? createPortal(h(NewChat, { key: `${ui.newChat}:${ui.newChatSection ?? ''}`, mode: ui.newChat, sectionId: ui.newChatSection ?? null, paneLeft: layout.column, roster, actions }), document.body) : null,
     ui.palette ? createPortal(h(CommandPalette, { key: ui.palette.token, start: ui.palette.query, token: ui.palette.token, roster, actions, useSessions }), document.body) : null,
-    ui.groupSearch && roster.roomsById[ui.groupSearch.roomId]
-      ? createPortal(h(GroupSearch, { key: ui.groupSearch.token, room: roster.roomsById[ui.groupSearch.roomId], roster, token: ui.groupSearch.token, actions }), document.body)
-      : null,
     ui.exchange ? createPortal(h(ExchangeDialog, { pair: ui.exchange, paneLeft: layout.column, roster, actions }), document.body) : null,
     ui.voice ? createPortal(h(VoiceMode, { key: ui.voice, sessionId: ui.voice, paneLeft: layout.column, roster, actions, useSessions, useSessionStatus }), document.body) : null,
     menu ? createPortal(h(ContextMenu, { key: `${menu.kind ?? ''}:${menu.id}:${menu.x}:${menu.y}`, menu, roster, actions, useWork, leaving: menuLeaving }), document.body) : null,

@@ -24,6 +24,7 @@ function fixture() {
       if (found) { if (found.input !== input) throw new Error('operation conflict'); return found.result }
       if (task.revision !== expectedRevision) throw new Error('revision conflict')
       if (type === 'edit') Object.assign(task, value)
+      else if (type === 'personal-progress') task.personalProgress = value.progress
       else if (type === 'attach') task.attachments.push(...value.images)
       else if (type === 'remove-image') task.attachments = task.attachments.filter(image => image.id !== value.imageId)
       task.revision += 1
@@ -90,4 +91,18 @@ test('a task on another group board cannot be edited from the wrong scope', () =
   const f = fixture(); f.api.create(room, user, proposal)
   f.state.rooms.other = { members: ['one', 'two'] }
   assert.throws(() => f.api.command({ kind: 'room', id: 'other' }, user, { operationId: 'edit', taskId: 'task1', expectedRevision: 1, type: 'edit', value: {} }), /not available/)
+})
+
+test('personal progress is offered only for the user’s own unregistered card', () => {
+  const f = fixture(), scope={kind:'personal',id:'user'}
+  f.api.create(scope,user,{...proposal,operationId:'mine',taskId:'mine',owner:'user',reviewer:'one'})
+  const initial=f.api.list(scope,user)
+  assert.equal(initial.tasks[0].personalProgress,'todo')
+  assert.ok(initial.capabilities.commands.mine.some(command=>command.type==='personal-progress'))
+  const result=f.api.command(scope,user,{operationId:'move',taskId:'mine',expectedRevision:1,type:'personal-progress',value:{progress:'doing'}})
+  assert.equal(result.personalProgress,'doing'); assert.equal(result.status,'proposed')
+  f.api.create(room,user,{...proposal,operationId:'group',taskId:'group',owner:'user',reviewer:'one'})
+  assert.throws(()=>f.api.command(scope,user,{operationId:'bad',taskId:'group',expectedRevision:1,type:'personal-progress',value:{progress:'finished'}}),/unavailable/)
+  f.rows.find(task=>task.id==='mine').status='reported'
+  assert.ok(!f.api.list(scope,user).capabilities.commands.mine.some(command=>command.type==='personal-progress'))
 })

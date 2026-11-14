@@ -67,6 +67,21 @@ test('actual task journal backs the five instance-user endpoints with isolated g
   assert.equal(readdirSync(join(rt.home, 'board-v1', 'images')).length, 2)
 })
 
+test('owner moves a personal card with a durable receipt without changing shared workflow', async t => {
+  const { rt } = fixture(t), personal={kind:'personal',id:'user'}
+  await rt.boardCall('board-command',{scope:personal,operationId:'personal-create',taskId:'mine',type:'create',value:{title:'Mine',owner:'user',reviewer:'one',acceptance:'Check',dependencies:[]}})
+  const before=await rt.boardCall('board-list',{scope:personal})
+  assert.equal(before.tasks[0].personalProgress,'todo')
+  assert.ok(before.capabilities.commands.mine.some(command=>command.type==='personal-progress'))
+  const input={scope:personal,operationId:'personal-move',taskId:'mine',expectedRevision:1,type:'personal-progress',value:{progress:'finished'}}
+  const result=await rt.boardCall('board-command',input)
+  assert.equal(result.personalProgress,'finished'); assert.equal(result.status,'proposed')
+  assert.deepEqual(await rt.boardCall('board-command',input),result)
+  assert.equal((await rt.boardCall('board-operation',{scope:personal,operationId:'personal-move'})).state,'committed')
+  assert.equal((await rt.boardCall('board-list',{scope:personal})).tasks[0].status,'proposed')
+  await assert.rejects(rt.boardCall('board-command',{...input,operationId:'other',expectedRevision:2,value:{progress:'done'}}),/unavailable|invalid/i)
+})
+
 test('a rejected stale edit has a durable outcome after a lost response and rejects changed payload reuse', async t => {
   const { rt } = fixture(t); await rt.boardCall('board-command', create)
   const edit = { scope, operationId:'reject-1', taskId:'t1', expectedRevision:3, type:'edit', value:create.value }
