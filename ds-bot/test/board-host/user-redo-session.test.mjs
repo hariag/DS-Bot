@@ -24,4 +24,16 @@ test('reserved redo Sessions get identity without ordinary ownership and deny ev
   rt.state.userRedos.duplicate = { ...row }
   assert.equal(rt.userRedoOwner(identity.sessionId), undefined)
   assert.match(guard({ agent:{ id:identity.sessionId }, name:'bash' }), /unavailable/)
+  // A stale or missing ownership table must not release an already-created
+  // redo Session into the ordinary unrestricted tool policy.
+  for (const lost of [undefined, null, [], {}]) {
+    rt.state.userRedos = lost
+    assert.equal(rt.userRedoOwner(identity.sessionId), undefined)
+    assert.equal(rt.userRedoReserved(identity.sessionId), true)
+    assert.match(guard({ agent:{ id:identity.sessionId }, name:'bash' }), /unavailable/)
+    assert.match(guard({ agent:{ id:'ordinary-session', session:{ id:identity.sessionId } }, name:'bash' }), /unavailable/)
+  }
+  rt.state.userRedos = { wrongKey:row }
+  assert.equal(rt.userRedoOwner(identity.sessionId), undefined)
+  assert.match(guard({ agent:{ id:identity.sessionId }, name:'bash' }), /unavailable/)
 })

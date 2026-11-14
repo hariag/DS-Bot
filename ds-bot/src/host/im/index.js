@@ -9,6 +9,7 @@ import { replaceFile } from '../files.js'
 import { viewCardText } from '../parts.js'
 import { imPlatform, IM_PLATFORMS } from '../../shared/im-platforms.js'
 import { adapters } from './platforms/index.js'
+import { isUserRedoSessionId } from '../user-redo-session.mjs'
 
 const RECONCILE_MS = 15_000
 const RUNTIME_SAVE_MS = 400
@@ -1017,6 +1018,7 @@ export function install(rt) {
 
   // ----------------------------------------------------------------- outbound
   ctx.on('session/event', (session, event) => {
+    if (isUserRedoSessionId(session?.id)) return
     const botId = rt.chatOwners.get(session.id)
     if (botId === undefined) {
       imVia.delete(session.id)
@@ -1046,6 +1048,7 @@ export function install(rt) {
   })
 
   rt.onApproval((kind, data) => {
+    if (isUserRedoSessionId(data?.sessionId)) return
     if (kind === 'open') {
       void (async () => {
         for (const conn of Object.values(connections())) {

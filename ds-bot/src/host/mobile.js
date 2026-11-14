@@ -11,6 +11,7 @@ import { PREVIEW_EDGE, previewImage } from './preview.js'
 import { relayRange } from '../shared/group-replies.js'
 import { textOf } from './text.js'
 import { hourKeys } from './usage.js'
+import { isUserRedoSessionId } from './user-redo-session.mjs'
 
 const PKG = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
 
@@ -205,17 +206,19 @@ export function install(rt) {
 
   // A card in a Bot's own chat waits for the user.
   rt.cardShown = (sessionId, kind, text) => {
+    if (isUserRedoSessionId(sessionId)) return
     const botId = rt.chatOwners.get(sessionId)
     if (botId !== undefined) botNotice(botId, { kind, sessionId, text })
   }
   rt.approvalWaiting = (entry) => {
+    if (isUserRedoSessionId(entry.sessionId)) return
     const room = rt.roomOf(entry.roomId)
     botNotice(entry.botId, { kind: 'approval', sessionId: entry.sessionId, ...(room ? { roomId: room.id, title: room.name } : {}), text: entry.tool })
   }
 
   ctx.on('session/event', (session, event) => {
     const id = session?.id
-    if (id === undefined) return
+    if (id === undefined || isUserRedoSessionId(id)) return
     const room = rt.roomOf(id)
     if (room !== undefined) {
       // A round starts or ends.

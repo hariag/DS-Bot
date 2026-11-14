@@ -9,6 +9,7 @@
 // `hello` carries the team's revision and, for the mobile API, its version and the
 // latest notice, so a client that reconnects knows what it missed.
 import { ROUTE } from './constants.js'
+import { isUserRedoSessionId } from './user-redo-session.mjs'
 
 export const FEED_ROUTE = `${ROUTE}/feed`
 // A comment line now and then keeps an idle connection open.
@@ -73,6 +74,7 @@ export function install(rt) {
   })
 
   ctx.on('session/event', (session, event) => {
+    if (isUserRedoSessionId(session?.id)) return
     if (!listening()) return
     const botId = rt.chatOwners.get(session.id)
     if (botId === undefined) return
@@ -84,6 +86,7 @@ export function install(rt) {
   // chat (turns.js marks it before the model is called), so its text is not streamed.
   const writing = new Map()
   ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+    if (isUserRedoSessionId(agent?.id) || isUserRedoSessionId(agent?.session?.id)) return
     if (frame.type === 'start') {
       const botId = rt.chatOwners.get(agent.id)
       if (!listening() || botId === undefined || (state.exchangeTurns[agent.id] ?? []).includes(frame.turn)) return
