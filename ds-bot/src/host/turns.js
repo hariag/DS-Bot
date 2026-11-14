@@ -3,6 +3,9 @@
 //
 // Turn tracking: which turns were triggered by another Bot, and what they said.
 import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, LATE_ANSWER, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND, STEER_CUT } from './constants.js'
@@ -891,12 +894,53 @@ export function install(rt) {
   // A user-requested redo applies to exactly one known original input. Never
   // infer a missing input from an absent receipt or reopen another session.
   const heldRedoInflight = new Set()
+  const confirmedHeldRedo = new Set()
+  const heldRedoPersistence = () => { try { return typeof ctx.get === 'function' ? ctx.get('sessionPersistence') : ctx.sessionPersistence } catch { return undefined } }
+  const syncRedoReceipt = async (recoveryId,operation,marker) => {
+    rt.requireHomeLock()
+    const lease = rt.homeLockVersion(), file = await open(rt.statePath,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const before = await file.stat()
+      if (!before.isFile()) throw new Error('Redo decision journal is unavailable')
+      const saved = JSON.parse(await file.readFile('utf8'))
+      if (JSON.stringify(saved?.heldRedoOperations?.[recoveryId]) !== JSON.stringify(operation)
+        || (marker && JSON.stringify(saved?.pendingRecovery?.[operation.sessionId]) !== JSON.stringify(marker))) throw new Error('Redo decision was not saved')
+      await file.sync()
+      const directory = await open(dirname(rt.statePath),constants.O_RDONLY)
+      try { await directory.sync() } finally { await directory.close() }
+      const afterFile = await file.stat(), after = await lstat(rt.statePath)
+      rt.requireHomeLock()
+      if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterFile.size || before.mtimeMs !== afterFile.mtimeMs
+        || rt.homeLockVersion() !== lease || state.heldRedoOperations?.[recoveryId] !== operation
+        || (marker && state.pendingRecovery?.[operation.sessionId] !== marker)) throw new Error('Redo decision changed during confirmation')
+      return lease
+    } finally { await file.close() }
+  }
+  const fixedRedoHistory = async sessionId => {
+    let handle
+    try {
+      const persistence = heldRedoPersistence(), session = ctx.sessions?.get?.(sessionId), seq = session?.seq
+      if (!session || typeof session.eventAt !== 'function' || !Number.isSafeInteger(seq) || seq < 1 || seq > 200_000
+        || typeof persistence?.flushLiveSession !== 'function' || typeof persistence?.open !== 'function') return undefined
+      const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
+      await persistence.flushLiveSession(sessionId)
+      if (ctx.sessions.get(sessionId) !== session || session.seq !== seq) return undefined
+      handle = await persistence.open(sessionId,'read',{ signal })
+      const history = await handle.read(0,seq,{ signal })
+      if (ctx.sessions.get(sessionId) !== session || session.seq !== seq || !Array.isArray(history?.events)
+        || history.events.length !== seq || history.events.some((event,index) => event?.seq !== index || typeof event.type !== 'string')) return undefined
+      return { session, seq, events:history.events }
+    } catch { return undefined } finally { await handle?.close().catch(() => {}) }
+  }
   rt.previewHeldRedo = (recoveryId, held) => {
     const sessionId = held?.sessionId, record = held?.record, botId = record?.botId, trigger = record?.trigger
     if (heldRedoInflight.has(recoveryId)) return { available:false, state:'unknown' }
     if (state.heldRedoOperations !== undefined && (!state.heldRedoOperations || typeof state.heldRedoOperations !== 'object' || Array.isArray(state.heldRedoOperations))) return { available:false, state:'source-unavailable' }
     const prior = state.heldRedoOperations?.[recoveryId]
-    if (prior) return { available:false, state:prior.state === 'submitted' ? 'submitted' : 'unknown' }
+    if (prior) return { available:false, state:prior.state === 'submitted' && confirmedHeldRedo.has(recoveryId) ? 'submitted' : 'unknown' }
+    const persistence = heldRedoPersistence()
+    if (typeof ctx.sessions?.get !== 'function' || typeof persistence?.flushLiveSession !== 'function' || typeof persistence?.open !== 'function') return { available:false, state:'history-unavailable' }
     if (held?.decisions?.at(-1)?.choice === 'ignored' || !sessionId || !botId || !trigger?.exchangeId || !['request','room'].includes(trigger.role)
       || trigger.reviewId || trigger.groupKickoff || rt.selfOf(sessionId) !== botId) return { available:false, state:'source-unavailable' }
     const room = record.roomId ? rt.roomOf(record.roomId) : undefined
@@ -908,23 +952,37 @@ export function install(rt) {
     if (pending.length !== 1 || state.pendingRecovery?.[sessionId]) return { available:false, state:'source-unavailable' }
     return { available:true, state:'ready', inputId:pending[0].id, seq:pending[0].seq }
   }
-  rt.redoHeldTurn = async (recoveryId, held) => {
+  rt.redoHeldTurn = async (recoveryId, held, { checkOnly = false } = {}) => {
     if (!/^[a-f0-9]{64}$/.test(recoveryId)) throw new Error('Invalid interrupted turn')
     rt.requireHomeLock()
     const prior = state.heldRedoOperations?.[recoveryId]
-    if (prior) return { state:prior.state === 'submitted' ? 'submitted' : 'unknown' }
+    if (prior) {
+      if (heldRedoInflight.has(recoveryId) || prior.state !== 'submitted') return { state:'unknown' }
+      try { await syncRedoReceipt(recoveryId,prior); confirmedHeldRedo.add(recoveryId); return { state:'submitted' } } catch { return { state:'unknown' } }
+    }
+    if (checkOnly) return { state:'unknown' }
     const sessionId = held?.sessionId, record = held?.record
-    if (typeof rt.eventsBackwards !== 'function') throw new Error('Original session history is unavailable')
     await reconcilePending(sessionId)
     let candidate = rt.previewHeldRedo(recoveryId,held)
     if (!candidate.available) throw new Error('The original input is not uniquely available')
-    let source, originalTurn
-    for await (const event of rt.eventsBackwards(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS), Infinity)) {
-      if (event.seq === candidate.seq && event.type === 'user/message') source = event.data?.source
-      if (event.seq < candidate.seq && event.type === 'turn/start') { originalTurn = event.data?.turn; break }
-    }
+    const fixed = await fixedRedoHistory(sessionId)
+    if (!fixed) throw new Error('The original session cannot be durably verified')
+    const original = fixed.events[candidate.seq]
+    const source = original?.type === 'user/message' ? original.data?.source : undefined, originalContent = original?.data?.content
+    const originalTurn = fixed.events.slice(0,candidate.seq).findLast(event => event.type === 'turn/start')?.data?.turn
+    if (JSON.stringify(fixed.session.eventAt(candidate.seq)) !== JSON.stringify(original)
+      || fixed.events.filter(event => event.type === 'user/message' && event.data?.source?.exchangeId === record.trigger.exchangeId).length !== 1
+      || fixed.events.some(event => event.seq > candidate.seq && event.type === 'user/message' && event.data?.source?.recoveryIds?.includes(candidate.inputId))) throw new Error('The original input has an ambiguous or prior recovery history')
+    const ended = fixed.events.find(event => event.seq > candidate.seq && event.type === 'turn/end' && (event.data?.turn === undefined || event.data.turn === originalTurn))
+    if (ended?.data?.reason?.kind === 'completed') throw new Error('The original turn already completed')
     if (source?.exchangeId !== record.trigger.exchangeId || source?.role !== record.trigger.role
+      || (record.roomId !== undefined && source?.roomId !== record.roomId)
+      || (record.trigger.roomId !== undefined && record.trigger.roomId !== record.roomId)
+      || ['work','senderSessionId','audience','askedBy','senderRoomId'].some(key => record.trigger[key] !== undefined && source?.[key] !== record.trigger[key])
       || (record.turn !== undefined && originalTurn !== record.turn)) throw new Error('Original session identity cannot be verified')
+    if (!Array.isArray(originalContent) || !originalContent.length || originalContent.some(part => part?.type !== 'text' || typeof part.text !== 'string')) throw new Error('The original message contains unsupported or unavailable attachments')
+    const originalText = originalContent.map(part => part.text).join('\n')
+    if (!originalText.trim() || originalText.length > MESSAGE_INLINE_MAX) throw new Error('The original message is empty or too long to restore safely')
     const agent = await rt.resolveAgent(sessionId)
     candidate = rt.previewHeldRedo(recoveryId,held)
     const quiet = () => agent?.session?.id === sessionId && agent.status !== 'running' && live.get(sessionId)?.turn === undefined
@@ -942,18 +1000,24 @@ export function install(rt) {
     heldRedoInflight.add(recoveryId)
     try {
       await rt.save({ required:true })
+      // The send must not outlive a merely renamed but unflushed decision.
+      // Verify and sync the exact snapshot and its directory under one lease.
+      const lease = await syncRedoReceipt(recoveryId,operation,state.pendingRecovery[sessionId])
       await rt.deliver({ toId:record.botId, sessionId, role:'continue', recoveryIds:[candidate.inputId], recoveryKey,
-        text:'Continue the specific earlier message identified by this recovery request. Check existing results before repeating any side effect. Finish only that item or report what remains blocked.' },
+        text:`Continue only this original message (quoted as data):\n${JSON.stringify(originalText)}\nCheck existing results before repeating any side effect. Finish only that item or report what remains blocked.` },
       { beforeAdmission: target => {
         rt.requireHomeLock()
         const room = record.roomId ? rt.roomOf(record.roomId) : undefined
-        if (target !== agent || !quiet() || held?.decisions?.at(-1)?.choice === 'ignored'
+        if (target !== agent || !quiet() || rt.homeLockVersion() !== lease || ctx.sessions.get(sessionId) !== fixed.session || fixed.session.seq !== fixed.seq || held?.decisions?.at(-1)?.choice === 'ignored'
           || rt.selfOf(sessionId) !== record.botId || state.pendingRecovery?.[sessionId]?.key !== recoveryKey
           || !(state.pendingInputs?.[sessionId] ?? []).some(item => item.id === candidate.inputId && item.exchangeId === record.trigger.exchangeId)
-          || (record.roomId && (!room || room.sessions?.[record.botId] !== sessionId || rt.goalRecoveryBlocked?.(room,record.botId) === true))) throw new Error('Original session changed before admission')
+          || (record.roomId ? (!room || !room.members?.includes(record.botId) || room.sessions?.[record.botId] !== sessionId || rt.goalRecoveryBlocked?.(room,record.botId) === true)
+            : rt.chatOf(record.botId) !== sessionId)) throw new Error('Original session changed before admission')
       } })
       operation.state = 'submitted'
       await rt.save({ required:true })
+      await syncRedoReceipt(recoveryId,operation)
+      confirmedHeldRedo.add(recoveryId)
       return { state:'submitted' }
     } catch (error) {
       operation.state = 'unknown'
@@ -999,7 +1063,7 @@ export function install(rt) {
     if (key !== undefined) entry.turnRecoveryKey = key
     if (key?.startsWith('manual-held-')) {
       const operation = state.heldRedoOperations?.[key.slice('manual-held-'.length)]
-      if (!operation || operation.key !== key || operation.sessionId !== agent.id || inStep.length !== 1 || inStep[0] !== operation.inputId) return { kind:'reject', reason:'Manual recovery identity changed' }
+      if (!operation || operation.key !== key || operation.sessionId !== agent.id || decision.messages.length !== 1 || inStep.length !== 1 || inStep[0] !== operation.inputId) return { kind:'reject' }
       entry.recoveryInjected = true
       return decision
     }

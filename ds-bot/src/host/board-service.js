@@ -162,7 +162,7 @@ export function install(rt) {
       case 'board-held-redo':
         api.list(scope,principal)
         if (payload.confirmed !== true || typeof rt.requestHeldRedo !== 'function') throw new Error('Confirm the redo before continuing')
-        return rt.requestHeldRedo(scope,payload.recoveryId)
+        return rt.requestHeldRedo(scope,payload.recoveryId,payload.checkOnly === true)
       case 'board-operation-cancel': {
         api.list(scope, principal)
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))return goalEditor.cancel(scope,payload.operationId)

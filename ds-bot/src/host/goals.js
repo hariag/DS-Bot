@@ -3,6 +3,9 @@
 // runs it with the group_goal tool, the user steers it from the goal endpoints,
 // and the relay wakes the admin when nothing runs and the goal is not done.
 import { createHash, randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
@@ -806,6 +809,33 @@ export function install(rt) {
   // goal-control { roomId, goalId, action, stopWork? }: the user's pause, resume,
   // stop and clear from the goal panel.
   const pendingReviewResolutions = new Set()
+  const pendingReviewRooms = new Set()
+  const confirmedReviewResolutions = new WeakMap()
+  const durableReviewResolutions = async (room,goal) => {
+    const entries = goal.reviewResolutions
+    if (entries === undefined) return
+    if (!Array.isArray(entries)) throw new Error('Review decision history is unavailable')
+    rt.requireHomeLock()
+    const lease = rt.homeLockVersion(), confirmed = confirmedReviewResolutions.get(goal)
+    if (confirmed?.entries === entries && confirmed.lease === lease) return
+    const file = await open(rt.statePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const before = await file.stat()
+      if (!before.isFile()) throw new Error('Review decision journal is unavailable')
+      const saved = JSON.parse(await file.readFile('utf8'))?.rooms?.[room.id]?.goal
+      if (saved?.id !== goal.id || JSON.stringify(saved.reviewResolutions) !== JSON.stringify(entries)) throw new Error('Review decision was not saved')
+      await file.sync()
+      const directory = await open(dirname(rt.statePath),constants.O_RDONLY)
+      try { await directory.sync() } finally { await directory.close() }
+      const afterFile = await file.stat(), after = await lstat(rt.statePath)
+      rt.requireHomeLock()
+      if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterFile.size || before.mtimeMs !== afterFile.mtimeMs
+        || rt.homeLockVersion() !== lease || rt.roomOf(room.id) !== room || room.goal !== goal
+        || goal.reviewResolutions !== entries) throw new Error('Review decision changed during confirmation')
+      confirmedReviewResolutions.set(goal,{entries,lease})
+    } finally { await file.close() }
+  }
   async function goalControl(roomId, body = {}) {
     const room = rt.roomOf(roomId)
     if (room === undefined) return { error: 'Unknown group chat' }
@@ -821,8 +851,10 @@ export function install(rt) {
       if (!Array.isArray(resolutions) || resolutions.length >= 10000) return { error:'Review decision history is unavailable or full.', code:'bot/refused' }
       const resolutionKey = JSON.stringify([room.id,goal.id,body.reviewId])
       if (pendingReviewResolutions.has(resolutionKey)) return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' }
-      if (resolutions.some(item => item?.id === body.reviewId)) return attempt?.id === body.reviewId
-        ? { error:'Review identity was reused; inspect it before continuing.', code:'bot/stale' } : {}
+      if (resolutions.some(item => item?.id === body.reviewId)) {
+        if (attempt?.id === body.reviewId) return { error:'Review identity was reused; inspect it before continuing.', code:'bot/stale' }
+        try { await durableReviewResolutions(room,goal); return {} } catch { return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' } }
+      }
       if (!reviewEligible(goal) || attempt === undefined || attempt.id !== body.reviewId
         || !['uncertain', 'admitting', 'cancelled-uncertain'].includes(attempt.state)
         || (attempt.state === 'admitting' && (!Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS))) return { error: 'The review is not eligible for recovery, or the goal was paused or stopped.', code: 'bot/stale' }
@@ -844,14 +876,18 @@ export function install(rt) {
       const wasAutomatic = automaticIdle(goal)
       const now = Date.now()
       pendingReviewResolutions.add(resolutionKey)
-      goal.reviewResolutions = [...resolutions, { id:attempt.id, attempt:structuredClone(attempt), decision:allowFuture?'allow-future':'verified', by:'user', at:now }]
+      pendingReviewRooms.add(room.id)
+      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:allowFuture?'allow-future':'verified', by:'user', at:now }
+      goal.reviewResolutions = [...resolutions, resolution]
       delete goal.reviewAttempt
       goal.revision += 1
       goal.updatedAt = now
       if (wasAutomatic) { goal.idleRevision = goal.revision; goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS }
       goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by: 'user', reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
-      try { await rt.save({ required: true }); pendingReviewResolutions.delete(resolutionKey) }
-      catch (error) { throw error }
+      await rt.save({ required: true })
+      await durableReviewResolutions(room,goal)
+      pendingReviewResolutions.delete(resolutionKey)
+      pendingReviewRooms.delete(room.id)
       return {}
     }
     if (action === 'pause') {
@@ -1033,7 +1069,9 @@ export function install(rt) {
     if (reviewDisposed || rt.readOnly() !== undefined) return
     const jobs = []
     for (const room of Object.values(rt.state.rooms ?? {})) {
+      if (pendingReviewRooms.has(room.id)) continue
       const goal = room.goal
+      if (goal?.reviewResolutions !== undefined) { try { await durableReviewResolutions(room,goal) } catch { continue } }
       const attempt = goal?.reviewAttempt
       if (attempt && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
         reviewNotified.add(attempt.id)
@@ -1154,7 +1192,9 @@ export function install(rt) {
   // still gets its check. An admin that passes waits for the user, and two checks
   // without progress mark the goal idle until something happens.
   async function goalDrive(room, round) {
+    if (pendingReviewRooms.has(room.id)) return
     const goal = room.goal
+    if (goal?.reviewResolutions !== undefined) { try { await durableReviewResolutions(room,goal) } catch { return } }
     const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
     if (round.goalReviewId && goalReviewAllowed(room, round.goalReviewId)) {
       const slot = round.slots.find(item => item.id === admin?.id)
