@@ -18,7 +18,7 @@ const principal = Object.freeze({ kind: 'user', id: 'user' })
 const fail = (message, code = 'bot/invalid') => ({ ok: false, error: { code, message, details: {} } })
 const ok = value => ({ ok: true, value })
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } })
-const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached'])
+const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress'])
 const rejected = error => error?.code === 'bot/invalid' || (!error?.code && typeof error?.message === 'string' && (rejectedMessages.has(error.message) || /^invalid (task id|operation id|actor|owner|reviewer|scope|title|acceptance|attachment id|image id|revision)$/.test(error.message)))
 const requestKey = (endpoint, payload) => {
   if (endpoint !== 'board-upload' || !Array.isArray(payload?.images)) return { endpoint, payload }
@@ -84,7 +84,7 @@ export function install(rt) {
     const proofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable,
-      authorize: input => (input.actor === 'user' && ['create', 'edit', 'attach', 'remove-image', 'cancel', 'share', 'unshare'].includes(input.type)) || botWorkflow.authorize(input),
+      authorize: input => (input.actor === 'user' && ['create', 'edit', 'attach', 'remove-image', 'cancel', 'share', 'unshare', 'personal-progress'].includes(input.type)) || botWorkflow.authorize(input),
       verifyShare: (task, value, actor) => actor === 'user' && shareAllowed(task, value.targetRoomId),
       verifyDependency: dependencyAllowed,
       verifyAttachment: (task, item, actor) => {

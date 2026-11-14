@@ -38,6 +38,9 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
       return [task.id, [{ type: 'edit', label: 'Edit' }, ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
+        ...(scope.kind === 'personal' && scope.id === 'user' && source?.scope === 'personal:user' && source.owner === 'user'
+          && source.status === 'proposed' && source.actionRevision == null && !source.evidence && !source.blocked && !source.stale
+          ? [{ type:'personal-progress', label:'Move personal task' }] : []),
         ...(targets.length ? [{ type:'share', label:'Share' }] : []), ...(grants.length ? [{ type:'unshare', label:'Unshare' }] : [])]]
     }))
     const taskLimit = store.limits?.().tasks
@@ -134,6 +137,10 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
         const dependencies = [...new Set([...value.dependencies, ...hidden])]
         const dependencyGrants = bindingsFor(taskScope(task), principal, { ...task, owner:value.owner, reviewer:value.reviewer }, dependencies)
         value = { title: value.title, owner: value.owner, reviewer: value.reviewer, acceptance: value.acceptance, dependencies, dependencyGrants }
+      } else if (input.type === 'personal-progress') {
+        if (scope.kind !== 'personal' || scope.id !== 'user' || task.scope !== 'personal:user' || task.owner !== 'user'
+          || !value || !['todo', 'doing', 'finished'].includes(value.progress)) throw fail('Personal progress is unavailable')
+        value = { progress:value.progress }
       } else if (input.type === 'share') {
         if (!value || !nonempty(value.targetRoomId) || !Array.isArray(value.fields)) throw fail('Invalid share request')
         value = { targetRoomId:value.targetRoomId, fields:value.fields }

@@ -8,6 +8,16 @@ Give each group and each personal scope its own editable task board. Record a st
 
 Task state and task execution are separate. A report is not acceptance, a queue entry is not proof of execution, and a finished turn is not proof that acceptance criteria passed. Existing pauses, stops, unknown outcomes, user decisions and external blockers remain binding.
 
+The instance owner's own unregistered personal cards may additionally carry a
+personal progress marker: to do, doing, or personally finished. This marker is
+written through the same durable operation receipt and revision checks as other
+edits, but is distinct from the task's verified workflow status. It never
+creates an Agent action, completes a task, or unblocks a dependency. A user can
+move these cards by dragging or by using the keyboard-accessible progress menu.
+Group cards, Bot-owned cards, and personal cards already in the verified workflow
+cannot use this shortcut. The board displays those cards using their actual
+workflow status and does not imply that dragging changes it.
+
 ## Board storage and editing
 
 Use a private, durable task journal with stable IDs and revision checks. Editing, state transitions, sharing and image changes must be authorized in the requested scope and use an operation ID with a queryable outcome. A repeated operation with the same ID and input returns the recorded result; conflicting reuse is rejected. When an answer is lost, query the original operation. If an uncommitted operation is explicitly cancelled, persist a tombstone that prevents its late completion; do not invent a new operation ID to replay an uncertain change.
