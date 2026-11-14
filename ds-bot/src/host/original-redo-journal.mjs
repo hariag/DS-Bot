@@ -393,7 +393,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
     const path = join(root, `.result-${row.operationId}`), fd = openSync(path, constants.O_RDONLY | nofollow)
     try {
       const before = fstatSync(fd)
-      if (!before.isFile() || before.size > 131072 || (before.mode & 0o077)
+      if (!before.isFile() || before.size > 6 * 65_536 + 1_024 || (before.mode & 0o077)
         || (typeof process.getuid === 'function' && before.uid !== process.getuid())) throw Error('redo result artifact unavailable')
       const artifact = JSON.parse(readFileSync(fd, 'utf8'))
       if (artifact?.version !== 1 || artifact.operationId !== row.operationId || artifact.digest !== row.result?.digest

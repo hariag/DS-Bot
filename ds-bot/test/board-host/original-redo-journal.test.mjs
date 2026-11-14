@@ -492,3 +492,20 @@ test('result reads pin the proof callback against reentrant replacement', async 
     authorize:() => { if (verified) { current = false; proof.isCurrent = () => true }; return true } })
   await assert.rejects(journal.readResult(operationId, f.request.principal), /changed|unverified/)
 })
+
+
+test('private result artifacts allow bounded text that expands in JSON', async t => {
+  const f = await fixture(t), target = { cwd:f.home, provider:'p', model:'m' }
+  const journal = createIsolatedRedoJournal(f.rt, f.dependencies)
+  const confirmationDigest = isolatedRedoConfirmation(scope, recoveryId, f.proof,
+    { principal:f.request.principal, operationId, target })
+  await journal.prepare({ ...f.request, target, confirmationDigest })
+  const { binding } = await journal.beginDispatch(operationId, f.request.principal), turn = { turn:1, turnStartSeq:9 }
+  journal.markClaimingSync(binding, turn, f.request.principal)
+  const text = '\u0000'.repeat(64_000), identity = binding.identity
+  f.resultProof({ durability:'target-writer-v1', sessionId:identity.sessionId, messageId:identity.messageId,
+    admissionId:identity.admissionId, turn, throughSeq:20, text, resultDigest:createHash('sha256').update(text).digest('hex'),
+    resultRef:{ kind:'session-events', sessionId:identity.sessionId, firstSeq:12, lastSeq:12 }, isCurrent:() => true })
+  await journal.recordResult(operationId, f.request.principal)
+  assert.equal((await journal.readResult(operationId, f.request.principal)).text, text)
+})
