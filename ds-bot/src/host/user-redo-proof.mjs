@@ -70,7 +70,9 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
           openTurn = undefined
         }
       }
-      if (starts !== 1 || originalTurn !== expectedTurn || !['interrupted', 'error'].includes(end?.kind)
+      const stopped = ['interrupted', 'error'].includes(end?.kind)
+        || (end?.kind === 'aborted' && end.reason?.kind === 'disposed')
+      if (starts !== 1 || originalTurn !== expectedTurn || !stopped
         || events.filter(entry => entry.type === 'turn/start' && entry.data?.turn === originalTurn).length !== 1
         || events.filter(entry => entry.type === 'user/message' && entry.seq > startSeq && entry.seq < endSeq).length !== 1
         || !current()) return undefined
