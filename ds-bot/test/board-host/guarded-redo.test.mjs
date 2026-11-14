@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -19,15 +19,15 @@ function fixture(t){
   const binding={recoveryId:'a'.repeat(64),scope:{kind:'room',id:'room'},sessionId:'session',turn:7,messageSeq:3,throughSeq:9,originalMessageId:'original-message',exchangeId:'work-1',workId:'work-1',senderId:'sender',recipientId:'receiver',roomId:'room',sourceHash:hash({source,content})}
   const identity=redoIdentity(binding),original={role:'user',id:'original-message',source,content}
   const message={...original,id:identity.messageId}
-  let owns=true, allowed=true, settled=true, journal
-  const opts={assertLease:()=>owns,authorizeIntent:()=>allowed,authorizeClaim:()=>allowed}
+  let owns=true, allowed=true, settled=true, generation=1, journal
+  const opts={assertLease:()=>owns,leaseVersion:()=>generation,authorizeIntent:()=>allowed,authorizeClaim:()=>allowed}
   const reopen=()=>{journal?.close();journal=openGuardedRedoJournal(path,opts);return journal}
   reopen()
   const agent={id:'session',session:{id:'session'},durableAdmissionVersion:1,guardedClaimTurnVersion:1}
   const proof={complete:true,durability:'target-writer-v1',originalOutcome:'failed',sessionId:'session',throughSeq:9,messageSeq:3,turn:7,message:original,isCurrent:()=>true}
-  const bridge=()=>createGuardedRedoBridge({enabled:true,journal,verifyOriginal:async()=>proof,resolveAgent:async()=>agent,isCurrent:()=>owns&&allowed,resultAuthority:()=>settled?{version:'durable-original-result-v1',claimOriginalResult(){},readResultReceipt(){},isCurrent:()=>true}:undefined,isResultRouterBound:()=>true,makeMessage:(m,id)=>({...m,id}),leaseVersion:()=>owns?1:2,coordinatorReady:()=>true})
+  const bridge=()=>createGuardedRedoBridge({enabled:true,journal,verifyOriginal:async()=>proof,resolveAgent:async()=>agent,isCurrent:()=>owns&&allowed,resultAuthority:()=>settled?{version:'durable-original-result-v1',claimOriginalResult(){},readResultReceipt(){},isCurrent:()=>true}:undefined,isResultRouterBound:()=>true,makeMessage:(m,id)=>({...m,id}),leaseVersion:()=>generation,coordinatorReady:()=>true})
   t.after(()=>{journal?.close();rmSync(home,{recursive:true,force:true})})
-  return {binding,identity,message,proof,agent,bridge,reopen,path,get journal(){return journal},lose(){owns=false},revoke(){allowed=false},noSettlement(){settled=false}}
+  return {binding,identity,message,proof,agent,bridge,reopen,path,get journal(){return journal},lose(){owns=false},rotate(){generation+=1},revoke(){allowed=false},noSettlement(){settled=false}}
 }
 
 test('redo uses one guarded message and duplicate requests cannot enqueue again',async t=>{
@@ -103,6 +103,37 @@ test('redo snapshots reject lossy JSON and use locale-independent key order',()=
   assert.deepEqual(Object.keys(redoSnapshot({é:1,z:2,A:3})),['A','z','é'])
 })
 
+test('an unheld lease creates no file and unknown SQLite input remains byte-for-byte untouched',t=>{
+  const home=mkdtempSync(join(tmpdir(),'redo-unknown-')),path=join(home,'unknown.sqlite')
+  t.after(()=>rmSync(home,{recursive:true,force:true}))
+  const denied={assertLease:()=>false,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true}
+  assert.throws(()=>openGuardedRedoJournal(path,denied),/lease/)
+  assert.equal(existsSync(path),false)
+  assert.deepEqual(readdirSync(home),[])
+  const allowed={...denied,assertLease:()=>true}
+  const untouched=bytes=>{
+    writeFileSync(path,bytes,{mode:0o600})
+    const before=readFileSync(path),stamp=statSync(path,{bigint:true}),entries=readdirSync(home).sort()
+    assert.throws(()=>openGuardedRedoJournal(path,allowed),/unknown|invalid/)
+    const after=statSync(path,{bigint:true})
+    assert.deepEqual(readFileSync(path),before)
+    assert.equal(after.mtimeNs,stamp.mtimeNs)
+    assert.equal(after.ctimeNs,stamp.ctimeNs)
+    assert.deepEqual(readdirSync(home).sort(),entries)
+  }
+  untouched(Buffer.from('not a sqlite database'))
+  const wal=Buffer.alloc(100);Buffer.from('SQLite format 3\u0000','binary').copy(wal);wal[18]=2;wal[19]=2;wal.writeUInt32BE(1,60);wal.writeUInt32BE(1146311247,68)
+  untouched(wal)
+})
+
+test('lease generation changes permanently fence the old journal before guarded admission',async t=>{
+  const f=fixture(t);let sends=0
+  f.agent.guardedSend=async()=>{sends+=1}
+  f.rotate()
+  assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
+  assert.equal(sends,0)
+})
+
 test('only the exact complete target-writer prefix proves an interrupted original input',async t=>{
   const f=fixture(t),original={...f.message,id:f.binding.originalMessageId}
   let events=[
@@ -134,7 +165,7 @@ test('process death inside claim leaves a durable fence, not a replayable admiss
   f.journal.beginSend({binding:f.binding,message:f.message})
   const moduleUrl=pathToFileURL(new URL('../../src/host/guarded-redo-journal.mjs',import.meta.url).pathname).href
   const script=`import {openGuardedRedoJournal} from ${JSON.stringify(moduleUrl)};
-    const journal=openGuardedRedoJournal(process.argv[1],{assertLease:()=>true,authorizeIntent:()=>true,authorizeClaim:()=>true});
+    const journal=openGuardedRedoJournal(process.argv[1],{assertLease:()=>true,leaseVersion:()=>1,authorizeIntent:()=>true,authorizeClaim:()=>true});
     journal.claim('session',${JSON.stringify(input)},${JSON.stringify(turn)},()=>process.exit(42));`
   const child=spawnSync(process.execPath,['--input-type=module','-e',script,f.path],{encoding:'utf8',env:{PATH:process.env.PATH}})
   assert.equal(child.status,42,child.stderr)

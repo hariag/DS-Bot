@@ -1,12 +1,19 @@
 // Separate authority journal: an admission outcome is never a work result.
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { constants, closeSync, fsyncSync, lstatSync, openSync } from 'node:fs'
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, openSync, readSync } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/
 const HEX = /^[a-f0-9]{64}$/
 const SCHEMA = "CREATE TABLE redo_intents (operation_id TEXT PRIMARY KEY, recovery_id TEXT NOT NULL UNIQUE, admission_id TEXT NOT NULL UNIQUE, message_id TEXT NOT NULL UNIQUE, binding TEXT NOT NULL, binding_hash TEXT NOT NULL, message TEXT NOT NULL, message_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('prepared','sending','queued','claiming','claimed')), turn INTEGER, turn_start_seq INTEGER)"
+const COLUMNS=[['operation_id','TEXT',0,1],['recovery_id','TEXT',1,0],['admission_id','TEXT',1,0],['message_id','TEXT',1,0],['binding','TEXT',1,0],['binding_hash','TEXT',1,0],['message','TEXT',1,0],['message_hash','TEXT',1,0],['state','TEXT',1,0],['turn','INTEGER',0,0],['turn_start_seq','INTEGER',0,0]]
+const sameFile=(a,b)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeMs===b.mtimeMs&&a.ctimeMs===b.ctimeMs
+function verifySchema(db) {
+  const names=db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all()
+  const columns=db.prepare('PRAGMA table_info(redo_intents)').all().map(row=>[row.name,row.type,row.notnull,row.pk])
+  if(names.length!==1||names[0].type!=='table'||names[0].name!=='redo_intents'||names[0].sql!==SCHEMA||JSON.stringify(columns)!==JSON.stringify(COLUMNS)||db.prepare('PRAGMA quick_check').get().quick_check!=='ok')throw Error('invalid redo journal')
+}
 const id = value => typeof value === 'string' && ID.test(value)
 const digest = value => createHash('sha256').update(value).digest('hex')
 const stable = value => JSON.stringify(value, function (_key, current) {
@@ -79,39 +86,62 @@ export function validateRedoMessage(binding,message) {
   return true
 }
 
-export function openGuardedRedoJournal(path, { assertLease, authorizeIntent, authorizeClaim } = {}) {
-  if (![assertLease,authorizeIntent,authorizeClaim].every(fn => typeof fn === 'function')) throw Error('redo authority unavailable')
+export function openGuardedRedoJournal(path, { assertLease, leaseVersion, authorizeIntent, authorizeClaim } = {}) {
+  if (![assertLease,leaseVersion,authorizeIntent,authorizeClaim].every(fn => typeof fn === 'function')) throw Error('redo authority unavailable')
   if (!isAbsolute(path)) throw Error('redo journal requires an absolute path')
   const dir=lstatSync(dirname(path))
   if(!dir.isDirectory()||dir.isSymbolicLink()||dir.uid!==process.getuid()||(dir.mode&0o077)!==0) throw Error('redo directory unavailable')
+  const generation=leaseVersion()
+  const validGeneration=(typeof generation==='string'&&generation.length>0)||(typeof generation==='number'&&Number.isSafeInteger(generation)&&generation>=0)||typeof generation==='bigint'
+  const leaseHeld=()=>assertLease()===true&&validGeneration&&leaseVersion()===generation
+  if(!leaseHeld())throw Error('redo lease unavailable')
   let created=false
   try { const fd=openSync(path,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|(constants.O_NOFOLLOW??0),0o600);closeSync(fd);created=true }
   catch(error) { if(error.code!=='EEXIST')throw error }
   const file=lstatSync(path)
   if(!file.isFile()||file.isSymbolicLink()||file.uid!==process.getuid()||(file.mode&0o077)!==0)throw Error('redo journal unavailable')
   const lease=()=>{
-    if(assertLease()!==true)throw Error('redo lease unavailable')
-    const current=lstatSync(path)
-    if(!current.isFile()||current.isSymbolicLink()||current.uid!==file.uid||(current.mode&0o077)!==0||current.dev!==file.dev||current.ino!==file.ino)throw Error('redo journal replaced')
+    if(!leaseHeld())throw Error('redo lease unavailable')
+    const current=lstatSync(path),currentDir=lstatSync(dirname(path))
+    if(!currentDir.isDirectory()||currentDir.isSymbolicLink()||currentDir.uid!==dir.uid||(currentDir.mode&0o077)!==0||currentDir.dev!==dir.dev||currentDir.ino!==dir.ino
+      ||!current.isFile()||current.isSymbolicLink()||current.uid!==file.uid||(current.mode&0o077)!==0||current.dev!==file.dev||current.ino!==file.ino)throw Error('redo journal replaced')
   }
   lease()
+  if(!created){
+    // Do not ask SQLite to open an unknown or WAL database: even read-only
+    // setup may otherwise try to create sidecars or recover a hot journal.
+    for(const suffix of ['-journal','-wal','-shm']){
+      try{lstatSync(`${path}${suffix}`);throw Error('redo journal needs offline recovery')}
+      catch(error){if(error.code!=='ENOENT')throw error}
+    }
+    const fd=openSync(path,constants.O_RDONLY|(constants.O_NOFOLLOW??0))
+    try {
+      const before=fstatSync(fd),header=Buffer.alloc(100)
+      if(!before.isFile()||before.dev!==file.dev||before.ino!==file.ino||readSync(fd,header,0,100,0)!==100
+        ||header.subarray(0,16).toString('binary')!=='SQLite format 3\u0000'||header[18]!==1||header[19]!==1
+        ||header.readUInt32BE(60)!==1||header.readUInt32BE(68)!==1146311247
+        ||!sameFile(before,fstatSync(fd))||!sameFile(before,lstatSync(path)))throw Error('unknown redo journal')
+    } finally {closeSync(fd)}
+    lease()
+    const before=lstatSync(path),readonly=new DatabaseSync(path,{readOnly:true})
+    try {verifySchema(readonly)} finally {readonly.close()}
+    lease()
+    if(!sameFile(before,lstatSync(path)))throw Error('redo journal changed during verification')
+  }
   const db=new DatabaseSync(path)
   try {
-    db.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL')
-    const version=db.prepare('PRAGMA user_version').get().user_version
-    const app=db.prepare('PRAGMA application_id').get().application_id
+    lease();db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL')
     if(created){
+      db.exec('PRAGMA journal_mode=DELETE')
       db.exec('BEGIN IMMEDIATE')
       try {
         db.exec(`${SCHEMA}; PRAGMA application_id=1146311247; PRAGMA user_version=1`)
         lease();db.exec('COMMIT')
       } catch(error){try{db.exec('ROLLBACK')}catch{};throw error}
       const fd=openSync(dirname(path),constants.O_RDONLY|(constants.O_NOFOLLOW??0));try{fsyncSync(fd)}finally{closeSync(fd)}
-    } else if(version!==1||app!==1146311247)throw Error('unknown redo journal')
-    const names=db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all()
-    const columns=db.prepare('PRAGMA table_info(redo_intents)').all().map(row=>[row.name,row.type,row.notnull,row.pk])
-    const expected=[['operation_id','TEXT',0,1],['recovery_id','TEXT',1,0],['admission_id','TEXT',1,0],['message_id','TEXT',1,0],['binding','TEXT',1,0],['binding_hash','TEXT',1,0],['message','TEXT',1,0],['message_hash','TEXT',1,0],['state','TEXT',1,0],['turn','INTEGER',0,0],['turn_start_seq','INTEGER',0,0]]
-    if(names.length!==1||names[0].type!=='table'||names[0].name!=='redo_intents'||names[0].sql!==SCHEMA||JSON.stringify(columns)!==JSON.stringify(expected)||db.prepare('PRAGMA quick_check').get().quick_check!=='ok')throw Error('invalid redo journal')
+    }
+    if(db.prepare('PRAGMA synchronous').get().synchronous!==2||db.prepare('PRAGMA journal_mode').get().journal_mode!=='delete')throw Error('redo durability unavailable')
+    lease();verifySchema(db)
   } catch(error){db.close();throw error}
   let inTransaction=false
   const read=operationId=>db.prepare('SELECT * FROM redo_intents WHERE operation_id=?').get(operationId)
