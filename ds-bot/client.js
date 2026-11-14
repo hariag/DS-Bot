@@ -12484,27 +12484,23 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
-  "Current goal task": "当前目标任务",
-  "Earlier goal stage": "先前目标阶段",
-  "Upcoming goal stage": "后续目标阶段",
-  "Archived goal task": "已归档目标任务",
-  "Closed goal task": "已结束目标任务",
-  "Original task description": "原始任务说明",
-  "A card change is awaiting confirmation in its original board.": "卡片修改尚待确认，请在原看板核对结果。",
-  "The original task changed after this display title was corrected. Review the title.": "原任务在显示标题修订后已变化，请重新核对标题。",
-  "Correct card title": "修订卡片显示标题",
-  "Card display title": "卡片显示标题",
-  "Reason for correction": "修订说明",
-  "The original task and acceptance record remain unchanged.": "原任务和验收记录保持不变。",
-  "Card revision history": "卡片修订记录",
-  "Before": "修改前",
-  "After": "修改后",
-  "Goal card details can be corrected without changing the original task or acceptance record.": "可修订目标卡片资料，原任务和验收记录保持不变。",
-  "Card details changed; refresh the board": "卡片资料已变化，请刷新看板。",
-  "Card stage changed; refresh the board": "任务阶段已变化，请刷新看板。",
-  "Provide a card title and a brief reason": "请填写卡片标题和简短修订说明。",
-  "Card history is full; preserve it before making more changes": "卡片修订记录已达上限，请先保全记录再继续修改。",
-  "These stages have card revision history. Preserve that history before rebuilding the stages.": "这些阶段包含卡片修订记录，重建阶段前请先保全。",
+  "Check redo": "核实重做状态",
+  "Redo": "重做",
+  "Redo this specific interrupted work? External actions may happen again.": "重做这项中断的工作？外部操作可能再次发生。",
+  "The redo outcome is unknown. Refresh to check; do not submit it again.": "重做结果暂不明确，请刷新核对；不要重复提交。",
+  "Redo request submitted.": "已提交重做请求。",
+  "The previous redo outcome is unknown.": "之前的重做结果未知。",
+  "Redo is unavailable because the original input cannot be verified.": "无法确认原始输入，暂不能重做。",
+  "Allow future inspections": "允许后续巡检",
+  "The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.": "上次巡检结果仍然未知，允许后续巡检不代表确认了上次结果。",
+  "Interrupted work": "中断的工作",
+  "Choose what to do with each item": "逐项选择要如何处理",
+  "Decision outcome is unknown. Refresh before trying again.": "操作结果暂不明确，请刷新后核对。",
+  "The outcome is unknown. Your choice does not mark the work complete.": "原工作结果未知，处理选择不会将任务标记为完成。",
+  "Ignoring keeps the record and does not complete the work.": "忽略会保留原记录，不会完成任务。",
+  "Ignored": "已忽略",
+  "Ignore": "忽略",
+  "Undo ignore": "撤销忽略",
   "Task details": "任务详情",
   "Close card": "关闭卡片",
   "Previous columns": "上一组列表",
@@ -15268,7 +15264,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     stopRoomWork: (roomId) => after(call2("stop-room-work", { roomId })),
     goalDraft: (roomId, text) => after(call2("goal-draft", { roomId, text })),
     goalControl: (roomId, goalId, action, stopWork) => after(call2("goal-control", { roomId, goalId, action, ...stopWork ? { stopWork: true } : {} })),
-    goalReviewResolve: (roomId, goalId, reviewId, evidence) => after(call2("goal-control", { roomId, goalId, action: "review-resolve", reviewId, evidence, confirmed: true })),
+    goalReviewResolve: (roomId, goalId, reviewId) => after(call2("goal-control", { roomId, goalId, action: "review-resolve", reviewId, decision: "allow-future", confirmed: true })),
     // The goal island: `goalCompose` holds the room whose draft form is open,
     // `goalOpen` the room whose panel is open.
     composeGoal: (roomId) => ui2.set((state) => ({ ...state, goalCompose: roomId, goalOpen: roomId })),
@@ -36756,9 +36752,6 @@ var IMAGE_BATCH_MAX_BYTES = 20 * 1024 * 1024;
 var finalOperation = (status) => status === "committed" || status === "rejected";
 var storageKey = (scope) => `ds-bot:board-pending:${scope.kind}:${scope.id}`;
 var textValue = (value) => typeof value === "string" ? value : "";
-var cardStamp = (task) => ({ revision: task.revision, ...task.legacy?.useOverlay ? { boardRevision: task.legacy.boardRevision, position: task.legacy.position } : {} });
-var sameCardStamp = (task, stamp) => JSON.stringify(cardStamp(task)) === JSON.stringify(stamp);
-var stampedTask = (task, stamp) => ({ ...task, revision: stamp.revision, ...task.legacy ? { legacy: { ...task.legacy, useOverlay: stamp.position !== void 0, boardRevision: stamp.boardRevision, position: stamp.position } } : {} });
 function boardColumns(tasks) {
   const columns2 = new Map(COLUMNS.map(([key]) => [key, []]));
   columns2.set("unknown", []);
@@ -36847,13 +36840,59 @@ function recoveryGroups(rows2, idOf, nameOf2) {
   }
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
-function HeldTurns({ recovery }) {
+function HeldTurns({ recovery, scope, request, onRefresh }) {
   const [query, setQuery] = (0, import_react50.useState)("");
+  const [busy, setBusy] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)("");
+  const inFlight = (0, import_react50.useRef)(false);
+  const decide = async (item, choice) => {
+    if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return;
+    inFlight.current = true;
+    setBusy(item.recoveryId);
+    setError("");
+    try {
+      await request("board-held-decision", { scope, recoveryId: item.recoveryId, expectedRevision: item.decisionRevision, choice });
+      await onRefresh();
+    } catch {
+      setError(t("Decision outcome is unknown. Refresh before trying again."));
+    } finally {
+      inFlight.current = false;
+      setBusy("");
+    }
+  };
   if (!recovery || recovery.available !== true) return (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
   const needle = query.trim().toLocaleLowerCase();
   const filtered = rows2.filter((item) => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]));
-  const groups = recoveryGroups(filtered, (item) => item.botId, (item) => item.botName);
+  const pendingRows = filtered.filter((item) => item.decision !== "ignored");
+  const ignoredRows = filtered.filter((item) => item.decision === "ignored");
+  const groups = recoveryGroups(pendingRows, (item) => item.botId, (item) => item.botName);
+  const renderRows = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-groups" }, recoveryGroups(list, (item) => item.botId, (item) => item.botName).map((group) => (0, import_react50.createElement)(
+    "section",
+    { key: group.id, className: "bt-recovery-group" },
+    (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
+    group.rows.map((item) => (0, import_react50.createElement)(
+      "details",
+      { key: item.recoveryId, className: "bt-board-held-record bt-recovery-record" },
+      (0, import_react50.createElement)(
+        "summary",
+        { className: "bt-recovery-record-summary" },
+        (0, import_react50.createElement)("span", { className: "bt-recovery-record-id", title: item.sessionId }, shortIdentity(item.sessionId)),
+        (0, import_react50.createElement)("span", { className: "bt-recovery-record-time" }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t("Unknown")),
+        (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t(item.decision === "ignored" ? "Ignored" : "Status unknown"))
+      ),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-facts" },
+        (0, import_react50.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
+        (0, import_react50.createElement)(Fact, { label: t("Original turn"), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t("Unknown") }),
+        (0, import_react50.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
+        (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId })
+      ),
+      (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring keeps the record and does not complete the work.")),
+      item.decision !== "ignored" ? (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Redo is unavailable because the original input cannot be verified.")) : null,
+      (0, import_react50.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore"))
+    ))
+  )));
   return (0, import_react50.createElement)(
     "details",
     { className: "bt-recovery-panel" },
@@ -36864,18 +36903,19 @@ function HeldTurns({ recovery }) {
       (0, import_react50.createElement)(
         "span",
         { className: "bt-recovery-summary-text" },
-        (0, import_react50.createElement)("strong", null, t("Interrupted turns awaiting review")),
-        (0, import_react50.createElement)("small", null, t(rows2.length ? "Read only" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
+        (0, import_react50.createElement)("strong", null, t("Interrupted work")),
+        (0, import_react50.createElement)("small", null, t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
       ),
-      (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !rows2.length ? "—" : String(rows2.length))
+      (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !rows2.length ? "—" : String(rows2.filter((item) => item.decision !== "ignored").length))
     ),
     (0, import_react50.createElement)(
       "div",
       { className: "bt-recovery-body" },
+      error ? (0, import_react50.createElement)("p", { role: "alert", className: "bt-recovery-warning" }, error) : null,
       (0, import_react50.createElement)(
         "div",
         { className: "bt-recovery-intro" },
-        (0, import_react50.createElement)("p", null, t("These records are read-only. A result is unknown; no work is resent or closed here.")),
+        (0, import_react50.createElement)("p", null, t("The outcome is unknown. Your choice does not mark the work complete.")),
         (0, import_react50.createElement)("span", null, t("Snapshot time (UTC)"), ": ", snapshotTime(recovery.sampledAt))
       ),
       recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
@@ -36887,31 +36927,8 @@ function HeldTurns({ recovery }) {
       ) : null,
       !rows2.length && !recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No interrupted turns in this snapshot.")) : null,
       rows2.length && !filtered.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
-      groups.length ? (0, import_react50.createElement)("div", { className: "bt-recovery-groups" }, groups.map((group) => (0, import_react50.createElement)(
-        "section",
-        { key: group.id, className: "bt-recovery-group" },
-        (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
-        group.rows.map((item) => (0, import_react50.createElement)(
-          "details",
-          { key: item.recoveryId, className: "bt-board-held-record bt-recovery-record" },
-          (0, import_react50.createElement)(
-            "summary",
-            { className: "bt-recovery-record-summary" },
-            (0, import_react50.createElement)("span", { className: "bt-recovery-record-id", title: item.sessionId }, shortIdentity(item.sessionId)),
-            (0, import_react50.createElement)("span", { className: "bt-recovery-record-time" }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t("Unknown")),
-            (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t("Status unknown"))
-          ),
-          (0, import_react50.createElement)(
-            "div",
-            { className: "bt-recovery-facts" },
-            (0, import_react50.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
-            (0, import_react50.createElement)(Fact, { label: t("Original turn"), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t("Unknown") }),
-            (0, import_react50.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
-            (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId }),
-            (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: "inflight.json" })
-          )
-        ))
-      ))) : null
+      groups.length ? renderRows(pendingRows) : null,
+      ignoredRows.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Ignored")} (${ignoredRows.length})`), renderRows(ignoredRows)) : null
     )
   );
 }
@@ -37208,7 +37225,6 @@ function LegacyWorkReview({ scope, request, actors }) {
 }
 var periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at]);
 function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen }) {
-  const [draft, setDraft] = (0, import_react50.useState)({ key: "", text: "" }), [confirmedKey, setConfirmedKey] = (0, import_react50.useState)("");
   const [checking, setChecking] = (0, import_react50.useState)(false), [saving, setSaving] = (0, import_react50.useState)(false);
   const [checkedKey, setCheckedKey] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)(""), [notice, setNotice] = (0, import_react50.useState)("");
   const generation = (0, import_react50.useRef)(0), scopeGeneration = (0, import_react50.useRef)(0), checkBusy = (0, import_react50.useRef)(false), saveBusy = (0, import_react50.useRef)(false);
@@ -37223,8 +37239,6 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     previousAttempt.current = attemptKey;
     generation.current += 1;
   }
-  const evidence = draft.key === attemptKey ? draft.text : "";
-  const confirmed = confirmedKey === identity;
   (0, import_react50.useEffect)(() => {
     scopeGeneration.current += 1;
     setNotice("");
@@ -37257,8 +37271,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     }
   };
   const submit = async () => {
-    const text = evidence.trim();
-    if (!eligible || checkedKey !== identity || !confirmed || text.length < 8 || text.length > 2e3 || checkBusy.current || saveBusy.current || typeof resolveReview !== "function") return;
+    if (!eligible || checkedKey !== identity || checkBusy.current || saveBusy.current || typeof resolveReview !== "function") return;
     let fresh;
     try {
       fresh = currentRoomGoal?.(scopeId);
@@ -37275,13 +37288,9 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     setError("");
     setNotice("");
     try {
-      await resolveReview(goalId, attemptId, text);
+      await resolveReview(goalId, attemptId);
       if (scopeGeneration.current === scopeAtStart) setNotice(`${t("Request accepted. Refresh to verify the current review status.")} ${t("Review ID")}: ${attemptId}`);
-      if (generation.current === current) {
-        setDraft({ key: attemptKey, text: "" });
-        setConfirmedKey("");
-        setCheckedKey("");
-      }
+      if (generation.current === current) setCheckedKey("");
     } catch (err) {
       if (generation.current === current) setCheckedKey("");
       if (scopeGeneration.current === scopeAtStart) setError(["bot/stale", "bot/invalid", "bot/refused", "bot/read-only"].includes(err?.code) ? t("The goal changed or related work is still pending. Check it before recovery.") : t("Action outcome is unknown; check it before making another change."));
@@ -37290,7 +37299,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
       if (scopeGeneration.current === scopeAtStart) setSaving(false);
     }
   };
-  const reason = typeof resolveReview !== "function" ? t("Review recovery is unavailable in this view.") : typeof refreshGoal !== "function" || typeof currentRoomGoal !== "function" ? t("Group status is unavailable.") : !goalId || !attemptId ? t("Review identity is unavailable.") : goal?.status !== "active" ? t("The group goal must be active before reviews can resume.") : goal.idle === true && !automaticIdle ? t("The goal is paused or its idle state needs review.") : !eligible ? t("This review is not ready to resume. Refresh its status later.") : checkedKey !== identity ? t("Refresh the group status before continuing.") : evidence.trim().length < 8 ? t("Enter at least 8 characters describing what you verified.") : evidence.trim().length > 2e3 ? t("Use at most 2000 characters.") : !confirmed ? t("Confirm that you checked the original outcome.") : "";
+  const reason = typeof resolveReview !== "function" ? t("Review recovery is unavailable in this view.") : typeof refreshGoal !== "function" || typeof currentRoomGoal !== "function" ? t("Group status is unavailable.") : !goalId || !attemptId ? t("Review identity is unavailable.") : goal?.status !== "active" ? t("The group goal must be active before reviews can resume.") : goal.idle === true && !automaticIdle ? t("The goal is paused or its idle state needs review.") : !eligible ? t("This review is not ready to resume. Refresh its status later.") : checkedKey !== identity ? t("Refresh the group status before continuing.") : "";
   return (0, import_react50.createElement)(
     "details",
     {
@@ -37313,7 +37322,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
       attempt ? (0, import_react50.createElement)(
         "div",
         { className: "bt-periodic-context" },
-        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
+        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.")),
         (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This only resumes periodic inspections; it does not approve or complete tasks.")),
         (0, import_react50.createElement)(
           "div",
@@ -37335,10 +37344,8 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
       attempt ? (0, import_react50.createElement)(
         "div",
         { className: "bt-recovery-form" },
-        (0, import_react50.createElement)("label", null, t("What did you verify?"), (0, import_react50.createElement)("textarea", { value: evidence, maxLength: 2e3, disabled: checking || saving, onChange: (event) => setDraft({ key: attemptKey, text: event.target.value }) })),
-        (0, import_react50.createElement)("label", { className: "bt-recovery-confirm" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: confirmed, disabled: checking || saving, onChange: (event) => setConfirmedKey(event.target.checked ? identity : "") }), t("I checked the original outcome and authorize future reviews.")),
         reason ? (0, import_react50.createElement)("p", { className: "bt-recovery-note", role: "status" }, reason) : null,
-        (0, import_react50.createElement)("button", { type: "button", disabled: !!reason || checking || saving || typeof resolveReview !== "function", onClick: () => void submit() }, t("Resume periodic reviews"))
+        (0, import_react50.createElement)("button", { type: "button", disabled: !!reason || checking || saving || typeof resolveReview !== "function", onClick: () => void submit() }, t("Allow future inspections"))
       ) : null
     )
   );
@@ -37473,15 +37480,15 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
   );
 }
 function CardDetails({ task, editable, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [draft, setDraft] = (0, import_react50.useState)({}), [entry, setEntry2] = (0, import_react50.useState)("");
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [draft, setDraft] = (0, import_react50.useState)({}), [entry, setEntry2] = (0, import_react50.useState)("");
   const reset = () => {
-    setBase(cardStamp(task));
+    setBase(task.revision);
     setEntry2("");
     setDraft({ description: textValue(task.description), dueDate: textValue(task.dueDate), labels: (Array.isArray(task.labels) ? task.labels : []).join("\n"), checklist: (Array.isArray(task.checklist) ? task.checklist : []).map((item) => ({ ...item })) });
   };
   const checklist = Array.isArray(task.checklist) ? task.checklist : [];
   const labels2 = Array.isArray(task.labels) ? task.labels : [];
-  const changed = !sameCardStamp(task, base);
+  const changed = task.revision !== base;
   const labelValues = (draft.labels ?? "").split("\n").map((value) => value.trim()).filter(Boolean);
   const bytes = (value) => new TextEncoder().encode(value).length;
   const valid = bytes(draft.description ?? "") <= 8192 && labelValues.length <= 20 && new Set(labelValues).size === labelValues.length && labelValues.every((value) => bytes(value) <= 40) && (draft.checklist ?? []).length <= 100 && (draft.checklist ?? []).every((item) => item.text.trim() && bytes(item.text.trim()) <= 512);
@@ -37509,7 +37516,7 @@ function CardDetails({ task, editable, disabled, onEdit }) {
       { className: "bt-board-actions", onSubmit: (event) => {
         event.preventDefault();
         if (disabled || changed || !valid) return;
-        void onEdit(stampedTask(task, base), { description: draft.description, dueDate: draft.dueDate || null, labels: labelValues, checklist: draft.checklist.map((item) => ({ ...item, text: item.text.trim() })) }).then((result) => {
+        void onEdit({ ...task, revision: base }, { description: draft.description, dueDate: draft.dueDate || null, labels: labelValues, checklist: draft.checklist.map((item) => ({ ...item, text: item.text.trim() })) }).then((result) => {
           if (result === "committed") setOpen(false);
         });
       } },
@@ -37580,18 +37587,18 @@ function CardConversation({ task, commands, disabled, onCommand }) {
   );
 }
 function EditGoalTask({ task, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
   const reset = () => {
-    setBase(cardStamp(task));
-    setTitle(textValue(task.legacy?.originalTitle ?? task.title));
+    setBase(task.revision);
+    setTitle(textValue(task.title));
     setNote(textValue(task.goalNote));
     setStatus(task.legacy?.originalStatus ?? "");
   };
-  const changed = !sameCardStamp(task, base), original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
+  const changed = task.revision !== base, original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
   const titleLocked = ["reported", "done"].includes(original);
   const next = original === "pending" ? "working" : original === "working" ? "reported" : void 0;
   const statuses = [original, ...!paused && next ? [next] : []].filter(Boolean);
-  const modified = title.trim() !== textValue(task.legacy?.originalTitle ?? task.title) || note !== textValue(task.goalNote) || status !== original;
+  const modified = title.trim() !== textValue(task.title) || note !== textValue(task.goalNote) || status !== original;
   const valid = title.trim() && modified && (!status || status === original || note.trim());
   if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
     reset();
@@ -37603,10 +37610,10 @@ function EditGoalTask({ task, disabled, onEdit }) {
       event.preventDefault();
       if (disabled || changed || !valid) return;
       const value = {};
-      if (title.trim() !== textValue(task.legacy?.originalTitle ?? task.title)) value.title = title.trim();
+      if (title.trim() !== textValue(task.title)) value.title = title.trim();
       if (note !== textValue(task.goalNote) || status !== original) value.note = note;
       if (status !== original) value.status = status;
-      void onEdit(stampedTask(task, base), value).then((result) => {
+      void onEdit({ ...task, revision: base }, value).then((result) => {
         if (result === "committed") setOpen(false);
       });
     } },
@@ -37620,35 +37627,6 @@ function EditGoalTask({ task, disabled, onEdit }) {
     )),
     (0, import_react50.createElement)("label", null, t("Goal task note"), (0, import_react50.createElement)("textarea", { "aria-label": t("Goal task note"), value: note, disabled: disabled || paused, onChange: (event) => setNote(event.target.value) })),
     (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Owner, acceptance and completed status are managed by the group goal.")),
-    (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
-  );
-}
-function EditHistoryTitle({ task, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [reason, setReason] = (0, import_react50.useState)("");
-  const reset = () => {
-    setBase(cardStamp(task));
-    setTitle(textValue(task.title));
-    setReason("");
-  };
-  const changed = !sameCardStamp(task, base);
-  const valid = title.trim() && title.trim().length <= 500 && title.trim() !== task.title && reason.trim() && reason.length <= 300;
-  if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
-    reset();
-    setOpen(true);
-  } }, t("Correct card title"));
-  return (0, import_react50.createElement)(
-    "form",
-    { className: "bt-board-actions", onSubmit: (event) => {
-      event.preventDefault();
-      if (disabled || changed || !valid) return;
-      void onEdit(stampedTask(task, base), { title: title.trim(), reason: reason.trim() }).then((result) => {
-        if (result === "committed") setOpen(false);
-      });
-    } },
-    changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
-    (0, import_react50.createElement)("label", null, t("Card display title"), (0, import_react50.createElement)("input", { "aria-label": t("Card display title"), value: title, disabled, onChange: (event) => setTitle(event.target.value) })),
-    (0, import_react50.createElement)("label", null, t("Reason for correction"), (0, import_react50.createElement)("textarea", { "aria-label": t("Reason for correction"), value: reason, disabled, onChange: (event) => setReason(event.target.value) })),
-    (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("The original task and acceptance record remain unchanged.")),
     (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
   );
 }
@@ -37740,8 +37718,8 @@ function BoardImage({ scope, taskId, image, request, disabled, onRemove, canRemo
 function UploadImages({ task, disabled, onUpload }) {
   const [images, setImages] = (0, import_react50.useState)([]);
   const [error, setError] = (0, import_react50.useState)("");
-  const [base, setBase] = (0, import_react50.useState)(() => cardStamp(task));
-  const changed = images.length > 0 && !sameCardStamp(task, base);
+  const [base, setBase] = (0, import_react50.useState)(task.revision);
+  const changed = images.length > 0 && base !== task.revision;
   const urls = (0, import_react50.useRef)(/* @__PURE__ */ new Set());
   (0, import_react50.useEffect)(() => () => {
     for (const url of urls.current) URL.revokeObjectURL(url);
@@ -37755,7 +37733,7 @@ function UploadImages({ task, disabled, onUpload }) {
   const choose = (event) => {
     const files = [...event.target.files ?? []];
     event.target.value = "";
-    if (!images.length) setBase(cardStamp(task));
+    if (!images.length) setBase(task.revision);
     const count = (Array.isArray(task.images) ? task.images.length : 0) + images.length + files.length;
     const bytes = images.reduce((sum, image) => sum + image.file.size, 0) + files.reduce((sum, file) => sum + file.size, 0);
     if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || images.length + files.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || files.some((file) => !IMAGE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
@@ -37793,7 +37771,7 @@ function UploadImages({ task, disabled, onUpload }) {
       (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => remove(image) }, t("Remove image"))
     ))),
     images.length ? (0, import_react50.createElement)("button", { type: "button", disabled: disabled || changed, onClick: () => {
-      void onUpload(stampedTask(task, base), images).then((result) => {
+      void onUpload({ ...task, revision: base }, images).then((result) => {
         if (result !== "committed") return;
         for (const image of images) {
           URL.revokeObjectURL(image.url);
@@ -37975,10 +37953,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           )
         ) : null,
         (0, import_react50.createElement)("span", { className: "bt-board-id" }, task.id),
-        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t({ current: "Current goal task", previous: "Earlier goal stage", future: "Upcoming goal stage", archived: "Archived goal task", closed: "Closed goal task" }[task.legacy.position] ?? (task.legacy.current ? "Current goal task" : "Earlier goal stage"))) : null,
-        task.legacy?.useOverlay ? (0, import_react50.createElement)(Fact, { label: t("Original task description"), value: textValue(task.legacy.originalTitle) }) : null,
-        task.legacy?.titleStale ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("The original task changed after this display title was corrected. Review the title.")) : null,
-        task.legacy?.pending ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("A card change is awaiting confirmation in its original board.")) : null,
+        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t(task.legacy.current ? "Original group goal task" : "Earlier group goal task · read only")) : null,
         task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Shared task · read only")) : null,
         task.legacy && !KNOWN.has(task.status) ? (0, import_react50.createElement)(Fact, { label: t("Original status"), value: textValue(task.legacy.originalStatus) || t("Status unknown") }) : null,
         (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(task.owner, actors) }),
@@ -38005,22 +37980,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         }))) : null,
         uploadEnabled && commands.some((command) => command.type === "upload") ? (0, import_react50.createElement)(UploadImages, { task, disabled: uncertain, onUpload }) : null,
         (0, import_react50.createElement)(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
-        commands.some((command) => command.type === "goal-history-title") ? (0, import_react50.createElement)(EditHistoryTitle, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-history-title" }, value) }) : null,
-        Array.isArray(task.boardHistory) && task.boardHistory.length ? (0, import_react50.createElement)(
-          "details",
-          { className: "bt-board-history" },
-          (0, import_react50.createElement)("summary", null, t("Card revision history")),
-          task.boardHistory.map((entry) => (0, import_react50.createElement)(
-            "article",
-            { key: entry.operationId },
-            (0, import_react50.createElement)("strong", null, `${Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString() : ""} · ${t("You")} · ${entry.kind}`),
-            entry.reason ? (0, import_react50.createElement)("p", null, entry.reason) : null,
-            (0, import_react50.createElement)("p", null, `${t("Before")}: ${JSON.stringify(entry.before)}`),
-            (0, import_react50.createElement)("p", null, `${t("After")}: ${JSON.stringify(entry.after)}`)
-          ))
-        ) : null,
         commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)(EditGoalTask, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-task-edit" }, value) }) : null,
-        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["goal-task-edit", "goal-history-title", "goal-card-details", "goal-card-comment", "goal-image-remove", "remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
+        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["goal-task-edit", "goal-image-remove", "remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
       )
     )
   );
@@ -38189,7 +38150,6 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
         operationId,
         taskId: task.id,
         ...Number.isSafeInteger(task.revision) ? { expectedRevision: task.revision } : {},
-        ...task.legacy?.useOverlay ? { expectedBoardRevision: task.legacy.boardRevision, expectedPosition: task.legacy.position } : {},
         type: command.type,
         ...value !== void 0 ? { value } : {}
       });
@@ -38228,7 +38188,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       pendingRef.current = operationId;
       fetching.current = operationId;
       setPending(operationId);
-      await request("board-upload", { scope, taskId: task.id, expectedRevision: task.revision, ...task.legacy?.useOverlay ? { expectedBoardRevision: task.legacy.boardRevision, expectedPosition: task.legacy.position } : {}, operationId, images: encoded });
+      await request("board-upload", { scope, taskId: task.id, expectedRevision: task.revision, operationId, images: encoded });
       return await check(operationId, epoch);
     } catch (err) {
       if (current(epoch) && operationId && pendingRef.current === operationId) return await check(operationId, epoch);
@@ -38297,7 +38257,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       ),
       error ? (0, import_react50.createElement)("div", { className: "bt-board-error", role: "alert" }, error) : null,
       capacityReached ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "status" }, t("Task limit reached. New tasks cannot be created.")) : null,
-      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Goal card details can be corrected without changing the original task or acceptance record.")) : null,
+      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Group goal cards edit the original task. Earlier stages remain read only.")) : null,
       pending ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-pending", role: "status" },
@@ -38327,7 +38287,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           }
         }) : null
       ),
-      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { recovery: data.recovery }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
+      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
       !data ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-empty" },
