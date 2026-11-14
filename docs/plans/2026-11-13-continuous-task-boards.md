@@ -4,7 +4,9 @@ Status: implementation in progress. Board editing and storage can be tested inde
 
 ## Goals
 
-Give each group and each personal scope its own editable task board. Record a stable task identity, owner, independent reviewer, acceptance criteria, dependencies, status, evidence and version. A group may expose a limited read-only view of a task to another group only through an explicit grant. The existing group-goal aggregate remains a separate, read-only projection until it is deliberately linked to task records; adding a card must not silently replace or complete an existing goal.
+Give each group and each personal scope its own editable task board. Record a stable task identity, owner, independent reviewer, acceptance criteria, dependencies, status, evidence and version. A group may expose a limited read-only view of a task to another group only through an explicit grant. Existing group-goal cards refer directly to the original Goal task, using a stable room/goal/stage/task identity; they do not create a second task. A user may update the current task description, note and permitted progress through the original Goal. Stage acceptance and completion remain governed by the Goal workflow; reported or completed work cannot have its description silently rewritten.
+
+Images on Goal cards are attached to the original task, with references and operation receipts saved in the same team-state snapshot. Image bytes are durably published before the reference; a failed or uncertain state save never reports success. Earlier stages and archived Goals retain readable attachments, while rebuilding a stage containing images is refused until those references are deliberately preserved and removed.
 
 Task state and task execution are separate. A report is not acceptance, a queue entry is not proof of execution, and a finished turn is not proof that acceptance criteria passed. Existing pauses, stops, unknown outcomes, user decisions and external blockers remain binding.
 
