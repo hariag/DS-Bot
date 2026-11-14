@@ -63,3 +63,13 @@ test('a group-origin record cannot be relabeled as a personal record', () => {
   snapshot.userRedos[operationId].scope = { kind:'personal', id:'user' }
   assert.equal(project({ state:snapshot, scope:{ kind:'personal', id:'user' } }).items[0].redo, undefined)
 })
+
+test('a genuinely personal record is only shown in its original personal scope', () => {
+  const snapshot = state(), recovery = held()
+  delete recovery.items[0].roomId
+  snapshot.userRedos[operationId].scope = { kind:'personal', id:'bot' }
+  const own = project({ state:snapshot, recovery, scope:{ kind:'personal', id:'bot' } })
+  assert.deepEqual(own.items[0].redo, { operationId, status:'unknown' })
+  const user = project({ state:snapshot, recovery, scope:{ kind:'personal', id:'user' } })
+  assert.equal(user.items[0].redo, undefined)
+})
