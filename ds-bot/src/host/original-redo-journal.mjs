@@ -24,15 +24,46 @@ export function originalRedoIdentity(operationId) {
 export function createOriginalRedoJournal(rt, { authorize, proveOriginal, validateBinding, verifyResult } = {}) {
   if (typeof rt?.home !== 'string' || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
     || typeof authorize !== 'function' || typeof proveOriginal !== 'function' || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
-  const root = join(rt.home, 'original-redo-v1'), busy = rt.originalRedoBusy ??= new Set()
+  const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), busy = rt.originalRedoBusy ??= new Set()
+  let directoryIdentity
   const lease = () => { rt.requireHomeLock(); const v = rt.homeLockVersion(); if (v == null) throw Error('redo lease unavailable'); return v }
-  const sameLease = generation => { if (lease() !== generation) throw Error('redo lease changed') }
+  const sameLease = generation => {
+    if (lease() !== generation) throw Error('redo lease changed')
+    if (directoryIdentity) {
+      const current = lstatSync(root), home = lstatSync(rt.home)
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino
+        || !home.isDirectory() || home.isSymbolicLink() || home.dev !== directoryIdentity.homeDev || home.ino !== directoryIdentity.homeIno) throw Error('redo directory changed')
+    }
+  }
   const dirSync = path => { const fd = openSync(path, constants.O_RDONLY | nofollow); try { fsyncSync(fd) } finally { closeSync(fd) } }
   function directory(generation) {
     sameLease(generation)
-    try { mkdirSync(root, { mode:0o700 }); dirSync(rt.home) } catch (error) { if (error.code !== 'EEXIST') throw error }
-    const stat = lstatSync(root)
+    try { mkdirSync(root, { mode:0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
+    const stat = lstatSync(root), home = lstatSync(rt.home)
     if (!stat.isDirectory() || stat.isSymbolicLink() || (typeof process.getuid === 'function' && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('redo directory unavailable')
+    if (!home.isDirectory() || home.isSymbolicLink()) throw Error('redo directory unavailable')
+    const identity = { dev:stat.dev, ino:stat.ino, homeDev:home.dev, homeIno:home.ino }
+    let fd
+    try {
+      fd = openSync(marker, constants.O_RDONLY | nofollow)
+    } catch (error) {
+      if (error.code !== 'ENOENT' || readdirSync(root).length !== 0) throw Error('redo identity unavailable')
+      const created = openSync(marker, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
+      try { writeFileSync(created, JSON.stringify(identity)); fsyncSync(created) } finally { closeSync(created) }
+      dirSync(rt.home)
+      fd = openSync(marker, constants.O_RDONLY | nofollow)
+    }
+    try {
+      const state = fstatSync(fd)
+      if (!state.isFile() || state.size > 1024 || (state.mode & 0o077) || (typeof process.getuid === 'function' && state.uid !== process.getuid())
+        || !isDeepStrictEqual(JSON.parse(readFileSync(fd, 'utf8')), identity)) throw Error('redo identity unavailable')
+      fsyncSync(fd)
+    } finally { closeSync(fd) }
+    dirSync(rt.home)
+    const after = lstatSync(root)
+    if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== stat.dev || after.ino !== stat.ino) throw Error('redo directory changed')
+    if (directoryIdentity && !isDeepStrictEqual(directoryIdentity, identity)) throw Error('redo directory changed')
+    directoryIdentity = identity
     sameLease(generation)
   }
   function pathFor(operationId) { if (!uuid(operationId)) throw Error('invalid redo operation'); return join(root, `${operationId}.json`) }
@@ -98,21 +129,22 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   }
   function checkAccess(row, generation) {
     sameLease(generation)
-    if (authorize(row.scope, row.recoveryId, row.principal) !== true) throw Error('redo unavailable')
+    if (authorize(copy(row.scope), row.recoveryId, copy(row.principal)) !== true) throw Error('redo unavailable')
   }
   async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest }) {
     const identity = originalRedoIdentity(operationId)
     if (!principalValid(principal)
       || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)) throw Error('redo confirmation required')
+    scope = copy(scope); principal = copy(principal)
     if (busy.has(operationId)) throw Error('redo outcome unknown')
     busy.add(operationId)
     try {
       const generation = lease(); directory(generation)
-      if (authorize(scope, recoveryId, principal) !== true) throw Error('redo unavailable')
-      const proof = await proveOriginal(scope, recoveryId)
+      if (authorize(copy(scope), recoveryId, copy(principal)) !== true) throw Error('redo unavailable')
+      const proof = await proveOriginal(copy(scope), recoveryId)
       const source = original(proof, recoveryId, scope, confirmationDigest)
       sameLease(generation)
-      if (authorize(scope, recoveryId, principal) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
+      if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
       const rows = all(), existing = rows.find(row => row.operationId === operationId)
       if (existing) {
         if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest
@@ -129,20 +161,22 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       return copy(row)
     } finally { busy.delete(operationId) }
   }
-  async function beginDispatch(operationId) {
+  async function beginDispatch(operationId, principal) {
     if (busy.has(operationId)) throw Error('redo outcome unknown')
     busy.add(operationId)
     try {
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
+      if (!isDeepStrictEqual(row.principal, principal)) throw Error('redo unavailable')
       if (row.state !== 'prepared') return { state:'unknown', operationId }
-      const proof = await proveOriginal(row.scope, row.recoveryId)
+      const proof = await proveOriginal(copy(row.scope), row.recoveryId)
       const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest)
       checkAccess(row, generation)
       if (!isDeepStrictEqual(source, row.original) || proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo proof changed')
       if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding unavailable')
+      checkAccess(row, generation); sameLease(generation)
       const next = { ...row, state:'dispatching' }
-      try { write(next, generation); checkAccess(next, generation); if (proof.isCurrent() !== true || validateBinding(copy(next), undefined) !== true) throw Error('redo binding changed') }
+      try { write(next, generation); checkAccess(next, generation); if (proof.isCurrent() !== true || validateBinding(copy(next), undefined) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
       catch { throw Error('redo dispatch outcome unknown') }
       return { state:'dispatching', operationId, perform:true, binding:copy(next) }
     } finally { busy.delete(operationId) }
@@ -156,7 +190,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const row = read(operationId); checkAccess(row, generation)
       if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
         || validateBinding(copy(row), undefined) !== true) throw Error('redo dispatch unavailable')
-      try { confirm(row, generation); checkAccess(row, generation); if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding changed') }
+      try { confirm(row, generation); checkAccess(row, generation); if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding changed'); checkAccess(row, generation); sameLease(generation) }
       catch { throw Error('redo dispatch outcome unknown') }
       return copy(row)
     } finally { busy.delete(operationId) }
@@ -170,8 +204,9 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const row = read(operationId); checkAccess(row, generation)
       if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal) || !Number.isSafeInteger(turn?.turn) || turn.turn < 0
         || !Number.isSafeInteger(turn?.turnStartSeq) || turn.turnStartSeq < 0 || validateBinding(copy(row), turn) !== true) throw Error('redo claim unavailable')
+      checkAccess(row, generation); sameLease(generation)
       const next = { ...row, state:'claiming', turn:{ turn:turn.turn, turnStartSeq:turn.turnStartSeq } }
-      try { write(next, generation); checkAccess(next, generation); if (validateBinding(copy(next), turn) !== true) throw Error('redo binding changed') }
+      try { write(next, generation); checkAccess(next, generation); if (validateBinding(copy(next), turn) !== true) throw Error('redo binding changed'); checkAccess(next, generation); sameLease(generation) }
       catch { throw Error('redo claim outcome unknown') }
       return copy(next)
     } finally { busy.delete(operationId) }
@@ -194,7 +229,8 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       checkAccess(row, generation)
       if (proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo result changed')
       const result = { digest:proof.resultDigest, ref:copy(ref), throughSeq:proof.throughSeq }
-      if (row.state === 'completed' && !isDeepStrictEqual(row.result, result)) throw Error('redo result conflict')
+      if (row.state === 'completed' && (!isDeepStrictEqual(row.result?.ref, result.ref) || row.result?.digest !== result.digest
+        || !Number.isSafeInteger(row.result?.throughSeq) || result.throughSeq < row.result.throughSeq)) throw Error('redo result conflict')
       const next = row.state === 'completed' ? row : { ...row, state:'completed', result }
       try {
         if (row.state === 'completed') confirm(row, generation)
