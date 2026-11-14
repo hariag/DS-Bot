@@ -7,7 +7,7 @@ const statuses = new Map([['pending','legacy-pending'],['working','working'],['r
 // This identifies the original goal task across edits; it is not a second
 // task registration and cannot confer permission by itself.
 export const legacyGoalCardId = (roomId, goalId, stageId, taskId) => `legacy-${keyOf([roomId,goalId,stageId,taskId])}`
-export function legacyGoalCards({ scope, principal, rooms = {}, bots = {} }) {
+export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendingCard }) {
   if (!scope || !principal) return []
   if (principal.kind === 'bot' && scope.kind === 'personal' && scope.id !== principal.id) return []
   const selected = scope.kind === 'room' ? [[scope.id, own(rooms, scope.id)]]
@@ -25,23 +25,42 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {} }) {
         for (const [taskIndex,task] of stage.tasks.entries()) {
       if (!task || typeof task.id !== 'string' || typeof task.botId !== 'string' || typeof task.task !== 'string') continue
       if (scope.kind === 'personal' && task.botId !== scope.id) continue
+      const stableId=legacyGoalCardId(roomId,goal.id,stage.id,task.id)
+      const pending=pendingCard?.(stableId)
+      const saved=pending ? pending.previous : own(goal.boardCards,stableId)
+      const validSaved=saved===undefined || (saved && typeof saved==='object' && !Array.isArray(saved)
+        && saved.roomId===roomId && saved.goalId===goal.id && saved.stageId===stage.id && saved.taskId===task.id
+        && Number.isSafeInteger(saved.revision) && saved.revision>=1 && Array.isArray(saved.audit)
+        && (saved.details===undefined || (saved.details && typeof saved.details==='object' && !Array.isArray(saved.details)))
+        && ['comments','images','hiddenImages'].every(key=>saved[key]===undefined || Array.isArray(saved[key])))
       const ambiguous=stage.tasks.filter(item=>item?.id===task.id).length!==1
+        || goal.stages.filter(item=>item?.id===stage.id).length!==1 || goals.filter(item=>item?.id===goal.id).length!==1 || !validSaved
+      const overlay=validSaved && saved ? saved : undefined
+      const isCurrent=goal===room.goal && stageIndex===goal.current && ['active','paused'].includes(goal.status)
+      const position=goal!==room.goal?'archived':stageIndex<goal.current?'previous':stageIndex>goal.current?'future':isCurrent?'current':'closed'
+      const details={...(task.boardDetails??{}),...(overlay?.details??{})}
+      const hidden=Array.isArray(overlay?.hiddenImages)?overlay.hiddenImages:[]
+      const images=[...(Array.isArray(task.boardImages)?task.boardImages:[]),...(Array.isArray(overlay?.images)?overlay.images:[])]
+        .filter(image=>image && typeof image.id==='string' && !hidden.includes(image.id))
       const status = task.status==='pending' && stageIndex>goal.current ? 'waiting' : statuses.get(task.status) ?? 'legacy-unverified'
       cards.push({
-        id: ambiguous ? `legacy-${keyOf([roomId,goal.id,stage.id,task.id,'ambiguous',taskIndex])}` : legacyGoalCardId(roomId,goal.id,stage.id,task.id),
-        revision: goal.revision, title: task.task, owner: task.botId, status,
+        id: ambiguous ? `legacy-${keyOf([roomId,goal.id,stage.id,task.id,'ambiguous',taskIndex])}` : stableId,
+        revision: goal.revision, title: typeof overlay?.title==='string'?overlay.title:task.task, owner: task.botId, status,
         originRoomId: roomId, dependencies: [], acceptance:stage.acceptance,
-        description:typeof task.boardDetails?.description==='string'?task.boardDetails.description:'',
-        dueDate:typeof task.boardDetails?.dueDate==='string'?task.boardDetails.dueDate:null,
-        labels:Array.isArray(task.boardDetails?.labels)?task.boardDetails.labels:[],
-        checklist:Array.isArray(task.boardDetails?.checklist)?task.boardDetails.checklist:[],
-        comments:Array.isArray(task.boardComments)?task.boardComments:[],
+        description:typeof details.description==='string'?details.description:'',
+        dueDate:typeof details.dueDate==='string'?details.dueDate:null,
+        labels:Array.isArray(details.labels)?details.labels:[],
+        checklist:Array.isArray(details.checklist)?details.checklist:[],
+        comments:[...(Array.isArray(task.boardComments)?task.boardComments:[]),...(Array.isArray(overlay?.comments)?overlay.comments:[])],
         boardActivity:Array.isArray(task.boardActivity)?task.boardActivity:[],
+        boardHistory:Array.isArray(overlay?.audit)?overlay.audit:[],
         ...(typeof task.note === 'string' ? { goalNote:task.note } : {}),
-        ...(Array.isArray(task.boardImages) ? { images:task.boardImages.filter(image=>image && typeof image.id==='string').map(({ id,name,mediaType })=>({id,name,mediaType})) } : {}),
+        ...(images.length ? {images:images.map(({ id,name,mediaType })=>({id,name,mediaType}))} : {}),
         legacy: { goalId: goal.id, stageId: stage.id, stageTitle: stage.title,
           taskId: task.id, originalStatus: task.status, goalStatus: goal.status, goalTitle:goal.title,
-          archived:goal!==room.goal, current:goal===room.goal&&stageIndex===goal.current, ambiguous },
+          originalTitle:task.task, titleStale:typeof overlay?.title==='string' && overlay.titleSource!==task.task,
+          position, boardRevision:overlay?.revision??0, useOverlay:!isCurrent||!!overlay, pending:!!pending,
+          archived:goal!==room.goal, current:isCurrent, ambiguous },
       })
         }
       }

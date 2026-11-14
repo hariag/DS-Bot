@@ -8,7 +8,7 @@ const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' 
 
 // `principal` comes from the authenticated route, never from a request body.
 // The current browser principal represents the instance owner, not a Bot.
-export function createBoardApi({ store, roster, assertWritable, images, goalImageReference, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [] }) {
+export function createBoardApi({ store, roster, assertWritable, images, goalImageReference, goalCardSnapshot, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [] }) {
   const current = () => {
     const value = roster()
     if (!value || !value.rooms || !value.bots) throw fail('Team is unavailable')
@@ -20,7 +20,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, verifyShare, verifyDependency })
     const addLegacy = () => {
       const ids = new Set(board.tasks.map(task => task.id))
-      for(const task of legacyGoalCards({ scope, principal, rooms: state.rooms, bots: state.bots })) {
+      for(const task of legacyGoalCards({ scope, principal, rooms: state.rooms, bots: state.bots, pendingCard:goalCardSnapshot })) {
         if(!ids.has(task.id)){ids.add(task.id);board.tasks.push(task)}
       }
       return board
@@ -37,9 +37,10 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const availableTargets = Object.create(null)
     const commands = Object.fromEntries(board.tasks.map(task => {
       if (!writable || task.shared) return [task.id, []]
-      if (task.legacy) return [task.id, task.legacy.current && !task.legacy.ambiguous && Number.isSafeInteger(task.revision)
-        && ['active','paused'].includes(task.legacy.goalStatus)
-        ? [{type:'goal-task-edit',label:'Edit goal task'},{type:'goal-card-details',label:'Edit card details'},{type:'goal-card-comment',label:'Add comment'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
+      if (task.legacy) return [task.id, !task.legacy.ambiguous && !task.legacy.pending && Number.isSafeInteger(task.revision)
+        ? [...(task.legacy.current?[{type:'goal-task-edit',label:'Edit goal task'}]:[]),
+          ...(task.legacy.useOverlay?[{type:'goal-history-title',label:'Correct card title'}]:[]),
+          {type:'goal-card-details',label:'Edit card details'},{type:'goal-card-comment',label:'Add comment'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
       const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
