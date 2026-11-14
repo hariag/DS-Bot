@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { userRedoConfirmation } from './user-redo-journal.mjs'
+import { userRedoConfirmation, userRedoIdentity } from './user-redo-journal.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -21,11 +21,23 @@ export function originalRedoIdentity(operationId) {
 
 // This journal is not installed by itself. Callers must prove the original
 // writer and bind the current Agent, exact Session object and scope before use.
-export function createOriginalRedoJournal(rt, { authorize, proveOriginal, validateBinding, verifyResult } = {}) {
+export function createOriginalRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, false) }
+export function createIsolatedRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, true) }
+
+function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, verifyResult } = {}, isolated) {
   if (typeof rt?.home !== 'string' || typeof rt.statePath !== 'string' || !rt.state || typeof rt.save !== 'function'
     || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
     || typeof authorize !== 'function' || typeof proveOriginal !== 'function' || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
-  const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
+  // Both modes share the recovery witness and operation busy set, so one held
+  // record cannot be dispatched once by each mode. Private files and phase
+  // markers are otherwise separate and cannot be mistaken for one another.
+  const namespace = isolated ? 'isolated-redo-v1' : 'original-redo-v1'
+  const root = join(rt.home, namespace), marker = join(rt.home, `.${namespace}.identity`), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
+  const identityFor = isolated ? userRedoIdentity : originalRedoIdentity
+  const targetValid = target => target && typeof target.cwd === 'string' && isAbsolute(target.cwd) && !target.cwd.includes('\0')
+    && typeof target.provider === 'string' && target.provider.length > 0 && target.provider.length <= 256
+    && typeof target.model === 'string' && target.model.length > 0 && target.model.length <= 256
+    && Object.keys(target).every(key => ['cwd', 'provider', 'model'].includes(key))
   let directoryIdentity
   function readMarker(path, sync = false) {
     const fd = openSync(path, constants.O_RDONLY | nofollow)
@@ -81,7 +93,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function pathFor(operationId) { if (!uuid(operationId)) throw Error('invalid redo operation'); return join(root, `${operationId}.json`) }
   function witnessFor(row) {
     return { version:1, recoveryId:row.recoveryId, operationId:row.operationId,
-      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest]) }
+      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest, ...(isolated ? [row.target] : [])]) }
   }
   function witnessTable() {
     const table = rt.state.originalRedoWitness
@@ -111,7 +123,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   }
   function phasePath(operationId, phase) {
     if (!uuid(operationId) || !['dispatching', 'claiming', 'completed'].includes(phase)) throw Error('invalid redo phase')
-    return join(rt.home, `.original-redo-${operationId}-${phase}`)
+    return join(rt.home, `.${isolated ? 'isolated' : 'original'}-redo-${operationId}-${phase}`)
   }
   function phaseEvidence(row, phase, turn) {
     return { version:1, operationId:row.operationId, recoveryId:row.recoveryId, bindingHash:witnessFor(row).bindingHash,
@@ -162,7 +174,8 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (!stat.isFile() || stat.size > 65536 || (stat.mode & 0o077) || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw Error('redo record unavailable')
       const value = JSON.parse(readFileSync(fd, 'utf8'))
       const source = value?.original
-      if (value?.version !== 1 || value.operationId !== operationId || !isDeepStrictEqual(value.identity, originalRedoIdentity(operationId))
+      if (value?.version !== 1 || value.operationId !== operationId || !isDeepStrictEqual(value.identity, identityFor(operationId))
+        || (isolated ? !targetValid(value.target) : value.target !== undefined)
         || !principalValid(value.principal) || !scopeValid(value.scope) || !digest(value.recoveryId) || !digest(value.confirmationDigest)
         || value.acknowledged !== true || !['prepared', 'dispatching', 'claiming', 'completed'].includes(value.state)
         || !validId(source?.botId) || !validId(source.sessionId) || !validId(source.messageId) || !digest(source.messageHash)
@@ -229,11 +242,12 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     if (!isDeepStrictEqual(readRecovery(row.recoveryId, generation), { recoveryId:row.recoveryId, operationId:row.operationId })) throw Error('redo recovery marker unavailable')
     confirmWitness(row, generation)
   }
-  async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest }) {
-    const identity = originalRedoIdentity(operationId)
+  async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest, target }) {
+    const identity = identityFor(operationId)
     if (!principalValid(principal)
-      || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)) throw Error('redo confirmation required')
-    scope = copy(scope); principal = copy(principal)
+      || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)
+      || (isolated ? !targetValid(target) : target !== undefined)) throw Error('redo confirmation required')
+    scope = copy(scope); principal = copy(principal); target = copy(target)
     if (busy.has(operationId)) throw Error('redo outcome unknown')
     busy.add(operationId)
     const previous = rt.originalRedoPrepareTail ?? Promise.resolve(), release = Promise.withResolvers()
@@ -254,14 +268,14 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (existing) {
         if (!reserved) throw Error('redo preparation outcome unknown')
         if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest
-          || !isDeepStrictEqual(existing.original, source)) throw Error('redo identity conflict')
+          || !isDeepStrictEqual(existing.original, source) || !isDeepStrictEqual(existing.target, target)) throw Error('redo identity conflict')
         try { confirm(existing, generation); checkAccess(existing, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed'); confirm(existing, generation); confirmPhase(existing, generation); confirmWitness(existing, generation) }
         catch { throw Error('redo preparation outcome unknown') }
         return copy(existing)
       }
       if (rows.some(row => row.recoveryId === recoveryId)) throw Error('redo already exists; inspect outcome')
       const row = { version:1, operationId, recoveryId, scope:copy(scope), principal:copy(principal), identity, original:source, confirmationDigest,
-        acknowledged:true, state:'prepared', createdAt:Date.now() }
+        ...(isolated ? { target:copy(target) } : {}), acknowledged:true, state:'prepared', createdAt:Date.now() }
       try {
         rt.state.originalRedoWitness = { ...witnessTable(), [recoveryId]:witnessFor(row) }
         await rt.save({ required:true })
@@ -344,9 +358,9 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
         turn:copy(proof?.turn), throughSeq:proof?.throughSeq, resultDigest:proof?.resultDigest, resultRef:copy(proof?.resultRef) }
       const ref = evidence.resultRef
       if (typeof proof?.isCurrent !== 'function' || proof.isCurrent() !== true || evidence.durability !== 'target-writer-v1'
-        || evidence.sessionId !== row.original.sessionId || evidence.messageId !== row.identity.messageId || evidence.admissionId !== row.identity.admissionId
+        || evidence.sessionId !== (isolated ? row.identity.sessionId : row.original.sessionId) || evidence.messageId !== row.identity.messageId || evidence.admissionId !== row.identity.admissionId
         || !isDeepStrictEqual(evidence.turn, row.turn) || !Number.isSafeInteger(evidence.throughSeq) || evidence.throughSeq <= row.turn.turnStartSeq
-        || !digest(evidence.resultDigest) || ref?.kind !== 'session-events' || ref.sessionId !== row.original.sessionId
+        || !digest(evidence.resultDigest) || ref?.kind !== 'session-events' || ref.sessionId !== (isolated ? row.identity.sessionId : row.original.sessionId)
         || !Number.isSafeInteger(ref.firstSeq) || !Number.isSafeInteger(ref.lastSeq) || ref.firstSeq <= row.turn.turnStartSeq
         || ref.lastSeq < ref.firstSeq || ref.lastSeq >= evidence.throughSeq || Object.keys(ref).some(key => !['kind', 'sessionId', 'firstSeq', 'lastSeq'].includes(key))) throw Error('redo result unverified')
       checkAccess(row, generation)

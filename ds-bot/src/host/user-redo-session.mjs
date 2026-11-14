@@ -10,10 +10,14 @@ export const isUserRedoSessionId = id => typeof id === 'string' && /^redo-[a-f0-
 // is separate from ordinary Bot/chat ownership and must fail closed while the
 // original-scope permission and tool policy have not been positively bound.
 export function install(rt) {
+  // Process-local mirror of an independently durable, authorized journal row.
+  // This alone is not authority: the caller must recheck the journal fence.
+  // Losing this map on restart intentionally makes ownership unavailable.
+  const transient = new Map()
   const rowsFor = sessionId => {
     const rows = rt.state.userRedos
-    if (!rows || typeof rows !== 'object' || Array.isArray(rows)) return []
-    return Object.entries(rows).filter(([, row]) => row?.identity?.sessionId === sessionId)
+    const stored = rows && typeof rows === 'object' && !Array.isArray(rows) ? Object.entries(rows) : []
+    return [...stored, ...transient.entries()].filter(([, row]) => row?.identity?.sessionId === sessionId)
   }
   const reserved = sessionId => isUserRedoSessionId(sessionId)
   const owner = sessionId => {
@@ -35,6 +39,11 @@ export function install(rt) {
   }
   rt.userRedoReserved = reserved
   rt.userRedoOwner = owner
+  rt.userRedoBinding = sessionId => {
+    const rows = rowsFor(sessionId)
+    return reserved(sessionId) && rows.length === 1 ? rows[0][1] : undefined
+  }
+  rt.userRedoTransient = transient
   // Guard every tool, including shell, run_code, connectors and delegation.
   // This is a safety floor, not an assertion that the redo can do useful work.
   // The feature must stay unavailable until a narrower original-scope policy

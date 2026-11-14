@@ -14,7 +14,7 @@ const comparableHeader = header => header && typeof header === 'object'
 // genuine, and is not an admission or result-delivery implementation.
 export function createIsolatedRedoSessionFactory(rt, fence) {
   if (!rt?.ctx || typeof fence?.begin !== 'function' || typeof fence?.current !== 'function'
-    || typeof rt.userRedoOwner !== 'function' || typeof rt.userRedoReserved !== 'function'
+    || typeof rt.userRedoOwner !== 'function' || typeof rt.userRedoReserved !== 'function' || typeof rt.userRedoBinding !== 'function'
     || typeof rt.selfOf !== 'function' || typeof rt.agentOf !== 'function' || typeof rt.botOf !== 'function' || typeof rt.roomOf !== 'function'
     || typeof rt.chatOwners?.has !== 'function' || typeof rt.groupOwners?.has !== 'function' || typeof rt.pastOwners?.has !== 'function') {
     throw new Error('isolated redo authority unavailable')
@@ -38,18 +38,19 @@ export function createIsolatedRedoSessionFactory(rt, fence) {
     attempted.add(operationId)
     let handle, reader, success = false
     try {
-      const row = snapshot(rt.state?.userRedos?.[operationId])
+      const initial = { operationId, sessionId:identity.sessionId, cwd, provider, model }
+      const reserved = await fence.begin(snapshot(initial))
+      if (reserved !== true) return { state:'unknown' }
+      const row = snapshot(rt.userRedoBinding(identity.sessionId))
       if (!row || row.operationId !== operationId || row.acknowledged !== true
         || !isDeepStrictEqual(row.identity, identity) || typeof row.original?.botId !== 'string' || !row.original.botId
         || !['personal', 'room'].includes(row.scope?.kind) || typeof row.scope.id !== 'string' || !row.scope.id
         || !/^[a-f0-9]{64}$/.test(row.recoveryId) || !/^[a-f0-9]{64}$/.test(row.confirmationDigest)) return { state:'unknown' }
       const binding = snapshot({ operationId, sessionId:identity.sessionId, cwd, provider, model,
         botId:row.original.botId, scope:row.scope, recoveryId:row.recoveryId, confirmationDigest:row.confirmationDigest })
-      const reserved = await fence.begin(snapshot(binding))
-      if (reserved !== true) return { state:'unknown' }
       const owner = rt.userRedoOwner(identity.sessionId)
       const valid = () => fence.current(snapshot(binding)) === true && rt.userRedoReserved(identity.sessionId) === true
-        && isDeepStrictEqual(rt.state?.userRedos?.[operationId], row)
+        && isDeepStrictEqual(rt.userRedoBinding(identity.sessionId), row)
         && owner?.id === binding.botId && rt.userRedoOwner(identity.sessionId) === owner && noOrdinaryOwner(identity.sessionId)
       const persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
       const persistenceProvider = providerOf(persistence)
