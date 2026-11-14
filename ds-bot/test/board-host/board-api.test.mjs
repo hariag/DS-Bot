@@ -11,6 +11,7 @@ function fixture() {
     list: () => rows,
     get: id => rows.find(row => row.id === id),
     operation: id => operations.get(id),
+    history: id => ({ entries:[{ after:{ revision:1, title:id } }], truncated:false }),
     create: ({ operationId, actor, task }) => {
       const found = operations.get(operationId)
       if (found) { if (found.input !== JSON.stringify(task)) throw new Error('operation conflict'); return found.result }
@@ -37,6 +38,14 @@ function fixture() {
 const room = { kind: 'room', id: 'room' }
 const user = { kind: 'user' }
 const proposal = { operationId: 'op1', taskId: 'task1', title: 'Build', acceptance: 'Independent check', owner: 'one', reviewer: 'two', dependencies: [] }
+
+test('task history requires the owner principal and the same board scope', () => {
+  const f = fixture(); f.api.create(room, user, proposal)
+  assert.equal(f.api.history(room, user, 'task1').entries[0].after.title, 'task1')
+  assert.throws(() => f.api.history(room, {kind:'bot', id:'one'}, 'task1'))
+  f.state.rooms.other = {members:['one','two']}
+  assert.throws(() => f.api.history({kind:'room',id:'other'}, user, 'task1'))
+})
 
 test('a group proposal is durable under the same operation ID and visible from the owner board', () => {
   const f = fixture(); const created = f.api.create(room, user, proposal)

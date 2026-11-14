@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
 import { symbols } from '@deepseek-ai/cordis'
-import { createInboxAudit } from './inbox-audit.js'
 import { LEGACY_CANDIDATE_WARNING } from './user-redo-legacy-candidate.mjs'
 
 const providerOf = service => service?.[symbols.original] ?? service
@@ -51,9 +50,11 @@ export function createClosedRedoCandidatePreview(rt, { timeoutMs = 15_000, maxBy
       const start = starts[0], endings = events.filter(event => event.seq > start.seq && event.type === 'turn/end' && event.data?.turn === start.data?.turn)
       if (endings.length !== 1) return undefined
       const end = endings[0]
-      if (!(['interrupted', 'error'].includes(end.data?.reason?.kind)
-        || (end.data?.reason?.kind === 'aborted' && end.data.reason.reason?.kind === 'disposed'))) return undefined
-      const inputs = events.filter(event => event.type === 'user/message' && event.seq > start.seq && event.seq < end.seq)
+      // A closed snapshot is not proof that the earlier turn failed or that
+      // its other inputs were included. Pick only one exchange-matched input;
+      // the UI explicitly warns that other context may be omitted.
+      const inputs = events.filter(event => event.type === 'user/message' && event.seq > start.seq && event.seq < end.seq
+        && event.data?.source?.exchangeId === trigger.exchangeId)
       if (inputs.length !== 1) return undefined
       const event = inputs[0], message = event.data, source = message?.source
       if (source?.kind !== 'bot' || !noControl(source) || !sameRoom(scope, source.roomId) || !sameOriginRoom(scope, source.senderRoomId)
@@ -66,14 +67,6 @@ export function createClosedRedoCandidatePreview(rt, { timeoutMs = 15_000, maxBy
       const insertions = events.flatMap(item => item.type === 'agent/inbox/spliced'
         ? (item.data?.inserted ?? []).filter(candidate => candidate?.id === message.id) : [])
       if (insertions.length !== 1 || !isDeepStrictEqual(insertions[0], message)) return undefined
-      const audit = createInboxAudit(held.sessionId)
-      for (const item of events) audit.observe(item)
-      const folded = audit.finish(events.length), admissions = folded.records.filter(row => row.id === message.id)
-      const removals = folded.records.flatMap(row => row.removals
-        .filter(removal => removal.seq > start.seq && removal.seq < end.seq).map(removal => ({ id:row.id, ...removal })))
-      if (admissions.length !== 1 || admissions[0].status !== 'entered-in-log' || admissions[0].entered.length !== 1
-        || admissions[0].entered[0] !== event.seq || removals.length !== 1 || removals[0].id !== message.id
-        || removals[0].batchSize !== 1 || !current()) return undefined
       const final = await persistence.stat(held.sessionId, { signal })
       if (signal.aborted || !current() || !isDeepStrictEqual(before, final)) return undefined
       return { kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, snapshotOnly:true, recoveryId,

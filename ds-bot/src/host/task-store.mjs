@@ -264,6 +264,17 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
       })
     },
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
+    history(id) {
+      const rows = db.prepare('SELECT before,after FROM history WHERE task_id=? ORDER BY sequence DESC LIMIT 51').all(requireId(id, 'task id'))
+      const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'dueDate', 'labels', 'checklist']
+      const project = value => {
+        if (!value) return null
+        const record = JSON.parse(value), result = { revision:record.revision }
+        for (const field of fields) if (Object.hasOwn(record, field)) result[field] = record[field]
+        return result
+      }
+      return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after) })) }
+    },
     create({ operationId, actor, task }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
       requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants'])

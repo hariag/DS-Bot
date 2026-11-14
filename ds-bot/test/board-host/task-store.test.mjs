@@ -23,6 +23,20 @@ const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({
 const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
 
+test('version history preserves before and after across restart without exposing unrelated metadata', t => {
+  const {store, path} = fixture(t)
+  create(store, 'history')
+  command(store, 'history', 'card-details', 'user', {description:'Original'})
+  command(store, 'history', 'card-details', 'user', {description:'Changed'}, 'changed')
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  const history = reopened.history('history')
+  assert.equal(history.entries[0].before.description, 'Original')
+  assert.equal(history.entries[0].after.description, 'Changed')
+  assert.equal(history.entries[0].after.revision, 3)
+  assert.equal(history.entries[0].after.authority, undefined)
+  assert.equal(history.truncated, false)
+})
+
 test('card details persist with CAS and idempotency without completing dependencies', t => {
   const { store, path } = fixture(t)
   create(store, 'card'); create(store, 'dependent', ['card']); register(store, 'dependent')

@@ -52,3 +52,13 @@ test('a timed-out snapshot blocks concurrent reads until its original probe sett
   f.writer.stat=async () => structuredClone(f.snapshot)
   assert.equal((await probe(scope,recovery))?.snapshotOnly,true)
 })
+
+
+test('a unique exchange can be inspected in a completed or multi-input snapshot without becoming execution evidence', async () => {
+  const a=fixture(); a.events[4].data.reason.kind='completed'
+  assert.equal((await a.preview(scope,recovery))?.snapshotOnly,true)
+  const b=fixture(), other={ ...structuredClone(b.message), id:'other', source:{ ...b.message.source, exchangeId:'other' } }
+  b.events.splice(4,0,{seq:4,type:'user/message',data:other}); b.events[5].seq=5
+  const view=await b.preview(scope,recovery)
+  assert.deepEqual(view?.textSegments,['candidate']); assert.equal(view?.executeAllowed,false)
+})
