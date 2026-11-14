@@ -169,7 +169,7 @@ test('a new group greeting cannot import private chat or dispatch work, while a 
 })
 
 test('group sessions cannot post into a different group', async t => {
-  const host=await start(t,undefined,undefined,{r2:{id:'r2',name:'Other',members:['a','b'],mode:'admin',admin:'a',sessions:{},log:[],seq:0,seen:{}}})
+  const host=await start(t,undefined,undefined,{r2:{id:'r2',name:'Other',named:true,members:['a','b'],mode:'admin',admin:'a',sessions:{},log:[],seq:0,seen:{}}})
   const result=await host.tool('post_to_group',{group:'Other',message:'@Writer unrelated'},'ga')
   assert.match(result,/cannot post work into another group/)
   assert.equal(host.agentOf('r2').calls.length,0)
