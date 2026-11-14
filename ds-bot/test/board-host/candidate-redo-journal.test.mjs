@@ -129,3 +129,18 @@ test('real team store retains the candidate witness through close and a new stor
     confirmationDigest:candidateRedoConfirmation(scope, recoveryId, f.proof, { principal, operationId:otherId, target:f.request.target }) }), /already exists/)
   assert.equal(journal.beginDispatch, undefined)
 })
+
+test('same operation ID across two modes and recoveries is fenced concurrently and after reload', async t => {
+  const f = await fixture(t), otherRecovery = 'c'.repeat(64)
+  const otherProof = { complete:true, durability:'target-writer-v1', recoveryId:otherRecovery, botId:'bot', sessionId:'source', turn:5, messageSeq:3,
+    message:{ id:'m', role:'user', source:{ kind:'bot', role:'request' }, content:[{ type:'text', text:'another input' }] }, isCurrent:() => true }
+  const dependencies = { authorize:() => true, proveOriginal:async () => otherProof, validateBinding:() => true }
+  const otherRequest = { operationId, recoveryId:otherRecovery, scope, principal, acknowledged:true,
+    confirmationDigest:userRedoConfirmation(scope, otherRecovery, otherProof) }
+  const original = createOriginalRedoJournal(f.rt, dependencies)
+  const [first, concurrent] = await Promise.allSettled([f.journal.prepare(f.request), original.prepare(otherRequest)])
+  assert.equal(first.status, 'fulfilled')
+  assert.equal(concurrent.status, 'rejected')
+  const restarted = createOriginalRedoJournal(f.rt, dependencies)
+  await assert.rejects(restarted.prepare(otherRequest), /identity conflict/)
+})
