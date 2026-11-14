@@ -123,6 +123,21 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
+  "Change awaiting checkpoint": "チェックポイント確定待ちの変更",
+  "Monitor catching up": "変更を順次確認中",
+  "Remote code changes": "リモートコードの変更",
+  "Waiting for first check": "初回確認を待機中",
+  "Monitor active": "監視中",
+  "Monitor unavailable": "監視を利用できません",
+  "Monitor authorization unavailable": "監視の認可を利用できません",
+  "Monitor history requires review": "監視履歴の確認が必要です",
+  "Monitor capacity reached": "監視の保存上限に達しました",
+  "Monitor rate limited": "監視のレート制限中",
+  "Monitor configuration invalid": "監視設定が無効です",
+  "Last checked (UTC)": "最終確認（UTC）",
+  "Earlier history before the first checkpoint was not verified.": "最初のチェックポイント以前の履歴は未確認です。",
+  "No relevant changes recorded.": "関連する変更は記録されていません。",
+  "Change requires review": "変更の確認が必要です",
   "New tasks start in Preparing.": "新しいタスクは「準備中」から始まります。",
   "{count} dependencies": "依存関係 {count} 件",
   "View details": "詳細を見る",
@@ -2553,6 +2568,21 @@ var DSH_JA = {
 
 // src/client/locales/ko.js
 var KO = {
+  "Change awaiting checkpoint": "체크포인트 확인 대기 중인 변경",
+  "Monitor catching up": "변경 사항 확인 중",
+  "Remote code changes": "원격 코드 변경",
+  "Waiting for first check": "첫 확인 대기 중",
+  "Monitor active": "모니터링 중",
+  "Monitor unavailable": "모니터링을 사용할 수 없음",
+  "Monitor authorization unavailable": "모니터링 권한을 사용할 수 없음",
+  "Monitor history requires review": "모니터링 기록 확인 필요",
+  "Monitor capacity reached": "모니터링 저장 한도 도달",
+  "Monitor rate limited": "모니터링 요청 제한 중",
+  "Monitor configuration invalid": "모니터링 설정이 잘못됨",
+  "Last checked (UTC)": "마지막 확인 (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "첫 체크포인트 이전 기록은 확인되지 않았습니다.",
+  "No relevant changes recorded.": "관련 변경 사항이 기록되지 않았습니다.",
+  "Change requires review": "변경 사항 확인 필요",
   "New tasks start in Preparing.": "새 작업은 준비 중에서 시작합니다.",
   "{count} dependencies": "종속 항목 {count}개",
   "View details": "상세 보기",
@@ -5028,6 +5058,21 @@ var DSH_KO = {
 
 // src/client/locales/es.js
 var ES = {
+  "Change awaiting checkpoint": "Cambio pendiente del punto de control",
+  "Monitor catching up": "Supervisión recuperando cambios",
+  "Remote code changes": "Cambios de código remoto",
+  "Waiting for first check": "Esperando la primera revisión",
+  "Monitor active": "Supervisión activa",
+  "Monitor unavailable": "Supervisión no disponible",
+  "Monitor authorization unavailable": "Autorización de supervisión no disponible",
+  "Monitor history requires review": "El historial de supervisión requiere revisión",
+  "Monitor capacity reached": "Capacidad de supervisión alcanzada",
+  "Monitor rate limited": "Supervisión limitada temporalmente",
+  "Monitor configuration invalid": "Configuración de supervisión no válida",
+  "Last checked (UTC)": "Última revisión (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "No se verificó el historial anterior al primer punto de control.",
+  "No relevant changes recorded.": "No se registraron cambios relevantes.",
+  "Change requires review": "El cambio requiere revisión",
   "New tasks start in Preparing.": "Las tareas nuevas empiezan en Preparación.",
   "{count} dependencies": "{count} dependencias",
   "View details": "Ver detalles",
@@ -7503,6 +7548,21 @@ var DSH_ES = {
 
 // src/client/locales/fr.js
 var FR = {
+  "Change awaiting checkpoint": "Modification en attente du point de contrôle",
+  "Monitor catching up": "Rattrapage des modifications",
+  "Remote code changes": "Modifications du code distant",
+  "Waiting for first check": "En attente du premier contrôle",
+  "Monitor active": "Surveillance active",
+  "Monitor unavailable": "Surveillance indisponible",
+  "Monitor authorization unavailable": "Autorisation de surveillance indisponible",
+  "Monitor history requires review": "Historique de surveillance à vérifier",
+  "Monitor capacity reached": "Capacité de surveillance atteinte",
+  "Monitor rate limited": "Surveillance limitée temporairement",
+  "Monitor configuration invalid": "Configuration de surveillance invalide",
+  "Last checked (UTC)": "Dernière vérification (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "L’historique antérieur au premier point de contrôle n’a pas été vérifié.",
+  "No relevant changes recorded.": "Aucune modification pertinente enregistrée.",
+  "Change requires review": "Modification à vérifier",
   "New tasks start in Preparing.": "Les nouvelles tâches commencent dans Préparation.",
   "{count} dependencies": "{count} dépendances",
   "View details": "Voir les détails",
@@ -9933,6 +9993,21 @@ var DSH_FR = {
 
 // src/client/locales/de.js
 var DE = {
+  "Change awaiting checkpoint": "Änderung wartet auf Prüfpunkt",
+  "Monitor catching up": "Überwachung holt Änderungen nach",
+  "Remote code changes": "Remote-Codeänderungen",
+  "Waiting for first check": "Warten auf erste Prüfung",
+  "Monitor active": "Überwachung aktiv",
+  "Monitor unavailable": "Überwachung nicht verfügbar",
+  "Monitor authorization unavailable": "Überwachungsberechtigung nicht verfügbar",
+  "Monitor history requires review": "Überwachungsverlauf muss geprüft werden",
+  "Monitor capacity reached": "Kapazitätsgrenze der Überwachung erreicht",
+  "Monitor rate limited": "Überwachung ist ratenbegrenzt",
+  "Monitor configuration invalid": "Überwachungskonfiguration ungültig",
+  "Last checked (UTC)": "Zuletzt geprüft (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "Der Verlauf vor dem ersten Prüfpunkt wurde nicht geprüft.",
+  "No relevant changes recorded.": "Keine relevanten Änderungen erfasst.",
+  "Change requires review": "Änderung muss geprüft werden",
   "New tasks start in Preparing.": "Neue Aufgaben beginnen in Vorbereitung.",
   "{count} dependencies": "{count} Abhängigkeiten",
   "View details": "Details ansehen",
@@ -12409,6 +12484,21 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Remote code changes": "远端代码变更",
+  "Waiting for first check": "等待首次检查",
+  "Monitor active": "监视运行中",
+  "Monitor catching up": "正在补查变更",
+  "Monitor unavailable": "监视不可用",
+  "Monitor authorization unavailable": "监视授权不可用",
+  "Monitor history requires review": "监视历史需要核对",
+  "Monitor capacity reached": "监视记录已达上限",
+  "Monitor rate limited": "监视请求受到限流，将稍后重试",
+  "Monitor configuration invalid": "监视配置无效",
+  "Last checked (UTC)": "最近检查时间（UTC）",
+  "Earlier history before the first checkpoint was not verified.": "首次检查点之前的历史尚未核实。",
+  "No relevant changes recorded.": "尚无相关变更记录。",
+  "Change requires review": "变更需要核对",
+  "Change awaiting checkpoint": "变更尚待完成检查点",
   "Search tasks": "搜索任务",
   "View details": "查看详情",
   "No tasks": "暂无任务",
@@ -19401,7 +19491,7 @@ var COMPUTER_CSS = `
 .bt-cstep-shot-open img{max-height:280px;max-width:480px}
 `;
 
-// node_modules/deep-view/src/react/ui.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/ui.js
 var import_react12 = require("react");
 var FallbackMarkdown = ({ text }) => (0, import_react12.createElement)("span", null, String(text ?? ""));
 var ViewUi = (0, import_react12.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
@@ -19468,7 +19558,7 @@ function useOptionKeys2(count, onPick, ownRef) {
   return count > 0 && listening <= 1;
 }
 
-// node_modules/deep-view/src/core/formula.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/core/formula.js
 var FUNCTIONS = {
   min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
   max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
@@ -19749,7 +19839,7 @@ function evaluate(tree, lookup) {
   }
 }
 
-// node_modules/deep-view/src/core/views.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/core/views.js
 var LAYOUT = ["stack", "row"];
 var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
 var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
@@ -20381,7 +20471,7 @@ function validateForm(node, values) {
   return { fields };
 }
 
-// node_modules/deep-view/src/react/chart.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/chart.js
 var import_react13 = require("react");
 var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
 var colorAt = (index) => PALETTE[index % PALETTE.length];
@@ -20820,7 +20910,7 @@ var CHART_CSS = `
 @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
 `;
 
-// node_modules/deep-view/src/react/frame.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/frame.js
 var import_react14 = require("react");
 var THEME_VARS = [
   ["--view-ink", "--bt-ink", "--dv-ink"],
@@ -20902,7 +20992,7 @@ var HTML_CSS = `
 .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
 `;
 
-// node_modules/deep-view/src/react/card.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/card.js
 var import_react15 = require("react");
 var mdLabels2 = (ui2) => ({ code: { copyLabel: ui2.t("Copy"), copiedLabel: ui2.t("Copied") }, footnotes: ui2.t("Footnotes") });
 var TONES2 = ["good", "warn", "bad"];
@@ -21644,7 +21734,7 @@ ${CHART_CSS}
 ${HTML_CSS}
 `;
 
-// node_modules/deep-view/src/react/styles.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/styles.js
 var THEME_CSS = `
 body{
 --dv-ink:var(--dsw-alias-label-primary);
@@ -21742,10 +21832,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
 @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
 `;
 
-// node_modules/deep-view/src/react/index.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/index.js
 var DEEP_VIEW_CSS = THEME_CSS + QUESTION_CSS + WIDGET_CSS;
 
-// node_modules/deep-view/src/core/reply.js
+// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/core/reply.js
 var REPLY_KIND = "user-question-reply";
 var REPLY_SOURCE_KIND = "deep-view-reply";
 function viewCardText(args) {
@@ -32162,7 +32252,7 @@ var CONNECTORS_PAGE_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
 `;
 
-// node_modules/qrcode-generator/dist/qrcode.mjs
+// ../../dsbot-watch-builddeps/node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -36593,6 +36683,41 @@ function Fact({ label, value }) {
   if (!value) return null;
   return (0, import_react50.createElement)("div", { className: "bt-board-fact" }, (0, import_react50.createElement)("span", null, label), (0, import_react50.createElement)("span", null, value));
 }
+function RemoteChanges({ monitor }) {
+  if (!monitor) return null;
+  const states = {
+    waiting: "Waiting for first check",
+    ok: "Monitor active",
+    "catching up": "Monitor catching up",
+    unavailable: "Monitor unavailable",
+    "authorization unavailable": "Monitor authorization unavailable",
+    "history requires reconciliation": "Monitor history requires review",
+    "monitor capacity reached": "Monitor capacity reached",
+    "rate limited": "Monitor rate limited",
+    "invalid configuration": "Monitor configuration invalid"
+  };
+  const events = Array.isArray(monitor.events) ? monitor.events : [];
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-board-held" },
+    (0, import_react50.createElement)("summary", null, t("Remote code changes"), Number.isSafeInteger(monitor.totalEvents) && monitor.totalEvents ? ` (${monitor.totalEvents})` : ""),
+    (0, import_react50.createElement)("p", { role: "status" }, `${t("Status")}: ${t(states[monitor.status] ?? "Monitor unavailable")}`),
+    monitor.repository && monitor.branch ? (0, import_react50.createElement)("p", null, `${monitor.repository} · ${monitor.branch}`) : null,
+    monitor.checkedAt ? (0, import_react50.createElement)("p", null, `${t("Last checked (UTC)")}: ${monitor.checkedAt}`) : null,
+    monitor.earlierUnknown ? (0, import_react50.createElement)("p", { role: "status" }, t("Earlier history before the first checkpoint was not verified.")) : null,
+    events.length === 0 ? (0, import_react50.createElement)("p", null, t("No relevant changes recorded.")) : null,
+    events.map((event) => (0, import_react50.createElement)(
+      "article",
+      { key: event.sha, className: "bt-board-held-record" },
+      (0, import_react50.createElement)("a", { href: `https://github.com/${monitor.repository}/commit/${event.sha}`, target: "_blank", rel: "noopener noreferrer" }, event.sha.slice(0, 8)),
+      (0, import_react50.createElement)("span", null, event.title),
+      (0, import_react50.createElement)("span", null, event.author),
+      (0, import_react50.createElement)("span", null, event.committed_at),
+      event.pending ? (0, import_react50.createElement)("span", null, t("Change awaiting checkpoint")) : null,
+      (0, import_react50.createElement)("span", null, event.kind === "unknown" ? t("Change requires review") : (event.paths ?? []).join(", "))
+    ))
+  );
+}
 function HeldTurns({ recovery }) {
   if (!recovery || recovery.available !== true) return (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
@@ -37379,7 +37504,7 @@ function TaskBoard({ scope, title, close, request = call }) {
           }
         }) : null
       ),
-      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { recovery: data.recovery }), (0, import_react50.createElement)(LegacyWorkReview, { scope, request })) : null,
+      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { recovery: data.recovery }), (0, import_react50.createElement)(LegacyWorkReview, { scope, request }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
       !data ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-empty" },
