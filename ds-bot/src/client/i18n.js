@@ -11,6 +11,10 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Task details': '任务详情',
+  'Close card': '关闭卡片',
+  'Previous columns': '上一组列表',
+  'Next columns': '下一组列表',
   'Comments': '评论',
   'No comments yet.': '暂无评论。',
   'Add a comment': '添加评论',
