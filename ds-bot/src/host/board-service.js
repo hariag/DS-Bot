@@ -144,7 +144,7 @@ export function install(rt) {
           const view = api.list(scope, principal)
           const recovery = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [] }
           if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
-            recovery,
+            recovery, ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
             revision: `${rosterRevision}:${before}` }
         }
         throw new Error('Board changed; refresh the board')

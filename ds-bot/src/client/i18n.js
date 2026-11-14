@@ -11,6 +11,21 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Remote code changes': '远端代码变更',
+  'Waiting for first check': '等待首次检查',
+  'Monitor active': '监视运行中',
+  'Monitor catching up': '正在补查变更',
+  'Monitor unavailable': '监视不可用',
+  'Monitor authorization unavailable': '监视授权不可用',
+  'Monitor history requires review': '监视历史需要核对',
+  'Monitor capacity reached': '监视记录已达上限',
+  'Monitor rate limited': '监视请求受到限流，将稍后重试',
+  'Monitor configuration invalid': '监视配置无效',
+  'Last checked (UTC)': '最近检查时间（UTC）',
+  'Earlier history before the first checkpoint was not verified.': '首次检查点之前的历史尚未核实。',
+  'No relevant changes recorded.': '尚无相关变更记录。',
+  'Change requires review': '变更需要核对',
+  'Change awaiting checkpoint': '变更尚待完成检查点',
   'Search tasks': '搜索任务',
   'View details': '查看详情',
   'No tasks': '暂无任务',

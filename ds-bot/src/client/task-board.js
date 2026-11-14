@@ -70,6 +70,25 @@ function Fact({ label, value }) {
   return h('div', { className: 'bt-board-fact' }, h('span', null, label), h('span', null, value))
 }
 
+function RemoteChanges({ monitor }) {
+  if (!monitor) return null
+  const states = { waiting:'Waiting for first check', ok:'Monitor active', 'catching up':'Monitor catching up', unavailable:'Monitor unavailable',
+    'authorization unavailable':'Monitor authorization unavailable', 'history requires reconciliation':'Monitor history requires review',
+    'monitor capacity reached':'Monitor capacity reached', 'rate limited':'Monitor rate limited', 'invalid configuration':'Monitor configuration invalid' }
+  const events=Array.isArray(monitor.events) ? monitor.events : []
+  return h('details', { className:'bt-board-held' },
+    h('summary', null, t('Remote code changes'), Number.isSafeInteger(monitor.totalEvents) && monitor.totalEvents ? ` (${monitor.totalEvents})` : ''),
+    h('p', { role:'status' }, `${t('Status')}: ${t(states[monitor.status] ?? 'Monitor unavailable')}`),
+    monitor.repository && monitor.branch ? h('p', null, `${monitor.repository} · ${monitor.branch}`) : null,
+    monitor.checkedAt ? h('p', null, `${t('Last checked (UTC)')}: ${monitor.checkedAt}`) : null,
+    monitor.earlierUnknown ? h('p', { role:'status' }, t('Earlier history before the first checkpoint was not verified.')) : null,
+    events.length===0 ? h('p', null, t('No relevant changes recorded.')) : null,
+    events.map(event=>h('article', { key:event.sha, className:'bt-board-held-record' },
+      h('a', { href:`https://github.com/${monitor.repository}/commit/${event.sha}`, target:'_blank', rel:'noopener noreferrer' }, event.sha.slice(0,8)),
+      h('span', null, event.title), h('span', null, event.author), h('span', null, event.committed_at), event.pending ? h('span', null, t('Change awaiting checkpoint')) : null,
+      h('span', null, event.kind==='unknown' ? t('Change requires review') : (event.paths ?? []).join(', ')))))
+}
+
 // The host sends metadata only. This view has no commands to replay or close work.
 function HeldTurns({ recovery }) {
   if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
@@ -572,7 +591,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { scope, request })) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { scope, request }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },
