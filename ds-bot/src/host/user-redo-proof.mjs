@@ -1,15 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import { createInboxAudit } from './inbox-audit.js'
 
-// These snapshots are injected by the Host at pre-step rather than through the
-// inbox. Unknown or malformed source kinds remain unresolved, not discarded.
-const isRuntimeSnapshot = message => message?.role === 'user' && typeof message.id === 'string'
-  && ['runtime-context', 'ds-bot-time-context'].includes(message.source?.kind)
-  && message.source?.form === 'snapshot' && Array.isArray(message.source.sections)
-  && message.source.sections.every(section => typeof section?.name === 'string' && typeof section.text === 'string')
-  && Array.isArray(message.content) && message.content.length === 1
-  && message.content[0]?.type === 'text' && typeof message.content[0].text === 'string'
-
 // Read only: an unknown or incomplete prefix is never evidence of absence.
 // This intentionally supports only a uniquely recorded Bot exchange from a
 // stopped turn. Other histories stay unavailable for manual examination.
@@ -56,9 +47,6 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
       }
       for (const event of events) audit.observe(event)
       const folded = audit.finish(through)
-      const admittedIds = new Set(folded.records.map(row => row.id))
-      const untracked = events.filter(entry => entry.type === 'user/message' && !admittedIds.has(entry.data?.id))
-      if (untracked.length !== folded.untrackedAdmissions || untracked.some(entry => !isRuntimeSnapshot(entry.data))) return undefined
       const matches = events.filter(event => event.type === 'user/message' && event.data?.source?.kind === 'bot'
         && event.data.source.exchangeId === trigger.exchangeId)
       if (matches.length !== 1) return undefined
@@ -88,10 +76,12 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
       }
       const stopped = ['interrupted', 'error'].includes(end?.kind)
         || (end?.kind === 'aborted' && end.reason?.kind === 'disposed')
+      const removals = folded.records.flatMap(row => row.removals
+        .filter(removal => removal.seq > startSeq && removal.seq < endSeq).map(removal => ({ id:row.id, ...removal })))
       if (starts !== 1 || originalTurn !== expectedTurn || !stopped
         || events.filter(entry => entry.type === 'turn/start' && entry.data?.turn === originalTurn).length !== 1
-        || events.filter(entry => entry.type === 'user/message' && entry.seq > startSeq && entry.seq < endSeq
-          && (admittedIds.has(entry.data?.id) || !isRuntimeSnapshot(entry.data))).length !== 1
+        || events.filter(entry => entry.type === 'user/message' && entry.seq > startSeq && entry.seq < endSeq).length !== 1
+        || removals.length !== 1 || removals[0].id !== event.data.id || removals[0].batchSize !== 1
         || !current()) return undefined
       return { complete:true, durability:'target-writer-v1', recoveryId, botId:hold.record.botId, sessionId:hold.sessionId,
         messageSeq:event.seq, turn:originalTurn,
