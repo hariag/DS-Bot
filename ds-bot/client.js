@@ -12484,6 +12484,26 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Comments": "评论",
+  "No comments yet.": "暂无评论。",
+  "Add a comment": "添加评论",
+  "Post comment": "发表评论",
+  "Recent card activity": "最近卡片动态",
+  "Task edited": "任务已编辑",
+  "Card details updated": "卡片详情已更新",
+  "Comment added": "已添加评论",
+  "Images added": "已添加图片",
+  "Image removed": "已移除图片",
+  "Personal progress updated": "个人进度已更新",
+  "Task shared": "任务已分享",
+  "Share revoked": "已撤销分享",
+  "Card updated": "卡片已更新",
+  "Invalid card comment": "评论无效。",
+  "invalid card comment": "评论无效。",
+  "card comment limit reached": "评论已达上限。",
+  "Card comment limit reached": "评论已达上限。",
+  "These stages contain board details or comments. Preserve them before rebuilding the stages.": "这些阶段包含看板详情或评论。请先保全这些内容，再重建阶段。",
+  "These stages contain board images. Download and remove the images before rebuilding the stages.": "这些阶段包含看板图片，请先下载并移除图片，再重建阶段。",
   "Due date": "截止日期",
   "Labels": "标签",
   "Labels, one per line": "标签，每行一个",
@@ -37075,6 +37095,44 @@ function CardDetails({ task, editable, disabled, onEdit }) {
     )
   );
 }
+function CardConversation({ task, commands, disabled, onCommand }) {
+  const [text, setText] = (0, import_react50.useState)("");
+  const comments = Array.isArray(task.comments) ? task.comments : [];
+  const activity = Array.isArray(task.boardActivity) ? task.boardActivity : [];
+  const type = task.legacy ? "goal-card-comment" : "card-comment";
+  const labels2 = { edit: "Task edited", details: "Card details updated", "card-details": "Card details updated", comment: "Comment added", "card-comment": "Comment added", attach: "Images added", "remove-image": "Image removed", "personal-progress": "Personal progress updated", share: "Task shared", unshare: "Share revoked" };
+  const when3 = (value) => Number.isFinite(value) ? new Date(value).toLocaleString() : "";
+  return (0, import_react50.createElement)(
+    "section",
+    { className: "bt-board-conversation" },
+    (0, import_react50.createElement)("strong", null, t("Comments")),
+    comments.length ? comments.map((comment) => (0, import_react50.createElement)(
+      "div",
+      { key: comment.id, className: "bt-board-comment" },
+      (0, import_react50.createElement)("small", null, `${t("You")} · ${when3(comment.at)}`),
+      (0, import_react50.createElement)("p", null, textValue(comment.text))
+    )) : (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("No comments yet.")),
+    commands.some((command) => command.type === type) ? (0, import_react50.createElement)(
+      "form",
+      { onSubmit: (event) => {
+        event.preventDefault();
+        if (disabled || !text.trim() || new TextEncoder().encode(text) > 2048) return;
+        const submitted = text;
+        void onCommand(task, { type }, { text: submitted }).then((result) => {
+          if (result === "committed") setText((current) => current === submitted ? "" : current);
+        });
+      } },
+      (0, import_react50.createElement)("label", null, t("Add a comment"), (0, import_react50.createElement)("textarea", { "aria-label": t("Add a comment"), value: text, disabled, onChange: (event) => setText(event.target.value) })),
+      (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || !text.trim() || new TextEncoder().encode(text) > 2048 }, t("Post comment"))
+    ) : null,
+    activity.length ? (0, import_react50.createElement)(
+      "details",
+      null,
+      (0, import_react50.createElement)("summary", null, t("Recent card activity")),
+      (0, import_react50.createElement)("ul", null, activity.map((item) => (0, import_react50.createElement)("li", { key: item.id }, `${when3(item.at)} · ${t(labels2[item.type] ?? "Card updated")}`)))
+    ) : null
+  );
+}
 function EditGoalTask({ task, disabled, onEdit }) {
   const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
   const reset = () => {
@@ -37344,6 +37402,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
         (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: evidence }),
         (0, import_react50.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
         !task.shared ? (0, import_react50.createElement)(CardDetails, { task, editable: commands.some((command) => command.type === (task.legacy ? "goal-card-details" : "card-details")), disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: task.legacy ? "goal-card-details" : "card-details" }, value) }) : null,
+        !task.shared ? (0, import_react50.createElement)(CardConversation, { task, commands, disabled: uncertain, onCommand }) : null,
         !canMove && !commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Status changes are not available for this task.")) : null,
         Array.isArray(task.images) && task.images.length ? (0, import_react50.createElement)("div", { className: "bt-board-images" }, task.images.map((image) => (0, import_react50.createElement)(BoardImage, {
           key: image.id,
@@ -37750,6 +37809,7 @@ var TASK_BOARD_CSS = `
 .bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:9px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 .bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
+.bt-board-conversation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:10px}.bt-board-conversation form,.bt-board-conversation label{display:flex;flex-direction:column;gap:6px}.bt-board-comment{padding:8px;border-radius:8px;background:var(--bt-sidebar);white-space:pre-wrap;overflow-wrap:anywhere}.bt-board-comment p{margin:4px 0 0}.bt-board-comment small{color:var(--bt-ink-2)}
 .bt-board-card-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.bt-board-owner,.bt-board-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);padding:3px 7px;font-size:11px}.bt-board-chip-blocked{color:var(--bt-danger);background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card))}
 .bt-board-open-hint{font-size:11px;color:var(--bt-ink-2);margin-left:auto}.bt-board-card-details[open] .bt-board-open-hint{display:none}.bt-board-card-body{display:flex;flex-direction:column;gap:8px;padding:0 13px 13px}.bt-board-move{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--bt-line);font-size:12px;color:var(--bt-ink-2)}.bt-board-dialog .bt-board-move select{max-width:60%;font-size:12px;padding:4px 6px}
 .bt-board-title{font-size:14px;line-height:1.4}.bt-board-id{font-size:11px;color:var(--bt-ink-3)}.bt-board-fact{display:flex;flex-direction:column;font-size:12px;gap:2px}.bt-board-fact>:first-child{color:var(--bt-ink-2)}

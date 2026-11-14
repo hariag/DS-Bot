@@ -334,6 +334,14 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             }
             break
           }
+          case 'card-comment': {
+            keysOnly(value,['text'])
+            if(actor!=='user'||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw new Error('invalid card comment')
+            const comments=Array.isArray(old.comments)?old.comments:[]
+            if(comments.length>=100)throw new Error('card comment limit reached')
+            next.comments=[...comments,{id:operationId,author:'user',text:value.text.trim(),at:Date.now()}]
+            break
+          }
           case 'register':
             if (old.status !== 'proposed') throw new Error('invalid state')
             keysOnly(value, ['kind','commit','blob','reference'])
@@ -448,6 +456,10 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             next.shares = shares.map(share => share.id === value.shareId ? { ...share, revoked:true } : share); break
           }
           default: throw new Error('unknown command')
+        }
+        if(['edit','card-details','card-comment','personal-progress','attach','remove-image','share','unshare'].includes(type)) {
+          const activity=Array.isArray(old.boardActivity)?old.boardActivity:[]
+          next.boardActivity=[...activity,{id:operationId,actor,type,at:Date.now()}].slice(-50)
         }
         save(old, next)
         if (type === 'report') action(next, 'review', next.reviewer)
