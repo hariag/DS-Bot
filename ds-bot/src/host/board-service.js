@@ -13,6 +13,7 @@ import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
 import { createGoalBoardEditor } from './goal-board-editor.js'
 import { userRedoView } from './user-redo-view.mjs'
+import { createUserRedoPreparation } from './user-redo-preparation.mjs'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -138,9 +139,15 @@ export function install(rt) {
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
     return outcome.value
   }
+  let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
     const { api, store, goalEditor } = service(), scope = payload.scope
     switch (endpoint) {
+      case 'board-redo-preview':
+      case 'board-redo-confirm':
+        api.list(scope, principal)
+        redoPreparation ??= createUserRedoPreparation(rt)
+        return endpoint === 'board-redo-preview' ? redoPreparation.preview(payload) : redoPreparation.confirm(payload)
       case 'board-list': {
         // A concurrent DB writer may commit between projection and version
         // reads; never label an older list as the current snapshot.

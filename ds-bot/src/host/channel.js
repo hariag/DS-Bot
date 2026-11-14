@@ -339,6 +339,8 @@ export function install(rt) {
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
         case 'board-list':
+        case 'board-redo-preview':
+        case 'board-redo-confirm':
         case 'board-operation':
         case 'board-command':
         case 'board-held-decision':
