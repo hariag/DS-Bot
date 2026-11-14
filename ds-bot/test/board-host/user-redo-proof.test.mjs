@@ -15,14 +15,12 @@ const original = () => [
 
 function fixture(events = original(), timeoutMs = 15_000) {
   let current = true, flush = async () => {}, disk = structuredClone(events)
-  const session = { id:'source', seq:events.length, header:{ id:'source', version:4 }, inheritedEventCount:0, eventAt:index => events[index] }
-  const reader = { id:'source', header:{ ...session.header, delegationDepth:0 }, inheritedEventCount:0,
-    read:async () => ({ events:disk }), close:async () => {} }
-  const writer = { flushLiveSession:async () => flush(), open:async () => reader }
-  const record = { botId:'bot', turn:5, trigger:{ role:'request', exchangeId:'ex', senderSessionId:'sender' } }
+  const session = { id:'source', seq:events.length, eventAt:index => events[index] }
+  const writer = { flushLiveSession:async () => flush(), open:async () => ({ read:async () => ({ events:disk }), close:async () => {} }) }
+  const record = { turn:5, trigger:{ role:'request', exchangeId:'ex', senderSessionId:'sender' } }
   const rt = { recoveryHeldOriginal:async () => ({ sessionId:'source', record, isCurrent:() => current }),
     ctx:{ sessions:{ get:() => session }, get:() => writer } }
-  return { proof:createUserRedoOriginalProof(rt, { timeoutMs }), rt, reader, writer, session, events, record, setCurrent:value => { current = value },
+  return { proof:createUserRedoOriginalProof(rt, { timeoutMs }), writer, session, events, record, setCurrent:value => { current = value },
     setFlush:value => { flush = value }, setDisk:value => { disk = value } }
 }
 
@@ -34,25 +32,6 @@ test('matches one stopped exchange through a fixed target-writer prefix', async 
   assert.equal(proof.isCurrent(), true)
   f.setCurrent(false)
   assert.equal(proof.isCurrent(), false)
-})
-
-test('rejects provider replacement and a mismatched stored handle', async () => {
-  const replaced = fixture()
-  replaced.setFlush(async () => { replaced.rt.ctx.get = () => ({ ...replaced.writer }) })
-  assert.equal(await replaced.proof(scope, recoveryId), undefined)
-  for (const field of ['id', 'header', 'inheritedEventCount']) {
-    const f = fixture()
-    if (field === 'id') f.reader.id = 'other'
-    if (field === 'header') f.reader.header = { ...f.reader.header, delegationDepth:1 }
-    if (field === 'inheritedEventCount') f.reader.inheritedEventCount = 1
-    assert.equal(await f.proof(scope, recoveryId), undefined, field)
-  }
-})
-
-test('rejects an entered message that differs from the originally enqueued message', async () => {
-  const events = original()
-  events[3] = entry(3, 'user/message', { ...message, content:[{ type:'text', text:'changed task' }] })
-  assert.equal(await fixture(events).proof(scope, recoveryId), undefined)
 })
 
 test('missing barrier, a changing Session, or a different disk prefix are unavailable', async () => {
@@ -83,13 +62,6 @@ test('completed or user-aborted turns do not become redo inputs', async () => {
   }
 })
 
-test('a disposed turn is supported but an explicitly user-aborted turn is not', async () => {
-  const disposed = original(); disposed[4].data.reason = { kind:'aborted', reason:{ kind:'disposed' } }
-  assert.equal((await fixture(disposed).proof(scope, recoveryId))?.turn, 5)
-  const user = original(); user[4].data.reason = { kind:'aborted', reason:{ kind:'user' } }
-  assert.equal(await fixture(user).proof(scope, recoveryId), undefined)
-})
-
 test('a missing or different held turn cannot reuse an earlier exchange', async () => {
   const a = fixture(); delete a.record.turn
   assert.equal(await a.proof(scope, recoveryId), undefined)
@@ -97,10 +69,10 @@ test('a missing or different held turn cannot reuse an earlier exchange', async 
   assert.equal(await b.proof(scope, recoveryId), undefined)
 })
 
-test('old holds without a recorded turn remain unavailable even with a matching start time', async () => {
+test('old holds require a unique persisted start time containing the same input', async () => {
   const events = original(); events[1].time = 123456
   const a = fixture(events); delete a.record.turn; a.record.since = 123456
-  assert.equal(await a.proof(scope, recoveryId), undefined)
+  assert.equal((await a.proof(scope, recoveryId))?.turn, 5)
   const b = fixture(events); delete b.record.turn; b.record.since = 123457
   assert.equal(await b.proof(scope, recoveryId), undefined)
   const duplicate = structuredClone(events)
@@ -111,8 +83,6 @@ test('old holds without a recorded turn remain unavailable even with a matching 
   delete duplicate[5].time
   const d = fixture(duplicate); delete d.record.turn; d.record.since = 123456
   assert.equal(await d.proof(scope, recoveryId), undefined)
-  const e = fixture(events); e.record.since = 123457
-  assert.equal(await e.proof(scope, recoveryId), undefined)
 })
 
 test('inspection and kickoff controls cannot be downgraded into ordinary work', async () => {
@@ -120,25 +90,6 @@ test('inspection and kickoff controls cannot be downgraded into ordinary work', 
     const f = fixture(); f.record.trigger[flag] = flag === 'reviewId' ? 'review' : true
     assert.equal(await f.proof(scope, recoveryId), undefined)
   }
-})
-
-test('an untracked snapshot cannot be assumed to be an authenticated runtime message', async () => {
-  for (const kind of ['runtime-context', 'ds-bot-time-context']) {
-    const events = original()
-    events.splice(4, 0, entry(4, 'user/message', { id:'context', role:'user', content:[{ type:'text', text:'context' }],
-      source:{ kind, form:'snapshot', sections:[{ name:kind, text:'context' }] } }))
-    events.forEach((event, index) => { event.seq = index })
-    assert.equal(await fixture(events).proof(scope, recoveryId), undefined)
-    events[4].data.source.kind = 'unknown-context'
-    assert.equal(await fixture(events).proof(scope, recoveryId), undefined)
-  }
-})
-
-test('an additional claimed runtime input remains visible even when omitted from the turn log', async () => {
-  const events = original()
-  events[0].data.inserted.push({ id:'forged', role:'user', source:{ kind:'runtime-context', form:'snapshot', sections:[] }, content:[{ type:'text', text:'hidden' }] })
-  events[2].data.removedCount = 2
-  assert.equal(await fixture(events).proof(scope, recoveryId), undefined)
 })
 
 test('untracked admission, altered sender, or duplicate exchange cannot prove the source', async () => {

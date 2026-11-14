@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,7 +9,9 @@ import { createUserRedoJournal, userRedoIdentity } from '../../src/host/user-red
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d'
 const recoveryId = 'a'.repeat(64)
 const scope = { kind:'room', id:'room-1' }
-const request = { operationId, recoveryId, scope, acknowledged:true }
+const sourceMessage = { id:'message-1', role:'user', content:[{ type:'text', text:'Original task' }], source:{ kind:'bot', role:'request', work:'original-work' } }
+const confirmedMessageHash = createHash('sha256').update(JSON.stringify(sourceMessage)).digest('hex')
+const request = { operationId, recoveryId, scope, acknowledged:true, confirmedMessageHash }
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'dsbot-user-redo-'))
@@ -19,7 +22,7 @@ async function fixture(t) {
   let allowed = true, current = true, failSave = false
   const rt = { state, statePath, requireHomeLock() {}, homeLockVersion:() => 1,
     async save() { if (failSave) throw Error('save failed'); await writeFile(statePath, JSON.stringify(state), { mode:0o600 }) } }
-  const original = { id:'message-1', role:'user', content:[{ type:'text', text:'Original task' }], source:{ kind:'bot', role:'request', work:'original-work' } }
+  const original = structuredClone(sourceMessage)
   const proof = { complete:true, durability:'target-writer-v1', recoveryId, sessionId:'original-session', messageSeq:12, turn:3,
     message:original, isCurrent:() => current }
   const journal = createUserRedoJournal(rt, { authorize:() => allowed, proveOriginal:async () => proof })
@@ -32,12 +35,14 @@ test('prepares a stable new identity and preserves original work', async t => {
   assert.deepEqual(entry.identity, userRedoIdentity(operationId))
   assert.deepEqual(f.state.works, { 'original-work':{ state:'unknown' } })
   assert.deepEqual(JSON.parse(await readFile(f.statePath, 'utf8')).userRedos[operationId], entry)
+  assert.doesNotMatch(await readFile(f.statePath, 'utf8'), /Original task|senderSessionId/)
   assert.deepEqual(await f.journal.prepare(request), entry)
 })
 
 test('requires explicit acknowledgement, user authorization and a scoped identity', async t => {
   const f = await fixture(t)
   await assert.rejects(f.journal.prepare({ ...request, acknowledged:false }), /confirmation/)
+  await assert.rejects(f.journal.prepare({ ...request, confirmedMessageHash:'b'.repeat(64) }), /confirmation/)
   f.setAllowed(false)
   await assert.rejects(f.journal.prepare(request), /unavailable/)
   f.setAllowed(true)

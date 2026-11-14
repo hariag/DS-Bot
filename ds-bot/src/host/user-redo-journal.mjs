@@ -29,9 +29,12 @@ function validateProof(proof, recoveryId) {
   const message = proof?.message
   if (proof?.complete !== true || proof.durability !== 'target-writer-v1' || proof.recoveryId !== recoveryId
     || typeof proof.isCurrent !== 'function' || proof.isCurrent() !== true
-    || !id(proof.sessionId) || !id(message?.id) || !Number.isSafeInteger(proof.messageSeq) || proof.messageSeq < 0
+    || !id(proof.sessionId) || !id(message?.id) || message.role !== 'user' || !message.source || typeof message.source !== 'object'
+    || Array.isArray(message.source) || !Number.isSafeInteger(proof.messageSeq) || proof.messageSeq < 0
     || !Number.isSafeInteger(proof.turn) || proof.turn < 0 || !Array.isArray(message.content) || !message.content.length
-    || message.content.some(part => part?.type !== 'text' || typeof part.text !== 'string')
+    || message.content.some(part => part?.type !== 'text' || typeof part.text !== 'string'
+      || Object.keys(part).some(key => !['type', 'text'].includes(key)))
+    || message.content.every(part => !part.text.trim())
     || Buffer.byteLength(JSON.stringify(message)) > 65536) throw new Error('original input cannot be verified')
 }
 
@@ -66,9 +69,9 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
         || !isDeepStrictEqual(table()[entry.operationId], entry)) throw new Error('redo snapshot changed')
     } finally { await file.close() }
   }
-  async function prepare({ operationId, recoveryId, scope, acknowledged }) {
+  async function prepare({ operationId, recoveryId, scope, acknowledged, confirmedMessageHash }) {
     const identity = userRedoIdentity(operationId)
-    if (!hex(recoveryId) || acknowledged !== true) throw new Error('redo confirmation required')
+    if (!hex(recoveryId) || !hex(confirmedMessageHash) || acknowledged !== true) throw new Error('redo confirmation required')
     validateScope(scope)
     if (busy.has(operationId)) throw new Error('redo outcome is unknown')
     busy.add(operationId)
@@ -81,8 +84,9 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
           || !isDeepStrictEqual(previous.identity, identity)) throw new Error('redo operation identity conflict')
         const proof = await proveOriginal(scope, recoveryId)
         validateProof(proof, recoveryId)
-        const original = { sessionId:proof.sessionId, messageSeq:proof.messageSeq, turn:proof.turn, message:clone(proof.message) }
-        if (!isDeepStrictEqual(previous.original, original) || lease() !== generation
+        const original = { sessionId:proof.sessionId, messageSeq:proof.messageSeq, turn:proof.turn,
+          messageId:proof.message.id, messageHash:digest(proof.message) }
+        if (original.messageHash !== confirmedMessageHash || !isDeepStrictEqual(previous.original, original) || lease() !== generation
           || authorize(scope, recoveryId) !== true) throw new Error('redo proof changed')
         await durable(previous, generation)
         if (authorize(scope, recoveryId) !== true || proof.isCurrent() !== true) throw new Error('redo is unavailable')
@@ -93,7 +97,9 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
       validateProof(proof, recoveryId)
       if (lease() !== generation || authorize(scope, recoveryId) !== true || table()[operationId]
         || Object.values(table()).some(row => row?.recoveryId === recoveryId)) throw new Error('redo changed during verification')
-      const original = { sessionId:proof.sessionId, messageSeq:proof.messageSeq, turn:proof.turn, message:clone(proof.message) }
+      const original = { sessionId:proof.sessionId, messageSeq:proof.messageSeq, turn:proof.turn,
+        messageId:proof.message.id, messageHash:digest(proof.message) }
+      if (original.messageHash !== confirmedMessageHash) throw new Error('redo confirmation does not match the input')
       const entry = { operationId, identity, recoveryId, scope:clone(scope), original, state:'prepared', acknowledged:true, createdAt:Date.now() }
       rt.state.userRedos = { ...table(), [operationId]:entry }
       try {
