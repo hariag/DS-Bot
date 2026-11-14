@@ -138,6 +138,7 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
         h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
         h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }), h(Fact, { label: t('Recovery ID'), value: item.recoveryId })),
       h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
+      item.redo?.status === 'unknown' ? h('p', { className:'bt-recovery-note', role:'status' }, t('A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.')) : null,
       item.decision !== 'ignored' ? h('p', { className:'bt-recovery-note' }, t('Redo is unavailable because the original input cannot be verified.')) : null,
       h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))))))
   return h('details', { className: 'bt-recovery-panel' },

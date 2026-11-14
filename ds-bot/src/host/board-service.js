@@ -12,6 +12,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
 import { createGoalBoardEditor } from './goal-board-editor.js'
+import { userRedoView } from './user-redo-view.mjs'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -146,7 +147,8 @@ export function install(rt) {
         for (let i = 0; i < 3; i += 1) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
-          const recovery = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [] }
+          const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [] }
+          const recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
           if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
             recovery, ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
             revision: `${rosterRevision}:${before}` }
