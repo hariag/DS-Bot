@@ -27,9 +27,12 @@ export function heldTurnsView(held, scope, bots = {}) {
     const exchangeId = id(record.trigger?.exchangeId)
     const startedAt = Number.isSafeInteger(record.since) && record.since >= 0 && record.since <= 8_640_000_000_000_000 ? record.since : undefined
     const turn = Number.isSafeInteger(record.turn) && record.turn >= 0 ? record.turn : undefined
+    const decisions = value.decisions
+    if (decisions !== undefined && (!Array.isArray(decisions) || decisions.length > 100 || decisions.some((entry, index) => !entry || entry.revision !== index + 1 || !['ignored', 'open'].includes(entry.choice) || entry.by !== 'user' || !Number.isSafeInteger(entry.at)))) { incomplete = true; continue }
+    const choice = decisions?.at(-1)?.choice ?? 'open'
     items.push({ recoveryId, botId, botName, sessionId, ...(roomId ? { roomId } : {}),
       ...(exchangeId ? { exchangeId } : {}), ...(startedAt !== undefined ? { startedAt } : {}),
-      ...(turn !== undefined ? { turn } : {}), status: 'uncertain', evidence: 'inflight.json' })
+      ...(turn !== undefined ? { turn } : {}), status: 'uncertain', decision: choice, decisionRevision: decisions?.length ?? 0, evidence: 'inflight.json' })
   }
   items.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || a.recoveryId.localeCompare(b.recoveryId))
   return { available: true, incomplete, items }
