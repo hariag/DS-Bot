@@ -191,6 +191,50 @@ function putReviewMarker(marker) {
   if (globalThis.localStorage.getItem(key) !== JSON.stringify(marker)) throw new Error('Review storage unavailable')
   return key
 }
+function WorkDecisions({ scope, request, actors }) {
+  const [items,setItems]=useState(null), [selected,setSelected]=useState(''), [error,setError]=useState(''), [busy,setBusy]=useState(false)
+  const [incomplete,setIncomplete]=useState(false), [query,setQuery]=useState('')
+  const active=useRef(false), epoch=useRef(0), requested=useRef(false)
+  useEffect(()=>()=>{epoch.current+=1},[])
+  const fetchItems=async current=>{
+    const result=await request('legacy-review-list',{scope}), ids=new Set()
+    if(!result||!Array.isArray(result.items)||result.items.some(item=>!item||typeof item.workId!=='string'||!item.workId||ids.has(item.workId)||!['open','ignored','user-accepted'].includes(item.choice)||!Number.isSafeInteger(item.revision)||item.revision<0||typeof item.owner!=='string'||typeof item.sender!=='string'||(ids.add(item.workId),false)))throw Error('Invalid work decisions')
+    if(current===epoch.current){setItems(result.items);setIncomplete(result.incomplete!==false)}
+  }
+  const refresh=async()=>{
+    if(active.current)return
+    const current=epoch.current;active.current=true;requested.current=true;setBusy(true);setError('')
+    try{await fetchItems(current)}catch{if(current===epoch.current){setItems(null);setError(t('Work decisions are unavailable.'))}}
+    finally{active.current=false;if(current===epoch.current)setBusy(false)}
+  }
+  const decide=async(item,choice)=>{
+    if(active.current||item.canDecide!==true)return
+    if(choice==='user-accepted'&&!globalThis.confirm(t('Record your acceptance of work {id} in {scope}? This does not complete the task or replace independent acceptance.',{id:item.workId,scope:scope.id})))return
+    const current=epoch.current;active.current=true;setBusy(true);setError('')
+    try{await request('legacy-review-decision',{scope,workId:item.workId,expectedRevision:item.revision,choice});await fetchItems(current)}
+    catch{try{await fetchItems(current)}catch{if(current===epoch.current)setItems(null)}if(current===epoch.current)setError(t('Decision outcome may be unknown. Refresh to verify it.'))}
+    finally{active.current=false;if(current===epoch.current)setBusy(false)}
+  }
+  const rows=Array.isArray(items)?items:[], needle=query.trim().toLocaleLowerCase()
+  const filtered=rows.filter(item=>matchesRecovery(needle,[item.workId,item.owner,item.sender,actorLabel(item.owner,actors),actorLabel(item.sender,actors)]))
+  const open=filtered.filter(item=>item.choice==='open'), handled=filtered.filter(item=>item.choice!=='open'), item=rows.find(row=>row.workId===selected)
+  const render=list=>h('div',{className:'bt-recovery-work-groups'},list.map(row=>h('button',{key:row.workId,type:'button',className:'bt-recovery-work-choice',disabled:busy,'aria-pressed':selected===row.workId,onClick:()=>setSelected(row.workId),title:row.workId},`${actorLabel(row.owner,actors)} · ${shortIdentity(row.workId)}`)))
+  return h('details',{className:'bt-recovery-panel',onToggle:event=>{if(event.target===event.currentTarget&&event.currentTarget.open&&!requested.current)void refresh()}},
+    h('summary',{className:'bt-recovery-summary'},h('span',{className:'bt-recovery-icon','aria-hidden':true},'✓'),h('span',{className:'bt-recovery-summary-text'},h('strong',null,t('Work decisions')),h('small',null,t('Choose an action for an existing work'))),items?h('span',{className:'bt-recovery-count'},rows.filter(row=>row.choice==='open').length):null),
+    h('div',{className:'bt-recovery-body'},h('p',{className:'bt-recovery-note'},t('Your choice does not close the work or establish its outcome.')),
+      incomplete?h('p',{className:'bt-recovery-warning',role:'status'},t('The recovery list may be incomplete.')):null,
+      error?h('p',{className:'bt-recovery-warning',role:'alert'},error):null,
+      h('div',{className:'bt-recovery-workspace'},h('div',{className:'bt-recovery-work-list'},h('div',{className:'bt-recovery-list-header'},h('strong',null,t('Needs a decision')),h('button',{type:'button',disabled:busy,onClick:()=>void refresh()},t('Refresh'))),
+        rows.length?h('input',{type:'search',value:query,placeholder:t('Filter by Bot or ID'),disabled:busy,onChange:event=>setQuery(event.target.value)}):null,
+        items&&open.length===0&&!incomplete?h('p',{className:'bt-recovery-empty'},t('No work needs a decision.')):null,render(open),
+        handled.length?h('details',null,h('summary',null,`${t('Handled')} (${handled.length})`),render(handled)):null),
+      h('div',{className:'bt-recovery-detail'},item?h('div',{className:'bt-recovery-review'},
+        h('div',{className:'bt-recovery-facts'},h(Fact,{label:t('Original work ID'),value:item.workId}),h(Fact,{label:t('Board'),value:scope.id}),h(Fact,{label:t('Sender'),value:actorLabel(item.sender,actors)}),h(Fact,{label:t('Owner'),value:actorLabel(item.owner,actors)})),
+        h('p',{className:'bt-recovery-note'},t('The result remains unknown; this is not independent acceptance.')),
+        item.canDecide!==true?h('p',{className:'bt-recovery-warning'},t('The original work identity cannot be verified.')):null,
+        item.choice==='open'?h('div',null,h('button',{type:'button',disabled:busy||item.canDecide!==true,onClick:()=>void decide(item,'ignored')},t('Ignore')),' ',h('button',{type:'button',disabled:busy||item.canDecide!==true,onClick:()=>void decide(item,'user-accepted')},t('Record my acceptance'))):h('div',null,h('strong',null,t(item.choice==='ignored'?'Ignored':'Accepted by you')),' ',h('button',{type:'button',disabled:busy||item.canDecide!==true,onClick:()=>void decide(item,'open')},t('Move back to needs a decision')))):
+        h('p',{className:'bt-recovery-empty'},t('Choose a work to review.'))))))
+}
 function LegacyWorkReview({ scope, request, actors }) {
   const [workId, setWorkId] = useState(''), [record, setRecord] = useState(null)
   const [summary, setSummary] = useState(''), [evidence, setEvidence] = useState(''), [unfinished, setUnfinished] = useState('')
@@ -286,7 +330,7 @@ function LegacyWorkReview({ scope, request, actors }) {
     if (event.target === event.currentTarget && event.currentTarget.open && !requested.current && !inFlight.current) void list()
   } },
   h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '≡'),
-    h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Review an existing work')), h('small', null, t('Review note'))),
+    h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Manual notes (optional)')), h('small', null, t('Review note'))),
     Array.isArray(candidates?.items) ? h('span', { className: 'bt-recovery-count' }, String(rows.length)) : null),
   h('div', { className: 'bt-recovery-body' },
     h('div', { className: 'bt-recovery-intro' }, h('p', null, t('Review notes do not send messages or close work. Sources are unverified; inspect the original records.')),
@@ -1043,7 +1087,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh:() => load() }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh:() => load() }), h(WorkDecisions, { key, scope, request, actors:data.capabilities?.actors }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },

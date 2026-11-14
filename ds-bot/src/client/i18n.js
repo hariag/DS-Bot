@@ -11,6 +11,21 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Work decisions': '处理已有工作',
+  'Choose an action for an existing work': '选择如何处理已有工作',
+  'Manual notes (optional)': '手工备注（可选）',
+  'Your choice does not close the work or establish its outcome.': '此选择不会关闭工作，也不代表工作结果已确认。',
+  'Work decisions are unavailable.': '暂时无法读取工作处理状态。',
+  'Decision outcome may be unknown. Refresh to verify it.': '处理结果可能未知，请刷新核对。',
+  'Needs a decision': '待处理',
+  'No work needs a decision.': '没有待处理的工作。',
+  'Handled': '已处理',
+  'The result remains unknown; this is not independent acceptance.': '工作结果仍然未知，此操作不代表独立验收。',
+  'The original work identity cannot be verified.': '无法确认原工作身份。',
+  'Record my acceptance': '记录我的认可',
+  'Accepted by you': '你已认可',
+  'Move back to needs a decision': '撤销并移回待处理',
+  'Record your acceptance of work {id} in {scope}? This does not complete the task or replace independent acceptance.': '确认认可 {scope} 中的工作 {id}？这不会完成任务，也不能代替独立验收。',
   'Current goal task': '当前目标任务',
   'Earlier goal stage': '先前目标阶段',
   'Upcoming goal stage': '后续目标阶段',
