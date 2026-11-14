@@ -6,7 +6,7 @@ import { userRedoConfirmation } from './user-redo-journal.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
+const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !Array.from(value).some(char => char.charCodeAt(0) < 32)
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value)
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const copy = value => structuredClone(value)
@@ -123,7 +123,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function write(row, generation) {
     sameLease(generation)
     const dest = pathFor(row.operationId), temp = join(root, `.pending-${randomUUID()}`), data = JSON.stringify(row)
-    let fd
+    let fd, failure
     try {
       fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
       writeFileSync(fd, data); fsyncSync(fd); closeSync(fd); fd = undefined
@@ -131,10 +131,11 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const saved = read(row.operationId)
       sameLease(generation)
       if (!isDeepStrictEqual(saved, row)) throw Error('redo snapshot changed')
-    } finally {
+    } catch (error) { failure = error } finally {
       if (fd !== undefined) closeSync(fd)
-      try { unlinkSync(temp) } catch (error) { if (error.code !== 'ENOENT') throw error }
     }
+    try { unlinkSync(temp) } catch (error) { if (error.code !== 'ENOENT' && !failure) failure = error }
+    if (failure) throw failure
   }
   function all() {
     const entries = readdirSync(root)
