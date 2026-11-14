@@ -23,9 +23,9 @@ function fixture(t){
   const opts={assertLease:()=>owns,leaseVersion:()=>generation,authorizeIntent:()=>allowed,authorizeClaim:()=>allowed}
   const reopen=()=>{journal?.close();journal=openGuardedRedoJournal(path,opts);return journal}
   reopen()
-  const agent={id:'session',session:{id:'session'},durableAdmissionVersion:1,guardedClaimTurnVersion:1}
-  const proof={complete:true,durability:'target-writer-v1',originalOutcome:'failed',sessionId:'session',throughSeq:9,messageSeq:3,turn:7,message:original,isCurrent:()=>true}
-  const bridge=()=>createGuardedRedoBridge({enabled:true,journal,verifyOriginal:async()=>proof,resolveAgent:async()=>agent,isCurrent:()=>owns&&allowed,resultAuthority:()=>settled?{version:'durable-original-result-v1',claimOriginalResult(){},readResultReceipt(){},isCurrent:()=>true}:undefined,isResultRouterBound:()=>true,makeMessage:(m,id)=>({...m,id}),leaseVersion:()=>generation,coordinatorReady:()=>true})
+  const agent={id:'session',session:{id:'session',eventAt:index=>index===20?{seq:20,type:'turn/start',data:{turn:8}}:undefined},durableAdmissionVersion:1,guardedClaimTurnVersion:1}
+  const proof={complete:true,durability:'target-writer-v1',originalOutcome:'failed',sessionId:'session',throughSeq:9,messageSeq:3,turn:7,message:original,isCurrent:()=>true,isSameSession:()=>true}
+  const bridge=()=>createGuardedRedoBridge({enabled:true,journal,verifyOriginal:async()=>proof,resolveAgent:async()=>agent,isBeforeAdmission:()=>owns&&allowed,isAfterAdmission:()=>owns&&allowed,resultAuthority:()=>settled?{version:'durable-original-result-v1',claimOriginalResult(){},readResultReceipt(){},isCurrent:()=>true}:undefined,isResultRouterBound:()=>true,makeMessage:(m,id)=>({...m,id}),leaseVersion:()=>generation,coordinatorReady:()=>true})
   t.after(()=>{journal?.close();rmSync(home,{recursive:true,force:true})})
   return {binding,identity,message,proof,agent,bridge,reopen,path,get journal(){return journal},lose(){owns=false},rotate(){generation+=1},revoke(){allowed=false},noSettlement(){settled=false}}
 }
@@ -64,6 +64,15 @@ test('a mixed board/redo batch is rejected before claiming anything',t=>{
   assert.equal(other,1)
 })
 
+test('a forged or stale turn cannot reach the claim callback',t=>{
+  const f=fixture(t);let claimed=0
+  const route=sharedGuardedCoordinator({sessionId:'session',agent:f.agent,redoJournal:f.journal,otherCoordinator:()=>{throw Error('not board')},isCurrent:()=>true})
+  const redo={admissionId:f.identity.admissionId,target:'next-turn',message:f.message}
+  assert.throws(()=>route('session',[redo],()=>{claimed+=1},{turn:9,turnStartSeq:20}),/turn identity/)
+  assert.throws(()=>route('session',[redo],()=>{claimed+=1},{turn:8,turnStartSeq:21}),/turn identity/)
+  assert.equal(claimed,0)
+})
+
 test('lost guarded-send result remains unknown across journal restart',async t=>{
   const f=fixture(t);let sends=0
   f.agent.guardedSend=async()=>{sends+=1;throw Error('outcome lost after enqueue')}
@@ -71,6 +80,18 @@ test('lost guarded-send result remains unknown across journal restart',async t=>
   f.reopen()
   assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
   assert.equal(sends,1)
+})
+
+test('the admission may append to the same Session but may not replace it',async t=>{
+  const first=fixture(t);let sends=0
+  first.agent.guardedSend=async()=>{sends+=1;first.proof.isCurrent=()=>false}
+  assert.equal((await first.bridge().request({binding:first.binding,confirmed:true})).state,'submitted')
+  assert.equal(sends,1)
+  const second=fixture(t);let replacedSends=0
+  second.agent.guardedSend=async()=>{replacedSends+=1;second.proof.isCurrent=()=>false;second.proof.isSameSession=()=>false}
+  assert.equal((await second.bridge().request({binding:second.binding,confirmed:true})).state,'unknown')
+  assert.equal((await second.bridge().request({binding:second.binding,confirmed:true})).state,'unknown')
+  assert.equal(replacedSends,1)
 })
 
 test('a failed claim after the callback stays fenced and cannot be claimed twice',t=>{
@@ -148,7 +169,7 @@ test('only the exact complete target-writer prefix proves an interrupted origina
   const session={seq:9,eventAt:index=>events[index]}
   const writer={flushLiveSession:async id=>{assert.equal(id,'session');flushes+=1},open:async()=>({read:async()=>({events}),close:async()=>{}})}
   const ctx={sessions:{get:id=>id==='session'?session:undefined},get:name=>name==='sessionPersistence'?writer:undefined}
-  const verify=createTargetWriterRedoProof({ctx,assertLease:()=>true,leaseVersion:()=>1,authorizeCurrent:()=>live})
+  const verify=createTargetWriterRedoProof({ctx,assertLease:()=>true,leaseVersion:()=>1,authorizeCurrent:()=>live,authorizeSameSession:()=>live})
   const proof=await verify(f.binding)
   assert.equal(proof?.originalOutcome,'failed');assert.equal(proof?.isCurrent(),true);assert.equal(flushes,1)
   live=false;assert.equal(proof.isCurrent(),false);assert.equal(await verify(f.binding),undefined);live=true
@@ -157,6 +178,8 @@ test('only the exact complete target-writer prefix proves an interrupted origina
   events=structuredClone(good);events[4].data.reason={kind:'completed'};assert.equal(await verify(f.binding),undefined)
   events=structuredClone(good);events[3].data.content=[{type:'text',text:'changed'}];assert.equal(await verify(f.binding),undefined)
   events=good;writer.flushLiveSession=async()=>{session.seq+=1};assert.equal(await verify(f.binding),undefined)
+  assert.equal(proof.isCurrent(),false);assert.equal(proof.isSameSession(),true)
+  ctx.sessions.get=()=>({seq:session.seq});assert.equal(proof.isSameSession(),false)
 })
 
 test('process death inside claim leaves a durable fence, not a replayable admission',t=>{

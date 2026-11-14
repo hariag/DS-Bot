@@ -3,8 +3,8 @@ import { normalizeRedoBinding, redoIdentity, redoSnapshot, validateRedoMessage }
 
 // The caller supplies actual synchronous Host authorization, never a guessed
 // queue state. A missing target writer or incomplete prefix is not evidence.
-export function createTargetWriterRedoProof({ctx,assertLease,leaseVersion,authorizeCurrent}={}) {
-  if(!ctx||![assertLease,leaseVersion,authorizeCurrent].every(fn=>typeof fn==='function'))throw Error('redo proof authority unavailable')
+export function createTargetWriterRedoProof({ctx,assertLease,leaseVersion,authorizeCurrent,authorizeSameSession}={}) {
+  if(!ctx||![assertLease,leaseVersion,authorizeCurrent,authorizeSameSession].every(fn=>typeof fn==='function'))throw Error('redo proof authority unavailable')
   const persistence=()=>{try{return typeof ctx.get==='function'?ctx.get('sessionPersistence'):ctx.sessionPersistence}catch{return undefined}}
   return async input=>{
     let handle
@@ -14,8 +14,9 @@ export function createTargetWriterRedoProof({ctx,assertLease,leaseVersion,author
       const lease=leaseVersion(),session=store.get(binding.sessionId),through=session?.seq
       if(assertLease()!==true||lease===undefined||!session||typeof session.eventAt!=='function'||through!==binding.throughSeq
         ||through<1||through>200_000||authorizeCurrent(binding,session)!==true)return undefined
-      const current=()=>assertLease()===true&&leaseVersion()===lease&&store.get(binding.sessionId)===session
-        &&session.seq===through&&authorizeCurrent(binding,session)===true
+      const sameSession=()=>assertLease()===true&&leaseVersion()===lease&&store.get(binding.sessionId)===session
+        &&authorizeSameSession(binding,session)===true
+      const current=()=>sameSession()&&session.seq===through&&authorizeCurrent(binding,session)===true
       const signal=AbortSignal.timeout(15_000)
       await writer.flushLiveSession(binding.sessionId)
       if(signal.aborted||!current())return undefined
@@ -55,7 +56,7 @@ export function createTargetWriterRedoProof({ctx,assertLease,leaseVersion,author
       validateRedoMessage(binding,{...message,id:redoIdentity(binding).messageId})
       if(!current())return undefined
       return {complete:true,durability:'target-writer-v1',originalOutcome,sessionId:binding.sessionId,throughSeq:through,
-        messageSeq:binding.messageSeq,turn:binding.turn,message,isCurrent:current}
+        messageSeq:binding.messageSeq,turn:binding.turn,message,isCurrent:current,isSameSession:sameSession}
     } catch {return undefined} finally {await handle?.close().catch(()=>{})}
   }
 }
