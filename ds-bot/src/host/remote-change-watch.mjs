@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 
 const SHA = /^[a-f0-9]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
@@ -35,14 +34,14 @@ export function classifyFiles(files) {
 function privateDirectory(path) {
   try { mkdirSync(path, { mode: 0o700 }) } catch (e) { if (e.code !== 'EEXIST') throw e }
   const s = lstatSync(path)
-  if (!isPrivateDirectory(path, s)) throw new Error('private storage unavailable')
+  if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077)) throw new Error('private storage unavailable')
 }
 
 export function openRemoteChangeStore(path, spec, assertOwner) {
   if (path !== ':memory:') {
     try { closeSync(openSync(path, 'wx', 0o600)) } catch (e) { if (e.code !== 'EEXIST') throw e }
     const s = lstatSync(path)
-    if (!isPrivateFile(path, s)) throw new Error('private storage unavailable')
+    if (!s.isFile() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077)) throw new Error('private storage unavailable')
   }
   const db = new DatabaseSync(path)
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;

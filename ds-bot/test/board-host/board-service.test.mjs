@@ -41,6 +41,15 @@ test('authenticated board view returns only the scoped read-only recovery projec
   assert.equal(seen.length, 1, 'invalid scope must not reach recovery projection')
 })
 
+test('remote code status is limited to the owner personal board', async t => {
+  const { rt } = fixture(t)
+  rt.remoteChangeView=()=>({status:'ok',events:[{sha:'a'.repeat(40)}]})
+  const own=await rt.boardCall('board-list',{scope:{kind:'personal',id:'user'}})
+  assert.equal(own.remoteChanges.events.length,1)
+  assert.equal((await rt.boardCall('board-list',{scope:{kind:'personal',id:'one'}})).remoteChanges,undefined)
+  assert.equal((await rt.boardCall('board-list',{scope})).remoteChanges,undefined)
+})
+
 test('actual task journal backs the five instance-user endpoints with isolated group and personal views', async t => {
   const { rt, route } = fixture(t)
   assert.equal(route.requestBody, 'streaming')
