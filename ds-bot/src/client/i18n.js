@@ -47,6 +47,7 @@ const ZH = {
   'Card revision history': '卡片修订记录',
   'Showing the latest 50 revisions.': '显示最近 50 个修订。',
   'Revision': '修订版本',
+  'Personal progress does not dispatch a Bot or complete shared work.': '个人进度不会派发 Bot，也不会完成共享任务。',
   'Saving creates a separate change proposal after the original task.': '保存后将创建独立的需求变更提案，并等待原任务完成。',
   'Requirement change': '需求变更',
   'Original task': '原任务',

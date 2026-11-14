@@ -277,17 +277,19 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     },
     create({ operationId, actor, task }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
-      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants'])
+      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress'])
       const payload = { type: 'create', actor, task }
       return transact(operationId, actor, payload, () => ({ type: 'create', actor, task }), () => {
         const id = requireId(task.id, 'task id'), owner = requireId(task.owner, 'owner'), reviewer = requireId(task.reviewer, 'reviewer')
         if (owner === reviewer) throw new Error('reviewer must be independent')
+        if (task.personalProgress !== undefined && (actor !== 'user' || task.scope !== 'personal:user' || owner !== 'user' || !['todo','doing','finished'].includes(task.personalProgress))) throw new Error('invalid personal progress')
         string(task.title, 'title'); string(task.acceptance, 'acceptance'); requireId(task.scope, 'scope')
         if (getTask(id)) throw new Error('task id exists')
         if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
         const dependencies = task.dependencies ?? [], dependencyGrants = task.dependencyGrants ?? []; checkGraph(id, dependencies)
         checkBindings({ scope:task.scope, owner, reviewer }, dependencies, dependencyGrants)
-        const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: 'proposed', authority: null, evidence: null, blocked: null, stale: false }
+        const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: 'proposed', authority: null, evidence: null, blocked: null, stale: false,
+          ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
       })
