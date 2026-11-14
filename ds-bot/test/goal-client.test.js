@@ -243,13 +243,14 @@ test('the open island draws a stepper, the current stage and the goal controls, 
   assert.equal(content.includes('Goal and checks'), true)
 })
 
-test('an uncertain review shows its investigation form with recovery disabled until confirmation', () => {
+test('an uncertain review opens its separate workspace rather than approving in the goal panel', () => {
   const node = renderHeader(team(running({ reviewAttempt: { id: 'review-1', state: 'uncertain', at: 1 } })), { goalOpen: 'r1' })
   const panel = find(node, 'bt-goal-panel')
   assert.match(text(panel), /unknown outcome/)
-  assert.match(text(panel), /What did you verify/)
-  const button = all(panel, 'bt-soft').find(item => text(item) === 'Resume periodic reviews')
-  assert.equal(button.props.disabled, true)
+  assert.doesNotMatch(text(panel), /What did you verify|Resume periodic reviews/)
+  const button = all(panel, 'bt-soft').find(item => text(item) === 'Open review workspace')
+  assert.equal(button.props.disabled, false)
+  assert.equal(typeof button.props.onClick, 'function')
 })
 
 test('a passed stage shows its evidence and the rework line grows with the count', () => {
