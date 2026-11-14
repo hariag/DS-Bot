@@ -46,5 +46,24 @@ try {
  assert.deepEqual(legacy.textSegments,['Synthetic task to review']);assert.match(legacy.warning.zh,/无法确认发送者/)
  const legacyConfirm=await raw('board-redo-confirm',{scope,recoveryId:seeded.legacyRecovery,confirmationDigest:preview.confirmationDigest,acknowledged:true});assert.equal(legacyConfirm.ok,false)
  assert.equal(JSON.parse(readFileSync(join(home,'bot/state.json'),'utf8')).originalRedoWitness,undefined)
- console.log(JSON.stringify({ownerPreview:true,exactSyntheticContent:true,badDigestRejected:true,confirmNotRecorded:true,legacyCandidate:true,legacyConfirmRejected:true,execution:'not invoked'}))
+ const welcome=page.getByText('Get started',{exact:true})
+ if(await welcome.isVisible()) {
+  await welcome.locator('..').getByRole('button').first().click()
+  await welcome.waitFor({state:'hidden'})
+ }
+ await page.getByText('Synthetic Owner',{exact:true}).first().click()
+ await page.getByRole('button',{name:/^(Task board|任务看板)$/}).click()
+ const held=page.locator('.bt-recovery-panel').filter({hasText:/Interrupted work|中断的工作/})
+ await held.locator('summary').first().click()
+ const legacyRecord=held.locator('.bt-recovery-record').filter({hasText:seeded.legacyRecovery})
+ await legacyRecord.locator('summary').click()
+ await legacyRecord.getByRole('button',{name:/^(View candidate text|查看候选内容)$/}).click()
+ await legacyRecord.locator('.bt-recovery-candidate-text').getByText('Synthetic task to review').waitFor()
+ assert.equal(await legacyRecord.getByRole('button',{name:/^(Redo|重做)$/}).count(),0)
+ await legacyRecord.locator('summary').click();await legacyRecord.locator('summary').click()
+ assert.equal(await legacyRecord.locator('.bt-recovery-candidate-text').count(),0)
+ console.log(JSON.stringify({ownerPreview:true,exactSyntheticContent:true,badDigestRejected:true,confirmNotRecorded:true,legacyCandidate:true,legacyConfirmRejected:true,uiCandidate:true,closedClears:true,execution:'not invoked'}))
+} catch (error) {
+ if(page)await page.screenshot({path:join(base,'redo-ui-failure.png')}).catch(()=>{})
+ throw error
 } finally {await page?.close().catch(()=>{});await browser?.close().catch(()=>{});await stop()}
