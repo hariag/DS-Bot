@@ -1,6 +1,15 @@
 import { isDeepStrictEqual } from 'node:util'
 import { createInboxAudit } from './inbox-audit.js'
 
+// These snapshots are injected by the Host at pre-step rather than through the
+// inbox. Unknown or malformed source kinds remain unresolved, not discarded.
+const isRuntimeSnapshot = message => message?.role === 'user' && typeof message.id === 'string'
+  && ['runtime-context', 'ds-bot-time-context'].includes(message.source?.kind)
+  && message.source?.form === 'snapshot' && Array.isArray(message.source.sections)
+  && message.source.sections.every(section => typeof section?.name === 'string' && typeof section.text === 'string')
+  && Array.isArray(message.content) && message.content.length === 1
+  && message.content[0]?.type === 'text' && typeof message.content[0].text === 'string'
+
 // Read only: an unknown or incomplete prefix is never evidence of absence.
 // This intentionally supports only a uniquely recorded Bot exchange from a
 // stopped turn. Other histories stay unavailable for manual examination.
@@ -40,12 +49,19 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
         const matchingStarts = starts.filter(event => event.time === hold.record.since)
         if (matchingStarts.length !== 1 || !Number.isSafeInteger(matchingStarts[0].data?.turn)) return undefined
         expectedTurn = matchingStarts[0].data.turn
+      } else if (hold.record.since !== undefined) {
+        if (!Number.isSafeInteger(hold.record.since) || hold.record.since < 0) return undefined
+        const starts = events.filter(event => event.type === 'turn/start' && event.data?.turn === expectedTurn)
+        if (starts.length !== 1 || (starts[0].time !== undefined && starts[0].time !== hold.record.since)) return undefined
       }
       for (const event of events) audit.observe(event)
       const folded = audit.finish(through)
+      const admittedIds = new Set(folded.records.map(row => row.id))
+      const untracked = events.filter(entry => entry.type === 'user/message' && !admittedIds.has(entry.data?.id))
+      if (untracked.length !== folded.untrackedAdmissions || untracked.some(entry => !isRuntimeSnapshot(entry.data))) return undefined
       const matches = events.filter(event => event.type === 'user/message' && event.data?.source?.kind === 'bot'
         && event.data.source.exchangeId === trigger.exchangeId)
-      if (folded.untrackedAdmissions !== 0 || matches.length !== 1) return undefined
+      if (matches.length !== 1) return undefined
       const event = matches[0], source = event.data.source
       if (!['request', 'room'].includes(source.role) || source.reviewInspect === true
         || source.groupKickoff === true || source.reviewId !== undefined) return undefined
@@ -74,9 +90,10 @@ export function createUserRedoOriginalProof(rt, { timeoutMs = 15_000 } = {}) {
         || (end?.kind === 'aborted' && end.reason?.kind === 'disposed')
       if (starts !== 1 || originalTurn !== expectedTurn || !stopped
         || events.filter(entry => entry.type === 'turn/start' && entry.data?.turn === originalTurn).length !== 1
-        || events.filter(entry => entry.type === 'user/message' && entry.seq > startSeq && entry.seq < endSeq).length !== 1
+        || events.filter(entry => entry.type === 'user/message' && entry.seq > startSeq && entry.seq < endSeq
+          && (admittedIds.has(entry.data?.id) || !isRuntimeSnapshot(entry.data))).length !== 1
         || !current()) return undefined
-      return { complete:true, durability:'target-writer-v1', recoveryId, sessionId:hold.sessionId,
+      return { complete:true, durability:'target-writer-v1', recoveryId, botId:hold.record.botId, sessionId:hold.sessionId,
         messageSeq:event.seq, turn:originalTurn,
         message:structuredClone({ id:event.data.id, role:'user', source:event.data.source, content:event.data.content }), isCurrent:current }
     } catch { return undefined } finally { await reader?.close().catch(() => {}) }

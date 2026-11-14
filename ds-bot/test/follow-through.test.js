@@ -129,9 +129,20 @@ test('redo source evidence is bound to its room and current membership', async t
   assert.equal(proof.isCurrent(), true)
   assert.equal(await host.rt.recoveryHeldOriginal({ kind:'personal', id:'user' }, id), undefined)
   assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'other' }, id), undefined)
+  host.rt.state.agents.x = { id:'x', sessions:['gb'] }
+  assert.equal(proof.isCurrent(), false)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
+  delete host.rt.state.agents.x
   host.rt.state.rooms.r1.members = ['a']
   assert.equal(proof.isCurrent(), false)
   assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
+})
+
+test('new interrupted records preserve the exact turn number', async t => {
+  const home = freshHome(t), host = await start(home)
+  host.emit('gb', 'turn/start', { turn:9 })
+  await settle(() => notes(home).turns?.gb?.turn === 9)
+  assert.equal(notes(home).turns.gb.roomId, 'r1')
 })
 // The team file is written in the background, and Windows may hold it busy for a
 // moment: the retry waits on the clock, which the tests mock.
