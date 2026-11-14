@@ -116,8 +116,8 @@ function HeldTurns({ recovery }) {
     h('summary', { className: 'bt-recovery-summary' },
       h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
       h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted turns awaiting review')),
-        h('small', null, t(rows.length ? 'Read only' : 'No items'))),
-      h('span', { className: 'bt-recovery-count' }, String(rows.length))),
+        h('small', null, t(rows.length ? 'Read only' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
+      h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !rows.length ? '—' : String(rows.length))),
     h('div', { className: 'bt-recovery-body' },
       h('div', { className: 'bt-recovery-intro' },
         h('p', null, t('These records are read-only. A result is unknown; no work is resent or closed here.')),
@@ -125,7 +125,7 @@ function HeldTurns({ recovery }) {
       recovery.incomplete ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
       rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
         h('input', { type: 'search', value: query, placeholder: t('Filter by Bot or ID'), onChange: event => setQuery(event.target.value) })) : null,
-      !rows.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No interrupted turns in this snapshot.')) : null,
+      !rows.length && !recovery.incomplete ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No interrupted turns in this snapshot.')) : null,
       rows.length && !filtered.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
       groups.length ? h('div', { className: 'bt-recovery-groups' }, groups.map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
         h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
@@ -148,36 +148,124 @@ const recoveryObservationText = value => value === 'observed-present' ? t('Obser
 const legacyReviewStateText = value => value === 'needs-review' ? t('Needs manual review')
   : value === 'evidence-needed' ? t('Evidence still needed')
     : value === 'identity-unverified' ? t('Work identity unverified') : t('Not known')
+const reviewMarkerPrefix = 'ds-bot:legacy-review-pending:'
+const reviewOperationPattern = /^manual-review:[a-f0-9]{64}$/
+function reviewMarkers(workId) {
+  const storage = globalThis.localStorage
+  if (!storage) throw new Error('Review storage unavailable')
+  const prefix = `${reviewMarkerPrefix}${encodeURIComponent(workId)}:`
+  const markers = []
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (!key?.startsWith(prefix)) continue
+    const marker = JSON.parse(storage.getItem(key))
+    if (!marker || marker.workId !== workId || !reviewOperationPattern.test(marker.operationId)
+      || key !== `${prefix}${marker.operationId}` || !['create', 'finding'].includes(marker.kind)
+      || !['personal', 'room'].includes(marker.scope?.kind) || typeof marker.scope.id !== 'string' || !marker.scope.id) throw new Error('Invalid review marker')
+    markers.push({ key, ...marker })
+    if (markers.length > 100) throw new Error('Too many review markers')
+  }
+  return markers
+}
+function putReviewMarker(marker) {
+  const key = `${reviewMarkerPrefix}${encodeURIComponent(marker.workId)}:${marker.operationId}`
+  globalThis.localStorage.setItem(key, JSON.stringify(marker))
+  if (globalThis.localStorage.getItem(key) !== JSON.stringify(marker)) throw new Error('Review storage unavailable')
+  return key
+}
 function LegacyWorkReview({ scope, request, actors }) {
   const [workId, setWorkId] = useState(''), [record, setRecord] = useState(null)
   const [summary, setSummary] = useState(''), [evidence, setEvidence] = useState(''), [unfinished, setUnfinished] = useState('')
-  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [query, setQuery] = useState('')
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [query, setQuery] = useState(''), [uncertain, setUncertain] = useState(false)
   const [candidates, setCandidates] = useState(null)
-  const epoch = useRef(0), requested = useRef(false)
+  const epoch = useRef(0), requested = useRef(false), inFlight = useRef(false)
+  const selected = useRef(''), recordFor = useRef(''), uncertainRef = useRef(false)
   useEffect(() => () => { epoch.current += 1 }, [])
+  useEffect(() => {
+    const onStorage = event => {
+      if (event.key && !event.key.startsWith(reviewMarkerPrefix)) return
+      try { const pending = reviewMarkers(selected.current).length > 0; uncertainRef.current = pending; setUncertain(pending) }
+      catch { uncertainRef.current = true; setUncertain(true) }
+    }
+    globalThis.addEventListener('storage', onStorage)
+    return () => globalThis.removeEventListener('storage', onStorage)
+  }, [])
   const clearDraft = () => { setSummary(''); setEvidence(''); setUnfinished('') }
   const run = async (endpoint, body, id = workId) => {
-    const current = epoch.current; setBusy(true); setError('')
+    if (inFlight.current || typeof id !== 'string' || id === '' || selected.current !== id
+      || (endpoint !== 'legacy-review-get' && (recordFor.current !== id || uncertainRef.current))) return
+    const current = epoch.current
+    inFlight.current = true; setBusy(true); setError('')
+    let markerKey = '', mutationStarted = false
     try {
+      let markers = [], storageAvailable = true
+      try { markers = reviewMarkers(id) } catch { storageAvailable = false }
+      if (endpoint === 'legacy-review-get') {
+        for (const marker of markers) {
+          const receipt = await request('legacy-review-operation', { scope: marker.scope, workId: id, operationId: marker.operationId, kind: marker.kind }).catch(() => null)
+          if (receipt?.status === 'committed') globalThis.localStorage.removeItem(marker.key)
+        }
+        if (storageAvailable) markers = reviewMarkers(id)
+      } else {
+        if (!storageAvailable) throw new Error('Review storage unavailable')
+        if (markers.length) throw new Error('Pending review operation')
+        const kind = endpoint === 'legacy-review-create' ? 'create' : 'finding'
+        const prepared = await request('legacy-review-prepare', { scope, workId: id, kind, ...body })
+        if (!reviewOperationPattern.test(prepared?.operationId)) throw new Error('Invalid review operation')
+        markerKey = putReviewMarker({ workId: id, operationId: prepared.operationId, kind, scope: { kind: scope.kind, id: scope.id } })
+        body = { ...body, operationId: prepared.operationId }
+      }
+      mutationStarted = endpoint !== 'legacy-review-get'
       const result = await request(endpoint, { scope, workId: id, ...body })
-      if (current === epoch.current) { setRecord(result); if (endpoint === 'legacy-review-finding') clearDraft() }
-    } catch { if (current === epoch.current) setError(t('Action outcome is unknown; check it before making another change.')) }
-    finally { if (current === epoch.current) setBusy(false) }
+      if (!result || typeof result !== 'object' || Array.isArray(result)
+        || (result.workId !== undefined && result.workId !== id)
+        || (result.snapshot?.workId !== undefined && result.snapshot.workId !== id)) throw new Error('Review identity changed')
+      if (markerKey) globalThis.localStorage.removeItem(markerKey)
+      if (current === epoch.current && selected.current === id) {
+        recordFor.current = id; setRecord(result)
+        uncertainRef.current = !storageAvailable || markers.length > 0; setUncertain(!storageAvailable || markers.length > 0)
+        if (!storageAvailable) setError(t('Review storage or verification is unavailable; saving is disabled.'))
+        if (markers.length) setError(t('A previous review action is still unconfirmed. Check again before saving.'))
+        if (endpoint === 'legacy-review-finding' || (endpoint === 'legacy-review-get' && storageAvailable && !markers.length
+          && summary && (result.history ?? []).some(item => item.finding?.summary === summary
+            && JSON.stringify(item.finding?.evidenceRefs) === JSON.stringify(evidence.split('\n').map(s => s.trim()).filter(Boolean))
+            && JSON.stringify(item.finding?.unfinished) === JSON.stringify(unfinished.split('\n').map(s => s.trim()).filter(Boolean))))) clearDraft()
+      }
+    } catch {
+      if (current === epoch.current && selected.current === id) {
+        uncertainRef.current = true; setUncertain(true)
+        setError(t(mutationStarted ? 'Action outcome is unknown; check it before making another change.' : 'Review storage or verification is unavailable; saving is disabled.'))
+      }
+    } finally { inFlight.current = false; if (current === epoch.current) setBusy(false) }
   }
   const list = async () => {
-    const current = epoch.current; requested.current = true; setBusy(true); setError('')
-    try { const result = await request('legacy-review-list', { scope }); if (current === epoch.current) setCandidates(result) }
-    catch { if (current === epoch.current) setError(t('Review sources are unavailable.')) }
-    finally { if (current === epoch.current) setBusy(false) }
+    if (inFlight.current) return
+    const current = epoch.current
+    inFlight.current = true; requested.current = true; setBusy(true); setError(''); setCandidates(null)
+    try {
+      const result = await request('legacy-review-list', { scope })
+      const ids = new Set()
+      if (!result || !Array.isArray(result.items) || result.items.some(item => {
+        if (!item || typeof item.workId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(item.workId)
+          || typeof item.owner !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(item.owner) || ids.has(item.workId)) return true
+        ids.add(item.workId); return false
+      })) throw new Error('Invalid review sources')
+      if (current === epoch.current) setCandidates({ items: result.items, incomplete: result.incomplete !== false })
+    } catch { if (current === epoch.current) { recordFor.current = ''; setRecord(null); setCandidates(null); setError(t('Review sources are unavailable.')) } }
+    finally { inFlight.current = false; if (current === epoch.current) setBusy(false) }
   }
-  const choose = item => { setWorkId(item.workId); setRecord(null); clearDraft(); void run('legacy-review-get', {}, item.workId) }
+  const choose = item => {
+    if (inFlight.current || typeof item?.workId !== 'string' || item.workId === '') return
+    selected.current = item.workId; recordFor.current = ''
+    setWorkId(item.workId); setRecord(null); clearDraft(); void run('legacy-review-get', {}, item.workId)
+  }
   const rows = Array.isArray(candidates?.items) ? candidates.items : []
   const needle = query.trim().toLocaleLowerCase()
   const filtered = rows.filter(item => matchesRecovery(needle, [item.workId, item.owner, actorLabel(item.owner, actors)]))
   const groups = recoveryGroups(filtered, item => item.owner, item => actorLabel(item.owner, actors))
   const live = record?.liveRecovery
   return h('details', { className: 'bt-recovery-panel', onToggle: event => {
-    if (event.target === event.currentTarget && event.currentTarget.open && !requested.current && !busy) void list()
+    if (event.target === event.currentTarget && event.currentTarget.open && !requested.current && !inFlight.current) void list()
   } },
   h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '≡'),
     h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Review an existing work')), h('small', null, t('Review note'))),
@@ -194,7 +282,7 @@ function LegacyWorkReview({ scope, request, actors }) {
         rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
           h('input', { type: 'search', value: query, disabled: busy, placeholder: t('Filter by Bot or ID'), onChange: event => setQuery(event.target.value) })) : null,
         busy && candidates === null ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('Loading…')) : null,
-        !busy && candidates !== null && !rows.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No work awaiting inspection.')) : null,
+        !busy && candidates !== null && !candidates.incomplete && !rows.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No work awaiting inspection.')) : null,
         rows.length && !filtered.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
         h('div', { className: 'bt-recovery-work-groups' }, groups.map(group => h('section', { key: group.id, className: 'bt-recovery-work-group' },
           h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
@@ -202,8 +290,8 @@ function LegacyWorkReview({ scope, request, actors }) {
             'aria-pressed': workId === item.workId, onClick: () => choose(item), title: item.workId }, shortIdentity(item.workId))))))),
       h('div', { className: 'bt-recovery-detail' },
         h('div', { className: 'bt-recovery-manual' },
-          h('label', null, t('Original work ID'), h('input', { value: workId, disabled: busy, onChange: event => { setWorkId(event.target.value); setRecord(null); clearDraft() } })),
-          h('button', { type: 'button', disabled: busy || !workId.trim(), onClick: () => { setRecord(null); clearDraft(); void run('legacy-review-get', {}, workId.trim()) } }, t('Check'))),
+          h('label', null, t('Original work ID'), h('input', { value: workId, disabled: busy, onChange: event => { if (inFlight.current) return; selected.current = event.target.value; recordFor.current = ''; setWorkId(event.target.value); setRecord(null); clearDraft() } })),
+          h('button', { type: 'button', disabled: busy || !workId.trim(), onClick: () => { if (inFlight.current) return; const id = workId.trim(), same = selected.current === id && recordFor.current === id; selected.current = id; recordFor.current = ''; setWorkId(id); setRecord(null); if (!same) clearDraft(); void run('legacy-review-get', {}, id) } }, t('Check'))),
         !record && !busy ? h('p', { className: 'bt-recovery-empty' }, t('Choose a work to review.')) : null,
         live ? h('div', { className: 'bt-recovery-snapshot', role: 'status' }, live.available
           ? h('div', null, h('strong', null, t('Recovery snapshot')), ' · ', snapshotTime(live.sampledAt),
@@ -211,7 +299,7 @@ function LegacyWorkReview({ scope, request, actors }) {
               h(Fact, { label: t('Held records'), value: recoveryObservationText(live.observed?.held) }),
               h(Fact, { label: t('Original sessions'), value: (live.ids ?? []).join(', ') || t('Not known') })))
           : t('Current recovery sources are unavailable.')) : null,
-        record?.state === 'not-created' ? h('button', { type: 'button', disabled: busy, onClick: () => void run('legacy-review-create', {}) }, t('Create review')) : null,
+        record?.state === 'not-created' ? h('button', { type: 'button', disabled: busy || uncertain, onClick: () => void run('legacy-review-create', {}) }, t('Create review')) : null,
         record && record.state !== 'not-created' ? h('div', { className: 'bt-recovery-review' },
           h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Status'), value: legacyReviewStateText(record.state) }),
             h(Fact, { label: t('Owner'), value: actorLabel(record.owner, actors) }),
@@ -220,17 +308,19 @@ function LegacyWorkReview({ scope, request, actors }) {
           record.archived ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.')) : null,
           h('p', { className: 'bt-recovery-note' }, t('Execution and external effects remain unknown.')),
           !record.archived && ['needs-review', 'evidence-needed'].includes(record.state) ? h('div', { className: 'bt-recovery-form' },
-            h('label', null, t('Review note'), h('textarea', { value: summary, disabled: busy, onChange: event => setSummary(event.target.value) })),
-            h('label', null, t('Evidence references, one per line'), h('textarea', { value: evidence, disabled: busy, onChange: event => setEvidence(event.target.value) })),
-            h('label', null, t('Unfinished items, one per line'), h('textarea', { value: unfinished, disabled: busy, onChange: event => setUnfinished(event.target.value) })),
-            h('button', { type: 'button', disabled: busy || !summary.trim(), onClick: () => void run('legacy-review-finding', { expectedRevision: record.revision, summary, evidenceRefs: evidence.split('\n').map(s => s.trim()).filter(Boolean), unfinished: unfinished.split('\n').map(s => s.trim()).filter(Boolean) }) }, t('Save review note'))) : null,
+            h('label', null, t('Review note'), h('textarea', { value: summary, disabled: busy || uncertain, onChange: event => { if (!inFlight.current && !uncertainRef.current) setSummary(event.target.value) } })),
+            h('label', null, t('Evidence references, one per line'), h('textarea', { value: evidence, disabled: busy || uncertain, onChange: event => { if (!inFlight.current && !uncertainRef.current) setEvidence(event.target.value) } })),
+            h('label', null, t('Unfinished items, one per line'), h('textarea', { value: unfinished, disabled: busy || uncertain, onChange: event => { if (!inFlight.current && !uncertainRef.current) setUnfinished(event.target.value) } })),
+            h('button', { type: 'button', disabled: busy || uncertain || !summary.trim(), onClick: () => void run('legacy-review-finding', { expectedRevision: record.revision, summary, evidenceRefs: evidence.split('\n').map(s => s.trim()).filter(Boolean), unfinished: unfinished.split('\n').map(s => s.trim()).filter(Boolean) }) }, t('Save review note'))) : null,
           (record.history ?? []).map(item => h('article', { key: item.revision, className: 'bt-recovery-history' }, h(Fact, { label: t('Review note'), value: item.finding.summary }),
             h(Fact, { label: t('Evidence references'), value: item.finding.evidenceRefs.join(', ') }), h(Fact, { label: t('Unfinished items'), value: item.finding.unfinished.join(', ') })))) : null))))
 }
 
+const periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at])
+
 // This action only clears a specific periodic inspection's uncertainty fence.
 // The host independently rechecks the current goal, attempt, scope and activity.
-function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initiallyOpen }) {
+function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen }) {
   const [draft, setDraft] = useState({ key: '', text: '' }), [confirmedKey, setConfirmedKey] = useState('')
   const [checking, setChecking] = useState(false), [saving, setSaving] = useState(false)
   const [checkedKey, setCheckedKey] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('')
@@ -239,14 +329,14 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
   const scopeId = scope.kind === 'room' ? scope.id : ''
   const attemptId = typeof attempt?.id === 'string' ? attempt.id : ''
   const goalId = typeof goal?.id === 'string' ? goal.id : ''
-  const identity = JSON.stringify([scopeId, goalId, attemptId, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, attempt?.state, attempt?.at])
+  const identity = periodicReviewIdentity(scopeId, goal)
   const attemptKey = JSON.stringify([scopeId, goalId, attemptId])
   const previousAttempt = useRef(attemptKey)
   if (previousAttempt.current !== attemptKey) { previousAttempt.current = attemptKey; generation.current += 1 }
   const evidence = draft.key === attemptKey ? draft.text : ''
   const confirmed = confirmedKey === identity
   useEffect(() => { scopeGeneration.current += 1; setNotice(''); return () => { scopeGeneration.current += 1; generation.current += 1 } }, [scopeId])
-  if (!scopeId || (!attemptId && !notice && !error)) return null
+  if (!scopeId || (!attempt && !notice && !error)) return null
   const automaticIdle = goal?.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
     && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
   const eligible = goal?.status === 'active' && goalId && attemptId
@@ -257,7 +347,13 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
     if (checkBusy.current || saveBusy.current || typeof refreshGoal !== 'function') return
     const current = generation.current, scopeAtStart = scopeGeneration.current, key = identity
     checkBusy.current = true; setChecking(true); setError(''); setCheckedKey('')
-    try { await refreshGoal(); if (generation.current === current) setCheckedKey(key) }
+    try {
+      const snapshot = await refreshGoal()
+      if (generation.current === current) {
+        if (periodicReviewIdentity(scopeId, snapshot?.roomsById?.[scopeId]?.goal) === key) setCheckedKey(key)
+        else setError(t('Group status changed. Refresh and review the current attempt.'))
+      }
+    }
     catch { if (generation.current === current) setError(t('Could not refresh the group status.')) }
     finally { checkBusy.current = false; if (scopeGeneration.current === scopeAtStart) setChecking(false) }
   }
@@ -265,6 +361,11 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
     const text = evidence.trim()
     if (!eligible || checkedKey !== identity || !confirmed || text.length < 8 || text.length > 2000
       || checkBusy.current || saveBusy.current || typeof resolveReview !== 'function') return
+    let fresh
+    try { fresh = currentRoomGoal?.(scopeId) } catch { /* no verified current view */ }
+    if (periodicReviewIdentity(scopeId, fresh) !== identity) {
+      setCheckedKey(''); setError(t('Group status changed. Refresh and review the current attempt.')); return
+    }
     const current = generation.current, scopeAtStart = scopeGeneration.current
     saveBusy.current = true; setSaving(true); setError(''); setNotice('')
     try {
@@ -279,7 +380,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
     } finally { saveBusy.current = false; if (scopeGeneration.current === scopeAtStart) setSaving(false) }
   }
   const reason = typeof resolveReview !== 'function' ? t('Review recovery is unavailable in this view.')
-    : typeof refreshGoal !== 'function' ? t('Group status is unavailable.')
+    : typeof refreshGoal !== 'function' || typeof currentRoomGoal !== 'function' ? t('Group status is unavailable.')
       : !goalId || !attemptId ? t('Review identity is unavailable.')
     : goal?.status !== 'active' ? t('The group goal must be active before reviews can resume.')
       : goal.idle === true && !automaticIdle ? t('The goal is paused or its idle state needs review.')
@@ -292,19 +393,19 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
     onToggle: event => { if (event.target === event.currentTarget && event.currentTarget.open && checkedKey !== identity && !checkBusy.current) void refresh() } },
     h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '!'),
       h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Periodic review issue')), h('small', null, t('Inspection recovery'))),
-      attemptId ? h('span', { className: 'bt-recovery-badge' }, t('Status unknown')) : null),
+      attempt ? h('span', { className: 'bt-recovery-badge' }, t('Status unknown')) : null),
     h('div', { className: 'bt-recovery-body' },
-      attemptId ? h('div', { className: 'bt-periodic-context' },
+      attempt ? h('div', { className: 'bt-periodic-context' },
         h('p', { className: 'bt-recovery-note' }, t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
         h('p', { className: 'bt-recovery-note' }, t('This only resumes periodic inspections; it does not approve or complete tasks.')),
         h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Group ID'), value: scopeId }),
-          h(Fact, { label: t('Goal ID'), value: goalId || t('Unknown') }), h(Fact, { label: t('Review ID'), value: attemptId })),
+          h(Fact, { label: t('Goal ID'), value: goalId || t('Unknown') }), h(Fact, { label: t('Review ID'), value: attemptId || t('Unknown') })),
         h('p', { className: 'bt-recovery-warning' }, t('The server also checks the group and administrator sessions for pending work, approvals and subagents.'))) : null,
       h('div', { className: 'bt-recovery-list-header' }, h('span', null, checking ? t('Loading…') : checkedKey === identity ? t('Current status checked') : t('Group status')),
         h('button', { type: 'button', disabled: checking || saving || typeof refreshGoal !== 'function', onClick: () => void refresh() }, t('Refresh status'))),
       notice ? h('p', { className: 'bt-recovery-notice', role: 'status' }, notice) : null,
       error ? h('p', { className: 'bt-recovery-warning', role: 'alert' }, error) : null,
-      attemptId ? h('div', { className: 'bt-recovery-form' },
+      attempt ? h('div', { className: 'bt-recovery-form' },
         h('label', null, t('What did you verify?'), h('textarea', { value: evidence, maxLength: 2000, disabled: checking || saving, onChange: event => setDraft({ key: attemptKey, text: event.target.value }) })),
         h('label', { className: 'bt-recovery-confirm' }, h('input', { type: 'checkbox', checked: confirmed, disabled: checking || saving, onChange: event => setConfirmedKey(event.target.checked ? identity : '') }), t('I checked the original outcome and authorize future reviews.')),
         reason ? h('p', { className: 'bt-recovery-note', role: 'status' }, reason) : null,
@@ -530,7 +631,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
 }
 
 /** A server-authorized group or personal board. */
-export function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, initialReview = false }) {
+export function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false }) {
   const [visible, setVisible] = useState(true)
   const [snapshot, setData] = useState(null)
   const [error, setError] = useState('')
@@ -736,7 +837,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },

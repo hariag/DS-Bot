@@ -50,10 +50,25 @@ async function request(endpoint,payload){
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
   return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',evidence:'inflight.json',secret:'SECRET-HIDDEN'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
- if(endpoint==='legacy-review-list')return {items:[{workId:'work-a',owner:'a'},{workId:'work-b',owner:'b'}],incomplete:false};
- if(endpoint==='legacy-review-get')return {state:'not-created',liveRecovery:{available:true,sampledAt:1700000000000,ids:['session-original'],observed:{queue:'observed-present',held:'unknown'}}};
- if(endpoint==='legacy-review-create')return {state:'needs-review',owner:'a',revision:1,snapshot:{sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[]};
- if(endpoint==='legacy-review-finding')return {state:'evidence-needed',owner:'a',revision:2,snapshot:{sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[{revision:2,finding:{summary:payload.summary,evidenceRefs:payload.evidenceRefs,unfinished:payload.unfinished}}]};
+ if(endpoint==='legacy-review-list'){
+  if(state.mode==='review-invalid-list')return {items:'invalid',incomplete:false};
+  return {items:[{workId:'work-a',owner:'a'},{workId:'work-b',owner:'b'}],incomplete:false};
+ }
+ if(endpoint==='legacy-review-prepare')return {operationId:'manual-review:'+ (payload.kind==='create'?'a':'b').repeat(64)};
+ if(endpoint==='legacy-review-operation')return {status:state.reviewReceipt?'committed':'unknown'};
+ if(endpoint==='legacy-review-get'){
+  const mode=state.mode;
+  if(mode==='review-slow'&&payload.scope.id==='g5')await new Promise(resolve=>{state.resolvers['review:g5:'+payload.workId]=resolve});
+  if(mode==='review-wrong-id')return {state:'not-created',workId:'different-work'};
+  if(mode==='review-lost'&&state.reviewSaved)return {state:'evidence-needed',workId:payload.workId,owner:'a',revision:2,snapshot:{workId:payload.workId,sampledAt:1700000000000,sources:[]},history:[{revision:2,finding:{summary:'A verified result',evidenceRefs:[],unfinished:[]}}]};
+  if(mode==='review-slow')return {state:'identity-unverified',archived:true};
+  return {state:'not-created',liveRecovery:{available:true,sampledAt:1700000000000,ids:['session-original'],observed:{queue:'observed-present',held:'unknown'}}};
+ }
+ if(endpoint==='legacy-review-create')return {state:'needs-review',owner:'a',revision:1,snapshot:{workId:payload.workId,sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[]};
+ if(endpoint==='legacy-review-finding'){
+  if(state.mode==='review-lost'){state.reviewSaved=true;throw Error('response lost after save')}
+  return {state:'evidence-needed',owner:'a',revision:2,snapshot:{workId:payload.workId,sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[{revision:2,finding:{summary:payload.summary,evidenceRefs:payload.evidenceRefs,unfinished:payload.unfinished}}]};
+ }
  if(endpoint==='board-image')return images[payload.imageId];
  if(endpoint==='board-command'||endpoint==='board-upload'){
   if(state.mode==='lost')throw Error('network lost');
@@ -76,10 +91,12 @@ async function request(endpoint,payload){
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));
 globalThis.renderFixture=(scope,mode='normal')=>{state.scope=scope;state.mode=mode;
- const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:mode==='periodic-paused'?'paused':'active',reviewAttempt:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
- const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline')};
+ const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:mode==='periodic-paused'?'paused':'active',reviewAttempt:mode==='periodic-no-id'?{state:'uncertain',at:1}:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
+ state.currentGoal=goal;
+ const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline');const current=mode==='periodic-changed'?{...state.currentGoal,revision:2}:state.currentGoal;return {roomsById:{[scope.id]:{goal:current}}}};
+ const currentRoomGoal=id=>id===scope.id?state.currentGoal:undefined;
  const resolveReview=async(goalId,reviewId,evidence)=>{state.calls.push({endpoint:'review-resolve',scope,payload:{goalId,reviewId,evidence}});if(mode==='periodic-error')throw Object.assign(Error('stale'),{code:'bot/stale'});if(mode==='periodic-network')throw Error('offline')};
- root.render(h(TaskBoard,{scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
+ root.render(h(TaskBoard,{scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,currentRoomGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
 globalThis.clearFixture=()=>ReactDOM.flushSync(()=>root.render(null));
 `
 const bundle = await build({ stdin: { contents: entry, resolveDir: dirname(boardEntry), sourcefile: 'board-fixture.js' },
@@ -154,6 +171,68 @@ try {
   await manual.getByRole('button', {name:'Save review note'}).click()
   await manual.getByText('Checked the original session').waitFor()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'legacy-review-finding' && x.payload.workId === 'work-b' && x.payload.expectedRevision === 1)), true)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g5' }, 'review-slow'))
+  await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g5'))
+  const slowReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  await slowReview.locator('summary').first().click()
+  await slowReview.getByRole('button', {name:'work-a'}).waitFor()
+  await slowReview.getByRole('button', {name:'work-b'}).waitFor()
+  await page.evaluate(() => {
+    const panel = [...document.querySelectorAll('.bt-recovery-panel')].find(el => el.textContent.includes('Review an existing work'))
+    const buttons = [...panel.querySelectorAll('button')]
+    buttons.find(button => button.textContent === 'work-a').click()
+    buttons.find(button => button.textContent === 'work-b').click()
+  })
+  await page.waitForFunction(() => typeof globalThis.fixture.resolvers['review:g5:work-a'] === 'function')
+  const simultaneous = await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'legacy-review-get' && x.payload.scope.id === 'g5').map(x => x.payload.workId))
+  assert.deepEqual(simultaneous, ['work-a'], 'a second candidate cannot start while the first request is pending')
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g6' }, 'normal'))
+  await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g6'))
+  const nextReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  await nextReview.locator('summary').first().click()
+  await nextReview.getByRole('button', {name:'work-b'}).click()
+  await nextReview.getByRole('button', {name:'Create review'}).waitFor()
+  await page.evaluate(() => globalThis.fixture.resolvers['review:g5:work-a']())
+  await page.waitForTimeout(50)
+  assert.equal(await nextReview.getByLabel('Original work ID').inputValue(), 'work-b')
+  assert.equal(await nextReview.getByRole('button', {name:'Create review'}).count(), 1, 'late response from another group must not replace this review')
+  assert.equal(await nextReview.getByText('Work identity unverified').count(), 0)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g7' }, 'review-invalid-list'))
+  await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g7'))
+  const invalidReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  await invalidReview.locator('summary').first().click()
+  await invalidReview.getByRole('alert').getByText('Review sources are unavailable.').waitFor()
+  assert.equal(await invalidReview.getByText('No work awaiting inspection.').count(), 0, 'unreadable sources are not an empty list')
+
+  await page.evaluate(() => { globalThis.fixture.reviewSaved=false; globalThis.fixture.reviewReceipt=false; globalThis.renderFixture({ kind:'room', id:'g8' }, 'review-lost') })
+  await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-list' && x.payload.scope.id === 'g8'))
+  const lostReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  await lostReview.locator('summary').first().click()
+  await lostReview.getByRole('button', {name:'work-a'}).click()
+  await lostReview.getByRole('button', {name:'Create review'}).click()
+  await lostReview.getByLabel('Review note', {exact:true}).fill('A verified result')
+  await lostReview.getByRole('button', {name:'Save review note'}).click()
+  await lostReview.getByRole('alert').getByText('Action outcome is unknown; check it before making another change.').waitFor()
+  assert.equal(await lostReview.getByRole('button', {name:'Save review note'}).isDisabled(), true)
+  assert.equal(await lostReview.getByLabel('Review note', {exact:true}).inputValue(), 'A verified result')
+  await lostReview.getByRole('button', {name:'Check',exact:true}).click()
+  await lostReview.getByText('Evidence still needed').waitFor()
+  assert.equal(await lostReview.getByLabel('Review note', {exact:true}).inputValue(), 'A verified result', 'rechecking must retain the local draft')
+  assert.equal(await lostReview.getByRole('button', {name:'Save review note'}).isDisabled(), true, 'a newer revision without a receipt must not enable another save')
+  assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('A verified result')), false, 'pending markers must not contain note content')
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g9' }, 'review-lost'))
+  const switchedReview = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  await switchedReview.locator('summary').first().click()
+  await switchedReview.getByRole('button', {name:'work-a'}).click()
+  await switchedReview.getByText('Evidence still needed').waitFor()
+  assert.equal(await switchedReview.getByRole('button', {name:'Save review note'}).isDisabled(), true, 'switching scope must not bypass the original pending operation')
+  await page.evaluate(() => { globalThis.fixture.reviewReceipt=true })
+  await switchedReview.getByRole('button', {name:'Check',exact:true}).click()
+  await switchedReview.getByText('Evidence still needed').waitFor()
+  assert.equal(await switchedReview.getByRole('button', {name:'Save review note'}).isDisabled(), true, 'a confirmed old operation does not resubmit the note')
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint==='legacy-review-finding' && x.payload.workId==='work-a' && x.payload.scope.id==='g8').length), 1)
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'periodic'))
   const periodic = page.locator('.bt-periodic-review')

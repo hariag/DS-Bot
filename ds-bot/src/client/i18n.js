@@ -11,6 +11,9 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'A previous review action is still unconfirmed. Check again before saving.': '之前的复核操作尚未确认，请再次核查后再保存。',
+  'Review storage or verification is unavailable; saving is disabled.': '复核记录存储或核验不可用，暂时无法保存。',
+  'Group status changed. Refresh and review the current attempt.': '群状态已变化，请刷新并核对当前巡检记录。',
   'Current status checked': '已核对当前状态',
   'Filter by Bot or ID': '按 Bot 或 ID 筛选',
   'No matching records.': '没有匹配的记录。',
@@ -1988,6 +1991,7 @@ export const LANGUAGES = [
 // These manual-review strings currently have Chinese translations. Other
 // locales retain the existing English fallback until their translations exist.
 const LEGACY_REVIEW_EN_FALLBACK = Object.fromEntries([
+  'Group status changed. Refresh and review the current attempt.',
   'Current status checked',
   'Filter by Bot or ID',
   'No matching records.',
