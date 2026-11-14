@@ -159,6 +159,23 @@ test('a new group greeting cannot import private chat or dispatch work, while a 
   await settle(()=>kickoff()!==undefined)
   assert.equal(host.agentOf('gb').calls.length,0)
   assert.match(kickoff().replies.find(row=>row.text)?.text,/No work was sent/)
+  assert.doesNotMatch(kickoff().replies.find(row=>row.text)?.text,/@Writer/)
+  // A completed round must not lose the restriction when a delayed reply or
+  // progress message enters the group's own relay as a fresh post.
+  await rt.lateRoomReply('s1',message.source,'@Writer late unrelated work')
+  const late=host.agentOf('r1').calls.at(-1)
+  assert.equal(late.source.quiet,true)
+  assert.doesNotMatch(text(late),/@Writer/)
+  const lateRound=host.round('late',{content:late.content,source:late.source})
+  await settle(()=>lateRound()!==undefined)
+  assert.equal(host.agentOf('gb').calls.length,0)
+  await rt.roomStepText('s1',message.source,'@Writer progress unrelated work',true)
+  const progress=host.agentOf('r1').calls.at(-1)
+  assert.equal(progress.source.quiet,true)
+  assert.doesNotMatch(text(progress),/@Writer/)
+  const progressRound=host.round('progress',{content:progress.content,source:progress.source})
+  await settle(()=>progressRound()!==undefined)
+  assert.equal(host.agentOf('gb').calls.length,0)
   const request=host.round('user-request',host.say('@Writer 请处理本群需求'))
   await settle(()=>host.agentOf('gb').calls.length===1)
   const asked=host.begin('gb')
@@ -168,11 +185,14 @@ test('a new group greeting cannot import private chat or dispatch work, while a 
   await settle(()=>request()!==undefined)
 })
 
-test('group sessions cannot post into a different group', async t => {
+test('a group session can still coordinate with another group outside a restricted greeting', async t => {
   const host=await start(t,undefined,undefined,{r2:{id:'r2',name:'Other',named:true,members:['a','b'],mode:'admin',admin:'a',sessions:{},log:[],seq:0,seen:{}}})
   const result=await host.tool('post_to_group',{group:'Other',message:'@Writer unrelated'},'ga')
-  assert.match(result,/cannot post work into another group/)
-  assert.equal(host.agentOf('r2').calls.length,0)
+  assert.match(result,/Posted in "Other"/)
+  assert.equal(host.agentOf('r2').calls.length,1)
+  const bridge=await host.tool('post_to_group',{group:'Other',message:'@Writer a user-directed handoff'},'a')
+  assert.match(bridge,/Posted in "Other"/)
+  assert.equal(host.agentOf('r2').calls.length,2)
 })
 
 test('work past the grace lets the round go on, and the member that asked answers the result', async (t) => {

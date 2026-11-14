@@ -766,8 +766,6 @@ export function install(rt) {
       if (sender === undefined) return 'Only Bots on the team can use post_to_group.'
       const { room, error } = pickRoom(args.group, self)
       if (error) return error
-      const originRoom=rt.groupOwners.get(exec.agent?.id)?.roomId
-      if(originRoom && originRoom!==room.id)return 'A group session cannot post work into another group. The user may request cross-group coordination from their own chat.'
       // An ordinary member's post calls only the members it names (openingSpeakers).
       const member = !rt.isMain(self) && !rt.isAdminOf(room, self)
       const info = rt.live.get(exec.agent?.id)?.info

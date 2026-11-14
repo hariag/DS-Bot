@@ -792,7 +792,7 @@ export function install(rt) {
       const say = (raw) => {
         let step = stripOwnName(member.name, raw)
         if (isPass(step)) return
-        if(round.kickoff && callsIn(room,member,step))step += '\n\n[No work was sent: this is a greeting. Waiting for a user request in this group.]'
+        if(round.kickoff)step = safeKickoffText(room,step)
         said.push(step)
         postInRound(room, member, step, Date.now() - startedAt)
         heard(step)
@@ -1180,7 +1180,7 @@ export function install(rt) {
       onWork, answeredBot || slot.automatic === true, slot.originReviewId,
     )
     let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
-    if(final && round.kickoff && callsIn(room,member,final))final += '\n\n[No work was sent: this is a greeting. Waiting for a user request in this group.]'
+    if(final && round.kickoff)final = safeKickoffText(room,final)
     const subRunning = rt.hasSubagents?.(session.id) === true
     if (reply?.failure !== undefined) {
       // Not a pass: the user sees why the member is silent, and the round goes on.
@@ -1782,7 +1782,7 @@ export function install(rt) {
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
     const text = stripOwnName(member.name, reply)
     if(kickoffRestricted(sessionId,info)) {
-      if(!isPass(text))await postToRoom(room,member,callsIn(room,member,text) ? `${text}\n\n[No work was sent: this is a greeting. Waiting for a user request in this group.]` : text,{late:true,quiet:true})
+      if(!isPass(text))await postToRoom(room,member,safeKickoffText(room,text),{late:true,quiet:true})
       return
     }
     if (info.reviewInspect === true) {
@@ -1847,6 +1847,15 @@ export function install(rt) {
     return room !== undefined && member !== undefined && room.members.includes(member.id) ? { room, member } : undefined
   }
   const callsIn = (room, member, text) => mentionsIn(text, room.members.map(rt.botOf).filter(Boolean)).found.some(bot => bot.id !== member.id)
+  const safeKickoffText = (room, text) => {
+    // Never send live mentions to a downstream relay, even a supposedly quiet
+    // late/progress post. Keep the text readable without creating an @ call.
+    const spans=mentionSpans(text,room.members.map(rt.botOf).filter(Boolean))
+    if(!spans.length)return text
+    let safe=text
+    for(const span of spans.reverse())safe=`${safe.slice(0,span.start)}＠${safe.slice(span.start+1)}`
+    return `${safe}\n\n[No work was sent: this is a greeting. Waiting for a user request in this group.]`
+  }
   rt.callsRoomMember = (sessionId, info, raw) => {
     const { room, member } = memberIn(sessionId, info) ?? {}
     return room !== undefined && member !== undefined && callsIn(room, member, stripOwnName(member.name, raw ?? ''))
@@ -1862,8 +1871,7 @@ export function install(rt) {
     const { room, member } = memberIn(sessionId, info) ?? {}
     if (room === undefined) return
     if(kickoffRestricted(sessionId,info)) {
-      const shown=callsIn(room,member,text) ? `${text}\n\n[No work was sent: this is a greeting. Waiting for a user request in this group.]` : text
-      await postToRoom(room,member,shown,{progress:true,quiet:true})
+      await postToRoom(room,member,safeKickoffText(room,text),{progress:true,quiet:true})
       return
     }
     if (info?.reviewInspect === true) {
