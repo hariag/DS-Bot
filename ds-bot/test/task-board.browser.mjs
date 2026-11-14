@@ -48,7 +48,7 @@ async function request(endpoint,payload){
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',status:'legacy-unverified',legacy:{originalStatus:'done'}}]:[];
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
-  return {tasks:[task,...legacy,...shared],recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
  if(endpoint==='board-image')return images[payload.imageId];
  if(endpoint==='board-command'||endpoint==='board-upload'){
@@ -88,6 +88,16 @@ try {
   await page.addScriptTag({ path: react })
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'user' }, 'monitor'))
+  await page.getByText('Remote code changes (31)', { exact:true }).click()
+  await page.getByText('Earlier history before the first checkpoint was not verified.').waitFor()
+  await page.getByText('Update service').waitFor()
+  assert.equal(await page.locator('a').filter({hasText:'aaaaaaaa'}).getAttribute('href'), 'https://github.com/example/project/commit/'+'a'.repeat(40))
+  await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'user' }, 'monitor-denied'))
+  await page.getByRole('button', {name:'Refresh', exact:true}).click()
+  await page.getByText('Status: Monitor authorization unavailable').waitFor()
+  assert.equal(await page.getByText('Update service').count(),0)
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'recovery'))
   await page.getByText('Interrupted turns awaiting review').click()

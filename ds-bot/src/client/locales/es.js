@@ -1,6 +1,21 @@
 // Spanish (es) localization for DS Bot client and DSH settings namespaces.
 
 export const ES = {
+  "Change awaiting checkpoint": "Cambio pendiente del punto de control",
+  "Monitor catching up": "Supervisión recuperando cambios",
+  "Remote code changes": "Cambios de código remoto",
+  "Waiting for first check": "Esperando la primera revisión",
+  "Monitor active": "Supervisión activa",
+  "Monitor unavailable": "Supervisión no disponible",
+  "Monitor authorization unavailable": "Autorización de supervisión no disponible",
+  "Monitor history requires review": "El historial de supervisión requiere revisión",
+  "Monitor capacity reached": "Capacidad de supervisión alcanzada",
+  "Monitor rate limited": "Supervisión limitada temporalmente",
+  "Monitor configuration invalid": "Configuración de supervisión no válida",
+  "Last checked (UTC)": "Última revisión (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "No se verificó el historial anterior al primer punto de control.",
+  "No relevant changes recorded.": "No se registraron cambios relevantes.",
+  "Change requires review": "El cambio requiere revisión",
   "New tasks start in Preparing.": "Las tareas nuevas empiezan en Preparación.",
   "{count} dependencies": "{count} dependencias",
   "View details": "Ver detalles",

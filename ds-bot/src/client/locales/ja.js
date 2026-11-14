@@ -1,6 +1,21 @@
 // Japanese (ja) localization for DS Bot client and DSH settings namespaces.
 
 export const JA = {
+  "Change awaiting checkpoint": "チェックポイント確定待ちの変更",
+  "Monitor catching up": "変更を順次確認中",
+  "Remote code changes": "リモートコードの変更",
+  "Waiting for first check": "初回確認を待機中",
+  "Monitor active": "監視中",
+  "Monitor unavailable": "監視を利用できません",
+  "Monitor authorization unavailable": "監視の認可を利用できません",
+  "Monitor history requires review": "監視履歴の確認が必要です",
+  "Monitor capacity reached": "監視の保存上限に達しました",
+  "Monitor rate limited": "監視のレート制限中",
+  "Monitor configuration invalid": "監視設定が無効です",
+  "Last checked (UTC)": "最終確認（UTC）",
+  "Earlier history before the first checkpoint was not verified.": "最初のチェックポイント以前の履歴は未確認です。",
+  "No relevant changes recorded.": "関連する変更は記録されていません。",
+  "Change requires review": "変更の確認が必要です",
   "New tasks start in Preparing.": "新しいタスクは「準備中」から始まります。",
   "{count} dependencies": "依存関係 {count} 件",
   "View details": "詳細を見る",

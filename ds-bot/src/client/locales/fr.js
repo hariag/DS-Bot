@@ -1,6 +1,21 @@
 // French (fr) localization for DS Bot client and DSH settings namespaces.
 
 export const FR = {
+  "Change awaiting checkpoint": "Modification en attente du point de contrôle",
+  "Monitor catching up": "Rattrapage des modifications",
+  "Remote code changes": "Modifications du code distant",
+  "Waiting for first check": "En attente du premier contrôle",
+  "Monitor active": "Surveillance active",
+  "Monitor unavailable": "Surveillance indisponible",
+  "Monitor authorization unavailable": "Autorisation de surveillance indisponible",
+  "Monitor history requires review": "Historique de surveillance à vérifier",
+  "Monitor capacity reached": "Capacité de surveillance atteinte",
+  "Monitor rate limited": "Surveillance limitée temporairement",
+  "Monitor configuration invalid": "Configuration de surveillance invalide",
+  "Last checked (UTC)": "Dernière vérification (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "L’historique antérieur au premier point de contrôle n’a pas été vérifié.",
+  "No relevant changes recorded.": "Aucune modification pertinente enregistrée.",
+  "Change requires review": "Modification à vérifier",
   "New tasks start in Preparing.": "Les nouvelles tâches commencent dans Préparation.",
   "{count} dependencies": "{count} dépendances",
   "View details": "Voir les détails",

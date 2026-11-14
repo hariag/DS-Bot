@@ -36,6 +36,7 @@ import * as browserPlugins from './src/host/browser-plugins.js'
 import * as computer from './src/host/computer/index.js'
 import * as secrets from './src/host/secrets.js'
 import * as connectors from './src/host/connectors/index.js'
+import * as remoteChangeWatch from './src/host/remote-change-watch.mjs'
 import * as capabilities from './src/host/capabilities.js'
 import * as learning from './src/host/learning.js'
 import * as schedules from './src/host/schedules.js'
@@ -62,7 +63,7 @@ export { name, inject } from './src/host/entry.js'
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, approvals, resume, memory, parts, images, avatarLibrary, secrets, connectors, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, remote, officeSkills, goalSkills, localAgents]
+const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, approvals, resume, memory, parts, images, avatarLibrary, secrets, connectors, remoteChangeWatch, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, remote, officeSkills, goalSkills, localAgents]
 
 export function apply(ctx, config = {}) {
   createRuntime(ctx, config)

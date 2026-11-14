@@ -1,6 +1,21 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  "Change awaiting checkpoint": "Änderung wartet auf Prüfpunkt",
+  "Monitor catching up": "Überwachung holt Änderungen nach",
+  "Remote code changes": "Remote-Codeänderungen",
+  "Waiting for first check": "Warten auf erste Prüfung",
+  "Monitor active": "Überwachung aktiv",
+  "Monitor unavailable": "Überwachung nicht verfügbar",
+  "Monitor authorization unavailable": "Überwachungsberechtigung nicht verfügbar",
+  "Monitor history requires review": "Überwachungsverlauf muss geprüft werden",
+  "Monitor capacity reached": "Kapazitätsgrenze der Überwachung erreicht",
+  "Monitor rate limited": "Überwachung ist ratenbegrenzt",
+  "Monitor configuration invalid": "Überwachungskonfiguration ungültig",
+  "Last checked (UTC)": "Zuletzt geprüft (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "Der Verlauf vor dem ersten Prüfpunkt wurde nicht geprüft.",
+  "No relevant changes recorded.": "Keine relevanten Änderungen erfasst.",
+  "Change requires review": "Änderung muss geprüft werden",
   "New tasks start in Preparing.": "Neue Aufgaben beginnen in Vorbereitung.",
   "{count} dependencies": "{count} Abhängigkeiten",
   "View details": "Details ansehen",

@@ -1,6 +1,21 @@
 // Korean (ko) localization for DS Bot client and DSH settings namespaces.
 
 export const KO = {
+  "Change awaiting checkpoint": "체크포인트 확인 대기 중인 변경",
+  "Monitor catching up": "변경 사항 확인 중",
+  "Remote code changes": "원격 코드 변경",
+  "Waiting for first check": "첫 확인 대기 중",
+  "Monitor active": "모니터링 중",
+  "Monitor unavailable": "모니터링을 사용할 수 없음",
+  "Monitor authorization unavailable": "모니터링 권한을 사용할 수 없음",
+  "Monitor history requires review": "모니터링 기록 확인 필요",
+  "Monitor capacity reached": "모니터링 저장 한도 도달",
+  "Monitor rate limited": "모니터링 요청 제한 중",
+  "Monitor configuration invalid": "모니터링 설정이 잘못됨",
+  "Last checked (UTC)": "마지막 확인 (UTC)",
+  "Earlier history before the first checkpoint was not verified.": "첫 체크포인트 이전 기록은 확인되지 않았습니다.",
+  "No relevant changes recorded.": "관련 변경 사항이 기록되지 않았습니다.",
+  "Change requires review": "변경 사항 확인 필요",
   "New tasks start in Preparing.": "새 작업은 준비 중에서 시작합니다.",
   "{count} dependencies": "종속 항목 {count}개",
   "View details": "상세 보기",
