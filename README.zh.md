@@ -69,6 +69,8 @@ DS Bot 会把 `auto` 搜索 provider 选为整个 profile 的后端。禁用 `we
 
 也可以通过 `operatorInstructions` 向每个 Bot 提供部署环境指令；这些指令会发送给模型，请勿放入密码或密钥。参见[插件配置](ds-bot/README.md#configuration)。
 
+可选的远端代码监视功能通过 `remoteChangeWatch` 指定仓库、分支和获授权的 Bot，在「我的任务看板」显示代码变更及授权异常，不调用模型，也不自动发送消息。访问 GitHub 的 `GITHUB_TOKEN` 应保存在密钥管理中，不要写进配置文件。监视器启动前的历史需要另行核实；配置和限制见[插件配置](ds-bot/README.md#configuration)。
+
 这个 bot 作为你的 chief，它拥有非常高的权限，可以管理其他 bot 和群聊。第一次进入 ds bot 时，默认会有一个 main bot 叫 Chief。你可以直接和它对话，让它引导你完成配置。
 
 总之，有问题，找 main bot。
