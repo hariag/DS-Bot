@@ -87,14 +87,15 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
       if (admissions.length !== 1 || admissions[0].status !== 'entered-in-log'
         || admissions[0].entered.length !== 1 || admissions[0].entered[0] !== event.seq
         || removals.length !== 1 || removals[0].id !== message.id || removals[0].batchSize !== 1 || !current()) return undefined
-      return { kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, recoveryId,
+      const view = Object.freeze({ kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, recoveryId,
         warning:LEGACY_CANDIDATE_WARNING,
         botId:record.botId, sessionId:hold.sessionId, ...(scope.kind === 'room' ? { roomId:scope.id } : {}),
         turn:start.data.turn, turnStartSeq:start.seq, messageSeq:event.seq, matchedTime:start.time,
-        textSegments:message.content.map(part => part.text) }
+        textSegments:Object.freeze(message.content.map(part => part.text)) })
+      return Object.freeze({ kind:'unverified-candidate-evidence-v1', view, isCurrent:current })
     } catch { return undefined } finally { await reader?.close().catch(() => {}) }
   }
-  return async (scope, recoveryId) => {
+  const inspectEvidence = async (scope, recoveryId) => {
     if (pending) return undefined
     pending = true
     const work = read(scope, recoveryId)
@@ -103,4 +104,10 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
     try { return await Promise.race([work, new Promise(resolve => { timer = setTimeout(resolve, timeoutMs) })]) }
     finally { clearTimeout(timer) }
   }
+  const preview = async (scope, recoveryId) => (await inspectEvidence(scope, recoveryId))?.view
+  // Internal callers must not serialize the callback or treat this evidence as
+  // the original producer proof. It only certifies the inspected prefix is
+  // still the same physical candidate, under the previously checked scope.
+  preview.inspectEvidence = inspectEvidence
+  return preview
 }
