@@ -713,17 +713,35 @@ function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,
   const canMove=commands.some(command=>command.type==='personal-progress')&&PERSONAL_COLUMNS.some(([id])=>id===task.personalProgress)
   useEffect(()=>{
     const popup=modal.current, backdrop=popup?.parentElement, parent=backdrop?.parentElement
+    // Capture before the host shell's keyboard handlers: the inner dialog owns
+    // Tab and Escape even if an async save removed the previously focused node.
+    const keyDown=event=>{
+      if(!popup || !['Tab','Escape'].includes(event.key))return
+      event.preventDefault();event.stopImmediatePropagation()
+      if(event.key==='Escape'){onClose();return}
+      const choices=[...popup.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')]
+        .filter(item=>item.tabIndex>=0 && !item.closest('[inert]') && item.getClientRects().length>0)
+      if(!choices.length){popup.focus();return}
+      const current=choices.indexOf(document.activeElement)
+      const index=event.shiftKey ? (current<=0?choices.length-1:current-1) : (current<0||current===choices.length-1?0:current+1)
+      choices[index].focus()
+    }
+    const keepFocus=event=>{if(popup?.isConnected && !popup.contains(event.target))popup.focus()}
     const previous=new Map()
     const hideBackground=()=>{for(const item of parent?.children??[]){
       if(item===backdrop)continue
       if(!previous.has(item))previous.set(item,{inert:item.inert,hidden:item.getAttribute('aria-hidden')})
       item.inert=true;item.setAttribute('aria-hidden','true')
     }}
+    popup?.focus()
     hideBackground()
     const observer=new MutationObserver(hideBackground)
     if(parent)observer.observe(parent,{childList:true})
-    popup?.focus()
+    window.addEventListener('keydown',keyDown,true)
+    document.addEventListener('focusin',keepFocus,true)
     return ()=>{
+      window.removeEventListener('keydown',keyDown,true)
+      document.removeEventListener('focusin',keepFocus,true)
       observer.disconnect()
       for(const [item,{inert,hidden}] of previous){item.inert=inert;if(hidden===null)item.removeAttribute('aria-hidden');else item.setAttribute('aria-hidden',hidden)}
       const replacement=[...(boardRef.current?.querySelectorAll('[data-task-id]')??[])].find(item=>item.dataset.taskId===task.id)?.querySelector('.bt-board-card-summary')
