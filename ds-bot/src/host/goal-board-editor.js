@@ -150,7 +150,11 @@ export function createGoalBoardEditor(rt) {
     const stage=stages.length===1?stages[0]:undefined
     const tasks=stage?.tasks?.filter(task=>task?.id===card.legacy.taskId) ?? []
     if(!room||!goal||!stage||goal.revision!==revision||tasks.length!==1||card.legacy.ambiguous)throw invalid('Goal task changed; refresh the board')
-    if(card.legacy.useOverlay && (!Number.isSafeInteger(boardRevision)||boardRevision!==card.legacy.boardRevision||position!==card.legacy.position))throw invalid('Card details changed; refresh the board')
+    // An old current-card client can make the first change with its goal CAS;
+    // once an overlay exists it must send the independent board revision.
+    const legacyCurrent = card.legacy.current && card.legacy.boardRevision===0 && boardRevision===undefined && position===undefined
+    if(card.legacy.current && card.legacy.boardRevision>0 && boardRevision===undefined && position===undefined)throw invalid('This page is out of date; reload the page before editing. 页面版本已过期，请刷新整个网页后重试。')
+    if(card.legacy.useOverlay && !legacyCurrent && (!Number.isSafeInteger(boardRevision)||boardRevision!==card.legacy.boardRevision||position!==card.legacy.position))throw invalid('Card details changed; refresh the board')
     if(!card.legacy.useOverlay && (boardRevision!==undefined||position!==undefined))throw invalid('Card stage changed; refresh the board')
     return {card,room,goal,stage,task:tasks[0]}
   }

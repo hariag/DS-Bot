@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import pngjs from 'pngjs'
 import { install, BOARD_UPLOAD_PATH } from '../../src/host/board-service.js'
@@ -82,6 +83,37 @@ test('all original stage positions and archived goals support annotated metadata
     assert.ok(audit.includes(input.operationId) && audit.includes(`Correction ${which}`),'audit binds operation and after value')
   }
   assert.deepEqual(facts(rt.state),before,'stage acceptance, status, source task, evidence, and execution timestamps remain unchanged')
+})
+
+test('current card data uses a separate revision without invalidating existing business review',async t=>{
+  const {rt}=setup(t), goal=rt.state.rooms.group.goal, task=goal.stages[1].tasks[0]
+  task.boardDetails={description:'Prior inline description',labels:['old']}
+  task.boardComments=[{id:'old-comment',author:'user',text:'Old comment',at:20}]
+  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex')
+  goal.ownerReview={stageId:'s2',checks:{t2:{fingerprint:digest(task),unresolved:false,evidence:'Previous review'}}}
+  const reviewBefore=structuredClone(goal.ownerReview),taskBefore=structuredClone(task),businessBefore=facts(rt.state),current=(await board(rt)).tasks.find(item=>item.legacy.taskId==='t2')
+  assert.equal(current.description,'Prior inline description')
+  assert.equal(current.comments[0].text,'Old comment')
+  assert.equal(current.legacy.position,'current');assert.equal(current.legacy.boardRevision,0)
+  const oldClient={scope:group,taskId:current.id,expectedRevision:current.revision,operationId:'goal:current-legacy',type:'goal-card-details',value:{description:'New description'}}
+  assert.equal((await rt.boardCall('board-command',oldClient)).state,'committed')
+  const updated=currentCard(await board(rt),current.id)
+  assert.equal(updated.description,'New description');assert.equal(updated.labels[0],'old')
+  assert.equal(updated.comments[0].text,'Old comment');assert.equal(updated.legacy.boardRevision,1)
+  assert.deepEqual(task,taskBefore);assert.equal(digest(task),reviewBefore.checks.t2.fingerprint)
+  assert.deepEqual(goal.ownerReview,reviewBefore);assert.deepEqual(facts(rt.state),businessBefore)
+  const outdated=await rt.boardCall('board-command',{...oldClient,operationId:'goal:stale-old-client',value:{description:'Lost update'}})
+  assert.equal(outdated.state,'rejected');assert.match(outdated.message,/reload the page.*刷新整个网页/)
+  const one=command(updated,group,'goal:current-cas-one','goal-card-comment',{text:'First'})
+  const two=command(updated,group,'goal:current-cas-two','goal-card-comment',{text:'Second'})
+  const results=await Promise.all([rt.boardCall('board-command',one),rt.boardCall('board-command',two)])
+  assert.equal(results.filter(item=>item.state==='committed').length,1)
+  assert.equal(results.filter(item=>item.state==='rejected').length,1)
+  assert.deepEqual(task,taskBefore);assert.deepEqual(goal.ownerReview,reviewBefore);assert.deepEqual(facts(rt.state),businessBefore)
+  const after=currentCard(await board(rt),current.id)
+  const progress=command(after,group,'goal:current-progress','goal-task-edit',{status:'reported',note:'Ready for independent review'})
+  assert.equal((await rt.boardCall('board-command',progress)).state,'committed')
+  assert.equal(task.status,'reported');assert.notEqual(digest(task),reviewBefore.checks.t2.fingerprint,'real task progress must invalidate prior review')
 })
 
 test('historical title corrections preserve the actual accepted title and include complete provenance',async t=>{
