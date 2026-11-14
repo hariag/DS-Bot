@@ -12,6 +12,11 @@ import { isDeepStrictEqual } from 'node:util'
 import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
 import { createTaskActionContext } from './task-action-context.mjs'
+import { createTaskHostAuthority } from './task-host-authority.mjs'
+import { createV5GuardedAdmission } from './task-admission.mjs'
+import { createTaskTurnCompletion } from './task-turn-completion.mjs'
+import { attachTaskCooperativeGate, createTaskCooperativeGate } from './task-cooperative-gate.mjs'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -40,10 +45,16 @@ function privateDirectory(path, assertWritable) {
 // User requests and scoped Bot tools share one journal and transaction authority.
 export function install(rt) {
   const { ctx } = rt
+  // Experimental integration remains opt-in until real Host and crash tests
+  // pass. A v5 journal is never upgraded without a separate lifecycle fence.
+  const guarded = rt.config?.experimentalGuardedBoard === true
   const active = new Set(), readers = new Set(), workers = new Set(), imageWaiters = [], uploadWaiters = []
   let imageReads = 0, uploads = 0
   let closing = false, closePromise, instance
-  ctx.on?.('session/event', (session, event) => instance?.actionContext.observe(session, event))
+  ctx.on?.('session/event', (session, event) => {
+    instance?.finisher?.observe(session,event)
+    instance?.actionContext.observe(session, event)
+  })
   const writable = () => {
     if (closing || rt.stopping) throw new Error('Board service is closing')
     if (rt.readOnly() !== undefined) throw new Error('Board is read-only')
@@ -85,9 +96,31 @@ export function install(rt) {
       return member(task.owner) && member(task.reviewer)
     }
     const proofs = new Map()
+    const taskBriefs = new Map()
+    const authority = guarded ? createTaskHostAuthority({rt,assertLease:writable}) : undefined
+    let admission, gate, finisher, driver, dropGate
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable,
-      authorize: input => (input.actor === 'user' && ['create', 'edit', 'attach', 'remove-image', 'cancel', 'share', 'unshare', 'personal-progress'].includes(input.type)) || botWorkflow.authorize(input),
+      enableExplicitTasks:guarded,
+      // Upgrading an existing v5 database still requires an independent
+      // lifecycle fence for old connections; fail closed until supplied.
+      assertExclusiveUpgrade: () => { throw new Error('board lifecycle upgrade fence unavailable') },
+      authorize: input => {
+        if(input.actor==='user' && ['create','create-explicit','edit','attach','remove-image','cancel','share','unshare','personal-progress'].includes(input.type))return true
+        if(input.actor==='host' && input.type==='guarded-recovery') {writable();return guarded}
+        if(finisher?.authorize(input)===true)return true
+        if(input.actor==='scheduler' && input.type==='receipt') {writable();return guarded}
+        if(input.actor==='scheduler' && ['claim','guarded-claim'].includes(input.type)) {
+          return guarded && gate?.mayClaim()===true && authority.verify(input.task) && !!authority.target(input.action,input.task)
+        }
+        return botWorkflow.authorize(input)
+      },
+      verifyUserTask:(task,execution,actor)=>{try{return !!authority?.capture(task,execution,actor)}catch{return false}},
+      captureUserAuthority:guarded ? (task,execution,actor)=>authority.capture(task,execution,actor) : undefined,
+      verifyEvidence:(task,value,actor,phase)=>authority?.verifyEvidence(task,value,actor,phase)===true,
+      verifyAdmission:(task,action,intent)=>admission?.verifyAdmission(task,action,intent)===true,
+      verifyReceipt:(action,state,receipt,intent)=>admission?.verifyReceipt(action,state,receipt,intent)===true,
+      verifyTurnCompletion:(task,action,proof,actor)=>finisher?.verify(task,action,proof,actor)===true,
       verifyShare: (task, value, actor) => actor === 'user' && shareAllowed(task, value.targetRoomId),
       verifyDependency: dependencyAllowed,
       verifyAttachment: (task, item, actor) => {
@@ -100,23 +133,54 @@ export function install(rt) {
             && s.dev === proof.stat.dev && s.ino === proof.stat.ino && s.size === proof.stat.size && s.mtimeMs === proof.stat.mtimeMs
         } catch { return false }
       },
-      // No unverified registration, evidence, receipt, invalidation, or dispatch.
     })
     const images = {
       read: (taskId, reference) => readBoardImage({ directory: imageDir, taskId, reference }),
     }
     const api = createBoardApi({ store, images, assertWritable: writable, roster: () => rt.state, verifyDependency: dependencyAllowed,
+      explicitRequired:()=>guarded, explicitAvailable:()=>instance?.guardedReady===true,
+      workspaces:()=>ctx.workspaceRegistry.list().map(item=>({id:item.id,name:item.title})),
+      defaultExecution:(scope,actor)=>{
+        const sid=scope.kind==='room' ? rt.roomOf(scope.id)?.sessions?.[actor] : rt.chatOf(actor)
+        const ws=ctx.workspaceRegistry.list().find(item=>item.sessionIds.includes(sid))
+        return ws ? {workspace:ws.id,mode:'write',paths:['.']} : undefined
+      },
       shareTargets: task => Object.entries(rt.state.rooms).filter(([id]) => shareAllowed(task, id)).map(([id, room]) => ({ id, name:typeof room.name === 'string' && room.name ? room.name : id })),
       verifyShare: (task, grant, scope, viewer) => grant?.taskId === task.id && grant.grantedBy === 'user' && !grant.revoked && grant.targetRoomId === scope.id
         && Array.isArray(grant.fields) && grant.fields.includes('status') && grant.fields.every(field => ['status','title'].includes(field))
         && shareAllowed(task, scope.id) && (viewer.kind === 'user' || (viewer.kind === 'bot' && rt.state.rooms[scope.id].members?.includes(viewer.id))) })
     try {
       botWorkflow.bind(store)
-      // No real admission capability or proof verifiers are installed here.
-      // Wakeups scan nothing until the separately reviewed gate is supplied.
-      const driver = createTaskDriver({ store, onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
       const actionContext = createTaskActionContext(store)
-      instance = { store, api, root, imageDir, proofs, shareAllowed, driver, actionContext }
+      if(guarded) {
+        gate=createTaskCooperativeGate({store,actionContext,resolveBot:sid=>rt.isBotSession(sid)?rt.selfOf(sid):undefined,assertLease:writable})
+        dropGate=attachTaskCooperativeGate(ctx,gate)
+        finisher=createTaskTurnCompletion({store,actionContext,assertLease:writable,
+          beginReceipt:(sid,type)=>ctx.sessionPersistence.beginLiveEventReceipt(sid,type),wake:()=>driver?.wake(),
+          onError:error=>rt.warn?.('ds-bot: task turn completion: %s',error?.message||'unknown error')})
+        admission=createV5GuardedAdmission({store,enabled:true,noAgentsResolved:()=>ctx.agents.list().length===0,
+          isActive:()=>{try{writable();return true}catch{return false}},resolveTarget:(action,task)=>authority.target(action,task),
+          resolveAgent:sid=>rt.resolveAgent(sid),authorize:(task,action)=>authority.verify(task)&&!!authority.target(action,task),
+          sessionGeneration:agent=>actionContext.generation(agent),activateTurn:(agent,position)=>finisher.activate(agent,position),
+          makeMessage:(action,task)=>{
+            const target=authority.target(action,task),room=task.scope.startsWith('room:')?rt.roomOf(task.scope.slice(5)):undefined
+            const context=[taskBriefs.get(target?.sessionId),room?.name?`Group: ${room.name}`:'',room?.notice].filter(Boolean).join('\n\n')
+            return createUserMessage({source:{kind:'bot'},content:[{type:'text',text:
+              `${context}${context?'\n\n':''}[Board task ${task.id}] You are the ${action.kind==='review'?'independent reviewer':'owner'}. Call board_task show first; follow its current revision and acceptance criteria. Respect its workspace and paths. Use sha256:<digest>:<relative path> for file evidence. Reviewer turns are read-only. Submit the result with board_task and finish the turn.`}]})
+          }})
+        const admit=admission.admit.bind(admission)
+        admission.admit=async input=>{const result=await admit(input);taskBriefs.delete(input.intent.targetSessionId);return result}
+      }
+      driver = createTaskDriver({ store, admission, authorized:async(action,task)=>{
+        if(!guarded||gate?.mayClaim()!==true||!authority.verify(task))return false
+        if(!authority.target(action,task)&&task.scope.startsWith('room:')&&action.actor!=='user') {
+          const session=await rt.prepareTaskGroupSession?.(task.scope.slice(5),action.actor)
+          if(session?.brief)taskBriefs.set(session.id,session.brief)
+        }
+        return gate.mayClaim()===true&&authority.verify(task)&&!!authority.target(action,task)
+      },
+        onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
+      instance = { store, api, root, imageDir, proofs, shareAllowed, driver, actionContext, admission, gate, finisher, dropGate, guardedReady:false }
       queueMicrotask(notifyDriver)
       return instance
     } catch (error) { store.close(); throw error }
@@ -124,6 +188,38 @@ export function install(rt) {
   const notifyDriver = () => {
     if (!instance || closing || rt.stopping) return
     void run(() => instance?.driver.wake()).catch(error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error'))
+  }
+  let providerDispose, bootPromise, bootReady
+  if(guarded) {
+    if(typeof ctx.agents?.registerGuardedClaimProvider!=='function' || typeof ctx.sessionPersistence?.beginLiveEventReceipt!=='function') throw Error('guarded board requires durable Agent and session persistence')
+    bootReady=Promise.withResolvers()
+    void bootReady.promise.catch(()=>{})
+    // Install the provider publication barrier synchronously before any
+    // asynchronously restored Agent can begin an unguarded claim.
+    const registered=ctx.agents.registerGuardedClaimProvider(async agent=>{
+      const inst=await bootReady.promise
+      return inst.admission.coordinatorFor(agent)
+    })
+    void registered.catch(()=>{})
+    bootPromise=(async()=>{
+      try {
+        await rt.load();writable()
+        const inst=service()
+        inst.admission.startBeforeRestore()
+        bootReady.resolve(inst)
+        providerDispose=await registered
+        if(closing||rt.stopping)throw Error('board service is closing')
+        inst.guardedReady=true
+        notifyDriver()
+      }catch(error){
+        bootReady.reject(error)
+        const release=await registered.catch(()=>undefined)
+        release?.();providerDispose=undefined
+        instance?.admission?.close()
+        instance?.dropGate?.()
+        rt.warn?.('ds-bot: guarded board unavailable: %s',error?.message||'unknown error')
+      }
+    })()
   }
   const mutate = (endpoint, payload) => {
     const { api, store } = service(), scope = payload.scope
@@ -311,12 +407,16 @@ export function install(rt) {
   })
   const stop = () => closePromise ??= (async () => {
     closing = true
+    bootReady?.reject(new Error('board service is closing'))
     for (const waiter of imageWaiters.splice(0)) waiter.reject(new Error('Board service is closing'))
     for (const waiter of uploadWaiters.splice(0)) waiter.reject(new Error('Board service is closing'))
     for (const reader of readers) void reader.cancel().catch(() => {})
     for (const worker of workers) void worker.terminate()
     await Promise.allSettled([...active])
     await instance?.driver.close()
+    await bootPromise
+    await instance?.finisher?.close()
+    instance?.admission?.close();instance?.dropGate?.();providerDispose?.()
     botWorkflow.close(); instance?.store.close(); instance = undefined
   })()
   rt.boardCall = boardCall

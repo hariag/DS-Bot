@@ -451,6 +451,14 @@ export function install(rt) {
     return { id, brief: await rt.ownChatBrief(member) }
   }
 
+  // Board tasks use the same session, permissions and first-turn brief as a
+  // normal group turn; do not create an independent cross-group identity.
+  rt.prepareTaskGroupSession = async (roomId, botId) => {
+    const room=rt.roomOf(roomId),member=rt.botOf(botId)
+    if(!room || !member || !room.members.includes(botId))return undefined
+    return groupSessionFor(room,member)
+  }
+
   // Lines from before the round's opening message are kept apart from this round, so
   // an earlier round (an old count-off, say) never reads as part of the current one.
   // `files` are the files of the lines shown, which go to the member with the prompt.
