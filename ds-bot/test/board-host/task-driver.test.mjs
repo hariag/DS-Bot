@@ -32,6 +32,20 @@ test('concurrent wakes admit one claimed message and never repeat an accepted ac
   assert.equal(sent, 1); assert.equal(store.listActions('task')[0].state, 'accepted')
 })
 
+test('the durable receipt is committed before admission can start the recipient turn', async t => {
+  const {store, prepare} = fixture(t), order = []
+  const admission = {available:async()=>true, prepare, admit:async({action,commitReceipt})=>{
+    commitReceipt('session-message-receipt')
+    assert.equal(store.admission(action.id).state,'accepted')
+    order.push('receipt'); order.push('recipient-start')
+    return 'session-message-receipt'
+  }}
+  const driver=createTaskDriver({store,admission,authorized:()=>true})
+  await driver.wake(); await driver.close()
+  assert.deepEqual(order,['receipt','recipient-start'])
+  assert.equal(store.listActions('task')[0].state,'accepted')
+})
+
 test('a lost admission outcome is held and never sent again on another wake', async t => {
   const {store, prepare, path} = fixture(t); let attempts = 0
   const admission = {available:async()=>true, prepare, admit:async()=>{attempts++; throw new Error('lost response')}}

@@ -27,7 +27,7 @@ function* chunksOf(reply) {
 
 // A Bot's own chat part with the note writer around it. `replies` are answered in
 // order by the model stream; `info` holds resolveModelInfo per route.
-async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, retryPolicy }) {
+async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, retryPolicy, contextHard = false }) {
   const requests = []
   const warnings = []
   const infos = []
@@ -38,6 +38,7 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
   const queue = [...replies]
   const abort = new AbortController()
   const ctx = fakeContext()
+  if (contextHard) ctx.get = name => name === 'tokenMeter' ? { measure: () => ({ totalTokens: 999 }) } : undefined
   ctx.logger = {
     warn: (template, ...args) => warnings.push(say(template, ...args)),
     info: (template, ...args) => infos.push(say(template, ...args)),
@@ -46,7 +47,9 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
   ctx.workspaceRegistry = { archiveSession: async () => {} }
   ctx.llm = {
     ...(retryPolicy === undefined ? {} : { providerRetryPolicy: () => retryPolicy }),
-    resolveModelInfo: async (provider, model) => info[`${provider}/${model}`] ?? {},
+    resolveModelInfo: async (provider, model) => {
+      return info[`${provider}/${model}`] ?? (contextHard ? { context: { contextWindow: 1_000 } } : {})
+    },
     stream: (options) => {
       const prompt = options.messages.at(-1).content.map(block => block.text).join('')
       requests.push({ provider: options.provider, model: options.model, reasoningEffort: options.reasoningEffort, maxTokens: options.maxTokens, prompt })
@@ -62,7 +65,7 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
     id: 's1',
     header: { cwd: '/tmp/team' },
     requestHeader: () => ({ config: { provider: route.provider ?? 'deepseek', model: route.model ?? 'v4', ...(route.maxTokens === undefined ? {} : { maxTokens: route.maxTokens }) }, tools: [{ name: 'message_bot' }] }),
-    deriveMessages: () => MESSAGES,
+    deriveMessages: () => contextHard ? [{ role: 'user', content: [{ type: 'text', text: 'context '.repeat(10_000) }] }] : MESSAGES,
     toolHistory: () => [],
   }
   const agent = {
@@ -146,7 +149,8 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
     defaultModel: async () => { defaultCalls += 1; return fallback },
   }
   partsInstall(rt)
-  await rt.newPart('s1')
+  if (contextHard) ctx.emit('agent/status',{agent,status:'idle'})
+  else await rt.newPart('s1')
   for (let at = 0; at < 100 && bot.sessionId !== 's2' && !warnings.some(line => /did not move on/.test(line)); at += 1) {
     await new Promise(done => setTimeout(done, 10))
   }
@@ -166,6 +170,15 @@ test('the note asks for the lowest reasoning the model offers', async () => {
   const none = await switchPart({ replies: [{ text: note('no-reasoning') }] })
   assert.equal(none.requests[0].reasoningEffort, undefined)
   assert.match(none.packageText, /no-reasoning/)
+})
+
+test('a hard-context handoff uses the bounded package instead of retrying a full-history note', async () => {
+  const run = await switchPart({ replies: [], contextHard: true, oldNote: 'Prior verified handoff note' })
+  assert.equal(run.bot.sessionId, 's2', run.warnings.join(' | '))
+  assert.equal(run.requests.length, 0, 'the full-context note writer is not called at the hard line')
+  assert.match(run.packageText, /the part reached its hard context limit/)
+  assert.match(run.packageText, /Prior verified handoff note/)
+  assert.match(run.packageText, /Finish the migration/)
 })
 
 test('a cut-off note is asked again with a larger output budget, and the new note is what the fresh part gets', async () => {

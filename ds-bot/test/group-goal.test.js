@@ -1039,7 +1039,7 @@ test('a runtime interrupted turn survives a later turn in its session and is rep
   const held = recovery.items.find(item => item.sessionId === 'gb')
   assert.ok(held)
   assert.equal(held.status, 'uncertain')
-  assert.equal(held.turn, undefined, 'turn number is not in the original durable note')
+  assert.equal(held.turn, 1, 'the original durable turn number is preserved for review')
   assert.equal(held.evidence, 'inflight.json')
   assert.equal(restarted.agentOf('gb').calls.length, 0, 'reading the recovery view must not restart work')
   const readOnly = restarted.rt.readOnly

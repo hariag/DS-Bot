@@ -57,6 +57,14 @@ test('a group proposal is durable under the same operation ID and visible from t
   assert.throws(() => f.api.create(room, user, { ...proposal, title: 'Different' }), /operation conflict/)
 })
 
+test('a personal Bot board offers public Bots as independent reviewers and permits scheduling', () => {
+  const f=fixture(),scope={kind:'personal',id:'one'}
+  f.api.create(scope,user,{...proposal,operationId:'personal-bot',taskId:'personal-bot-task'})
+  const board=f.api.list(scope,user)
+  assert.ok(board.capabilities.actors.some(actor=>actor.id==='two'))
+  assert.ok(board.capabilities.commands['personal-bot-task'].some(command=>command.type==='schedule'))
+})
+
 test('private or nonmember Bots cannot be put in a group proposal', () => {
   const f = fixture()
   assert.throws(() => f.api.create(room, user, { ...proposal, owner: 'private' }))

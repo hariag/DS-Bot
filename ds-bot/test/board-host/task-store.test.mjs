@@ -131,19 +131,24 @@ test('editing running work creates one separate change proposal with an immutabl
   const {store, path} = fixture(t); create(store, 'active'); register(store, 'active')
   accept(store, 'active', 'execute'); command(store, 'active', 'start', 'owner')
   const old = store.get('active')
-  const value = {title:'Changed', owner:old.owner, reviewer:old.reviewer, acceptance:'New acceptance', dependencies:[], dependencyGrants:[]}
+  const value = {title:'Changed', owner:old.owner, reviewer:old.reviewer, acceptance:'New acceptance', dependencies:[], dependencyGrants:[], description:'New description'}
   const input = {operationId:'change-op', actor:'user', taskId:old.id, expectedRevision:old.revision, value}
   const proposal = store.proposeChange(input)
   assert.deepEqual(store.proposeChange(input), proposal)
   assert.equal(store.get('active').title, old.title)
   assert.equal(store.get('active').status, 'working')
-  assert.equal(proposal.status, 'proposed'); assert.deepEqual(proposal.dependencies, ['active'])
+  assert.equal(proposal.status, 'waiting'); assert.deepEqual(proposal.dependencies, ['active'])
   assert.equal(proposal.change.before.acceptance, old.acceptance); assert.equal(proposal.change.after.acceptance, 'New acceptance')
+  assert.equal(proposal.change.before.description, ''); assert.equal(proposal.change.after.description, 'New description')
   assert.equal(store.listActions(proposal.id).length, 0)
   assert.throws(() => command(store, proposal.id, 'edit', 'user', {title:'Overwrite'}), /immutable/)
   assert.throws(() => command(store, proposal.id, 'card-details', 'user', {description:'Overwrite'}), /immutable/)
   assert.throws(() => store.proposeChange({...input, operationId:'duplicate'}), /already exists/)
   assert.throws(() => store.proposeChange({...input, operationId:'stale', expectedRevision:old.revision-1}), /revision conflict/)
+  command(store, 'active', 'report', 'owner', evidence)
+  accept(store, 'active', 'review'); command(store, 'active', 'review', 'reviewer', {evidence:'independent',result:'pass'})
+  assert.equal(store.get(proposal.id).status, 'ready')
+  assert.equal(store.listActions(proposal.id).filter(action=>action.state==='pending').length, 1)
   store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
   assert.deepEqual(reopened.get(proposal.id).change, proposal.change)
   assert.deepEqual(reopened.proposeChange(input), proposal)
@@ -217,6 +222,20 @@ test('process death after admission intent commit preserves original identity wi
   const intent = { admissionId:'admission-1', messageId:'message-1', targetBotId:'bot', targetSessionId:'session-1', payload:{ id:'message-1', role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:'admission-1'} } }
   assert.equal(store.claimAction({ actionId:action.id, actor:'scheduler', intent }).claimedNow, false)
   assert.throws(() => store.claimAction({ actionId:action.id, actor:'scheduler', intent:{ ...intent, targetSessionId:'session-2' } }), /intent conflict/)
+})
+
+test('startup converts interrupted admissions to durable uncertainty exactly once', t => {
+  const {store,path}=fixture(t);create(store,'restart');register(store,'restart')
+  const action=store.listActions('restart')[0],intent=intentFor(action);claim(store,action,intent)
+  store.markAction({actionId:action.id,actor:'host',expectedState:'claimed',state:'accepted',receipt:'verified'})
+  store.close()
+  const reopened=openTaskStore(path,opts);t.after(()=>reopened.close())
+  assert.equal(reopened.holdInterruptedAdmissions(),1)
+  const held=reopened.admission(action.id)
+  assert.equal(held.state,'uncertain');assert.equal(held.admissionId,intent.admissionId);assert.equal(held.messageId,intent.messageId)
+  assert.match(held.receipt??reopened.listActions('restart')[0].receipt,/delivery outcome unknown/)
+  assert.equal(reopened.holdInterruptedAdmissions(),0)
+  assert.equal(reopened.listActions('restart')[0].state,'uncertain')
 })
 
 test('pending cancellation is durable, idempotent and does not claim delivery', t => {
