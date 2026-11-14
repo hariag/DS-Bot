@@ -121,12 +121,14 @@ export function install(rt) {
 
   // A group Session renders exactly its Bot's text, so both share one cached prefix.
   const promptFor = (id, context) => {
-    const self = rt.selfOf(id)
+    const redoOwner = rt.userRedoOwner?.(id)
+    const self = rt.selfOf(id) ?? redoOwner?.id
     const bot = rt.botOf(self)
     if (bot !== undefined) {
       return [
         '# Your identity',
         `You are ${bot.name}, a Bot on the user's team in DS Bot.${bot.role ? ` Your role: ${bot.role}.` : ''}`,
+        ...(redoOwner ? ['This is a separate user-requested redo. The original work remains unresolved. Tools are currently unavailable in this isolated session; say when you cannot complete the task.'] : []),
         bot.instructions ? `\n${rolePromptText(rt, bot, context)}` : '',
         '',
         rt.isMain(self) ? `${MAIN_RULES}\n\n${TEAM_RULES}` : TEAM_RULES,
