@@ -330,7 +330,7 @@ export function install(rt) {
         const working = rt.live.get(chat)?.turn !== undefined
         const steer = args.when !== 'queue' && !toUser
         const exchangeId = randomUUID()
-        if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })
+        if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, fromSession: exec.agent?.session?.id })
         try {
           await rt.deliver({ fromId: sender.id, toId: target.id, text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) })
         } catch (error) {
