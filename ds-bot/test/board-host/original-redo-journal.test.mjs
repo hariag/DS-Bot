@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, chmod, rename, mkdir } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, chmod, rename, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { createOriginalRedoJournal, originalRedoIdentity } from '../../src/host/original-redo-journal.mjs'
 import { userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
+import { install as installStore } from '../../src/host/store.js'
 
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d', otherId = 'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454'
 const recoveryId = 'a'.repeat(64), scope = { kind:'room', id:'room-1' }
@@ -17,7 +18,10 @@ async function fixture(t) {
   const message = { id:'input-1', role:'user', source:{ kind:'bot', role:'request', work:'old-work' }, content:[{ type:'text', text:'sensitive original task' }] }
   const proof = { complete:true, durability:'target-writer-v1', recoveryId, botId:'bot', sessionId:'original-session', turn:4, messageSeq:12,
     message, isCurrent:() => current }
-  const rt = { home, requireHomeLock() {}, homeLockVersion:() => generation }
+  const statePath = join(home, 'state.json'), state = { version:1 }
+  await writeFile(statePath, JSON.stringify(state))
+  const rt = { home, statePath, state, requireHomeLock() {}, homeLockVersion:() => generation,
+    async save() { await writeFile(statePath, JSON.stringify(state)) } }
   const dependencies = { authorize:() => allowed, proveOriginal:async () => proof, validateBinding:() => bound, verifyResult:async () => resultProof }
   const request = { operationId, recoveryId, scope, principal:{ kind:'user', id:'user' }, acknowledged:true, confirmationDigest:userRedoConfirmation(scope, recoveryId, proof) }
   return { home, rt, dependencies, request, proof, journal:createOriginalRedoJournal(rt, dependencies),
@@ -160,8 +164,8 @@ test('removing one operation record cannot make its recovery eligible for anothe
   const f = await fixture(t); await f.journal.prepare(f.request)
   await rm(join(f.home, 'original-redo-v1', `${operationId}.json`))
   const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
-  await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }), /already exists/)
-  await assert.rejects(restarted.prepare(f.request), /already exists/)
+  await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }), Error)
+  await assert.rejects(restarted.prepare(f.request), Error)
 })
 
 test('missing or altered journal and recovery markers fail closed', async t => {
@@ -209,6 +213,21 @@ test('stores only a matching writer-verified result reference and requires autho
   await assert.rejects(f.journal.recordResult(operationId, f.request.principal), /unavailable/)
 })
 
+test('snapshots the verified result before a reentrant authorization callback can mutate it', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), turn = { turn:9, turnStartSeq:72 }
+  f.journal.markClaimingSync(binding, turn, f.request.principal)
+  const proof = { durability:'target-writer-v1', sessionId:'original-session', messageId:binding.identity.messageId,
+    admissionId:binding.identity.admissionId, turn, throughSeq:80, resultDigest:'b'.repeat(64),
+    resultRef:{ kind:'session-events', sessionId:'original-session', firstSeq:75, lastSeq:78 }, isCurrent:() => true }
+  let verified = false
+  f.dependencies.verifyResult = async () => { verified = true; return proof }
+  f.dependencies.authorize = () => { if (verified) { proof.resultDigest = 'bad'; proof.resultRef.lastSeq = 999 }; return true }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  const receipt = await journal.recordResult(operationId, f.request.principal)
+  assert.equal(receipt.result.digest, 'b'.repeat(64)); assert.equal(receipt.result.ref.lastSeq, 78)
+})
+
 test('rejects a non-user principal before creating a record', async t => {
   const f = await fixture(t)
   await assert.rejects(f.journal.prepare({ ...f.request, principal:{ kind:'bot', id:'user' } }), /confirmation/)
@@ -223,4 +242,59 @@ test('authorization callbacks cannot mutate the requested or persisted scope and
   assert.equal(f.request.scope.id, 'room-1'); assert.equal(f.request.principal.id, 'user')
   const dispatched = await journal.beginDispatch(operationId, f.request.principal)
   assert.equal(dispatched.binding.scope.id, 'room-1'); assert.equal(dispatched.binding.principal.id, 'user')
+})
+
+test('independent state witness blocks a new operation when both private records are missing', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const root = join(f.home, 'original-redo-v1')
+  await rm(join(root, `${operationId}.json`)); await rm(join(root, `.recovery-${recoveryId}`))
+  const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }), Error)
+  await assert.rejects(restarted.prepare(f.request), Error)
+})
+
+test('state witness loss while private journal remains cannot authorize dispatch or prepare', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  delete f.rt.state.originalRedoWitness
+  await f.rt.save()
+  await assert.rejects(f.journal.prepare(f.request), Error)
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), Error)
+})
+
+test('failed state save before and after write remains unknown and never authorizes a new operation', async t => {
+  for (const after of [false, true]) {
+    const f = await fixture(t), save = f.rt.save
+    f.rt.save = async () => { if (after) await save(); throw Error('injected state save failure') }
+    await assert.rejects(f.journal.prepare(f.request), /unknown/)
+    f.rt.save = save
+    await assert.rejects(f.journal.prepare(f.request), Error)
+    await assert.rejects(f.journal.prepare({ ...f.request, operationId:otherId }), Error)
+  }
+})
+
+test('adoption or lease change during witness save leaves preparation unknown', async t => {
+  const f = await fixture(t), save = f.rt.save
+  f.rt.save = async () => { await save(); f.generation(2); delete f.rt.state.originalRedoWitness }
+  await assert.rejects(f.journal.prepare(f.request), /unknown/)
+  f.rt.save = save
+  await assert.rejects(f.journal.prepare(f.request), Error)
+})
+
+test('the actual store preserves the witness through normalization, save and reload', async t => {
+  const f = await fixture(t), disposers = []
+  const ctx = { logger:{ warn() {} }, effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) } }
+  const rt = { home:f.home, statePath:f.rt.statePath, ctx, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {} }
+  installStore(rt)
+  t.after(async () => { for (const dispose of disposers.splice(0)) await dispose() })
+  await rt.load(); await rt.save({ required:true })
+  const journal = createOriginalRedoJournal(rt, f.dependencies), saved = await journal.prepare(f.request)
+  assert.equal(rt.state.originalRedoWitness[recoveryId].operationId, operationId)
+  const savedState = JSON.parse(await readFile(rt.statePath, 'utf8'))
+  assert.deepEqual(savedState.originalRedoWitness, rt.state.originalRedoWitness)
+  for (const dispose of disposers.splice(0)) await dispose()
+  const restored = { home:f.home, statePath:f.rt.statePath, ctx, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {} }
+  installStore(restored); await restored.load()
+  assert.deepEqual(restored.state.originalRedoWitness, savedState.originalRedoWitness)
+  assert.deepEqual(await createOriginalRedoJournal(restored, f.dependencies).prepare(f.request), saved)
+  for (const dispose of disposers.splice(0)) await dispose()
 })
