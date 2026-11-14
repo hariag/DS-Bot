@@ -7,7 +7,7 @@ import { hostText, t } from './i18n.js'
 // another actor's private tasks in the browser.
 const COLUMNS = [
   ['proposed', 'Preparing'], ['waiting', 'Waiting'], ['ready', 'Ready'],
-  ['legacy-pending', 'Not started'], ['working', 'In progress'], ['reported', 'Awaiting review'], ['done', 'Done'],
+  ['legacy-pending', 'Not started'], ['working', 'In progress'], ['reported', 'Awaiting review'], ['done', 'Done'], ['legacy-done','Goal marked done'],
 ]
 const PERSONAL_COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['finished', 'Personally finished']]
 const KNOWN = new Set(COLUMNS.map(([status]) => status))
@@ -236,6 +236,49 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
     h('button', { type: 'button', disabled, onClick: () => setOpen(false) }, t('Cancel'))))
 }
 
+function CardDetails({task,editable,disabled,onEdit}) {
+  const [open,setOpen]=useState(false),[base,setBase]=useState(task.revision),[draft,setDraft]=useState({}),[entry,setEntry]=useState('')
+  const reset=()=>{setBase(task.revision);setEntry('');setDraft({description:textValue(task.description),dueDate:textValue(task.dueDate),labels:(Array.isArray(task.labels)?task.labels:[]).join('\n'),checklist:(Array.isArray(task.checklist)?task.checklist:[]).map(item=>({...item}))})}
+  const checklist=Array.isArray(task.checklist)?task.checklist:[]
+  const labels=Array.isArray(task.labels)?task.labels:[]
+  const changed=task.revision!==base
+  const labelValues=(draft.labels??'').split('\n').map(value=>value.trim()).filter(Boolean)
+  const bytes=value=>new TextEncoder().encode(value).length
+  const valid=bytes(draft.description??'')<=8192&&labelValues.length<=20&&new Set(labelValues).size===labelValues.length
+    &&labelValues.every(value=>bytes(value)<=40)&&(draft.checklist??[]).length<=100
+    &&(draft.checklist??[]).every(item=>item.text.trim()&&bytes(item.text.trim())<=512)
+  return h('div',{className:'bt-board-card-details-fields'},
+    !open ? h('div',null,
+      h(Fact,{label:t('Description'),value:textValue(task.description)}),
+      h(Fact,{label:t('Due date'),value:textValue(task.dueDate)}),
+      labels.length?h(Fact,{label:t('Labels'),value:labels.join(' · ')}):null,
+      checklist.length?h('div',{className:'bt-board-checklist'},h('strong',null,t('Checklist')),
+        checklist.map(item=>h('label',{key:item.id},h('input',{type:'checkbox',checked:item.checked===true,disabled:true}),` ${item.text}`))):null,
+      editable?h('button',{type:'button',disabled,onClick:()=>{reset();setOpen(true)}},t('Edit card details')):null)
+      : h('form',{className:'bt-board-actions',onSubmit:event=>{
+        event.preventDefault();if(disabled||changed||!valid)return
+        void onEdit({...task,revision:base},{description:draft.description,dueDate:draft.dueDate||null,labels:labelValues,checklist:draft.checklist.map(item=>({...item,text:item.text.trim()}))})
+          .then(result=>{if(result==='committed')setOpen(false)})
+      }},
+      changed?h('div',{role:'alert'},t('Task changed. Reload its current values before saving.'),' ',h('button',{type:'button',disabled,onClick:reset},t('Reload values'))):null,
+      h('label',null,t('Description'),h('textarea',{'aria-label':t('Description'),value:draft.description??'',disabled,onChange:event=>setDraft({...draft,description:event.target.value})})),
+      h('label',null,t('Due date'),h('input',{type:'date','aria-label':t('Due date'),value:draft.dueDate??'',disabled,onChange:event=>setDraft({...draft,dueDate:event.target.value})})),
+      h('label',null,t('Labels, one per line'),h('textarea',{'aria-label':t('Labels, one per line'),value:draft.labels??'',disabled,onChange:event=>setDraft({...draft,labels:event.target.value})})),
+      h('fieldset',null,h('legend',null,t('Checklist')),
+        (draft.checklist??[]).map(item=>h('div',{key:item.id,className:'bt-board-check-row'},
+          h('input',{type:'checkbox','aria-label':t('Mark checklist item'),checked:item.checked,disabled,onChange:event=>setDraft({...draft,checklist:draft.checklist.map(row=>row.id===item.id?{...row,checked:event.target.checked}:row)})}),
+          h('input',{'aria-label':t('Checklist item'),value:item.text,disabled,onChange:event=>setDraft({...draft,checklist:draft.checklist.map(row=>row.id===item.id?{...row,text:event.target.value}:row)})}),
+          h('button',{type:'button',disabled,onClick:()=>setDraft({...draft,checklist:draft.checklist.filter(row=>row.id!==item.id)})},t('Remove')))),
+        h('label',null,t('New checklist item'),h('input',{'aria-label':t('New checklist item'),value:entry,disabled,onChange:event=>setEntry(event.target.value)})),
+        h('button',{type:'button',disabled:disabled||!entry.trim()||bytes(entry.trim())>512||(draft.checklist??[]).length>=100,onClick:()=>{
+          if(!window.crypto?.randomUUID)return
+          setDraft({...draft,checklist:[...(draft.checklist??[]),{id:window.crypto.randomUUID(),text:entry.trim(),checked:false}]});setEntry('')
+        }},t('Add item'))),
+      !valid?h('p',{role:'alert'},t('Check the card details and size limits.')):null,
+      h('p',{className:'bt-board-readonly'},t('Checklist items do not complete the task or its dependencies.')),
+      h('div',null,h('button',{type:'submit',disabled:disabled||changed||!valid},t('Save changes')),' ',h('button',{type:'button',disabled,onClick:()=>setOpen(false)},t('Cancel')))))
+}
+
 function EditGoalTask({task,disabled,onEdit}) {
   const [open,setOpen]=useState(false),[base,setBase]=useState(task.revision),[title,setTitle]=useState(''),[note,setNote]=useState(''),[status,setStatus]=useState('')
   const reset=()=>{setBase(task.revision);setTitle(textValue(task.title));setNote(textValue(task.goalNote));setStatus(task.legacy?.originalStatus??'')}
@@ -379,6 +422,9 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
         task.shared ? h('span', { className:'bt-board-chip' }, t('Shared task · read only')) : null,
         blocker ? h('span', { className:'bt-board-chip bt-board-chip-blocked' }, t('Blocked')) : null,
         dependencies.length ? h('span', { className:'bt-board-chip' }, t('{count} dependencies', { count:dependencies.length })) : null,
+        task.dueDate ? h('span',{className:'bt-board-chip'},`${t('Due date')}: ${textValue(task.dueDate)}`) : null,
+        Array.isArray(task.labels) ? task.labels.slice(0,3).map(label=>h('span',{key:label,className:'bt-board-chip'},label)) : null,
+        Array.isArray(task.checklist)&&task.checklist.length ? h('span',{className:'bt-board-chip'},`${task.checklist.filter(item=>item.checked).length}/${task.checklist.length} ${t('Checklist')}`) : null,
         task.images?.length ? h('span', { className:'bt-board-chip' }, t('{count} images', { count:task.images.length })) : null,
         h('span', { className: 'bt-board-open-hint' }, t('View details')))),
     h('div', { className:'bt-board-card-body' },
@@ -399,7 +445,8 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
     h(Fact, { label: t('Blocked'), value: blocker }),
     h(Fact, { label: t('Evidence'), value: evidence }),
     h(Fact, { label: t('Target version'), value: asText(task.authority) }),
-    !canMove ? h('span', { className:'bt-board-readonly' }, t('Status changes are not available for this task.')) : null,
+    !task.legacy&&!task.shared ? h(CardDetails,{task,editable:commands.some(command=>command.type==='card-details'),disabled:uncertain,onEdit:(item,value)=>onCommand(item,{type:'card-details'},value)}) : null,
+    !canMove && !commands.some(command=>command.type==='goal-task-edit') ? h('span', { className:'bt-board-readonly' }, t('Status changes are not available for this task.')) : null,
     Array.isArray(task.images) && task.images.length ? h('div', { className: 'bt-board-images' }, task.images.map(image => h(BoardImage, {
       key: image.id, scope, taskId: task.id, image, request, disabled: uncertain,
       canRemove: commands.some(command => command.type === (task.legacy?'goal-image-remove':'remove-image')),
@@ -595,7 +642,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
   const personalTasks = personal ? filtered.filter(task => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : []
   const personalIds = new Set(personalTasks.map(task => task.id))
   const columns = boardColumns(filtered.filter(task => !personalIds.has(task.id)))
-  const listed = [...COLUMNS.filter(([status])=>status!=='legacy-pending'||columns.get(status).length), ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
+  const listed = [...COLUMNS.filter(([status])=>!['legacy-pending','legacy-done'].includes(status)||columns.get(status).length), ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
   const card = task => h(TaskCard, { key: task.id, scope, task, tasks: data.tasks, request, onUpload: upload,
     commands: !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : [],
     actors: data?.capabilities?.actors, targets: data?.capabilities?.shareTargets?.[task.id], uploadEnabled: data?.capabilities?.upload === true, uncertain: !canAct, onCommand: run })

@@ -137,7 +137,7 @@ export function install(rt) {
     return outcome.value
   }
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
-    const { api, store } = service(), scope = payload.scope
+    const { api, store, goalEditor } = service(), scope = payload.scope
     switch (endpoint) {
       case 'board-list': {
         // A concurrent DB writer may commit between projection and version
@@ -165,6 +165,7 @@ export function install(rt) {
           api.list(scope,principal)
           return goalEditor.execute(scope,payload.operationId,{endpoint,payload},()=>goalEditor.mutate(scope,payload,payload.type==='goal-task-edit'?'edit':'remove-image'))
         }
+        if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))throw new Error('Goal operation ID requires a goal task action')
         const result = mutate(endpoint, payload); notifyDriver(); return result
       }
       default: throw new Error('Unknown board endpoint')

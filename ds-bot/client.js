@@ -12484,6 +12484,28 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Due date": "截止日期",
+  "Labels": "标签",
+  "Labels, one per line": "标签，每行一个",
+  "Checklist": "清单",
+  "Mark checklist item": "勾选清单项",
+  "Checklist item": "清单项",
+  "New checklist item": "新清单项",
+  "Add item": "添加项目",
+  "Edit card details": "编辑卡片详情",
+  "Check the card details and size limits.": "请检查卡片内容及大小限制。",
+  "Checklist items do not complete the task or its dependencies.": "勾选清单不会完成任务或解除依赖。",
+  "Not started": "未开始",
+  "Goal marked done": "目标中标记完成",
+  "Edit goal task": "编辑群目标任务",
+  "Task description": "任务说明",
+  "Goal task status": "群目标任务状态",
+  "Goal task note": "任务备注",
+  "Reported or completed work must be reconciled before changing its description.": "任务已汇报或完成，修改说明前须先核对并处理原工作。",
+  "Owner, acceptance and completed status are managed by the group goal.": "负责人、验收条件和完成状态由群目标管理。",
+  "Original group goal task": "群目标原任务",
+  "Earlier group goal task · read only": "历史群目标任务 · 仅可查看",
+  "Group goal cards edit the original task. Earlier stages remain read only.": "群目标卡片直接编辑原任务；历史阶段仅可查看。",
   "Remote code changes": "远端代码变更",
   "Waiting for first check": "等待首次检查",
   "Monitor active": "监视运行中",
@@ -14227,6 +14249,12 @@ var ZH = {
   "Failed": "失败"
 };
 var HOST_ERRORS = [
+  [/^Goal task changed or is unavailable; refresh the board$/, "群目标任务已变化或不可用，请刷新看板。"],
+  [/^Goal task changed; refresh the board$/, "群目标任务已变化，请刷新看板。"],
+  [/^This task was reported or completed\. Reconcile or reopen it before changing its description\.$/, "任务已汇报或完成，请先核对并重新开展，再修改说明。"],
+  [/^This status change requires the group goal rework or review workflow\.$/, "此状态变更需要通过群目标的返工或验收流程处理。"],
+  [/^Add a note explaining the status change$/, "请添加备注，说明状态变更。"],
+  [/^A paused goal cannot change task progress or notes$/, "目标已暂停，不能修改任务进度或备注。"],
   [/^Could not reach the mail server at (.+)\. Check the server address\.$/, "连不上邮件服务器 $1，请检查服务器地址。"],
   [/^Model (.+) is not available\. Available: (.*)$/, "模型 $1 不可用。可用的：$2"],
   [/^The API key for (.+) is set outside DS Bot and cannot be changed here$/, "$1 的 API key 是在 DS Bot 之外设置的，这里改不了"],
@@ -36628,9 +36656,11 @@ var COLUMNS = [
   ["proposed", "Preparing"],
   ["waiting", "Waiting"],
   ["ready", "Ready"],
+  ["legacy-pending", "Not started"],
   ["working", "In progress"],
   ["reported", "Awaiting review"],
-  ["done", "Done"]
+  ["done", "Done"],
+  ["legacy-done", "Goal marked done"]
 ];
 var PERSONAL_COLUMNS = [["todo", "To do"], ["doing", "Doing"], ["finished", "Personally finished"]];
 var KNOWN = new Set(COLUMNS.map(([status]) => status));
@@ -36976,6 +37006,119 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
     )
   );
 }
+function CardDetails({ task, editable, disabled, onEdit }) {
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [draft, setDraft] = (0, import_react50.useState)({}), [entry, setEntry2] = (0, import_react50.useState)("");
+  const reset = () => {
+    setBase(task.revision);
+    setEntry2("");
+    setDraft({ description: textValue(task.description), dueDate: textValue(task.dueDate), labels: (Array.isArray(task.labels) ? task.labels : []).join("\n"), checklist: (Array.isArray(task.checklist) ? task.checklist : []).map((item) => ({ ...item })) });
+  };
+  const checklist = Array.isArray(task.checklist) ? task.checklist : [];
+  const labels2 = Array.isArray(task.labels) ? task.labels : [];
+  const changed = task.revision !== base;
+  const labelValues = (draft.labels ?? "").split("\n").map((value) => value.trim()).filter(Boolean);
+  const bytes = (value) => new TextEncoder().encode(value).length;
+  const valid = bytes(draft.description ?? "") <= 8192 && labelValues.length <= 20 && new Set(labelValues).size === labelValues.length && labelValues.every((value) => bytes(value) <= 40) && (draft.checklist ?? []).length <= 100 && (draft.checklist ?? []).every((item) => item.text.trim() && bytes(item.text.trim()) <= 512);
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-board-card-details-fields" },
+    !open ? (0, import_react50.createElement)(
+      "div",
+      null,
+      (0, import_react50.createElement)(Fact, { label: t("Description"), value: textValue(task.description) }),
+      (0, import_react50.createElement)(Fact, { label: t("Due date"), value: textValue(task.dueDate) }),
+      labels2.length ? (0, import_react50.createElement)(Fact, { label: t("Labels"), value: labels2.join(" · ") }) : null,
+      checklist.length ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-board-checklist" },
+        (0, import_react50.createElement)("strong", null, t("Checklist")),
+        checklist.map((item) => (0, import_react50.createElement)("label", { key: item.id }, (0, import_react50.createElement)("input", { type: "checkbox", checked: item.checked === true, disabled: true }), ` ${item.text}`))
+      ) : null,
+      editable ? (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
+        reset();
+        setOpen(true);
+      } }, t("Edit card details")) : null
+    ) : (0, import_react50.createElement)(
+      "form",
+      { className: "bt-board-actions", onSubmit: (event) => {
+        event.preventDefault();
+        if (disabled || changed || !valid) return;
+        void onEdit({ ...task, revision: base }, { description: draft.description, dueDate: draft.dueDate || null, labels: labelValues, checklist: draft.checklist.map((item) => ({ ...item, text: item.text.trim() })) }).then((result) => {
+          if (result === "committed") setOpen(false);
+        });
+      } },
+      changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
+      (0, import_react50.createElement)("label", null, t("Description"), (0, import_react50.createElement)("textarea", { "aria-label": t("Description"), value: draft.description ?? "", disabled, onChange: (event) => setDraft({ ...draft, description: event.target.value }) })),
+      (0, import_react50.createElement)("label", null, t("Due date"), (0, import_react50.createElement)("input", { type: "date", "aria-label": t("Due date"), value: draft.dueDate ?? "", disabled, onChange: (event) => setDraft({ ...draft, dueDate: event.target.value }) })),
+      (0, import_react50.createElement)("label", null, t("Labels, one per line"), (0, import_react50.createElement)("textarea", { "aria-label": t("Labels, one per line"), value: draft.labels ?? "", disabled, onChange: (event) => setDraft({ ...draft, labels: event.target.value }) })),
+      (0, import_react50.createElement)(
+        "fieldset",
+        null,
+        (0, import_react50.createElement)("legend", null, t("Checklist")),
+        (draft.checklist ?? []).map((item) => (0, import_react50.createElement)(
+          "div",
+          { key: item.id, className: "bt-board-check-row" },
+          (0, import_react50.createElement)("input", { type: "checkbox", "aria-label": t("Mark checklist item"), checked: item.checked, disabled, onChange: (event) => setDraft({ ...draft, checklist: draft.checklist.map((row) => row.id === item.id ? { ...row, checked: event.target.checked } : row) }) }),
+          (0, import_react50.createElement)("input", { "aria-label": t("Checklist item"), value: item.text, disabled, onChange: (event) => setDraft({ ...draft, checklist: draft.checklist.map((row) => row.id === item.id ? { ...row, text: event.target.value } : row) }) }),
+          (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setDraft({ ...draft, checklist: draft.checklist.filter((row) => row.id !== item.id) }) }, t("Remove"))
+        )),
+        (0, import_react50.createElement)("label", null, t("New checklist item"), (0, import_react50.createElement)("input", { "aria-label": t("New checklist item"), value: entry, disabled, onChange: (event) => setEntry2(event.target.value) })),
+        (0, import_react50.createElement)("button", { type: "button", disabled: disabled || !entry.trim() || bytes(entry.trim()) > 512 || (draft.checklist ?? []).length >= 100, onClick: () => {
+          if (!window.crypto?.randomUUID) return;
+          setDraft({ ...draft, checklist: [...draft.checklist ?? [], { id: window.crypto.randomUUID(), text: entry.trim(), checked: false }] });
+          setEntry2("");
+        } }, t("Add item"))
+      ),
+      !valid ? (0, import_react50.createElement)("p", { role: "alert" }, t("Check the card details and size limits.")) : null,
+      (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Checklist items do not complete the task or its dependencies.")),
+      (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
+    )
+  );
+}
+function EditGoalTask({ task, disabled, onEdit }) {
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(task.revision), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
+  const reset = () => {
+    setBase(task.revision);
+    setTitle(textValue(task.title));
+    setNote(textValue(task.goalNote));
+    setStatus(task.legacy?.originalStatus ?? "");
+  };
+  const changed = task.revision !== base, original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
+  const titleLocked = ["reported", "done"].includes(original);
+  const next = original === "pending" ? "working" : original === "working" ? "reported" : void 0;
+  const statuses = [original, ...!paused && next ? [next] : []].filter(Boolean);
+  const modified = title.trim() !== textValue(task.title) || note !== textValue(task.goalNote) || status !== original;
+  const valid = title.trim() && modified && (!status || status === original || note.trim());
+  if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
+    reset();
+    setOpen(true);
+  } }, t("Edit goal task"));
+  return (0, import_react50.createElement)(
+    "form",
+    { className: "bt-board-actions", onSubmit: (event) => {
+      event.preventDefault();
+      if (disabled || changed || !valid) return;
+      const value = {};
+      if (title.trim() !== textValue(task.title)) value.title = title.trim();
+      if (note !== textValue(task.goalNote) || status !== original) value.note = note;
+      if (status !== original) value.status = status;
+      void onEdit({ ...task, revision: base }, value).then((result) => {
+        if (result === "committed") setOpen(false);
+      });
+    } },
+    changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
+    (0, import_react50.createElement)("label", null, t("Task description"), (0, import_react50.createElement)("textarea", { "aria-label": t("Task description"), value: title, disabled: disabled || titleLocked, onChange: (event) => setTitle(event.target.value) })),
+    titleLocked ? (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Reported or completed work must be reconciled before changing its description.")) : null,
+    (0, import_react50.createElement)("label", null, t("Goal task status"), (0, import_react50.createElement)(
+      "select",
+      { "aria-label": t("Goal task status"), value: status, disabled: disabled || paused, onChange: (event) => setStatus(event.target.value) },
+      statuses.map((value) => (0, import_react50.createElement)("option", { key: value, value }, t({ pending: "Not started", working: "In progress", reported: "Awaiting review", done: "Done" }[value] ?? "Status unknown")))
+    )),
+    (0, import_react50.createElement)("label", null, t("Goal task note"), (0, import_react50.createElement)("textarea", { "aria-label": t("Goal task note"), value: note, disabled: disabled || paused, onChange: (event) => setNote(event.target.value) })),
+    (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Owner, acceptance and completed status are managed by the group goal.")),
+    (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
+  );
+}
 function ShareTask({ task, commands, targets, disabled, onCommand }) {
   const [open, setOpen] = (0, import_react50.useState)(false);
   const [base, setBase] = (0, import_react50.useState)(task.revision);
@@ -37160,6 +37303,9 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
           task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("Shared task · read only")) : null,
           blocker ? (0, import_react50.createElement)("span", { className: "bt-board-chip bt-board-chip-blocked" }, t("Blocked")) : null,
           dependencies.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} dependencies", { count: dependencies.length })) : null,
+          task.dueDate ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${t("Due date")}: ${textValue(task.dueDate)}`) : null,
+          Array.isArray(task.labels) ? task.labels.slice(0, 3).map((label) => (0, import_react50.createElement)("span", { key: label, className: "bt-board-chip" }, label)) : null,
+          Array.isArray(task.checklist) && task.checklist.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${task.checklist.filter((item) => item.checked).length}/${task.checklist.length} ${t("Checklist")}`) : null,
           task.images?.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} images", { count: task.images.length })) : null,
           (0, import_react50.createElement)("span", { className: "bt-board-open-hint" }, t("View details"))
         )
@@ -37185,18 +37331,20 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
           )
         ) : null,
         (0, import_react50.createElement)("span", { className: "bt-board-id" }, task.id),
-        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Existing group goal aggregate; child tasks not yet linked")) : null,
+        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t(task.legacy.current ? "Original group goal task" : "Earlier group goal task · read only")) : null,
         task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Shared task · read only")) : null,
         task.legacy && !KNOWN.has(task.status) ? (0, import_react50.createElement)(Fact, { label: t("Original status"), value: textValue(task.legacy.originalStatus) || t("Status unknown") }) : null,
         (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(task.owner, actors) }),
         (0, import_react50.createElement)(Fact, { label: t("Reviewer"), value: actorLabel(task.reviewer, actors) }),
         (0, import_react50.createElement)(Fact, { label: t("Acceptance criteria"), value: textValue(task.acceptance) }),
+        task.legacy ? (0, import_react50.createElement)(Fact, { label: t("Goal task note"), value: textValue(task.goalNote) }) : null,
         (0, import_react50.createElement)(Fact, { label: t("Dependencies"), value: dependencies.join(" · ") }),
         (0, import_react50.createElement)(Fact, { label: t("Next action"), value: asText2(task.nextAction) }),
         (0, import_react50.createElement)(Fact, { label: t("Blocked"), value: blocker }),
         (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: evidence }),
         (0, import_react50.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
-        !canMove ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Status changes are not available for this task.")) : null,
+        !task.legacy && !task.shared ? (0, import_react50.createElement)(CardDetails, { task, editable: commands.some((command) => command.type === "card-details"), disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "card-details" }, value) }) : null,
+        !canMove && !commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Status changes are not available for this task.")) : null,
         Array.isArray(task.images) && task.images.length ? (0, import_react50.createElement)("div", { className: "bt-board-images" }, task.images.map((image) => (0, import_react50.createElement)(BoardImage, {
           key: image.id,
           scope,
@@ -37204,12 +37352,13 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
           image,
           request,
           disabled: uncertain,
-          canRemove: commands.some((command) => command.type === "remove-image"),
-          onRemove: (_, imageId) => onCommand(task, { type: "remove-image" }, { imageId })
+          canRemove: commands.some((command) => command.type === (task.legacy ? "goal-image-remove" : "remove-image")),
+          onRemove: (_, imageId) => onCommand(task, { type: task.legacy ? "goal-image-remove" : "remove-image" }, { imageId })
         }))) : null,
         uploadEnabled && commands.some((command) => command.type === "upload") ? (0, import_react50.createElement)(UploadImages, { task, disabled: uncertain, onUpload }) : null,
         (0, import_react50.createElement)(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
-        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
+        commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)(EditGoalTask, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-task-edit" }, value) }) : null,
+        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["goal-task-edit", "goal-image-remove", "remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
       )
     )
   );
@@ -37262,7 +37411,7 @@ function TaskBoard({ scope, title, close, request = call }) {
       setBusy(false);
     }
     if (result.state === "rejected") {
-      setError(result.message || t("Action rejected"));
+      setError(result.message ? hostText(result.message) : t("Action rejected"));
       await load(epoch, true);
     } else await load(epoch);
     return result.state;
@@ -37357,7 +37506,7 @@ function TaskBoard({ scope, title, close, request = call }) {
   }, [key, visible]);
   const run2 = async (task, command, value) => {
     if (fetching.current || pendingRef.current || !store.current || !window.crypto?.randomUUID) return;
-    const operationId = window.crypto.randomUUID();
+    const operationId = `${command.type.startsWith("goal-") ? "goal:" : ""}${window.crypto.randomUUID()}`;
     fetching.current = operationId;
     const epoch = generation.current;
     try {
@@ -37403,7 +37552,7 @@ function TaskBoard({ scope, title, close, request = call }) {
         reader.readAsDataURL(image.file);
       })));
       if (!current(epoch)) return;
-      operationId = window.crypto.randomUUID();
+      operationId = `${task.legacy ? "goal:" : ""}${window.crypto.randomUUID()}`;
       store.current.put(operationId);
       pendingRef.current = operationId;
       fetching.current = operationId;
@@ -37432,7 +37581,7 @@ function TaskBoard({ scope, title, close, request = call }) {
   const personalTasks = personal ? filtered.filter((task) => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : [];
   const personalIds = new Set(personalTasks.map((task) => task.id));
   const columns2 = boardColumns(filtered.filter((task) => !personalIds.has(task.id)));
-  const listed = [...COLUMNS, ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const listed = [...COLUMNS.filter(([status]) => !["legacy-pending", "legacy-done"].includes(status) || columns2.get(status).length), ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
   const card = (task) => (0, import_react50.createElement)(TaskCard, {
     key: task.id,
     scope,
@@ -37440,7 +37589,7 @@ function TaskBoard({ scope, title, close, request = call }) {
     tasks: data.tasks,
     request,
     onUpload: upload,
-    commands: !task.legacy && !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter((command) => command && typeof command.type === "string") : [],
+    commands: !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter((command) => command && typeof command.type === "string") : [],
     actors: data?.capabilities?.actors,
     targets: data?.capabilities?.shareTargets?.[task.id],
     uploadEnabled: data?.capabilities?.upload === true,
@@ -37474,7 +37623,7 @@ function TaskBoard({ scope, title, close, request = call }) {
       ),
       error ? (0, import_react50.createElement)("div", { className: "bt-board-error", role: "alert" }, error) : null,
       capacityReached ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "status" }, t("Task limit reached. New tasks cannot be created.")) : null,
-      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Existing group goal aggregates are read only. A new card does not automatically link to or replace them.")) : null,
+      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Group goal cards edit the original task. Earlier stages remain read only.")) : null,
       pending ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-pending", role: "status" },

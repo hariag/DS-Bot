@@ -11,7 +11,19 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Due date': '截止日期',
+  'Labels': '标签',
+  'Labels, one per line': '标签，每行一个',
+  'Checklist': '清单',
+  'Mark checklist item': '勾选清单项',
+  'Checklist item': '清单项',
+  'New checklist item': '新清单项',
+  'Add item': '添加项目',
+  'Edit card details': '编辑卡片详情',
+  'Check the card details and size limits.': '请检查卡片内容及大小限制。',
+  'Checklist items do not complete the task or its dependencies.': '勾选清单不会完成任务或解除依赖。',
   'Not started': '未开始',
+  'Goal marked done': '目标中标记完成',
   'Edit goal task': '编辑群目标任务',
   'Task description': '任务说明',
   'Goal task status': '群目标任务状态',
