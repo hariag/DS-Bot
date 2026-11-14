@@ -376,3 +376,26 @@ test('a reentrant callback cannot overwrite a changed private operation record',
   await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /unknown/)
   assert.equal(JSON.parse(await readFile(path, 'utf8')).state, 'claiming')
 })
+
+test('a callback that restores the old row and deletes the phase cannot return dispatch permission', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const path = join(f.home, 'original-redo-v1', `${operationId}.json`), old = await readFile(path)
+  f.dependencies.validateBinding = row => {
+    if (row.state === 'dispatching') { fs.writeFileSync(path, old); fs.unlinkSync(join(f.home, `.original-redo-${operationId}-dispatching`)) }
+    return true
+  }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /unknown/)
+})
+
+test('a callback that restores the dispatch row and deletes claim phase cannot return claim permission', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal)
+  const path = join(f.home, 'original-redo-v1', `${operationId}.json`), old = await readFile(path)
+  f.dependencies.validateBinding = row => {
+    if (row.state === 'claiming') { fs.writeFileSync(path, old); fs.unlinkSync(join(f.home, `.original-redo-${operationId}-claiming`)) }
+    return true
+  }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  assert.throws(() => journal.markClaimingSync(binding, { turn:9, turnStartSeq:72 }, f.request.principal), /unknown/)
+})
