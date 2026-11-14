@@ -66,6 +66,7 @@ export function install(rt) {
   // parent chain, however many subagents sit between them.
   const callerOf = async (exec) => {
     const own = rt.selfOf(exec.agent?.id) ?? rt.selfOf(exec.agent?.session?.id)
+      ?? rt.userRedoOwner?.(exec.agent?.id)?.id ?? rt.userRedoOwner?.(exec.agent?.session?.id)?.id
     if (own !== undefined) return own
     let parent = exec.agent?.session?.header?.parentSession
     const seen = new Set()
