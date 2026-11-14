@@ -62,12 +62,16 @@ export function install(rt) {
     await rt.load();writable();const {workId,scope}=payload
     if(endpoint==='legacy-review-list'){
       if(decisionBusy)throw Error('work decision outcome unknown')
+      const observedTable=decisions()
       await syncDecisions()
+      if(decisionBusy||decisionBlocked||decisions()!==observedTable)throw Error('work decisions changed')
       if(!scope||!['personal','room'].includes(scope.kind)||!valid(scope.id)||(scope.kind==='room'&&!rt.state.rooms?.[scope.id])||(scope.kind==='personal'&&scope.id!=='user'&&!rt.state.bots?.[scope.id]))throw Error('review unavailable')
       const revision=rt.state.revision,sample=await rt.recoveryWorkCandidates?.();writable()
-      if(!sample||!Array.isArray(sample.ids)||rt.state.revision!==revision)throw Error('review sources unavailable')
+      if(!sample||!Array.isArray(sample.ids)||rt.state.revision!==revision||decisionBusy||decisionBlocked||decisions()!==observedTable)throw Error('review sources unavailable')
       let incomplete=sample.incomplete===true
-      const items=[];for(const id of sample.ids){let w;try{w=workFor(id);scopeKey(scope,w)}catch{continue}try{items.push({workId:id,owner:w.to,sender:w.from,canDecide:validWorkTime(w.at),...decisionFor(id,w)})}catch{incomplete=true}}
+      const ids=new Set(sample.ids)
+      for(const entry of Object.values(observedTable??{}))if(typeof entry?.workId==='string')ids.add(entry.workId)
+      const items=[];for(const id of ids){let w;try{w=workFor(id);scopeKey(scope,w)}catch{if(observedTable?.[hash(id)]?.history?.some(item=>item.scope===JSON.stringify([scope.kind,scope.id])))incomplete=true;continue}try{if(items.length>=500){incomplete=true;break}items.push({workId:id,owner:w.to,sender:w.from,canDecide:validWorkTime(w.at),...decisionFor(id,w)})}catch{incomplete=true}}
       return {items,incomplete}
     }
     if(endpoint==='legacy-review-decision'){
