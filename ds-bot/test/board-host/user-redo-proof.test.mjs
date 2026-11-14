@@ -62,6 +62,13 @@ test('completed or user-aborted turns do not become redo inputs', async () => {
   }
 })
 
+test('a disposed turn is supported but an explicitly user-aborted turn is not', async () => {
+  const disposed = original(); disposed[4].data.reason = { kind:'aborted', reason:{ kind:'disposed' } }
+  assert.equal((await fixture(disposed).proof(scope, recoveryId))?.turn, 5)
+  const user = original(); user[4].data.reason = { kind:'aborted', reason:{ kind:'user' } }
+  assert.equal(await fixture(user).proof(scope, recoveryId), undefined)
+})
+
 test('a missing or different held turn cannot reuse an earlier exchange', async () => {
   const a = fixture(); delete a.record.turn
   assert.equal(await a.proof(scope, recoveryId), undefined)
