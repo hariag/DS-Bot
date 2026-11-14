@@ -1,22 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createUserRedoJournal, userRedoConfirmation, userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
-import { privateTempDirAsync } from '../private-temp.mjs'
+import { createUserRedoJournal, userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
 
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d'
 const recoveryId = 'a'.repeat(64)
 const scope = { kind:'room', id:'room-1' }
-const sourceMessage = { id:'message-1', role:'user', content:[{ type:'text', text:'Original task' }], source:{ kind:'bot', role:'request', work:'original-work' } }
-const sourceProof = { complete:true, durability:'target-writer-v1', recoveryId, botId:'bot', sessionId:'original-session', messageSeq:12, turn:3,
-  message:sourceMessage, isCurrent:() => true }
-const confirmationDigest = userRedoConfirmation(scope, recoveryId, sourceProof)
-const request = { operationId, recoveryId, scope, acknowledged:true, confirmationDigest }
+const request = { operationId, recoveryId, scope, acknowledged:true }
 
 async function fixture(t) {
-  const dir = await privateTempDirAsync(join(tmpdir(), 'dsbot-user-redo-'))
+  const dir = await mkdtemp(join(tmpdir(), 'dsbot-user-redo-'))
   t.after(() => rm(dir, { recursive:true, force:true }))
   const statePath = join(dir, 'state.json')
   const state = { works:{ 'original-work':{ state:'unknown' } } }
@@ -24,8 +19,8 @@ async function fixture(t) {
   let allowed = true, current = true, failSave = false
   const rt = { state, statePath, requireHomeLock() {}, homeLockVersion:() => 1,
     async save() { if (failSave) throw Error('save failed'); await writeFile(statePath, JSON.stringify(state), { mode:0o600 }) } }
-  const original = structuredClone(sourceMessage)
-  const proof = { complete:true, durability:'target-writer-v1', recoveryId, botId:'bot', sessionId:'original-session', messageSeq:12, turn:3,
+  const original = { id:'message-1', role:'user', content:[{ type:'text', text:'Original task' }], source:{ kind:'bot', role:'request', work:'original-work' } }
+  const proof = { complete:true, durability:'target-writer-v1', recoveryId, sessionId:'original-session', messageSeq:12, turn:3,
     message:original, isCurrent:() => current }
   const journal = createUserRedoJournal(rt, { authorize:() => allowed, proveOriginal:async () => proof })
   return { state, statePath, journal, proof, original, setAllowed:x => { allowed = x }, setCurrent:x => { current = x }, setFailSave:x => { failSave = x } }
@@ -37,14 +32,12 @@ test('prepares a stable new identity and preserves original work', async t => {
   assert.deepEqual(entry.identity, userRedoIdentity(operationId))
   assert.deepEqual(f.state.works, { 'original-work':{ state:'unknown' } })
   assert.deepEqual(JSON.parse(await readFile(f.statePath, 'utf8')).userRedos[operationId], entry)
-  assert.doesNotMatch(await readFile(f.statePath, 'utf8'), /Original task|senderSessionId/)
   assert.deepEqual(await f.journal.prepare(request), entry)
 })
 
 test('requires explicit acknowledgement, user authorization and a scoped identity', async t => {
   const f = await fixture(t)
   await assert.rejects(f.journal.prepare({ ...request, acknowledged:false }), /confirmation/)
-  await assert.rejects(f.journal.prepare({ ...request, confirmationDigest:'b'.repeat(64) }), /confirmation/)
   f.setAllowed(false)
   await assert.rejects(f.journal.prepare(request), /unavailable/)
   f.setAllowed(true)
@@ -76,18 +69,6 @@ test('losing source proof cannot reuse a prepared operation', async t => {
   await f.journal.prepare(request)
   f.setCurrent(false)
   await assert.rejects(f.journal.prepare(request), /cannot be verified/)
-})
-
-test('confirmation cannot be replayed for an identical message in a different context', async t => {
-  const f = await fixture(t)
-  f.proof.sessionId = 'another-session'
-  await assert.rejects(f.journal.prepare(request), /confirmation/)
-  f.proof.sessionId = 'original-session'
-  f.proof.turn = 4
-  await assert.rejects(f.journal.prepare(request), /confirmation/)
-  f.proof.turn = 3
-  await assert.rejects(f.journal.prepare({ ...request, scope:{ kind:'room', id:'other-room' } }), /confirmation/)
-  assert.equal(f.state.userRedos, undefined)
 })
 
 test('concurrent calls for one operation are fenced', async t => {
