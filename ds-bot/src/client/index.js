@@ -508,6 +508,8 @@ export function apply(ctx) {
   }
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock, panelFolded }),
+    refreshTeam: async () => { await pull(); return roster.getSnapshot() },
+    currentRoomGoal: roomId => roster.getSnapshot().roomsById?.[roomId]?.goal,
     learningAnswer: (id, approve) => after(call('learning-answer', { id, approve })),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
     // or the click appears to do nothing.
