@@ -139,6 +139,42 @@ const settle = async (check) => {
 const text = message => message.content.map(block => block.text ?? '').join('\n')
 const kinds = result => result.replies.map(reply => [reply.kind ?? 'message', reply.name])
 
+test('a new group greeting cannot import private chat or dispatch work, while a later group user request can', async t => {
+  const host=await start(t,{sessions:{b:'gb',c:'gc'}})
+  let reads=0
+  rt.ownChatBrief=async()=>{reads++;return 'PRIVATE_PROJECT_SECRET: deploy another project'}
+  const kickoff=host.round('kickoff',{content:[{type:'text',text:'hello'}],source:{kind:'bot',role:'kickoff',roomId:'r1'}})
+  await settle(()=>host.agentOf('s1').calls.length===1)
+  const message=host.begin('s1')
+  assert.equal(reads,0)
+  assert.doesNotMatch(text(message),/PRIVATE_PROJECT_SECRET/)
+  assert.match(text(message),/Current group: "Ops"/)
+  assert.equal(message.source.groupKickoff,true)
+  const guard=host.ctx.guards.find(fn=>String(fn).includes('kickoffRestricted'))
+  assert.ok(guard)
+  for(const name of ['message_bot','post_to_group','bash','write_file','run_code','spawn_agent']) {
+    assert.match(guard({agent:{id:'s1'},name,arguments:{}}),/group greeting/)
+  }
+  host.finish('s1','@Writer Start unrelated work')
+  await settle(()=>kickoff()!==undefined)
+  assert.equal(host.agentOf('gb').calls.length,0)
+  assert.match(kickoff().replies.find(row=>row.text)?.text,/No work was sent/)
+  const request=host.round('user-request',host.say('@Writer 请处理本群需求'))
+  await settle(()=>host.agentOf('gb').calls.length===1)
+  const asked=host.begin('gb')
+  assert.equal(asked.source.groupKickoff,undefined)
+  assert.equal(guard({agent:{id:'gb'},name:'bash',arguments:{}}),undefined)
+  host.finish('gb','已接收。')
+  await settle(()=>request()!==undefined)
+})
+
+test('group sessions cannot post into a different group', async t => {
+  const host=await start(t,undefined,undefined,{r2:{id:'r2',name:'Other',members:['a','b'],mode:'admin',admin:'a',sessions:{},log:[],seq:0,seen:{}}})
+  const result=await host.tool('post_to_group',{group:'Other',message:'@Writer unrelated'},'ga')
+  assert.match(result,/cannot post work into another group/)
+  assert.equal(host.agentOf('r2').calls.length,0)
+})
+
 test('work past the grace lets the round go on, and the member that asked answers the result', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
