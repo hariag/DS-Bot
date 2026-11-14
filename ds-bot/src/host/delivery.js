@@ -83,7 +83,16 @@ export function install(rt) {
   async function deliver(args, observation) {
     let admissionStarted = false
     try {
-      return await deliverToAgent(args, agent => { observation?.beforeAdmission?.(agent); admissionStarted = true })
+      return await deliverToAgent(args, (agent, message) => {
+        const result = observation?.beforeAdmission?.(agent, message)
+        // Admission follows immediately; an async guard cannot establish a
+        // decision before then. Reject it instead of silently sending first.
+        if (result && typeof result.then === 'function') {
+          void Promise.resolve(result).catch(() => {})
+          throw new Error('Admission guard must be synchronous')
+        }
+        admissionStarted = true
+      })
     } catch (error) {
       // A followup/steer can enqueue the message before it throws. Only a
       // failure before entering that call proves this attempt was not admitted.
@@ -149,7 +158,9 @@ export function install(rt) {
       ],
       source,
     })
-    onAdmission(agent)
+    // The observer runs synchronously on the exact immutable message that is
+    // about to enter this agent. A rejection is known to precede admission.
+    onAdmission(agent, message)
     if (steer) agent.steer(message)
     else agent.followup(message)
     await ctx.sessions.flush(agent.session)
