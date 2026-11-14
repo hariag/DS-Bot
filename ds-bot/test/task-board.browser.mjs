@@ -36,15 +36,23 @@ window.removeEventListener=(type,fn,options)=>{if(type==='keydown')keyListeners.
 globalThis.listenerCount=()=>keyListeners.size;
 const sheet=document.createElement('style');sheet.textContent=\`body{font-family:system-ui,sans-serif;--bt-main:#fcfcfc;--bt-sidebar:#f7f7f7;--bt-card:#fff;--bt-ink:#141414;--bt-ink-2:#666;--bt-ink-3:#999;--bt-line:#e8e8e8;--bt-line-2:#d9d9d9;--bt-hover:#eee;--bt-accent:#4d6bfe;--bt-accent-ink:#fff;--bt-tag-bg:#eee;--bt-green:#00c972;--bt-danger:#e02135;--bt-danger-soft:#faeeee;--bt-glass-shadow:0 18px 50px #0003}\`+TASK_BOARD_CSS;document.head.append(sheet);
 const actors=[{id:'a',name:'Alice'},{id:'b',name:'Bob'},{id:'user',name:'You'}];
-const state=globalThis.fixture={calls:[],mode:'normal',revision:1,scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{}};
+const state=globalThis.fixture={calls:[],mode:'normal',revision:1,scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{},boardPlans:{},boardStarted:[],boardFinished:[],receiptPlans:{},receiptStarted:[],boardTitles:{}};
 const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
 const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').split(',')[1]},jpeg:{mediaType:'image/jpeg',data:canvas.toDataURL('image/jpeg').split(',')[1]},bad:{mediaType:'image/png',data:'YWJj'}};
 state.images=images;
-function record(scope){return {id:'T1',title:scope.id==='g1'?'Group task':'Personal task',owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status:state.mode==='manual'?'proposed':'reported',...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
+function record(scope){return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status:state.mode==='manual'?'proposed':'reported',...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
  if(endpoint==='board-list'){
+  // Capture the snapshot before blocking so a stale response is observably old.
   const task=record(payload.scope);
+  const key=payload.scope.kind+':'+payload.scope.id, plan=state.boardPlans[key]?.shift();
+  if(plan){
+   state.boardStarted.push(plan.id);
+   if(plan.mode==='hold')await new Promise((resolve,reject)=>{state.resolvers['board:'+plan.id]=ok=>ok?resolve():reject(Error('board refresh failed'))});
+   else if(plan.mode==='fail')throw Error('board refresh failed');
+   state.boardFinished.push(plan.id);
+  }
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',owner:'a',revision:1,status:'legacy-pending',legacy:{originalStatus:'pending',current:true,goalStatus:'active'}}]:[];
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
@@ -86,7 +94,11 @@ async function request(endpoint,payload){
   if(state.mode==='cancel-fails')throw Error('network lost');
   state.sealed.add(payload.operationId);return {state:'rejected',message:'safely cancelled'};
  }
- if(endpoint==='board-operation')return {state:state.sealed.has(payload.operationId)?'rejected':state.mode==='lost'||state.mode==='cancel-fails'?'unknown':state.mode==='conflict'||state.mode==='invalid-image'?'rejected':'committed',message:state.mode==='invalid-image'?'Interlaced PNG is not supported':'stale revision'};
+ if(endpoint==='board-operation'){
+  const plan=state.receiptPlans[payload.operationId];
+  if(plan){delete state.receiptPlans[payload.operationId];state.receiptStarted.push(plan.id);await new Promise(resolve=>{state.resolvers['receipt:'+plan.id]=resolve})}
+  return {state:state.sealed.has(payload.operationId)?'rejected':state.mode==='lost'||state.mode==='cancel-fails'?'unknown':state.mode==='conflict'||state.mode==='invalid-image'?'rejected':'committed',message:state.mode==='invalid-image'?'Interlaced PNG is not supported':'stale revision'};
+ }
  throw Error('unexpected endpoint '+endpoint);
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));
@@ -563,6 +575,88 @@ try {
   await page.getByText('Personal task', { exact:true }).waitFor()
   await page.waitForTimeout(600)
   assert.equal(await page.getByText('Group task', { exact:true }).count(), 0, 'late response must not overwrite the new board')
+
+  // A committed receipt does not make the old board revision safe for another
+  // command. A failed refresh must keep the original ID and file input fenced.
+  await page.evaluate(()=>{fixture.calls=[];fixture.boardPlans['personal:a']=[{id:'after-commit-fails',mode:'fail'}]})
+  const openReceiptCard=async title=>{
+    await page.locator('article').filter({hasText:title}).locator('.bt-board-card-summary').click()
+    const modal=page.locator('.bt-card-modal');await modal.waitFor();return modal
+  }
+  let receiptModal=await openReceiptCard('Personal task')
+  await receiptModal.getByRole('button',{name:'Edit card details'}).click()
+  await receiptModal.getByLabel('Description',{exact:true}).fill('Committed but refresh failed')
+  await receiptModal.getByRole('button',{name:'Save changes'}).click()
+  await page.waitForFunction(()=>fixture.boardStarted.includes('after-commit-fails'))
+  await receiptModal.getByText('An action needs confirmation.').waitFor()
+  const committedId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
+  assert.ok(committedId,'the original operation ID remains durable after the failed board read')
+  assert.equal(await page.evaluate(id=>fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),committedId),true,'the operation receipt was checked')
+  assert.equal(await receiptModal.locator('input[type=file]').isDisabled(),true,'file upload remains fenced while the board is stale')
+  await page.evaluate(()=>{fixture.boardPlans['personal:a']=[{id:'retry-refresh',mode:'hold'}]})
+  await receiptModal.getByRole('button',{name:'Check action'}).click()
+  await page.waitForFunction(()=>fixture.boardStarted.includes('retry-refresh'))
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')),committedId)
+  assert.equal(await receiptModal.locator('input[type=file]').isDisabled(),true,'a pending refreshed snapshot cannot release the fence')
+  assert.equal(await page.evaluate(id=>fixture.calls.filter(x=>x.endpoint==='board-operation'&&x.payload.operationId===id).length>=2,committedId),true,'Check queries the same operation ID')
+  assert.equal(await page.evaluate(id=>fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.operationId===id).length,committedId),1,'Check does not replay the command')
+  await page.evaluate(()=>fixture.resolvers['board:retry-refresh'](true))
+  await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')===null)
+  await page.waitForFunction(()=>document.querySelector('.bt-card-modal input[type=file]')?.disabled===false)
+  assert.equal(await receiptModal.locator('input[type=file]').isDisabled(),false)
+  await page.keyboard.press('Escape');await receiptModal.waitFor({state:'detached'})
+
+  // A manual Refresh may supersede the committed receipt's older load. The
+  // older response cannot release the operation while the latest load is held.
+  await page.evaluate(()=>{fixture.calls=[];fixture.boardPlans['personal:a']=[{id:'older-load',mode:'hold'},{id:'newer-load',mode:'hold'}]})
+  receiptModal=await openReceiptCard('Personal task')
+  await receiptModal.getByRole('button',{name:'Edit card details'}).click()
+  await receiptModal.getByLabel('Description',{exact:true}).fill('Receipt with competing refresh')
+  await receiptModal.getByRole('button',{name:'Save changes'}).click()
+  await page.waitForFunction(()=>fixture.boardStarted.includes('older-load'))
+  const racingId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
+  assert.ok(racingId)
+  await page.keyboard.press('Escape');await receiptModal.waitFor({state:'detached'})
+  await page.evaluate(()=>{fixture.revision=2;fixture.boardTitles['personal:a']='Fresh snapshot task'})
+  await page.getByRole('button',{name:'Refresh',exact:true}).click()
+  await page.waitForFunction(()=>fixture.boardStarted.includes('newer-load'))
+  await page.evaluate(async()=>{fixture.resolvers['board:older-load'](true);await new Promise(resolve=>setTimeout(resolve,0))})
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')),racingId,'superseded response cannot clear pending')
+  await page.evaluate(()=>fixture.resolvers['board:newer-load'](true))
+  await page.getByText('Fresh snapshot task',{exact:true}).waitFor()
+  if(await page.getByText('An action needs confirmation.').isVisible())await page.getByRole('button',{name:'Check action'}).click()
+  await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')===null)
+
+  // A late response for the old scope cannot touch a different scope's marker
+  // or enable its controls, even if both scopes have unsettled receipts.
+  await page.evaluate(()=>{fixture.calls=[];fixture.boardPlans['personal:a']=[{id:'scope-a-late',mode:'hold'}]})
+  receiptModal=await openReceiptCard('Fresh snapshot task')
+  await receiptModal.getByRole('button',{name:'Edit card details'}).click()
+  await receiptModal.getByLabel('Description',{exact:true}).fill('Old scope late response')
+  await receiptModal.getByRole('button',{name:'Save changes'}).click()
+  await page.waitForFunction(()=>fixture.boardStarted.includes('scope-a-late'))
+  const oldScopeId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
+  assert.ok(oldScopeId)
+  const newScopeId='scope-b-pending-operation'
+  await page.evaluate(id=>{sessionStorage.setItem('ds-bot:board-pending:room:g2',id);fixture.receiptPlans[id]={id:'scope-b-receipt'};renderFixture({kind:'room',id:'g2'},'normal')},newScopeId)
+  await page.waitForFunction(()=>fixture.receiptStarted.includes('scope-b-receipt'))
+  await page.getByText('Personal task',{exact:true}).waitFor()
+  const newModal=await openReceiptCard('Personal task')
+  assert.equal(await newModal.locator('input[type=file]').isDisabled(),true)
+  await page.evaluate(async()=>{fixture.resolvers['board:scope-a-late'](true);await new Promise(resolve=>setTimeout(resolve,0))})
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:room:g2')),newScopeId,'old-scope result cannot clear the new scope ID')
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')),oldScopeId,'old scope keeps its own unresolved UI marker')
+  assert.equal(await newModal.locator('input[type=file]').isDisabled(),true,'old-scope response cannot enable new-scope uploads')
+  await page.evaluate(()=>{fixture.boardPlans['room:g2']=[{id:'scope-b-fresh',mode:'hold'}];fixture.resolvers['receipt:scope-b-receipt']()})
+  await page.waitForFunction(()=>fixture.boardStarted.includes('scope-b-fresh'))
+  assert.equal(await newModal.locator('input[type=file]').isDisabled(),true)
+  await page.evaluate(()=>fixture.resolvers['board:scope-b-fresh'](true))
+  await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:room:g2')===null)
+  assert.equal(await newModal.locator('input[type=file]').isDisabled(),false)
+  await page.evaluate(()=>{fixture.boardTitles={};fixture.revision=1;renderFixture({kind:'personal',id:'a'},'normal')})
+  await page.getByText('Personal task',{exact:true}).waitFor()
+  await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')===null)
+
   await page.setViewportSize({ width: 375, height: 700 })
   const box = await page.locator('.bt-board-dialog').boundingBox()
   assert.ok(box && box.width <= 375, 'board must fit a narrow viewport')
