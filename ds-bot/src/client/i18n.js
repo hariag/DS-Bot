@@ -11,6 +11,14 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Interrupted work': '中断的工作',
+  'Choose what to do with each item': '逐项选择要如何处理',
+  'Decision outcome is unknown. Refresh before trying again.': '操作结果暂不明确，请刷新后核对。',
+  'The outcome is unknown. Your choice does not mark the work complete.': '原工作结果未知，处理选择不会将任务标记为完成。',
+  'Ignoring keeps the record and does not complete the work.': '忽略会保留原记录，不会完成任务。',
+  'Ignored': '已忽略',
+  'Ignore': '忽略',
+  'Undo ignore': '撤销忽略',
   'Task details': '任务详情',
   'Close card': '关闭卡片',
   'Previous columns': '上一组列表',

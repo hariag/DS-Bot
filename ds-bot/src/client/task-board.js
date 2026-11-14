@@ -105,8 +105,19 @@ function recoveryGroups(rows, idOf, nameOf) {
 }
 
 // The host provides scoped metadata only. This view never replays or closes work.
-function HeldTurns({ recovery }) {
+function HeldTurns({ recovery, scope, request, onRefresh }) {
   const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(''), [error, setError] = useState('')
+  const inFlight = useRef(false)
+  const decide = async (item, choice) => {
+    if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return
+    inFlight.current = true; setBusy(item.recoveryId); setError('')
+    try {
+      await request('board-held-decision', { scope, recoveryId:item.recoveryId, expectedRevision:item.decisionRevision, choice })
+      await onRefresh()
+    } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
+    finally { inFlight.current = false; setBusy('') }
+  }
   if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
@@ -115,12 +126,13 @@ function HeldTurns({ recovery }) {
   return h('details', { className: 'bt-recovery-panel' },
     h('summary', { className: 'bt-recovery-summary' },
       h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
-      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted turns awaiting review')),
-        h('small', null, t(rows.length ? 'Read only' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
+      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted work')),
+        h('small', null, t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
       h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !rows.length ? '—' : String(rows.length))),
     h('div', { className: 'bt-recovery-body' },
+      error ? h('p', { role:'alert', className:'bt-recovery-warning' }, error) : null,
       h('div', { className: 'bt-recovery-intro' },
-        h('p', null, t('These records are read-only. A result is unknown; no work is resent or closed here.')),
+        h('p', null, t('The outcome is unknown. Your choice does not mark the work complete.')),
         h('span', null, t('Snapshot time (UTC)'), ': ', snapshotTime(recovery.sampledAt))),
       recovery.incomplete ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
       rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
@@ -133,13 +145,16 @@ function HeldTurns({ recovery }) {
           h('summary', { className: 'bt-recovery-record-summary' },
             h('span', { className: 'bt-recovery-record-id', title: item.sessionId }, shortIdentity(item.sessionId)),
             h('span', { className: 'bt-recovery-record-time' }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t('Unknown')),
-            h('span', { className: 'bt-recovery-badge' }, t('Status unknown'))),
+            h('span', { className: 'bt-recovery-badge' }, t(item.decision === 'ignored' ? 'Ignored' : 'Status unknown'))),
           h('div', { className: 'bt-recovery-facts' },
             h(Fact, { label: t('Session ID'), value: item.sessionId }),
             h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
             h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }),
             h(Fact, { label: t('Recovery ID'), value: item.recoveryId }),
-            h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))))) : null))
+            h(Fact, { label: t('Evidence'), value: 'inflight.json' })),
+          h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
+          h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') },
+            t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore'))))))) : null))
 }
 
 // Owner-only manual notes on an existing work. This never dispatches or closes it.
@@ -1011,7 +1026,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh:() => load() }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },

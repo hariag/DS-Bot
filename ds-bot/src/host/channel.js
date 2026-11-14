@@ -365,6 +365,7 @@ export function install(rt) {
         case 'board-list':
         case 'board-operation':
         case 'board-command':
+        case 'board-held-decision':
         case 'board-operation-cancel':
         case 'board-image':
           return ok(await rt.boardCall(endpoint, body))

@@ -362,6 +362,27 @@ export function install(rt) {
     })
     return run
   }
+  // A choice only annotates the original hold. It does not settle work, alter
+  // the inbox, or establish whether an external effect occurred.
+  rt.setHeldDecision = async (scope, recoveryId, expectedRevision, choice) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId) || !Number.isSafeInteger(expectedRevision)
+      || expectedRevision < 0 || !['ignored', 'open'].includes(choice)) throw new Error('Invalid interrupted turn decision')
+    const view = await rt.recoveryHeldView(scope)
+    const item = view.available && view.items.find(row => row.recoveryId === recoveryId)
+    if (!item) throw new Error('Interrupted turn is unavailable; refresh the board')
+    const hold = heldTurns[recoveryId], history = hold?.decisions ?? []
+    if (!hold || !Array.isArray(history)) throw new Error('Interrupted turn is unavailable')
+    const previous = history[expectedRevision]
+    if (previous?.revision === expectedRevision + 1 && previous.choice === choice) return { decision:choice, revision:previous.revision }
+    if (history.length !== expectedRevision || item.decisionRevision !== expectedRevision || history.length >= 100) throw new Error('Interrupted turn changed; refresh the board')
+    rt.requireHomeLock()
+    hold.decisions = [...history, { revision:expectedRevision + 1, choice, by:'user', at:Date.now() }]
+    await persist({ required:true })
+    const verified = await sampleRecoveryHeld(scope)
+    const saved = verified.available && verified.items.find(row => row.recoveryId === recoveryId)
+    if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice) throw new Error('Decision outcome is unknown; refresh the board')
+    return { decision:choice, revision:saved.decisionRevision }
+  }
   const roomNotesForTurn = (sessionId, record) => {
     if (!record || typeof record !== 'object') return []
     const trigger = record?.trigger
