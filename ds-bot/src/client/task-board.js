@@ -89,27 +89,57 @@ function RemoteChanges({ monitor }) {
       h('span', null, event.kind==='unknown' ? t('Change requires review') : (event.paths ?? []).join(', ')))))
 }
 
-// The host sends metadata only. This view has no commands to replay or close work.
+const snapshotTime = value => Number.isSafeInteger(value) && value >= 0 && value <= 8_640_000_000_000_000
+  ? new Date(value).toISOString() : t('Unknown')
+const shortIdentity = value => typeof value !== 'string' ? t('Unknown') : value.length > 32 ? `${value.slice(0, 20)}…${value.slice(-8)}` : value
+const matchesRecovery = (needle, values) => !needle || values.some(value => textValue(value).toLocaleLowerCase().includes(needle))
+
+function recoveryGroups(rows, idOf, nameOf) {
+  const groups = new Map()
+  for (const item of rows) {
+    const id = idOf(item) || ''
+    if (!groups.has(id)) groups.set(id, { id, name: nameOf(item) || id || t('Unknown'), rows: [] })
+    groups.get(id).rows.push(item)
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// The host provides scoped metadata only. This view never replays or closes work.
 function HeldTurns({ recovery }) {
+  const [query, setQuery] = useState('')
   if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
   const rows = Array.isArray(recovery.items) ? recovery.items : []
-  const sampled = Number.isSafeInteger(recovery.sampledAt) && recovery.sampledAt >= 0 && recovery.sampledAt <= 8_640_000_000_000_000
-    ? new Date(recovery.sampledAt).toISOString() : t('Unknown')
-  if (!rows.length && !recovery.incomplete) return h('p', { className:'bt-board-recovery-clear', role:'status' },
-    t('No interrupted turns in this snapshot.'), ' ', t('Snapshot time (UTC)'), ': ', sampled)
-  return h('details', { className: 'bt-board-held' },
-    h('summary', null, t('Interrupted turns awaiting review'), rows.length ? ` (${rows.length})` : ''),
-    h('p', null, t('Snapshot time (UTC)'), ': ', sampled),
-    h('p', null, t('These records are read-only. A result is unknown; no work is resent or closed here.')),
-    recovery.incomplete ? h('p', { role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
-    rows.map(item => h('article', { key: item.recoveryId, className: 'bt-board-held-record' },
-      h(Fact, { label: t('Bot'), value: item.botName || item.botId }),
-      h(Fact, { label: t('Session ID'), value: item.sessionId }),
-      h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
-      h(Fact, { label: t('Started at'), value: Number.isSafeInteger(item.startedAt) ? new Date(item.startedAt).toLocaleString() : t('Unknown') }),
-      h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }),
-      h(Fact, { label: t('Recovery ID'), value: item.recoveryId }),
-      h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))
+  const needle = query.trim().toLocaleLowerCase()
+  const filtered = rows.filter(item => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]))
+  const groups = recoveryGroups(filtered, item => item.botId, item => item.botName)
+  return h('details', { className: 'bt-recovery-panel' },
+    h('summary', { className: 'bt-recovery-summary' },
+      h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
+      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted turns awaiting review')),
+        h('small', null, t('Read only'))),
+      h('span', { className: 'bt-recovery-count' }, String(rows.length))),
+    h('div', { className: 'bt-recovery-body' },
+      h('div', { className: 'bt-recovery-intro' },
+        h('p', null, t('These records are read-only. A result is unknown; no work is resent or closed here.')),
+        h('span', null, t('Snapshot time (UTC)'), ': ', snapshotTime(recovery.sampledAt))),
+      recovery.incomplete ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
+      rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
+        h('input', { type: 'search', value: query, placeholder: t('Filter by Bot or ID'), onChange: event => setQuery(event.target.value) })) : null,
+      !rows.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No interrupted turns in this snapshot.')) : null,
+      rows.length && !filtered.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
+      groups.length ? h('div', { className: 'bt-recovery-groups' }, groups.map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
+        h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
+        group.rows.map(item => h('details', { key: item.recoveryId, className: 'bt-board-held-record bt-recovery-record' },
+          h('summary', { className: 'bt-recovery-record-summary' },
+            h('span', { className: 'bt-recovery-record-id', title: item.sessionId }, shortIdentity(item.sessionId)),
+            h('span', { className: 'bt-recovery-record-time' }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t('Unknown')),
+            h('span', { className: 'bt-recovery-badge' }, t('Status unknown'))),
+          h('div', { className: 'bt-recovery-facts' },
+            h(Fact, { label: t('Session ID'), value: item.sessionId }),
+            h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
+            h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }),
+            h(Fact, { label: t('Recovery ID'), value: item.recoveryId }),
+            h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))))) : null))
 }
 
 // Owner-only manual notes on an existing work. This never dispatches or closes it.
@@ -118,52 +148,167 @@ const recoveryObservationText = value => value === 'observed-present' ? t('Obser
 const legacyReviewStateText = value => value === 'needs-review' ? t('Needs manual review')
   : value === 'evidence-needed' ? t('Evidence still needed')
     : value === 'identity-unverified' ? t('Work identity unverified') : t('Not known')
-function LegacyWorkReview({ scope, request }) {
+function LegacyWorkReview({ scope, request, actors }) {
   const [workId, setWorkId] = useState(''), [record, setRecord] = useState(null)
   const [summary, setSummary] = useState(''), [evidence, setEvidence] = useState(''), [unfinished, setUnfinished] = useState('')
-  const [error, setError] = useState(''), [busy, setBusy] = useState(false)
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [query, setQuery] = useState('')
   const [candidates, setCandidates] = useState(null)
-  const epoch = useRef(0), scopeKey = `${scope.kind}:${scope.id}`
-  useEffect(() => { epoch.current++; setWorkId(''); setRecord(null); setCandidates(null); setSummary(''); setEvidence(''); setUnfinished(''); setError(''); setBusy(false); return () => { epoch.current++ } }, [scopeKey])
-  const run = async (endpoint, body) => {
+  const epoch = useRef(0), requested = useRef(false), scopeKey = `${scope.kind}:${scope.id}`
+  useEffect(() => { epoch.current++; requested.current = false; setWorkId(''); setRecord(null); setCandidates(null); setQuery(''); setSummary(''); setEvidence(''); setUnfinished(''); setError(''); setBusy(false); return () => { epoch.current++ } }, [scopeKey])
+  const clearDraft = () => { setSummary(''); setEvidence(''); setUnfinished('') }
+  const run = async (endpoint, body, id = workId) => {
     const current = epoch.current; setBusy(true); setError('')
-    try { const result = await request(endpoint, { scope, workId, ...body }); if (current === epoch.current) setRecord(result) }
-    catch { if (current === epoch.current) setError(t('Action outcome is unknown; check it before making another change.')) }
+    try {
+      const result = await request(endpoint, { scope, workId: id, ...body })
+      if (current === epoch.current) { setRecord(result); if (endpoint === 'legacy-review-finding') clearDraft() }
+    } catch { if (current === epoch.current) setError(t('Action outcome is unknown; check it before making another change.')) }
     finally { if (current === epoch.current) setBusy(false) }
   }
   const list = async () => {
-    const current=epoch.current;setBusy(true);setError('')
-    try {const result=await request('legacy-review-list',{scope});if(current===epoch.current)setCandidates(result)}
-    catch {if(current===epoch.current)setError(t('Review sources are unavailable.'))}
-    finally {if(current===epoch.current)setBusy(false)}
+    const current = epoch.current; requested.current = true; setBusy(true); setError('')
+    try { const result = await request('legacy-review-list', { scope }); if (current === epoch.current) setCandidates(result) }
+    catch { if (current === epoch.current) setError(t('Review sources are unavailable.')) }
+    finally { if (current === epoch.current) setBusy(false) }
   }
-  return h('details', { className:'bt-board-held' }, h('summary', null, t('Review an existing work')),
-    h('p', null, t('Review notes do not send messages or close work. Sources are unverified; inspect the original records.')),
-    h('p', null, t('Only works between existing Bots are currently supported.')),
-    h('button', {type:'button',disabled:busy,onClick:()=>void list()},t('Find works awaiting inspection')),
-    candidates?.incomplete ? h('p', {role:'status'},t('The recovery list may be incomplete.')) : null,
-    Array.isArray(candidates?.items) ? h('div', null, candidates.items.map(item=>h('button', {key:item.workId,type:'button',disabled:busy,onClick:()=>{setWorkId(item.workId);setRecord(null)}},`${item.workId} · ${item.owner}`))) : null,
-    h('label', null, t('Original work ID'), ' ', h('input', { value:workId, disabled:busy, onChange:event => { setWorkId(event.target.value); setRecord(null) } })), ' ',
-    h('button', { type:'button', disabled:busy||!workId, onClick:() => void run('legacy-review-get', {}) }, t('Check')),
-    record?.liveRecovery ? h('p', {role:'status'}, record.liveRecovery.available
-      ? `${t('Recovery snapshot')} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt>=0 && record.liveRecovery.sampledAt<=8_640_000_000_000_000 ? new Date(record.liveRecovery.sampledAt).toISOString() : t('Not known')}): ${t('Queue')}: ${recoveryObservationText(record.liveRecovery.observed.queue)} · ${t('Held records')}: ${recoveryObservationText(record.liveRecovery.observed.held)} · ${(record.liveRecovery.ids ?? []).join(', ')}`
-      : t('Current recovery sources are unavailable.')) : null,
-    record?.state === 'not-created' ? h('button', { type:'button', disabled:busy, onClick:() => void run('legacy-review-create', {}) }, t('Create review')) : null,
-    record && record.state !== 'not-created' ? h('div', null,
-      h(Fact, { label:t('Status'), value:legacyReviewStateText(record.state) }),
-      h(Fact, { label:t('Owner'), value:record.owner }),
-      record.archived ? h('p', {role:'status'}, t('The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.')) : null,
-      h(Fact, { label:t('Source snapshot time (UTC)'), value:Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt>=0 && record.snapshot.sampledAt<=8_640_000_000_000_000 ? new Date(record.snapshot.sampledAt).toISOString() : t('Not known') }),
-      h(Fact, { label:t('Original sessions'), value:(record.snapshot?.sources ?? []).map(s=>s.sessionId).join(', ') }),
-      h('p', null, t('Execution and external effects remain unknown.')),
-      !record.archived && ['needs-review','evidence-needed'].includes(record.state) ? h('div', null,
-        h('label', null, t('Review note'), h('textarea', { value:summary, disabled:busy, onChange:event=>setSummary(event.target.value) })),
-        h('label', null, t('Evidence references, one per line'), h('textarea', { value:evidence, disabled:busy, onChange:event=>setEvidence(event.target.value) })),
-        h('label', null, t('Unfinished items, one per line'), h('textarea', { value:unfinished, disabled:busy, onChange:event=>setUnfinished(event.target.value) })),
-        h('button', { type:'button', disabled:busy||!summary.trim(), onClick:() => void run('legacy-review-finding', { expectedRevision:record.revision, summary, evidenceRefs:evidence.split('\n').map(s=>s.trim()).filter(Boolean), unfinished:unfinished.split('\n').map(s=>s.trim()).filter(Boolean) }) }, t('Save review note'))) : null,
-      (record.history ?? []).map(item=>h('article', { key:item.revision }, h(Fact, { label:t('Review note'), value:item.finding.summary }),
-        h(Fact, { label:t('Evidence references'), value:item.finding.evidenceRefs.join(', ') }), h(Fact, { label:t('Unfinished items'), value:item.finding.unfinished.join(', ') })))) : null,
-    error ? h('p', { role:'alert' }, error) : null)
+  const choose = item => { setWorkId(item.workId); setRecord(null); clearDraft(); void run('legacy-review-get', {}, item.workId) }
+  const rows = Array.isArray(candidates?.items) ? candidates.items : []
+  const needle = query.trim().toLocaleLowerCase()
+  const filtered = rows.filter(item => matchesRecovery(needle, [item.workId, item.owner, actorLabel(item.owner, actors)]))
+  const groups = recoveryGroups(filtered, item => item.owner, item => actorLabel(item.owner, actors))
+  const live = record?.liveRecovery
+  return h('details', { className: 'bt-recovery-panel', onToggle: event => {
+    if (event.target === event.currentTarget && event.currentTarget.open && !requested.current && !busy) void list()
+  } },
+  h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '≡'),
+    h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Review an existing work')), h('small', null, t('Review note'))),
+    Array.isArray(candidates?.items) ? h('span', { className: 'bt-recovery-count' }, String(rows.length)) : null),
+  h('div', { className: 'bt-recovery-body' },
+    h('div', { className: 'bt-recovery-intro' }, h('p', null, t('Review notes do not send messages or close work. Sources are unverified; inspect the original records.')),
+      h('span', null, t('Only works between existing Bots are currently supported.'))),
+    candidates?.incomplete ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('The recovery list may be incomplete.')) : null,
+    error ? h('p', { className: 'bt-recovery-warning', role: 'alert' }, error) : null,
+    h('div', { className: 'bt-recovery-workspace' },
+      h('div', { className: 'bt-recovery-work-list' },
+        h('div', { className: 'bt-recovery-list-header' }, h('strong', null, t('Find works awaiting inspection')),
+          h('button', { type: 'button', disabled: busy, onClick: () => void list() }, t('Refresh'))),
+        rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
+          h('input', { type: 'search', value: query, disabled: busy, placeholder: t('Filter by Bot or ID'), onChange: event => setQuery(event.target.value) })) : null,
+        busy && candidates === null ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('Loading…')) : null,
+        !busy && candidates !== null && !rows.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No work awaiting inspection.')) : null,
+        rows.length && !filtered.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
+        h('div', { className: 'bt-recovery-work-groups' }, groups.map(group => h('section', { key: group.id, className: 'bt-recovery-work-group' },
+          h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
+          group.rows.map(item => h('button', { key: item.workId, type: 'button', className: 'bt-recovery-work-choice', disabled: busy,
+            'aria-pressed': workId === item.workId, onClick: () => choose(item), title: item.workId }, shortIdentity(item.workId))))))),
+      h('div', { className: 'bt-recovery-detail' },
+        h('div', { className: 'bt-recovery-manual' },
+          h('label', null, t('Original work ID'), h('input', { value: workId, disabled: busy, onChange: event => { setWorkId(event.target.value); setRecord(null); clearDraft() } })),
+          h('button', { type: 'button', disabled: busy || !workId.trim(), onClick: () => { setRecord(null); clearDraft(); void run('legacy-review-get', {}, workId.trim()) } }, t('Check'))),
+        !record && !busy ? h('p', { className: 'bt-recovery-empty' }, t('Choose a work to review.')) : null,
+        live ? h('div', { className: 'bt-recovery-snapshot', role: 'status' }, live.available
+          ? h('div', null, h('strong', null, t('Recovery snapshot')), ' · ', snapshotTime(live.sampledAt),
+            h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Queue'), value: recoveryObservationText(live.observed?.queue) }),
+              h(Fact, { label: t('Held records'), value: recoveryObservationText(live.observed?.held) }),
+              h(Fact, { label: t('Original sessions'), value: (live.ids ?? []).join(', ') || t('Not known') })))
+          : t('Current recovery sources are unavailable.')) : null,
+        record?.state === 'not-created' ? h('button', { type: 'button', disabled: busy, onClick: () => void run('legacy-review-create', {}) }, t('Create review')) : null,
+        record && record.state !== 'not-created' ? h('div', { className: 'bt-recovery-review' },
+          h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Status'), value: legacyReviewStateText(record.state) }),
+            h(Fact, { label: t('Owner'), value: actorLabel(record.owner, actors) }),
+            h(Fact, { label: t('Source snapshot time (UTC)'), value: snapshotTime(record.snapshot?.sampledAt) }),
+            h(Fact, { label: t('Original sessions'), value: (record.snapshot?.sources ?? []).map(source => source.sessionId).join(', ') || t('Not known') })),
+          record.archived ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.')) : null,
+          h('p', { className: 'bt-recovery-note' }, t('Execution and external effects remain unknown.')),
+          !record.archived && ['needs-review', 'evidence-needed'].includes(record.state) ? h('div', { className: 'bt-recovery-form' },
+            h('label', null, t('Review note'), h('textarea', { value: summary, disabled: busy, onChange: event => setSummary(event.target.value) })),
+            h('label', null, t('Evidence references, one per line'), h('textarea', { value: evidence, disabled: busy, onChange: event => setEvidence(event.target.value) })),
+            h('label', null, t('Unfinished items, one per line'), h('textarea', { value: unfinished, disabled: busy, onChange: event => setUnfinished(event.target.value) })),
+            h('button', { type: 'button', disabled: busy || !summary.trim(), onClick: () => void run('legacy-review-finding', { expectedRevision: record.revision, summary, evidenceRefs: evidence.split('\n').map(s => s.trim()).filter(Boolean), unfinished: unfinished.split('\n').map(s => s.trim()).filter(Boolean) }) }, t('Save review note'))) : null,
+          (record.history ?? []).map(item => h('article', { key: item.revision, className: 'bt-recovery-history' }, h(Fact, { label: t('Review note'), value: item.finding.summary }),
+            h(Fact, { label: t('Evidence references'), value: item.finding.evidenceRefs.join(', ') }), h(Fact, { label: t('Unfinished items'), value: item.finding.unfinished.join(', ') })))) : null))))
+}
+
+// This action only clears a specific periodic inspection's uncertainty fence.
+// The host independently rechecks the current goal, attempt, scope and activity.
+function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initiallyOpen }) {
+  const [evidence, setEvidence] = useState(''), [confirmed, setConfirmed] = useState(false)
+  const [checking, setChecking] = useState(false), [saving, setSaving] = useState(false)
+  const [checkedKey, setCheckedKey] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('')
+  const generation = useRef(0), scopeGeneration = useRef(0), checkBusy = useRef(false), saveBusy = useRef(false)
+  const attempt = goal?.reviewAttempt
+  const scopeId = scope.kind === 'room' ? scope.id : ''
+  const attemptId = typeof attempt?.id === 'string' ? attempt.id : ''
+  const goalId = typeof goal?.id === 'string' ? goal.id : ''
+  const identity = JSON.stringify([scopeId, goalId, attemptId, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, attempt?.state, attempt?.at])
+  useEffect(() => { scopeGeneration.current += 1; setNotice(''); return () => { scopeGeneration.current += 1 } }, [scopeId])
+  useEffect(() => {
+    generation.current += 1; checkBusy.current = false
+    setEvidence(''); setConfirmed(false); setChecking(false); setSaving(saveBusy.current); setCheckedKey(''); setError('')
+    return () => { generation.current += 1 }
+  }, [scopeId, goalId, attemptId])
+  if (!scopeId || (!attemptId && !notice && !error)) return null
+  const automaticIdle = goal?.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
+    && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
+  const eligible = goal?.status === 'active' && goalId && attemptId
+    && (['uncertain', 'cancelled-uncertain'].includes(attempt?.state)
+      || (attempt?.state === 'admitting' && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1000))
+    && (goal.idle !== true || automaticIdle)
+  const refresh = async () => {
+    if (checkBusy.current || saveBusy.current || typeof refreshGoal !== 'function') return
+    const current = generation.current, key = identity
+    checkBusy.current = true; setChecking(true); setError(''); setCheckedKey('')
+    try { await refreshGoal(); if (generation.current === current) setCheckedKey(key) }
+    catch { if (generation.current === current) setError(t('Could not refresh the group status.')) }
+    finally { if (generation.current === current) { checkBusy.current = false; setChecking(false) } }
+  }
+  const submit = async () => {
+    const text = evidence.trim()
+    if (!eligible || checkedKey !== identity || !confirmed || text.length < 8 || text.length > 2000
+      || checkBusy.current || saveBusy.current || typeof resolveReview !== 'function') return
+    const current = generation.current, scopeAtStart = scopeGeneration.current
+    saveBusy.current = true; setSaving(true); setError(''); setNotice('')
+    try {
+      await resolveReview(goalId, attemptId, text)
+      if (scopeGeneration.current === scopeAtStart) setNotice(`${t('Request accepted. Refresh to verify the current review status.')} ${t('Review ID')}: ${attemptId}`)
+      if (generation.current === current) { setEvidence(''); setConfirmed(false); setCheckedKey('') }
+    } catch (err) {
+      if (generation.current === current) setCheckedKey('')
+      if (scopeGeneration.current === scopeAtStart) setError(['bot/stale', 'bot/invalid', 'bot/refused', 'bot/read-only'].includes(err?.code)
+        ? t('The goal changed or related work is still pending. Check it before recovery.')
+        : t('Action outcome is unknown; check it before making another change.'))
+    } finally { saveBusy.current = false; if (scopeGeneration.current === scopeAtStart) setSaving(false) }
+  }
+  const reason = typeof resolveReview !== 'function' ? t('Review recovery is unavailable in this view.')
+    : typeof refreshGoal !== 'function' ? t('Group status is unavailable.')
+      : !goalId || !attemptId ? t('Review identity is unavailable.')
+    : goal?.status !== 'active' ? t('The group goal must be active before reviews can resume.')
+      : goal.idle === true && !automaticIdle ? t('The goal is paused or its idle state needs review.')
+        : !eligible ? t('This review is not ready to resume. Refresh its status later.')
+          : checkedKey !== identity ? t('Refresh the group status before continuing.')
+            : evidence.trim().length < 8 ? t('Enter at least 8 characters describing what you verified.')
+              : evidence.trim().length > 2000 ? t('Use at most 2000 characters.')
+                : !confirmed ? t('Confirm that you checked the original outcome.') : ''
+  return h('details', { className: 'bt-recovery-panel bt-periodic-review', open: initiallyOpen || undefined,
+    onToggle: event => { if (event.target === event.currentTarget && event.currentTarget.open && !checkedKey && !checkBusy.current) void refresh() } },
+    h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '!'),
+      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Periodic review issue')), h('small', null, t('Inspection recovery'))),
+      attemptId ? h('span', { className: 'bt-recovery-badge' }, t('Status unknown')) : null),
+    h('div', { className: 'bt-recovery-body' },
+      attemptId ? h('div', { className: 'bt-periodic-context' },
+        h('p', { className: 'bt-recovery-note' }, t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
+        h('p', { className: 'bt-recovery-note' }, t('This only resumes periodic inspections; it does not approve or complete tasks.')),
+        h('div', { className: 'bt-recovery-facts' }, h(Fact, { label: t('Group ID'), value: scopeId }),
+          h(Fact, { label: t('Goal ID'), value: goalId || t('Unknown') }), h(Fact, { label: t('Review ID'), value: attemptId })),
+        h('p', { className: 'bt-recovery-warning' }, t('The server also checks the group and administrator sessions for pending work, approvals and subagents.'))) : null,
+      h('div', { className: 'bt-recovery-list-header' }, h('span', null, checking ? t('Loading…') : checkedKey === identity ? t('Current status checked') : t('Group status')),
+        h('button', { type: 'button', disabled: checking || saving || typeof refreshGoal !== 'function', onClick: () => void refresh() }, t('Refresh status'))),
+      notice ? h('p', { className: 'bt-recovery-notice', role: 'status' }, notice) : null,
+      error ? h('p', { className: 'bt-recovery-warning', role: 'alert' }, error) : null,
+      attemptId ? h('div', { className: 'bt-recovery-form' },
+        h('label', null, t('What did you verify?'), h('textarea', { value: evidence, maxLength: 2000, disabled: checking || saving, onChange: event => setEvidence(event.target.value) })),
+        h('label', { className: 'bt-recovery-confirm' }, h('input', { type: 'checkbox', checked: confirmed, disabled: checking || saving, onChange: event => setConfirmed(event.target.checked) }), t('I checked the original outcome and authorize future reviews.')),
+        reason ? h('p', { className: 'bt-recovery-note', role: 'status' }, reason) : null,
+        h('button', { type: 'button', disabled: !!reason || checking || saving || typeof resolveReview !== 'function', onClick: () => void submit() }, t('Resume periodic reviews'))) : null))
 }
 
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
@@ -385,7 +530,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
 }
 
 /** A server-authorized group or personal board. */
-export function TaskBoard({ scope, title, close, request = call }) {
+export function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, initialReview = false }) {
   const [visible, setVisible] = useState(true)
   const [snapshot, setData] = useState(null)
   const [error, setError] = useState('')
@@ -591,7 +736,7 @@ export function TaskBoard({ scope, title, close, request = call }) {
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { scope, request }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },
@@ -634,10 +779,22 @@ export const TASK_BOARD_CSS = `
 .bt-board-search{display:flex;align-items:center;gap:8px;min-width:200px;max-width:360px;flex:1;color:var(--bt-ink-2);background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding-left:11px}
 .bt-board-search-icon{font-size:20px;line-height:1}.bt-board-dialog .bt-board-search input{min-width:0;width:100%;border:0;background:transparent;outline:none;padding:9px 8px 9px 0}
 .bt-board-search:focus-within{outline:2px solid var(--bt-accent);outline-offset:2px}
-.bt-board-review-tools{display:flex;gap:8px;flex-wrap:wrap;padding:0 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:30%;overflow:auto}
+.bt-board-review-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));align-items:start;gap:10px;padding:10px 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:min(46vh,480px);overflow:auto}
 .bt-board-recovery-clear{font-size:12px;color:var(--bt-ink-2);padding:10px 0;margin:0}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
 .bt-board-held{padding:10px 0;overflow:auto;max-height:30vh;font-size:12px}.bt-board-held summary{cursor:pointer;font-weight:600;color:var(--bt-ink-2)}.bt-board-held-record{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere}
+.bt-recovery-panel{min-width:0;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 2px 6px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
+.bt-recovery-panel[open]{grid-column:1/-1}.bt-recovery-summary{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;list-style:none;padding:12px 14px}.bt-recovery-summary::-webkit-details-marker,.bt-recovery-record-summary::-webkit-details-marker{display:none}
+.bt-recovery-summary:focus-visible,.bt-recovery-record-summary:focus-visible,.bt-recovery-work-choice:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}.bt-recovery-summary-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bt-recovery-summary-text strong{font-size:13px;line-height:1.35}.bt-recovery-summary-text small{font-size:11px;color:var(--bt-ink-2)}
+.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:9px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
+.bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
+.bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
+.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
+.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:9px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:9px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
+.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
+@media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
+
 .bt-board-content{overflow:auto;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
 .bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:visible;padding:2px 2px 20px;align-items:flex-start;min-height:190px}

@@ -48,8 +48,12 @@ async function request(endpoint,payload){
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',status:'legacy-unverified',legacy:{originalStatus:'done'}}]:[];
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
-  return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',evidence:'inflight.json',secret:'SECRET-HIDDEN'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
+ if(endpoint==='legacy-review-list')return {items:[{workId:'work-a',owner:'a'},{workId:'work-b',owner:'b'}],incomplete:false};
+ if(endpoint==='legacy-review-get')return {state:'not-created',liveRecovery:{available:true,sampledAt:1700000000000,ids:['session-original'],observed:{queue:'observed-present',held:'unknown'}}};
+ if(endpoint==='legacy-review-create')return {state:'needs-review',owner:'a',revision:1,snapshot:{sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[]};
+ if(endpoint==='legacy-review-finding')return {state:'evidence-needed',owner:'a',revision:2,snapshot:{sampledAt:1700000000000,sources:[{sessionId:'session-original'}]},history:[{revision:2,finding:{summary:payload.summary,evidenceRefs:payload.evidenceRefs,unfinished:payload.unfinished}}]};
  if(endpoint==='board-image')return images[payload.imageId];
  if(endpoint==='board-command'||endpoint==='board-upload'){
   if(state.mode==='lost')throw Error('network lost');
@@ -71,7 +75,11 @@ async function request(endpoint,payload){
  throw Error('unexpected endpoint '+endpoint);
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));
-globalThis.renderFixture=(scope,mode='normal')=>{state.scope=scope;state.mode=mode;root.render(h(TaskBoard,{scope,title:'Board',close:()=>{state.closed=(state.closed??0)+1},request}))};
+globalThis.renderFixture=(scope,mode='normal')=>{state.scope=scope;state.mode=mode;
+ const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:'active',reviewAttempt:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
+ const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline')};
+ const resolveReview=async(goalId,reviewId,evidence)=>{state.calls.push({endpoint:'review-resolve',scope,payload:{goalId,reviewId,evidence}});if(mode==='periodic-error')throw Object.assign(Error('stale'),{code:'bot/stale'});if(mode==='periodic-network')throw Error('offline')};
+ root.render(h(TaskBoard,{scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
 globalThis.clearFixture=()=>ReactDOM.flushSync(()=>root.render(null));
 `
 const bundle = await build({ stdin: { contents: entry, resolveDir: dirname(boardEntry), sourcefile: 'board-fixture.js' },
@@ -101,12 +109,24 @@ try {
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'recovery'))
   await page.getByText('Interrupted turns awaiting review').click()
-  const recovery = page.locator('.bt-board-held-record')
-  await recovery.getByText('session-original').waitFor()
-  assert.match(await recovery.innerText(), /Original turn[\s\S]*Unknown/)
-  assert.match(await recovery.innerText(), /exchange-1/)
-  assert.match(await recovery.innerText(), /inflight\.json/)
+  const recovery = page.locator('.bt-recovery-panel').filter({hasText:'Interrupted turns awaiting review'})
+  await recovery.getByText('Alice', {exact:true}).waitFor()
+  await recovery.getByText('Bob', {exact:true}).waitFor()
+  const recoverySearch = recovery.getByPlaceholder('Filter by Bot or ID')
+  await recoverySearch.fill('exchange-2')
+  assert.equal(await recovery.getByText('session-other', {exact:true}).count(), 1)
+  assert.equal(await recovery.getByText('session-original', {exact:true}).count(), 0)
+  await recoverySearch.fill('missing')
+  await recovery.getByText('No matching records.').waitFor()
+  await recoverySearch.fill('')
+  const original = recovery.locator('.bt-recovery-record').filter({hasText:'session-original'})
+  await original.locator('summary').click()
+  assert.match(await original.innerText(), /Original turn[\s\S]*Unknown/)
+  assert.match(await original.innerText(), /exchange-1/)
+  assert.match(await original.innerText(), /inflight\.json/)
+  assert.doesNotMatch(await recovery.innerText(), /SECRET-HIDDEN/)
   assert.equal(await recovery.getByRole('button').count(), 0, 'reconciliation view must not replay or close work')
+  if (process.env.RECOVERY_SCREENSHOT) await page.screenshot({ path:process.env.RECOVERY_SCREENSHOT })
   await page.getByText('Snapshot time (UTC): 2023-11-14T22:13:20.000Z').waitFor()
   const beforeRefresh = await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)
   await page.evaluate(() => { globalThis.fixture.recoveryEmpty = true })
@@ -116,6 +136,48 @@ try {
   await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal'))
   await page.getByText('Personal task', {exact:true}).waitFor()
   assert.equal(await page.locator('.bt-board-held-record').count(), 0, 'scope change must not retain old recovery rows')
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'normal'))
+  const manual = page.locator('.bt-recovery-panel').filter({hasText:'Review an existing work'})
+  await manual.locator('summary').first().click()
+  await manual.getByText('Alice', {exact:true}).waitFor()
+  await manual.getByText('Bob', {exact:true}).waitFor()
+  await manual.getByPlaceholder('Filter by Bot or ID').fill('work-b')
+  assert.equal(await manual.getByRole('button', {name:'work-b'}).count(), 1)
+  assert.equal(await manual.getByRole('button', {name:'work-a'}).count(), 0)
+  await manual.getByRole('button', {name:'work-b'}).click()
+  await manual.getByRole('button', {name:'Create review'}).waitFor()
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'legacy-review-get' && x.payload.workId === 'work-b' && x.payload.scope.id === 'g1')), true)
+  await manual.getByRole('button', {name:'Create review'}).click()
+  await manual.getByLabel('Review note', {exact:true}).fill('Checked the original session')
+  await manual.getByRole('button', {name:'Save review note'}).click()
+  await manual.getByText('Checked the original session').waitFor()
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'legacy-review-finding' && x.payload.workId === 'work-b' && x.payload.expectedRevision === 1)), true)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'periodic'))
+  const periodic = page.locator('.bt-periodic-review')
+  await periodic.getByText('This only resumes periodic inspections; it does not approve or complete tasks.').waitFor()
+  await periodic.getByText('The server also checks the group and administrator sessions for pending work, approvals and subagents.').waitFor()
+  const resume = periodic.getByRole('button', {name:'Resume periodic reviews'})
+  assert.equal(await resume.isDisabled(), true)
+  await periodic.getByLabel('What did you verify?').fill('Checked original work')
+  assert.equal(await resume.isDisabled(), true, 'confirmation must be explicit')
+  await periodic.getByLabel('I checked the original outcome and authorize future reviews.').check()
+  await periodic.getByRole('button', {name:'Refresh status'}).click()
+  await resume.click()
+  await periodic.getByText(/Request accepted/).waitFor()
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'review-resolve').length), 1)
+  assert.deepEqual(await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'review-resolve').payload), {goalId:'goal-1',reviewId:'attempt-1',evidence:'Checked original work'})
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'review-resolve').scope.id), 'g1')
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g2' }, 'periodic-error'))
+  const refused = page.locator('.bt-periodic-review')
+  await refused.getByLabel('What did you verify?').fill('Checked original work')
+  await refused.getByLabel('I checked the original outcome and authorize future reviews.').check()
+  await refused.getByRole('button', {name:'Refresh status'}).click()
+  await refused.getByRole('button', {name:'Resume periodic reviews'}).click()
+  await refused.getByRole('alert').getByText('The goal changed or related work is still pending. Check it before recovery.').waitFor()
+  assert.equal(await refused.getByRole('button', {name:'Resume periodic reviews'}).isDisabled(), true)
 
   await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'capacity'))
   await page.getByText('Instance task capacity: 1000 / 1000').waitFor()

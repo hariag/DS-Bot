@@ -186,14 +186,11 @@ const STOP_ARM_MS = 3000
 
 // The open pod focuses one stage: a stepper across the top, the selected
 // stage's checks and tasks under it, and a bottom row with the rest.
-function GoalPanel({ goal, view, room, roster, actions, working }) {
+function GoalPanel({ goal, view, room, roster, actions, working, openReview }) {
   const at = RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1
   const [selected, setSelected] = useState(at)
   const [checks, setChecks] = useState(false)
   const [armed, setArmed] = useState(false)
-  const [reviewEvidence, setReviewEvidence] = useState('')
-  const [reviewConfirmed, setReviewConfirmed] = useState(false)
-  const [reviewSaving, setReviewSaving] = useState(false)
   // The selected stage follows the goal's current one as stages pass.
   useEffect(() => setSelected(RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1), [view.status, goal.current])
   useEffect(() => {
@@ -221,18 +218,7 @@ function GoalPanel({ goal, view, room, roster, actions, working }) {
   const hasChecks = goal.objective !== undefined || goal.acceptance !== undefined || goal.constraints?.length > 0
   const admin = roster.byId?.[room.admin]?.name ?? t('a Bot')
   const stopWork = () => void Promise.resolve(actions.stopRoomWork(room.id)).catch(error => actions.reportError(error, 'stop'))
-  const attempt = goal.reviewAttempt
-  const recoverable = view.status === 'active' && attempt && (['uncertain', 'cancelled-uncertain'].includes(attempt.state)
-    || (attempt.state === 'admitting' && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1000))
-    && !(goal.idle === true && (!['admin-pass', 'nudge-limit'].includes(goal.idleReason) || goal.idleRevision !== goal.revision))
-  const resolveReview = () => {
-    if (!recoverable || !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving) return
-    setReviewSaving(true)
-    void Promise.resolve(actions.goalReviewResolve(room.id, goal.id, attempt.id, reviewEvidence.trim())).then(
-      () => { setReviewEvidence(''); setReviewConfirmed(false); setReviewSaving(false) },
-      error => { setReviewSaving(false); actions.reportError(error, 'goal') },
-    )
-  }
+  const reviewIssue = goal.reviewAttempt && ['uncertain', 'cancelled-uncertain', 'admitting'].includes(goal.reviewAttempt.state)
   return h('div', { className: 'bt-goal-panel', role: 'region', 'aria-label': view.title },
     h('div', { className: 'bt-goal-body' },
     view.status === 'drafting' ? null : h('div', { ref: stepper, className: 'bt-goal-steps', role: 'group', 'aria-label': t('Stages') },
@@ -268,11 +254,9 @@ function GoalPanel({ goal, view, room, roster, actions, working }) {
       goal.acceptance ? sec('acceptance', t('Done when'), goal.acceptance) : null,
       goal.constraints?.length > 0 ? sec('rules', t('Rules'), h('ul', { className: 'bt-goal-rules' },
         goal.constraints.map((rule, i) => h('li', { key: i }, rule)))) : null) : null),
-    recoverable ? h('div', { className: 'bt-goal-sec' },
+    reviewIssue ? h('div', { className: 'bt-goal-sec' },
       h('div', { className: 'bt-goal-text' }, t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
-      h('label', { className: 'bt-goal-text' }, t('What did you verify?'), h('textarea', { className: 'bt-input bt-input-area', value: reviewEvidence, onChange: event => setReviewEvidence(event.target.value) })),
-      h('label', { className: 'bt-goal-text' }, h('input', { type: 'checkbox', checked: reviewConfirmed, onChange: event => setReviewConfirmed(event.target.checked) }), t('I checked the original outcome and authorize future reviews.')),
-      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving, onClick: resolveReview }, t('Resume periodic reviews'))) : null,
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: typeof openReview !== 'function', onClick: openReview }, t('Open review workspace'))) : null,
     h('div', { className: 'bt-goal-foot' },
       hasChecks ? h('button', {
         type: 'button', className: 'bt-goal-checks', 'aria-expanded': checks, onClick: () => setChecks(!checks),
@@ -333,7 +317,7 @@ function GoalCompose({ room, roster, actions }) {
 
 // The surface that wraps the pill: pod with the bar (or the draft form) while
 // closed, the panel while open. The pod hangs off the header over the transcript.
-export function GoalIsland({ room, goal, view, open, composing, roomWork, roster, actions, pill }) {
+export function GoalIsland({ room, goal, view, open, composing, roomWork, roster, actions, pill, openReview }) {
   const island = useRef(null)
   useMorph(island, open)
   const working = new Set((roomWork ?? []).map(entry => entry.botId))
@@ -351,7 +335,7 @@ export function GoalIsland({ room, goal, view, open, composing, roomWork, roster
       : view === null ? null
         : h(Fragment, null,
           h(GoalBar, { view, open, room, actions }),
-          open ? h(GoalPanel, { goal, view, room, roster, actions, working }) : null)))
+          open ? h(GoalPanel, { goal, view, room, roster, actions, working, openReview }) : null)))
 }
 
 export const GOAL_CSS = `
