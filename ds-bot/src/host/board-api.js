@@ -87,6 +87,11 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     list(scope, principal) {
       return view(scope, principal)
     },
+    history(scope, principal, taskId) {
+      if (principal?.kind !== 'user') throw fail('Task history is unavailable')
+      visibleTask(scope, principal, taskId)
+      return store.history(taskId)
+    },
     operation(scope, principal, operationId) {
       if (!nonempty(operationId)) throw fail('Invalid operation ID')
       const board = view(scope, principal)

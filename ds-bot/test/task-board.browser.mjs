@@ -196,7 +196,7 @@ try {
   assert.equal(await original.getByRole('button',{name:'Redo',exact:true}).count(),0)
   await original.getByRole('button',{name:'View candidate text'}).click()
   await original.getByText('This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.').waitFor()
-  await original.getByText('This is a saved snapshot and may be incomplete or out of date.').waitFor()
+  await original.getByText('This saved snapshot may omit other inputs and may be out of date.').waitFor()
   assert.equal(await original.locator('.bt-recovery-candidate-text').innerText(),'Candidate task\nSecond line')
   await original.locator('summary').click(); await original.locator('summary').click()
   assert.equal(await original.locator('.bt-recovery-candidate-text').count(),0,'closing clears candidate text')

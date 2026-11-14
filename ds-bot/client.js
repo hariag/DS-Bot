@@ -12485,7 +12485,7 @@ var DSH_DE = {
 var NAMESPACE = "ds-bot";
 var ZH = {
   "View candidate text": "查看候选内容",
-  "This is a saved snapshot and may be incomplete or out of date.": "这是保存的历史快照，可能不完整或已过时。",
+  "This saved snapshot may omit other inputs and may be out of date.": "这是保存的历史快照，可能遗漏同回合的其他输入，也可能已过时。",
   "Redo is not available. You can inspect candidate text without sending it.": "暂不能重做。你可以查看候选内容，不会发送或执行。",
   "Candidate text is unavailable. The record may be missing, incomplete or changing.": "无法读取候选内容，记录可能不存在、不完整或正在变化。",
   "This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.": "这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。",
@@ -12518,6 +12518,8 @@ var ZH = {
   "Reason for correction": "修订说明",
   "The original task and acceptance record remain unchanged.": "原任务和验收记录保持不变。",
   "Card revision history": "卡片修订记录",
+  "Showing the latest 50 revisions.": "显示最近 50 个修订。",
+  "Revision": "修订版本",
   "Before": "修改前",
   "After": "修改后",
   "Goal card details can be corrected without changing the original task or acceptance record.": "可修订目标卡片资料，原任务和验收记录保持不变。",
@@ -36956,7 +36958,7 @@ function HeldRecord({ item, scope, request, busy, decide }) {
       "div",
       { className: "bt-recovery-candidate" },
       (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t(candidate.legacy ? "This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly." : "This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.")),
-      candidate.snapshot ? (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This is a saved snapshot and may be incomplete or out of date.")) : null,
+      candidate.snapshot ? (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This saved snapshot may omit other inputs and may be out of date.")) : null,
       candidate.parts.map((part, index) => (0, import_react50.createElement)("pre", { key: index, className: "bt-recovery-candidate-text" }, part))
     ) : null,
     (0, import_react50.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore"))
@@ -38079,6 +38081,54 @@ function TaskCard({ scope, task, commands, actors, uncertain, onOpen }) {
     )
   );
 }
+function TaskHistory({ scope, task, request }) {
+  const [history, setHistory] = (0, import_react50.useState)(null);
+  const [error, setError] = (0, import_react50.useState)("");
+  const sequence = (0, import_react50.useRef)(0);
+  (0, import_react50.useEffect)(() => {
+    setHistory(null);
+    setError("");
+    sequence.current++;
+    return () => {
+      sequence.current++;
+    };
+  }, [task.id, task.revision]);
+  const load = async (event) => {
+    if (!event.currentTarget.open || history) return;
+    const id = ++sequence.current;
+    try {
+      const result = await request("board-history", { scope, taskId: task.id });
+      if (sequence.current === id) setHistory(result);
+    } catch (err) {
+      if (sequence.current === id) setError(err?.message || t("Board unavailable"));
+    }
+  };
+  const fields = { title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description", dueDate: "Due date", labels: "Labels", checklist: "Checklist" };
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-board-history", onToggle: load },
+    (0, import_react50.createElement)("summary", null, t("Card revision history")),
+    error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null,
+    !history && !error ? (0, import_react50.createElement)("p", null, t("Loading…")) : null,
+    history?.truncated ? (0, import_react50.createElement)("p", null, t("Showing the latest 50 revisions.")) : null,
+    (history?.entries ?? []).map((entry) => {
+      const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null));
+      if (!changed.length) return null;
+      return (0, import_react50.createElement)(
+        "article",
+        { key: entry.after.revision },
+        (0, import_react50.createElement)("strong", null, `${t("Revision")} ${entry.after.revision}`),
+        changed.map(([key, label]) => (0, import_react50.createElement)(
+          "div",
+          { key },
+          (0, import_react50.createElement)("strong", null, t(label)),
+          (0, import_react50.createElement)("p", null, `${t("Before")}: ${typeof entry.before?.[key] === "string" ? entry.before[key] : JSON.stringify(entry.before?.[key] ?? "")}`),
+          (0, import_react50.createElement)("p", null, `${t("After")}: ${typeof entry.after?.[key] === "string" ? entry.after[key] : JSON.stringify(entry.after?.[key] ?? "")}`)
+        ))
+      );
+    })
+  );
+}
 function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy }) {
   const modal = (0, import_react50.useRef)(null);
   const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
@@ -38212,6 +38262,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         }))) : null,
         uploadEnabled && commands.some((command) => command.type === "upload") ? (0, import_react50.createElement)(UploadImages, { task, disabled: uncertain, onUpload }) : null,
         (0, import_react50.createElement)(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
+        !task.legacy && !task.shared ? (0, import_react50.createElement)(TaskHistory, { scope, task, request }) : null,
         commands.some((command) => command.type === "goal-history-title") ? (0, import_react50.createElement)(EditHistoryTitle, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-history-title" }, value) }) : null,
         Array.isArray(task.boardHistory) && task.boardHistory.length ? (0, import_react50.createElement)(
           "details",
@@ -38624,7 +38675,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
 }
 var TASK_BOARD_CSS = `
 .bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:4px 8px;cursor:pointer}
-.bt-board-backdrop{position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.46);display:flex;align-items:center;justify-content:center;padding:18px}
+.bt-board-backdrop{--bt-main:var(--dsw-alias-bg-base,#fcfcfc);--bt-sidebar:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-card:var(--dsw-alias-bg-layer-1,#fff);--bt-ink:var(--dsw-alias-label-primary,#141414);--bt-ink-2:var(--dsw-alias-label-secondary,#555);--bt-ink-3:var(--dsw-alias-label-tertiary,#777);--bt-line:var(--dsw-alias-border-l2,rgba(0,0,0,.1));--bt-line-2:var(--dsw-alias-border-l3,rgba(0,0,0,.12));--bt-hover:var(--dsw-alias-interactive-bg-hover-solid,#f5f5f5);--bt-tag-bg:var(--dsw-alias-bg-module-platform,#f7f7f7);--bt-accent:var(--dsw-alias-button-info-fill,#4176e6);--bt-accent-ink:var(--dsw-alias-label-on-color,#fff);position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
 .bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
 .bt-board-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 26px 16px;border-bottom:1px solid var(--bt-line);flex:none}
 .bt-board-header h2{font-size:20px;line-height:1.3;letter-spacing:-.025em;margin:0}.bt-board-header p{font-size:12px;color:var(--bt-ink-2);margin:4px 0 0}
@@ -38656,7 +38707,7 @@ var TASK_BOARD_CSS = `
 .bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
 
-.bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
+.bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:var(--dsw-alias-bg-base,var(--bt-main))}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
 .bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
 .bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 20px;align-items:flex-start;min-height:190px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.bt-board-columns::-webkit-scrollbar{display:none}

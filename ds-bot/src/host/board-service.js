@@ -165,6 +165,8 @@ export function install(rt) {
       case 'board-operation':
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:')) {api.list(scope,principal);return goalEditor.operation(scope,payload.operationId)}
         return api.operation(scope, principal, payload.operationId)
+      case 'board-history':
+        return api.history(scope, principal, payload.taskId)
       case 'board-held-decision':
         api.list(scope,principal)
         if (typeof rt.setHeldDecision !== 'function') throw new Error('Interrupted turn decisions are unavailable')
