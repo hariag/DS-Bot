@@ -107,7 +107,8 @@ test('rejects a private directory whose permissions were widened', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
   const dir = join(f.home, 'original-redo-v1'); await chmod(dir, 0o755)
   t.after(() => chmod(dir, 0o700).catch(() => {}))
-  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /directory unavailable/)
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), Error)
+  assert.equal(JSON.parse(await readFile(join(dir, `${operationId}.json`), 'utf8')).state, 'prepared')
 })
 
 test('a permission change after the durable dispatch transition returns unknown and does not permit resend', async t => {
@@ -153,6 +154,41 @@ test('replacement or loss of a previously initialized journal directory fails cl
   const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
   await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }), /identity unavailable|directory changed/)
   await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), /directory changed/)
+})
+
+test('removing one operation record cannot make its recovery eligible for another operation', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  await rm(join(f.home, 'original-redo-v1', `${operationId}.json`))
+  const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }), /already exists/)
+  await assert.rejects(restarted.prepare(f.request), /already exists/)
+})
+
+test('missing or altered journal and recovery markers fail closed', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const root = join(f.home, 'original-redo-v1')
+  await rm(join(root, '.identity'))
+  await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal))
+  const restarted = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(restarted.prepare({ ...f.request, operationId:otherId }))
+})
+
+test('a callback that widens the journal directory is fenced before dispatch', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const root = join(f.home, 'original-redo-v1')
+  t.after(() => chmod(root, 0o700).catch(() => {}))
+  f.dependencies.validateBinding = () => { fs.chmodSync(root, 0o755); return true }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /directory changed/)
+})
+
+test('claim boundary is fixed before invoking callbacks', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal)
+  f.dependencies.validateBinding = (_row, turn) => { if (turn) { assert.equal(Object.isFrozen(turn), true); assert.throws(() => { turn.turn = 88 }, TypeError) }; return true }
+  const journal = createOriginalRedoJournal(f.rt, f.dependencies)
+  const result = journal.markClaimingSync(binding, { turn:9, turnStartSeq:72 }, f.request.principal)
+  assert.deepEqual(result.turn, { turn:9, turnStartSeq:72 })
 })
 
 test('stores only a matching writer-verified result reference and requires authorization on repeat reads', async t => {
