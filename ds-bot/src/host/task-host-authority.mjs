@@ -50,7 +50,10 @@ export function createTaskHostAuthority({rt,assertLease}) {
       return {botId:action.actor,sessionId:sid}
     }catch{return undefined}
   }
-  const within=(candidate,base)=>candidate===base||candidate.startsWith(`${base}${sep}`)
+  const within=(candidate,base)=>{
+    const suffix=relative(base,candidate)
+    return suffix==='' || (!isAbsolute(suffix) && suffix!=='..' && !suffix.startsWith(`..${sep}`))
+  }
   const evidenceFile=(task,description)=>{
     const match=typeof description==='string'&&/^sha256:([0-9a-f]{64}):(.+)$/.exec(description)
     if(!match)return false

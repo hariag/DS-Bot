@@ -215,6 +215,7 @@ export function install(rt) {
         bootReady.reject(error)
         const release=await registered.catch(()=>undefined)
         release?.();providerDispose=undefined
+        await instance?.finisher?.close()
         instance?.admission?.close()
         instance?.dropGate?.()
         rt.warn?.('ds-bot: guarded board unavailable: %s',error?.message||'unknown error')
