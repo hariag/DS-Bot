@@ -671,6 +671,9 @@ try {
   assert.ok(mobileBox && mobileBox.width<=375 && mobileBox.height<=700, 'card detail must fit the mobile viewport')
   const scrollable=await mobileModal.evaluate(root=>[root,...root.querySelectorAll('*')].some(el=>el.scrollHeight>el.clientHeight+1&&['auto','scroll'].includes(getComputedStyle(el).overflowY)))
   assert.equal(scrollable,true,'long mobile card details must scroll within the modal')
+  await page.evaluate(()=>{const button=document.createElement('button');button.id='shell-focus-probe';document.body.append(button);button.focus()})
+  assert.equal(await mobileModal.evaluate(el=>el.contains(document.activeElement)),true,'host focus changes must not escape the active card dialog')
+  await page.evaluate(()=>{document.activeElement?.blur();document.getElementById('shell-focus-probe')?.remove()})
   for(const key of ['Tab','Tab','Shift+Tab']) {
     await page.keyboard.press(key)
     assert.equal(await mobileModal.evaluate(el=>el.contains(document.activeElement)),true,`${key} stays in the card dialog`)
