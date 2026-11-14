@@ -11,6 +11,8 @@ function fixture() {
     list: () => rows,
     get: id => rows.find(row => row.id === id),
     operation: id => operations.get(id),
+    history: id => ({ entries:[{ after:{ revision:1, title:id } }], truncated:false }),
+    proposeChange: input => ({ id:'change', source:input.taskId, value:input.value }),
     create: ({ operationId, actor, task }) => {
       const found = operations.get(operationId)
       if (found) { if (found.input !== JSON.stringify(task)) throw new Error('operation conflict'); return found.result }
@@ -38,6 +40,14 @@ const room = { kind: 'room', id: 'room' }
 const user = { kind: 'user' }
 const proposal = { operationId: 'op1', taskId: 'task1', title: 'Build', acceptance: 'Independent check', owner: 'one', reviewer: 'two', dependencies: [] }
 
+test('task history requires the owner principal and the same board scope', () => {
+  const f = fixture(); f.api.create(room, user, proposal)
+  assert.equal(f.api.history(room, user, 'task1').entries[0].after.title, 'task1')
+  assert.throws(() => f.api.history(room, {kind:'bot', id:'one'}, 'task1'))
+  f.state.rooms.other = {members:['one','two']}
+  assert.throws(() => f.api.history({kind:'room',id:'other'}, user, 'task1'))
+})
+
 test('a group proposal is durable under the same operation ID and visible from the owner board', () => {
   const f = fixture(); const created = f.api.create(room, user, proposal)
   assert.deepEqual(f.api.create(room, user, proposal), created)
@@ -47,10 +57,25 @@ test('a group proposal is durable under the same operation ID and visible from t
   assert.throws(() => f.api.create(room, user, { ...proposal, title: 'Different' }), /operation conflict/)
 })
 
+test('a personal Bot board offers public Bots as independent reviewers and permits scheduling', () => {
+  const f=fixture(),scope={kind:'personal',id:'one'}
+  f.api.create(scope,user,{...proposal,operationId:'personal-bot',taskId:'personal-bot-task'})
+  const board=f.api.list(scope,user)
+  assert.ok(board.capabilities.actors.some(actor=>actor.id==='two'))
+  assert.ok(board.capabilities.commands['personal-bot-task'].some(command=>command.type==='schedule'))
+})
+
 test('private or nonmember Bots cannot be put in a group proposal', () => {
   const f = fixture()
   assert.throws(() => f.api.create(room, user, { ...proposal, owner: 'private' }))
   assert.equal(f.rows.length, 0)
+})
+
+test('a user can create a personal card in a progress column but cannot assign that marker to a group', () => {
+  const f = fixture(), mine = {...proposal, owner:'user', reviewer:'one', personalProgress:'doing'}
+  const card = f.api.create({kind:'personal', id:'user'}, user, mine)
+  assert.equal(card.personalProgress, 'doing'); assert.equal(card.status, 'proposed')
+  assert.throws(() => f.api.create(room, user, {...mine, operationId:'group', taskId:'group'}), /personal progress/i)
 })
 
 test('a Bot cannot impersonate the instance user or view another personal board', () => {
@@ -85,6 +110,17 @@ test('an authorized user edits a card without impersonating its Bot owner', () =
   const edited = f.api.command(room, user, { operationId: 'edit-1', taskId: 'task1', expectedRevision: 1, type: 'edit', value })
   assert.equal(edited.title, 'New title'); assert.equal(edited.owner, 'one'); assert.equal(edited.revision, 2)
   assert.deepEqual(f.api.command(room, user, { operationId: 'edit-1', taskId: 'task1', expectedRevision: 1, type: 'edit', value }), edited)
+})
+
+test('editing an active task creates a change request without overwriting the original', () => {
+  const f = fixture(); f.api.create(room, user, proposal)
+  f.rows[0].status = 'working'
+  const value = {title:'New title', owner:'one', reviewer:'two', acceptance:'New acceptance', dependencies:[]}
+  const changed = f.api.command(room, user, {operationId:'change', taskId:'task1', expectedRevision:1, type:'edit', value})
+  assert.equal(changed.source, 'task1'); assert.equal(changed.value.acceptance, 'New acceptance')
+  assert.equal(f.rows[0].title, 'Build'); assert.equal(f.rows[0].status, 'working')
+  f.state.rooms.other = {members:['one','two']}
+  assert.throws(() => f.api.command({kind:'room',id:'other'}, user, {operationId:'bad',taskId:'task1',expectedRevision:1,type:'edit',value}))
 })
 
 test('card details are scoped, explicit capabilities and do not leak into shared projections', () => {

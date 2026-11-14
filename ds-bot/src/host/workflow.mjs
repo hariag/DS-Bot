@@ -55,7 +55,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
 
   const direct = (task, caller) => {
     if (!task || !id(task.id) || typeof task.scope !== 'string') return false
-    if (task.scope.startsWith('personal:')) return caller.roomId === undefined && task.scope.slice(9) === caller.actor
+    if (task.scope.startsWith('personal:')) return caller.roomId === undefined
+      && (task.scope.slice(9) === caller.actor || task.reviewer === caller.actor)
     const origin = roomFor(task)
     if (!member(origin, caller.actor)) return false
     return caller.roomId === undefined || caller.roomId === origin.id

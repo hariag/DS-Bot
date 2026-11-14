@@ -23,6 +23,20 @@ const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({
 const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
 
+test('version history preserves before and after across restart without exposing unrelated metadata', t => {
+  const {store, path} = fixture(t)
+  create(store, 'history')
+  command(store, 'history', 'card-details', 'user', {description:'Original'})
+  command(store, 'history', 'card-details', 'user', {description:'Changed'}, 'changed')
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  const history = reopened.history('history')
+  assert.equal(history.entries[0].before.description, 'Original')
+  assert.equal(history.entries[0].after.description, 'Changed')
+  assert.equal(history.entries[0].after.revision, 3)
+  assert.equal(history.entries[0].after.authority, undefined)
+  assert.equal(history.truncated, false)
+})
+
 test('card details persist with CAS and idempotency without completing dependencies', t => {
   const { store, path } = fixture(t)
   create(store, 'card'); create(store, 'dependent', ['card']); register(store, 'dependent')
@@ -78,6 +92,18 @@ test('personal progress is durable, scoped and never completes a dependency', t 
   assert.equal(reopened.get('mine').personalProgress, 'finished'); assert.equal(reopened.get('mine').status, 'proposed')
   assert.equal(reopened.get('dependent').status, 'waiting')
 })
+
+test('personal progress can be selected atomically at creation without scheduling work', t => {
+  const {store, path} = fixture(t)
+  const input = {operationId:'create-doing', actor:'user', task:{...task('doing'), owner:'user', personalProgress:'doing'}}
+  const created = store.create(input)
+  assert.equal(created.personalProgress, 'doing'); assert.equal(created.status, 'proposed')
+  assert.deepEqual(store.create(input), created); assert.equal(store.listActions(created.id).length, 0)
+  assert.throws(() => store.create({...input, operationId:'bad', task:{...input.task, id:'bad', scope:'room:group'}}), /personal progress/)
+  assert.throws(() => store.create({...input, operationId:'bad2', task:{...input.task, id:'bad2', owner:'bot'}}), /personal progress/)
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  assert.equal(reopened.get('doing').personalProgress, 'doing')
+})
 const intentFor = action => ({ admissionId:`admission-${action.id}`, messageId:`message-${action.id}`, targetBotId:action.actor, targetSessionId:`session-${action.actor}`, payload:{ id:`message-${action.id}`, role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:`admission-${action.id}`} } })
 const claim = (store, action, intent = intentFor(action)) => store.claimAction({ actionId:action.id, actor:'scheduler', intent })
 function accept(s, id, kind) {
@@ -99,6 +125,33 @@ test('card details do not disrupt an already accepted work and its independent r
   command(store, 'active', 'report', 'owner', evidence)
   accept(store, 'active', 'review'); command(store, 'active', 'review', 'reviewer', { evidence:'independent review', result:'pass' })
   assert.equal(store.get('active').status, 'done')
+})
+
+test('editing running work creates one separate change proposal with an immutable baseline', t => {
+  const {store, path} = fixture(t); create(store, 'active'); register(store, 'active')
+  accept(store, 'active', 'execute'); command(store, 'active', 'start', 'owner')
+  const old = store.get('active')
+  const value = {title:'Changed', owner:old.owner, reviewer:old.reviewer, acceptance:'New acceptance', dependencies:[], dependencyGrants:[], description:'New description'}
+  const input = {operationId:'change-op', actor:'user', taskId:old.id, expectedRevision:old.revision, value}
+  const proposal = store.proposeChange(input)
+  assert.deepEqual(store.proposeChange(input), proposal)
+  assert.equal(store.get('active').title, old.title)
+  assert.equal(store.get('active').status, 'working')
+  assert.equal(proposal.status, 'waiting'); assert.deepEqual(proposal.dependencies, ['active'])
+  assert.equal(proposal.change.before.acceptance, old.acceptance); assert.equal(proposal.change.after.acceptance, 'New acceptance')
+  assert.equal(proposal.change.before.description, ''); assert.equal(proposal.change.after.description, 'New description')
+  assert.equal(store.listActions(proposal.id).length, 0)
+  assert.throws(() => command(store, proposal.id, 'edit', 'user', {title:'Overwrite'}), /immutable/)
+  assert.throws(() => command(store, proposal.id, 'card-details', 'user', {description:'Overwrite'}), /immutable/)
+  assert.throws(() => store.proposeChange({...input, operationId:'duplicate'}), /already exists/)
+  assert.throws(() => store.proposeChange({...input, operationId:'stale', expectedRevision:old.revision-1}), /revision conflict/)
+  command(store, 'active', 'report', 'owner', evidence)
+  accept(store, 'active', 'review'); command(store, 'active', 'review', 'reviewer', {evidence:'independent',result:'pass'})
+  assert.equal(store.get(proposal.id).status, 'ready')
+  assert.equal(store.listActions(proposal.id).filter(action=>action.state==='pending').length, 1)
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  assert.deepEqual(reopened.get(proposal.id).change, proposal.change)
+  assert.deepEqual(reopened.proposeChange(input), proposal)
 })
 
 test('delivery and independent review drive dependencies immediately and survive restart', t => {
@@ -169,6 +222,20 @@ test('process death after admission intent commit preserves original identity wi
   const intent = { admissionId:'admission-1', messageId:'message-1', targetBotId:'bot', targetSessionId:'session-1', payload:{ id:'message-1', role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:'admission-1'} } }
   assert.equal(store.claimAction({ actionId:action.id, actor:'scheduler', intent }).claimedNow, false)
   assert.throws(() => store.claimAction({ actionId:action.id, actor:'scheduler', intent:{ ...intent, targetSessionId:'session-2' } }), /intent conflict/)
+})
+
+test('startup converts interrupted admissions to durable uncertainty exactly once', t => {
+  const {store,path}=fixture(t);create(store,'restart');register(store,'restart')
+  const action=store.listActions('restart')[0],intent=intentFor(action);claim(store,action,intent)
+  store.markAction({actionId:action.id,actor:'host',expectedState:'claimed',state:'accepted',receipt:'verified'})
+  store.close()
+  const reopened=openTaskStore(path,opts);t.after(()=>reopened.close())
+  assert.equal(reopened.holdInterruptedAdmissions(),1)
+  const held=reopened.admission(action.id)
+  assert.equal(held.state,'uncertain');assert.equal(held.admissionId,intent.admissionId);assert.equal(held.messageId,intent.messageId)
+  assert.match(held.receipt??reopened.listActions('restart')[0].receipt,/delivery outcome unknown/)
+  assert.equal(reopened.holdInterruptedAdmissions(),0)
+  assert.equal(reopened.listActions('restart')[0].state,'uncertain')
 })
 
 test('pending cancellation is durable, idempotent and does not claim delivery', t => {

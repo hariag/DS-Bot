@@ -12,8 +12,9 @@ export const NAMESPACE = 'ds-bot'
 
 const ZH = {
   'View candidate text': '查看候选内容',
+  'This saved snapshot may omit other inputs and may be out of date.': '这是保存的历史快照，可能遗漏同回合的其他输入，也可能已过时。',
   'Redo is not available. You can inspect candidate text without sending it.': '暂不能重做。你可以查看候选内容，不会发送或执行。',
-  'Candidate text is unavailable. The session or its durable writer may be unavailable.': '无法读取候选内容，会话或持久化写入器可能不可用。',
+  'Candidate text is unavailable. The record may be missing, incomplete or changing.': '无法读取候选内容，记录可能不存在、不完整或正在变化。',
   'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.': '这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。',
   'This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.': '这段文字是持久日志中的候选内容，发送者未经认证，仅供核对，不能执行。',
   'Work decisions': '处理已有工作',
@@ -44,6 +45,29 @@ const ZH = {
   'Reason for correction': '修订说明',
   'The original task and acceptance record remain unchanged.': '原任务和验收记录保持不变。',
   'Card revision history': '卡片修订记录',
+  'Showing the latest 50 revisions.': '显示最近 50 个修订。',
+  'Revision': '修订版本',
+  'Personal progress does not dispatch a Bot or complete shared work.': '个人进度不会派发 Bot，也不会完成共享任务。',
+  'Add task': '添加任务',
+  'Add and schedule': '添加并派发',
+  'Add follow-up': '添加后续任务',
+  'Create and schedule': '创建并派发',
+  'Create follow-up': '创建后续任务',
+  'Schedule Bot': '派发 Bot',
+  'This task will be sent to its Bot owner when its dependencies are met.': '依赖满足后，任务将发送给负责的 Bot。',
+  'This creates a follow-up in Preparing; reported and completed work cannot be created without evidence.': '这会在「准备中」创建后续任务；没有证据时不能直接创建已汇报或已完成的工作。',
+  'Reported and completed work cannot be created without evidence.': '没有证据时，不能直接创建已汇报或已完成的工作。',
+  'Bot queued': '已排队待派发',
+  'Preparing delivery': '正在准备派发',
+  'Sent to Bot': '已发送给 Bot',
+  'Delivery needs review': '派发结果待核对',
+  'The Bot message may or may not have reached its Session. Check the delivery before scheduling again.': 'Bot 消息是否进入会话尚不确定。请先核对派发结果，再决定是否重新派发。',
+  'This change is being worked as a separate task; the original stays unchanged.': '此变更作为独立任务推进；原任务保持不变。',
+  'This change waits for the original task to complete. It has not been dispatched.': '此变更等待原任务完成，尚未派发。',
+  'Saving creates a separate change proposal after the original task.': '保存后将创建独立的需求变更提案，并等待原任务完成。',
+  'Requirement change': '需求变更',
+  'Original task': '原任务',
+  'This proposal waits for the original task. It has not been dispatched.': '此提案等待原任务完成，尚未派发。',
   'Before': '修改前',
   'After': '修改后',
   'Goal card details can be corrected without changing the original task or acceptance record.': '可修订目标卡片资料，原任务和验收记录保持不变。',
@@ -220,6 +244,8 @@ const ZH = {
   "Exchange ID": "交接 ID",
   "Recovery ID": "恢复记录 ID",
   'Task board': '任务看板',
+  'Board': '看板',
+  'Sender': '发送者',
   'My task board': '我的任务看板',
   'Group task board': '群任务看板',
   'Personal task board': '个人任务看板',
@@ -2144,14 +2170,18 @@ const LEGACY_REVIEW_EN_FALLBACK = Object.fromEntries([
   'Save review note', 'Evidence references', 'Unfinished items',
 ].map(key => [key, key]))
 
+// Locale packs may translate only part of the client; untranslated copy stays
+// explicitly English until that locale receives a translation.
+const CLIENT_EN_FALLBACK = Object.fromEntries(Object.keys(ZH).map(key => [key, key]))
+
 export const DICTIONARY = {
   zh: ZH,
   'zh-TW': ZH_TW,
-  ja: { ...LEGACY_REVIEW_EN_FALLBACK, ...JA },
-  ko: { ...LEGACY_REVIEW_EN_FALLBACK, ...KO },
-  es: { ...LEGACY_REVIEW_EN_FALLBACK, ...ES },
-  fr: { ...LEGACY_REVIEW_EN_FALLBACK, ...FR },
-  de: { ...LEGACY_REVIEW_EN_FALLBACK, ...DE },
+  ja: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...JA },
+  ko: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...KO },
+  es: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...ES },
+  fr: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...FR },
+  de: { ...CLIENT_EN_FALLBACK, ...LEGACY_REVIEW_EN_FALLBACK, ...DE },
 }
 
 const HOST_ERROR_TABLE = {

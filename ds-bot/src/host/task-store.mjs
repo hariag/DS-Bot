@@ -36,6 +36,7 @@ const stable = value => {
 const digest = x => createHash('sha256').update(stable(x)).digest('hex')
 const read = row => row ? JSON.parse(row.body) : undefined
 const actionId = (id, rev, kind) => digest([id, rev, kind])
+export const boardRegistrationReference = task => `board:${task.id}:${task.revision}`
 const MAX_TASKS = 1000
 const schema = [
   { type:'index', name:'actions_task', tbl_name:'actions', sql:'CREATE INDEX actions_task ON actions(task_id,state)' },
@@ -172,6 +173,21 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
   }
   return {
     close() { db.close() },
+    holdInterruptedAdmissions() {
+      return tx(() => {
+        const rows = db.prepare("SELECT * FROM actions WHERE state IN ('claimed','accepted') ORDER BY rowid").all()
+        for (const row of rows) {
+          const intent = db.prepare('SELECT admission_id FROM admission_intents WHERE action_id=?').get(row.id)
+          const reason = 'process restarted; delivery outcome unknown'
+          const changed = db.prepare("UPDATE actions SET state='uncertain',receipt=? WHERE id=? AND state=?").run(reason, row.id, row.state).changes
+          if (changed !== 1) throw new Error('action recovery conflict')
+          db.prepare('INSERT INTO admission_decisions(operation_id,action_id,admission_id,actor,task_revision,previous_state,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
+            .run(`recovery:${row.id}`, row.id, intent?.admission_id ?? null, 'scheduler', row.revision, row.state, 'uncertain', reason, new Date().toISOString())
+          addHistory.run(`recovery:${row.id}`, 'scheduler', row.task_id, JSON.stringify(row), JSON.stringify({ ...row, state:'uncertain', receipt:reason }))
+        }
+        return rows.length
+      })
+    },
     limits() { return { tasks:MAX_TASKS, dependencies:100 } },
     // Internal refresh cursor only; callers must not expose global changes to
     // actors who cannot view every task in this database.
@@ -264,21 +280,68 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
       })
     },
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
+    history(id) {
+      const rows = db.prepare('SELECT before,after FROM history WHERE task_id=? ORDER BY sequence DESC LIMIT 51').all(requireId(id, 'task id'))
+      const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'dueDate', 'labels', 'checklist']
+      const project = value => {
+        if (!value) return null
+        const record = JSON.parse(value), result = { revision:record.revision }
+        for (const field of fields) if (Object.hasOwn(record, field)) result[field] = record[field]
+        return result
+      }
+      return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after) })) }
+    },
     create({ operationId, actor, task }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
-      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants'])
+      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress'])
       const payload = { type: 'create', actor, task }
       return transact(operationId, actor, payload, () => ({ type: 'create', actor, task }), () => {
         const id = requireId(task.id, 'task id'), owner = requireId(task.owner, 'owner'), reviewer = requireId(task.reviewer, 'reviewer')
         if (owner === reviewer) throw new Error('reviewer must be independent')
+        if (task.personalProgress !== undefined && (actor !== 'user' || task.scope !== 'personal:user' || owner !== 'user' || !['todo','doing','finished'].includes(task.personalProgress))) throw new Error('invalid personal progress')
         string(task.title, 'title'); string(task.acceptance, 'acceptance'); requireId(task.scope, 'scope')
         if (getTask(id)) throw new Error('task id exists')
         if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
         const dependencies = task.dependencies ?? [], dependencyGrants = task.dependencyGrants ?? []; checkGraph(id, dependencies)
         checkBindings({ scope:task.scope, owner, reviewer }, dependencies, dependencyGrants)
-        const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: 'proposed', authority: null, evidence: null, blocked: null, stale: false }
+        const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: 'proposed', authority: null, evidence: null, blocked: null, stale: false,
+          ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
+      })
+    },
+    proposeChange({ operationId, actor, taskId, expectedRevision, value }) {
+      requireId(actor, 'actor'); requireId(taskId, 'task id')
+      if (actor !== 'user' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
+      keysOnly(value, ['title','owner','reviewer','acceptance','dependencies','dependencyGrants','description'])
+      const payload = { type:'propose-change', actor, taskId, expectedRevision, value }; stable(payload)
+      return transact(operationId, actor, payload, () => ({type:'edit', actor, task:getTask(taskId)}), () => {
+        const old = getTask(taskId)
+        if (!old) throw new Error('unknown task')
+        if (old.revision !== expectedRevision) throw new Error('revision conflict')
+        if (!['working','reported','done'].includes(old.status)) throw new Error('change proposal unavailable')
+        if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
+        const fields = ['title','owner','reviewer','acceptance','dependencies','description']
+        const before = Object.fromEntries(fields.map(field => [field, old[field]]))
+        const after = Object.fromEntries(fields.map(field => [field, value[field]]))
+        before.description ??= ''
+        string(after.title, 'title'); string(after.acceptance, 'acceptance')
+        if (typeof after.description !== 'string' || Buffer.byteLength(after.description) > 8192) throw new Error('invalid card details')
+        requireId(after.owner, 'owner'); requireId(after.reviewer, 'reviewer')
+        if (after.owner === after.reviewer) throw new Error('reviewer must be independent')
+        if (!Array.isArray(after.dependencies)) throw new Error('invalid dependencies')
+        if (stable(before) === stable(after)) throw new Error('empty edit')
+        const dependencies = [...new Set([taskId, ...after.dependencies])], grants = value.dependencyGrants ?? []
+        const id = `change-${digest([operationId, taskId])}`
+        checkGraph(id, dependencies); checkBindings({scope:old.scope, owner:after.owner, reviewer:after.reviewer}, dependencies, grants)
+        const change = { sourceTaskId:taskId, sourceRevision:old.revision, before, after }
+        const duplicate = getAll().some(item => item.change?.sourceTaskId === taskId && item.change?.sourceRevision === old.revision && stable(item.change.after) === stable(after))
+        if (duplicate) throw new Error('change proposal already exists')
+        const record = { id, title:after.title, owner:after.owner, reviewer:after.reviewer, scope:old.scope,
+          acceptance:after.acceptance, description:after.description, dependencies, dependencyGrants:grants, attachments:[], shares:[], revision:1,
+          actionRevision:null, status:'waiting', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false, change }
+        db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return ready(record)
       })
     },
     command({ operationId, taskId, expectedRevision, actor, type, value }) {
@@ -288,6 +351,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
       return transact(operationId, actor, payload, () => ({ type, actor, task: getTask(taskId) }), () => {
         const old = getTask(taskId); if (!old) throw new Error('unknown task')
         if (old.revision !== expectedRevision) throw new Error('revision conflict')
+        if (old.change && ['edit','card-details'].includes(type)) throw new Error('change proposal is immutable')
         let next = { ...old, revision: old.revision + 1 }
         switch (type) {
           case 'personal-progress':
@@ -350,6 +414,20 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             } else if (value.kind === 'personal') { string(value.reference, 'personal authority') } else throw new Error('invalid authority kind')
             if (verifyRegistration(old, value, actor) !== true) throw new Error('authority evidence unverified')
             next.authority = JSON.parse(JSON.stringify(value)); next.status = 'waiting'; break
+          case 'schedule':
+            if (actor !== 'user' || old.blocked || old.stale || old.evidence || unresolved(old.id)) throw new Error('task is not schedulable')
+            if (old.status === 'proposed') {
+              keysOnly(value, ['kind','reference'])
+              if (value.kind !== 'personal' || verifyRegistration(old, value, actor) !== true) throw new Error('authority evidence unverified')
+              next.authority = JSON.parse(JSON.stringify(value)); next.status = 'waiting'
+            } else if (['waiting','ready'].includes(old.status)) {
+              if (!old.authority || verifyRegistration(old, old.authority, actor) !== true) throw new Error('task authority unavailable')
+              if (old.status === 'waiting' && !dependenciesDone(old)) return old
+              const existing = db.prepare('SELECT state FROM actions WHERE task_id=? AND revision=? AND kind=?').get(old.id, old.actionRevision, old.status === 'reported' ? 'review' : 'execute')
+              if (old.status === 'ready' && ['pending','claimed','accepted','uncertain'].includes(existing?.state)) return old
+              if (old.status === 'ready') throw new Error('task action unavailable')
+            } else throw new Error('task is not schedulable')
+            break
           case 'start':
             if (old.status !== 'ready' || old.stale || old.blocked || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot start')
             if (!db.prepare("SELECT 1 FROM actions WHERE task_id=? AND revision=? AND kind='execute' AND state='accepted'").get(old.id, old.actionRevision)) throw new Error('verified action receipt required')
@@ -463,7 +541,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         }
         save(old, next)
         if (type === 'report') action(next, 'review', next.reviewer)
-        if (type === 'register' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
+        if (type === 'register' || type === 'schedule' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
         if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
         if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
         if (type === 'invalidate') {

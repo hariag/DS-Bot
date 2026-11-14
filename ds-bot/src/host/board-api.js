@@ -16,7 +16,13 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
   }
   const view = (scope, principal) => {
     const state = current()
-    const tasks = store.list()
+    const tasks = store.list().map(task => {
+      const kind = task.status === 'reported' ? 'review' : 'execute'
+      const action = ['ready','working','reported'].includes(task.status)
+        ? (store.listActions?.(task.id) ?? []).find(item => item.kind === kind && item.revision === task.actionRevision) : undefined
+      return action && ['pending','claimed','accepted','uncertain'].includes(action.state)
+        ? { ...task, dispatchState:action.state } : task
+    })
     const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, verifyShare, verifyDependency })
     const addLegacy = () => {
       const ids = new Set(board.tasks.map(task => task.id))
@@ -28,9 +34,10 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     addLegacy()
     if (principal?.kind !== 'user') return board
     const isPublic = id => has(state.bots, id) && state.bots[id]?.private !== true
+    const publicBots = Object.keys(state.bots).filter(isPublic)
     const ids = scope.kind === 'room'
       ? ['user', ...(state.rooms[scope.id].members ?? []).filter(isPublic)]
-      : scope.id === 'user' ? ['user', ...Object.keys(state.bots).filter(isPublic)] : ['user', scope.id]
+      : ['user', ...publicBots]
     const actors = [...new Set(ids)].map(id => ({ id, name: id === 'user' ? 'You' : (state.bots[id]?.name ?? id) }))
     let writable = false
     try { assertWritable(); writable = true } catch { /* read-only host still shows its board */ }
@@ -44,7 +51,12 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
-      return [task.id, [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }, {type:'card-comment',label:'Add comment'}, ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
+      const actions = source ? store.listActions?.(task.id) ?? [] : []
+      const activeAction = actions.find(action => action.revision === source?.actionRevision && ['pending','claimed','accepted','uncertain'].includes(action.state))
+      const canSchedule = !source?.change && ['proposed','waiting'].includes(source?.status) && source.owner !== 'user' && source.reviewer !== 'user'
+        && !source.blocked && !source.stale && !activeAction && actors.some(actor => actor.id === source.owner) && actors.some(actor => actor.id === source.reviewer)
+      return [task.id, [...(!source?.change ? [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }] : []),
+        ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []), {type:'card-comment',label:'Add comment'}, ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
         ...(scope.kind === 'personal' && scope.id === 'user' && source?.scope === 'personal:user' && source.owner === 'user'
           && source.status === 'proposed' && source.actionRevision == null && !source.evidence && !source.blocked && !source.stale
           ? [{ type:'personal-progress', label:'Move personal task' }] : []),
@@ -87,6 +99,11 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     list(scope, principal) {
       return view(scope, principal)
     },
+    history(scope, principal, taskId) {
+      if (principal?.kind !== 'user') throw fail('Task history is unavailable')
+      visibleTask(scope, principal, taskId)
+      return store.history(taskId)
+    },
     operation(scope, principal, operationId) {
       if (!nonempty(operationId)) throw fail('Invalid operation ID')
       const board = view(scope, principal)
@@ -117,12 +134,14 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       } else if (scope.kind === 'personal' && input.owner !== scope.id) {
         throw fail('Personal task must belong to this board owner')
       }
+      if (input.personalProgress !== undefined && (scope.kind !== 'personal' || scope.id !== 'user' || input.owner !== 'user' || !['todo','doing','finished'].includes(input.personalProgress))) throw fail('Invalid personal progress')
       const candidate = { scope:`${scope.kind}:${scope.id}`, owner:input.owner, reviewer:input.reviewer }
       const dependencyGrants = bindingsFor(scope, principal, candidate, input.dependencies)
       return store.create({ operationId: input.operationId, actor: 'user', task: {
         id: input.taskId, title: input.title.trim(), owner: input.owner,
         reviewer: input.reviewer, scope: `${scope.kind}:${scope.id}`,
         acceptance: input.acceptance.trim(), dependencies: input.dependencies, dependencyGrants,
+        ...(input.personalProgress !== undefined ? {personalProgress:input.personalProgress} : {}),
       } })
     },
     command(scope, principal, input) {
@@ -144,8 +163,24 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         const dependencies = [...new Set([...value.dependencies, ...hidden])]
         const dependencyGrants = bindingsFor(taskScope(task), principal, { ...task, owner:value.owner, reviewer:value.reviewer }, dependencies)
         value = { title: value.title, owner: value.owner, reviewer: value.reviewer, acceptance: value.acceptance, dependencies, dependencyGrants }
+        if (['working','reported','done'].includes(task.status)) return store.proposeChange({ operationId:input.operationId, taskId:task.id,
+          expectedRevision:input.expectedRevision, actor:'user', value:{...value,description:task.description??''} })
+      } else if (input.type === 'schedule') {
+        if (task.owner === 'user' || task.reviewer === 'user') throw fail('Assign a Bot owner and independent Bot reviewer before scheduling')
+        if (!['proposed','waiting'].includes(task.status) || task.blocked || task.stale || task.change) throw fail('Task is not ready to schedule')
+        value = { kind:'personal', reference:`board:${task.id}:${task.revision}` }
       } else if (input.type === 'card-details' || input.type === 'card-comment') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid card details')
+        if (input.type === 'card-details' && Object.hasOwn(value,'description') && value.description !== (task.description??'')
+          && ['working','reported','done'].includes(task.status)) {
+          const proposal=store.proposeChange({operationId:input.operationId,taskId:task.id,expectedRevision:input.expectedRevision,actor:'user',value:{
+            title:task.title,owner:task.owner,reviewer:task.reviewer,acceptance:task.acceptance,dependencies:task.dependencies,
+            dependencyGrants:task.dependencyGrants??[],description:value.description,
+          }})
+          const details=Object.fromEntries(Object.entries(value).filter(([key])=>key!=='description'))
+          if(Object.keys(details).length)store.command({operationId:`${input.operationId}:details`,taskId:task.id,expectedRevision:input.expectedRevision,actor:'user',type:'card-details',value:details})
+          return proposal
+        }
       } else if (input.type === 'personal-progress') {
         if (scope.kind !== 'personal' || scope.id !== 'user' || task.scope !== 'personal:user' || task.owner !== 'user'
           || !value || !['todo', 'doing', 'finished'].includes(value.progress)) throw fail('Personal progress is unavailable')

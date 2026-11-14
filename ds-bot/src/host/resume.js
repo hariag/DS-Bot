@@ -564,7 +564,7 @@ export function install(rt) {
     rt.requireHomeLock()
     let notAdmitted = false
     try {
-      const result = await deliver(noted, { beforeAdmission: observation?.beforeAdmission, onNotAdmitted: () => {
+      const result = await deliver(noted, { beforeAdmission: observation?.beforeAdmission, preparedMessage:observation?.preparedMessage, onNotAdmitted: () => {
         notAdmitted = true
         try { observation?.onNotAdmitted?.() } catch {}
       } })
