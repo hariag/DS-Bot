@@ -22,7 +22,8 @@ export function originalRedoIdentity(operationId) {
 // This journal is not installed by itself. Callers must prove the original
 // writer and bind the current Agent, exact Session object and scope before use.
 export function createOriginalRedoJournal(rt, { authorize, proveOriginal, validateBinding, verifyResult } = {}) {
-  if (typeof rt?.home !== 'string' || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
+  if (typeof rt?.home !== 'string' || typeof rt.statePath !== 'string' || !rt.state || typeof rt.save !== 'function'
+    || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
     || typeof authorize !== 'function' || typeof proveOriginal !== 'function' || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
   const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   let directoryIdentity
@@ -78,6 +79,36 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     sameLease(generation)
   }
   function pathFor(operationId) { if (!uuid(operationId)) throw Error('invalid redo operation'); return join(root, `${operationId}.json`) }
+  function witnessFor(row) {
+    return { version:1, recoveryId:row.recoveryId, operationId:row.operationId,
+      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest]) }
+  }
+  function witnessTable() {
+    const table = rt.state.originalRedoWitness
+    if (table === undefined) return {}
+    if (!table || typeof table !== 'object' || Array.isArray(table)) throw Error('redo witness unavailable')
+    return table
+  }
+  function confirmWitnessTable(generation) {
+    sameLease(generation)
+    const expected = copy(witnessTable()), fd = openSync(rt.statePath, constants.O_RDONLY | nofollow)
+    try {
+      const before = fstatSync(fd)
+      if (!before.isFile() || before.size > 64 * 1024 * 1024) throw Error('redo witness unavailable')
+      const disk = JSON.parse(readFileSync(fd, 'utf8'))
+      if (!isDeepStrictEqual(disk.originalRedoWitness ?? {}, expected)) throw Error('redo witness unavailable')
+      fsyncSync(fd); dirSync(rt.home)
+      const after = fstatSync(fd), current = lstatSync(rt.statePath)
+      sameLease(generation)
+      if (!current.isFile() || current.isSymbolicLink() || before.dev !== current.dev || before.ino !== current.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+        || !isDeepStrictEqual(witnessTable(), expected)) throw Error('redo witness changed')
+    } finally { closeSync(fd) }
+    return expected
+  }
+  function confirmWitness(row, generation) {
+    if (!isDeepStrictEqual(confirmWitnessTable(generation)[row.recoveryId], witnessFor(row))) throw Error('redo witness unavailable')
+  }
   function recoveryMarker(recoveryId) { if (!digest(recoveryId)) throw Error('invalid recovery'); return join(root, `.recovery-${recoveryId}`) }
   function readRecovery(recoveryId, generation) {
     let data
@@ -158,6 +189,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     sameLease(generation)
     if (authorize(copy(row.scope), row.recoveryId, copy(row.principal)) !== true) throw Error('redo unavailable')
     if (!isDeepStrictEqual(readRecovery(row.recoveryId, generation), { recoveryId:row.recoveryId, operationId:row.operationId })) throw Error('redo recovery marker unavailable')
+    confirmWitness(row, generation)
   }
   async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest }) {
     const identity = originalRedoIdentity(operationId)
@@ -174,6 +206,9 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       sameLease(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
       const rows = all(), existing = rows.find(row => row.operationId === operationId), reserved = readRecovery(recoveryId, generation)
+      const witness = confirmWitnessTable(generation)[recoveryId]
+      if (witness && witness.operationId !== operationId) throw Error('redo already exists; inspect outcome')
+      if (!!witness !== !!existing || !!witness !== !!reserved) throw Error('redo preparation outcome unknown')
       if (reserved && (!existing || reserved.operationId !== operationId)) throw Error('redo already exists; inspect outcome')
       if (existing) {
         if (!reserved) throw Error('redo preparation outcome unknown')
@@ -186,7 +221,14 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (rows.some(row => row.recoveryId === recoveryId)) throw Error('redo already exists; inspect outcome')
       const row = { version:1, operationId, recoveryId, scope:copy(scope), principal:copy(principal), identity, original:source, confirmationDigest,
         acknowledged:true, state:'prepared', createdAt:Date.now() }
-      try { reserveRecovery(recoveryId, operationId, generation); write(row, generation); checkAccess(row, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed') }
+      try {
+        rt.state.originalRedoWitness = { ...witnessTable(), [recoveryId]:witnessFor(row) }
+        await rt.save({ required:true })
+        confirmWitness(row, generation)
+        if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
+        reserveRecovery(recoveryId, operationId, generation); write(row, generation); checkAccess(row, generation)
+        if (proof.isCurrent() !== true) throw Error('redo proof changed')
+      }
       catch { throw Error('redo preparation outcome unknown') }
       return copy(row)
     } finally { busy.delete(operationId) }
@@ -252,16 +294,18 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const row = read(operationId); checkAccess(row, generation)
       if (!isDeepStrictEqual(row.principal, principal) || !['claiming', 'completed'].includes(row.state)) throw Error('redo result unavailable')
       const proof = await verifyResult(copy(row))
-      const ref = proof?.resultRef
-      if (typeof proof?.isCurrent !== 'function' || proof.isCurrent() !== true || proof.durability !== 'target-writer-v1'
-        || proof.sessionId !== row.original.sessionId || proof.messageId !== row.identity.messageId || proof.admissionId !== row.identity.admissionId
-        || !isDeepStrictEqual(proof.turn, row.turn) || !Number.isSafeInteger(proof.throughSeq) || proof.throughSeq <= row.turn.turnStartSeq
-        || !digest(proof.resultDigest) || ref?.kind !== 'session-events' || ref.sessionId !== row.original.sessionId
+      const evidence = { durability:proof?.durability, sessionId:proof?.sessionId, messageId:proof?.messageId, admissionId:proof?.admissionId,
+        turn:copy(proof?.turn), throughSeq:proof?.throughSeq, resultDigest:proof?.resultDigest, resultRef:copy(proof?.resultRef) }
+      const ref = evidence.resultRef
+      if (typeof proof?.isCurrent !== 'function' || proof.isCurrent() !== true || evidence.durability !== 'target-writer-v1'
+        || evidence.sessionId !== row.original.sessionId || evidence.messageId !== row.identity.messageId || evidence.admissionId !== row.identity.admissionId
+        || !isDeepStrictEqual(evidence.turn, row.turn) || !Number.isSafeInteger(evidence.throughSeq) || evidence.throughSeq <= row.turn.turnStartSeq
+        || !digest(evidence.resultDigest) || ref?.kind !== 'session-events' || ref.sessionId !== row.original.sessionId
         || !Number.isSafeInteger(ref.firstSeq) || !Number.isSafeInteger(ref.lastSeq) || ref.firstSeq <= row.turn.turnStartSeq
-        || ref.lastSeq < ref.firstSeq || ref.lastSeq >= proof.throughSeq || Object.keys(ref).some(key => !['kind', 'sessionId', 'firstSeq', 'lastSeq'].includes(key))) throw Error('redo result unverified')
+        || ref.lastSeq < ref.firstSeq || ref.lastSeq >= evidence.throughSeq || Object.keys(ref).some(key => !['kind', 'sessionId', 'firstSeq', 'lastSeq'].includes(key))) throw Error('redo result unverified')
       checkAccess(row, generation)
       if (proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo result changed')
-      const result = { digest:proof.resultDigest, ref:copy(ref), throughSeq:proof.throughSeq }
+      const result = { digest:evidence.resultDigest, ref:copy(ref), throughSeq:evidence.throughSeq }
       if (row.state === 'completed' && (!isDeepStrictEqual(row.result?.ref, result.ref) || row.result?.digest !== result.digest
         || !Number.isSafeInteger(row.result?.throughSeq) || result.throughSeq < row.result.throughSeq)) throw Error('redo result conflict')
       const next = row.state === 'completed' ? row : { ...row, state:'completed', result }
