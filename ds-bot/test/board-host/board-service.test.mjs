@@ -351,6 +351,10 @@ test('native card comments are idempotent and excluded from shared status projec
   assert.equal(shown.comments[0].text,'Private review note')
   assert.equal(shown.status,'proposed')
   assert.equal(shown.boardActivity.at(-1).type,'card-comment')
+  const invalid={...comment,operationId:'comment-invalid',expectedRevision:2,value:{text:'x'.repeat(2049)}}
+  await assert.rejects(rt.boardCall('board-command',invalid),/invalid card comment/i)
+  assert.equal((await rt.boardCall('board-operation',{scope,operationId:invalid.operationId})).state,'rejected')
+  assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id==='t1').comments.length,1)
   await rt.boardCall('board-command',{scope,operationId:'share-comment',taskId:'t1',expectedRevision:2,type:'share',value:{targetRoomId:'other',fields:['status']}})
   const shared=(await rt.boardCall('board-list',{scope:{kind:'room',id:'other'}})).tasks.find(task=>task.id==='t1')
   assert.equal(shared.shared,true)
