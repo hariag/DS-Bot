@@ -422,5 +422,30 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       return copy(next)
     } finally { busy.delete(operationId) }
   }
-  return { prepare, beginDispatch, inspectDispatchSync, markClaimingSync, inspectClaimingSync, recordResult }
+  // Read only a completed, writer-verified result. Missing live writer or a
+  // changed scope is unknown, never a reason to dispatch the operation again.
+  async function readResult(operationId, principal) {
+    if (!uuid(operationId) || busy.has(operationId) || typeof verifyResult !== 'function') throw Error('redo result unavailable')
+    busy.add(operationId)
+    try {
+      const generation = lease(); directory(generation)
+      const row = read(operationId); checkAccess(row, generation); confirmPhase(row, generation)
+      if (row.state !== 'completed' || !isDeepStrictEqual(row.principal, principal)) throw Error('redo result unavailable')
+      const proof = await verifyResult(copy(row))
+      const text = proof?.text, resultRef = copy(proof?.resultRef), turn = copy(proof?.turn), proofCurrent = proof?.isCurrent
+      const expectedSession = isolated ? row.identity.sessionId : row.original.sessionId
+      if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text, 'utf8') > 65_536
+        || typeof proofCurrent !== 'function' || proofCurrent.call(proof) !== true
+        || proof.durability !== 'target-writer-v1' || proof.sessionId !== expectedSession
+        || proof.messageId !== row.identity.messageId || proof.admissionId !== row.identity.admissionId
+        || !isDeepStrictEqual(turn, row.turn) || !isDeepStrictEqual(resultRef, row.result?.ref)
+        || proof.resultDigest !== row.result?.digest || createHash('sha256').update(text, 'utf8').digest('hex') !== row.result?.digest
+        || !Number.isSafeInteger(proof.throughSeq) || proof.throughSeq < row.result.throughSeq) throw Error('redo result unverified')
+      checkAccess(row, generation); confirm(row, generation); confirmPhase(row, generation)
+      if (proofCurrent.call(proof) !== true) throw Error('redo result changed')
+      confirm(row, generation); confirmPhase(row, generation); confirmWitness(row, generation)
+      return { operationId, state:'completed', text }
+    } finally { busy.delete(operationId) }
+  }
+  return { prepare, beginDispatch, inspectDispatchSync, markClaimingSync, inspectClaimingSync, recordResult, readResult }
 }

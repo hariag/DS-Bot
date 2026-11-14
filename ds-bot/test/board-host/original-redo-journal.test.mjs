@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, chmod, rename, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -454,4 +455,40 @@ test('claim inspection refuses a reentrant rollback before a model request', asy
   } })
   assert.throws(() => restarted.inspectClaimingSync(claimed, f.request.principal), /unavailable|snapshot|changed|unknown/)
   assert.equal(called, true)
+})
+
+
+test('result reads revalidate text, writer, scope and principal without redispatch', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), turn = { turn:9, turnStartSeq:72 }
+  f.journal.markClaimingSync(binding, turn, f.request.principal)
+  let current = true
+  const result = { durability:'target-writer-v1', sessionId:'original-session', messageId:binding.identity.messageId,
+    admissionId:binding.identity.admissionId, turn, throughSeq:80, text:'synthetic result',
+    resultDigest:createHash('sha256').update('synthetic result').digest('hex'),
+    resultRef:{ kind:'session-events', sessionId:'original-session', firstSeq:75, lastSeq:78 }, isCurrent:() => current }
+  f.resultProof(result); await f.journal.recordResult(operationId, f.request.principal)
+  assert.deepEqual(await f.journal.readResult(operationId, f.request.principal), { operationId, state:'completed', text:'synthetic result' })
+  await assert.rejects(f.journal.readResult(operationId, { kind:'bot', id:'user' }), /unavailable/)
+  f.resultProof({ ...result, text:'changed' }); await assert.rejects(f.journal.readResult(operationId, f.request.principal), /unverified/)
+  f.resultProof(result); current = false; await assert.rejects(f.journal.readResult(operationId, f.request.principal), /unverified/)
+  current = true; f.allowed(false); await assert.rejects(f.journal.readResult(operationId, f.request.principal), /unavailable/)
+  f.allowed(true); assert.equal((await f.journal.beginDispatch(operationId, f.request.principal)).state,'unknown')
+})
+
+
+test('result reads pin the proof callback against reentrant replacement', async t => {
+  const f = await fixture(t); await f.journal.prepare(f.request)
+  const { binding } = await f.journal.beginDispatch(operationId, f.request.principal), turn = { turn:9, turnStartSeq:72 }
+  f.journal.markClaimingSync(binding, turn, f.request.principal)
+  let current = true, verified = false
+  const proof = { durability:'target-writer-v1', sessionId:'original-session', messageId:binding.identity.messageId,
+    admissionId:binding.identity.admissionId, turn, throughSeq:80, text:'synthetic result',
+    resultDigest:createHash('sha256').update('synthetic result').digest('hex'),
+    resultRef:{ kind:'session-events', sessionId:'original-session', firstSeq:75, lastSeq:78 }, isCurrent:() => current }
+  f.resultProof(proof); await f.journal.recordResult(operationId, f.request.principal)
+  const journal = createOriginalRedoJournal(f.rt, { ...f.dependencies,
+    verifyResult:async () => { verified = true; return proof },
+    authorize:() => { if (verified) { current = false; proof.isCurrent = () => true }; return true } })
+  await assert.rejects(journal.readResult(operationId, f.request.principal), /changed|unverified/)
 })
