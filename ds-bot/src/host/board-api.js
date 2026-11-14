@@ -39,7 +39,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       if (!writable || task.shared) return [task.id, []]
       if (task.legacy) return [task.id, task.legacy.current && !task.legacy.ambiguous && Number.isSafeInteger(task.revision)
         && ['active','paused'].includes(task.legacy.goalStatus)
-        ? [{type:'goal-task-edit',label:'Edit goal task'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
+        ? [{type:'goal-task-edit',label:'Edit goal task'},{type:'goal-card-details',label:'Edit card details'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
       const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets

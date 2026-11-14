@@ -161,9 +161,10 @@ export function install(rt) {
         return store.cancelRequest({ operationId: payload.operationId, actor: 'user' })
       }
       case 'board-command': {
-        if(['goal-task-edit','goal-image-remove'].includes(payload.type)) {
+        if(['goal-task-edit','goal-card-details','goal-image-remove'].includes(payload.type)) {
           api.list(scope,principal)
-          return goalEditor.execute(scope,payload.operationId,{endpoint,payload},()=>goalEditor.mutate(scope,payload,payload.type==='goal-task-edit'?'edit':'remove-image'))
+          const kind=payload.type==='goal-task-edit'?'edit':payload.type==='goal-card-details'?'details':'remove-image'
+          return goalEditor.execute(scope,payload.operationId,{endpoint,payload},()=>goalEditor.mutate(scope,payload,kind))
         }
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))throw new Error('Goal operation ID requires a goal task action')
         const result = mutate(endpoint, payload); notifyDriver(); return result
