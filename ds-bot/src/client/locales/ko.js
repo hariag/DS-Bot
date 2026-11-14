@@ -1,6 +1,21 @@
 // Korean (ko) localization for DS Bot client and DSH settings namespaces.
 
 export const KO = {
+  "New tasks start in Preparing.": "새 작업은 준비 중에서 시작합니다.",
+  "{count} dependencies": "종속 항목 {count}개",
+  "View details": "상세 보기",
+  "Personal progress": "개인 진행 상황",
+  "Move personal task": "개인 작업 이동",
+  "Acceptance criteria": "수락 기준",
+  "Status changes are not available for this task.": "이 작업의 상태는 변경할 수 없습니다.",
+  "Search tasks": "작업 검색",
+  "Drag a card or use its progress menu.": "카드를 끌거나 진행 상황 메뉴를 사용하세요.",
+  "Your own progress markers do not complete shared work or unblock dependencies.": "개인 진행 표시를 변경해도 공유 작업이 완료되거나 종속성이 해제되지는 않습니다.",
+  "Drag a card here": "카드를 여기로 끌어 놓으세요",
+  "Workflow": "워크플로",
+  "Shared workflow": "공유 워크플로",
+  "These statuses reflect the shared task workflow.": "이 상태는 공유 작업의 워크플로를 나타냅니다.",
+  "No tasks": "작업 없음",
   "Snapshot time (UTC)": "스냅샷 시각(UTC)",
   "No interrupted turns in this snapshot.": "이 스냅샷에는 중단된 턴이 없습니다.",
   "Interrupted turns awaiting review": "확인이 필요한 중단된 턴",

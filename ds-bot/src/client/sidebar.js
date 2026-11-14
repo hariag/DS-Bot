@@ -17,7 +17,6 @@ import { showsDshRow } from './dsh-offer.js'
 import { quietly } from './diagnostics.js'
 import { frameLayout, dragColumn, RAIL_WIDTH, FALLBACK_SIDEBAR_WIDTH, userSidebarToggle } from './frame-layout.js'
 import { chatRoom, dshCollapsed } from './frame-watch.js'
-import { TaskBoard } from './task-board.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -976,7 +975,6 @@ const NO_SNAPSHOT = () => null
 // back in Agent mode; FooterAccount stands in while no seat exists at all.
 export function AccountLauncher({ seat = true, settingsOpen, actions }) {
   const [open, setOpen] = useState(false)
-  const [boardOpen, setBoardOpen] = useState(false)
   useLayoutEffect(() => {
     if (!seat) return undefined
     actions.seatAccount(true)
@@ -1052,7 +1050,7 @@ export function AccountLauncher({ seat = true, settingsOpen, actions }) {
   const openModels = actions.openModels
   const groups = [
     [
-      [t('My task board'), ClockIcon, () => setBoardOpen(true)],
+      [t('My task board'), ClockIcon, () => actions.openPersonalBoard?.()],
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
       openModels ? [t('Models and API keys'), SlidersIcon, () => openModels()] : null,
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
@@ -1078,8 +1076,7 @@ export function AccountLauncher({ seat = true, settingsOpen, actions }) {
           group.map(([label, Icon, run, hint, stay]) => h('button', {
             key: label, type: 'button', role: 'menuitem',
             onClick: () => { if (stay !== true) setOpen(false); void Promise.resolve(run()).catch(error => actions.reportError(error, 'menu')) },
-          }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null,
-    boardOpen ? h(TaskBoard, { scope: { kind: 'personal', id: 'user' }, title: t('My task board'), close: () => setBoardOpen(false) }) : null)
+          }, h(Icon), h('span', { className: 'bt-menu-label' }, label), hint ? h('span', { className: 'bt-menu-hint' }, hint) : null))))), document.body) : null)
 }
 
 // The desktop app keeps its main window hidden until the team interface has drawn

@@ -1,6 +1,21 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  "New tasks start in Preparing.": "Neue Aufgaben beginnen in Vorbereitung.",
+  "{count} dependencies": "{count} Abhängigkeiten",
+  "View details": "Details ansehen",
+  "Personal progress": "Persönlicher Fortschritt",
+  "Move personal task": "Persönliche Aufgabe verschieben",
+  "Acceptance criteria": "Abnahmekriterien",
+  "Status changes are not available for this task.": "Der Status dieser Aufgabe kann nicht geändert werden.",
+  "Search tasks": "Aufgaben suchen",
+  "Drag a card or use its progress menu.": "Ziehe eine Karte oder nutze ihr Fortschrittsmenü.",
+  "Your own progress markers do not complete shared work or unblock dependencies.": "Persönliche Fortschrittsmarkierungen schließen gemeinsame Arbeit nicht ab und lösen keine Abhängigkeiten auf.",
+  "Drag a card here": "Karte hierher ziehen",
+  "Workflow": "Arbeitsablauf",
+  "Shared workflow": "Gemeinsamer Arbeitsablauf",
+  "These statuses reflect the shared task workflow.": "Diese Status zeigen den gemeinsamen Aufgabenablauf.",
+  "No tasks": "Keine Aufgaben",
   "Snapshot time (UTC)": "Zeitpunkt der Momentaufnahme (UTC)",
   "No interrupted turns in this snapshot.": "Diese Momentaufnahme enthält keine unterbrochenen Runden.",
   "Interrupted turns awaiting review": "Unterbrochene Runden zur Prüfung",

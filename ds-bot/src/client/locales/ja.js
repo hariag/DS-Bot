@@ -1,6 +1,21 @@
 // Japanese (ja) localization for DS Bot client and DSH settings namespaces.
 
 export const JA = {
+  "New tasks start in Preparing.": "新しいタスクは「準備中」から始まります。",
+  "{count} dependencies": "依存関係 {count} 件",
+  "View details": "詳細を見る",
+  "Personal progress": "個人の進捗",
+  "Move personal task": "個人タスクを移動",
+  "Acceptance criteria": "受け入れ条件",
+  "Status changes are not available for this task.": "このタスクの状態は変更できません。",
+  "Search tasks": "タスクを検索",
+  "Drag a card or use its progress menu.": "カードをドラッグするか、進捗メニューを使用してください。",
+  "Your own progress markers do not complete shared work or unblock dependencies.": "個人の進捗を変更しても、共有タスクの完了や依存関係の解除にはなりません。",
+  "Drag a card here": "カードをここにドラッグ",
+  "Workflow": "ワークフロー",
+  "Shared workflow": "共有ワークフロー",
+  "These statuses reflect the shared task workflow.": "これらの状態は共有タスクのワークフローを表します。",
+  "No tasks": "タスクはありません",
   "Snapshot time (UTC)": "スナップショット時刻（UTC）",
   "No interrupted turns in this snapshot.": "この時点で中断されたターンはありません。",
   "Interrupted turns awaiting review": "確認待ちの中断されたターン",
