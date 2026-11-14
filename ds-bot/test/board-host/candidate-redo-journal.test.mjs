@@ -7,6 +7,7 @@ import { createLegacyRedoCandidate } from '../../src/host/user-redo-legacy-candi
 import { candidateRedoConfirmation } from '../../src/host/candidate-redo-confirmation.mjs'
 import { createCandidateRedoJournal, createOriginalRedoJournal } from '../../src/host/original-redo-journal.mjs'
 import { userRedoConfirmation, userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
+import { install as installStore } from '../../src/host/store.js'
 
 const operationId = 'bb5b1723-7063-4e3e-b27e-12f44dd0033d', otherId = 'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454'
 const recoveryId = 'a'.repeat(64), scope = { kind:'room', id:'room' }, principal = { kind:'user', id:'user' }
@@ -93,4 +94,27 @@ test('cross-mode recovery witness and lease changes prevent duplicate decisions'
   // second operation for this same recovery.
   await assert.rejects(createCandidateRedoJournal(f.rt, f.dependencies).prepare({ ...f.request, operationId:otherId,
     confirmationDigest:candidateRedoConfirmation(scope, recoveryId, f.proof, { principal, operationId:otherId, target:f.request.target }) }), /already exists/)
+})
+
+test('real team store retains the candidate witness through close and a new store instance', async t => {
+  const f = await fixture(t), disposers = []
+  const ctx = { logger:{ warn() {} }, effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) } }
+  const makeStore = () => ({ home:f.home, statePath:f.rt.statePath, ctx, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {} })
+  const first = makeStore()
+  installStore(first)
+  t.after(async () => { for (const dispose of disposers.splice(0)) await dispose() })
+  await first.load(); await first.save({ required:true })
+  const saved = await createCandidateRedoJournal(first, f.dependencies).prepare(f.request)
+  const state = JSON.parse(await readFile(first.statePath, 'utf8'))
+  assert.equal(state.originalRedoWitness[recoveryId].operationId, operationId)
+  assert.doesNotMatch(JSON.stringify(state), /sensitive candidate text/)
+  for (const dispose of disposers.splice(0)) await dispose()
+  const restored = makeStore()
+  installStore(restored); await restored.load()
+  assert.deepEqual(restored.state.originalRedoWitness, state.originalRedoWitness)
+  const journal = createCandidateRedoJournal(restored, f.dependencies)
+  assert.deepEqual(await journal.prepare(f.request), saved)
+  await assert.rejects(journal.prepare({ ...f.request, operationId:otherId,
+    confirmationDigest:candidateRedoConfirmation(scope, recoveryId, f.proof, { principal, operationId:otherId, target:f.request.target }) }), /already exists/)
+  assert.equal(journal.beginDispatch, undefined)
 })
