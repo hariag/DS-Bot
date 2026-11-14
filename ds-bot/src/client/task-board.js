@@ -116,7 +116,7 @@ function HeldTurns({ recovery }) {
     h('summary', { className: 'bt-recovery-summary' },
       h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
       h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted turns awaiting review')),
-        h('small', null, t('Read only'))),
+        h('small', null, t(rows.length ? 'Read only' : 'No items'))),
       h('span', { className: 'bt-recovery-count' }, String(rows.length))),
     h('div', { className: 'bt-recovery-body' },
       h('div', { className: 'bt-recovery-intro' },
@@ -153,8 +153,8 @@ function LegacyWorkReview({ scope, request, actors }) {
   const [summary, setSummary] = useState(''), [evidence, setEvidence] = useState(''), [unfinished, setUnfinished] = useState('')
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [query, setQuery] = useState('')
   const [candidates, setCandidates] = useState(null)
-  const epoch = useRef(0), requested = useRef(false), scopeKey = `${scope.kind}:${scope.id}`
-  useEffect(() => { epoch.current++; requested.current = false; setWorkId(''); setRecord(null); setCandidates(null); setQuery(''); setSummary(''); setEvidence(''); setUnfinished(''); setError(''); setBusy(false); return () => { epoch.current++ } }, [scopeKey])
+  const epoch = useRef(0), requested = useRef(false)
+  useEffect(() => () => { epoch.current += 1 }, [])
   const clearDraft = () => { setSummary(''); setEvidence(''); setUnfinished('') }
   const run = async (endpoint, body, id = workId) => {
     const current = epoch.current; setBusy(true); setError('')
@@ -231,7 +231,7 @@ function LegacyWorkReview({ scope, request, actors }) {
 // This action only clears a specific periodic inspection's uncertainty fence.
 // The host independently rechecks the current goal, attempt, scope and activity.
 function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initiallyOpen }) {
-  const [evidence, setEvidence] = useState(''), [confirmed, setConfirmed] = useState(false)
+  const [draft, setDraft] = useState({ key: '', text: '' }), [confirmedKey, setConfirmedKey] = useState('')
   const [checking, setChecking] = useState(false), [saving, setSaving] = useState(false)
   const [checkedKey, setCheckedKey] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const generation = useRef(0), scopeGeneration = useRef(0), checkBusy = useRef(false), saveBusy = useRef(false)
@@ -240,12 +240,12 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
   const attemptId = typeof attempt?.id === 'string' ? attempt.id : ''
   const goalId = typeof goal?.id === 'string' ? goal.id : ''
   const identity = JSON.stringify([scopeId, goalId, attemptId, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, attempt?.state, attempt?.at])
-  useEffect(() => { scopeGeneration.current += 1; setNotice(''); return () => { scopeGeneration.current += 1 } }, [scopeId])
-  useEffect(() => {
-    generation.current += 1; checkBusy.current = false
-    setEvidence(''); setConfirmed(false); setChecking(false); setSaving(saveBusy.current); setCheckedKey(''); setError('')
-    return () => { generation.current += 1 }
-  }, [scopeId, goalId, attemptId])
+  const attemptKey = JSON.stringify([scopeId, goalId, attemptId])
+  const previousAttempt = useRef(attemptKey)
+  if (previousAttempt.current !== attemptKey) { previousAttempt.current = attemptKey; generation.current += 1 }
+  const evidence = draft.key === attemptKey ? draft.text : ''
+  const confirmed = confirmedKey === identity
+  useEffect(() => { scopeGeneration.current += 1; setNotice(''); return () => { scopeGeneration.current += 1; generation.current += 1 } }, [scopeId])
   if (!scopeId || (!attemptId && !notice && !error)) return null
   const automaticIdle = goal?.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
     && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
@@ -255,11 +255,11 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
     && (goal.idle !== true || automaticIdle)
   const refresh = async () => {
     if (checkBusy.current || saveBusy.current || typeof refreshGoal !== 'function') return
-    const current = generation.current, key = identity
+    const current = generation.current, scopeAtStart = scopeGeneration.current, key = identity
     checkBusy.current = true; setChecking(true); setError(''); setCheckedKey('')
     try { await refreshGoal(); if (generation.current === current) setCheckedKey(key) }
     catch { if (generation.current === current) setError(t('Could not refresh the group status.')) }
-    finally { if (generation.current === current) { checkBusy.current = false; setChecking(false) } }
+    finally { checkBusy.current = false; if (scopeGeneration.current === scopeAtStart) setChecking(false) }
   }
   const submit = async () => {
     const text = evidence.trim()
@@ -270,7 +270,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
     try {
       await resolveReview(goalId, attemptId, text)
       if (scopeGeneration.current === scopeAtStart) setNotice(`${t('Request accepted. Refresh to verify the current review status.')} ${t('Review ID')}: ${attemptId}`)
-      if (generation.current === current) { setEvidence(''); setConfirmed(false); setCheckedKey('') }
+      if (generation.current === current) { setDraft({ key: attemptKey, text: '' }); setConfirmedKey(''); setCheckedKey('') }
     } catch (err) {
       if (generation.current === current) setCheckedKey('')
       if (scopeGeneration.current === scopeAtStart) setError(['bot/stale', 'bot/invalid', 'bot/refused', 'bot/read-only'].includes(err?.code)
@@ -289,7 +289,7 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
               : evidence.trim().length > 2000 ? t('Use at most 2000 characters.')
                 : !confirmed ? t('Confirm that you checked the original outcome.') : ''
   return h('details', { className: 'bt-recovery-panel bt-periodic-review', open: initiallyOpen || undefined,
-    onToggle: event => { if (event.target === event.currentTarget && event.currentTarget.open && !checkedKey && !checkBusy.current) void refresh() } },
+    onToggle: event => { if (event.target === event.currentTarget && event.currentTarget.open && checkedKey !== identity && !checkBusy.current) void refresh() } },
     h('summary', { className: 'bt-recovery-summary' }, h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '!'),
       h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Periodic review issue')), h('small', null, t('Inspection recovery'))),
       attemptId ? h('span', { className: 'bt-recovery-badge' }, t('Status unknown')) : null),
@@ -305,8 +305,8 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initi
       notice ? h('p', { className: 'bt-recovery-notice', role: 'status' }, notice) : null,
       error ? h('p', { className: 'bt-recovery-warning', role: 'alert' }, error) : null,
       attemptId ? h('div', { className: 'bt-recovery-form' },
-        h('label', null, t('What did you verify?'), h('textarea', { value: evidence, maxLength: 2000, disabled: checking || saving, onChange: event => setEvidence(event.target.value) })),
-        h('label', { className: 'bt-recovery-confirm' }, h('input', { type: 'checkbox', checked: confirmed, disabled: checking || saving, onChange: event => setConfirmed(event.target.checked) }), t('I checked the original outcome and authorize future reviews.')),
+        h('label', null, t('What did you verify?'), h('textarea', { value: evidence, maxLength: 2000, disabled: checking || saving, onChange: event => setDraft({ key: attemptKey, text: event.target.value }) })),
+        h('label', { className: 'bt-recovery-confirm' }, h('input', { type: 'checkbox', checked: confirmed, disabled: checking || saving, onChange: event => setConfirmedKey(event.target.checked ? identity : '') }), t('I checked the original outcome and authorize future reviews.')),
         reason ? h('p', { className: 'bt-recovery-note', role: 'status' }, reason) : null,
         h('button', { type: 'button', disabled: !!reason || checking || saving || typeof resolveReview !== 'function', onClick: () => void submit() }, t('Resume periodic reviews'))) : null))
 }
@@ -736,7 +736,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null),
-      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
+      data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { recovery: data.recovery }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className:'bt-board-content' },
@@ -783,6 +783,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-recovery-clear{font-size:12px;color:var(--bt-ink-2);padding:10px 0;margin:0}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
 .bt-board-held{padding:10px 0;overflow:auto;max-height:30vh;font-size:12px}.bt-board-held summary{cursor:pointer;font-weight:600;color:var(--bt-ink-2)}.bt-board-held-record{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere}
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:min(68vh,680px)}
 .bt-recovery-panel{min-width:0;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 2px 6px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
 .bt-recovery-panel[open]{grid-column:1/-1}.bt-recovery-summary{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;list-style:none;padding:12px 14px}.bt-recovery-summary::-webkit-details-marker,.bt-recovery-record-summary::-webkit-details-marker{display:none}
 .bt-recovery-summary:focus-visible,.bt-recovery-record-summary:focus-visible,.bt-recovery-work-choice:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}.bt-recovery-summary-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bt-recovery-summary-text strong{font-size:13px;line-height:1.35}.bt-recovery-summary-text small{font-size:11px;color:var(--bt-ink-2)}

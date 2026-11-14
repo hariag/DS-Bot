@@ -12484,6 +12484,34 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Current status checked": "已核对当前状态",
+  "Filter by Bot or ID": "按 Bot 或 ID 筛选",
+  "No matching records.": "没有匹配的记录。",
+  "No work awaiting inspection.": "当前没有待核对的工作。",
+  "Choose a work to review.": "选择一项工作，或输入原工作 ID。",
+  "Open review workspace": "打开巡检异常处理",
+  "Periodic review issue": "周期巡检异常",
+  "Inspection recovery": "巡检恢复",
+  "Group ID": "群 ID",
+  "Goal ID": "目标 ID",
+  "Review ID": "巡检 ID",
+  "Group status": "群状态",
+  "Refresh status": "刷新状态",
+  "Review recovery is unavailable in this view.": "当前界面无法处理巡检恢复。",
+  "Group status is unavailable.": "无法读取群状态。",
+  "Review identity is unavailable.": "无法确认原巡检的身份。",
+  "The group goal must be active before reviews can resume.": "群目标处于进行中时才能恢复巡检。",
+  "The goal is paused or its idle state needs review.": "群目标已暂停，或其休眠状态需要核查。",
+  "This review is not ready to resume. Refresh its status later.": "本次巡检暂不满足恢复条件，请稍后刷新状态。",
+  "Refresh the group status before continuing.": "继续之前请刷新群状态。",
+  "Enter at least 8 characters describing what you verified.": "请用至少 8 个字符说明核查结果。",
+  "Use at most 2000 characters.": "最多输入 2000 个字符。",
+  "Confirm that you checked the original outcome.": "请确认已经核查原巡检结果。",
+  "Could not refresh the group status.": "无法刷新群状态。",
+  "Request accepted. Refresh to verify the current review status.": "请求已受理，请刷新并核对当前巡检状态。",
+  "The goal changed or related work is still pending. Check it before recovery.": "目标已变化或相关工作仍在处理，请核对后再恢复。",
+  "This only resumes periodic inspections; it does not approve or complete tasks.": "此操作只恢复周期巡检，不会审批或完成任务。",
+  "The server also checks the group and administrator sessions for pending work, approvals and subagents.": "提交时系统还会检查群和管理员会话是否仍有待处理工作、审批或子任务。",
   "Remote code changes": "远端代码变更",
   "Waiting for first check": "等待首次检查",
   "Monitor active": "监视运行中",
@@ -14432,6 +14460,34 @@ var LANGUAGES = [
   { id: "de", label: "Deutsch", fallback: "en" }
 ];
 var LEGACY_REVIEW_EN_FALLBACK = Object.fromEntries([
+  "Current status checked",
+  "Filter by Bot or ID",
+  "No matching records.",
+  "No work awaiting inspection.",
+  "Choose a work to review.",
+  "Open review workspace",
+  "Periodic review issue",
+  "Inspection recovery",
+  "Group ID",
+  "Goal ID",
+  "Review ID",
+  "Group status",
+  "Refresh status",
+  "Review recovery is unavailable in this view.",
+  "Group status is unavailable.",
+  "Review identity is unavailable.",
+  "The group goal must be active before reviews can resume.",
+  "The goal is paused or its idle state needs review.",
+  "This review is not ready to resume. Refresh its status later.",
+  "Refresh the group status before continuing.",
+  "Enter at least 8 characters describing what you verified.",
+  "Use at most 2000 characters.",
+  "Confirm that you checked the original outcome.",
+  "Could not refresh the group status.",
+  "Request accepted. Refresh to verify the current review status.",
+  "The goal changed or related work is still pending. Check it before recovery.",
+  "This only resumes periodic inspections; it does not approve or complete tasks.",
+  "The server also checks the group and administrator sessions for pending work, approvals and subagents.",
   "Observed in snapshot",
   "Not observed in snapshot",
   "Not known",
@@ -18230,14 +18286,11 @@ function TaskRow({ task, working }) {
   );
 }
 var STOP_ARM_MS = 3e3;
-function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
+function GoalPanel({ goal, view, room: room2, roster, actions, working, openReview }) {
   const at = RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1;
   const [selected, setSelected] = (0, import_react6.useState)(at);
   const [checks, setChecks] = (0, import_react6.useState)(false);
   const [armed, setArmed] = (0, import_react6.useState)(false);
-  const [reviewEvidence, setReviewEvidence] = (0, import_react6.useState)("");
-  const [reviewConfirmed, setReviewConfirmed] = (0, import_react6.useState)(false);
-  const [reviewSaving, setReviewSaving] = (0, import_react6.useState)(false);
   (0, import_react6.useEffect)(() => setSelected(RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1), [view.status, goal.current]);
   (0, import_react6.useEffect)(() => {
     if (!armed) return void 0;
@@ -18266,23 +18319,7 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
   const hasChecks = goal.objective !== void 0 || goal.acceptance !== void 0 || goal.constraints?.length > 0;
   const admin = roster.byId?.[room2.admin]?.name ?? t("a Bot");
   const stopWork = () => void Promise.resolve(actions.stopRoomWork(room2.id)).catch((error) => actions.reportError(error, "stop"));
-  const attempt = goal.reviewAttempt;
-  const recoverable = view.status === "active" && attempt && (["uncertain", "cancelled-uncertain"].includes(attempt.state) || attempt.state === "admitting" && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1e3) && !(goal.idle === true && (!["admin-pass", "nudge-limit"].includes(goal.idleReason) || goal.idleRevision !== goal.revision));
-  const resolveReview = () => {
-    if (!recoverable || !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving) return;
-    setReviewSaving(true);
-    void Promise.resolve(actions.goalReviewResolve(room2.id, goal.id, attempt.id, reviewEvidence.trim())).then(
-      () => {
-        setReviewEvidence("");
-        setReviewConfirmed(false);
-        setReviewSaving(false);
-      },
-      (error) => {
-        setReviewSaving(false);
-        actions.reportError(error, "goal");
-      }
-    );
-  };
+  const reviewIssue = goal.reviewAttempt && ["uncertain", "cancelled-uncertain", "admitting"].includes(goal.reviewAttempt.state);
   return (0, import_react6.createElement)(
     "div",
     { className: "bt-goal-panel", role: "region", "aria-label": view.title },
@@ -18340,13 +18377,11 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
         )) : null
       ) : null
     ),
-    recoverable ? (0, import_react6.createElement)(
+    reviewIssue ? (0, import_react6.createElement)(
       "div",
       { className: "bt-goal-sec" },
       (0, import_react6.createElement)("div", { className: "bt-goal-text" }, t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
-      (0, import_react6.createElement)("label", { className: "bt-goal-text" }, t("What did you verify?"), (0, import_react6.createElement)("textarea", { className: "bt-input bt-input-area", value: reviewEvidence, onChange: (event) => setReviewEvidence(event.target.value) })),
-      (0, import_react6.createElement)("label", { className: "bt-goal-text" }, (0, import_react6.createElement)("input", { type: "checkbox", checked: reviewConfirmed, onChange: (event) => setReviewConfirmed(event.target.checked) }), t("I checked the original outcome and authorize future reviews.")),
-      (0, import_react6.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: !reviewConfirmed || reviewEvidence.trim().length < 8 || reviewSaving, onClick: resolveReview }, t("Resume periodic reviews"))
+      (0, import_react6.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: typeof openReview !== "function", onClick: openReview }, t("Open review workspace"))
     ) : null,
     (0, import_react6.createElement)(
       "div",
@@ -18436,7 +18471,7 @@ function GoalCompose({ room: room2, roster, actions }) {
     )
   );
 }
-function GoalIsland({ room: room2, goal, view, open, composing, roomWork, roster, actions, pill }) {
+function GoalIsland({ room: room2, goal, view, open, composing, roomWork, roster, actions, pill, openReview }) {
   const island = (0, import_react6.useRef)(null);
   useMorph(island, open);
   const working = new Set((roomWork ?? []).map((entry) => entry.botId));
@@ -18462,7 +18497,7 @@ function GoalIsland({ room: room2, goal, view, open, composing, roomWork, roster
         import_react6.Fragment,
         null,
         (0, import_react6.createElement)(GoalBar, { view, open, room: room2, actions }),
-        open ? (0, import_react6.createElement)(GoalPanel, { goal, view, room: room2, roster, actions, working }) : null
+        open ? (0, import_react6.createElement)(GoalPanel, { goal, view, room: room2, roster, actions, working, openReview }) : null
       )
     )
   );
@@ -36718,68 +36753,112 @@ function RemoteChanges({ monitor }) {
     ))
   );
 }
+var snapshotTime = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 864e13 ? new Date(value).toISOString() : t("Unknown");
+var shortIdentity = (value) => typeof value !== "string" ? t("Unknown") : value.length > 32 ? `${value.slice(0, 20)}…${value.slice(-8)}` : value;
+var matchesRecovery = (needle, values) => !needle || values.some((value) => textValue(value).toLocaleLowerCase().includes(needle));
+function recoveryGroups(rows2, idOf, nameOf2) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of rows2) {
+    const id = idOf(item) || "";
+    if (!groups.has(id)) groups.set(id, { id, name: nameOf2(item) || id || t("Unknown"), rows: [] });
+    groups.get(id).rows.push(item);
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 function HeldTurns({ recovery }) {
+  const [query, setQuery] = (0, import_react50.useState)("");
   if (!recovery || recovery.available !== true) return (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
-  const sampled = Number.isSafeInteger(recovery.sampledAt) && recovery.sampledAt >= 0 && recovery.sampledAt <= 864e13 ? new Date(recovery.sampledAt).toISOString() : t("Unknown");
-  if (!rows2.length && !recovery.incomplete) return (0, import_react50.createElement)(
-    "p",
-    { className: "bt-board-recovery-clear", role: "status" },
-    t("No interrupted turns in this snapshot."),
-    " ",
-    t("Snapshot time (UTC)"),
-    ": ",
-    sampled
-  );
+  const needle = query.trim().toLocaleLowerCase();
+  const filtered = rows2.filter((item) => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]));
+  const groups = recoveryGroups(filtered, (item) => item.botId, (item) => item.botName);
   return (0, import_react50.createElement)(
     "details",
-    { className: "bt-board-held" },
-    (0, import_react50.createElement)("summary", null, t("Interrupted turns awaiting review"), rows2.length ? ` (${rows2.length})` : ""),
-    (0, import_react50.createElement)("p", null, t("Snapshot time (UTC)"), ": ", sampled),
-    (0, import_react50.createElement)("p", null, t("These records are read-only. A result is unknown; no work is resent or closed here.")),
-    recovery.incomplete ? (0, import_react50.createElement)("p", { role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
-    rows2.map((item) => (0, import_react50.createElement)(
-      "article",
-      { key: item.recoveryId, className: "bt-board-held-record" },
-      (0, import_react50.createElement)(Fact, { label: t("Bot"), value: item.botName || item.botId }),
-      (0, import_react50.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
-      (0, import_react50.createElement)(Fact, { label: t("Original turn"), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t("Unknown") }),
-      (0, import_react50.createElement)(Fact, { label: t("Started at"), value: Number.isSafeInteger(item.startedAt) ? new Date(item.startedAt).toLocaleString() : t("Unknown") }),
-      (0, import_react50.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
-      (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId }),
-      (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: "inflight.json" })
-    ))
+    { className: "bt-recovery-panel" },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "↻"),
+      (0, import_react50.createElement)(
+        "span",
+        { className: "bt-recovery-summary-text" },
+        (0, import_react50.createElement)("strong", null, t("Interrupted turns awaiting review")),
+        (0, import_react50.createElement)("small", null, t(rows2.length ? "Read only" : "No items"))
+      ),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, String(rows2.length))
+    ),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-body" },
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-intro" },
+        (0, import_react50.createElement)("p", null, t("These records are read-only. A result is unknown; no work is resent or closed here.")),
+        (0, import_react50.createElement)("span", null, t("Snapshot time (UTC)"), ": ", snapshotTime(recovery.sampledAt))
+      ),
+      recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
+      rows2.length ? (0, import_react50.createElement)(
+        "label",
+        { className: "bt-recovery-search" },
+        (0, import_react50.createElement)("span", { className: "bt-recovery-sr" }, t("Filter by Bot or ID")),
+        (0, import_react50.createElement)("input", { type: "search", value: query, placeholder: t("Filter by Bot or ID"), onChange: (event) => setQuery(event.target.value) })
+      ) : null,
+      !rows2.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No interrupted turns in this snapshot.")) : null,
+      rows2.length && !filtered.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
+      groups.length ? (0, import_react50.createElement)("div", { className: "bt-recovery-groups" }, groups.map((group) => (0, import_react50.createElement)(
+        "section",
+        { key: group.id, className: "bt-recovery-group" },
+        (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
+        group.rows.map((item) => (0, import_react50.createElement)(
+          "details",
+          { key: item.recoveryId, className: "bt-board-held-record bt-recovery-record" },
+          (0, import_react50.createElement)(
+            "summary",
+            { className: "bt-recovery-record-summary" },
+            (0, import_react50.createElement)("span", { className: "bt-recovery-record-id", title: item.sessionId }, shortIdentity(item.sessionId)),
+            (0, import_react50.createElement)("span", { className: "bt-recovery-record-time" }, Number.isSafeInteger(item.startedAt) ? snapshotTime(item.startedAt) : t("Unknown")),
+            (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t("Status unknown"))
+          ),
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-facts" },
+            (0, import_react50.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
+            (0, import_react50.createElement)(Fact, { label: t("Original turn"), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t("Unknown") }),
+            (0, import_react50.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
+            (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId }),
+            (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: "inflight.json" })
+          )
+        ))
+      ))) : null
+    )
   );
 }
 var recoveryObservationText = (value) => value === "observed-present" ? t("Observed in snapshot") : value === "observed-absent" ? t("Not observed in snapshot") : t("Not known");
 var legacyReviewStateText = (value) => value === "needs-review" ? t("Needs manual review") : value === "evidence-needed" ? t("Evidence still needed") : value === "identity-unverified" ? t("Work identity unverified") : t("Not known");
-function LegacyWorkReview({ scope, request }) {
+function LegacyWorkReview({ scope, request, actors }) {
   const [workId, setWorkId] = (0, import_react50.useState)(""), [record, setRecord] = (0, import_react50.useState)(null);
   const [summary, setSummary] = (0, import_react50.useState)(""), [evidence, setEvidence] = (0, import_react50.useState)(""), [unfinished, setUnfinished] = (0, import_react50.useState)("");
-  const [error, setError] = (0, import_react50.useState)(""), [busy, setBusy] = (0, import_react50.useState)(false);
+  const [error, setError] = (0, import_react50.useState)(""), [busy, setBusy] = (0, import_react50.useState)(false), [query, setQuery] = (0, import_react50.useState)("");
   const [candidates, setCandidates] = (0, import_react50.useState)(null);
-  const epoch = (0, import_react50.useRef)(0), scopeKey = `${scope.kind}:${scope.id}`;
-  (0, import_react50.useEffect)(() => {
-    epoch.current++;
-    setWorkId("");
-    setRecord(null);
-    setCandidates(null);
+  const epoch = (0, import_react50.useRef)(0), requested = (0, import_react50.useRef)(false);
+  (0, import_react50.useEffect)(() => () => {
+    epoch.current += 1;
+  }, []);
+  const clearDraft = () => {
     setSummary("");
     setEvidence("");
     setUnfinished("");
-    setError("");
-    setBusy(false);
-    return () => {
-      epoch.current++;
-    };
-  }, [scopeKey]);
-  const run2 = async (endpoint, body) => {
+  };
+  const run2 = async (endpoint, body, id = workId) => {
     const current = epoch.current;
     setBusy(true);
     setError("");
     try {
-      const result = await request(endpoint, { scope, workId, ...body });
-      if (current === epoch.current) setRecord(result);
+      const result = await request(endpoint, { scope, workId: id, ...body });
+      if (current === epoch.current) {
+        setRecord(result);
+        if (endpoint === "legacy-review-finding") clearDraft();
+      }
     } catch {
       if (current === epoch.current) setError(t("Action outcome is unknown; check it before making another change."));
     } finally {
@@ -36788,6 +36867,7 @@ function LegacyWorkReview({ scope, request }) {
   };
   const list = async () => {
     const current = epoch.current;
+    requested.current = true;
     setBusy(true);
     setError("");
     try {
@@ -36799,52 +36879,264 @@ function LegacyWorkReview({ scope, request }) {
       if (current === epoch.current) setBusy(false);
     }
   };
+  const choose = (item) => {
+    setWorkId(item.workId);
+    setRecord(null);
+    clearDraft();
+    void run2("legacy-review-get", {}, item.workId);
+  };
+  const rows2 = Array.isArray(candidates?.items) ? candidates.items : [];
+  const needle = query.trim().toLocaleLowerCase();
+  const filtered = rows2.filter((item) => matchesRecovery(needle, [item.workId, item.owner, actorLabel(item.owner, actors)]));
+  const groups = recoveryGroups(filtered, (item) => item.owner, (item) => actorLabel(item.owner, actors));
+  const live = record?.liveRecovery;
   return (0, import_react50.createElement)(
     "details",
-    { className: "bt-board-held" },
-    (0, import_react50.createElement)("summary", null, t("Review an existing work")),
-    (0, import_react50.createElement)("p", null, t("Review notes do not send messages or close work. Sources are unverified; inspect the original records.")),
-    (0, import_react50.createElement)("p", null, t("Only works between existing Bots are currently supported.")),
-    (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void list() }, t("Find works awaiting inspection")),
-    candidates?.incomplete ? (0, import_react50.createElement)("p", { role: "status" }, t("The recovery list may be incomplete.")) : null,
-    Array.isArray(candidates?.items) ? (0, import_react50.createElement)("div", null, candidates.items.map((item) => (0, import_react50.createElement)("button", { key: item.workId, type: "button", disabled: busy, onClick: () => {
-      setWorkId(item.workId);
-      setRecord(null);
-    } }, `${item.workId} · ${item.owner}`))) : null,
-    (0, import_react50.createElement)("label", null, t("Original work ID"), " ", (0, import_react50.createElement)("input", { value: workId, disabled: busy, onChange: (event) => {
-      setWorkId(event.target.value);
-      setRecord(null);
-    } })),
-    " ",
-    (0, import_react50.createElement)("button", { type: "button", disabled: busy || !workId, onClick: () => void run2("legacy-review-get", {}) }, t("Check")),
-    record?.liveRecovery ? (0, import_react50.createElement)("p", { role: "status" }, record.liveRecovery.available ? `${t("Recovery snapshot")} (${Number.isSafeInteger(record.liveRecovery.sampledAt) && record.liveRecovery.sampledAt >= 0 && record.liveRecovery.sampledAt <= 864e13 ? new Date(record.liveRecovery.sampledAt).toISOString() : t("Not known")}): ${t("Queue")}: ${recoveryObservationText(record.liveRecovery.observed.queue)} · ${t("Held records")}: ${recoveryObservationText(record.liveRecovery.observed.held)} · ${(record.liveRecovery.ids ?? []).join(", ")}` : t("Current recovery sources are unavailable.")) : null,
-    record?.state === "not-created" ? (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void run2("legacy-review-create", {}) }, t("Create review")) : null,
-    record && record.state !== "not-created" ? (0, import_react50.createElement)(
+    { className: "bt-recovery-panel", onToggle: (event) => {
+      if (event.target === event.currentTarget && event.currentTarget.open && !requested.current && !busy) void list();
+    } },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "≡"),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Review an existing work")), (0, import_react50.createElement)("small", null, t("Review note"))),
+      Array.isArray(candidates?.items) ? (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, String(rows2.length)) : null
+    ),
+    (0, import_react50.createElement)(
       "div",
-      null,
-      (0, import_react50.createElement)(Fact, { label: t("Status"), value: legacyReviewStateText(record.state) }),
-      (0, import_react50.createElement)(Fact, { label: t("Owner"), value: record.owner }),
-      record.archived ? (0, import_react50.createElement)("p", { role: "status" }, t("The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.")) : null,
-      (0, import_react50.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: Number.isSafeInteger(record.snapshot?.sampledAt) && record.snapshot.sampledAt >= 0 && record.snapshot.sampledAt <= 864e13 ? new Date(record.snapshot.sampledAt).toISOString() : t("Not known") }),
-      (0, import_react50.createElement)(Fact, { label: t("Original sessions"), value: (record.snapshot?.sources ?? []).map((s) => s.sessionId).join(", ") }),
-      (0, import_react50.createElement)("p", null, t("Execution and external effects remain unknown.")),
-      !record.archived && ["needs-review", "evidence-needed"].includes(record.state) ? (0, import_react50.createElement)(
+      { className: "bt-recovery-body" },
+      (0, import_react50.createElement)(
         "div",
-        null,
-        (0, import_react50.createElement)("label", null, t("Review note"), (0, import_react50.createElement)("textarea", { value: summary, disabled: busy, onChange: (event) => setSummary(event.target.value) })),
-        (0, import_react50.createElement)("label", null, t("Evidence references, one per line"), (0, import_react50.createElement)("textarea", { value: evidence, disabled: busy, onChange: (event) => setEvidence(event.target.value) })),
-        (0, import_react50.createElement)("label", null, t("Unfinished items, one per line"), (0, import_react50.createElement)("textarea", { value: unfinished, disabled: busy, onChange: (event) => setUnfinished(event.target.value) })),
-        (0, import_react50.createElement)("button", { type: "button", disabled: busy || !summary.trim(), onClick: () => void run2("legacy-review-finding", { expectedRevision: record.revision, summary, evidenceRefs: evidence.split("\n").map((s) => s.trim()).filter(Boolean), unfinished: unfinished.split("\n").map((s) => s.trim()).filter(Boolean) }) }, t("Save review note"))
+        { className: "bt-recovery-intro" },
+        (0, import_react50.createElement)("p", null, t("Review notes do not send messages or close work. Sources are unverified; inspect the original records.")),
+        (0, import_react50.createElement)("span", null, t("Only works between existing Bots are currently supported."))
+      ),
+      candidates?.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("The recovery list may be incomplete.")) : null,
+      error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-workspace" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-work-list" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-list-header" },
+            (0, import_react50.createElement)("strong", null, t("Find works awaiting inspection")),
+            (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void list() }, t("Refresh"))
+          ),
+          rows2.length ? (0, import_react50.createElement)(
+            "label",
+            { className: "bt-recovery-search" },
+            (0, import_react50.createElement)("span", { className: "bt-recovery-sr" }, t("Filter by Bot or ID")),
+            (0, import_react50.createElement)("input", { type: "search", value: query, disabled: busy, placeholder: t("Filter by Bot or ID"), onChange: (event) => setQuery(event.target.value) })
+          ) : null,
+          busy && candidates === null ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("Loading…")) : null,
+          !busy && candidates !== null && !rows2.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No work awaiting inspection.")) : null,
+          rows2.length && !filtered.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
+          (0, import_react50.createElement)("div", { className: "bt-recovery-work-groups" }, groups.map((group) => (0, import_react50.createElement)(
+            "section",
+            { key: group.id, className: "bt-recovery-work-group" },
+            (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
+            group.rows.map((item) => (0, import_react50.createElement)("button", {
+              key: item.workId,
+              type: "button",
+              className: "bt-recovery-work-choice",
+              disabled: busy,
+              "aria-pressed": workId === item.workId,
+              onClick: () => choose(item),
+              title: item.workId
+            }, shortIdentity(item.workId)))
+          )))
+        ),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-detail" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-manual" },
+            (0, import_react50.createElement)("label", null, t("Original work ID"), (0, import_react50.createElement)("input", { value: workId, disabled: busy, onChange: (event) => {
+              setWorkId(event.target.value);
+              setRecord(null);
+              clearDraft();
+            } })),
+            (0, import_react50.createElement)("button", { type: "button", disabled: busy || !workId.trim(), onClick: () => {
+              setRecord(null);
+              clearDraft();
+              void run2("legacy-review-get", {}, workId.trim());
+            } }, t("Check"))
+          ),
+          !record && !busy ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty" }, t("Choose a work to review.")) : null,
+          live ? (0, import_react50.createElement)("div", { className: "bt-recovery-snapshot", role: "status" }, live.available ? (0, import_react50.createElement)(
+            "div",
+            null,
+            (0, import_react50.createElement)("strong", null, t("Recovery snapshot")),
+            " · ",
+            snapshotTime(live.sampledAt),
+            (0, import_react50.createElement)(
+              "div",
+              { className: "bt-recovery-facts" },
+              (0, import_react50.createElement)(Fact, { label: t("Queue"), value: recoveryObservationText(live.observed?.queue) }),
+              (0, import_react50.createElement)(Fact, { label: t("Held records"), value: recoveryObservationText(live.observed?.held) }),
+              (0, import_react50.createElement)(Fact, { label: t("Original sessions"), value: (live.ids ?? []).join(", ") || t("Not known") })
+            )
+          ) : t("Current recovery sources are unavailable.")) : null,
+          record?.state === "not-created" ? (0, import_react50.createElement)("button", { type: "button", disabled: busy, onClick: () => void run2("legacy-review-create", {}) }, t("Create review")) : null,
+          record && record.state !== "not-created" ? (0, import_react50.createElement)(
+            "div",
+            { className: "bt-recovery-review" },
+            (0, import_react50.createElement)(
+              "div",
+              { className: "bt-recovery-facts" },
+              (0, import_react50.createElement)(Fact, { label: t("Status"), value: legacyReviewStateText(record.state) }),
+              (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(record.owner, actors) }),
+              (0, import_react50.createElement)(Fact, { label: t("Source snapshot time (UTC)"), value: snapshotTime(record.snapshot?.sampledAt) }),
+              (0, import_react50.createElement)(Fact, { label: t("Original sessions"), value: (record.snapshot?.sources ?? []).map((source) => source.sessionId).join(", ") || t("Not known") })
+            ),
+            record.archived ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("The original work is unavailable, changed, or its identity is unverified. This record is read only and does not establish the outcome.")) : null,
+            (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Execution and external effects remain unknown.")),
+            !record.archived && ["needs-review", "evidence-needed"].includes(record.state) ? (0, import_react50.createElement)(
+              "div",
+              { className: "bt-recovery-form" },
+              (0, import_react50.createElement)("label", null, t("Review note"), (0, import_react50.createElement)("textarea", { value: summary, disabled: busy, onChange: (event) => setSummary(event.target.value) })),
+              (0, import_react50.createElement)("label", null, t("Evidence references, one per line"), (0, import_react50.createElement)("textarea", { value: evidence, disabled: busy, onChange: (event) => setEvidence(event.target.value) })),
+              (0, import_react50.createElement)("label", null, t("Unfinished items, one per line"), (0, import_react50.createElement)("textarea", { value: unfinished, disabled: busy, onChange: (event) => setUnfinished(event.target.value) })),
+              (0, import_react50.createElement)("button", { type: "button", disabled: busy || !summary.trim(), onClick: () => void run2("legacy-review-finding", { expectedRevision: record.revision, summary, evidenceRefs: evidence.split("\n").map((s) => s.trim()).filter(Boolean), unfinished: unfinished.split("\n").map((s) => s.trim()).filter(Boolean) }) }, t("Save review note"))
+            ) : null,
+            (record.history ?? []).map((item) => (0, import_react50.createElement)(
+              "article",
+              { key: item.revision, className: "bt-recovery-history" },
+              (0, import_react50.createElement)(Fact, { label: t("Review note"), value: item.finding.summary }),
+              (0, import_react50.createElement)(Fact, { label: t("Evidence references"), value: item.finding.evidenceRefs.join(", ") }),
+              (0, import_react50.createElement)(Fact, { label: t("Unfinished items"), value: item.finding.unfinished.join(", ") })
+            ))
+          ) : null
+        )
+      )
+    )
+  );
+}
+function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, initiallyOpen }) {
+  const [draft, setDraft] = (0, import_react50.useState)({ key: "", text: "" }), [confirmedKey, setConfirmedKey] = (0, import_react50.useState)("");
+  const [checking, setChecking] = (0, import_react50.useState)(false), [saving, setSaving] = (0, import_react50.useState)(false);
+  const [checkedKey, setCheckedKey] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)(""), [notice, setNotice] = (0, import_react50.useState)("");
+  const generation = (0, import_react50.useRef)(0), scopeGeneration = (0, import_react50.useRef)(0), checkBusy = (0, import_react50.useRef)(false), saveBusy = (0, import_react50.useRef)(false);
+  const attempt = goal?.reviewAttempt;
+  const scopeId = scope.kind === "room" ? scope.id : "";
+  const attemptId = typeof attempt?.id === "string" ? attempt.id : "";
+  const goalId = typeof goal?.id === "string" ? goal.id : "";
+  const identity = JSON.stringify([scopeId, goalId, attemptId, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, attempt?.state, attempt?.at]);
+  const attemptKey = JSON.stringify([scopeId, goalId, attemptId]);
+  const previousAttempt = (0, import_react50.useRef)(attemptKey);
+  if (previousAttempt.current !== attemptKey) {
+    previousAttempt.current = attemptKey;
+    generation.current += 1;
+  }
+  const evidence = draft.key === attemptKey ? draft.text : "";
+  const confirmed = confirmedKey === identity;
+  (0, import_react50.useEffect)(() => {
+    scopeGeneration.current += 1;
+    setNotice("");
+    return () => {
+      scopeGeneration.current += 1;
+      generation.current += 1;
+    };
+  }, [scopeId]);
+  if (!scopeId || !attemptId && !notice && !error) return null;
+  const automaticIdle = goal?.idle === true && ["admin-pass", "nudge-limit"].includes(goal.idleReason) && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision;
+  const eligible = goal?.status === "active" && goalId && attemptId && (["uncertain", "cancelled-uncertain"].includes(attempt?.state) || attempt?.state === "admitting" && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1e3) && (goal.idle !== true || automaticIdle);
+  const refresh = async () => {
+    if (checkBusy.current || saveBusy.current || typeof refreshGoal !== "function") return;
+    const current = generation.current, scopeAtStart = scopeGeneration.current, key = identity;
+    checkBusy.current = true;
+    setChecking(true);
+    setError("");
+    setCheckedKey("");
+    try {
+      await refreshGoal();
+      if (generation.current === current) setCheckedKey(key);
+    } catch {
+      if (generation.current === current) setError(t("Could not refresh the group status."));
+    } finally {
+      checkBusy.current = false;
+      if (scopeGeneration.current === scopeAtStart) setChecking(false);
+    }
+  };
+  const submit = async () => {
+    const text = evidence.trim();
+    if (!eligible || checkedKey !== identity || !confirmed || text.length < 8 || text.length > 2e3 || checkBusy.current || saveBusy.current || typeof resolveReview !== "function") return;
+    const current = generation.current, scopeAtStart = scopeGeneration.current;
+    saveBusy.current = true;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await resolveReview(goalId, attemptId, text);
+      if (scopeGeneration.current === scopeAtStart) setNotice(`${t("Request accepted. Refresh to verify the current review status.")} ${t("Review ID")}: ${attemptId}`);
+      if (generation.current === current) {
+        setDraft({ key: attemptKey, text: "" });
+        setConfirmedKey("");
+        setCheckedKey("");
+      }
+    } catch (err) {
+      if (generation.current === current) setCheckedKey("");
+      if (scopeGeneration.current === scopeAtStart) setError(["bot/stale", "bot/invalid", "bot/refused", "bot/read-only"].includes(err?.code) ? t("The goal changed or related work is still pending. Check it before recovery.") : t("Action outcome is unknown; check it before making another change."));
+    } finally {
+      saveBusy.current = false;
+      if (scopeGeneration.current === scopeAtStart) setSaving(false);
+    }
+  };
+  const reason = typeof resolveReview !== "function" ? t("Review recovery is unavailable in this view.") : typeof refreshGoal !== "function" ? t("Group status is unavailable.") : !goalId || !attemptId ? t("Review identity is unavailable.") : goal?.status !== "active" ? t("The group goal must be active before reviews can resume.") : goal.idle === true && !automaticIdle ? t("The goal is paused or its idle state needs review.") : !eligible ? t("This review is not ready to resume. Refresh its status later.") : checkedKey !== identity ? t("Refresh the group status before continuing.") : evidence.trim().length < 8 ? t("Enter at least 8 characters describing what you verified.") : evidence.trim().length > 2e3 ? t("Use at most 2000 characters.") : !confirmed ? t("Confirm that you checked the original outcome.") : "";
+  return (0, import_react50.createElement)(
+    "details",
+    {
+      className: "bt-recovery-panel bt-periodic-review",
+      open: initiallyOpen || void 0,
+      onToggle: (event) => {
+        if (event.target === event.currentTarget && event.currentTarget.open && checkedKey !== identity && !checkBusy.current) void refresh();
+      }
+    },
+    (0, import_react50.createElement)(
+      "summary",
+      { className: "bt-recovery-summary" },
+      (0, import_react50.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "!"),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-summary-text" }, (0, import_react50.createElement)("strong", null, t("Periodic review issue")), (0, import_react50.createElement)("small", null, t("Inspection recovery"))),
+      attemptId ? (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t("Status unknown")) : null
+    ),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-body" },
+      attemptId ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-periodic-context" },
+        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
+        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("This only resumes periodic inspections; it does not approve or complete tasks.")),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-recovery-facts" },
+          (0, import_react50.createElement)(Fact, { label: t("Group ID"), value: scopeId }),
+          (0, import_react50.createElement)(Fact, { label: t("Goal ID"), value: goalId || t("Unknown") }),
+          (0, import_react50.createElement)(Fact, { label: t("Review ID"), value: attemptId })
+        ),
+        (0, import_react50.createElement)("p", { className: "bt-recovery-warning" }, t("The server also checks the group and administrator sessions for pending work, approvals and subagents."))
       ) : null,
-      (record.history ?? []).map((item) => (0, import_react50.createElement)(
-        "article",
-        { key: item.revision },
-        (0, import_react50.createElement)(Fact, { label: t("Review note"), value: item.finding.summary }),
-        (0, import_react50.createElement)(Fact, { label: t("Evidence references"), value: item.finding.evidenceRefs.join(", ") }),
-        (0, import_react50.createElement)(Fact, { label: t("Unfinished items"), value: item.finding.unfinished.join(", ") })
-      ))
-    ) : null,
-    error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-list-header" },
+        (0, import_react50.createElement)("span", null, checking ? t("Loading…") : checkedKey === identity ? t("Current status checked") : t("Group status")),
+        (0, import_react50.createElement)("button", { type: "button", disabled: checking || saving || typeof refreshGoal !== "function", onClick: () => void refresh() }, t("Refresh status"))
+      ),
+      notice ? (0, import_react50.createElement)("p", { className: "bt-recovery-notice", role: "status" }, notice) : null,
+      error ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
+      attemptId ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-recovery-form" },
+        (0, import_react50.createElement)("label", null, t("What did you verify?"), (0, import_react50.createElement)("textarea", { value: evidence, maxLength: 2e3, disabled: checking || saving, onChange: (event) => setDraft({ key: attemptKey, text: event.target.value }) })),
+        (0, import_react50.createElement)("label", { className: "bt-recovery-confirm" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: confirmed, disabled: checking || saving, onChange: (event) => setConfirmedKey(event.target.checked ? identity : "") }), t("I checked the original outcome and authorize future reviews.")),
+        reason ? (0, import_react50.createElement)("p", { className: "bt-recovery-note", role: "status" }, reason) : null,
+        (0, import_react50.createElement)("button", { type: "button", disabled: !!reason || checking || saving || typeof resolveReview !== "function", onClick: () => void submit() }, t("Resume periodic reviews"))
+      ) : null
+    )
   );
 }
 function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
@@ -37214,7 +37506,7 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
     )
   );
 }
-function TaskBoard({ scope, title, close, request = call }) {
+function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, initialReview = false }) {
   const [visible, setVisible] = (0, import_react50.useState)(true);
   const [snapshot, setData] = (0, import_react50.useState)(null);
   const [error, setError] = (0, import_react50.useState)("");
@@ -37504,7 +37796,7 @@ function TaskBoard({ scope, title, close, request = call }) {
           }
         }) : null
       ),
-      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { recovery: data.recovery }), (0, import_react50.createElement)(LegacyWorkReview, { scope, request }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
+      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { recovery: data.recovery }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
       !data ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-empty" },
@@ -37585,10 +37877,23 @@ var TASK_BOARD_CSS = `
 .bt-board-search{display:flex;align-items:center;gap:8px;min-width:200px;max-width:360px;flex:1;color:var(--bt-ink-2);background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding-left:11px}
 .bt-board-search-icon{font-size:20px;line-height:1}.bt-board-dialog .bt-board-search input{min-width:0;width:100%;border:0;background:transparent;outline:none;padding:9px 8px 9px 0}
 .bt-board-search:focus-within{outline:2px solid var(--bt-accent);outline-offset:2px}
-.bt-board-review-tools{display:flex;gap:8px;flex-wrap:wrap;padding:0 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:30%;overflow:auto}
+.bt-board-review-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));align-items:start;gap:10px;padding:10px 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:min(46vh,480px);overflow:auto}
 .bt-board-recovery-clear{font-size:12px;color:var(--bt-ink-2);padding:10px 0;margin:0}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
 .bt-board-held{padding:10px 0;overflow:auto;max-height:30vh;font-size:12px}.bt-board-held summary{cursor:pointer;font-weight:600;color:var(--bt-ink-2)}.bt-board-held-record{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere}
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:min(68vh,680px)}
+.bt-recovery-panel{min-width:0;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:12px;box-shadow:0 2px 6px color-mix(in srgb,var(--bt-ink) 5%,transparent)}
+.bt-recovery-panel[open]{grid-column:1/-1}.bt-recovery-summary{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;list-style:none;padding:12px 14px}.bt-recovery-summary::-webkit-details-marker,.bt-recovery-record-summary::-webkit-details-marker{display:none}
+.bt-recovery-summary:focus-visible,.bt-recovery-record-summary:focus-visible,.bt-recovery-work-choice:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}.bt-recovery-summary-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bt-recovery-summary-text strong{font-size:13px;line-height:1.35}.bt-recovery-summary-text small{font-size:11px;color:var(--bt-ink-2)}
+.bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:9px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
+.bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
+.bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
+.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
+.bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:9px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:9px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
+.bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
+@media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
+
 .bt-board-content{overflow:auto;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
 .bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:visible;padding:2px 2px 20px;align-items:flex-start;min-height:190px}
@@ -37645,8 +37950,10 @@ function MemoryNotice({ shown }) {
 }
 function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
   const [boardOpen, setBoardOpen] = (0, import_react51.useState)(false);
+  const [boardReview, setBoardReview] = (0, import_react51.useState)(false);
   (0, import_react51.useEffect)(() => {
     setBoardOpen(false);
+    setBoardReview(false);
   }, [sessionId]);
   const roster = useRoster((value) => value);
   const selectedView = useStore?.((state) => state.view);
@@ -37736,9 +38043,16 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   return (0, import_react51.createElement)(
     "div",
     { className: "bt-head" },
-    showGoal ? (0, import_react51.createElement)(GoalIsland, { room: room2, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill }) : pill,
-    !away && (room2 || bot) ? (0, import_react51.createElement)("button", { type: "button", className: "bt-board-launch", onClick: () => setBoardOpen(true) }, t("Task board")) : null,
-    boardOpen && !away && (room2 || bot) ? (0, import_react51.createElement)(TaskBoard, { key: room2?.id ?? bot.id, scope: room2 ? { kind: "room", id: room2.id } : { kind: "personal", id: bot.id }, title: name, close: () => setBoardOpen(false) }) : null,
+    showGoal ? (0, import_react51.createElement)(GoalIsland, { room: room2, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill, openReview: () => {
+      actions.closeGoal?.();
+      setBoardReview(true);
+      setBoardOpen(true);
+    } }) : pill,
+    !away && (room2 || bot) ? (0, import_react51.createElement)("button", { type: "button", className: "bt-board-launch", onClick: () => {
+      setBoardReview(false);
+      setBoardOpen(true);
+    } }, t("Task board")) : null,
+    boardOpen && !away && (room2 || bot) ? (0, import_react51.createElement)(TaskBoard, { key: room2?.id ?? bot.id, scope: room2 ? { kind: "room", id: room2.id } : { kind: "personal", id: bot.id }, title: name, goal: room2?.goal, initialReview: boardReview, refreshGoal: actions.refreshTeam, resolveReview: room2 ? (goalId, reviewId, evidence) => actions.goalReviewResolve(room2.id, goalId, reviewId, evidence) : void 0, close: () => setBoardOpen(false) }) : null,
     (0, import_react51.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
     room2 !== void 0 && !away ? (0, import_react51.createElement)("button", {
       type: "button",
@@ -45027,6 +45341,7 @@ function apply(ctx) {
   };
   const actions = {
     ...teamActions({ call, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock, panelFolded }),
+    refreshTeam: () => pull(),
     learningAnswer: (id, approve) => after(call("learning-answer", { id, approve })),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
     // or the click appears to do nothing.
