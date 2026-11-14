@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import { createLegacyRedoCandidate } from '../../src/host/user-redo-legacy-candidate.mjs'
 import { candidateRedoConfirmation } from '../../src/host/candidate-redo-confirmation.mjs'
+import { createCandidateRedoPreparation } from '../../src/host/candidate-redo-preparation.mjs'
 import { createIsolatedCandidateRedoJournal, createIsolatedRedoJournal } from '../../src/host/original-redo-journal.mjs'
 import { isolatedRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
 
@@ -17,15 +18,16 @@ async function fixture(t) {
   const events = [event(0,'agent/inbox/spliced',{ target:'next-turn', start:0, removedCount:0, inserted:[msg] }),
     event(1,'turn/start',{ turn:5 },123456), event(2,'agent/inbox/spliced',{ target:'next-turn', start:0, removedCount:1, inserted:[] }),
     event(3,'user/message',msg), event(4,'turn/end',{ turn:5, reason:{ kind:'interrupted' } })]
-  const session = { id:'source', seq:events.length, header:{ id:'source', version:4 }, inheritedEventCount:0, eventAt:i => events[i] }
+  const session = { id:'source', seq:events.length, header:{ id:'source', version:4, cwd:home }, inheritedEventCount:0, eventAt:i => events[i] }
   const reader = { id:'source', header:{ ...session.header, delegationDepth:0 }, inheritedEventCount:0,
     read:async () => ({ events:structuredClone(events) }), close:async () => {} }
   const writer = { flushLiveSession:async () => {}, open:async () => reader }
   const record = { botId:'bot', since:123456, roomId:'room', trigger:{ role:'request', exchangeId:'ex', senderSessionId:'sender', roomId:'room' } }
-  const statePath = join(home,'state.json'), state = { version:1 }
+  const statePath = join(home,'state.json'), state = { version:1, bots:{ bot:{ id:'bot' } }, rooms:{ room:{ id:'room', members:['bot'] } } }
+  const agent = { id:'source', session, model:{ current:() => ({ provider:'p', model:'m' }) } }
   await writeFile(statePath, JSON.stringify(state))
   let current = true, allowed = true
-  const rt = { home, statePath, state, ctx:{ sessions:{ get:() => session }, get:() => writer },
+  const rt = { home, statePath, state, ctx:{ sessions:{ get:id => id === 'source' ? session : undefined }, agents:{ get:id => id === 'source' ? agent : undefined }, get:() => writer },
     requireHomeLock() {}, homeLockVersion:() => 1, async save() { await writeFile(statePath, JSON.stringify(state)) },
     recoveryHeldOriginal:async () => ({ sessionId:'source', record, isCurrent:() => current }) }
   const candidateReader = createLegacyRedoCandidate(rt), evidence = await candidateReader.inspectEvidence(scope,recoveryId)
@@ -33,7 +35,7 @@ async function fixture(t) {
   const journal = createIsolatedCandidateRedoJournal(rt, dependencies)
   const confirmationDigest = candidateRedoConfirmation(scope, recoveryId, evidence, { principal, operationId, target })
   const request = { operationId, recoveryId, scope, principal, target, confirmationDigest, acknowledged:true }
-  return { home, rt, record, session, msg, scope, principal, target, recoveryId, operationId, candidateReader, evidence, journal, request,
+  return { home, rt, record, session, agent, writer, msg, scope, principal, target, recoveryId, operationId, candidateReader, evidence, journal, request,
     setCurrent:v => { current=v }, setAllowed:v => { allowed=v } }
 }
 
@@ -83,4 +85,57 @@ test('verified and candidate domains cannot reuse an existing recovery in either
   const digest = isolatedRedoConfirmation(f.scope, f.recoveryId, proof, { principal:f.principal, operationId:otherId, target:f.target })
   await verified.prepare({ ...f.request, operationId:otherId, confirmationDigest:digest })
   await assert.rejects(f.journal.prepare(f.request), /unknown|already exists/)
+})
+
+
+test('owner sees a bound candidate and must confirm the unchanged target', async t => {
+  const f = await fixture(t), authority = createCandidateRedoPreparation(f.rt, { candidateReader:f.candidateReader, journal:f.journal })
+  const input = { scope:f.scope, recoveryId:f.recoveryId, operationId:f.operationId, principal:f.principal }
+  await assert.rejects(authority.preview({ ...input, principal:{ kind:'bot', id:'bot' } }), /unavailable/)
+  const preview = await authority.preview(input)
+  assert.equal(preview.candidate.producerVerified, false)
+  assert.deepEqual(preview.candidate.textSegments, ['private candidate'])
+  assert.equal(preview.execution, 'disabled')
+  assert.equal(f.rt.state.originalRedoWitness, undefined)
+  await assert.rejects(authority.prepare({ ...input, acknowledged:false, confirmationDigest:preview.confirmationDigest }), /required/)
+  f.agent.model.current = () => ({ provider:'p', model:'changed' })
+  await assert.rejects(authority.prepare({ ...input, acknowledged:true, confirmationDigest:preview.confirmationDigest }), /confirmation changed/)
+  assert.equal(f.rt.state.originalRedoWitness, undefined)
+  f.agent.model.current = () => ({ provider:'p', model:'m' })
+  f.rt.state.rooms.room.members.length = 0
+  await assert.rejects(authority.prepare({ ...input, acknowledged:true, confirmationDigest:preview.confirmationDigest }), /unavailable/)
+  assert.equal(f.rt.state.originalRedoWitness, undefined)
+  f.rt.state.rooms.room.members.push('bot')
+  assert.deepEqual(await authority.prepare({ ...input, acknowledged:true, confirmationDigest:preview.confirmationDigest }),
+    { operationId:f.operationId, state:'prepared', execution:'disabled' })
+  assert.doesNotMatch(await readFile(f.rt.statePath, 'utf8'), /private candidate/)
+})
+
+
+test('preview snapshots user scope and principal before awaiting the writer', async t => {
+  const f = await fixture(t), authority = createCandidateRedoPreparation(f.rt, { candidateReader:f.candidateReader, journal:f.journal })
+  const started = Promise.withResolvers(), resume = Promise.withResolvers()
+  f.writer.flushLiveSession = async () => { started.resolve(); await resume.promise }
+  const input = { scope:{ ...f.scope }, recoveryId:f.recoveryId, operationId:f.operationId, principal:{ ...f.principal } }
+  const pending = authority.preview(input); await started.promise
+  input.scope.id = 'other'; input.principal.kind = 'bot'; input.operationId = 'invalid'
+  resume.resolve()
+  const preview = await pending
+  assert.deepEqual(preview.scope, f.scope)
+  assert.equal(preview.operationId, f.operationId)
+  assert.equal(preview.candidate.producerVerified, false)
+  assert.equal(f.rt.state.originalRedoWitness, undefined)
+})
+
+
+test('preview fails if evidence callback replaces the current Agent', async t => {
+  const f = await fixture(t); let hijack = false
+  f.agent.model.current = () => { hijack = true; return { provider:'p', model:'m' } }
+  f.rt.recoveryHeldOriginal = async () => ({ sessionId:'source', record:f.record, isCurrent:() => {
+    if (hijack) f.rt.ctx.agents.get = () => ({ id:'source', session:f.session })
+    return true
+  } })
+  const authority = createCandidateRedoPreparation(f.rt, { candidateReader:f.candidateReader, journal:f.journal })
+  await assert.rejects(authority.preview({ scope:f.scope, recoveryId:f.recoveryId, operationId:f.operationId, principal:f.principal }), /unavailable|changed/)
+  assert.equal(f.rt.state.originalRedoWitness, undefined)
 })
