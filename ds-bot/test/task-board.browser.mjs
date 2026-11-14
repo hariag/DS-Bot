@@ -111,7 +111,7 @@ globalThis.renderFixture=(scope,mode='normal')=>{state.scope=scope;state.mode=mo
  root.render(h(TaskBoard,{scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,currentRoomGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
 globalThis.clearFixture=()=>ReactDOM.flushSync(()=>root.render(null));
 `
-const bundle = await build({ stdin: { contents: entry, resolveDir: dirname(boardEntry), sourcefile: 'board-fixture.js' },
+const bundle = await build({ stdin: { contents: entry, resolveDir: dirname(boardEntry), sourcefile: 'board-globalThis.fixture.js' },
   bundle: true, platform: 'browser', format: 'iife', write: false, plugins: [shim] })
 
 async function exerciseColumns(page, rail) {
@@ -578,7 +578,7 @@ try {
 
   // A committed receipt does not make the old board revision safe for another
   // command. A failed refresh must keep the original ID and file input fenced.
-  await page.evaluate(()=>{fixture.calls=[];fixture.boardPlans['personal:a']=[{id:'after-commit-fails',mode:'fail'}]})
+  await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'after-commit-fails',mode:'fail'}]})
   const openReceiptCard=async title=>{
     await page.locator('article').filter({hasText:title}).locator('.bt-board-card-summary').click()
     const modal=page.locator('.bt-card-modal');await modal.waitFor();return modal
@@ -587,20 +587,20 @@ try {
   await receiptModal.getByRole('button',{name:'Edit card details'}).click()
   await receiptModal.getByLabel('Description',{exact:true}).fill('Committed but refresh failed')
   await receiptModal.getByRole('button',{name:'Save changes'}).click()
-  await page.waitForFunction(()=>fixture.boardStarted.includes('after-commit-fails'))
+  await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('after-commit-fails'))
   await receiptModal.getByText('An action needs confirmation.').waitFor()
   const committedId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   assert.ok(committedId,'the original operation ID remains durable after the failed board read')
-  assert.equal(await page.evaluate(id=>fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),committedId),true,'the operation receipt was checked')
+  assert.equal(await page.evaluate(id=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),committedId),true,'the operation receipt was checked')
   assert.equal(await receiptModal.locator('input[type=file]').isDisabled(),true,'file upload remains fenced while the board is stale')
-  await page.evaluate(()=>{fixture.boardPlans['personal:a']=[{id:'retry-refresh',mode:'hold'}]})
+  await page.evaluate(()=>{globalThis.fixture.boardPlans['personal:a']=[{id:'retry-refresh',mode:'hold'}]})
   await receiptModal.getByRole('button',{name:'Check action'}).click()
-  await page.waitForFunction(()=>fixture.boardStarted.includes('retry-refresh'))
+  await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('retry-refresh'))
   assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')),committedId)
   assert.equal(await receiptModal.locator('input[type=file]').isDisabled(),true,'a pending refreshed snapshot cannot release the fence')
-  assert.equal(await page.evaluate(id=>fixture.calls.filter(x=>x.endpoint==='board-operation'&&x.payload.operationId===id).length>=2,committedId),true,'Check queries the same operation ID')
-  assert.equal(await page.evaluate(id=>fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.operationId===id).length,committedId),1,'Check does not replay the command')
-  await page.evaluate(()=>fixture.resolvers['board:retry-refresh'](true))
+  assert.equal(await page.evaluate(id=>globalThis.fixture.calls.filter(x=>x.endpoint==='board-operation'&&x.payload.operationId===id).length>=2,committedId),true,'Check queries the same operation ID')
+  assert.equal(await page.evaluate(id=>globalThis.fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.operationId===id).length,committedId),1,'Check does not replay the command')
+  await page.evaluate(()=>globalThis.fixture.resolvers['board:retry-refresh'](true))
   await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')===null)
   await page.waitForFunction(()=>document.querySelector('.bt-card-modal input[type=file]')?.disabled===false)
   assert.equal(await receiptModal.locator('input[type=file]').isDisabled(),false)
@@ -608,52 +608,52 @@ try {
 
   // A manual Refresh may supersede the committed receipt's older load. The
   // older response cannot release the operation while the latest load is held.
-  await page.evaluate(()=>{fixture.calls=[];fixture.boardPlans['personal:a']=[{id:'older-load',mode:'hold'},{id:'newer-load',mode:'hold'}]})
+  await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'older-load',mode:'hold'},{id:'newer-load',mode:'hold'}]})
   receiptModal=await openReceiptCard('Personal task')
   await receiptModal.getByRole('button',{name:'Edit card details'}).click()
   await receiptModal.getByLabel('Description',{exact:true}).fill('Receipt with competing refresh')
   await receiptModal.getByRole('button',{name:'Save changes'}).click()
-  await page.waitForFunction(()=>fixture.boardStarted.includes('older-load'))
+  await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('older-load'))
   const racingId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   assert.ok(racingId)
   await page.keyboard.press('Escape');await receiptModal.waitFor({state:'detached'})
-  await page.evaluate(()=>{fixture.revision=2;fixture.boardTitles['personal:a']='Fresh snapshot task'})
+  await page.evaluate(()=>{globalThis.fixture.revision=2;globalThis.fixture.boardTitles['personal:a']='Fresh snapshot task'})
   await page.getByRole('button',{name:'Refresh',exact:true}).click()
-  await page.waitForFunction(()=>fixture.boardStarted.includes('newer-load'))
-  await page.evaluate(async()=>{fixture.resolvers['board:older-load'](true);await new Promise(resolve=>setTimeout(resolve,0))})
+  await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('newer-load'))
+  await page.evaluate(async()=>{globalThis.fixture.resolvers['board:older-load'](true);await new Promise(resolve=>setTimeout(resolve,0))})
   assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')),racingId,'superseded response cannot clear pending')
-  await page.evaluate(()=>fixture.resolvers['board:newer-load'](true))
+  await page.evaluate(()=>globalThis.fixture.resolvers['board:newer-load'](true))
   await page.getByText('Fresh snapshot task',{exact:true}).waitFor()
   if(await page.getByText('An action needs confirmation.').isVisible())await page.getByRole('button',{name:'Check action'}).click()
   await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')===null)
 
   // A late response for the old scope cannot touch a different scope's marker
   // or enable its controls, even if both scopes have unsettled receipts.
-  await page.evaluate(()=>{fixture.calls=[];fixture.boardPlans['personal:a']=[{id:'scope-a-late',mode:'hold'}]})
+  await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'scope-a-late',mode:'hold'}]})
   receiptModal=await openReceiptCard('Fresh snapshot task')
   await receiptModal.getByRole('button',{name:'Edit card details'}).click()
   await receiptModal.getByLabel('Description',{exact:true}).fill('Old scope late response')
   await receiptModal.getByRole('button',{name:'Save changes'}).click()
-  await page.waitForFunction(()=>fixture.boardStarted.includes('scope-a-late'))
+  await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('scope-a-late'))
   const oldScopeId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   assert.ok(oldScopeId)
   const newScopeId='scope-b-pending-operation'
-  await page.evaluate(id=>{sessionStorage.setItem('ds-bot:board-pending:room:g2',id);fixture.receiptPlans[id]={id:'scope-b-receipt'};renderFixture({kind:'room',id:'g2'},'normal')},newScopeId)
-  await page.waitForFunction(()=>fixture.receiptStarted.includes('scope-b-receipt'))
+  await page.evaluate(id=>{sessionStorage.setItem('ds-bot:board-pending:room:g2',id);globalThis.fixture.receiptPlans[id]={id:'scope-b-receipt'};globalThis.renderFixture({kind:'room',id:'g2'},'normal')},newScopeId)
+  await page.waitForFunction(()=>globalThis.fixture.receiptStarted.includes('scope-b-receipt'))
   await page.getByText('Personal task',{exact:true}).waitFor()
   const newModal=await openReceiptCard('Personal task')
   assert.equal(await newModal.locator('input[type=file]').isDisabled(),true)
-  await page.evaluate(async()=>{fixture.resolvers['board:scope-a-late'](true);await new Promise(resolve=>setTimeout(resolve,0))})
+  await page.evaluate(async()=>{globalThis.fixture.resolvers['board:scope-a-late'](true);await new Promise(resolve=>setTimeout(resolve,0))})
   assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:room:g2')),newScopeId,'old-scope result cannot clear the new scope ID')
   assert.equal(await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')),oldScopeId,'old scope keeps its own unresolved UI marker')
   assert.equal(await newModal.locator('input[type=file]').isDisabled(),true,'old-scope response cannot enable new-scope uploads')
-  await page.evaluate(()=>{fixture.boardPlans['room:g2']=[{id:'scope-b-fresh',mode:'hold'}];fixture.resolvers['receipt:scope-b-receipt']()})
-  await page.waitForFunction(()=>fixture.boardStarted.includes('scope-b-fresh'))
+  await page.evaluate(()=>{globalThis.fixture.boardPlans['room:g2']=[{id:'scope-b-fresh',mode:'hold'}];globalThis.fixture.resolvers['receipt:scope-b-receipt']()})
+  await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('scope-b-fresh'))
   assert.equal(await newModal.locator('input[type=file]').isDisabled(),true)
-  await page.evaluate(()=>fixture.resolvers['board:scope-b-fresh'](true))
+  await page.evaluate(()=>globalThis.fixture.resolvers['board:scope-b-fresh'](true))
   await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:room:g2')===null)
   assert.equal(await newModal.locator('input[type=file]').isDisabled(),false)
-  await page.evaluate(()=>{fixture.boardTitles={};fixture.revision=1;renderFixture({kind:'personal',id:'a'},'normal')})
+  await page.evaluate(()=>{globalThis.fixture.boardTitles={};globalThis.fixture.revision=1;globalThis.renderFixture({kind:'personal',id:'a'},'normal')})
   await page.getByText('Personal task',{exact:true}).waitFor()
   await page.waitForFunction(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a')===null)
 
