@@ -281,7 +281,8 @@ try {
   await periodic.getByText('This only resumes periodic inspections; it does not approve or complete tasks.').waitFor()
   await periodic.getByText('The server also checks the group and administrator sessions for pending work, approvals and subagents.').waitFor()
   const resume = periodic.getByRole('button', {name:'Allow future inspections'})
-  assert.equal(await resume.isDisabled(), true)
+  await periodic.getByText('Current status checked').waitFor()
+  assert.equal(await resume.isEnabled(), true, 'an exact refreshed attempt permits an explicit decision')
   if (process.env.PERIODIC_SCREENSHOT) { await periodic.scrollIntoViewIfNeeded(); await page.screenshot({ path:process.env.PERIODIC_SCREENSHOT }) }
   assert.equal(await periodic.getByLabel('What did you verify?').count(), 0, 'no explanation is required')
   await periodic.getByRole('button', {name:'Refresh status'}).click()
