@@ -37874,7 +37874,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         " ",
         (0, import_react50.createElement)("button", { type: "button", onClick: () => onCheck(pending) }, t("Check action")),
         " ",
-        (0, import_react50.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => onCancel(pending) }, t("Safely cancel pending request"))
+        (0, import_react50.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => onCancel(pending) }, t("Safely cancel pending request")),
+        error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null
       ) : error ? (0, import_react50.createElement)("div", { className: "bt-card-modal-status", role: "alert" }, error) : null,
       (0, import_react50.createElement)(
         "div",
@@ -37962,9 +37963,11 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       boardColumns(next.tasks);
       setData({ key, value: next });
       if (!pendingRef.current && !preserveError) setError("");
+      return true;
     } catch (err) {
       if (current(epoch) && sequence === loadSequence.current) setError(err?.message || t("Unable to load board"));
     }
+    return false;
   };
   const settle = async (id, result, epoch) => {
     if (!current(epoch) || pendingRef.current !== id) return;
@@ -37972,6 +37975,9 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setError(t("Action outcome is unknown; check it before making another change."));
       return;
     }
+    if (result.state === "rejected") setError(result.message ? hostText(result.message) : t("Action rejected"));
+    const refreshed = await load(epoch, true);
+    if (!refreshed || !current(epoch) || pendingRef.current !== id) return;
     store.current?.clear();
     pendingRef.current = "";
     setPending("");
@@ -37979,10 +37985,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       fetching.current = null;
       setBusy(false);
     }
-    if (result.state === "rejected") {
-      setError(result.message ? hostText(result.message) : t("Action rejected"));
-      await load(epoch, true);
-    } else await load(epoch);
+    if (result.state === "committed") setError("");
     return result.state;
   };
   const check = async (id, epoch = generation.current) => {
@@ -38366,7 +38369,7 @@ var TASK_BOARD_CSS = `
 .bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.52);overscroll-behavior:contain}
 .bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.3)}
 .bt-card-modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--bt-line);flex:none}.bt-card-modal-header p{margin:0 0 5px;color:var(--bt-ink-2);font-size:12px}.bt-card-modal-header h2{margin:0;font-size:21px;line-height:1.3;overflow-wrap:anywhere}.bt-card-modal-header button{font-size:22px;line-height:1;min-width:38px}
-.bt-card-modal .bt-board-card-body{overflow:auto;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px}
+.bt-card-modal .bt-board-card-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px;overflow-wrap:anywhere}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
 .bt-board-conversation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:10px}.bt-board-conversation form,.bt-board-conversation label{display:flex;flex-direction:column;gap:6px}.bt-board-comment{padding:8px;border-radius:8px;background:var(--bt-sidebar);white-space:pre-wrap;overflow-wrap:anywhere}.bt-board-comment p{margin:4px 0 0}.bt-board-comment small{color:var(--bt-ink-2)}
 .bt-board-card-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.bt-board-owner,.bt-board-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);padding:3px 7px;font-size:11px}.bt-board-chip-blocked{color:var(--bt-danger);background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card))}
