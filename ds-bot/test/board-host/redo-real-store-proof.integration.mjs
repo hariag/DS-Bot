@@ -17,6 +17,7 @@ import { boardList } from '../../src/host/board-query.js'
 import { createUserRedoOriginalProof } from '../../src/host/user-redo-proof.mjs'
 import { createOriginalRedoJournal } from '../../src/host/original-redo-journal.mjs'
 import { userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
+import { createUserRedoPreparation } from '../../src/host/user-redo-preparation.mjs'
 
 test('real store and writer require a current scoped owner and held input before a redo record', async t => {
   const home = await mkdtemp(join(tmpdir(), 'ds-bot-redo-real-host-')), statePath = join(home, 'state.json')
@@ -56,11 +57,19 @@ test('real store and writer require a current scoped owner and held input before
   // SessionStore checks without claiming a production coordinator is bound.
   const journal = createOriginalRedoJournal(rt, { authorize, proveOriginal:proof,
     validateBinding:row => ctx.sessions.get(row.original.sessionId) === session && ctx.agents.get(row.original.sessionId)?.session === session })
-  const request = { operationId:'9d5b1723-7063-4e3e-b27e-12f44dd0033d', recoveryId, scope, principal,
-    acknowledged:true, confirmationDigest:userRedoConfirmation(scope, recoveryId, source) }
-  const prepared = await journal.prepare(request)
-  assert.equal(prepared.original.messageId, message.id)
-  await assert.rejects(journal.beginDispatch(request.operationId, principal), Error)
-  await assert.rejects(journal.prepare({ ...request, operationId:'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454', principal:{ kind:'bot', id:'bot' } }), Error)
+  const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d', preparation = createUserRedoPreparation(rt)
+  const preview = await preparation.preview({ scope, recoveryId })
+  assert.deepEqual(preview.content, message.content)
+  assert.match(preview.warning, /sender is not authenticated/)
+  assert.equal(preview.execution, 'disabled')
+  await assert.rejects(preparation.preview({ scope:{ kind:'personal', id:'missing' }, recoveryId }), Error)
+  const request = { operationId, recoveryId, scope, acknowledged:true, confirmationDigest:preview.confirmationDigest }
+  await assert.rejects(preparation.confirm({ ...request, confirmationDigest:'b'.repeat(64) }), Error)
+  await assert.rejects(preparation.confirm({ ...request, acknowledged:false }), Error)
+  assert.equal((await preparation.confirm(request)).execution, 'disabled')
+  await assert.rejects(journal.beginDispatch(operationId, principal), Error)
+  const permissiveBinding = createOriginalRedoJournal(rt, { authorize, proveOriginal:proof, validateBinding:() => true })
+  await assert.rejects(permissiveBinding.beginDispatch(operationId, principal), /execution was not authorized/)
+  await assert.rejects(journal.prepare({ ...request, confirmationDigest:userRedoConfirmation(scope, recoveryId, source), operationId:'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454', principal:{ kind:'bot', id:'bot' } }), Error)
   assert.equal(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8')).originalRedoWitness[recoveryId].operationId, request.operationId)
 })
