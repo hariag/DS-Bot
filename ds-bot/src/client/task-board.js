@@ -736,7 +736,8 @@ function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,
         h('button',{type:'button','aria-label':t('Close card'),'data-close-card':'true',onClick:onClose},'×')),
       pending?h('div',{className:'bt-card-modal-status',role:'status'},t(busy?'Saving…':'An action needs confirmation.'),' ',
         h('button',{type:'button',onClick:()=>onCheck(pending)},t('Check action')),' ',
-        h('button',{type:'button',disabled:cancelBusy,onClick:()=>onCancel(pending)},t('Safely cancel pending request'))):error?h('div',{className:'bt-card-modal-status',role:'alert'},error):null,
+        h('button',{type:'button',disabled:cancelBusy,onClick:()=>onCancel(pending)},t('Safely cancel pending request')),
+        error?h('p',{role:'alert'},error):null):error?h('div',{className:'bt-card-modal-status',role:'alert'},error):null,
     h('div', { className:'bt-board-card-body' },
     canMove ? h('label', { className:'bt-board-move' }, h('span', null, t('Personal progress')),
       h('select', { 'aria-label':t('Move personal task'), disabled:uncertain, value:task.personalProgress,
@@ -807,7 +808,9 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       boardColumns(next.tasks)
       setData({ key, value:next })
       if (!pendingRef.current && !preserveError) setError('')
+      return true
     } catch (err) { if (current(epoch) && sequence === loadSequence.current) setError(err?.message || t('Unable to load board')) }
+    return false
   }
   const settle = async (id, result, epoch) => {
     if (!current(epoch) || pendingRef.current !== id) return
@@ -815,12 +818,17 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setError(t('Action outcome is unknown; check it before making another change.'))
       return
     }
+    if (result.state === 'rejected') setError(result.message ? hostText(result.message) : t('Action rejected'))
+    // A durable receipt settles the request, but the old revision must remain
+    // fenced until this scope has successfully loaded a current board. A
+    // failed or superseded load keeps the original ID available for recheck.
+    const refreshed=await load(epoch,true)
+    if(!refreshed || !current(epoch) || pendingRef.current!==id)return
     store.current?.clear()
     pendingRef.current = ''
     setPending('')
     if (fetching.current === id) { fetching.current = null; setBusy(false) }
-    if (result.state === 'rejected') { setError(result.message ? hostText(result.message) : t('Action rejected')); await load(epoch, true) }
-    else await load(epoch)
+    if (result.state === 'committed') setError('')
     return result.state
   }
   const check = async (id, epoch = generation.current) => {
