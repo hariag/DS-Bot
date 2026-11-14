@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { ISOLATED_REDO_WARNING, isolatedRedoTargetValid, userRedoIdentity } from './user-redo-journal.mjs'
-import { LEGACY_CANDIDATE_WARNING } from './user-redo-legacy-candidate.mjs'
+import { isIssuedLegacyCandidateEvidence, LEGACY_CANDIDATE_WARNING } from './user-redo-legacy-candidate.mjs'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
@@ -12,7 +12,7 @@ const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value
 // The source summary never includes plaintext textSegments.
 export function candidateRedoSource(scope, recoveryId, evidence) {
   const view = evidence?.view
-  if (evidence?.kind !== 'unverified-candidate-evidence-v1' || !Object.isFrozen(evidence)
+  if (!isIssuedLegacyCandidateEvidence(evidence) || evidence?.kind !== 'unverified-candidate-evidence-v1' || !Object.isFrozen(evidence)
     || !Object.isFrozen(view) || !Object.isFrozen(view?.textSegments) || typeof evidence.isCurrent !== 'function'
     || evidence.isCurrent() !== true || !digest(recoveryId) || view?.recoveryId !== recoveryId
     || view.kind !== 'unverified-legacy-candidate' || view.producerVerified !== false || view.executeAllowed !== false

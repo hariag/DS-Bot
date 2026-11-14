@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { isolatedRedoConfirmation, isolatedRedoTargetValid, userRedoConfirmation, userRedoIdentity } from './user-redo-journal.mjs'
 import { candidateRedoConfirmation, candidateRedoSource } from './candidate-redo-confirmation.mjs'
+import { isEvidenceFromLegacyCandidateReader, isLegacyCandidateReaderFor } from './user-redo-legacy-candidate.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -26,11 +27,11 @@ export function createOriginalRedoJournal(rt, options = {}) { return createRedoJ
 export function createIsolatedRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, true) }
 export function createCandidateRedoJournal(rt, options = {}) { return createRedoJournal(rt, options, 'candidate') }
 
-function createRedoJournal(rt, { authorize, proveOriginal, proveCandidate, validateBinding, verifyResult } = {}, isolated) {
+function createRedoJournal(rt, { authorize, proveOriginal, candidateReader, validateBinding, verifyResult } = {}, isolated) {
   const candidate = isolated === 'candidate'
   if (typeof rt?.home !== 'string' || typeof rt.statePath !== 'string' || !rt.state || typeof rt.save !== 'function'
     || typeof rt.requireHomeLock !== 'function' || typeof rt.homeLockVersion !== 'function'
-    || typeof authorize !== 'function' || typeof (candidate ? proveCandidate : proveOriginal) !== 'function'
+    || typeof authorize !== 'function' || (candidate ? !isLegacyCandidateReaderFor(rt, candidateReader) : typeof proveOriginal !== 'function')
     || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
   // Both modes share the recovery witness and operation busy set, so one held
   // record cannot be dispatched once by each mode. Private files and phase
@@ -39,6 +40,12 @@ function createRedoJournal(rt, { authorize, proveOriginal, proveCandidate, valid
   const root = join(rt.home, namespace), marker = join(rt.home, `.${namespace}.identity`), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   const identityFor = isolated ? userRedoIdentity : originalRedoIdentity
   const targetValid = isolatedRedoTargetValid
+  const readProof = async (scope, recoveryId) => {
+    if (!candidate) return proveOriginal(scope, recoveryId)
+    const proof = await candidateReader.inspectEvidence(scope, recoveryId)
+    if (!isEvidenceFromLegacyCandidateReader(rt, candidateReader, proof)) throw Error('legacy candidate unavailable')
+    return proof
+  }
   let directoryIdentity
   function readMarker(path, sync = false) {
     const fd = openSync(path, constants.O_RDONLY | nofollow)
@@ -100,6 +107,12 @@ function createRedoJournal(rt, { authorize, proveOriginal, proveCandidate, valid
     const table = rt.state.originalRedoWitness
     if (table === undefined) return {}
     if (!table || typeof table !== 'object' || Array.isArray(table)) throw Error('redo witness unavailable')
+    const operations = new Set()
+    for (const [key, witness] of Object.entries(table)) {
+      if (!digest(key) || witness?.recoveryId !== key || !uuid(witness.operationId) || !digest(witness.bindingHash)
+        || operations.has(witness.operationId)) throw Error('redo witness conflict')
+      operations.add(witness.operationId)
+    }
     return table
   }
   function confirmWitnessTable(generation) {
@@ -264,12 +277,13 @@ function createRedoJournal(rt, { authorize, proveOriginal, proveCandidate, valid
       await previous
       const generation = lease(); directory(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true) throw Error('redo unavailable')
-      const proof = await (candidate ? proveCandidate : proveOriginal)(copy(scope), recoveryId)
+      const proof = await readProof(copy(scope), recoveryId)
       const source = original(proof, recoveryId, scope, confirmationDigest, principal, operationId, target)
       sameLease(generation)
       if (authorize(copy(scope), recoveryId, copy(principal)) !== true || proof.isCurrent() !== true) throw Error('redo proof changed')
       const rows = all(), existing = rows.find(row => row.operationId === operationId), reserved = readRecovery(recoveryId, generation)
-      const witness = confirmWitnessTable(generation)[recoveryId]
+      const witnesses = confirmWitnessTable(generation), witness = witnesses[recoveryId]
+      if (Object.values(witnesses).some(item => item.operationId === operationId && item.recoveryId !== recoveryId)) throw Error('redo operation identity conflict')
       if (witness && witness.operationId !== operationId) throw Error('redo already exists; inspect outcome')
       if (!!witness !== !!existing || !!witness !== !!reserved) throw Error('redo preparation outcome unknown')
       if (reserved && (!existing || reserved.operationId !== operationId)) throw Error('redo already exists; inspect outcome')
@@ -306,7 +320,7 @@ function createRedoJournal(rt, { authorize, proveOriginal, proveCandidate, valid
       if (!isDeepStrictEqual(row.principal, principal)) throw Error('redo unavailable')
       confirmPhase(row, generation)
       if (row.state !== 'prepared') return { state:'unknown', operationId }
-      const proof = await (candidate ? proveCandidate : proveOriginal)(copy(row.scope), row.recoveryId)
+      const proof = await readProof(copy(row.scope), row.recoveryId)
       const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest, row.principal, row.operationId, row.target)
       checkAccess(row, generation)
       if (!isDeepStrictEqual(source, row.original) || proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo proof changed')

@@ -3,6 +3,11 @@ import { symbols } from '@deepseek-ai/cordis'
 import { createInboxAudit } from './inbox-audit.js'
 
 const providerOf = service => service?.[symbols.original] ?? service
+const issued = new WeakSet(), readers = new WeakMap()
+export const isIssuedLegacyCandidateEvidence = evidence => !!evidence && issued.has(evidence)
+export const isLegacyCandidateReaderFor = (rt, reader) => typeof reader === 'function' && readers.get(reader)?.rt === rt
+export const isEvidenceFromLegacyCandidateReader = (rt, reader, evidence) => isLegacyCandidateReaderFor(rt, reader)
+  && readers.get(reader).issued.has(evidence)
 const comparableHeader = header => header && typeof header === 'object'
   ? { ...header, delegationDepth:header.delegationDepth === undefined ? 0 : header.delegationDepth } : header
 const noControl = source => source && ['request', 'room'].includes(source.role) && source.reviewInspect !== true
@@ -24,6 +29,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
   // Every probe may read a full Session prefix. Bound work across different
   // recovery ids too; a timed-out disk read must not invite a parallel flood.
   let pending = false
+  const ownIssued = new WeakSet()
   const read = async (scope, recoveryId) => {
     let reader
     try {
@@ -92,7 +98,9 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
         botId:record.botId, sessionId:hold.sessionId, ...(scope.kind === 'room' ? { roomId:scope.id } : {}),
         turn:start.data.turn, turnStartSeq:start.seq, messageSeq:event.seq, matchedTime:start.time,
         textSegments:Object.freeze(message.content.map(part => part.text)) })
-      return Object.freeze({ kind:'unverified-candidate-evidence-v1', view, isCurrent:current })
+      const evidence = Object.freeze({ kind:'unverified-candidate-evidence-v1', view, isCurrent:current })
+      issued.add(evidence); ownIssued.add(evidence)
+      return evidence
     } catch { return undefined } finally { await reader?.close().catch(() => {}) }
   }
   const inspectEvidence = async (scope, recoveryId) => {
@@ -108,6 +116,7 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
   // Internal callers must not serialize the callback or treat this evidence as
   // the original producer proof. It only certifies the inspected prefix is
   // still the same physical candidate, under the previously checked scope.
-  preview.inspectEvidence = inspectEvidence
-  return preview
+  Object.defineProperty(preview, 'inspectEvidence', { value:inspectEvidence })
+  readers.set(preview, { rt, issued:ownIssued })
+  return Object.freeze(preview)
 }

@@ -36,7 +36,7 @@ async function fixture(t) {
   const readCandidate = createLegacyRedoCandidate(rt), target = { cwd:'/work', provider:'p', model:'m' }
   const proof = await readCandidate.inspectEvidence(scope, recoveryId)
   assert.ok(proof)
-  const dependencies = { authorize:() => allowed, proveCandidate:(scope_, id_) => readCandidate.inspectEvidence(scope_, id_), validateBinding:() => true }
+  const dependencies = { authorize:() => allowed, candidateReader:readCandidate, validateBinding:() => true }
   const request = { operationId, recoveryId, scope, principal, target, acknowledged:true,
     confirmationDigest:candidateRedoConfirmation(scope, recoveryId, proof, { principal, operationId, target }) }
   return { home, rt, dependencies, request, proof, events, session, record, readCandidate,
@@ -65,6 +65,11 @@ test('rejects fabricated evidence and candidate or target changes after preview'
   const forged = { ...f.proof, view:{ ...f.proof.view, producerVerified:true } }
   assert.throws(() => candidateRedoConfirmation(scope, recoveryId, forged, { principal, operationId, target:f.request.target }), /unavailable/)
   assert.throws(() => candidateRedoConfirmation(scope, recoveryId, { ...f.proof }, { principal, operationId, target:f.request.target }), /unavailable/)
+  const frozenForged = Object.freeze({ ...f.proof, view:Object.freeze({ ...f.proof.view,
+    textSegments:Object.freeze(['forged text']) }), isCurrent:() => true })
+  assert.throws(() => candidateRedoConfirmation(scope, recoveryId, frozenForged, { principal, operationId, target:f.request.target }), /unavailable/)
+  const differentHost = { ...f.rt }
+  assert.throws(() => createCandidateRedoJournal(differentHost, f.dependencies), /authority unavailable/)
   await assert.rejects(f.journal.prepare({ ...f.request, target:{ ...f.request.target, model:'changed' } }), /confirmation/)
   f.events[0].data.inserted[0].content[0].text = 'different candidate'
   f.events[3].data.content[0].text = 'different candidate'
@@ -89,6 +94,10 @@ test('cross-mode recovery witness and lease changes prevent duplicate decisions'
   const old = createOriginalRedoJournal(f.rt, { authorize:() => true, proveOriginal:async () => originalProof, validateBinding:() => true })
   await assert.rejects(old.prepare({ operationId, recoveryId, scope, principal, acknowledged:true,
     confirmationDigest:userRedoConfirmation(scope, recoveryId, originalProof) }), /unknown|already exists/)
+  const otherRecovery = 'c'.repeat(64), otherProof = { ...originalProof, recoveryId:otherRecovery }
+  const otherJournal = createOriginalRedoJournal(f.rt, { authorize:() => true, proveOriginal:async () => otherProof, validateBinding:() => true })
+  await assert.rejects(otherJournal.prepare({ operationId, recoveryId:otherRecovery, scope, principal, acknowledged:true,
+    confirmationDigest:userRedoConfirmation(scope, otherRecovery, otherProof) }), /identity conflict/)
   f.generation(2)
   // A fresh generation may inspect a complete decision but cannot invent a
   // second operation for this same recovery.
@@ -99,12 +108,14 @@ test('cross-mode recovery witness and lease changes prevent duplicate decisions'
 test('real team store retains the candidate witness through close and a new store instance', async t => {
   const f = await fixture(t), disposers = []
   const ctx = { logger:{ warn() {} }, effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) } }
-  const makeStore = () => ({ home:f.home, statePath:f.rt.statePath, ctx, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {} })
+  ctx.sessions = f.rt.ctx.sessions; ctx.get = f.rt.ctx.get
+  const makeStore = () => ({ home:f.home, statePath:f.rt.statePath, ctx, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {},
+    recoveryHeldOriginal:f.rt.recoveryHeldOriginal })
   const first = makeStore()
   installStore(first)
   t.after(async () => { for (const dispose of disposers.splice(0)) await dispose() })
   await first.load(); await first.save({ required:true })
-  const saved = await createCandidateRedoJournal(first, f.dependencies).prepare(f.request)
+  const saved = await createCandidateRedoJournal(first, { ...f.dependencies, candidateReader:createLegacyRedoCandidate(first) }).prepare(f.request)
   const state = JSON.parse(await readFile(first.statePath, 'utf8'))
   assert.equal(state.originalRedoWitness[recoveryId].operationId, operationId)
   assert.doesNotMatch(JSON.stringify(state), /sensitive candidate text/)
@@ -112,7 +123,7 @@ test('real team store retains the candidate witness through close and a new stor
   const restored = makeStore()
   installStore(restored); await restored.load()
   assert.deepEqual(restored.state.originalRedoWitness, state.originalRedoWitness)
-  const journal = createCandidateRedoJournal(restored, f.dependencies)
+  const journal = createCandidateRedoJournal(restored, { ...f.dependencies, candidateReader:createLegacyRedoCandidate(restored) })
   assert.deepEqual(await journal.prepare(f.request), saved)
   await assert.rejects(journal.prepare({ ...f.request, operationId:otherId,
     confirmationDigest:candidateRedoConfirmation(scope, recoveryId, f.proof, { principal, operationId:otherId, target:f.request.target }) }), /already exists/)
