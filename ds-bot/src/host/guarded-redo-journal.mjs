@@ -158,6 +158,19 @@ export function openGuardedRedoJournal(path, { assertLease, leaseVersion, author
   }
   return {
     close(){if(inTransaction)throw Error('nested redo transaction');db.close()},
+    prior({binding}) {
+      if(inTransaction)throw Error('nested redo transaction')
+      const normalized=normalizeRedoBinding(binding),identity=redoIdentity(normalized)
+      lease()
+      const row=read(identity.operationId)
+      // Absence is only a routing hint, never proof that earlier work or an
+      // external side effect did not occur.
+      if(!row){lease();return {present:false}}
+      const message=redoSnapshot(JSON.parse(row.message))
+      verifyRow(row,normalized,message)
+      if(authorizeIntent(normalized,message)!==true)throw Error('redo inspection unauthorized')
+      lease();return {present:true}
+    },
     reserve({binding,message,confirmed}) {
       const normalized=normalizeRedoBinding(binding), safeMessage=redoSnapshot(message), identity=redoIdentity(normalized), messageText=exactJson(safeMessage), bindingText=exactJson(normalized)
       if(confirmed!==true)throw Error('explicit redo confirmation required')

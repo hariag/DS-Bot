@@ -30,7 +30,7 @@ export function sharedGuardedCoordinator({sessionId,agent,redoJournal,otherCoord
 // resultAuthority must be bound to the actual Agent result path. Its durable
 // receipt is separate from admission; a boolean acknowledgement is not enough.
 export function createGuardedRedoBridge({enabled=false,journal,verifyOriginal,resolveAgent,isBeforeAdmission,isAfterAdmission,resultAuthority,isResultRouterBound,makeMessage,leaseVersion,coordinatorReady}={}) {
-  const ready=()=>enabled===true&&journal&&typeof journal.reserve==='function'&&typeof journal.beginSend==='function'&&typeof journal.markQueued==='function'
+  const ready=()=>enabled===true&&journal&&typeof journal.prior==='function'&&typeof journal.reserve==='function'&&typeof journal.beginSend==='function'&&typeof journal.markQueued==='function'
     &&[verifyOriginal,resolveAgent,isBeforeAdmission,isAfterAdmission,resultAuthority,isResultRouterBound,makeMessage,leaseVersion,coordinatorReady].every(fn=>typeof fn==='function')
   return {
     available:()=>ready()===true,
@@ -41,6 +41,9 @@ export function createGuardedRedoBridge({enabled=false,journal,verifyOriginal,re
       try {
         value=normalizeRedoBinding(binding);lease=leaseVersion()
         if(lease===undefined)return unavailable('host lease is unavailable')
+        let prior
+        try { prior=journal.prior({binding:value}) } catch {return unknown()}
+        if(!prior||prior.present!==false)return unknown()
         proof=await verifyOriginal(value)
         if(!proof||proof.complete!==true||proof.durability!=='target-writer-v1'||!['unfinished','aborted','failed'].includes(proof.originalOutcome)
           ||proof.sessionId!==value.sessionId||proof.throughSeq!==value.throughSeq

@@ -78,6 +78,7 @@ test('lost guarded-send result remains unknown across journal restart',async t=>
   f.agent.guardedSend=async()=>{sends+=1;throw Error('outcome lost after enqueue')}
   assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
   f.reopen()
+  f.proof.message=undefined
   assert.equal((await f.bridge().request({binding:f.binding,confirmed:true})).state,'unknown')
   assert.equal(sends,1)
 })
@@ -110,10 +111,11 @@ test('a failed claim after the callback stays fenced and cannot be claimed twice
 test('scope changes, incomplete content and changed source cannot reuse an identity',t=>{
   const f=fixture(t)
   f.journal.reserve({binding:f.binding,message:f.message,confirmed:true})
+  assert.deepEqual(f.journal.prior({binding:f.binding}),{present:true})
   assert.throws(()=>f.journal.reserve({binding:{...f.binding,scope:{kind:'personal',id:'receiver'}},message:f.message,confirmed:true}),/conflict/)
   assert.throws(()=>f.journal.beginSend({binding:f.binding,message:{...f.message,content:[{type:'text',text:'different'}]}}),/changed/)
   assert.throws(()=>f.journal.beginSend({binding:f.binding,message:{...f.message,content:[{type:'image',attachment:'private'}]}}),/unsupported/)
-  f.revoke();assert.throws(()=>f.journal.beginSend({binding:f.binding,message:f.message}),/unauthorized|unavailable/)
+  f.revoke();assert.throws(()=>f.journal.prior({binding:f.binding}),/unauthorized/);assert.throws(()=>f.journal.beginSend({binding:f.binding,message:f.message}),/unauthorized|unavailable/)
 })
 
 test('redo snapshots reject lossy JSON and use locale-independent key order',()=>{
