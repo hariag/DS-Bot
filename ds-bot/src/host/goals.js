@@ -180,10 +180,15 @@ export function touchGoal(goal, event, now = Date.now(), { keepNudges = false } 
   if (event !== undefined) goal.events = [...(goal.events ?? []), { at: now, ...event }].slice(-EVENTS_MAX)
 }
 
+const goalHasBoardImages = goal => (goal?.stages ?? []).some(stage => (stage?.tasks ?? []).some(task => Array.isArray(task?.boardImages) && task.boardImages.length>0))
+
 export function archiveGoal(room) {
   const goal = room.goal
   if (goal === undefined) return
-  room.pastGoals = [...(room.pastGoals ?? []), goal].slice(-PAST_MAX)
+  const all=[...(room.pastGoals ?? []),goal]
+  // Do not discard the only references to images when the ordinary history
+  // window rolls over. Old goals without attachments still use the limit.
+  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goalHasBoardImages),...all.slice(-PAST_MAX)]
   delete room.goal
 }
 
@@ -363,6 +368,9 @@ export function reviseGoal(room, input, by, memberOf, memberNames, now = Date.no
   let cleaned
   let keep = []
   if (input.stages !== undefined) {
+    if(goal.stages.slice(Math.max(0,goal.current)).some(stage=>goalHasBoardImages({stages:[stage]}))) {
+      return {error:'These stages contain board images. Download and remove the images before rebuilding the stages.'}
+    }
     cleaned = cleanStages(room, input.stages, 'revise', memberOf, memberNames)
     if (cleaned.error !== undefined) return cleaned
     keep = goal.stages.slice(0, Math.max(0, goal.current))

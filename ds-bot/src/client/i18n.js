@@ -11,6 +11,16 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Not started': '未开始',
+  'Edit goal task': '编辑群目标任务',
+  'Task description': '任务说明',
+  'Goal task status': '群目标任务状态',
+  'Goal task note': '任务备注',
+  'Reported or completed work must be reconciled before changing its description.': '任务已汇报或完成，修改说明前须先核对并处理原工作。',
+  'Owner, acceptance and completed status are managed by the group goal.': '负责人、验收条件和完成状态由群目标管理。',
+  'Original group goal task': '群目标原任务',
+  'Earlier group goal task · read only': '历史群目标任务 · 仅可查看',
+  'Group goal cards edit the original task. Earlier stages remain read only.': '群目标卡片直接编辑原任务；历史阶段仅可查看。',
   'Remote code changes': '远端代码变更',
   'Waiting for first check': '等待首次检查',
   'Monitor active': '监视运行中',
@@ -1750,6 +1760,12 @@ const ZH = {
 // Host errors stay English, since Bots read them too; they are translated where the
 // interface shows them. Static ones go through ZH, these carry names or numbers.
 const HOST_ERRORS = [
+  [/^Goal task changed or is unavailable; refresh the board$/, '群目标任务已变化或不可用，请刷新看板。'],
+  [/^Goal task changed; refresh the board$/, '群目标任务已变化，请刷新看板。'],
+  [/^This task was reported or completed\. Reconcile or reopen it before changing its description\.$/, '任务已汇报或完成，请先核对并重新开展，再修改说明。'],
+  [/^This status change requires the group goal rework or review workflow\.$/, '此状态变更需要通过群目标的返工或验收流程处理。'],
+  [/^Add a note explaining the status change$/, '请添加备注，说明状态变更。'],
+  [/^A paused goal cannot change task progress or notes$/, '目标已暂停，不能修改任务进度或备注。'],
   [/^Could not reach the mail server at (.+)\. Check the server address\.$/, '连不上邮件服务器 $1，请检查服务器地址。'],
   [/^Model (.+) is not available\. Available: (.*)$/, '模型 $1 不可用。可用的：$2'],
   [/^The API key for (.+) is set outside DS Bot and cannot be changed here$/, '$1 的 API key 是在 DS Bot 之外设置的，这里改不了'],
