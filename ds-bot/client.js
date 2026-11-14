@@ -12527,6 +12527,7 @@ var ZH = {
   "Redo request submitted.": "已提交重做请求。",
   "The previous redo outcome is unknown.": "之前的重做结果未知。",
   "Redo is unavailable because the original input cannot be verified.": "无法确认原始输入，暂不能重做。",
+  "A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.": "存在单独的重做记录，其执行情况和结果未知；原任务仍未解决。",
   "Allow future inspections": "允许后续巡检",
   "The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.": "上次巡检结果仍然未知，允许后续巡检不代表确认了上次结果。",
   "Interrupted work": "中断的工作",
@@ -32396,7 +32397,7 @@ var CONNECTORS_PAGE_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
 `;
 
-// node_modules/qrcode-generator/dist/qrcode.mjs
+// ../../dsbot-historical-card-edit-20261114/ds-bot/node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -36928,6 +36929,7 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
         (0, import_react50.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId })
       ),
       (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring keeps the record and does not complete the work.")),
+      item.redo?.status === "unknown" ? (0, import_react50.createElement)("p", { className: "bt-recovery-note", role: "status" }, t("A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.")) : null,
       item.decision !== "ignored" ? (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Redo is unavailable because the original input cannot be verified.")) : null,
       (0, import_react50.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore"))
     ))
