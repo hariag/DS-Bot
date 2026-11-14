@@ -68,7 +68,7 @@ async function request(endpoint,payload){
  if(endpoint==='board-redo-preview'){
   if(state.candidateHold)await new Promise(resolve=>{state.resolvers['candidate']=resolve});
   if(state.candidateFail)throw Error('writer unavailable');
-  return {kind:'unverified-legacy-candidate',producerVerified:false,executeAllowed:false,recoveryId:payload.recoveryId,sessionId:'session-original',textSegments:['Candidate task\\nSecond line']};
+  return {kind:'unverified-legacy-candidate',producerVerified:false,executeAllowed:false,snapshotOnly:true,recoveryId:payload.recoveryId,sessionId:'session-original',textSegments:['Candidate task\\nSecond line']};
  }
  if(endpoint==='legacy-review-decision'){const old=state.workDecisions[payload.workId]??{choice:'open',revision:0};if(old.revision!==payload.expectedRevision)throw Error('stale');state.workDecisions[payload.workId]={choice:payload.choice,revision:old.revision+1};return state.workDecisions[payload.workId]}
  if(endpoint==='legacy-review-prepare')return {operationId:'manual-review:'+ (payload.kind==='create'?'a':'b').repeat(64)};
@@ -196,12 +196,13 @@ try {
   assert.equal(await original.getByRole('button',{name:'Redo',exact:true}).count(),0)
   await original.getByRole('button',{name:'View candidate text'}).click()
   await original.getByText('This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.').waitFor()
+  await original.getByText('This is a saved snapshot and may be incomplete or out of date.').waitFor()
   assert.equal(await original.locator('.bt-recovery-candidate-text').innerText(),'Candidate task\nSecond line')
   await original.locator('summary').click(); await original.locator('summary').click()
   assert.equal(await original.locator('.bt-recovery-candidate-text').count(),0,'closing clears candidate text')
   await page.evaluate(() => { globalThis.fixture.candidateFail = true })
   await original.getByRole('button',{name:'View candidate text'}).click()
-  await original.getByRole('alert').getByText('Candidate text is unavailable. The session or its durable writer may be unavailable.').waitFor()
+  await original.getByRole('alert').getByText('Candidate text is unavailable. The record may be missing, incomplete or changing.').waitFor()
   await page.evaluate(() => { globalThis.fixture.candidateFail = false })
   if (process.env.RECOVERY_SCREENSHOT) await page.screenshot({ path:process.env.RECOVERY_SCREENSHOT })
   await page.getByText('Snapshot time (UTC): 2023-11-14T22:13:20.000Z').waitFor()

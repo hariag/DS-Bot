@@ -126,8 +126,8 @@ function HeldRecord({ item, scope, request, busy, decide }) {
       if ((legacy && (result.producerVerified !== false || result.executeAllowed !== false)) || (!legacy && result.execution !== 'disabled')
         || !Array.isArray(parts) || parts.length === 0 || parts.some(part => typeof part !== 'string')
         || parts.reduce((length, part) => length + part.length, 0) > 65536) throw Error('candidate unavailable')
-      setCandidate({ parts, legacy, key })
-    } catch { if (at === generation.current) setError(t('Candidate text is unavailable. The session or its durable writer may be unavailable.')) }
+      setCandidate({ parts, legacy, snapshot:result.snapshotOnly === true, key })
+    } catch { if (at === generation.current) setError(t('Candidate text is unavailable. The record may be missing, incomplete or changing.')) }
     finally { if (at === generation.current) setLoading(false) }
   }
   return h('details', { className:'bt-board-held-record bt-recovery-record', onToggle:event => { if (event.target === event.currentTarget && !event.currentTarget.open) clear() } },
@@ -146,6 +146,7 @@ function HeldRecord({ item, scope, request, busy, decide }) {
       h('p', { className:'bt-recovery-warning', role:'status' }, t(candidate.legacy
         ? 'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.'
         : 'This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.')),
+      candidate.snapshot ? h('p', { className:'bt-recovery-note' }, t('This is a saved snapshot and may be incomplete or out of date.')) : null,
       candidate.parts.map((part,index) => h('pre', { key:index, className:'bt-recovery-candidate-text' }, part))) : null,
     h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))
 }

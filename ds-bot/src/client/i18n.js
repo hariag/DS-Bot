@@ -12,8 +12,9 @@ export const NAMESPACE = 'ds-bot'
 
 const ZH = {
   'View candidate text': '查看候选内容',
+  'This is a saved snapshot and may be incomplete or out of date.': '这是保存的历史快照，可能不完整或已过时。',
   'Redo is not available. You can inspect candidate text without sending it.': '暂不能重做。你可以查看候选内容，不会发送或执行。',
-  'Candidate text is unavailable. The session or its durable writer may be unavailable.': '无法读取候选内容，会话或持久化写入器可能不可用。',
+  'Candidate text is unavailable. The record may be missing, incomplete or changing.': '无法读取候选内容，记录可能不存在、不完整或正在变化。',
   'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.': '这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。',
   'This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.': '这段文字是持久日志中的候选内容，发送者未经认证，仅供核对，不能执行。',
   'Work decisions': '处理已有工作',
