@@ -25,7 +25,7 @@ export function install(rt) {
   }
   function privateDir(){const root=join(rt.home,'legacy-reviews-v1');try{lstatSync(root)}catch(e){if(e.code!=='ENOENT')throw e;writable();try{mkdirSync(root,{mode:0o700})}catch(x){if(x.code!=='EEXIST')throw x}}const stat=lstatSync(root);if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==process.getuid()||(stat.mode&0o077))throw Error('manual review unavailable');return root}
   function current(snapshot){const work=rt.state.works?.[snapshot.workId];return !!work && validWorkTime(work.at)&&validWorkTime(snapshot.workAt)&&work.at===snapshot.workAt&&work.from===snapshot.sender&&work.to===snapshot.owner&&workHash(snapshot.workId,work)===snapshot.snapshotId}
-  function service(){if(ledger)return ledger;writable();ledger=openReviewLedger(join(privateDir(),'reviews.sqlite'),{assertLease:()=>{try{writable();return true}catch{return false}},assertActor:(actor,_action)=>actor==='user',verifySnapshot:current});return ledger}
+  function service(){if(ledger)return ledger;writable();ledger=openReviewLedger(join(privateDir(),'reviews.sqlite'),{assertLease:()=>{try{writable();return true}catch{return false}},assertActor:actor=>actor==='user',verifySnapshot:current});return ledger}
   async function call(endpoint,payload={}){
     await rt.load();writable();const {workId,scope}=payload
     if(endpoint==='legacy-review-list'){

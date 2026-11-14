@@ -311,7 +311,9 @@ test('the state reports a changed model list without a new revision', async (t) 
   const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   const first = (await call('state', {})).value
-  assert.equal((await call('state', { since: first.revision, models: first.modelsKey })).value.unchanged, true)
+  const withoutLiveKey = (await call('state', { since: first.revision, models: first.modelsKey })).value
+  assert.equal(withoutLiveKey.unchanged, undefined)
+  assert.ok(Array.isArray(withoutLiveKey.rooms), 'without a known live key the client must refresh scoped goal projections')
   assert.equal((await call('state', { since: first.revision, models: 'stale' })).value.unchanged, undefined)
 })
 
@@ -330,7 +332,8 @@ test('an unchanged state answer skips the live fields a window already holds', a
   assert.equal(quiet.connectors, undefined)
   // A key that names an older answer still gets the fields with the current one.
   const stale = (await call('state', { since: first.revision, models: first.modelsKey, live: 'an older answer' })).value
-  assert.equal(stale.unchanged, true)
+  assert.equal(stale.unchanged, undefined)
+  assert.ok(Array.isArray(stale.rooms), 'an unknown live key cannot reuse scoped goal projections')
   assert.equal(stale.liveKey, first.liveKey)
   assert.equal(typeof stale.activity, 'object')
   assert.equal(typeof stale.work, 'object')
@@ -365,7 +368,8 @@ test('a window holding live state gets fresh fields after the host restarts at t
   const second = start(saved)
   t.after(second.stop)
   const now = (await second.call('state', { since: held.revision, models: held.modelsKey, live: held.liveKey })).value
-  assert.equal(now.unchanged, true)
+  assert.equal(now.unchanged, undefined)
+  assert.ok(Array.isArray(now.rooms), 'a key from a previous host cannot reuse scoped goal projections')
   assert.equal(now.revision, held.revision)
   assert.deepEqual(now.work?.bots, {})
   assert.deepEqual(now.activity, {})
@@ -1440,6 +1444,35 @@ test('create_bot uses a named model, then the team default, then its creator’s
   rt.state.prefs.defaultBotModel = 'gone/model'
   assert.match(await createBotAs('Inherited'), /^Created Inherited/)
   assert.equal((await botNamed('Inherited')).model, 'deepseek/deepseek-v4-pro')
+})
+
+// A Bot created from inside another Bot's turn is the one path a user reported as
+// sharing history (#1196). Its Session, its greeting and its transcript stay its own.
+test('a Bot created inside another Bot’s turn gets a Session of its own', async (t) => {
+  const { call, stop, sent } = start(TEAM_MODEL, { models: ['deepseek-v4-flash', 'deepseek-v4-pro'] })
+  t.after(stop)
+  const before = (await call('state', {})).value
+  const chief = before.bots.find(bot => bot.id === before.mainBotId)
+  assert.match(await createBotAs('Isolated'), /^Created Isolated/)
+
+  const after = (await call('state', {})).value
+  const created = after.bots.find(bot => bot.name === 'Isolated')
+  const keptChief = after.bots.find(bot => bot.id === chief.id)
+  // Its own chat, not the chat whose turn made it.
+  assert.notEqual(created.id, chief.id)
+  assert.equal(created.sessionId, created.id)
+  assert.ok(!(created.parts ?? []).includes(chief.id))
+  // The greeting goes to the new Bot's Session and nowhere else.
+  await until(() => sent.length > 0)
+  assert.deepEqual([...new Set(sent.map(entry => entry.sessionId))], [created.id])
+  // The creator keeps its own chat, and the new Bot's Session is not part of it.
+  assert.equal(keptChief.sessionId, chief.sessionId)
+  assert.ok(!(keptChief.parts ?? []).includes(created.id))
+  // Nothing of the creator's conversation is reachable from the new Bot's chat: it
+  // answers with its own Session and no lines, never with the chat that made it.
+  const chat = await call('chat', { botId: created.id })
+  assert.ok(chat.value === undefined || chat.value.sessionId === created.id, `chat answered for ${chat.value?.sessionId}`)
+  assert.deepEqual(chat.value?.items ?? [], [])
 })
 
 test('create_bot inherits the creator’s model when no team default is set', async (t) => {

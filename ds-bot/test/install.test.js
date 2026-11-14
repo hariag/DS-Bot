@@ -40,6 +40,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'effect ds-bot: board streaming upload',
     'route POST /api/bot-board-upload',
     'effect ds-bot: board service',
+    'effect ds-bot: legacy reviews',
     'effect ds-bot: ledger',
     'on llm/adapters-updated',
     'on credentials/reference-updated',

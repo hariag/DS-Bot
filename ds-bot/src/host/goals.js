@@ -1326,7 +1326,7 @@ export function install(rt) {
             if (!fingerprint || fingerprint !== inspectionFingerprint(room.goal)) return 'Goal changed while producing its ledger; do not dispatch or claim it complete.'
             attempt.inspectionLedgerAt = Date.now()
             attempt.inspectionLedgerFingerprint = fingerprint
-            try { await rt.save({ required: true }) } catch (error) {
+            try { await rt.save({ required: true }) } catch {
               delete attempt.inspectionLedgerAt
               delete attempt.inspectionLedgerFingerprint
               attempt.state = 'uncertain'
