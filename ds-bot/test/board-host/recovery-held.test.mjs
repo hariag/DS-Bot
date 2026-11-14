@@ -52,3 +52,13 @@ test('invalid or excessive records are signalled as incomplete without leaking d
   assert.equal(bounded.items.length, 0)
   assert.equal(bounded.incomplete, true, 'large unrelated sets must not look completely scanned')
 })
+
+
+test('only the whitelisted output-limit observation is projected', () => {
+  const safe = { [key(1)]: { ...held[key(1)], observation: 'output-limit' } }
+  const projected = heldTurnsView(safe, { kind:'personal', id:'one' }, bots)
+  assert.equal(projected.items[0].observation, 'output-limit')
+  const unsafe = { [key(1)]: { ...held[key(1)], observation: 'SECRET OBSERVATION' } }
+  assert.equal(heldTurnsView(unsafe, { kind:'personal', id:'one' }, bots).items[0].observation, undefined)
+  assert.doesNotMatch(JSON.stringify(heldTurnsView(unsafe, { kind:'personal', id:'one' }, bots)), /SECRET/)
+})

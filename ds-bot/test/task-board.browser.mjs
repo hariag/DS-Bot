@@ -48,7 +48,7 @@ async function request(endpoint,payload){
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',status:'legacy-unverified',legacy:{originalStatus:'done'}}]:[];
   const shared=payload.scope.kind==='personal'?[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}]:[];
-  return {tasks:[task,...legacy,...shared],recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  return {tasks:[task,...legacy,...shared],recovery:state.mode==='recovery'?{available:true,incomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',observation:'output-limit',evidence:'inflight.json'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[])],old:[{type:'edit'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
  if(endpoint==='board-image')return images[payload.imageId];
  if(endpoint==='board-command'||endpoint==='board-upload'){
@@ -96,6 +96,7 @@ try {
   assert.match(await recovery.innerText(), /Original turn[\s\S]*Unknown/)
   assert.match(await recovery.innerText(), /exchange-1/)
   assert.match(await recovery.innerText(), /inflight\.json/)
+  await recovery.getByText('Reached the output limit').waitFor()
   assert.equal(await recovery.getByRole('button').count(), 0, 'reconciliation view must not replay or close work')
   await page.getByText('Snapshot time (UTC): 2023-11-14T22:13:20.000Z').waitFor()
   const beforeRefresh = await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)

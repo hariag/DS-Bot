@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { historyMentionsSource, readDurableReply, readRecoveryHistory } from '../src/host/recovery-history.js'
+import { historyMentionsSource, readDurableReply, readRecoveryHistory, replyContainsInlineResults, observedOutputLimit } from '../src/host/recovery-history.js'
 
 const event = (seq, type, data = {}) => ({ seq, type, data })
 const reply = (seq, overrides = {}) => event(seq, 'user/message', { source: { kind: 'bot', role: 'reply', senderSessionId: 'worker', replyTo: 'work', ...overrides }, content: [{ type: 'text', text: 'original result' }] })
@@ -46,4 +46,30 @@ test('refuses a changing prefix, wrong event order, and a reply for other work',
   assert.equal(await resolve(gap), undefined)
   assert.equal(await resolve(persistence([reply(0, { replyTo: 'other' })])), undefined)
   assert.equal(await readDurableReply({ sessions: { get: () => ({ seq: 1 }) }, sessionPersistence: {} }, 'sender', 'work', 'worker', 'bot'), undefined)
+})
+
+
+test('child results are reconciled only when the received reply contains each complete inline result', () => {
+  const results = [{ id: 'c1', name: 'Reviewer', text: 'The numbers check out.' }]
+  const reply = '[Reply from Writer]\nDone.\n\n[Handed back to Writer for this work]\n\nReviewer:\nThe numbers check out.'
+  assert.equal(replyContainsInlineResults(reply, results, 'Writer'), true)
+  assert.equal(replyContainsInlineResults(reply, [{ ...results[0], text: 'Different numbers' }], 'Writer'), false)
+  assert.equal(replyContainsInlineResults(reply, [{ ...results[0], length: 100 }], 'Writer'), false)
+  assert.equal(replyContainsInlineResults(reply, [{ ...results[0], file: 'result.txt' }], 'Writer'), false)
+  assert.equal(replyContainsInlineResults(reply, [{ ...results[0], failed: true }], 'Writer'), false)
+  assert.equal(replyContainsInlineResults(reply, [results[0], results[0]], 'Writer'), false)
+  assert.equal(replyContainsInlineResults(reply.replace('[Handed back to Writer for this work]', ''), results, 'Writer'), false)
+})
+
+
+test('output-limit observation requires one matching message and one contiguous matching turn', () => {
+  const events = [event(0, 'turn/start', { turn: 4 }),
+    event(1, 'user/message', { source: { exchangeId: 'x' } }),
+    event(2, 'turn/end', { turn: 4, reason: { kind: 'max-tokens' } })]
+  assert.equal(observedOutputLimit(events, 'x', 4), true)
+  assert.equal(observedOutputLimit(events, 'x', 5), false)
+  assert.equal(observedOutputLimit(events, 'other', 4), false)
+  assert.equal(observedOutputLimit([events[0], { ...events[1], seq: 9 }, events[2]], 'x', 4), false)
+  assert.equal(observedOutputLimit([...events, event(3, 'user/message', { source: { exchangeId: 'x' } })], 'x', 4), false)
+  assert.equal(observedOutputLimit([events[0], events[1], event(2, 'turn/end', { turn: 4, reason: { kind: 'completed' } })], 'x', 4), false)
 })

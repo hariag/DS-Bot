@@ -89,6 +89,7 @@ function HeldTurns({ recovery }) {
       h(Fact, { label: t('Original turn'), value: Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
       h(Fact, { label: t('Started at'), value: Number.isSafeInteger(item.startedAt) ? new Date(item.startedAt).toLocaleString() : t('Unknown') }),
       h(Fact, { label: t('Exchange ID'), value: item.exchangeId || t('Unknown') }),
+      item.observation === 'output-limit' ? h(Fact, { label: t('Status'), value: t('Reached the output limit') }) : null,
       h(Fact, { label: t('Recovery ID'), value: item.recoveryId }),
       h(Fact, { label: t('Evidence'), value: 'inflight.json' }))))
 }

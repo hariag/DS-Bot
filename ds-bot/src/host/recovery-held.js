@@ -29,7 +29,7 @@ export function heldTurnsView(held, scope, bots = {}) {
     const turn = Number.isSafeInteger(record.turn) && record.turn >= 0 ? record.turn : undefined
     items.push({ recoveryId, botId, botName, sessionId, ...(roomId ? { roomId } : {}),
       ...(exchangeId ? { exchangeId } : {}), ...(startedAt !== undefined ? { startedAt } : {}),
-      ...(turn !== undefined ? { turn } : {}), status: 'uncertain', evidence: 'inflight.json' })
+      ...(turn !== undefined ? { turn } : {}), ...(value.observation === 'output-limit' ? { observation: 'output-limit' } : {}), status: 'uncertain', evidence: 'inflight.json' })
   }
   items.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || a.recoveryId.localeCompare(b.recoveryId))
   return { available: true, incomplete, items }

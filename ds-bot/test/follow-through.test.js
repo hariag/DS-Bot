@@ -1508,3 +1508,114 @@ test('a failed durable team save leaves the original held record for review', as
     syncBuiltinESMExports()
   }
 })
+
+test('a received exact reply reconciles complete inline child results into the parent once', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const state = seed()
+  state.works = {
+    p1: { to: 'a', open: ['x1'], results: [], at: 1 },
+    x1: { from: 'a', to: 'b', parent: 'p1', open: [], results: [{ id: 'y1', name: 'Reviewer', text: 'The numbers check out.' }], at: 2 },
+  }
+  const home = freshHome(t, state)
+  const record = { botId: 'b', since: 1, trigger: { role: 'request', exchangeId: 'x1', senderSessionId: 'a' } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {}, heldTurns: { old: { sessionId: 'b', record, reason: 'unknown' } } }))
+  const host = await start(home)
+  const reply = '[Reply from Writer]\nDone.\n\n[Handed back to Writer for this work]\n\nReviewer:\nThe numbers check out.'
+  const event = { seq: 0, type: 'user/message', data: { source: { kind: 'bot', role: 'reply', replyTo: 'x1', senderSessionId: 'b' }, content: [{ type: 'text', text: reply }] } }
+  const session = { id: 'a', seq: 1, eventAt: () => event }
+  host.ctx.sessions.get = id => id === 'a' ? session : undefined
+  host.ctx.sessionPersistence = { flushLiveSession: async () => {}, open: async () => ({ read: async () => ({ events: [event] }), close: async () => {} }) }
+  const getService = host.ctx.get
+  host.ctx.get = name => name === 'sessionPersistence' ? host.ctx.sessionPersistence : getService(name)
+  t.mock.timers.tick(0)
+  await settleState(t, home, () => stateOf(home).works.x1 === undefined)
+  const results = stateOf(home).works.p1.results
+  assert.equal(results.length, 1)
+  assert.equal(results[0].id, 'x1')
+  assert.equal(results[0].text, reply)
+  assert.deepEqual([host.agentOf('a').calls.length, host.agentOf('b').calls.length], [0, 0])
+})
+
+test('a received reply missing a child result does not reconcile or send', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const state = seed()
+  state.works = { x1: { from: 'a', to: 'b', open: [], results: [{ id: 'y1', name: 'Reviewer', text: 'The numbers check out.' }], at: 1 } }
+  const home = freshHome(t, state)
+  const record = { botId: 'b', since: 1, trigger: { role: 'request', exchangeId: 'x1', senderSessionId: 'a' } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {}, heldTurns: { old: { sessionId: 'b', record, reason: 'unknown' } } }))
+  const host = await start(home)
+  const event = { seq: 0, type: 'user/message', data: { source: { kind: 'bot', role: 'reply', replyTo: 'x1', senderSessionId: 'b' }, content: [{ type: 'text', text: 'The result is missing.' }] } }
+  const session = { id: 'a', seq: 1, eventAt: () => event }
+  let reads = 0
+  host.ctx.sessions.get = id => id === 'a' ? session : undefined
+  host.ctx.sessionPersistence = { flushLiveSession: async () => {}, open: async () => ({ read: async () => { reads += 1; return { events: [event] } }, close: async () => {} }) }
+  const getService = host.ctx.get
+  host.ctx.get = name => name === 'sessionPersistence' ? host.ctx.sessionPersistence : getService(name)
+  t.mock.timers.tick(0)
+  await settle(() => reads > 0)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(stateOf(home).works.x1)
+  assert.ok(notes(home).heldTurns.old)
+  assert.deepEqual([host.agentOf('a').calls.length, host.agentOf('b').calls.length], [0, 0])
+})
+
+test('a parent changed while a reply is read is not reconciled', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const state = seed()
+  state.works = { p1: { to: 'a', open: ['x1'], results: [], at: 1 }, x1: { from: 'a', to: 'b', parent: 'p1', open: [], results: [], at: 2 } }
+  const home = freshHome(t, state)
+  const record = { botId: 'b', since: 1, trigger: { role: 'request', exchangeId: 'x1', senderSessionId: 'a' } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {}, heldTurns: { old: { sessionId: 'b', record, reason: 'unknown' } } }))
+  const host = await start(home)
+  const event = { seq: 0, type: 'user/message', data: { source: { kind: 'bot', role: 'reply', replyTo: 'x1', senderSessionId: 'b' }, content: [{ type: 'text', text: 'A reply' }] } }
+  const session = { id: 'a', seq: 1, eventAt: () => event }
+  let entered = false, release
+  const pending = new Promise(resolve => { release = resolve })
+  host.ctx.sessions.get = id => id === 'a' ? session : undefined
+  host.ctx.sessionPersistence = { flushLiveSession: async () => {}, open: async () => ({ read: async () => { entered = true; await pending; return { events: [event] } }, close: async () => {} }) }
+  const getService = host.ctx.get
+  host.ctx.get = name => name === 'sessionPersistence' ? host.ctx.sessionPersistence : getService(name)
+  t.mock.timers.tick(0)
+  await settle(() => entered)
+  host.rt.state.works.p1.open.push('other')
+  release()
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(host.rt.state.works.x1)
+  assert.ok(notes(home).heldTurns.old)
+  assert.deepEqual([host.agentOf('a').calls.length, host.agentOf('b').calls.length], [0, 0])
+})
+
+test('an observed output limit is retained once for review without resending work', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const state = seed()
+  state.works = { x1: { from: 'a', to: 'b', open: [], results: [], at: 1 } }
+  const home = freshHome(t, state)
+  const first = await start(home)
+  const source = { kind: 'bot', role: 'request', exchangeId: 'x1', senderSessionId: 'a' }
+  run(first, 'b', 1, { source, content: [{ type: 'text', text: 'Draft the plan' }] })
+  await settle(() => inflight(home).b?.trigger?.exchangeId === 'x1')
+  await first.stop()
+  const events = [
+    { seq: 0, type: 'turn/start', data: { turn: 1 } },
+    { seq: 1, type: 'user/message', data: { source } },
+    { seq: 2, type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } },
+  ]
+  const logs = new Map([['b', events]])
+  const second = await start(home, logs)
+  second.emit('b', 'turn/end', { turn: 1, reason: { kind: 'max-tokens' } })
+  t.mock.timers.tick(3000)
+  await settle(() => Object.values(notes(home).heldTurns ?? {}).some(item => item.observation === 'output-limit'))
+  const entries = await readDiagnostics(home, rows => rows.some(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)))
+  assert.equal(entries.filter(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)).length, 1)
+  assert.ok(stateOf(home).works.x1)
+  assert.deepEqual([second.agentOf('a').calls.length, second.agentOf('b').calls.length], [0, 0])
+  await second.stop()
+  const third = await start(home, logs)
+  t.mock.timers.tick(0)
+  await new Promise(resolve => setImmediate(resolve))
+  const after = await readDiagnostics(home)
+  assert.equal(after.filter(row => row.code === 'MAX_TOKENS' && /outcome remains unknown/.test(row.text)).length, 1)
+  assert.ok(Object.values(notes(home).heldTurns ?? {}).some(item => item.observation === 'output-limit'))
+  assert.deepEqual([third.agentOf('a').calls.length, third.agentOf('b').calls.length], [0, 0])
+})

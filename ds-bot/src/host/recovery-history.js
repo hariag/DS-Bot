@@ -83,3 +83,50 @@ export async function readDurableReply(ctx, sessionId, workId, botId, sourceKind
     return text === '' ? undefined : text
   } catch { return undefined } finally { await handle?.close().catch(() => {}) }
 }
+
+// A received answer may reconcile inline child results only when the exact
+// rendered handoff contains each complete result, in order. Never infer that
+// a truncated, missing, file-backed or failed result was handed over.
+export function replyContainsInlineResults(reply, results, botName) {
+  if (typeof reply !== 'string' || !Array.isArray(results) || typeof botName !== 'string' || botName === '') return false
+  if (results.length === 0) return true
+  const marker = `[Handed back to ${botName} for this work]`
+  let at = reply.indexOf(marker)
+  if (at < 0) return false
+  at += marker.length
+  for (const result of results) {
+    if (!result || typeof result.name !== 'string' || result.name === ''
+      || typeof result.text !== 'string' || result.text === ''
+      || result.failed === true || result.length !== undefined || result.file !== undefined) return false
+    const piece = `${result.name}:\n${result.text}`
+    const found = reply.indexOf(piece, at)
+    if (found < 0) return false
+    at = found + piece.length
+  }
+  return true
+}
+
+// This is an observation of a session turn, not proof that its work finished.
+// Only an exact, contiguous history with one matching message and turn qualifies.
+export function observedOutputLimit(events, exchangeId, turnId) {
+  if (!Array.isArray(events) || typeof exchangeId !== 'string' || exchangeId === '' || !Number.isSafeInteger(turnId) || turnId < 0) return false
+  let current, starts = 0, matches = 0, inTarget = 0, ended = false
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i]
+    if (!event || event.seq !== i || typeof event.type !== 'string') return false
+    if (event.type === 'turn/start') {
+      if (current !== undefined) return false
+      current = event.data?.turn
+      if (!Number.isSafeInteger(current) || current < 0) return false
+      if (current === turnId) starts += 1
+    } else if (event.type === 'user/message' && event.data?.source?.exchangeId === exchangeId) {
+      matches += 1
+      if (current === turnId) inTarget += 1
+    } else if (event.type === 'turn/end') {
+      if (current === undefined || (event.data?.turn !== undefined && event.data.turn !== current)) return false
+      if (current === turnId && event.data?.reason?.kind === 'max-tokens') ended = true
+      current = undefined
+    }
+  }
+  return starts === 1 && matches === 1 && inTarget === 1 && ended
+}

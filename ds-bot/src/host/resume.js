@@ -7,7 +7,7 @@ import { constants, readFileSync } from 'node:fs'
 import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, SOURCE_KIND, STEER_CUT, TEXT_KEPT } from './constants.js'
-import { readRecoveryHistory, historyMentionsSource, readDurableReply } from './recovery-history.js'
+import { readRecoveryHistory, historyMentionsSource, readDurableReply, replyContainsInlineResults, observedOutputLimit } from './recovery-history.js'
 import { replaceFile } from './files.js'
 import { textOf } from './text.js'
 import { heldTurnsView } from './recovery-held.js'
@@ -671,7 +671,35 @@ export function install(rt) {
   // The controller history may include unflushed events; it is diagnostic
   // evidence only and absence must never authorize a replay.
   async function logOf(sessionId) {
-    return readRecoveryHistory(ctx.sessionController, sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
+    const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
+    return Promise.race([
+      readRecoveryHistory(ctx.sessionController, sessionId, signal),
+      new Promise(resolve => signal.addEventListener('abort', () => resolve(undefined), { once: true })),
+    ])
+  }
+
+  // Preserve a bounded observation for the held-record UI. It cannot settle,
+  // resume, or alter the part steward's consecutive-cutoff counter.
+  async function observeInterruptedCutoff(sessionId, record, ended) {
+    const exchangeId = record.trigger?.exchangeId
+    if (ended?.reason?.kind !== 'max-tokens' || typeof exchangeId !== 'string') return
+    const candidates = Object.entries(heldTurns).filter(([, held]) => held?.sessionId === sessionId
+      && held.observation !== 'output-limit' && JSON.stringify(held.record) === JSON.stringify(record))
+    if (candidates.length === 0) return
+    const events = await logOf(sessionId)
+    if (!observedOutputLimit(events, exchangeId, ended.turn) || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
+    rt.requireHomeLock()
+    let changed = false
+    for (const [id, previous] of candidates) {
+      if (heldTurns[id] !== previous) continue
+      heldTurns[id] = { ...previous, observation: 'output-limit' }
+      changed = true
+    }
+    if (!changed) return
+    unknownQueueGeneration += 1n
+    await persist({ required: true })
+    rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'MAX_TOKENS', sessionId,
+      text: 'An observed turn containing this interrupted exchange reached the output limit; its work outcome remains unknown.' })
   }
 
   // Only a durable, unique, explicitly attributed reply to this exact work may
@@ -682,12 +710,13 @@ export function install(rt) {
     const asker = rt.workAsker(workId)
     const sender = asker?.senderSessionId
     if (!work || !rt.ownsWork(record.botId, workId) || !sender || !rt.botOf(sender) || rt.waitsWork(workId)
-      || !Array.isArray(work.results) || work.results.length !== 0
+      || !Array.isArray(work.results)
       || Object.values(rt.state.works).some(child => child?.parent === workId)) return
     const parent = work.parent === undefined ? undefined : rt.state.works[work.parent]
     if (work.parent !== undefined && (!parent || !Array.isArray(parent.open) || !parent.open.includes(workId)
       || !Array.isArray(parent.results) || parent.results.some(result => result?.id === workId))) return
     const parentBefore = JSON.stringify(parent)
+    const name = rt.botOf(record.botId)?.name ?? 'The other Bot'
     const destination = rt.roomOf(asker.senderRoomId)?.sessions?.[sender] ?? rt.chatOf(sender)
     if (!destination || rt.selfOf(sessionId) !== record.botId) return
     const before = JSON.stringify(work)
@@ -696,12 +725,14 @@ export function install(rt) {
       readDurableReply(ctx, destination, workId, record.botId, SOURCE_KIND, signal),
       new Promise(resolve => signal.addEventListener('abort', () => resolve(undefined), { once: true })),
     ])
-    if (reply === undefined || reply.length > TEXT_KEPT || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
+    if (reply === undefined || reply.length > TEXT_KEPT || !replyContainsInlineResults(reply, work.results, name)
+      || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
     rt.requireHomeLock()
     if (!rt.ownsWork(record.botId, workId) || rt.waitsWork(workId) || JSON.stringify(rt.state?.works?.[workId]) !== before
       || JSON.stringify(work.parent === undefined ? undefined : rt.state.works[work.parent]) !== parentBefore
+      || (rt.botOf(record.botId)?.name ?? 'The other Bot') !== name || !rt.botOf(sender)
+      || (rt.roomOf(asker.senderRoomId)?.sessions?.[sender] ?? rt.chatOf(sender)) !== destination
       || Object.values(rt.state.works).some(child => child?.parent === workId)) return
-    const name = rt.botOf(record.botId)?.name ?? 'The other Bot'
     rt.closeWork?.(workId, name, reply)
     await rt.save({ required: true, durable: true })
     return true
@@ -774,6 +805,7 @@ export function install(rt) {
       if (first?.type === 'turn/end') {
         // The turn ended while DS Bot was not watching it: what it did is settled from
         // the Session's durable log.
+        await observeInterruptedCutoff(sessionId, record, first).catch(error => rt.warn('ds-bot: recording the observed output limit for %s failed: %s', sessionId, error))
         const settled = await reconcileEnded(sessionId, record).catch(error => { rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error); return false })
         if (settled) await clearReconciled(sessionId, record)
         continue
