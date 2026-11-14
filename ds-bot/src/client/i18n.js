@@ -54,6 +54,7 @@ const ZH = {
   'Redo request submitted.': '已提交重做请求。',
   'The previous redo outcome is unknown.': '之前的重做结果未知。',
   'Redo is unavailable because the original input cannot be verified.': '无法确认原始输入，暂不能重做。',
+  'A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.': '存在单独的重做记录，其执行情况和结果未知；原任务仍未解决。',
   'Allow future inspections': '允许后续巡检',
   'The previous inspection outcome remains unknown. Allowing future inspections does not confirm its result.': '上次巡检结果仍然未知，允许后续巡检不代表确认了上次结果。',
   'Interrupted work': '中断的工作',

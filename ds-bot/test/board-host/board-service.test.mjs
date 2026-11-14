@@ -11,6 +11,7 @@ import { randomFillSync } from 'node:crypto'
 import { install, BOARD_UPLOAD_PATH, BOARD_UPLOAD_MAX_BYTES } from '../../src/host/board-service.js'
 import { install as installPrivacy } from '../../src/host/privacy.js'
 import { openTaskStore } from '../../src/host/task-store.mjs'
+import { userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
 
 function fixture(t) {
   const home = mkdtempSync(join(tmpdir(), 'dsbot-board-host-'))
@@ -39,6 +40,21 @@ test('authenticated board view returns only the scoped read-only recovery projec
   assert.deepEqual(seen, [scope])
   await assert.rejects(rt.boardCall('board-list', { scope:{ kind:'room', id:'unknown' } }), /available/)
   assert.equal(seen.length, 1, 'invalid scope must not reach recovery projection')
+})
+
+test('the owner sees only a scope-matched uncertain redo, never unverified result data', async t => {
+  const { rt } = fixture(t), recoveryId = 'a'.repeat(64), operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d'
+  rt.recoveryHeldView = () => ({ available:true, incomplete:false, items:[{ recoveryId, botId:'one', roomId:'group', sessionId:'original' }] })
+  rt.state.userRedos = { [operationId]:{ operationId, identity:userRedoIdentity(operationId), recoveryId, scope, acknowledged:true,
+    original:{ botId:'one', sessionId:'original', turn:3, messageSeq:5, messageId:'input', messageHash:'b'.repeat(64) },
+    state:'completed', result:'SECRET-UNVERIFIED' } }
+  const room = await rt.boardCall('board-list', { scope })
+  assert.deepEqual(room.recovery.items[0].redo, { operationId, status:'unknown' })
+  assert.doesNotMatch(JSON.stringify(room), /SECRET-UNVERIFIED|completed/)
+  const personal = await rt.boardCall('board-list', { scope:{ kind:'personal', id:'user' } })
+  assert.equal(personal.recovery.items[0].redo, undefined)
+  rt.state.rooms.group.members = ['two']
+  assert.equal((await rt.boardCall('board-list', { scope })).recovery.items[0].redo, undefined)
 })
 
 test('remote code status is limited to the owner personal board', async t => {
