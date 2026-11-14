@@ -9,6 +9,10 @@ const noControl = source => source && ['request', 'room'].includes(source.role) 
   && source.groupKickoff !== true && source.reviewId === undefined
 const sameRoom = (scope, roomId) => scope?.kind === 'room' ? typeof scope.id === 'string' && roomId === scope.id
   : scope?.kind === 'personal' && roomId === undefined
+export const LEGACY_CANDIDATE_WARNING = Object.freeze({
+  zh:'这段文字只是按时间匹配到的候选内容，无法确认发送者或原工作的结果，仅供核对，不能直接执行。',
+  en:'This text is only a time-matched candidate. Its sender and original outcome are unverified; it is for inspection and cannot be executed directly.',
+})
 
 // This produces a read-only candidate, not an authenticated original input or
 // authorization to run anything. The caller must authenticate the instance
@@ -17,7 +21,9 @@ const sameRoom = (scope, roomId) => scope?.kind === 'room' ? typeof scope.id ===
 // No result from this function has the proof shape accepted by the redo journal.
 export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new Error('invalid candidate timeout')
-  const pending = new Set()
+  // Every probe may read a full Session prefix. Bound work across different
+  // recovery ids too; a timed-out disk read must not invite a parallel flood.
+  let pending = false
   const read = async (scope, recoveryId) => {
     let reader
     try {
@@ -82,16 +88,17 @@ export function createLegacyRedoCandidate(rt, { timeoutMs = 15_000 } = {}) {
         || admissions[0].entered.length !== 1 || admissions[0].entered[0] !== event.seq
         || removals.length !== 1 || removals[0].id !== message.id || removals[0].batchSize !== 1 || !current()) return undefined
       return { kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false, recoveryId,
+        warning:LEGACY_CANDIDATE_WARNING,
         botId:record.botId, sessionId:hold.sessionId, ...(scope.kind === 'room' ? { roomId:scope.id } : {}),
         turn:start.data.turn, turnStartSeq:start.seq, messageSeq:event.seq, matchedTime:start.time,
         textSegments:message.content.map(part => part.text) }
     } catch { return undefined } finally { await reader?.close().catch(() => {}) }
   }
   return async (scope, recoveryId) => {
-    if (pending.has(recoveryId)) return undefined
-    pending.add(recoveryId)
+    if (pending) return undefined
+    pending = true
     const work = read(scope, recoveryId)
-    void work.then(() => pending.delete(recoveryId), () => pending.delete(recoveryId))
+    void work.then(() => { pending = false }, () => { pending = false })
     let timer
     try { return await Promise.race([work, new Promise(resolve => { timer = setTimeout(resolve, timeoutMs) })]) }
     finally { clearTimeout(timer) }

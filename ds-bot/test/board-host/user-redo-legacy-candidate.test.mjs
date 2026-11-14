@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createLegacyRedoCandidate } from '../../src/host/user-redo-legacy-candidate.mjs'
+import { createLegacyRedoCandidate, LEGACY_CANDIDATE_WARNING } from '../../src/host/user-redo-legacy-candidate.mjs'
 import { isolatedRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
 
 const recoveryId = 'b'.repeat(64), scope = { kind:'room', id:'room' }, timestamp = 123456
@@ -29,7 +29,7 @@ function fixture(events = original(), timeoutMs = 15_000) {
 test('returns a single physical candidate without claiming authenticated authorship or execution', async () => {
   const f = fixture(), candidate = await f.candidate(scope, recoveryId)
   assert.deepEqual(candidate, { kind:'unverified-legacy-candidate', producerVerified:false, executeAllowed:false,
-    recoveryId, botId:'bot', sessionId:'source', roomId:'room', turn:5, turnStartSeq:1, messageSeq:3, matchedTime:timestamp,
+    warning:LEGACY_CANDIDATE_WARNING, recoveryId, botId:'bot', sessionId:'source', roomId:'room', turn:5, turnStartSeq:1, messageSeq:3, matchedTime:timestamp,
     textSegments:['candidate task'] })
   assert.throws(() => isolatedRedoConfirmation(scope, recoveryId, candidate, { principal:{ kind:'user', id:'user' },
     operationId:'bb5b1723-7063-4e3e-b27e-12f44dd0033d', target:{ cwd:'/work', provider:'p', model:'m' } }), /cannot be verified/)
@@ -94,6 +94,7 @@ test('a stuck barrier times out and does not start another read while it is pend
   f.setFlush(() => new Promise(resolve => { release = resolve }))
   assert.equal(await f.candidate(scope, recoveryId), undefined)
   assert.equal(await f.candidate(scope, recoveryId), undefined)
+  assert.equal(await f.candidate(scope, 'c'.repeat(64)), undefined)
   release()
   await new Promise(resolve => setImmediate(resolve))
   f.setFlush(async () => {})
