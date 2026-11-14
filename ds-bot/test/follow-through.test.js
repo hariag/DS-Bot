@@ -94,6 +94,29 @@ const freshHome = (t, state = seed()) => {
   return home
 }
 const stateOf = home => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+
+test('ignore and undo retain the interrupted record, reject another scope and survive restart', async (t) => {
+  const home = freshHome(t), id = 'a'.repeat(64)
+  const record = {botId:'b',roomId:'r1',turn:7,trigger:{role:'room',exchangeId:'ex'}}
+  writeFileSync(join(home,'inflight.json'),JSON.stringify({turns:{},queued:{},heldTurns:{[id]:{sessionId:'gb',record,reason:'interrupted outcome unknown'}}}))
+  const host = await start(home)
+  const scope = {kind:'room',id:'r1'}
+  assert.equal((await host.rt.recoveryHeldView(scope)).items[0].decision,'open')
+  await assert.rejects(host.rt.setHeldDecision({kind:'room',id:'other'},id,0,'ignored'))
+  assert.deepEqual(await host.rt.setHeldDecision(scope,id,0,'ignored'),{decision:'ignored',revision:1})
+  assert.deepEqual(await host.rt.setHeldDecision(scope,id,0,'ignored'),{decision:'ignored',revision:1})
+  await assert.rejects(host.rt.setHeldDecision(scope,id,0,'open'))
+  assert.deepEqual(notes(home).heldTurns[id].record,record)
+  assert.equal(notes(home).heldTurns[id].decisions.length,1)
+  await host.stop()
+  const restarted = await start(home)
+  const saved = (await restarted.rt.recoveryHeldView(scope)).items[0]
+  assert.equal(saved.decision,'ignored')
+  assert.equal(saved.status,'uncertain')
+  assert.deepEqual(await restarted.rt.setHeldDecision(scope,id,1,'open'),{decision:'open',revision:2})
+  assert.deepEqual(notes(home).heldTurns[id].record,record)
+  assert.deepEqual(notes(home).heldTurns[id].decisions.map(item=>item.choice),['ignored','open'])
+})
 // The team file is written in the background, and Windows may hold it busy for a
 // moment: the retry waits on the clock, which the tests mock.
 const settleState = async (t, home, check) => {
