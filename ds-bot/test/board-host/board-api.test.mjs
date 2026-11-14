@@ -63,6 +63,13 @@ test('private or nonmember Bots cannot be put in a group proposal', () => {
   assert.equal(f.rows.length, 0)
 })
 
+test('a user can create a personal card in a progress column but cannot assign that marker to a group', () => {
+  const f = fixture(), mine = {...proposal, owner:'user', reviewer:'one', personalProgress:'doing'}
+  const card = f.api.create({kind:'personal', id:'user'}, user, mine)
+  assert.equal(card.personalProgress, 'doing'); assert.equal(card.status, 'proposed')
+  assert.throws(() => f.api.create(room, user, {...mine, operationId:'group', taskId:'group'}), /personal progress/i)
+})
+
 test('a Bot cannot impersonate the instance user or view another personal board', () => {
   const f = fixture()
   assert.throws(() => f.api.create(room, { kind: 'bot', id: 'one' }, proposal))

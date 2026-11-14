@@ -122,12 +122,14 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       } else if (scope.kind === 'personal' && input.owner !== scope.id) {
         throw fail('Personal task must belong to this board owner')
       }
+      if (input.personalProgress !== undefined && (scope.kind !== 'personal' || scope.id !== 'user' || input.owner !== 'user' || !['todo','doing','finished'].includes(input.personalProgress))) throw fail('Invalid personal progress')
       const candidate = { scope:`${scope.kind}:${scope.id}`, owner:input.owner, reviewer:input.reviewer }
       const dependencyGrants = bindingsFor(scope, principal, candidate, input.dependencies)
       return store.create({ operationId: input.operationId, actor: 'user', task: {
         id: input.taskId, title: input.title.trim(), owner: input.owner,
         reviewer: input.reviewer, scope: `${scope.kind}:${scope.id}`,
         acceptance: input.acceptance.trim(), dependencies: input.dependencies, dependencyGrants,
+        ...(input.personalProgress !== undefined ? {personalProgress:input.personalProgress} : {}),
       } })
     },
     command(scope, principal, input) {

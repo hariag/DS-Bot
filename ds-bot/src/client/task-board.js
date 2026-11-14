@@ -508,7 +508,7 @@ function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   options.map(task => h('option', { key: task.id, value: task.id }, `${textValue(task.title) || t('Shared task')} · ${task.id}`))))
 }
 
-function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = '' }) {
+function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = '', personalProgress }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [owner, setOwner] = useState(defaultOwner)
@@ -521,18 +521,18 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = '' }) {
   const actorField = (label, value, update) => Array.isArray(actors)
     ? h('label', null, t(label), h('select', { 'aria-label': t(label), value, disabled, onChange: event => update(event.target.value) },
       h('option', { value: '' }, t('Choose a Bot')),
-      actors.filter(actor => typeof actor?.id === 'string').map(actor => h('option', { key: actor.id, value: actor.id }, actor.name || actor.id))))
+      actors.filter(actor => typeof actor?.id === 'string' && (label !== 'Owner ID' || personalProgress === undefined || actor.id === 'user')).map(actor => h('option', { key: actor.id, value: actor.id }, actor.name || actor.id))))
     : field(label, value, update)
   return h('form', { className: 'bt-board-create', onSubmit: event => {
     event.preventDefault()
     if (!valid || disabled) return
     void onCreate({ title: title.trim(), owner: owner.trim(), reviewer: reviewer.trim(), acceptance: acceptance.trim(),
-      dependencies }).then(result => {
+      dependencies, ...(personalProgress !== undefined ? {personalProgress} : {}) }).then(result => {
       if (result !== 'committed') return
       setTitle(''); setOwner(defaultOwner); setReviewer(''); setAcceptance(''); setDependencies([]); setOpen(false)
     })
   } },
-  h('p', null, t('New tasks start in Preparing.')),
+  h('p', null, t(personalProgress !== undefined ? 'Personal progress does not dispatch a Bot or complete shared work.' : 'New tasks start in Preparing.')),
   field('Title', title, setTitle), actorField('Owner ID', owner, setOwner), actorField('Independent reviewer ID', reviewer, setReviewer),
   field('Acceptance criteria', acceptance, setAcceptance), h(DependenciesField, { tasks, value: dependencies, disabled, onChange: setDependencies }),
   h('div', null, h('button', { type: 'submit', disabled: disabled || !valid }, t('Submit proposal')), ' ',
@@ -1121,6 +1121,10 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const showCapacity = Number.isSafeInteger(capacity?.taskCount) && capacity.taskCount >= 0
     && Number.isSafeInteger(capacity?.taskLimit) && capacity.taskLimit > 0
   const capacityReached = capacity?.taskLimitReached === true
+  const createCard = value => {
+    if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
+    return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
+  }
   const hasLegacy = data?.tasks?.some(task => task.legacy) === true
   const needle = search.trim().toLocaleLowerCase()
   const filtered = (data?.tasks ?? []).filter(task => !needle || [task.title, task.id, actorLabel(task.owner, data?.capabilities?.actors), actorLabel(task.reviewer, data?.capabilities?.actors)]
@@ -1153,10 +1157,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       h('label', { className:'bt-board-search' }, h('span', { className:'bt-board-search-icon', 'aria-hidden':'true' }, '⌕'),
         h('input', { type:'search', 'aria-label':t('Search tasks'), placeholder:t('Search tasks'), value:search, onChange:event => setSearch(event.target.value) })),
       data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? h(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks,
-        defaultOwner:scope.kind === 'personal' ? scope.id : '', onCreate: value => {
-        if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
-        return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
-      } }) : null),
+        defaultOwner:scope.kind === 'personal' ? scope.id : '', onCreate:createCard }) : null),
       data ? h('div', { className:'bt-board-review-tools' }, h(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh:() => load() }), h(WorkDecisions, { key, scope, request, actors:data.capabilities?.actors }), h(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges,{monitor:data.remoteChanges})) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'),
         error ? h('button', { type: 'button', onClick: () => load() }, t('Retry')) : null)
@@ -1172,7 +1173,9 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
               onDrop:event=>{ if (!accepts(event)) return; event.preventDefault(); const id=event.dataTransfer.getData('application/x-ds-bot-personal-task')
                 const task=personalTasks.find(item=>item.id===id); if (task && task.personalProgress!==progress && commandMap[task.id]?.some(command=>command.type==='personal-progress')) void run(task,{type:'personal-progress'},{progress}) } },
               h('h3', null, h('span', null,t(label)), h('span', { className:'bt-board-count' },tasks.length)),
-              tasks.length ? tasks.map(card) : h('p', { className:'bt-board-drop-hint' },t('Drag a card here')))
+              tasks.length ? tasks.map(card) : h('p', { className:'bt-board-drop-hint' },t('Drag a card here')),
+              data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? h(CreateTask, { disabled:!canAct || capacityReached,
+                actors:data.capabilities.actors, tasks:data.tasks, defaultOwner:'user', personalProgress:progress, onCreate:createCard }) : null)
           }))) : null,
         !personal || filtered.some(task => !personalIds.has(task.id)) ? h('section', { className:'bt-board-section', 'aria-label':t('Workflow') },
           personal ? h('div', { className:'bt-board-section-heading' },h('h3',null,t('Shared workflow')),h('p',null,t('These statuses reflect the shared task workflow.'))) : null,
@@ -1180,7 +1183,10 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
           const tasks = columns.get(status)
           return h('section', { className: 'bt-board-column', key: status, 'aria-label': t(label), 'data-stage':status },
             h('h3', null, h('span',null,t(label)), tasks.length ? h('span', { className:'bt-board-count' },tasks.length) : null),
-            tasks.length ? tasks.map(card) : h('p', { className:'bt-board-lane-empty' },t('No tasks')))
+            tasks.length ? tasks.map(card) : h('p', { className:'bt-board-lane-empty' },t('No tasks')),
+            status === 'proposed' && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? h(CreateTask, {
+              disabled:!canAct || capacityReached, actors:data.capabilities.actors, tasks:data.tasks,
+              defaultOwner:scope.kind === 'personal' ? scope.id : '', onCreate:createCard }) : null)
         }))) : null),
         selected ? h(TaskCardDialog,{key:selected.id,scope,task:selected,tasks:data.tasks,commands:commandsFor(selected),actors:data.capabilities?.actors,
           targets:data.capabilities?.shareTargets?.[selected.id],uploadEnabled:data.capabilities?.upload===true,uncertain:!canAct,onCommand:run,onUpload:upload,request,
