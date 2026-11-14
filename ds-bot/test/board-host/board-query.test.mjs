@@ -41,3 +41,10 @@ test('object prototype keys are not valid roster identities', () => {
   assert.throws(() => list({ kind: 'room', id: '__proto__' }, { kind: 'user' }), /not available/)
   assert.throws(() => list({ kind: 'personal', id: '__proto__' }, { kind: 'user' }), /not available/)
 })
+
+test('a status-only share never reveals card description, due date, labels or checklist', () => {
+  const source={...tasks[0],description:'private details',dueDate:'2028-02-29',labels:['private'],checklist:[{id:'x',text:'private',checked:false}],shares:[{id:'grant',taskId:'a1',targetRoomId:'b',fields:['status'],revoked:false}]}
+  const view=boardList({scope:{kind:'room',id:'b'},principal:{kind:'user'},rooms,bots,tasks:[source],verifyShare:()=>true})
+  assert.equal(view.tasks.length,1)
+  assert.deepEqual(view.tasks[0],{id:'a1',title:'Shared task',status:'working',shared:true})
+})
