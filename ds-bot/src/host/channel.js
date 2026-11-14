@@ -357,6 +357,8 @@ export function install(rt) {
         // route; these endpoints record review notes and never dispatch work.
         case 'legacy-review-list':
         case 'legacy-review-get':
+        case 'legacy-review-prepare':
+        case 'legacy-review-operation':
         case 'legacy-review-create':
         case 'legacy-review-finding':
           return ok(await rt.legacyReviewCall(endpoint, body))

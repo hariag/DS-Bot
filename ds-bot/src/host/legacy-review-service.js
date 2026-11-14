@@ -2,9 +2,16 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { openReviewLedger } from './review-ledger.mjs'
+import { openReviewLedger, readReviewReceipt } from './review-ledger.mjs'
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const valid = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value)
+const validOperation = value => typeof value==='string' && /^manual-review:[0-9a-f]{64}$/.test(value)
+function operationId(kind,workId,payload) {
+  if(kind==='create')return `manual-review:${hash({kind,workId})}`
+  const {expectedRevision,summary,evidenceRefs,unfinished}=payload
+  if(kind!=='finding'||!Number.isSafeInteger(expectedRevision)||expectedRevision<0||typeof summary!=='string'||!summary.trim()||summary.length>4000||!Array.isArray(evidenceRefs)||evidenceRefs.length>32||evidenceRefs.some(v=>typeof v!=='string'||!v.trim()||v.length>500)||!Array.isArray(unfinished)||unfinished.length>32||unfinished.some(v=>typeof v!=='string'||!v.trim()||v.length>500))throw Error('invalid operation')
+  return `manual-review:${hash({kind,workId,expectedRevision,summary,evidenceRefs,unfinished})}`
+}
 const validWorkTime = value => Number.isSafeInteger(value)&&value>=0&&value<=8_640_000_000_000_000
 export function install(rt) {
   const {ctx}=rt;let ledger,closing=false
@@ -35,6 +42,16 @@ export function install(rt) {
       const items=[];for(const id of sample.ids){try{const w=workFor(id);scopeKey(scope,w);items.push({workId:id,owner:w.to})}catch{}}
       return {items,incomplete:sample.incomplete===true}
     }
+    if(endpoint==='legacy-review-prepare'){
+      const work=workFor(workId);scopeKey(scope,work)
+      return {operationId:operationId(payload.kind,workId,payload)}
+    }
+    if(endpoint==='legacy-review-operation'){
+      const {operationId,kind}=payload
+      if(!validOperation(operationId)||!['create','finding'].includes(kind))throw Error('invalid receipt request')
+      const work=workFor(workId);scopeKey(scope,work)
+      return readReviewReceipt(join(rt.home,'legacy-reviews-v1','reviews.sqlite'),{actor:'user',workId,operationId,kind,scope:`${scope.kind}:${scope.id}`,verifySnapshot:current})
+    }
     if(endpoint==='legacy-review-get'){
       if(!valid(workId))throw Error('review unavailable')
       let work;try{work=workFor(workId);scopeKey(scope,work)}catch{work=undefined}
@@ -50,20 +67,29 @@ export function install(rt) {
     const work=workFor(workId);const selected=scopeKey(scope,work)
     if(!validWorkTime(work.at))throw Error('work identity unavailable')
     if(endpoint==='legacy-review-create'){
-      const existing=service().read({actor:'user',workId});if(existing){if(!current(existing.snapshot))throw Error('review unavailable');return existing}
+      const explicit=payload.operationId!==undefined
+      if(explicit&&payload.operationId!==operationId('create',workId,payload))throw Error('invalid operation')
+      const receiptScope=explicit?`${scope.kind}:${scope.id}`:null
+      const existing=service().read({actor:'user',workId});if(existing){
+        if(!current(existing.snapshot))throw Error('review unavailable')
+        if(explicit&&readReviewReceipt(join(rt.home,'legacy-reviews-v1','reviews.sqlite'),{actor:'user',workId,operationId:payload.operationId,kind:'create',scope:receiptScope,verifySnapshot:current}).status!=='committed')throw Error('work already has a review')
+        return existing
+      }
       const fingerprint=workHash(workId,work),sample=await rt.recoveryWorkOrigins?.(workId)
       writable();const fresh=workFor(workId);if(workHash(workId,fresh)!==fingerprint||scopeKey(scope,fresh)!==selected)throw Error('review changed; retry')
       const origins=sample && Array.isArray(sample.ids) && sample.observed ? sample : {ids:[],observed:{queue:'unknown',held:'unknown',external:'unknown'}}
       const sampledAt=Number.isSafeInteger(origins.sampledAt)&&origins.sampledAt>=0&&origins.sampledAt<=8_640_000_000_000_000?origins.sampledAt:null
       const archiveScopes=[...new Set([fresh.room,fresh.fromRoom].filter(id=>valid(id)&&rt.state.rooms?.[id]).map(id=>`room:${id}`))].sort()
       const snapshot={workId,owner:fresh.to,sender:fresh.from,scope:selected,snapshotId:fingerprint,workAt:fresh.at,sampledAt,archiveScopes,sources:origins.ids.map(sessionId=>({sessionId,turnStartSeq:null,cursor:null,complete:false})),observations:{...origins.observed,inbox:'unknown',guarded:'unknown'}}
-      return service().createReview({operationId:`review-create:${hash(workId)}`,actor:'user',workId,snapshot}).current
+      return service().createReview({operationId:explicit?payload.operationId:`review-create:${hash(workId)}`,actor:'user',workId,snapshot,scope:receiptScope}).current
     }
     if(endpoint==='legacy-review-finding'){
       const currentReview=service().read({actor:'user',workId});if(!currentReview||!current(currentReview.snapshot))throw Error('review unavailable')
       const finding={summary:payload.summary,evidenceRefs:payload.evidenceRefs,unfinished:payload.unfinished,sideEffects:'unknown'}
-      const expectedRevision=payload.expectedRevision,operationId=`review-finding:${hash({workId,expectedRevision,finding})}`
-      return service().submitFinding({operationId,actor:'user',workId,expectedRevision,finding}).current
+      const explicit=payload.operationId!==undefined
+      if(explicit&&payload.operationId!==operationId('finding',workId,payload))throw Error('invalid operation')
+      const expectedRevision=payload.expectedRevision,receiptId=explicit?payload.operationId:`review-finding:${hash({workId,expectedRevision,finding})}`
+      return service().submitFinding({operationId:receiptId,actor:'user',workId,expectedRevision,finding,scope:explicit?`${scope.kind}:${scope.id}`:null}).current
     }
     throw Error('review unavailable')
   }

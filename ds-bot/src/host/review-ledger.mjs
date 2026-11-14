@@ -3,6 +3,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { closeSync, lstatSync, openSync } from 'node:fs'
+import { dirname } from 'node:path'
 const id = (v, name) => { if (typeof v !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(v)) throw Error(`invalid ${name}`); return v }
 const safeInt = (v, name) => { if (!Number.isSafeInteger(v) || v < 0) throw Error(`invalid ${name}`); return v }
 const stable = v => JSON.stringify(v, function (_, value) { return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))) : value })
@@ -33,35 +34,36 @@ export function openReviewLedger(path,{assertActor,verifySnapshot,assertLease}={
     CREATE TABLE IF NOT EXISTS reviews(work_id TEXT PRIMARY KEY, owner TEXT NOT NULL, scope TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL, snapshot TEXT NOT NULL, snapshot_hash TEXT NOT NULL, finding TEXT);
     CREATE TABLE IF NOT EXISTS receipts(operation_id TEXT PRIMARY KEY, actor TEXT NOT NULL, payload_hash TEXT NOT NULL, work_id TEXT NOT NULL, revision INTEGER NOT NULL, kind TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS review_findings(work_id TEXT NOT NULL, revision INTEGER NOT NULL, actor TEXT NOT NULL, finding TEXT NOT NULL, PRIMARY KEY(work_id,revision));`)
+  if(!db.prepare('PRAGMA table_info(receipts)').all().some(column=>column.name==='scope')) db.exec('ALTER TABLE receipts ADD COLUMN scope TEXT')
   const get=workId=>{const r=db.prepare('SELECT * FROM reviews WHERE work_id=?').get(workId);return r?{workId:r.work_id,owner:r.owner,scope:r.scope,state:r.state,revision:r.revision,snapshot:JSON.parse(r.snapshot),finding:r.finding?JSON.parse(r.finding):null,history:db.prepare('SELECT revision,actor,finding FROM review_findings WHERE work_id=? ORDER BY revision').all(workId).map(v=>({revision:v.revision,actor:v.actor,finding:JSON.parse(v.finding)}))}:undefined}
   const lease=()=>{if(assertLease()!==true)throw Error('host lease unavailable')}
   const authority=(actor,action,record)=>{if(assertActor(actor,action,record)!==true)throw Error('not authorized')}
-  function transact({operationId,actor,workId,payload,kind,existingAuth,commit}) {
+  function transact({operationId,actor,workId,payload,kind,scope=null,existingAuth,commit}) {
     id(operationId,'operation');id(actor,'actor');id(workId,'work'); const payloadHash=hash(payload)
     db.exec('BEGIN IMMEDIATE')
     try {
       lease();const existing=db.prepare('SELECT * FROM receipts WHERE operation_id=?').get(operationId)
-      if(existing){ if(existing.actor!==actor||existing.payload_hash!==payloadHash||existing.work_id!==workId||existing.kind!==kind)throw Error('operation id conflict');const current=get(workId);authority(actor,'read',current);lease();db.exec('COMMIT');return {status:'committed',operationId,receiptRevision:existing.revision,current} }
+      if(existing){ if(existing.actor!==actor||existing.payload_hash!==payloadHash||existing.work_id!==workId||existing.kind!==kind||existing.scope!==scope)throw Error('operation id conflict');const current=get(workId);authority(actor,'read',current);lease();db.exec('COMMIT');return {status:'committed',operationId,receiptRevision:existing.revision,current} }
       existingAuth(); const result=commit();lease()
-      db.prepare('INSERT INTO receipts VALUES (?,?,?,?,?,?)').run(operationId,actor,payloadHash,workId,result.revision,kind)
+      db.prepare('INSERT INTO receipts(operation_id,actor,payload_hash,work_id,revision,kind,scope) VALUES (?,?,?,?,?,?,?)').run(operationId,actor,payloadHash,workId,result.revision,kind,scope)
       db.exec('COMMIT');return {status:'committed',operationId,receiptRevision:result.revision,current:result}
     } catch(e) {try{db.exec('ROLLBACK')}catch{};throw e}
   }
   return {
     close(){db.close()},
-    createReview({operationId,actor,workId,snapshot}) {
+    createReview({operationId,actor,workId,snapshot,scope=null}) {
       id(workId,'work'); const normalized=normalizeSnapshot(snapshot,workId); const payload={kind:'create',workId,snapshot:normalized}
-      return transact({operationId,actor,workId,payload,kind:'create',existingAuth:()=>authority(actor,'create',normalized),commit:()=>{
+      return transact({operationId,actor,workId,payload,kind:'create',scope,existingAuth:()=>authority(actor,'create',normalized),commit:()=>{
         if(verifySnapshot(normalized)!==true)throw Error('snapshot unavailable or changed')
         if(get(workId))throw Error('work already has a review')
         const s=stable(normalized);db.prepare('INSERT INTO reviews VALUES (?,?,?,?,?,?,?,NULL)').run(workId,normalized.owner,normalized.scope,'needs-review',1,s,hash(normalized));if(verifySnapshot(normalized)!==true)throw Error('snapshot unavailable or changed');authority(actor,'create',normalized);return get(workId)
       }})
     },
-    submitFinding({operationId,actor,workId,expectedRevision,finding}) {
+    submitFinding({operationId,actor,workId,expectedRevision,finding,scope=null}) {
       safeInt(expectedRevision,'revision');keys(finding,['summary','evidenceRefs','unfinished','sideEffects'],'finding')
       if(typeof finding.summary!=='string'||!finding.summary.trim()||finding.summary.length>4000||!Array.isArray(finding.evidenceRefs)||finding.evidenceRefs.length>32||finding.evidenceRefs.some(v=>typeof v!=='string'||!v.trim()||v.length>500)||!Array.isArray(finding.unfinished)||finding.unfinished.length>32||finding.unfinished.some(v=>typeof v!=='string'||!v.trim()||v.length>500)||finding.sideEffects!=='unknown')throw Error('invalid finding')
       const payload={kind:'finding',workId,expectedRevision,finding}
-      return transact({operationId,actor,workId,payload,kind:'finding',existingAuth:()=>authority(actor,'submit',get(workId)),commit:()=>{
+      return transact({operationId,actor,workId,payload,kind:'finding',scope,existingAuth:()=>authority(actor,'submit',get(workId)),commit:()=>{
         const row=get(workId);if(!row||(actor!=='user'&&row.owner!==actor)||row.revision!==expectedRevision||row.revision>=101||!['needs-review','evidence-needed'].includes(row.state))throw Error('review unavailable or changed')
         if(verifySnapshot(row.snapshot)!==true)throw Error('snapshot unavailable or changed')
         db.prepare("UPDATE reviews SET state='evidence-needed',revision=revision+1,finding=? WHERE work_id=?").run(stable(finding),workId);db.prepare('INSERT INTO review_findings VALUES (?,?,?,?)').run(workId,row.revision+1,actor,stable(finding));if(verifySnapshot(row.snapshot)!==true)throw Error('snapshot unavailable or changed');authority(actor,'submit',row);return get(workId)
@@ -69,4 +71,25 @@ export function openReviewLedger(path,{assertActor,verifySnapshot,assertLease}={
     },
     read({actor,workId}) {id(actor,'actor');id(workId,'work');lease();const row=get(workId);if(!row)return undefined;authority(actor,'read',row);lease();return row}
   }
+}
+
+// This lookup never creates the journal or a receipt. A missing receipt is
+// inconclusive: an earlier request may still be running.
+export function readReviewReceipt(path,{actor,workId,operationId,kind,scope,verifySnapshot}) {
+  id(actor,'actor');id(workId,'work');id(operationId,'operation')
+  if(!['create','finding'].includes(kind)||typeof scope!=='string'||typeof verifySnapshot!=='function')throw Error('invalid receipt request')
+  let directory
+  try{directory=lstatSync(dirname(path))}catch(e){if(e.code==='ENOENT')return {status:'unknown'};throw e}
+  if(!directory.isDirectory()||directory.isSymbolicLink()||directory.uid!==process.getuid()||(directory.mode&0o077)!==0)throw Error('private journal unavailable')
+  let file
+  try{file=lstatSync(path)}catch(e){if(e.code==='ENOENT')return {status:'unknown'};throw e}
+  if(!file.isFile()||file.isSymbolicLink()||file.uid!==process.getuid()||(file.mode&0o077)!==0)throw Error('private journal unavailable')
+  const db=new DatabaseSync(path,{readOnly:true})
+  try {
+    if(!db.prepare('PRAGMA table_info(receipts)').all().some(column=>column.name==='scope'))return {status:'unknown'}
+    const receipt=db.prepare('SELECT actor,work_id,kind,scope FROM receipts WHERE operation_id=?').get(operationId)
+    if(!receipt||receipt.actor!==actor||receipt.work_id!==workId||receipt.kind!==kind||receipt.scope!==scope)return {status:'unknown'}
+    const review=db.prepare('SELECT snapshot FROM reviews WHERE work_id=?').get(workId)
+    return {status:review&&verifySnapshot(JSON.parse(review.snapshot))===true?'committed':'unknown'}
+  } finally {db.close()}
 }
