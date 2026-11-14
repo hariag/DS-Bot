@@ -913,6 +913,8 @@ export function install(rt) {
   ctx.on?.('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted || !rt.isBotSession(agent.id)) return decision
+    // A separately authorized redo must never absorb unrelated interrupted inputs.
+    if (rt.redoTurnRoute?.active(agent.session)) return decision
     const entry = live.get(agent.id)
     if (entry === undefined || entry.turn === undefined || entry.recoveryInjected) return decision
     await reconcilePending(agent.id, signal)
@@ -963,6 +965,9 @@ export function install(rt) {
   })
 
   ctx.on('session/event', (session, event) => {
+    // The opt-in route isolates the complete redo turn, retaining existing
+    // pending/carry and preventing ordinary work from being answered by it.
+    if (rt.redoTurnRoute?.isolate(session, event)) return
     const id = session?.id
     if (id === undefined) return
     if (!rt.isBotSession(id) && !rt.roomOf(id)) {

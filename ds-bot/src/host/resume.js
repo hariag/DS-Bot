@@ -672,6 +672,8 @@ export function install(rt) {
   // last run: only DS Bot restarted (the plugin reloaded) and DSH went on.
   let firstTurn = Object.keys(interrupted.turns).length > 0 ? new Map() : undefined
   ctx.on('session/event', (session, event) => {
+    // A redo is an independent result, not the interrupted turn's recovery.
+    if (rt.redoTurnRoute?.isolate(session, event)) return
     const id = session?.id
     if (id === undefined) return
     if ((event.type === 'turn/start' || event.type === 'turn/end') && firstTurn?.has(id) === false) {
