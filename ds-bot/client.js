@@ -12520,6 +12520,7 @@ var ZH = {
   "Card revision history": "卡片修订记录",
   "Showing the latest 50 revisions.": "显示最近 50 个修订。",
   "Revision": "修订版本",
+  "Personal progress does not dispatch a Bot or complete shared work.": "个人进度不会派发 Bot，也不会完成共享任务。",
   "Saving creates a separate change proposal after the original task.": "保存后将创建独立的需求变更提案，并等待原任务完成。",
   "Requirement change": "需求变更",
   "Original task": "原任务",
@@ -37570,7 +37571,7 @@ function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
     options.map((task) => (0, import_react50.createElement)("option", { key: task.id, value: task.id }, `${textValue(task.title) || t("Shared task")} · ${task.id}`))
   ));
 }
-function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "" }) {
+function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", personalProgress }) {
   const [open, setOpen] = (0, import_react50.useState)(false);
   const [title, setTitle] = (0, import_react50.useState)("");
   const [owner, setOwner] = (0, import_react50.useState)(defaultOwner);
@@ -37584,7 +37585,7 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "" }) {
     "select",
     { "aria-label": t(label), value, disabled, onChange: (event) => update(event.target.value) },
     (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
-    actors.filter((actor) => typeof actor?.id === "string").map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+    actors.filter((actor) => typeof actor?.id === "string" && (label !== "Owner ID" || personalProgress === void 0 || actor.id === "user")).map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
   )) : field(label, value, update);
   return (0, import_react50.createElement)(
     "form",
@@ -37596,7 +37597,8 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "" }) {
         owner: owner.trim(),
         reviewer: reviewer.trim(),
         acceptance: acceptance.trim(),
-        dependencies
+        dependencies,
+        ...personalProgress !== void 0 ? { personalProgress } : {}
       }).then((result) => {
         if (result !== "committed") return;
         setTitle("");
@@ -37607,7 +37609,7 @@ function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "" }) {
         setOpen(false);
       });
     } },
-    (0, import_react50.createElement)("p", null, t("New tasks start in Preparing.")),
+    (0, import_react50.createElement)("p", null, t(personalProgress !== void 0 ? "Personal progress does not dispatch a Bot or complete shared work." : "New tasks start in Preparing.")),
     field("Title", title, setTitle),
     actorField("Owner ID", owner, setOwner),
     actorField("Independent reviewer ID", reviewer, setReviewer),
@@ -38522,6 +38524,10 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const capacity = data?.capabilities;
   const showCapacity = Number.isSafeInteger(capacity?.taskCount) && capacity.taskCount >= 0 && Number.isSafeInteger(capacity?.taskLimit) && capacity.taskLimit > 0;
   const capacityReached = capacity?.taskLimitReached === true;
+  const createCard = (value) => {
+    if (!window.crypto?.randomUUID) return Promise.resolve(void 0);
+    return run2({ id: window.crypto.randomUUID() }, { type: "create" }, value);
+  };
   const hasLegacy = data?.tasks?.some((task) => task.legacy) === true;
   const needle = search.trim().toLocaleLowerCase();
   const filtered = (data?.tasks ?? []).filter((task) => !needle || [task.title, task.id, actorLabel(task.owner, data?.capabilities?.actors), actorLabel(task.reviewer, data?.capabilities?.actors)].some((value) => textValue(value).toLocaleLowerCase().includes(needle)));
@@ -38598,10 +38604,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           actors: data.capabilities.actors,
           tasks: data.tasks,
           defaultOwner: scope.kind === "personal" ? scope.id : "",
-          onCreate: (value) => {
-            if (!window.crypto?.randomUUID) return Promise.resolve(void 0);
-            return run2({ id: window.crypto.randomUUID() }, { type: "create" }, value);
-          }
+          onCreate: createCard
         }) : null
       ),
       data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(WorkDecisions, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
@@ -38647,7 +38650,15 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
                 }
               },
               (0, import_react50.createElement)("h3", null, (0, import_react50.createElement)("span", null, t(label)), (0, import_react50.createElement)("span", { className: "bt-board-count" }, tasks.length)),
-              tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-drop-hint" }, t("Drag a card here"))
+              tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-drop-hint" }, t("Drag a card here")),
+              data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? (0, import_react50.createElement)(CreateTask, {
+                disabled: !canAct || capacityReached,
+                actors: data.capabilities.actors,
+                tasks: data.tasks,
+                defaultOwner: "user",
+                personalProgress: progress,
+                onCreate: createCard
+              }) : null
             );
           }))
         ) : null,
@@ -38661,7 +38672,14 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
               "section",
               { className: "bt-board-column", key: status, "aria-label": t(label), "data-stage": status },
               (0, import_react50.createElement)("h3", null, (0, import_react50.createElement)("span", null, t(label)), tasks.length ? (0, import_react50.createElement)("span", { className: "bt-board-count" }, tasks.length) : null),
-              tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-lane-empty" }, t("No tasks"))
+              tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-lane-empty" }, t("No tasks")),
+              status === "proposed" && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? (0, import_react50.createElement)(CreateTask, {
+                disabled: !canAct || capacityReached,
+                actors: data.capabilities.actors,
+                tasks: data.tasks,
+                defaultOwner: scope.kind === "personal" ? scope.id : "",
+                onCreate: createCard
+              }) : null
             );
           }))
         ) : null

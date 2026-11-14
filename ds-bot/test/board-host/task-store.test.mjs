@@ -92,6 +92,18 @@ test('personal progress is durable, scoped and never completes a dependency', t 
   assert.equal(reopened.get('mine').personalProgress, 'finished'); assert.equal(reopened.get('mine').status, 'proposed')
   assert.equal(reopened.get('dependent').status, 'waiting')
 })
+
+test('personal progress can be selected atomically at creation without scheduling work', t => {
+  const {store, path} = fixture(t)
+  const input = {operationId:'create-doing', actor:'user', task:{...task('doing'), owner:'user', personalProgress:'doing'}}
+  const created = store.create(input)
+  assert.equal(created.personalProgress, 'doing'); assert.equal(created.status, 'proposed')
+  assert.deepEqual(store.create(input), created); assert.equal(store.listActions(created.id).length, 0)
+  assert.throws(() => store.create({...input, operationId:'bad', task:{...input.task, id:'bad', scope:'room:group'}}), /personal progress/)
+  assert.throws(() => store.create({...input, operationId:'bad2', task:{...input.task, id:'bad2', owner:'bot'}}), /personal progress/)
+  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  assert.equal(reopened.get('doing').personalProgress, 'doing')
+})
 const intentFor = action => ({ admissionId:`admission-${action.id}`, messageId:`message-${action.id}`, targetBotId:action.actor, targetSessionId:`session-${action.actor}`, payload:{ id:`message-${action.id}`, role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:`admission-${action.id}`} } })
 const claim = (store, action, intent = intentFor(action)) => store.claimAction({ actionId:action.id, actor:'scheduler', intent })
 function accept(s, id, kind) {
