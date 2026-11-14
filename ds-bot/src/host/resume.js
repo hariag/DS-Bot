@@ -1,20 +1,13 @@
-// Resume: Bot work that DeepSeek Harness dropped when it closed or restarted. DSH closes
-// a turn it never finished as interrupted when the Session next opens, and a clean
-// shutdown also cancels the messages still waiting in a Session's inbox; nothing would
-// ever run either again, and whoever waited for them was not told. DS Bot notes each
-// running Bot turn and each message it delivers until a turn takes it up, in
-// inflight.json; what is still noted at the next start is picked up once.
-//
-// A turn that ends while DS Bot is not watching it (the plugin reloaded, DSH went on)
-// is settled from the Session's durable log: an answer that was produced goes to the Bot
-// that waits for it, and an outcome that cannot be read is said to be unknown. The
-// request itself is never sent again there.
+// Preserve original Bot work across a restart. The recovery journal can outlive
+// an interrupted delivery, and an unflushed history cannot establish that an
+// absent message was never executed. Ambiguous records remain held without replay.
+// A unique, durably received reply can reconcile its exact original work item.
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, readFileSync } from 'node:fs'
 import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
-import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
+import { HISTORY_TIMEOUT_MS, SOURCE_KIND, STEER_CUT, TEXT_KEPT } from './constants.js'
+import { readRecoveryHistory, historyMentionsSource, readDurableReply } from './recovery-history.js'
 import { replaceFile } from './files.js'
 import { textOf } from './text.js'
 import { heldTurnsView } from './recovery-held.js'
@@ -604,10 +597,8 @@ export function install(rt) {
   const sessionFor = (sessionId, args) => (rt.isBotSession(sessionId) ? sessionId
     : args?.roomId === undefined ? rt.chatOf(args?.toId) : rt.roomOf(args.roomId)?.sessions?.[args.toId])
 
-  // A hard stop keeps the inbox, which the Session runs once it wakes; only what DSH
-  // cancelled is sent again. The notes stay queued until a turn takes the messages
-  // up, so a send that fails here, or a Session that cannot be opened, leaves them
-  // for the next start instead of losing them.
+  // A surviving inbox retains its original messages. Otherwise preserve each
+  // uncertain delivery for reconciliation; do not create a replacement message.
   async function resendQueued(sessionId, list, held) {
     for (const item of list) if (taken?.has(item?.args?.exchangeId) === true) held.add(item.args.exchangeId)
     const fresh = list.filter(item => rt.botOf(item.args?.toId) !== undefined
@@ -664,139 +655,88 @@ export function install(rt) {
         .filter(id => typeof id === 'string' && id !== ''))]
       const histories = await Promise.all(origins.map(logFor))
       if (waiting() || taken?.has(args.exchangeId) === true) { held.add(args.exchangeId); continue }
-      const seen = histories.some(events => events?.some(event => event.type === 'user/message' && event.data?.source?.exchangeId === args.exchangeId))
+      const seen = histories.some(events => events && historyMentionsSource(events, 'exchangeId', args.exchangeId))
       const unreadable = histories.some(events => events === undefined)
-      if (seen || unreadable) {
-        held.add(args.exchangeId)
-        const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
-        rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
-        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
-        continue
-      }
-      if (taken?.has(args.exchangeId) === true) {
-        forgetQueued(args.exchangeId)
-        continue
-      }
-      // A request that waited through a restart reaches its target late: the work
-      // it is for is marked, so the answer that comes back says so.
-      if (args.role === 'request' || args.role === 'stopped') rt.lateWork?.(args.exchangeId)
-      await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true }, { beforeAdmission: () => {
-        if (blocked()) throw new Error('Queued group work was stopped before recovery admission')
-      } })
-        .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
+      // An absent event is not evidence of non-admission: a crash may have
+      // discarded its unflushed log after the work already caused side effects.
+      held.add(args.exchangeId)
+      const why = seen ? 'it appeared in a previous turn or inbox; its outcome is not established'
+        : unreadable ? 'a relevant Session history could not be read'
+          : 'history does not establish whether its original admission happened'
+      rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
+      rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
     }
   }
 
-  // A Session's durable log, as DSH keeps it: what happened there, and what it said.
-  // Undefined when this DSH cannot read it, or when the Session is gone.
+  // The controller history may include unflushed events; it is diagnostic
+  // evidence only and absence must never authorize a replay.
   async function logOf(sessionId) {
-    const inspect = ctx.sessionController?.inspect
-    if (typeof inspect !== 'function') return undefined
-    const seen = await inspect(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS)).catch(() => undefined)
-    return Array.isArray(seen?.events) ? seen.events : undefined
+    return readRecoveryHistory(ctx.sessionController, sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
   }
 
-  // A turn that ended while DS Bot was not watching it: its answer may exist and never
-  // have gone to the Bot that waits for it. The Session's durable log says what it did;
-  // the work it was for is settled once, the way a finished turn settles it.
-  async function reconcileEnded(sessionId, record, ended) {
-    const trigger = record.trigger
-    if (trigger === undefined) return
-    const workId = rt.workOf(trigger)
-    if (!rt.ownsWork(record.botId, workId)) return
-    const exchangeId = trigger.exchangeId
+  // Only a durable, unique, explicitly attributed reply to this exact work may
+  // reconcile an old work item. A merged turn's assistant text is not a receipt.
+  async function reconcileEnded(sessionId, record) {
+    const workId = rt.workOf(record.trigger)
+    const work = rt.state?.works?.[workId]
     const asker = rt.workAsker(workId)
     const sender = asker?.senderSessionId
-    if (exchangeId === undefined || sender === undefined || rt.botOf(sender) === undefined) return
-    const name = rt.botOf(rt.selfOf(sessionId))?.name ?? 'The other Bot'
-    // DSH stopped that turn as it shut down: it is picked up at the next start.
-    if (ended.reason?.kind === 'aborted' && ended.reason.reason?.kind === 'disposed') {
-      update(sessionId, () => record)
-      return
+    if (!work || !rt.ownsWork(record.botId, workId) || !sender || !rt.botOf(sender) || rt.waitsWork(workId)
+      || !Array.isArray(work.results) || work.results.length !== 0
+      || Object.values(rt.state.works).some(child => child?.parent === workId)) return
+    const parent = work.parent === undefined ? undefined : rt.state.works[work.parent]
+    if (work.parent !== undefined && (!parent || !Array.isArray(parent.open) || !parent.open.includes(workId)
+      || !Array.isArray(parent.results) || parent.results.some(result => result?.id === workId))) return
+    const parentBefore = JSON.stringify(parent)
+    const destination = rt.roomOf(asker.senderRoomId)?.sessions?.[sender] ?? rt.chatOf(sender)
+    if (!destination || rt.selfOf(sessionId) !== record.botId) return
+    const before = JSON.stringify(work)
+    const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
+    const reply = await Promise.race([
+      readDurableReply(ctx, destination, workId, record.botId, SOURCE_KIND, signal),
+      new Promise(resolve => signal.addEventListener('abort', () => resolve(undefined), { once: true })),
+    ])
+    if (reply === undefined || reply.length > TEXT_KEPT || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
+    rt.requireHomeLock()
+    if (!rt.ownsWork(record.botId, workId) || rt.waitsWork(workId) || JSON.stringify(rt.state?.works?.[workId]) !== before
+      || JSON.stringify(work.parent === undefined ? undefined : rt.state.works[work.parent]) !== parentBefore
+      || Object.values(rt.state.works).some(child => child?.parent === workId)) return
+    const name = rt.botOf(record.botId)?.name ?? 'The other Bot'
+    rt.closeWork?.(workId, name, reply)
+    await rt.save({ required: true, durable: true })
+    return true
+  }
+
+  // Retry held records with positive evidence only; a missing receipt stays held.
+  // Clearing the recovery note is separate from the already-durable work save.
+  async function clearReconciled(sessionId, record) {
+    const exchangeId = record.trigger?.exchangeId
+    if (Object.values(queued).some(list => Array.isArray(list) && list.some(item => item?.args?.exchangeId === exchangeId))) return
+    let changed = false
+    for (const [id, held] of Object.entries(heldTurns)) {
+      if (held?.sessionId === sessionId && JSON.stringify(held.record) === JSON.stringify(record)) {
+        delete heldTurns[id]
+        changed = true
+      }
     }
-    const events = await logOf(sessionId)
-    if (events === undefined) {
-      // The record of that work cannot be read: whether it answered cannot be
-      // established. The sender is told that, and the work is not run again.
-      const why = 'the record of that work could not be read'
-      const text = `${name} could not answer your message: ${why}, so what it did is unknown (its session is ${sessionId}). It may have done part of the work. Tell the user if it matters; do not run the work again without asking.`
-      const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-      rt.noteFailure?.({
-        level: 'warn',
-        source: 'turn',
-        text: `the result of the work ${name} was given is unknown`,
-        bot: name,
-        where: room === undefined ? 'own chat' : `group "${room.name}"`,
-        sessionId,
-      })
-      answerSender(rt, sessionId, asker, text)
-      return
+    const current = turns[sessionId]
+    if (current?.recoveryHold) {
+      const { recoveryHold: _, ...plain } = current
+      if (JSON.stringify(plain) === JSON.stringify(record)) update(sessionId, () => undefined)
     }
-    const turn = turnOf(events, exchangeId)
-    // The request was never taken up: it is still waiting, and the delivery that is
-    // waiting for it keeps what it had.
-    if (turn === undefined) return
-    const said = turn.texts.join('\n\n')
-    // The answer went up in another run: the work closes with what it said, and
-    // nothing is sent twice.
-    const back = rt.roomOf(asker.senderRoomId)?.sessions?.[sender]
-    const sent = await logOf(back ?? rt.chatOf(sender))
-    if (sent !== undefined && answeredIn(sent, workId)) {
-      rt.closeWork?.(workId, name, rt.answerText(workId, said, name))
-      return
-    }
-    const reason = turn.reason
-    // A turn that went on to a fresh part goes on there; it is not settled here.
-    if (reason?.kind === 'blocked') return
-    // The turn was cut off before it finished: the work is picked up again, as after
-    // a restart that cut it off.
-    if (reason === undefined || reason.kind === 'interrupted') {
-      await resumeTurn(sessionId, record)
-      return
-    }
-    if (reason.kind === 'error') {
-      const failure = turnFailure(reason.error)
-      answerSender(rt, sessionId, asker, `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`)
-      return
-    }
-    if (reason.kind === 'aborted') {
-      // The turn was stopped before it could answer: the sender is told, as it is told
-      // when DS Bot watches the turn end.
-      answerSender(rt, sessionId, asker, `${name} was stopped before it could answer your message.`)
-      return
-    }
-    // A turn cut off at the output limit is not a finish: the answer says so, and the
-    // diagnostics record it, with the route the Session's log holds for it.
-    const cutOff = reason?.kind === 'max-tokens'
-    const withoutText = cutOff && turn.texts.length === 0
-    if (cutOff) {
-      rt.noteCutOffTurn?.(sessionId, { withoutText })
-      const context = events.findLast(event => event?.type === 'request/context')?.data
-      const ref = context?.provider && context?.model ? `${context.provider}/${context.model}` : undefined
-      const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-      rt.noteFailure?.({
-        level: 'warn',
-        source: 'turn',
-        code: 'MAX_TOKENS',
-        text: `${withoutText
-          ? 'the turn was cut off at the output limit before it wrote anything'
-          : 'the turn was cut off at the output limit, so its answer is not complete'}${ref ? ` (${ref})` : ''}`,
-        bot: name,
-        where: room === undefined ? 'own chat' : `group "${room.name}"`,
-        sessionId,
-      })
-    }
-    const answer = cutOff ? cutOffText(said) : said
-    // The turn ended with what it said: the answer goes up the way a finished turn's
-    // does, with the results that came back for it and the text it held. A work that
-    // still waits for what it handed on keeps its part until that comes back.
-    if (rt.waitsWork(workId)) {
-      rt.holdWork(workId, answer)
-      return
-    }
-    const text = rt.answerText(workId, answer, name)
-    const long = text.length > MESSAGE_INLINE_MAX ? await rt.attachLong(text, `Answer from ${name}.txt`) : undefined
-    answerSender(rt, sessionId, asker, text, long)
+    if (changed) { unknownQueueGeneration += 1n; await persist({ required: true }) }
+  }
+
+  let scanning = false
+  async function scanHeld() {
+    if (scanning || stopped || blocked !== undefined || rt.readOnly() !== undefined) return
+    scanning = true
+    try {
+      for (const held of Object.values(heldTurns)) {
+        if (stopped || blocked !== undefined || rt.readOnly() !== undefined) break
+        if (await reconcileEnded(held.sessionId, held.record)) await clearReconciled(held.sessionId, held.record)
+      }
+    } finally { scanning = false }
   }
 
   async function resumeAll() {
@@ -834,7 +774,8 @@ export function install(rt) {
       if (first?.type === 'turn/end') {
         // The turn ended while DS Bot was not watching it: what it did is settled from
         // the Session's durable log.
-        await reconcileEnded(sessionId, record, first).catch(error => rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error))
+        const settled = await reconcileEnded(sessionId, record).catch(error => { rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error); return false })
+        if (settled) await clearReconciled(sessionId, record)
         continue
       }
       // Still running: noted again, as if it had started here.
@@ -862,6 +803,7 @@ export function install(rt) {
     }
     // What a group's members were asked for and will not pick up is settled now.
     await rt.settleRoomBatches?.()
+    await scanHeld()
   }
 
   ctx.effect(() => {
@@ -875,12 +817,15 @@ export function install(rt) {
     // With nothing to pick up, the group batches a restart left are settled at once.
     const timer = pending
       ? setTimeout(() => { reportHolds(); void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)) }, RESUME_DELAY_MS)
-      : setTimeout(() => { reportHolds(); void rt.load().then(() => rt.settleRoomBatches?.()).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)) }, 0)
+      : setTimeout(() => { reportHolds(); void rt.load().then(async () => { await rt.settleRoomBatches?.(); await scanHeld() }).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)) }, 0)
     timer?.unref?.()
+    const retry = setInterval(() => { void scanHeld().catch(error => rt.warn('ds-bot: reviewing held work failed: %s', error)) }, 30 * 60 * 1000)
+    retry?.unref?.()
     // What the turns stopped by this shutdown left stays as last noted.
     return () => {
       stopped = true
       clearTimeout(timer)
+      clearInterval(retry)
       return writing
     }
   }, 'ds-bot: resume interrupted turns')

@@ -2,7 +2,7 @@
 // host on the same data from writing it, and the indexes that map a Session to the Bot
 // or group chat it belongs to.
 import { copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, SECTION_COLORS, SECTION_NAME_MAX, TEXT_KEPT } from './constants.js'
 import { replaceFile } from './files.js'
@@ -390,7 +390,7 @@ export function install(rt) {
     return warnReadOnly()
   }
 
-  const save = ({ required = false } = {}) => {
+  const save = ({ required = false, durable = false } = {}) => {
     if (stopped) return required ? Promise.reject(new Error('The Bot team cannot be saved after this host stopped.')) : writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
@@ -428,9 +428,22 @@ export function install(rt) {
           }
         }
         ensureLock()
-        await writeFile(temp, snapshot, 'utf8')
+        if (durable) {
+          // Reconciliation may discard a separate recovery note only after the
+          // replacement itself is crash-durable, including its directory entry.
+          // Directory fsync is not provided by Node on Windows; fail closed.
+          if (process.platform === 'win32') throw new Error('Durable team save is unavailable on Windows')
+          const output = await open(temp, 'w')
+          try { await output.writeFile(snapshot, 'utf8'); await output.sync() } finally { await output.close() }
+        } else await writeFile(temp, snapshot, 'utf8')
         ensureLock()
         await replaceFile(temp, statePath, ensureLock)
+        if (durable) {
+          const directory = await open(home, 'r')
+          try { await directory.sync() } finally { await directory.close() }
+          requireHomeLock()
+          if (lockEpoch !== epoch) throw new Error('The Bot team lock changed during the durable save')
+        }
         seen = stamp()
         rt.capabilitiesStateSaved?.()
         for (const listener of savedListeners) {

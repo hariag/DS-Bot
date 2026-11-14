@@ -1452,3 +1452,59 @@ test('sender identity remains stable if the Bot is deleted during the write barr
     syncBuiltinESMExports()
   }
 })
+
+test('held work reconciles only from a unique durable reply in the original sender session', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const state = seed()
+  state.works = { x1: { from: 'a', to: 'b', open: [], results: [], at: 1 } }
+  const home = freshHome(t, state)
+  const record = { botId: 'b', since: 1, trigger: { role: 'request', exchangeId: 'x1', senderSessionId: 'a' } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {}, heldTurns: { old: { sessionId: 'b', record, reason: 'unknown' } } }))
+  const host = await start(home)
+  const event = { seq: 0, type: 'user/message', data: { source: { kind: 'bot', role: 'reply', replyTo: 'x1', senderSessionId: 'b' }, content: [{ type: 'text', text: 'The original reply' }] } }
+  const session = { id: 'a', seq: 1, eventAt: seq => seq === 0 ? event : undefined }
+  host.ctx.sessions.get = id => id === 'a' ? session : undefined
+  host.ctx.sessionPersistence = { flushLiveSession: async id => assert.equal(id, 'a'), open: async id => {
+    assert.equal(id, 'a')
+    return { read: async () => ({ events: [event] }), close: async () => {} }
+  } }
+  const getService = host.ctx.get
+  host.ctx.get = name => name === 'sessionPersistence' ? host.ctx.sessionPersistence : getService(name)
+  t.mock.timers.tick(0)
+  await settleState(t, home, () => stateOf(home).works.x1 === undefined)
+  await settle(() => Object.keys(notes(home).heldTurns ?? {}).length === 0)
+  assert.deepEqual([host.agentOf('a').calls.length, host.agentOf('b').calls.length], [0, 0])
+})
+
+test('a failed durable team save leaves the original held record for review', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const state = seed()
+  state.works = { x1: { from: 'a', to: 'b', open: [], results: [], at: 1 } }
+  const home = freshHome(t, state)
+  const record = { botId: 'b', since: 1, trigger: { role: 'request', exchangeId: 'x1', senderSessionId: 'a' } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: {}, heldTurns: { old: { sessionId: 'b', record, reason: 'unknown' } } }))
+  const host = await start(home)
+  const event = { seq: 0, type: 'user/message', data: { source: { kind: 'bot', role: 'reply', replyTo: 'x1', senderSessionId: 'b' }, content: [{ type: 'text', text: 'The original reply' }] } }
+  const session = { id: 'a', seq: 1, eventAt: () => event }
+  host.ctx.sessions.get = id => id === 'a' ? session : undefined
+  host.ctx.sessionPersistence = { flushLiveSession: async () => {}, open: async () => ({ read: async () => ({ events: [event] }), close: async () => {} }) }
+  const getService = host.ctx.get
+  host.ctx.get = name => name === 'sessionPersistence' ? host.ctx.sessionPersistence : getService(name)
+  const originalOpen = fsp.open
+  const warnings = []
+  host.ctx.logger.warn = (...args) => warnings.push(args.join(' '))
+  fsp.open = async (path, ...args) => {
+    if (String(path) === `${join(home, 'state.json')}.${process.pid}.tmp`) throw new Error('injected durable save failure')
+    return originalOpen(path, ...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    t.mock.timers.tick(0)
+    await settle(() => warnings.some(line => line.includes('injected durable save failure')))
+    assert.ok(notes(home).heldTurns?.old)
+    assert.deepEqual([host.agentOf('a').calls.length, host.agentOf('b').calls.length], [0, 0])
+  } finally {
+    fsp.open = originalOpen
+    syncBuiltinESMExports()
+  }
+})
