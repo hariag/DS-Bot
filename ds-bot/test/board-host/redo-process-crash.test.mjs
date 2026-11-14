@@ -32,3 +32,21 @@ for (const candidate of [false, true]) for (const stage of ['dispatch', 'claim']
     assert.doesNotMatch(state, /private synthetic (task|candidate)/)
   })
 }
+
+
+for (const candidate of [false, true]) {
+  test(`durable ${candidate ? 'candidate ' : ''}result survives actual process death without replay`, async t => {
+    const home = await mkdtemp(join(tmpdir(), 'redo-result-crash-'))
+    t.after(() => rm(home, { recursive:true, force:true }))
+    await writeFile(join(home, 'state.json'), JSON.stringify({ version:1 }), { mode:0o600 })
+    const prepared = await worker(home, 'prepare', candidate)
+    assert.equal(prepared.code, 0, prepared.stderr)
+    const died = await worker(home, 'completed', candidate)
+    assert.equal(died.signal, 'SIGKILL', died.stderr)
+    const result = await worker(home, 'recover-result', candidate)
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal(result.stdout.trim(), 'synthetic result')
+    const again = await worker(home, 'recover', candidate)
+    assert.equal(again.stdout.trim(), 'unknown')
+  })
+}

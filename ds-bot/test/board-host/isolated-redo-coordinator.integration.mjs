@@ -1,7 +1,7 @@
 // Synthetic real Agent/JSONL/journal integration. Authentication and original
 // source are fixtures; no real user operation, tool execution or network.
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { test } from 'node:test'
@@ -82,6 +82,16 @@ test('real journal, isolated Agent and writer fence one synthetic request and re
   assert.doesNotMatch(await readFile(join(home, 'isolated-redo-v1', `${operationId}.json`), 'utf8'), /synthetic task|synthetic result/)
   provider()
   await made.handle.dispose()
+  const restored = createIsolatedRedoJournal({ ...rt, state:JSON.parse(await readFile(statePath, 'utf8')) }, { ...dependencies, verifyResult:undefined })
+  assert.equal((await restored.readResult(operationId, principal)).text, 'synthetic result')
+  const artifact = join(home, 'isolated-redo-v1', `.result-${operationId}`)
+  assert.equal((await stat(artifact)).mode & 0o077, 0)
+  await chmod(artifact, 0o644)
+  await assert.rejects(restored.readResult(operationId, principal), /unverified|unavailable/)
+  await chmod(artifact, 0o600)
+  await writeFile(artifact, '{"version":1}')
+  await assert.rejects(restored.readResult(operationId, principal), /unverified|unavailable/)
+  assert.equal((await restored.beginDispatch(operationId, principal)).state, 'unknown')
 })
 
 test('revoked group membership blocks a real Agent before model invocation', async t => {
@@ -243,6 +253,16 @@ test('unverified time-matched candidate starts one isolated synthetic operation'
   assert.doesNotMatch(await readFile(join(home, 'candidate-isolated-redo-v1', `${operationId}.json`), 'utf8'), /synthetic task|synthetic result/)
   provider()
   await made.handle.dispose()
+  const restored = createIsolatedCandidateRedoJournal(rt, { ...dependencies, candidateReader, verifyResult:undefined })
+  assert.equal((await restored.readResult(operationId, principal)).text, 'synthetic result')
+  const artifact = join(home, 'candidate-isolated-redo-v1', `.result-${operationId}`)
+  assert.equal((await stat(artifact)).mode & 0o077, 0)
+  await chmod(artifact, 0o644)
+  await assert.rejects(restored.readResult(operationId, principal), /unverified|unavailable/)
+  await chmod(artifact, 0o600)
+  await writeFile(artifact, '{"version":1}')
+  await assert.rejects(restored.readResult(operationId, principal), /unverified|unavailable/)
+  assert.equal((await restored.beginDispatch(operationId, principal)).state, 'unknown')
 })
 
 test('candidate operation fails closed if group access is revoked before claim', async t => {

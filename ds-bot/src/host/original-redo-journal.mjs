@@ -387,6 +387,40 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       return copy(row)
     } finally { busy.delete(operationId) }
   }
+  // A result is private (0700 directory, 0600 file) and immutable once
+  // created. A crash during creation is unknown and never triggers a resend.
+  function readResultArtifact(row, generation) {
+    const path = join(root, `.result-${row.operationId}`), fd = openSync(path, constants.O_RDONLY | nofollow)
+    try {
+      const before = fstatSync(fd)
+      if (!before.isFile() || before.size > 131072 || (before.mode & 0o077)
+        || (typeof process.getuid === 'function' && before.uid !== process.getuid())) throw Error('redo result artifact unavailable')
+      const artifact = JSON.parse(readFileSync(fd, 'utf8'))
+      if (artifact?.version !== 1 || artifact.operationId !== row.operationId || artifact.digest !== row.result?.digest
+        || typeof artifact.text !== 'string' || !artifact.text.trim() || Buffer.byteLength(artifact.text, 'utf8') > 65_536
+        || createHash('sha256').update(artifact.text, 'utf8').digest('hex') !== artifact.digest
+        || Object.keys(artifact).some(key => !['version', 'operationId', 'digest', 'text'].includes(key))) throw Error('redo result artifact unverified')
+      fsyncSync(fd); dirSync(root); sameLease(generation)
+      const after = fstatSync(fd), current = lstatSync(path)
+      if (!current.isFile() || current.isSymbolicLink() || before.dev !== current.dev || before.ino !== current.ino
+        || before.size !== current.size || before.mtimeMs !== current.mtimeMs || before.ctimeMs !== current.ctimeMs
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw Error('redo result artifact changed')
+      return artifact.text
+    } finally { closeSync(fd) }
+  }
+  function reserveResultArtifact(row, text, generation) {
+    const path = join(root, `.result-${row.operationId}`)
+    let fd
+    try {
+      fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow, 0o600)
+      writeFileSync(fd, JSON.stringify({ version:1, operationId:row.operationId, digest:row.result.digest, text }))
+      fsyncSync(fd)
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+    } finally { if (fd !== undefined) closeSync(fd) }
+    dirSync(root); sameLease(generation)
+    if (readResultArtifact(row, generation) !== text) throw Error('redo result artifact conflict')
+  }
   async function recordResult(operationId, principal) {
     if (!uuid(operationId) || busy.has(operationId) || typeof verifyResult !== 'function') throw Error('redo result unavailable')
     busy.add(operationId)
@@ -395,28 +429,32 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
       const row = read(operationId); checkAccess(row, generation)
       confirmPhase(row, generation)
       if (!isDeepStrictEqual(row.principal, principal) || !['claiming', 'completed'].includes(row.state)) throw Error('redo result unavailable')
-      const proof = await verifyResult(copy(row))
+      const proof = await verifyResult(copy(row)), proofCurrent = proof?.isCurrent, resultText = proof?.text
       const evidence = { durability:proof?.durability, sessionId:proof?.sessionId, messageId:proof?.messageId, admissionId:proof?.admissionId,
         turn:copy(proof?.turn), throughSeq:proof?.throughSeq, resultDigest:proof?.resultDigest, resultRef:copy(proof?.resultRef) }
       const ref = evidence.resultRef
-      if (typeof proof?.isCurrent !== 'function' || proof.isCurrent() !== true || evidence.durability !== 'target-writer-v1'
+      if (typeof proofCurrent !== 'function' || proofCurrent.call(proof) !== true || evidence.durability !== 'target-writer-v1'
         || evidence.sessionId !== (isolated ? row.identity.sessionId : row.original.sessionId) || evidence.messageId !== row.identity.messageId || evidence.admissionId !== row.identity.admissionId
         || !isDeepStrictEqual(evidence.turn, row.turn) || !Number.isSafeInteger(evidence.throughSeq) || evidence.throughSeq <= row.turn.turnStartSeq
         || !digest(evidence.resultDigest) || ref?.kind !== 'session-events' || ref.sessionId !== (isolated ? row.identity.sessionId : row.original.sessionId)
         || !Number.isSafeInteger(ref.firstSeq) || !Number.isSafeInteger(ref.lastSeq) || ref.firstSeq <= row.turn.turnStartSeq
         || ref.lastSeq < ref.firstSeq || ref.lastSeq >= evidence.throughSeq || Object.keys(ref).some(key => !['kind', 'sessionId', 'firstSeq', 'lastSeq'].includes(key))) throw Error('redo result unverified')
+      if (isolated && (typeof resultText !== 'string' || !resultText.trim() || Buffer.byteLength(resultText, 'utf8') > 65_536
+        || createHash('sha256').update(resultText, 'utf8').digest('hex') !== evidence.resultDigest)) throw Error('redo result unverified')
       checkAccess(row, generation)
-      if (proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo result changed')
+      if (proofCurrent.call(proof) !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo result changed')
       const result = { digest:evidence.resultDigest, ref:copy(ref), throughSeq:evidence.throughSeq }
       if (row.state === 'completed' && (!isDeepStrictEqual(row.result?.ref, result.ref) || row.result?.digest !== result.digest
         || !Number.isSafeInteger(row.result?.throughSeq) || result.throughSeq < row.result.throughSeq)) throw Error('redo result conflict')
       const next = row.state === 'completed' ? row : { ...row, state:'completed', result }
       try {
+        if (isolated) reserveResultArtifact(next, resultText, generation)
         if (row.state === 'completed') confirm(row, generation)
         else { markPhase(next, 'completed', generation); write(next, generation, row) }
         checkAccess(next, generation)
         confirmPhase(next, generation)
-        if (proof.isCurrent() !== true) throw Error('redo result changed')
+        if (proofCurrent.call(proof) !== true) throw Error('redo result changed')
+        if (isolated && readResultArtifact(next, generation) !== resultText) throw Error('redo result artifact changed')
         confirm(next, generation); confirmPhase(next, generation); confirmWitness(next, generation)
       } catch { throw Error('redo result outcome unknown') }
       return copy(next)
@@ -425,12 +463,19 @@ function createRedoJournal(rt, { authorize, proveOriginal, validateBinding, veri
   // Read only a completed, writer-verified result. Missing live writer or a
   // changed scope is unknown, never a reason to dispatch the operation again.
   async function readResult(operationId, principal) {
-    if (!uuid(operationId) || busy.has(operationId) || typeof verifyResult !== 'function') throw Error('redo result unavailable')
+    if (!uuid(operationId) || busy.has(operationId) || (!isolated && typeof verifyResult !== 'function')) throw Error('redo result unavailable')
     busy.add(operationId)
     try {
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation); confirmPhase(row, generation)
       if (row.state !== 'completed' || !isDeepStrictEqual(row.principal, principal)) throw Error('redo result unavailable')
+      if (isolated) {
+        const text = readResultArtifact(row, generation)
+        checkAccess(row, generation); confirm(row, generation); confirmPhase(row, generation); confirmWitness(row, generation)
+        if (readResultArtifact(row, generation) !== text) throw Error('redo result changed')
+        confirm(row, generation); confirmPhase(row, generation); confirmWitness(row, generation)
+        return { operationId, state:'completed', text }
+      }
       const proof = await verifyResult(copy(row))
       const text = proof?.text, resultRef = copy(proof?.resultRef), turn = copy(proof?.turn), proofCurrent = proof?.isCurrent
       const expectedSession = isolated ? row.identity.sessionId : row.original.sessionId
