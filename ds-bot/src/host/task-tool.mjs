@@ -4,7 +4,7 @@ export function installTaskTool(rt, workflow, defineTool) {
   if (!Array.isArray(rt?.teamTools) || typeof workflow?.invoke !== 'function' || typeof defineTool !== 'function') throw new TypeError('Task tool dependencies required')
   const tool = defineTool({
     name: 'board_task',
-    description: 'Inspect or update your authorized task. Show the task first. Use one stable operation_id for one exact logical update; if the outcome is unknown, call operation with that same ID before doing anything again. Only the real owner may start or report, and only its independent reviewer may review. Evidence and delivery receipts are verified by the host; a report is not an acceptance. Respect paused goals, existing work, dependencies, and the 30-step turn budget.',
+    description: 'Inspect or update your authorized task. Show the task first. Use one stable operation_id for one exact logical update; if the outcome is unknown, call operation with that same ID before doing anything again. Only the real owner may start or report, and only its independent reviewer may review. For user-created tasks, evidence must name an existing file in the authorized workspace scope as sha256:<64 lowercase hex digits>:<workspace-relative path>, with kind personal for the report; the host rereads both delivery and review evidence. The reviewer must not modify files. A report or review submission is not completion until its turn ends durably. Respect paused goals, existing work, dependencies, and the 30-step turn budget.',
     parameters: {
       action: { type:'string', required:true, enum:['show','operation','start','report','review','block','unblock'], description:'Task action' },
       task_id: { type:'string', required:true, description:'Stable task ID' },

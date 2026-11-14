@@ -147,14 +147,20 @@ function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
   options.map(task => h('option', { key: task.id, value: task.id }, `${textValue(task.title) || t('Shared task')} · ${task.id}`))))
 }
 
-function CreateTask({ disabled, actors, tasks, onCreate }) {
+function CreateTask({ disabled, actors, tasks, automaticRequired, automaticAvailable, workspaces, executionDefaults, onCreate }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [owner, setOwner] = useState('')
   const [reviewer, setReviewer] = useState('')
   const [acceptance, setAcceptance] = useState('')
   const [dependencies, setDependencies] = useState([])
+  const [workspace, setWorkspace] = useState('')
+  const [mode, setMode] = useState('write')
+  const [paths, setPaths] = useState('.')
+  const automatic = automaticRequired && owner && owner !== 'user'
+  const selectedWorkspace = workspace || executionDefaults?.[owner]?.workspace || ''
   const valid = title.trim() && owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim()
+    && (!automatic || (automaticAvailable && selectedWorkspace && paths.trim()))
   if (!open) return h('button', { type: 'button', disabled, onClick: () => setOpen(true) }, t('Propose task'))
   const field = (label, value, update) => h('label', null, t(label), h('input', { 'aria-label': t(label), value, disabled, onChange: event => update(event.target.value) }))
   const actorField = (label, value, update) => Array.isArray(actors)
@@ -165,16 +171,25 @@ function CreateTask({ disabled, actors, tasks, onCreate }) {
   return h('form', { className: 'bt-board-create', onSubmit: event => {
     event.preventDefault()
     if (!valid || disabled) return
+    const execution = automatic ? {mode,workspace:selectedWorkspace,paths:paths.split('\n').map(path=>path.trim()).filter(Boolean)} : undefined
     void onCreate({ title: title.trim(), owner: owner.trim(), reviewer: reviewer.trim(), acceptance: acceptance.trim(),
-      dependencies }).then(result => {
+      dependencies, ...(execution ? {execution} : {}) }).then(result => {
       if (result !== 'committed') return
       setTitle(''); setOwner(''); setReviewer(''); setAcceptance(''); setDependencies([]); setOpen(false)
     })
   } },
-  h('p', null, t('A proposed task is not yet assigned or registered.')),
+  h('p', null, t(automatic ? 'Bot tasks start when dependencies are ready.' : 'A proposed task is not yet assigned or registered.')),
   field('Title', title, setTitle), actorField('Owner ID', owner, setOwner), actorField('Independent reviewer ID', reviewer, setReviewer),
   field('Acceptance criteria', acceptance, setAcceptance), h(DependenciesField, { tasks, value: dependencies, disabled, onChange: setDependencies }),
-  h('div', null, h('button', { type: 'submit', disabled: disabled || !valid }, t('Submit proposal')), ' ',
+  automatic ? h('div', null,
+    automaticAvailable ? null : h('p', {role:'status'}, t('Automatic task dispatch is unavailable.')),
+    h('label', null, t('Working directory'), h('select', {'aria-label':t('Working directory'),value:selectedWorkspace,disabled,onChange:event=>setWorkspace(event.target.value)},
+      h('option',{value:''},t('Choose a working directory')),
+      (workspaces ?? []).map(item=>h('option',{key:item.id,value:item.id},item.name)))),
+    h('label', null, t('Access'), h('select', {'aria-label':t('Access'),value:mode,disabled,onChange:event=>setMode(event.target.value)},
+      h('option',{value:'write'},t('Read and write')),h('option',{value:'read'},t('Read only')))),
+    h('label', null, t('Paths, one per line'), h('textarea', {'aria-label':t('Paths, one per line'),value:paths,disabled,onChange:event=>setPaths(event.target.value)}))) : null,
+  h('div', null, h('button', { type: 'submit', disabled: disabled || !valid }, t(automatic ? 'Create task' : 'Submit proposal')), ' ',
     h('button', { type: 'button', disabled, onClick: () => setOpen(false) }, t('Cancel'))))
 }
 
@@ -528,7 +543,9 @@ export function TaskBoard({ scope, title, close, request = call }) {
         h('button', { type: 'button', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,
       data ? h(HeldTurns, { recovery: data.recovery }) : null,
       data ? h(LegacyWorkReview, { scope, request }) : null,
-      data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? h(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks, onCreate: value => {
+      data?.capabilities?.create === true && Array.isArray(data?.capabilities?.actors) ? h(CreateTask, { disabled: !canAct || capacityReached, actors: data.capabilities.actors, tasks: data.tasks,
+        automaticRequired:data.capabilities.explicitRequired === true, automaticAvailable:data.capabilities.explicitCreate === true,
+        workspaces:data.capabilities.executionWorkspaces, executionDefaults:data.capabilities.executionDefaults, onCreate: value => {
         if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
         return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
       } }) : null,

@@ -62,9 +62,10 @@ export function createTaskDriver({ store, admission, authorized = () => false, o
         // Required contract: admit holds the target input until the host's
         // current authority/grants are rechecked at its durable release gate.
         const receipt = await admission.admit({ action, task:current, intent:persistedIntent, revalidate })
-        store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'accepted', receipt })
+        // Acceptance is recorded only when the guarded Agent actually consumes the input.
+        if (receipt?.state !== 'queued') store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'accepted', receipt })
       } catch (error) {
-        try { store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'uncertain', receipt:'admission outcome unknown' }) }
+        try { const state = store.admission(action.id)?.state; if (state === 'claimed' || state === 'accepted') store.markAction({ actionId:action.id, actor:'scheduler', expectedState:state, state:'uncertain', receipt:'admission outcome unknown' }) }
         catch (recordError) { onError(recordError, action) }
         onError(error, action)
       }

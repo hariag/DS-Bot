@@ -8,7 +8,7 @@ const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' 
 
 // `principal` comes from the authenticated route, never from a request body.
 // The current browser principal represents the instance owner, not a Bot.
-export function createBoardApi({ store, roster, assertWritable, images, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [] }) {
+export function createBoardApi({ store, roster, assertWritable, images, explicitRequired = () => false, explicitAvailable = () => false, defaultExecution = () => undefined, workspaces = () => [], verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [] }) {
   const current = () => {
     const value = roster()
     if (!value || !value.rooms || !value.bots) throw fail('Team is unavailable')
@@ -42,7 +42,14 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
     }))
     const taskLimit = store.limits?.().tasks
     const taskLimitReached = Number.isSafeInteger(taskLimit) && tasks.length >= taskLimit
-    board.capabilities = { commands, create: writable && !taskLimitReached, upload: writable && !!images, actors, shareTargets:availableTargets,
+    const explicitCreate = writable && !taskLimitReached && explicitRequired() === true && explicitAvailable() === true
+    const executionWorkspaces = explicitCreate ? workspaces().filter(item => nonempty(item?.id) && string(item?.name, 256)).map(item => ({id:item.id,name:item.name})) : []
+    const executionDefaults = Object.create(null)
+    if (explicitCreate) for (const actor of actors) if (actor.id !== 'user') {
+      const value=defaultExecution(scope,actor.id)
+      if (value && executionWorkspaces.some(item=>item.id===value.workspace)) executionDefaults[actor.id]=value
+    }
+    board.capabilities = { commands, create: writable && !taskLimitReached, explicitRequired:explicitRequired()===true, explicitCreate, executionWorkspaces, executionDefaults, upload: writable && !!images, actors, shareTargets:availableTargets,
       ...(Number.isSafeInteger(taskLimit) ? { taskCount:tasks.length, taskLimit, taskLimitReached } : {}) }
     return addLegacy()
   }
@@ -109,11 +116,21 @@ export function createBoardApi({ store, roster, assertWritable, images, verifySh
       }
       const candidate = { scope:`${scope.kind}:${scope.id}`, owner:input.owner, reviewer:input.reviewer }
       const dependencyGrants = bindingsFor(scope, principal, candidate, input.dependencies)
-      return store.create({ operationId: input.operationId, actor: 'user', task: {
+      const task = {
         id: input.taskId, title: input.title.trim(), owner: input.owner,
         reviewer: input.reviewer, scope: `${scope.kind}:${scope.id}`,
         acceptance: input.acceptance.trim(), dependencies: input.dependencies, dependencyGrants,
-      } })
+      }
+      // The UI can prefill a default, but the create request must include the
+      // scope actually shown to its owner; an older proposal-only client cannot
+      // silently grant a write scope by omitting the field.
+      const execution = input.execution
+      if (execution !== undefined || (explicitRequired() === true && input.owner !== 'user')) {
+        if (!board.capabilities.explicitCreate || input.owner === 'user'
+          || !board.capabilities.executionWorkspaces.some(item => item.id === execution?.workspace)) throw fail('Explicit Bot task is unavailable')
+        return store.createExplicit({ operationId:input.operationId, actor:'user', task, execution })
+      }
+      return store.create({ operationId:input.operationId, actor:'user', task })
     },
     command(scope, principal, input) {
       if (principal?.kind !== 'user') throw fail('Only the instance user can change a task here')

@@ -11,6 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isDeepStrictEqual } from 'node:util'
 import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
+import { createTaskActionContext } from './task-action-context.mjs'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -42,6 +43,7 @@ export function install(rt) {
   const active = new Set(), readers = new Set(), workers = new Set(), imageWaiters = [], uploadWaiters = []
   let imageReads = 0, uploads = 0
   let closing = false, closePromise, instance
+  ctx.on?.('session/event', (session, event) => instance?.actionContext.observe(session, event))
   const writable = () => {
     if (closing || rt.stopping) throw new Error('Board service is closing')
     if (rt.readOnly() !== undefined) throw new Error('Board is read-only')
@@ -55,6 +57,7 @@ export function install(rt) {
   const botWorkflow = installHostWorkflow(rt, {
     defineTool, run, getStore: () => service().store,
     wake: () => instance?.driver.wake(),
+    verifyActionContext: (task, caller, action, exec) => instance?.actionContext.verify(task, caller, action, exec) === true,
     // Binding, receipt and evidence have no production verifier yet. Fail closed.
     verifyShare: (task, grant, target) => {
       const current = instance?.store.get(task.id)
@@ -112,7 +115,8 @@ export function install(rt) {
       // No real admission capability or proof verifiers are installed here.
       // Wakeups scan nothing until the separately reviewed gate is supplied.
       const driver = createTaskDriver({ store, onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
-      instance = { store, api, root, imageDir, proofs, shareAllowed, driver }
+      const actionContext = createTaskActionContext(store)
+      instance = { store, api, root, imageDir, proofs, shareAllowed, driver, actionContext }
       queueMicrotask(notifyDriver)
       return instance
     } catch (error) { store.close(); throw error }
