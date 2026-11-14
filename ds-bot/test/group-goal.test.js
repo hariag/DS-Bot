@@ -645,6 +645,23 @@ test('user can allow future inspections without claiming the previous result was
   assert.equal(g.reviewResolutions.filter(item=>item.id===original.id).length,1)
 })
 
+test('an unconfirmed inspection decision does not restart periodic work or claim success', async (t) => {
+  const host = await start(t), g = await parkForReview(host)
+  host.ctx.sessions.flush = async () => { throw new Error('uncertain flush') }
+  await host.rt.goalReviewPoll(g.reviewAt)
+  host.ctx.sessions.flush = async () => true
+  const body = {roomId:'r1',goalId:g.id,action:'review-resolve',reviewId:g.reviewAttempt.id,decision:'allow-future',confirmed:true}
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const save = host.rt.save
+  host.rt.save = async () => { throw new Error('decision save failed') }
+  try {
+    assert.equal((await host.call('goal-control',body)).ok,false)
+    assert.equal((await host.call('goal-control',body)).ok,false)
+    await host.rt.goalReviewPoll(Date.now()+3_600_000)
+    assert.equal(host.agentOf('r1').calls.length,1,'unconfirmed decision must not admit another inspection')
+  } finally { host.rt.save = save }
+})
+
 test('review recovery cannot bypass pause or user stop but works after explicit resume', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)

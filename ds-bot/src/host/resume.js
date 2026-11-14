@@ -274,13 +274,7 @@ export function install(rt) {
     if (!savedHolds || typeof savedHolds !== 'object' || Array.isArray(savedHolds)
       || JSON.stringify(savedHolds) !== JSON.stringify(heldTurns)) return unavailableHeld()
     if (expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
-    const view = heldTurnsView(savedHolds, scope, rt.state?.bots)
-    view.items = view.items.map(item => {
-      let redo
-      try { redo = rt.previewHeldRedo?.(item.recoveryId, heldTurns[item.recoveryId]) } catch {}
-      return { ...item, redo: { available:redo?.available === true, state:redo?.state ?? 'source-unavailable' } }
-    })
-    return { ...view, sampledAt:Date.now() }
+    return { ...heldTurnsView(savedHolds, scope, rt.state?.bots), sampledAt:Date.now() }
   }
   let recoverySample
   rt.recoveryHeldView = async scope => {
@@ -409,13 +403,7 @@ export function install(rt) {
     if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice) throw new Error('Decision outcome is unknown; refresh the board')
     return { decision:choice, revision:saved.decisionRevision }
   }
-  rt.requestHeldRedo = async (scope, recoveryId, checkOnly = false) => {
-    if (!/^[a-f0-9]{64}$/.test(recoveryId) || typeof rt.redoHeldTurn !== 'function') throw new Error('Redo is unavailable')
-    const view = await rt.recoveryHeldView(scope)
-    const item = view.available && view.items.find(row => row.recoveryId === recoveryId)
-    if (!item || item.decision === 'ignored') throw new Error('Interrupted turn is unavailable')
-    return rt.redoHeldTurn(recoveryId,heldTurns[recoveryId],{ checkOnly })
-  }
+
   const roomNotesForTurn = (sessionId, record) => {
     if (!record || typeof record !== 'object') return []
     const trigger = record?.trigger
