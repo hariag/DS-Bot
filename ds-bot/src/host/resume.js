@@ -10,7 +10,7 @@
 // that waits for it, and an outcome that cannot be read is said to be unknown. The
 // request itself is never sent again there.
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, readFileSync } from 'node:fs'
+import { constants, lstatSync, readFileSync } from 'node:fs'
 import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
@@ -286,6 +286,90 @@ export function install(rt) {
     void work.then(() => { if (recoverySample === work) recoverySample = undefined },
       () => { if (recoverySample === work) recoverySample = undefined })
     return boundedRecoveryView(work)
+  }
+  // Internal evidence for an explicit user redo. This is not a public view:
+  // it contains the original trigger. Callers must first authenticate the user
+  // and authorize the board scope, and recheck isCurrent across every await.
+  // A scoped metadata listing alone is not authorization for a group input
+  // to be executed from a personal context.
+  const readRecoveryHeldOriginal = async (scope, recoveryId) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId)) return undefined
+    const pending = writing
+    await pending
+    if (writing !== pending || ownsRecoveryView() !== true) return undefined
+    const view = await rt.recoveryHeldView(scope)
+    if (writing !== pending || !view.available || !view.items.some(item => item.recoveryId === recoveryId)) return undefined
+    const hold = heldTurns[recoveryId], record = hold?.record, sessionId = hold?.sessionId
+    if (!record || typeof sessionId !== 'string' || typeof record.botId !== 'string'
+      || createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex') !== recoveryId) return undefined
+    const bot = rt.botOf(record.botId), roomId = record.roomId ?? record.trigger?.roomId
+    if (!bot || (record.roomId !== undefined && record.trigger?.roomId !== undefined && record.roomId !== record.trigger.roomId)) return undefined
+    const validScope = () => {
+      if (rt.botOf(record.botId) !== bot) return false
+      // A stale or corrupt roster can assign one Session to several places;
+      // the convenience indexes silently choose one and cannot prove origin.
+      let origins = 0
+      for (const candidate of Object.values(rt.state.bots ?? {})) {
+        if (rt.chatOf(candidate.id) === sessionId) origins += 1
+        origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
+      }
+      for (const room of Object.values(rt.state.rooms ?? {})) {
+        if (rt.sessionOfRoom(room) === sessionId) origins += 1
+        origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
+        origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
+        for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
+      }
+      if (origins !== 1) return false
+      const owner = rt.groupOwners.get(sessionId) ?? rt.pastOwners.get(sessionId)
+      if (scope.kind === 'room') {
+        const room = rt.roomOf(scope.id)
+        return roomId === scope.id && !!room && room.members?.includes(record.botId) === true
+          && owner?.botId === record.botId && owner?.roomId === scope.id
+      }
+      return scope.kind === 'personal' && (scope.id === 'user' || scope.id === record.botId)
+        && roomId === undefined && (rt.chatOwners.get(sessionId) === record.botId
+          || (owner?.botId === record.botId && owner.roomId === undefined && rt.pastOwners.has(sessionId)))
+    }
+    if (!validScope() || ownsRecoveryView() !== true) return undefined
+    const generation = rt.homeLockVersion(), saved = expected, snapshot = JSON.stringify(hold)
+    if (generation === undefined) return undefined
+    const validMemory = () => ownsRecoveryView() === true && rt.homeLockVersion() === generation
+      && writing === pending && expected === saved && JSON.stringify(heldTurns[recoveryId]) === snapshot && validScope()
+    let handle
+    try {
+      handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      const before = await handle.stat({ bigint:true })
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || await handle.readFile('utf8') !== saved || !validMemory()) return undefined
+      await handle.sync()
+      const directory = await open(dirname(file), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      try { await directory.sync() } finally { await directory.close() }
+      const after = await handle.stat({ bigint:true }), path = await lstat(file, { bigint:true })
+      if (!path.isFile() || path.isSymbolicLink() || !validMemory()) return undefined
+      for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+        if (before[key] !== after[key] || after[key] !== path[key]) return undefined
+      }
+      const isCurrent = () => {
+        if (!validMemory()) return false
+        try {
+          const current = lstatSync(file, { bigint:true })
+          return current.isFile() && !current.isSymbolicLink()
+            && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(key => current[key] === before[key])
+        } catch { return false }
+      }
+      return isCurrent() ? { sessionId, record:JSON.parse(JSON.stringify(record)), isCurrent } : undefined
+    } catch { return undefined } finally { await handle?.close().catch(() => {}) }
+  }
+  let recoveryOriginalPending
+  rt.recoveryHeldOriginal = async (scope, recoveryId) => {
+    if (recoveryOriginalPending) return undefined
+    const work = readRecoveryHeldOriginal(scope, recoveryId)
+    recoveryOriginalPending = work
+    void work.then(() => { if (recoveryOriginalPending === work) recoveryOriginalPending = undefined },
+      () => { if (recoveryOriginalPending === work) recoveryOriginalPending = undefined })
+    let timer
+    try {
+      return await Promise.race([work.catch(() => undefined), new Promise(resolve => { timer = setTimeout(resolve, RECOVERY_VIEW_TIMEOUT_MS) })])
+    } finally { clearTimeout(timer) }
   }
   // Read-only origins for an owner-initiated manual review. A missing result is
   // not evidence that the work did not execute; it never triggers a delivery.

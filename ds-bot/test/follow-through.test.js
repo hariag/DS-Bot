@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
@@ -116,6 +117,21 @@ test('ignore and undo retain the interrupted record, reject another scope and su
   assert.deepEqual(await restarted.rt.setHeldDecision(scope,id,1,'open'),{decision:'open',revision:2})
   assert.deepEqual(notes(home).heldTurns[id].record,record)
   assert.deepEqual(notes(home).heldTurns[id].decisions.map(item=>item.choice),['ignored','open'])
+})
+
+test('redo source evidence is bound to its room and current membership', async t => {
+  const home = freshHome(t), record = { botId:'b', roomId:'r1', turn:7, trigger:{ role:'room', roomId:'r1', exchangeId:'ex' } }
+  const id = createHash('sha256').update(JSON.stringify(['gb', record])).digest('hex')
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns:{}, queued:{}, heldTurns:{ [id]:{ sessionId:'gb', record } } }))
+  const host = await start(home)
+  const proof = await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id)
+  assert.deepEqual(proof?.record, record)
+  assert.equal(proof.isCurrent(), true)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'personal', id:'user' }, id), undefined)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'other' }, id), undefined)
+  host.rt.state.rooms.r1.members = ['a']
+  assert.equal(proof.isCurrent(), false)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
 })
 // The team file is written in the background, and Windows may hold it busy for a
 // moment: the retry waits on the clock, which the tests mock.
