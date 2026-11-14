@@ -17,7 +17,7 @@ function fixture(events = original(), timeoutMs = 15_000) {
   let current = true, flush = async () => {}, disk = structuredClone(events)
   const session = { id:'source', seq:events.length, eventAt:index => events[index] }
   const writer = { flushLiveSession:async () => flush(), open:async () => ({ read:async () => ({ events:disk }), close:async () => {} }) }
-  const record = { turn:5, trigger:{ role:'request', exchangeId:'ex', senderSessionId:'sender' } }
+  const record = { botId:'bot', turn:5, trigger:{ role:'request', exchangeId:'ex', senderSessionId:'sender' } }
   const rt = { recoveryHeldOriginal:async () => ({ sessionId:'source', record, isCurrent:() => current }),
     ctx:{ sessions:{ get:() => session }, get:() => writer } }
   return { proof:createUserRedoOriginalProof(rt, { timeoutMs }), writer, session, events, record, setCurrent:value => { current = value },
@@ -90,12 +90,26 @@ test('old holds require a unique persisted start time containing the same input'
   delete duplicate[5].time
   const d = fixture(duplicate); delete d.record.turn; d.record.since = 123456
   assert.equal(await d.proof(scope, recoveryId), undefined)
+  const e = fixture(events); e.record.since = 123457
+  assert.equal(await e.proof(scope, recoveryId), undefined)
 })
 
 test('inspection and kickoff controls cannot be downgraded into ordinary work', async () => {
   for (const flag of ['reviewInspect', 'groupKickoff', 'reviewId']) {
     const f = fixture(); f.record.trigger[flag] = flag === 'reviewId' ? 'review' : true
     assert.equal(await f.proof(scope, recoveryId), undefined)
+  }
+})
+
+test('only known unqueued runtime snapshots may accompany the business input', async () => {
+  for (const kind of ['runtime-context', 'ds-bot-time-context']) {
+    const events = original()
+    events.splice(4, 0, entry(4, 'user/message', { id:'context', role:'user', content:[{ type:'text', text:'context' }],
+      source:{ kind, form:'snapshot', sections:[{ name:kind, text:'context' }] } }))
+    events.forEach((event, index) => { event.seq = index })
+    assert.equal((await fixture(events).proof(scope, recoveryId))?.turn, 5)
+    events[4].data.source.kind = 'unknown-context'
+    assert.equal(await fixture(events).proof(scope, recoveryId), undefined)
   }
 })
 

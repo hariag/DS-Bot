@@ -313,6 +313,7 @@ export function install(rt) {
         if (rt.chatOf(candidate.id) === sessionId) origins += 1
         origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
       }
+      for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
       for (const room of Object.values(rt.state.rooms ?? {})) {
         if (rt.sessionOfRoom(room) === sessionId) origins += 1
         origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
@@ -687,7 +688,9 @@ export function install(rt) {
         const botId = owner?.botId ?? rt.chatOwners.get(id)
         // turns.js runs first and has already claimed or restored the trigger.
         const info = rt.live.get(id)?.info
-        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(), ...(info !== undefined ? { trigger: triggerOf(info) } : {}) }))
+        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(),
+          ...(Number.isSafeInteger(event.data?.turn) && event.data.turn >= 0 ? { turn:event.data.turn } : {}),
+          ...(info !== undefined ? { trigger: triggerOf(info) } : {}) }))
         break
       }
       case 'user/message': {
