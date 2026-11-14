@@ -674,16 +674,25 @@ function UploadImages({ task, disabled, onUpload }) {
     }) } }, t('Upload images')) : null)
 }
 
-function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request }) {
-  const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText).filter(Boolean) : []
-  const evidence = Array.isArray(task.evidence) ? task.evidence.map(asText).filter(Boolean).join(' · ') : asText(task.evidence)
-  const blocker = asText(task.blocked)
-  const canMove = commands.some(command => command.type === 'personal-progress') && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)
-  const owner = scope.kind === 'personal' && scope.id === 'user' && task.owner === 'user' ? '' : actorLabel(task.owner, actors)
-  return h('article', { className: 'bt-board-card', draggable: canMove && !uncertain,
+function ColumnRail({label,personal,children}) {
+  const rail=useRef(null)
+  const move=direction=>{const node=rail.current;if(node)node.scrollBy({left:direction*Math.max(240,node.clientWidth*.8),behavior:'smooth'})}
+  return h('div',{className:'bt-board-rail'},
+    h('div',{className:'bt-board-rail-controls'},
+      h('button',{type:'button','aria-label':t('Previous columns'),onClick:()=>move(-1)},'←'),
+      h('button',{type:'button','aria-label':t('Next columns'),onClick:()=>move(1)},'→')),
+    h('div',{ref:rail,className:`bt-board-columns${personal?' bt-board-columns-personal':''}`,role:'region','aria-label':label,tabIndex:0,
+      onKeyDown:event=>{if(event.target===event.currentTarget && ['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();move(event.key==='ArrowLeft'?-1:1)}}},children))
+}
+
+function TaskCard({scope,task,commands,actors,uncertain,onOpen}) {
+  const dependencies=Array.isArray(task.dependencies)?task.dependencies.map(asText).filter(Boolean):[]
+  const blocker=asText(task.blocked)
+  const canMove=commands.some(command=>command.type==='personal-progress')&&PERSONAL_COLUMNS.some(([id])=>id===task.personalProgress)
+  const owner=scope.kind==='personal'&&scope.id==='user'&&task.owner==='user'?'':actorLabel(task.owner,actors)
+  return h('article', { className: 'bt-board-card', 'data-task-id':task.id, draggable: canMove && !uncertain,
     onDragStart: event => { if (canMove && !uncertain) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-ds-bot-personal-task', task.id) } } },
-    h('details', { className: 'bt-board-card-details' },
-    h('summary', { className: 'bt-board-card-summary' },
+    h('button',{type:'button',className:'bt-board-card-summary',onClick:event=>onOpen(task.id,event.currentTarget)},
       h('strong', { className: 'bt-board-title' }, textValue(task.title) || task.id),
       h('span', { className: 'bt-board-card-meta' }, owner ? h('span', { className:'bt-board-owner' }, owner) : null,
         task.shared ? h('span', { className:'bt-board-chip' }, t('Shared task · read only')) : null,
@@ -693,7 +702,41 @@ function TaskCard({ scope, task, tasks, commands, actors, targets, uploadEnabled
         Array.isArray(task.labels) ? task.labels.slice(0,3).map(label=>h('span',{key:label,className:'bt-board-chip'},label)) : null,
         Array.isArray(task.checklist)&&task.checklist.length ? h('span',{className:'bt-board-chip'},`${task.checklist.filter(item=>item.checked).length}/${task.checklist.length} ${t('Checklist')}`) : null,
         task.images?.length ? h('span', { className:'bt-board-chip' }, t('{count} images', { count:task.images.length })) : null,
-        h('span', { className: 'bt-board-open-hint' }, t('View details')))),
+        h('span', { className: 'bt-board-open-hint' }, t('View details')))))
+}
+
+function TaskCardDialog({scope,task,tasks,commands,actors,targets,uploadEnabled,uncertain,onCommand,onUpload,request,onClose,focusReturn,boardRef,pending,busy,error,onCheck,onCancel,cancelBusy}) {
+  const modal=useRef(null)
+  const dependencies=Array.isArray(task.dependencies)?task.dependencies.map(asText).filter(Boolean):[]
+  const evidence=Array.isArray(task.evidence)?task.evidence.map(asText).filter(Boolean).join(' · '):asText(task.evidence)
+  const blocker=asText(task.blocked)
+  const canMove=commands.some(command=>command.type==='personal-progress')&&PERSONAL_COLUMNS.some(([id])=>id===task.personalProgress)
+  useEffect(()=>{
+    const popup=modal.current, backdrop=popup?.parentElement, parent=backdrop?.parentElement
+    const previous=new Map()
+    const hideBackground=()=>{for(const item of parent?.children??[]){
+      if(item===backdrop)continue
+      if(!previous.has(item))previous.set(item,{inert:item.inert,hidden:item.getAttribute('aria-hidden')})
+      item.inert=true;item.setAttribute('aria-hidden','true')
+    }}
+    hideBackground()
+    const observer=new MutationObserver(hideBackground)
+    if(parent)observer.observe(parent,{childList:true})
+    popup?.focus()
+    return ()=>{
+      observer.disconnect()
+      for(const [item,{inert,hidden}] of previous){item.inert=inert;if(hidden===null)item.removeAttribute('aria-hidden');else item.setAttribute('aria-hidden',hidden)}
+      const replacement=[...(boardRef.current?.querySelectorAll('[data-task-id]')??[])].find(item=>item.dataset.taskId===task.id)?.querySelector('.bt-board-card-summary')
+      if(focusReturn.current?.isConnected)focusReturn.current.focus();else if(replacement)replacement.focus();else boardRef.current?.focus()
+    }
+  },[])
+  return h('div',{className:'bt-card-modal-backdrop',onMouseDown:event=>{if(event.target===event.currentTarget)onClose()}},
+    h('section',{ref:modal,className:'bt-card-modal',role:'dialog','aria-modal':'true','aria-label':textValue(task.title)||task.id,tabIndex:-1,onWheel:event=>event.stopPropagation()},
+      h('header',{className:'bt-card-modal-header'},h('div',null,h('p',null,t('Task details')),h('h2',null,textValue(task.title)||task.id)),
+        h('button',{type:'button','aria-label':t('Close card'),'data-close-card':'true',onClick:onClose},'×')),
+      pending?h('div',{className:'bt-card-modal-status',role:'status'},t(busy?'Saving…':'An action needs confirmation.'),' ',
+        h('button',{type:'button',onClick:()=>onCheck(pending)},t('Check action')),' ',
+        h('button',{type:'button',disabled:cancelBusy,onClick:()=>onCancel(pending)},t('Safely cancel pending request'))):error?h('div',{className:'bt-card-modal-status',role:'alert'},error):null,
     h('div', { className:'bt-board-card-body' },
     canMove ? h('label', { className:'bt-board-move' }, h('span', null, t('Personal progress')),
       h('select', { 'aria-label':t('Move personal task'), disabled:uncertain, value:task.personalProgress,
@@ -735,6 +778,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const [snapshot, setData] = useState(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [selectedCard,setSelectedCard]=useState(null)
+  const cardOpener=useRef(null)
   const [pending, setPending] = useState(() => pendingStore(scope)?.current ?? '')
   const [busy, setBusy] = useState(false)
   const [cancelBusy, setCancelBusy] = useState(false)
@@ -823,10 +868,12 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     if (operation) void check(operation, epoch)
     dialog.current?.focus()
     const keyDown = event => {
-      if (event.key === 'Escape') { event.stopPropagation(); dismiss(); return }
+      const modal=dialog.current?.querySelector('.bt-card-modal')
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if(modal)modal.querySelector('[data-close-card]')?.click();else dismiss(); return }
       if (event.key !== 'Tab' || !dialog.current) return
-      const focusable = [...dialog.current.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]')]
-      if (!focusable.length) { event.preventDefault(); dialog.current.focus(); return }
+      const root=modal ?? dialog.current
+      const focusable = [...root.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter(item=>!item.closest('[inert]') && item.getClientRects().length>0)
+      if (!focusable.length) { event.preventDefault(); root.focus(); return }
       const index = focusable.indexOf(document.activeElement)
       if (event.shiftKey && index <= 0) { event.preventDefault(); focusable[focusable.length - 1].focus() }
       else if (!event.shiftKey && (index < 0 || index === focusable.length - 1)) { event.preventDefault(); focusable[0].focus() }
@@ -911,9 +958,11 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const personalIds = new Set(personalTasks.map(task => task.id))
   const columns = boardColumns(filtered.filter(task => !personalIds.has(task.id)))
   const listed = [...COLUMNS.filter(([status])=>!['legacy-pending','legacy-done'].includes(status)||columns.get(status).length), ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
-  const card = task => h(TaskCard, { key: task.id, scope, task, tasks: data.tasks, request, onUpload: upload,
-    commands: !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : [],
-    actors: data?.capabilities?.actors, targets: data?.capabilities?.shareTargets?.[task.id], uploadEnabled: data?.capabilities?.upload === true, uncertain: !canAct, onCommand: run })
+  const commandsFor=task=>!task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command=>command && typeof command.type==='string') : []
+  const card=task=>h(TaskCard,{key:task.id,scope,task,commands:commandsFor(task),actors:data?.capabilities?.actors,uncertain:!canAct,
+    onOpen:(id,opener)=>{cardOpener.current=opener;setSelectedCard({key,id})}})
+  const selected=selectedCard?.key===key ? data?.tasks?.find(task=>task.id===selectedCard.id) : undefined
+  useEffect(()=>{if(selectedCard && (selectedCard.key!==key || (data && !selected)))setSelectedCard(null)},[key,data,selectedCard,selected])
   if (!visible) return null
   return createPortal(h('div', { className: 'bt-board-backdrop' },
     h('section', { ref: dialog, tabIndex: -1, className: 'bt-board-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': title || t('Task board') },
@@ -943,7 +992,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         personal ? h('section', { className:'bt-board-section', 'aria-label':t('Personal progress') },
           h('div', { className:'bt-board-section-heading' }, h('h3', null, t('Personal progress')),
             h('p', null, t('Drag a card or use its progress menu.'), ' ', t('Your own progress markers do not complete shared work or unblock dependencies.'))),
-          h('div', { className:'bt-board-columns bt-board-columns-personal' }, PERSONAL_COLUMNS.map(([progress,label]) => {
+          h(ColumnRail, {label:t('Personal progress'),personal:true}, PERSONAL_COLUMNS.map(([progress,label]) => {
             const tasks = personalTasks.filter(task => task.personalProgress === progress)
             const accepts = event => canAct && [...event.dataTransfer.types].includes('application/x-ds-bot-personal-task')
             return h('section', { className:'bt-board-column', key:progress, 'aria-label':t(label), 'data-stage':progress,
@@ -955,18 +1004,21 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
           }))) : null,
         !personal || filtered.some(task => !personalIds.has(task.id)) ? h('section', { className:'bt-board-section', 'aria-label':t('Workflow') },
           personal ? h('div', { className:'bt-board-section-heading' },h('h3',null,t('Shared workflow')),h('p',null,t('These statuses reflect the shared task workflow.'))) : null,
-          h('div', { className: 'bt-board-columns' }, listed.map(([status, label]) => {
+          h(ColumnRail, {label:t('Workflow')}, listed.map(([status, label]) => {
           const tasks = columns.get(status)
           return h('section', { className: 'bt-board-column', key: status, 'aria-label': t(label), 'data-stage':status },
             h('h3', null, h('span',null,t(label)), tasks.length ? h('span', { className:'bt-board-count' },tasks.length) : null),
             tasks.length ? tasks.map(card) : h('p', { className:'bt-board-lane-empty' },t('No tasks')))
-        }))) : null))), document.body)
+        }))) : null),
+        selected ? h(TaskCardDialog,{key:selected.id,scope,task:selected,tasks:data.tasks,commands:commandsFor(selected),actors:data.capabilities?.actors,
+          targets:data.capabilities?.shareTargets?.[selected.id],uploadEnabled:data.capabilities?.upload===true,uncertain:!canAct,onCommand:run,onUpload:upload,request,
+          onClose:()=>setSelectedCard(null),focusReturn:cardOpener,boardRef:dialog,pending,busy,error,onCheck:check,onCancel:cancel,cancelBusy}) : null)), document.body)
 }
 
 export const TASK_BOARD_CSS = `
 .bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:4px 8px;cursor:pointer}
 .bt-board-backdrop{position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.46);display:flex;align-items:center;justify-content:center;padding:18px}
-.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(860px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1440px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
+.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);overflow:hidden}
 .bt-board-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 26px 16px;border-bottom:1px solid var(--bt-line);flex:none}
 .bt-board-header h2{font-size:20px;line-height:1.3;letter-spacing:-.025em;margin:0}.bt-board-header p{font-size:12px;color:var(--bt-ink-2);margin:4px 0 0}
 .bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea,.bt-board-dialog input{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:7px 10px}
@@ -996,9 +1048,10 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:9px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
 @media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
 
-.bt-board-content{overflow:auto;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
+.bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:radial-gradient(ellipse at 95% 8%,color-mix(in srgb,var(--bt-accent) 25%,transparent),transparent 46%),linear-gradient(145deg,color-mix(in srgb,var(--bt-accent) 18%,var(--bt-main)),color-mix(in srgb,var(--bt-accent) 7%,var(--bt-main)) 70%)}
 .bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
-.bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:visible;padding:2px 2px 20px;align-items:flex-start;min-height:190px}
+.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
+.bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 20px;align-items:flex-start;min-height:190px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.bt-board-columns::-webkit-scrollbar{display:none}
 .bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:14px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent)}
 .bt-board-columns-personal>.bt-board-column{flex:0 0 300px;min-height:150px}
 .bt-board-column h3{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;margin:4px 4px 14px}.bt-board-count{min-width:20px;padding:2px 6px;text-align:center;background:color-mix(in srgb,var(--bt-ink) 8%,var(--bt-card));color:var(--bt-ink-2);border-radius:8px;font-size:11px;font-weight:600}
@@ -1007,6 +1060,11 @@ export const TASK_BOARD_CSS = `
 .bt-board-column:is([data-stage=finished],[data-stage=done]) h3>span:first-child:before{background:var(--bt-green)}
 .bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:9px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 .bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
+.bt-board-dialog .bt-board-card-summary{box-sizing:border-box;display:flex;width:100%;text-align:left;background:transparent;border:0;border-radius:10px;padding:11px 12px}
+.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.52);overscroll-behavior:contain}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.3)}
+.bt-card-modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--bt-line);flex:none}.bt-card-modal-header p{margin:0 0 5px;color:var(--bt-ink-2);font-size:12px}.bt-card-modal-header h2{margin:0;font-size:21px;line-height:1.3;overflow-wrap:anywhere}.bt-card-modal-header button{font-size:22px;line-height:1;min-width:38px}
+.bt-card-modal .bt-board-card-body{overflow:auto;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px}
 .bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
 .bt-board-conversation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:10px}.bt-board-conversation form,.bt-board-conversation label{display:flex;flex-direction:column;gap:6px}.bt-board-comment{padding:8px;border-radius:8px;background:var(--bt-sidebar);white-space:pre-wrap;overflow-wrap:anywhere}.bt-board-comment p{margin:4px 0 0}.bt-board-comment small{color:var(--bt-ink-2)}
 .bt-board-card-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.bt-board-owner,.bt-board-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);padding:3px 7px;font-size:11px}.bt-board-chip-blocked{color:var(--bt-danger);background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card))}
@@ -1017,5 +1075,5 @@ export const TASK_BOARD_CSS = `
 .bt-board-shares{display:flex;flex-direction:column;gap:6px;font-size:12px}.bt-board-share-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.bt-board-actions .bt-board-share-check{flex-direction:row;align-items:center}
 .bt-board-create{display:flex;gap:10px;flex-wrap:wrap;width:100%;padding:14px;background:var(--bt-sidebar);border:1px solid var(--bt-line);border-radius:10px}.bt-board-create p{width:100%;font-size:12px;margin:0;color:var(--bt-ink-2)}.bt-board-create label{display:flex;flex-direction:column;gap:4px;font-size:12px;flex:1 1 160px}.bt-board-create>div{display:flex;align-items:flex-end;gap:6px}
 .bt-board-images{display:flex;gap:6px;flex-wrap:wrap}.bt-board-photo{display:flex;flex-direction:column;gap:4px;max-width:100px;font-size:11px}.bt-board-photo img{width:92px;height:72px;object-fit:cover;border-radius:6px}.bt-board-photo button{font-size:11px;padding:3px}.bt-board-upload{display:flex;flex-direction:column;gap:6px;font-size:12px}.bt-board-upload input{width:100%;font-size:11px}
-@media(max-width:600px){.bt-board-backdrop{padding:0}.bt-board-dialog{height:100%;max-height:none;border-radius:0}.bt-board-header{padding:14px 16px}.bt-board-toolbar{padding:12px 16px}.bt-board-review-tools{padding:0 16px}.bt-board-content{padding:16px}.bt-board-column,.bt-board-columns-personal>.bt-board-column{flex:0 0 min(82vw,274px)}}
+@media(max-width:600px){.bt-board-backdrop{padding:0}.bt-board-dialog{height:100%;max-height:none;border-radius:0}.bt-board-header{padding:14px 16px}.bt-board-toolbar{padding:12px 16px}.bt-board-review-tools{padding:0 16px}.bt-board-content{padding:16px}.bt-board-column,.bt-board-columns-personal>.bt-board-column{flex:0 0 min(82vw,274px)}.bt-card-modal-backdrop{padding:0}.bt-card-modal{width:100%;height:100dvh;max-height:100dvh;border-radius:0}.bt-card-modal-header{padding:16px}.bt-card-modal .bt-board-card-body{padding:16px 16px 28px}}
 `
