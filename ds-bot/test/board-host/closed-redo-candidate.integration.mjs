@@ -43,6 +43,7 @@ test('unloaded original session supports only a read-only unverified snapshot', 
   const rt = { ctx, home, statePath, autoRoomName:() => 'Room', retitleRoom:async () => {}, warn() {} }
   installStore(rt); await rt.load(); await rt.save({ required:true }); installResume(rt)
   const scope = { kind:'personal', id:'bot' }
+  const before = await ctx.sessionPersistence.stat('bot')
   const preview = createClosedRedoCandidatePreview(rt)
   const value = await preview(scope, recoveryId)
   assert.deepEqual(value?.textSegments, ['synthetic private candidate'])
@@ -50,5 +51,6 @@ test('unloaded original session supports only a read-only unverified snapshot', 
   assert.equal(value?.producerVerified, false)
   assert.equal(value?.executeAllowed, false)
   assert.equal(ctx.sessions.get('bot'), undefined)
+  assert.deepEqual(await ctx.sessionPersistence.stat('bot'), before)
   assert.equal(rt.state.originalRedoWitness, undefined)
 })
