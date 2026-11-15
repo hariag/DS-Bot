@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { lstatSync, mkdtempSync, rmSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { invalidateWindowsAclCache } from '../src/host/private-storage.mjs'
+import { invalidateWindowsAclCache, isPrivateDirectory } from '../src/host/private-storage.mjs'
 
 let windowsPrivateRoot
 
@@ -55,11 +55,17 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
 export function describePrivateTempAcl(path) {
   if (process.platform !== 'win32') return ''
   const executable = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  let structural
+  try {
+    const stat = lstatSync(path)
+    structural = isPrivateDirectory(path, stat, { platform:'win32', checkWindowsAcl:() => true })
+  } catch (error) { structural = error.message }
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_DETAILS], {
     encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
     env: { ...process.env, DSBOT_TEST_PRIVATE_PATH: path },
   })
-  return result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `PowerShell exited with ${result.status}`
+  const acl = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `PowerShell exited with ${result.status}`
+  return `node-structure=${structural}\n${acl}`
 }
 
 export function privateTempDir(prefix) {

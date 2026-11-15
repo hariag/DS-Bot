@@ -85,6 +85,9 @@ test('remote code status is limited to the owner personal board', async t => {
 })
 
 test('actual task journal backs the five instance-user endpoints with isolated group and personal views', async t => {
+  const previousAclDiagnostics = process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS
+  process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS = '1'
+  t.after(() => { if (previousAclDiagnostics === undefined) delete process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS; else process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS = previousAclDiagnostics })
   const { rt, route } = fixture(t)
   assert.equal(route.requestBody, 'streaming')
   const created = await rt.boardCall('board-command', create)

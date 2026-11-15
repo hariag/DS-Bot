@@ -5,18 +5,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { createTaskDriver } from '../../src/host/task-driver.mjs'
-import { privateTempDir } from '../private-temp.mjs'
+import { describePrivateTempAcl, privateTempDir } from '../private-temp.mjs'
 
 const opts = {assertWriteLock() {}, authorize() {return true}, verifyRegistration() {return true}, verifyAdmission() {return true}, verifyReceipt() {return true}}
 function fixture(t) {
   const dir = privateTempDir(join(tmpdir(), 'board-driver-'))
-  const store = openTaskStore(join(dir, 'tasks.sqlite'), opts)
-  t.after(() => { store.close(); rmSync(dir, {recursive:true, force:true}) })
+  const stores = []
+  t.after(() => {
+    const closeErrors = []
+    for (const value of stores.reverse()) { try { value.close() } catch (error) { closeErrors.push(error.message) } }
+    try { rmSync(dir, {recursive:true, force:true}) }
+    catch (error) { error.message += `\n${describePrivateTempAcl(dir)}\nclose errors: ${closeErrors.join(' | ') || 'none'}`; throw error }
+  })
+  const trackStore = value => { stores.push(value); return value }
+  const store = trackStore(openTaskStore(join(dir, 'tasks.sqlite'), opts))
   store.create({operationId:'create', actor:'user', task:{id:'task',title:'Task',owner:'owner',reviewer:'reviewer',scope:'personal:owner',acceptance:'Review',dependencies:[]}})
   store.command({operationId:'register',taskId:'task',expectedRevision:1,actor:'user',type:'register',value:{kind:'personal',reference:'user'}})
   const prepare = async action => ({admissionId:`admission-${action.id}`,messageId:`message-${action.id}`,targetBotId:action.actor,targetSessionId:'session',
     payload:{id:`message-${action.id}`,role:'user',source:{kind:'test'},content:[{type:'text',text:'Task'}]}})
-  return {store, prepare, path:join(dir, 'tasks.sqlite')}
+  return {store, prepare, path:join(dir, 'tasks.sqlite'), trackStore}
 }
 
 test('the driver leaves ready work untouched without a production admission capability', async t => {
@@ -48,12 +55,12 @@ test('the durable receipt is committed before admission can start the recipient 
 })
 
 test('a lost admission outcome is held and never sent again on another wake', async t => {
-  const {store, prepare, path} = fixture(t); let attempts = 0
+  const {store, prepare, path, trackStore} = fixture(t); let attempts = 0
   const admission = {available:async()=>true, prepare, admit:async()=>{attempts++; throw new Error('lost response')}}
   const driver = createTaskDriver({store, admission, authorized:()=>true})
   await driver.wake(); await driver.wake(); await driver.close()
   assert.equal(attempts, 1); assert.equal(store.listActions('task')[0].state, 'uncertain')
-  const restarted = openTaskStore(path, opts); t.after(() => restarted.close())
+  const restarted = trackStore(openTaskStore(path, opts))
   const afterRestart = createTaskDriver({store:restarted, admission, authorized:()=>true})
   await afterRestart.wake(); await afterRestart.close()
   assert.equal(attempts, 1); assert.equal(restarted.listActions('task')[0].state, 'uncertain')
