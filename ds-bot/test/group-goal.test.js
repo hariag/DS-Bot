@@ -10,6 +10,8 @@ import { fakeContext } from './fake-ctx.js'
 import { ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 import { privateTempDir } from './private-temp.mjs'
 
+const cleanupByTest = new WeakMap()
+
 // Chief, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
 const seed = (room = {}, extraRooms = {}) => ({
   version: 1,
@@ -66,10 +68,17 @@ async function start(t, room, services, extraRooms, existingHome) {
   const register = ctx.connection.fetch.register
   ctx.connection.fetch.register = (options) => { route = options; return register(options) }
   const rt = createRuntime(ctx, { home })
-  t.after(async () => {
-    await ctx.dispose()
-    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
-  })
+  let homes = cleanupByTest.get(t)
+  if (!homes) { homes = new Map(); cleanupByTest.set(t, homes) }
+  let disposers = homes.get(home)
+  if (!disposers) {
+    disposers = []; homes.set(home, disposers)
+    t.after(async () => {
+      for (const dispose of disposers.reverse()) await dispose()
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    })
+  }
+  disposers.push(() => ctx.dispose())
   let seq = 0
   const turns = new Map()
   const emit = (id, type, data) => {
