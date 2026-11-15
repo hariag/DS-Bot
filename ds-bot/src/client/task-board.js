@@ -151,6 +151,33 @@ function HeldRecord({ item, scope, request, busy, decide }) {
     h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))
 }
 
+const queuedDeliveryStatus = value => value === 'send-outcome-unknown' ? t('Send outcome unknown')
+  : value === 'history-unavailable' ? t('Session history unavailable')
+    : value === 'seen-in-history' ? t('Exchange found in history')
+      : value === 'work-stopped' ? t('Work stopped') : t('Review outcome unknown')
+const queuedDeliveryNote = value => value === 'send-outcome-unknown' ? t('The send result is unknown. It will not be sent again automatically.')
+  : value === 'history-unavailable' ? t('The relevant Session history could not be read. The same exchange stays held until recovery can check it.')
+    : value === 'seen-in-history' ? t('The exchange is present in Session history, but its outcome is unknown. It will not be sent again.')
+      : value === 'work-stopped' ? t('The work is stopped or its stop state is unknown. This delivery remains held.')
+        : t('The group review outcome is unknown. This delivery remains held.')
+const queuedDeliveryRestoreNote = value => value === 'send-outcome-unknown'
+  ? t('Restoring review only keeps this unknown send visible; it does not enable a resend.')
+  : t('Restoring review lets later recovery check the same exchange; it does not send it now.')
+
+function QueuedDelivery({ item, busy, decide }) {
+  return h('article', { className:'bt-recovery-delivery' },
+    h('div', { className:'bt-recovery-delivery-heading' }, h('strong', null, item.recipientName),
+      h('span', { className:'bt-recovery-badge' }, t(item.decision === 'ignored' ? 'Ignored' : queuedDeliveryStatus(item.status)))),
+    h('div', { className:'bt-recovery-facts' }, h(Fact, { label:t('Session ID'), value:item.sessionId }),
+      h(Fact, { label:t('Exchange ID'), value:item.exchangeId }),
+      h(Fact, { label:t('Queued at'), value:Number.isSafeInteger(item.queuedAt) ? snapshotTime(item.queuedAt) : t('Unknown') })),
+    h('p', { className:'bt-recovery-note' }, queuedDeliveryNote(item.status)),
+    h('p', { className:'bt-recovery-note' }, t('Ignoring prevents future automatic recovery and does not complete the work.')),
+    item.decision === 'ignored' ? h('p', { className:'bt-recovery-note' }, queuedDeliveryRestoreNote(item.status)) : null,
+    h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') },
+      t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))
+}
+
 // The host provides scoped metadata only. This view never replays or closes work.
 function HeldTurns({ recovery, scope, request, onRefresh }) {
   const [query, setQuery] = useState('')
@@ -166,6 +193,15 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
     finally { inFlight.current = false; setBusy('') }
   }
+  const decideDelivery = async (item, choice) => {
+    if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return
+    inFlight.current = true; setBusy(item.recoveryId); setError('')
+    try {
+      await request('board-queued-delivery-decision', { scope, recoveryId:item.recoveryId, expectedRevision:item.decisionRevision, choice })
+      await onRefresh()
+    } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
+    finally { inFlight.current = false; setBusy('') }
+  }
   if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
@@ -173,6 +209,13 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const pendingRows = filtered.filter(item => item.decision !== 'ignored')
   const ignoredRows = filtered.filter(item => item.decision === 'ignored')
   const groups = recoveryGroups(pendingRows, item => item.botId, item => item.botName)
+  const deliveries = Array.isArray(recovery.deliveries) ? recovery.deliveries : []
+  const filteredDeliveries = deliveries.filter(item => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]))
+  const pendingDeliveries = filteredDeliveries.filter(item => item.decision !== 'ignored')
+  const ignoredDeliveries = filteredDeliveries.filter(item => item.decision === 'ignored')
+  const renderDeliveries = list => h('div', { className:'bt-recovery-deliveries' }, recoveryGroups(list, item => item.recipientId, item => item.recipientName).map(group => h('section', { key:group.id, className:'bt-recovery-group' },
+    h('div', { className:'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
+    group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:decideDelivery })))))
   const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
     h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(HeldRecord, { key:`${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide })))))
@@ -180,20 +223,27 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     h('summary', { className: 'bt-recovery-summary' },
       h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
       h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted work')),
-        h('small', null, t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
-      h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !rows.length ? '—' : String(rows.filter(item => item.decision !== 'ignored').length))),
+        h('small', null, pendingDeliveries.length ? t('{turns} interrupted turns · {messages} queued messages', { turns:pendingRows.length, messages:pendingDeliveries.length })
+          : t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
+      h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? '—' : String(pendingRows.length + pendingDeliveries.length))),
     h('div', { className: 'bt-recovery-body' },
       error ? h('p', { role:'alert', className:'bt-recovery-warning' }, error) : null,
       h('div', { className: 'bt-recovery-intro' },
         h('p', null, t('The outcome is unknown. Your choice does not mark the work complete.')),
         h('span', null, t('Snapshot time (UTC)'), ': ', snapshotTime(recovery.sampledAt))),
       recovery.incomplete ? h('p', { className: 'bt-recovery-warning', role: 'status' }, t('Recovery records are unavailable or incomplete.')) : null,
-      rows.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
+      rows.length || deliveries.length ? h('label', { className: 'bt-recovery-search' }, h('span', { className: 'bt-recovery-sr' }, t('Filter by Bot or ID')),
         h('input', { type: 'search', value: query, placeholder: t('Filter by Bot or ID'), onChange: event => setQuery(event.target.value) })) : null,
-      !rows.length && !recovery.incomplete ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No interrupted turns in this snapshot.')) : null,
-      rows.length && !filtered.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
+      !rows.length && !deliveries.length && !recovery.incomplete ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No interrupted turns in this snapshot.')) : null,
+      (rows.length || deliveries.length) && !filtered.length && !filteredDeliveries.length ? h('p', { className: 'bt-recovery-empty', role: 'status' }, t('No matching records.')) : null,
       groups.length ? renderRows(pendingRows) : null,
-      ignoredRows.length ? h('details', null, h('summary', null, `${t('Ignored')} (${ignoredRows.length})`), renderRows(ignoredRows)) : null))
+      ignoredRows.length ? h('details', null, h('summary', null, `${t('Ignored')} (${ignoredRows.length})`), renderRows(ignoredRows)) : null,
+      pendingDeliveries.length || ignoredDeliveries.length || recovery.deliveriesIncomplete ? h('section', { className:'bt-recovery-delivery-section' },
+        h('div', { className:'bt-recovery-list-header' }, h('strong', null, t('Queued messages awaiting review')), h('span', null, pendingDeliveries.length)),
+        h('p', { className:'bt-recovery-note' }, t('Message text is hidden. These exchanges stay held until recovery can verify their delivery status.')),
+        recovery.deliveriesIncomplete ? h('p', { className:'bt-recovery-warning', role:'status' }, t('Some queued messages could not be listed.')) : null,
+        pendingDeliveries.length ? renderDeliveries(pendingDeliveries) : null,
+        ignoredDeliveries.length ? h('details', null, h('summary', null, `${t('Ignored queued messages')} (${ignoredDeliveries.length})`), renderDeliveries(ignoredDeliveries)) : null) : null))
 }
 
 // Owner-only manual notes on an existing work. This never dispatches or closes it.
@@ -1265,6 +1315,7 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
 .bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
 .bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:8px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-delivery-section{display:grid;gap:8px;min-width:0;padding-top:12px;border-top:1px solid var(--bt-line)}.bt-recovery-deliveries{display:flex;flex-direction:column;gap:8px;max-height:250px;overflow:auto;min-width:0}.bt-recovery-delivery{display:grid;gap:8px;min-width:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-main)}.bt-recovery-delivery-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.bt-recovery-delivery-heading strong{min-width:0;overflow-wrap:anywhere;font-size:12px}
 .bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:8px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
 .bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:8px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
 .bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
