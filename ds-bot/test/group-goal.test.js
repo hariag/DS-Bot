@@ -2279,6 +2279,59 @@ test('unresolved delivery restricts its owner while another unique owner can be 
   await settle(()=>result()!==undefined)
 })
 
+test('scoped inspection can assign independent pending work and request only reviewed missing evidence', async t=>{
+  const host=await start(t)
+  await startGoal(host,{stages:[{title:'Draft',acceptance:'draft reviewed',tasks:[
+    {bot:'Writer',task:'write the draft'},{bot:'Tester',task:'run the draft checks'},
+  ]}]})
+  const g=host.rt.roomOf('r1').goal
+  await host.rt.goalDrive(host.rt.roomOf('r1'),{goalNudge:true,slots:[{id:'a',status:'passed'}]})
+  const original=host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb')throw Error('unresolved writer delivery');return original(id)}
+  await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
+  host.ctx.sessionController.resolveAgent=original
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const post=host.takeGoal();assert.equal(post.source.reviewInspect,true)
+  host.agentOf('r1').inbox.nextTurn.length=0
+  const result=host.round('scoped-independent-work',post)
+  await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
+  const reviewPrompt=JSON.stringify(host.agentOf('ga').calls.at(-1))
+  assert.match(reviewPrompt,/advance independent, ready tasks/)
+  assert.doesNotMatch(reviewPrompt,/do not assign, dispatch, modify tasks/)
+  const decide=(name,args={})=>host.ctx.guards.map(guard=>guard({name,arguments:args,agent:{id:'ga'}}))
+  const tester=g.stages[0].tasks.find(task=>task.botId==='c')
+  const reviewId=g.reviewAttempt.id
+  const pending={to:'Tester',when:'queue',request_id:`goal-review:${reviewId}:${tester.id}:assign`,
+    message:`Task ${tester.id}: ${tester.task}. Start after your current work and report evidence.`}
+  assert.ok(decide('message_bot',{...pending,to:'Writer'}).some(value=>typeof value==='string'))
+  assert.ok(decide('message_bot',pending).every(value=>value===undefined))
+  assert.ok(decide('message_bot',{...pending,request_id:`goal-review:${reviewId}:${tester.id}:evidence`}).some(value=>typeof value==='string'))
+  assert.ok(decide('message_bot',{...pending,request_id:`goal-review:${reviewId}:${tester.id}`}).some(value=>typeof value==='string'))
+  assert.ok(decide('message_bot',{...pending,message:`Task ${tester.id}: start`}).some(value=>typeof value==='string'))
+  assert.ok(decide('message_bot',{...pending,reply_to:'user'}).some(value=>typeof value==='string'))
+
+  tester.status='working'
+  assert.ok(decide('message_bot',pending).some(value=>typeof value==='string'))
+  tester.status='reported'
+  const next='Attach a screenshot showing the saved setting.'
+  assert.ok(decide('message_bot',{...pending,when:'now',message:`Task ${tester.id}: ${next}`}).some(value=>typeof value==='string'))
+  assert.match(await host.tool('group_goal',{...reviewArgs(tester),review_progress:'The report has no screenshot.',
+    review_next:next,evidence:'The report contains no screenshot.',review_complete:false},'ga'),/Recorded/)
+  const followUp={...pending,when:'now',request_id:`goal-review:${reviewId}:${tester.id}:evidence`,message:`Task ${tester.id}: ${next}`}
+  assert.ok(decide('message_bot',followUp).every(value=>value===undefined))
+  assert.ok(decide('message_bot',{...followUp,request_id:pending.request_id}).some(value=>typeof value==='string'))
+  assert.ok(decide('message_bot',{...followUp,message:`Task ${tester.id}: send an update`}).some(value=>typeof value==='string'))
+  const current=host.rt.reviewQueueVersion
+  host.rt.reviewQueueVersion=(roomId,ownerId)=>`${current(roomId,ownerId)}:changed`
+  assert.ok(decide('message_bot',followUp).some(value=>typeof value==='string'))
+  host.rt.reviewQueueVersion=current
+  g.status='paused'
+  assert.ok(decide('message_bot',followUp).some(value=>typeof value==='string'))
+  g.status='active'
+  host.finish('ga','[PASS]')
+  await settle(()=>result()!==undefined)
+})
+
 test('a scoped check becomes unresolved if the queue changes while its save is pending', async t=>{
   const host=await start(t)
   await startGoal(host,{stages:[{title:'Draft',acceptance:'reviewed',tasks:[{bot:'Writer',task:'write'},{bot:'Tester',task:'test'}]}]})
