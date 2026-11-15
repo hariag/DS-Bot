@@ -1054,7 +1054,7 @@ test('a runtime interrupted turn survives a later turn in its session and is rep
   assert.deepEqual(await restarted.rt.recoveryHeldView({ kind:'room', id:'r1' }), { available:false, incomplete:true, items:[] },
     'a host whose lock failed must not claim its in-memory notes are current')
   restarted.rt.requireHomeLock = requireHomeLock
-  writeFileSync(join(restarted.home, 'state.lock'), JSON.stringify({ pid: 1, token: 'a-different-owner' }))
+  writeFileSync(join(restarted.home, 'state.lock'), JSON.stringify({ pid: 1, token: 'test-lock-token-0001' }))
   assert.equal(restarted.rt.readOnly(), undefined, 'holder information may remain stale immediately after lock replacement')
   assert.deepEqual(await restarted.rt.recoveryHeldView({ kind:'room', id:'r1' }), { available:false, incomplete:true, items:[] },
     'a replaced lock token must make the recovery projection unavailable')
