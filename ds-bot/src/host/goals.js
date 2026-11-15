@@ -584,7 +584,7 @@ const DUTY_DRAFT = [
 ].join('\n')
 const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. ${OWNER_REVIEW} Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. If no authorized step can progress while waiting, record the unblock condition and reply [PASS].`
 const INSPECTION_DUTY = 'This is a read-only goal inspection because earlier work or a stop is unresolved. Your first action must be group_goal show for the current group; read the result and identify the current stage, unfinished owners and evidence gaps. If needed, use read_group_chat for the current group only to inspect existing handoffs and evidence. Do not call review-check, assign, dispatch, send reminders, change task state, or take external actions. The shown goal is not proof that an owner accepted or completed work. If show fails, report the failure; otherwise give a short factual inspection or reply [PASS] if nothing changed. Full owner checks and follow-up remain pending.'
-const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group. Earlier deliveries have unresolved outcomes for specific owners; do not repeat or dispatch their work. For other owners, inspect existing status and evidence and record review-check for the exact task and current fingerprint. You may read evidence for independently reviewable reported work. Do not dispatch, send reminders or change task status from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
+const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group. Earlier deliveries have unresolved outcomes for specific owners; do not repeat or dispatch their work. For other owners, inspect status, evidence, dependencies and capacity and record review-check for the exact task and current fingerprint. You may read evidence for independently reviewable reported work. You may assign one uniquely owned pending task only when it is ready, with message_bot when="queue", the task ID and full task text, and request_id "goal-review:<reviewId>:<taskId>:assign". For a reported task, first record an unresolved review-check with a concrete evidence gap; then you may ask its unblocked owner only for the exact missing item in review_next, with request_id "goal-review:<reviewId>:<taskId>:evidence" and when="now". These are separate requests and must use separate IDs. Never message blocked or unknown owners, repeat working or completed work, or use a new request ID to retry an uncertain request. Do not change task status or pass a stage from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
 
 export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined, scoped = () => false) => exec => {
@@ -651,9 +651,32 @@ export function install(rt) {
       || !room.members.includes(task.botId) || scope.blocked.has(task.botId))return undefined
     return task
   }
+  const scopedReviewMessage = (room, info, exec) => {
+    const args=exec.arguments
+    if(exec.name!=='message_bot' || !args || typeof args!=='object' || Array.isArray(args)
+      || args.reply_to==='user' || typeof args.to!=='string' || typeof args.message!=='string')return false
+    const scope=recoveryOwners(room)
+    if(!scope.has || scope.unknown)return false
+    const target=rt.findBot(args.to)
+    if(!target || !room.members.includes(target.id) || scope.blocked.has(target.id))return false
+    const stage=room.goal?.stages?.[room.goal.current],tasks=stage?.tasks ?? []
+    const owned=tasks.filter(task=>task.botId===target.id && task.status!=='done')
+    if(owned.length!==1)return false
+    const task=owned[0],message=args.message.trim()
+    if(typeof task.id!=='string' || task.id.length>64 || !message.includes(task.id))return false
+    if(task.status==='pending')return args.when==='queue' && args.request_id===`goal-review:${info.reviewId}:${task.id}:assign` && message.includes(task.task)
+    if(task.status!=='reported' || args.when!==undefined && args.when!=='now')return false
+    const check=room.goal.ownerReview?.stageId===stage.id ? room.goal.ownerReview.checks?.[task.id] : undefined
+    const queueVersion=rt.reviewQueueVersion?.(room.id,target.id)
+    return args.request_id===`goal-review:${info.reviewId}:${task.id}:evidence`
+      && check?.owner===target.id && check.fingerprint===reviewFingerprint(task) && check.unresolved===true
+      && check.scopedQueueVersion!==undefined && check.scopedQueueVersion===queueVersion
+      && typeof check.review_next==='string' && check.review_next.trim()!=='' && message.includes(check.review_next.trim())
+  }
   const scopedReviewAction = (room, info, exec) => {
     if(info?.reviewInspect!==true || !goalReviewAllowed(room,info.reviewId))return false
     if(exec.name==='group_goal' && exec.arguments?.action==='review-check')return scopedReviewTask(room,exec.arguments.review_task)!==undefined
+    if(exec.name==='message_bot')return scopedReviewMessage(room,info,exec)
     if(['read','glob','grep'].includes(exec.name)) {
       const stage=room.goal?.stages?.[room.goal.current]
       return (stage?.tasks ?? []).some(task=>task.status==='reported' && task.botId!==room.admin && scopedReviewTask(room,task.id)!==undefined)
@@ -1444,7 +1467,14 @@ export function install(rt) {
             throw error
           }
           if (!goalReviewAllowed(room, reviewId)) return 'The review stopped while saving. Its record must be inspected before further action.'
-          if (scopedQueueVersion !== undefined && missingFor(room).some(item => item.id === task.id)) return 'The queue or task changed while saving; the recorded check is unresolved and must be inspected again.'
+          const savedCheck = goal.ownerReview?.stageId === stage.id ? goal.ownerReview.checks?.[task.id] : undefined
+          if (scopedQueueVersion !== undefined && (goal.ownerReview !== updated
+            || reviewFingerprint(task) !== args.review_fingerprint
+            || rt.reviewQueueVersion?.(room.id, task.botId) !== scopedQueueVersion
+            || savedCheck !== updated.checks[task.id]
+            || savedCheck?.scopedQueueVersion !== scopedQueueVersion)) {
+            return 'The queue or task changed while saving; the recorded check is unresolved and must be inspected again.'
+          }
           return `Recorded the administrator's check for ${task.id}; ${missingFor(room).length} current task(s) remain unchecked or changed.`
         }
         case 'draft':
