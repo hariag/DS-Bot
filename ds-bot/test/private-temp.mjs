@@ -44,12 +44,12 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
 
 export function privateTempDir(prefix) {
   if (process.platform !== 'win32') return mkdtempSync(prefix)
-  return mkdtempSync(join(ensureWindowsPrivateRoot(), `${basename(prefix)}-`))
+  return setPrivateTempAcl(mkdtempSync(join(ensureWindowsPrivateRoot(), `${basename(prefix)}-`)))
 }
 
 export async function privateTempDirAsync(prefix) {
   if (process.platform !== 'win32') return mkdtemp(prefix)
-  return mkdtemp(join(ensureWindowsPrivateRoot(), `${basename(prefix)}-`))
+  return setPrivateTempAcl(await mkdtemp(join(ensureWindowsPrivateRoot(), `${basename(prefix)}-`)))
 }
 
 export function grantSharedTempAccessForTest(path) {
