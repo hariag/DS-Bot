@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto'
 import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { boardImageName, readBoardImage, stageBoardImages } from './board-images.js'
+import { isPrivateFile } from './private-storage.mjs'
 
 const stat = path => {
   const value = lstatSync(path)
-  if (!value.isFile() || value.isSymbolicLink() || (value.mode & 0o077) || value.uid !== process.getuid()) throw new Error('Image file is unavailable')
+  if (!isPrivateFile(path, value)) throw new Error('Image file is unavailable')
   return { dev:value.dev, ino:value.ino, size:value.size, mtimeMs:value.mtimeMs }
 }
 let identity, meta

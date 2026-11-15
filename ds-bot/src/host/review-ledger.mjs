@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { closeSync, lstatSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 const id = (v, name) => { if (typeof v !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(v)) throw Error(`invalid ${name}`); return v }
 const safeInt = (v, name) => { if (!Number.isSafeInteger(v) || v < 0) throw Error(`invalid ${name}`); return v }
 const stable = v => JSON.stringify(v, function (_, value) { return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))) : value })
@@ -27,7 +28,7 @@ export function openReviewLedger(path,{assertActor,verifySnapshot,assertLease}={
   if (![assertActor,verifySnapshot,assertLease].every(x=>typeof x==='function')) throw Error('host authority unavailable')
   if (path!==':memory:') {
     try {closeSync(openSync(path,'wx',0o600))} catch(e) {if(e.code!=='EEXIST')throw e}
-    const file=lstatSync(path);if(!file.isFile() || (file.mode & 0o077)!==0)throw Error('private journal unavailable')
+    const file=lstatSync(path);if(!isPrivateFile(path,file))throw Error('private journal unavailable')
   }
   const db=new DatabaseSync(path)
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
@@ -80,10 +81,10 @@ export function readReviewReceipt(path,{actor,workId,operationId,kind,scope,veri
   if(!['create','finding'].includes(kind)||typeof scope!=='string'||typeof verifySnapshot!=='function')throw Error('invalid receipt request')
   let directory
   try{directory=lstatSync(dirname(path))}catch(e){if(e.code==='ENOENT')return {status:'unknown'};throw e}
-  if(!directory.isDirectory()||directory.isSymbolicLink()||directory.uid!==process.getuid()||(directory.mode&0o077)!==0)throw Error('private journal unavailable')
+  if(!isPrivateDirectory(dirname(path),directory))throw Error('private journal unavailable')
   let file
   try{file=lstatSync(path)}catch(e){if(e.code==='ENOENT')return {status:'unknown'};throw e}
-  if(!file.isFile()||file.isSymbolicLink()||file.uid!==process.getuid()||(file.mode&0o077)!==0)throw Error('private journal unavailable')
+  if(!isPrivateFile(path,file))throw Error('private journal unavailable')
   const db=new DatabaseSync(path,{readOnly:true})
   try {
     if(!db.prepare('PRAGMA table_info(receipts)').all().some(column=>column.name==='scope'))return {status:'unknown'}

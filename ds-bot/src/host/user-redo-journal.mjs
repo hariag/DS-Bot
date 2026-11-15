@@ -6,6 +6,7 @@ import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { syncDirectory } from './directory-sync.mjs'
 
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
@@ -69,8 +70,7 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
       const before = await file.stat(), disk = JSON.parse(await file.readFile('utf8'))
       if (!before.isFile() || !isDeepStrictEqual(disk.userRedos?.[entry.operationId], entry)) throw new Error('redo snapshot unavailable')
       await file.sync()
-      const dir = await open(dirname(rt.statePath), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-      try { await dir.sync() } finally { await dir.close() }
+      await syncDirectory(dirname(rt.statePath))
       const afterFile = await file.stat(), after = await lstat(rt.statePath)
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
         || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterFile.size

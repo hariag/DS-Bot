@@ -3,6 +3,8 @@ import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readFil
 import { isAbsolute, join } from 'node:path'
 import pngjs from 'pngjs'
 import jpeg from 'jpeg-js'
+import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
+import { syncDirectorySync } from './directory-sync.mjs'
 
 const MAX_BYTES = 5 * 1024 * 1024
 const MAX_BATCH = 10
@@ -43,7 +45,7 @@ function validateImage(bytes, mediaType) {
 function checkDir(dir) {
   if (!isAbsolute(dir)) throw invalid('Image directory must be absolute')
   const stat = lstatSync(dir)
-  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.uid !== process.getuid()) throw invalid('Image directory is not private')
+  if (!isPrivateDirectory(dir, stat)) throw invalid('Image directory is not private')
   return stat
 }
 
@@ -64,7 +66,7 @@ function readFileExact(path, limit = MAX_BYTES) {
   try {
     const stat = fstatSync(fd), pathStat = lstatSync(path)
     if (!stat.isFile() || pathStat.isSymbolicLink() || pathStat.dev !== stat.dev || pathStat.ino !== stat.ino
-      || (stat.mode & 0o077) || stat.uid !== process.getuid() || stat.size > limit) throw invalid('Image file is unavailable')
+      || !isPrivateFile(path, stat) || stat.size > limit) throw invalid('Image file is unavailable')
     return readFileSync(fd)
   } finally { closeSync(fd) }
 }
@@ -94,8 +96,7 @@ export function stageBoardImages({ directory, taskId, images, assertWriteLock })
         const existing = readFileExact(destination)
         if (digest(existing) !== entry.sha256 || existing.length !== entry.size) throw invalid('Upload ID already belongs to different content')
       }
-      const dfd = openSync(directory, constants.O_RDONLY)
-      try { fsyncSync(dfd) } finally { closeSync(dfd) }
+      syncDirectorySync(directory)
     } finally {
       if (fd !== undefined) closeSync(fd)
       try { unlinkSync(temporary) } catch (error) { if (error.code !== 'ENOENT') throw error }
