@@ -304,7 +304,7 @@ export function install(rt) {
         for (let i = 0; i < 3; i += 1) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
-          const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [] }
+          const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
           const recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
           if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
             recovery, ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
@@ -321,6 +321,10 @@ export function install(rt) {
         api.list(scope,principal)
         if (typeof rt.setHeldDecision !== 'function') throw new Error('Interrupted turn decisions are unavailable')
         return rt.setHeldDecision(scope,payload.recoveryId,payload.expectedRevision,payload.choice)
+      case 'board-queued-delivery-decision':
+        api.list(scope,principal)
+        if (typeof rt.setQueuedDeliveryDecision !== 'function') throw new Error('Queued delivery decisions are unavailable')
+        return rt.setQueuedDeliveryDecision(scope,payload.recoveryId,payload.expectedRevision,payload.choice)
       case 'board-operation-cancel': {
         api.list(scope, principal)
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))return goalEditor.cancel(scope,payload.operationId)

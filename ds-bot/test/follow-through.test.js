@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
@@ -116,6 +117,60 @@ test('ignore and undo retain the interrupted record, reject another scope and su
   assert.deepEqual(await restarted.rt.setHeldDecision(scope,id,1,'open'),{decision:'open',revision:2})
   assert.deepEqual(notes(home).heldTurns[id].record,record)
   assert.deepEqual(notes(home).heldTurns[id].decisions.map(item=>item.choice),['ignored','open'])
+})
+
+test('ignoring an uncertain queued delivery is durable and prevents automatic resend', async (t) => {
+  t.mock.timers.enable({ apis:['setTimeout'] })
+  const home = freshHome(t)
+  const args = { exchangeId:'queued-once', roomId:'r1', toId:'b', fromId:'a', role:'room', text:'SECRET MESSAGE' }
+  writeFileSync(join(home,'inflight.json'), JSON.stringify({ turns:{}, queued:{ gb:[{ at:1700000000000, args, recoveryHold:'history-unavailable' }] } }))
+  const first = await start(home)
+  const scope = { kind:'room', id:'r1' }
+  const view = await first.rt.recoveryHeldView(scope)
+  assert.equal(view.available,true)
+  assert.equal(view.deliveries.length,1)
+  assert.equal(view.deliveries[0].status,'history-unavailable')
+  assert.doesNotMatch(JSON.stringify(view), /SECRET|fromId|text/)
+  const { recoveryId } = view.deliveries[0]
+  await assert.rejects(first.rt.setQueuedDeliveryDecision({kind:'room',id:'other'},recoveryId,0,'ignored'))
+  assert.deepEqual(await first.rt.setQueuedDeliveryDecision(scope,recoveryId,0,'ignored'),{decision:'ignored',revision:1})
+  assert.deepEqual(await first.rt.setQueuedDeliveryDecision(scope,recoveryId,0,'ignored'),{decision:'ignored',revision:1})
+  await assert.rejects(first.rt.setQueuedDeliveryDecision(scope,recoveryId,0,'open'))
+  assert.deepEqual(notes(home).queued.gb[0].args,args)
+  assert.equal(notes(home).queued.gb[0].decisions[0].choice,'ignored')
+  await first.stop()
+
+  const restarted = await start(home, new Map([['gb',[]]]))
+  assert.equal((await restarted.rt.recoveryHeldView(scope)).deliveries[0].decision,'ignored')
+  t.mock.timers.tick(3000)
+  await realDelay(30)
+  assert.equal(restarted.agentOf('gb').calls.length,0)
+})
+
+test('redo source evidence is bound to its room and current membership', async t => {
+  const home = freshHome(t), record = { botId:'b', roomId:'r1', turn:7, trigger:{ role:'room', roomId:'r1', exchangeId:'ex' } }
+  const id = createHash('sha256').update(JSON.stringify(['gb', record])).digest('hex')
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns:{}, queued:{}, heldTurns:{ [id]:{ sessionId:'gb', record } } }))
+  const host = await start(home)
+  const proof = await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id)
+  assert.deepEqual(proof?.record, record)
+  assert.equal(proof.isCurrent(), true)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'personal', id:'user' }, id), undefined)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'other' }, id), undefined)
+  host.rt.state.agents.x = { id:'x', sessions:['gb'] }
+  assert.equal(proof.isCurrent(), false)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
+  delete host.rt.state.agents.x
+  host.rt.state.rooms.r1.members = ['a']
+  assert.equal(proof.isCurrent(), false)
+  assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
+})
+
+test('new interrupted records preserve the exact turn number', async t => {
+  const home = freshHome(t), host = await start(home)
+  host.emit('gb', 'turn/start', { turn:9 })
+  await settle(() => notes(home).turns?.gb?.turn === 9)
+  assert.equal(notes(home).turns.gb.roomId, 'r1')
 })
 // The team file is written in the background, and Windows may hold it busy for a
 // moment: the retry waits on the clock, which the tests mock.

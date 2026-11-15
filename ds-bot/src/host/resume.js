@@ -17,7 +17,7 @@ import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from '
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
 import { replaceFile } from './files.js'
 import { textOf } from './text.js'
-import { heldTurnsView } from './recovery-held.js'
+import { heldTurnsView, queuedDeliveriesView } from './recovery-held.js'
 import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
 
 // Long enough for DSH to finish opening its workspaces after a start.
@@ -271,10 +271,16 @@ export function install(rt) {
     // the visible recovery file contains exactly the same held records.
     const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw)
     const savedHolds = parsed?.heldTurns ?? {}
+    const savedQueued = parsed?.queued ?? {}
     if (!savedHolds || typeof savedHolds !== 'object' || Array.isArray(savedHolds)
-      || JSON.stringify(savedHolds) !== JSON.stringify(heldTurns)) return unavailableHeld()
+      || JSON.stringify(savedHolds) !== JSON.stringify(heldTurns)
+      || !savedQueued || typeof savedQueued !== 'object' || Array.isArray(savedQueued)
+      || JSON.stringify(savedQueued) !== JSON.stringify(queued)) return unavailableHeld()
     if (expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
-    return { ...heldTurnsView(savedHolds, scope, rt.state?.bots), sampledAt:Date.now() }
+    const turns = heldTurnsView(savedHolds, scope, rt.state?.bots)
+    const deliveries = queuedDeliveriesView(savedQueued, scope, rt.state?.bots)
+    return { ...turns, incomplete:turns.incomplete || deliveries.incomplete, deliveries:deliveries.items,
+      deliveriesIncomplete:deliveries.incomplete, sampledAt:Date.now() }
   }
   let recoverySample
   rt.recoveryHeldView = async scope => {
@@ -382,6 +388,37 @@ export function install(rt) {
         || rt.homeLockVersion() !== lease || !heldTurns[recoveryId]?.decisions?.includes(entry)) throw new Error('Decision changed during confirmation')
     } finally { await handle.close() }
   }
+  const queuedRecoveryId = (sessionId, exchangeId) => createHash('sha256')
+    .update(JSON.stringify(['ds-bot:queued-delivery:v1', sessionId, exchangeId])).digest('hex')
+  const findQueuedDelivery = recoveryId => {
+    const matches = []
+    for (const [sessionId, entries] of Object.entries(queued)) {
+      if (!Array.isArray(entries)) continue
+      for (const item of entries) if (item?.args?.exchangeId && queuedRecoveryId(sessionId, item.args.exchangeId) === recoveryId)
+        matches.push({ sessionId, item })
+    }
+    return matches.length === 1 ? matches[0] : undefined
+  }
+  const syncQueuedDecision = async (recoveryId, entry) => {
+    rt.requireHomeLock()
+    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const before = await handle.stat()
+      if (!before.isFile()) throw new Error('Decision journal unavailable')
+      const saved = JSON.parse(await handle.readFile('utf8'))?.queued ?? {}
+      const matches = Object.entries(saved).flatMap(([sessionId, entries]) => Array.isArray(entries)
+        ? entries.filter(item => item?.args?.exchangeId && queuedRecoveryId(sessionId, item.args.exchangeId) === recoveryId) : [])
+      if (matches.length !== 1 || !matches[0].decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
+      await handle.sync()
+      const directory = await open(dirname(file),constants.O_RDONLY)
+      try { await directory.sync() } finally { await directory.close() }
+      const afterHandle = await handle.stat(), after = await lstat(file)
+      rt.requireHomeLock()
+      if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterHandle.size || before.mtimeMs !== afterHandle.mtimeMs
+        || rt.homeLockVersion() !== lease || !findQueuedDelivery(recoveryId)?.item.decisions?.includes(entry)) throw new Error('Decision changed during confirmation')
+    } finally { await handle.close() }
+  }
   rt.setHeldDecision = async (scope, recoveryId, expectedRevision, choice) => {
     if (!/^[a-f0-9]{64}$/.test(recoveryId) || !Number.isSafeInteger(expectedRevision)
       || expectedRevision < 0 || !['ignored', 'open'].includes(choice)) throw new Error('Invalid interrupted turn decision')
@@ -401,6 +438,33 @@ export function install(rt) {
     const verified = await sampleRecoveryHeld(scope)
     const saved = verified.available && verified.items.find(row => row.recoveryId === recoveryId)
     if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice) throw new Error('Decision outcome is unknown; refresh the board')
+    return { decision:choice, revision:saved.decisionRevision }
+  }
+  rt.setQueuedDeliveryDecision = async (scope, recoveryId, expectedRevision, choice) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId) || !Number.isSafeInteger(expectedRevision)
+      || expectedRevision < 0 || !['ignored', 'open'].includes(choice)) throw new Error('Invalid queued delivery decision')
+    const view = await rt.recoveryHeldView(scope)
+    const item = view.available && view.deliveries.find(row => row.recoveryId === recoveryId)
+    if (!item) throw new Error('Queued delivery is unavailable; refresh the board')
+    const match = findQueuedDelivery(recoveryId), history = match?.item.decisions ?? []
+    if (!match || !Array.isArray(history)) throw new Error('Queued delivery is unavailable')
+    const previous = history[expectedRevision]
+    if (previous?.revision === expectedRevision + 1 && previous.choice === choice) {
+      await syncQueuedDecision(recoveryId, previous)
+      return { decision:choice, revision:previous.revision }
+    }
+    if (history.length !== expectedRevision || item.decisionRevision !== expectedRevision || history.length >= 100)
+      throw new Error('Queued delivery changed; refresh the board')
+    rt.requireHomeLock()
+    const entry = { revision:expectedRevision + 1, choice, by:'user', at:Date.now() }
+    match.item.decisions = [...history, entry]
+    queueChanged(match.item.args, match.sessionId)
+    await persist({ required:true })
+    await syncQueuedDecision(recoveryId, entry)
+    const verified = await sampleRecoveryHeld(scope)
+    const saved = verified.available && verified.deliveries.find(row => row.recoveryId === recoveryId)
+    if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice)
+      throw new Error('Decision outcome is unknown; refresh the board')
     return { decision:choice, revision:saved.decisionRevision }
   }
 
@@ -647,6 +711,29 @@ export function install(rt) {
   const sessionFor = (sessionId, args) => (rt.isBotSession(sessionId) ? sessionId
     : args?.roomId === undefined ? rt.chatOf(args?.toId) : rt.roomOf(args.roomId)?.sessions?.[args.toId])
 
+  const setQueuedRecoveryHold = async (sessionId, exchangeId, recoveryHold) => {
+    const list = queued[sessionId]
+    if (!Array.isArray(list)) return
+    const matches = list.flatMap((item, index) => item?.args?.exchangeId === exchangeId ? [index] : [])
+    if (matches.length === 0) return
+    if (recoveryHold !== undefined && matches.length > 1) throw new Error('Queued exchange is ambiguous')
+    const next = [...list]
+    let changed = false
+    for (const index of matches) {
+      const current = list[index]
+      if (current.recoveryHold === recoveryHold) continue
+      const updated = { ...current }
+      if (recoveryHold === undefined) delete updated.recoveryHold
+      else updated.recoveryHold = recoveryHold
+      next[index] = updated
+      changed = true
+    }
+    if (!changed) return
+    queued = { ...queued, [sessionId]:next }
+    queueChanged(next[matches[0]].args, sessionId)
+    await persist({ required:true })
+  }
+
   // A hard stop keeps the inbox, which the Session runs once it wakes; only what DSH
   // cancelled is sent again. The notes stay queued until a turn takes the messages
   // up, so a send that fails here, or a Session that cannot be opened, leaves them
@@ -662,7 +749,8 @@ export function install(rt) {
       if (!logs.has(id)) logs.set(id, logOf(id))
       return logs.get(id)
     }
-    for (const { args, resumeOrigins, recoveryHold } of fresh) {
+    for (const { args, resumeOrigins, recoveryHold, decisions } of fresh) {
+      if (decisions?.at(-1)?.choice === 'ignored') { held.add(args.exchangeId); continue }
       const target = sessionFor(sessionId, args)
       const room = args.roomId && args.role === 'room' ? rt.roomOf(args.roomId) : undefined
       const blocked = () => room !== undefined && rt.goalRecoveryBlocked?.(room, args.toId) === true
@@ -676,13 +764,15 @@ export function install(rt) {
         if (!stillAllowed) for (const message of waiting) agent.inbox?.remove?.(message.id)
         held.add(args.exchangeId)
         if (waiting.length === 0) {
+          await setQueuedRecoveryHold(sessionId, args.exchangeId, 'review-uncertain')
           await rt.goalReviewFailed?.(room, target, args.reviewId)
           rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Goal review ${args.reviewId} was not resent after restart; inspect the original delivery before recovery.` })
-        }
+        } else await setQueuedRecoveryHold(sessionId, args.exchangeId, undefined)
         continue
       }
       if (blocked()) {
         held.add(args.exchangeId)
+        await setQueuedRecoveryHold(sessionId, args.exchangeId, 'work-stopped')
         const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .filter(message => message.source?.exchangeId === args.exchangeId)
         rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
@@ -691,7 +781,11 @@ export function install(rt) {
       }
       const waiting = () => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
         .some(message => message.source?.exchangeId === args.exchangeId)
-      if (waiting()) { held.add(args.exchangeId); continue }
+      if (waiting()) {
+        held.add(args.exchangeId)
+        if (recoveryHold !== undefined) await setQueuedRecoveryHold(sessionId, args.exchangeId, undefined)
+        continue
+      }
       if (recoveryHold === 'prepared') {
         held.add(args.exchangeId)
         const text = `Queued exchange ${args.exchangeId} was prepared for delivery, but its send outcome is unknown. Its recovery note is retained for review.`
@@ -711,6 +805,7 @@ export function install(rt) {
       const unreadable = histories.some(events => events === undefined)
       if (seen || unreadable) {
         held.add(args.exchangeId)
+        await setQueuedRecoveryHold(sessionId, args.exchangeId, seen ? 'history-seen' : 'history-unavailable')
         const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
         rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
         rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
@@ -726,6 +821,7 @@ export function install(rt) {
       await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true }, { beforeAdmission: () => {
         if (blocked()) throw new Error('Queued group work was stopped before recovery admission')
       } })
+        .then(() => setQueuedRecoveryHold(sessionId, args.exchangeId, undefined))
         .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
     }
   }
