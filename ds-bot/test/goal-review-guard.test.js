@@ -3,10 +3,19 @@ import assert from 'node:assert/strict'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { goalReviewGuard } from '../src/host/goals.js'
 
-test('a later allow policy cannot bypass the real inspection tool guard', async () => {
+test('a later allow policy cannot bypass the real inspection tool guard', async t => {
+  let NativeToolExecutor
+  try {
+    NativeToolExecutor = await import('@deepseek-ai/dsh-tool-executor-native')
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND' && error.message.includes('@deepseek-ai/dsh-tool-executor-native')) {
+      t.skip('this DSH version does not include the native tool executor')
+      return
+    }
+    throw error
+  }
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
