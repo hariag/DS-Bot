@@ -187,6 +187,20 @@ test('Bots are told how to open a PDF the user attached, once, in the shared pre
   assert.equal(prompt('group-worker'), prompt('worker'))
 })
 
+test('Bots coordinate shared projects through a named manager and refresh a clean repository in small slices', (t) => {
+  const { ctx, prompt } = start()
+  t.after(() => ctx.dispose())
+  const rules = [
+    '- When groups share a project, record the same project ID, repository, integration branch and one named Project Manager Bot in each group notice. If any is missing or ambiguous, ask the group admin to establish it before creating cross-group work; do not infer links from similar names.',
+    '- At shared-repository task intake, before each commit or merge, and every 30 minutes of continuing work, inspect `git status --short --branch` and `git rev-parse HEAD`; fetch the authorized integration ref when permitted and record its SHA and check time. Verify HEAD after each merge. Without fetch permission, use only a trusted tracking ref with a known check time; if it is stale or unknown, pause shared writes and ask the Project Manager to refresh it. Fast-forward only a clean local branch whose configured upstream is known and strictly ahead. Preserve dirty or diverged work; do not pull, reset, rebase or overwrite it.',
+    '- Keep shared-repository work in short task slices with one owner, a stable task ID, a declared write scope and a base SHA. Commit each coherent checked slice promptly; report the commit SHA, changed paths and verification before starting another slice. Do not hold unrelated changes in one long-lived branch.',
+    '- If groups on one project conflict over a path, contract, acceptance rule or dependency order, stop only the conflicting writes and send the Project Manager one actionable message with both task IDs, groups, owners, repository/ref, base/head SHAs, affected paths, evidence, options and a recommendation. Use a stable request_id. Do not duplicate, overwrite or silently choose between the work; independent scopes may continue.',
+  ]
+  for (const id of ['main', 'worker', 'group-worker']) {
+    for (const rule of rules) assert.equal(prompt(id).split(rule).length - 1, 1)
+  }
+})
+
 test('the group relay and non-Bot sessions do not get progress instructions', (t) => {
   const { ctx, prompt } = start()
   t.after(() => ctx.dispose())
