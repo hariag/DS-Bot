@@ -1,7 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
-import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+
+let windowsPrivateRoot
 
 const WINDOWS_PRIVATE_ACL = [
   "$ErrorActionPreference = 'Stop'",
@@ -34,13 +37,30 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
 }
 
 export function privateTempDir(prefix) {
-  return setPrivateTempAcl(mkdtempSync(prefix))
+  if (process.platform !== 'win32') return mkdtempSync(prefix)
+  return mkdtempSync(join(ensureWindowsPrivateRoot(), `${basename(prefix)}XXXXXX`))
 }
 
 export async function privateTempDirAsync(prefix) {
-  return setPrivateTempAcl(await mkdtemp(prefix))
+  if (process.platform !== 'win32') return mkdtemp(prefix)
+  return mkdtemp(join(ensureWindowsPrivateRoot(), `${basename(prefix)}XXXXXX`))
 }
 
 export function grantSharedTempAccessForTest(path) {
   return setPrivateTempAcl(path, { shared: true })
+}
+
+function ensureWindowsPrivateRoot() {
+  if (windowsPrivateRoot) return windowsPrivateRoot
+  const path = mkdtempSync(join(tmpdir(), 'dsbot-private-tests-'))
+  try {
+    windowsPrivateRoot = setPrivateTempAcl(path)
+  } catch (error) {
+    rmSync(path, { recursive: true, force: true })
+    throw error
+  }
+  process.once('exit', () => {
+    try { rmSync(path, { recursive: true, force: true }) } catch {}
+  })
+  return windowsPrivateRoot
 }
