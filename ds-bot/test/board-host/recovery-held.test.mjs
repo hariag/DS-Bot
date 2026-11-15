@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { heldTurnsView } from '../../src/host/recovery-held.js'
+import { heldTurnsView, queuedDeliveriesView } from '../../src/host/recovery-held.js'
 import { boundedRecoveryView } from '../../src/host/resume.js'
 
 const key = n => String(n).padStart(64, '0')
@@ -64,4 +64,28 @@ test('ignored turns remain visible with their original unknown status and decisi
   const broken = heldTurnsView({[key(1)]:{...value,decisions:[{revision:2,choice:'ignored',by:'user',at:1}]}}, {kind:'personal',id:'one'}, bots)
   assert.equal(broken.incomplete,true)
   assert.equal(broken.items.length,0)
+})
+
+test('queued recovery messages are scoped, bounded, and expose metadata only', () => {
+  const queued = {
+    'session-room': [
+      { at:1700000000000, recoveryHold:'history-unavailable', decisions:[{revision:1,choice:'ignored',by:'user',at:1700000001000}],
+        args:{ exchangeId:'exchange-queued', roomId:'group', toId:'one', fromId:'two', role:'room', text:'SECRET MESSAGE' } },
+      { recoveryHold:'prepared', args:{ exchangeId:'exchange-other', roomId:'other', toId:'two', role:'room', text:'SECRET OTHER' } },
+    ],
+    'session-personal': [
+      { recoveryHold:'history-seen', args:{ exchangeId:'exchange-private', toId:'one', fromId:'two', role:'request', text:'SECRET PRIVATE' } },
+    ],
+  }
+  const view = queuedDeliveriesView(queued, {kind:'room',id:'group'}, bots)
+  assert.equal(view.incomplete, false)
+  assert.equal(view.items.length, 1)
+  assert.equal(view.items[0].recipientName, 'One')
+  assert.equal(view.items[0].status, 'history-unavailable')
+  assert.equal(view.items[0].decision, 'ignored')
+  assert.equal(view.items[0].decisionRevision, 1)
+  assert.deepEqual(queuedDeliveriesView(queued, {kind:'personal',id:'one'}, bots).items.map(item => item.exchangeId), ['exchange-private'])
+  assert.deepEqual(queuedDeliveriesView(queued, {kind:'personal',id:'user'}, bots).items.map(item => item.exchangeId), ['exchange-private'])
+  assert.doesNotMatch(JSON.stringify(view), /SECRET|fromId|args|text|roomId/)
+  assert.deepEqual(queuedDeliveriesView(null, {kind:'room',id:'group'}), {incomplete:true,items:[]})
 })

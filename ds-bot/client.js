@@ -12567,6 +12567,25 @@ var ZH = {
   "Ignored": "已忽略",
   "Ignore": "忽略",
   "Undo ignore": "撤销忽略",
+  "Send outcome unknown": "投递结果未知",
+  "Session history unavailable": "会话历史不可用",
+  "Exchange found in history": "历史中已发现此交接",
+  "Work stopped": "工作已停止",
+  "Review outcome unknown": "复核结果未知",
+  "Queued at": "入队时间",
+  "Queued messages awaiting review": "待核对的排队消息",
+  "Ignored queued messages": "已忽略的排队消息",
+  "Ignoring prevents future automatic recovery and does not complete the work.": "忽略会阻止后续自动恢复，但不会完成工作。",
+  "The send result is unknown. It will not be sent again automatically.": "投递结果未知，不会自动再次发送。",
+  "The relevant Session history could not be read. The same exchange stays held until recovery can check it.": "无法读取相关会话历史。这条交接会保持挂起，等待恢复流程核查。",
+  "The exchange is present in Session history, but its outcome is unknown. It will not be sent again.": "会话历史中已有这条交接，但结果未知，不会再次发送。",
+  "The work is stopped or its stop state is unknown. This delivery remains held.": "工作已停止或停止状态未知，这条投递会保持挂起。",
+  "The group review outcome is unknown. This delivery remains held.": "群巡检结果未知，这条投递会保持挂起。",
+  "Message text is hidden. These exchanges stay held until recovery can verify their delivery status.": "消息正文已隐藏。恢复流程确认投递状态前，这些交接会保持挂起。",
+  "Some queued messages could not be listed.": "部分排队消息无法完整列出。",
+  "Restoring review only keeps this unknown send visible; it does not enable a resend.": "恢复关注只会重新显示这条投递结果未知的记录，不会启用重发。",
+  "Restoring review lets later recovery check the same exchange; it does not send it now.": "恢复关注后，后续恢复流程会继续核查同一条交接；当前不会发送。",
+  "{turns} interrupted turns · {messages} queued messages": "{turns} 个中断回合 · {messages} 条待核对消息",
   "Task details": "任务详情",
   "Close card": "关闭卡片",
   "Previous columns": "上一组列表",
@@ -36988,6 +37007,36 @@ function HeldRecord({ item, scope, request, busy, decide }) {
     (0, import_react50.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore"))
   );
 }
+var queuedDeliveryStatus = (value) => value === "send-outcome-unknown" ? t("Send outcome unknown") : value === "history-unavailable" ? t("Session history unavailable") : value === "seen-in-history" ? t("Exchange found in history") : value === "work-stopped" ? t("Work stopped") : t("Review outcome unknown");
+var queuedDeliveryNote = (value) => value === "send-outcome-unknown" ? t("The send result is unknown. It will not be sent again automatically.") : value === "history-unavailable" ? t("The relevant Session history could not be read. The same exchange stays held until recovery can check it.") : value === "seen-in-history" ? t("The exchange is present in Session history, but its outcome is unknown. It will not be sent again.") : value === "work-stopped" ? t("The work is stopped or its stop state is unknown. This delivery remains held.") : t("The group review outcome is unknown. This delivery remains held.");
+var queuedDeliveryRestoreNote = (value) => value === "send-outcome-unknown" ? t("Restoring review only keeps this unknown send visible; it does not enable a resend.") : t("Restoring review lets later recovery check the same exchange; it does not send it now.");
+function QueuedDelivery({ item, busy, decide }) {
+  return (0, import_react50.createElement)(
+    "article",
+    { className: "bt-recovery-delivery" },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-delivery-heading" },
+      (0, import_react50.createElement)("strong", null, item.recipientName),
+      (0, import_react50.createElement)("span", { className: "bt-recovery-badge" }, t(item.decision === "ignored" ? "Ignored" : queuedDeliveryStatus(item.status)))
+    ),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-recovery-facts" },
+      (0, import_react50.createElement)(Fact, { label: t("Session ID"), value: item.sessionId }),
+      (0, import_react50.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId }),
+      (0, import_react50.createElement)(Fact, { label: t("Queued at"), value: Number.isSafeInteger(item.queuedAt) ? snapshotTime(item.queuedAt) : t("Unknown") })
+    ),
+    (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, queuedDeliveryNote(item.status)),
+    (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring prevents future automatic recovery and does not complete the work.")),
+    item.decision === "ignored" ? (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, queuedDeliveryRestoreNote(item.status)) : null,
+    (0, import_react50.createElement)(
+      "button",
+      { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") },
+      t(item.decision === "ignored" ? "Undo ignore" : "Ignore")
+    )
+  );
+}
 function HeldTurns({ recovery, scope, request, onRefresh }) {
   const [query, setQuery] = (0, import_react50.useState)("");
   const [busy, setBusy] = (0, import_react50.useState)(""), [error, setError] = (0, import_react50.useState)("");
@@ -37008,6 +37057,21 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
       setBusy("");
     }
   };
+  const decideDelivery = async (item, choice) => {
+    if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return;
+    inFlight.current = true;
+    setBusy(item.recoveryId);
+    setError("");
+    try {
+      await request("board-queued-delivery-decision", { scope, recoveryId: item.recoveryId, expectedRevision: item.decisionRevision, choice });
+      await onRefresh();
+    } catch {
+      setError(t("Decision outcome is unknown. Refresh before trying again."));
+    } finally {
+      inFlight.current = false;
+      setBusy("");
+    }
+  };
   if (!recovery || recovery.available !== true) return (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
   const needle = query.trim().toLocaleLowerCase();
@@ -37015,6 +37079,16 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const pendingRows = filtered.filter((item) => item.decision !== "ignored");
   const ignoredRows = filtered.filter((item) => item.decision === "ignored");
   const groups = recoveryGroups(pendingRows, (item) => item.botId, (item) => item.botName);
+  const deliveries = Array.isArray(recovery.deliveries) ? recovery.deliveries : [];
+  const filteredDeliveries = deliveries.filter((item) => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]));
+  const pendingDeliveries = filteredDeliveries.filter((item) => item.decision !== "ignored");
+  const ignoredDeliveries = filteredDeliveries.filter((item) => item.decision === "ignored");
+  const renderDeliveries = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-deliveries" }, recoveryGroups(list, (item) => item.recipientId, (item) => item.recipientName).map((group) => (0, import_react50.createElement)(
+    "section",
+    { key: group.id, className: "bt-recovery-group" },
+    (0, import_react50.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react50.createElement)("strong", null, group.name), (0, import_react50.createElement)("span", null, group.rows.length)),
+    group.rows.map((item) => (0, import_react50.createElement)(QueuedDelivery, { key: item.recoveryId, item, busy, decide: decideDelivery }))
+  )));
   const renderRows = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-groups" }, recoveryGroups(list, (item) => item.botId, (item) => item.botName).map((group) => (0, import_react50.createElement)(
     "section",
     { key: group.id, className: "bt-recovery-group" },
@@ -37034,9 +37108,9 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
         "span",
         { className: "bt-recovery-summary-text" },
         (0, import_react50.createElement)("strong", null, t("Interrupted work")),
-        (0, import_react50.createElement)("small", null, t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
+        (0, import_react50.createElement)("small", null, pendingDeliveries.length ? t("{turns} interrupted turns · {messages} queued messages", { turns: pendingRows.length, messages: pendingDeliveries.length }) : t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
       ),
-      (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !rows2.length ? "—" : String(rows2.filter((item) => item.decision !== "ignored").length))
+      (0, import_react50.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? "—" : String(pendingRows.length + pendingDeliveries.length))
     ),
     (0, import_react50.createElement)(
       "div",
@@ -37049,16 +37123,25 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
         (0, import_react50.createElement)("span", null, t("Snapshot time (UTC)"), ": ", snapshotTime(recovery.sampledAt))
       ),
       recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("Recovery records are unavailable or incomplete.")) : null,
-      rows2.length ? (0, import_react50.createElement)(
+      rows2.length || deliveries.length ? (0, import_react50.createElement)(
         "label",
         { className: "bt-recovery-search" },
         (0, import_react50.createElement)("span", { className: "bt-recovery-sr" }, t("Filter by Bot or ID")),
         (0, import_react50.createElement)("input", { type: "search", value: query, placeholder: t("Filter by Bot or ID"), onChange: (event) => setQuery(event.target.value) })
       ) : null,
-      !rows2.length && !recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No interrupted turns in this snapshot.")) : null,
-      rows2.length && !filtered.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
+      !rows2.length && !deliveries.length && !recovery.incomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No interrupted turns in this snapshot.")) : null,
+      (rows2.length || deliveries.length) && !filtered.length && !filteredDeliveries.length ? (0, import_react50.createElement)("p", { className: "bt-recovery-empty", role: "status" }, t("No matching records.")) : null,
       groups.length ? renderRows(pendingRows) : null,
-      ignoredRows.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Ignored")} (${ignoredRows.length})`), renderRows(ignoredRows)) : null
+      ignoredRows.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Ignored")} (${ignoredRows.length})`), renderRows(ignoredRows)) : null,
+      pendingDeliveries.length || ignoredDeliveries.length || recovery.deliveriesIncomplete ? (0, import_react50.createElement)(
+        "section",
+        { className: "bt-recovery-delivery-section" },
+        (0, import_react50.createElement)("div", { className: "bt-recovery-list-header" }, (0, import_react50.createElement)("strong", null, t("Queued messages awaiting review")), (0, import_react50.createElement)("span", null, pendingDeliveries.length)),
+        (0, import_react50.createElement)("p", { className: "bt-recovery-note" }, t("Message text is hidden. These exchanges stay held until recovery can verify their delivery status.")),
+        recovery.deliveriesIncomplete ? (0, import_react50.createElement)("p", { className: "bt-recovery-warning", role: "status" }, t("Some queued messages could not be listed.")) : null,
+        pendingDeliveries.length ? renderDeliveries(pendingDeliveries) : null,
+        ignoredDeliveries.length ? (0, import_react50.createElement)("details", null, (0, import_react50.createElement)("summary", null, `${t("Ignored queued messages")} (${ignoredDeliveries.length})`), renderDeliveries(ignoredDeliveries)) : null
+      ) : null
     )
   );
 }
@@ -38818,6 +38901,7 @@ var TASK_BOARD_CSS = `
 .bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
 .bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
 .bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:8px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
+.bt-recovery-delivery-section{display:grid;gap:8px;min-width:0;padding-top:12px;border-top:1px solid var(--bt-line)}.bt-recovery-deliveries{display:flex;flex-direction:column;gap:8px;max-height:250px;overflow:auto;min-width:0}.bt-recovery-delivery{display:grid;gap:8px;min-width:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-main)}.bt-recovery-delivery-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.bt-recovery-delivery-heading strong{min-width:0;overflow-wrap:anywhere;font-size:12px}
 .bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:8px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
 .bt-recovery-manual{display:flex;align-items:end;gap:8px}.bt-recovery-manual label{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:var(--bt-ink-2);font-size:12px}.bt-board-dialog .bt-recovery-manual input,.bt-board-dialog .bt-recovery-form textarea{box-sizing:border-box;width:100%;padding:8px 10px;color:var(--bt-ink);background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit}.bt-recovery-snapshot,.bt-recovery-history{padding:12px;background:var(--bt-sidebar);border-radius:8px;font-size:12px;line-height:1.5}.bt-recovery-snapshot .bt-recovery-facts{margin-top:10px}.bt-recovery-review,.bt-recovery-form{display:flex;flex-direction:column;gap:10px}.bt-recovery-note{margin:0;color:var(--bt-ink-2);font-size:12px}.bt-recovery-form label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-recovery-form textarea{min-height:54px;resize:vertical}.bt-recovery-form button{align-self:flex-start}.bt-recovery-history{display:grid;gap:8px}.bt-recovery-form .bt-recovery-confirm{flex-direction:row;align-items:flex-start;gap:8px}.bt-recovery-confirm input{flex:none}.bt-periodic-context{display:flex;flex-direction:column;gap:10px}.bt-recovery-notice{margin:0;padding:9px 11px;border-radius:8px;color:var(--bt-ink);background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));font-size:12px}
 .bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
