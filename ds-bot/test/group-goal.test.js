@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -8,6 +8,7 @@ import { afterRound } from './relay-rows.js'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
+import { privateTempDir } from './private-temp.mjs'
 
 // Chief, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
 const seed = (room = {}, extraRooms = {}) => ({
@@ -28,7 +29,7 @@ const seed = (room = {}, extraRooms = {}) => ({
 })
 
 async function start(t, room, services, extraRooms, existingHome) {
-  const home = existingHome ?? mkdtempSync(join(tmpdir(), 'ds-bot-goal-'))
+  const home = existingHome ?? privateTempDir(join(tmpdir(), 'ds-bot-goal-'))
   if (existingHome === undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(seed(room, extraRooms)))
   const ctx = fakeContext({ services })
   const agents = new Map()
@@ -1083,7 +1084,7 @@ test('recovery projection rejects an oversized file without changing it', async 
 
 test('startup holds are unavailable until the copied records reach the file', async t => {
   t.mock.timers.enable({ apis:['setTimeout'] })
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-goal-'))
+  const home = privateTempDir(join(tmpdir(), 'ds-bot-goal-'))
   const record = { botId:'b', roomId:'r1', since:1 }
   writeFileSync(join(home, 'state.json'), JSON.stringify(seed()))
   writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns:{ gb:record }, queued:{}, heldTurns:{} }))
@@ -2471,7 +2472,7 @@ test('an ordinary owner check becomes unresolved when that owner receives uncert
 })
 
 test('old Sessions, missing room provenance, removed recipients and held turns remain visible through recovery', async t=>{
-  const home=mkdtempSync(join(tmpdir(),'ds-bot-old-room-'))
+  const home=privateTempDir(join(tmpdir(),'ds-bot-old-room-'))
   writeFileSync(join(home,'state.json'),JSON.stringify(seed()))
   const original={turns:{},queued:{oldSession:[
     {at:1,args:{role:'room',roomId:'r1',toId:'b',exchangeId:'old-valid'},recoveryHold:'prepared'},

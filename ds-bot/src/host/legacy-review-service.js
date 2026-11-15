@@ -39,7 +39,7 @@ export function install(rt) {
     const table=decisions();if(table===undefined){if(decisionBlocked)throw Error('work decision outcome unknown');return}
     writable();const lease=rt.homeLockVersion()
     if(!decisionBlocked&&table===confirmedTable&&lease===confirmedLease)return
-    const file=await open(rt.statePath,constants.O_RDONLY | (constants.O_NOFOLLOW??0))
+    const file=await open(rt.statePath,(process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW??0))
     try {
       const before=await file.stat();if(!before.isFile())throw Error('work decision journal unavailable')
       const saved=JSON.parse(await file.readFile('utf8'))?.legacyWorkDecisions

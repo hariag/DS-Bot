@@ -30,7 +30,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   let directoryIdentity
   function readMarker(path, sync = false) {
-    const fd = openSync(path, constants.O_RDONLY | nofollow)
+    const fd = openSync(path, (sync && process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | nofollow)
     try {
       const stat = fstatSync(fd)
       if (!isPrivateFile(path, stat) || stat.size > 1024) throw Error('redo identity unavailable')
@@ -92,7 +92,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   }
   function confirmWitnessTable(generation) {
     sameLease(generation)
-    const expected = copy(witnessTable()), fd = openSync(rt.statePath, constants.O_RDONLY | nofollow)
+    const expected = copy(witnessTable()), fd = openSync(rt.statePath, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | nofollow)
     try {
       const before = fstatSync(fd)
       if (!before.isFile() || before.size > 64 * 1024 * 1024) throw Error('redo witness unavailable')
@@ -172,7 +172,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     } finally { closeSync(fd) }
   }
   function confirm(row, generation) {
-    const path = pathFor(row.operationId), fd = openSync(path, constants.O_RDONLY | nofollow)
+    const path = pathFor(row.operationId), fd = openSync(path, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | nofollow)
     try {
       const before = fstatSync(fd)
       if (!before.isFile() || before.size > 65536 || !isDeepStrictEqual(JSON.parse(readFileSync(fd, 'utf8')), row)) throw Error('redo snapshot unavailable')

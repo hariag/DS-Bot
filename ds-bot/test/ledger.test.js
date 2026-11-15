@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -161,21 +161,49 @@ test('a reader that takes over writing reads the book again first', async (t) =>
   assert.deepEqual(parseBook(readFileSync(writer.file('group-r1'), 'utf8')).map(record => record.seq), [1, 2, 3])
 })
 
-test('a write that does not reach the disk is reported to whoever waits for it', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
+test('a failed ledger write blocks later deliveries and removes unwritten records from memory', async (t) => {
   const { rt, home } = host(t)
-  mkdirSync(join(home, 'ledger'), { recursive: true })
-  chmodSync(join(home, 'ledger'), 0o500)
-  try {
-    rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
-    await assert.rejects(rt.ledger.written('pair-a-b'))
-    // The queue goes on for the next record, and memory holds only what landed.
-    await rt.ledger.flush('pair-a-b')
-    assert.deepEqual(rt.ledger.records('pair-a-b'), [])
-  } finally {
-    chmodSync(join(home, 'ledger'), 0o700)
-  }
-  // Sent again, it is written again.
+  rt.ledger.open('pair-a-b')
+  writeFileSync(join(home, 'ledger'), 'not a directory')
   rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
-  await rt.ledger.written('pair-a-b')
-  assert.deepEqual(parseBook(readFileSync(join(home, 'ledger', 'pair-a-b.jsonl'), 'utf8')).map(record => record.id), ['x'])
+  rt.ledger.append('pair-a-b', { id: 'y', text: 'later' })
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  rmSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger'))
+  rt.ledger.append('pair-a-b', { id: 'z', text: 'retry' })
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  assert.equal(existsSync(join(home, 'ledger', 'pair-a-b.jsonl')), false)
+})
+
+test('written refuses an in-memory-only append even if the host becomes writable', async (t) => {
+  let readOnly = 'another host owns the team'
+  const { rt } = host(t, { readOnly: () => readOnly })
+  rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
+  await assert.rejects(rt.ledger.written('pair-a-b'), /read-only/)
+  readOnly = undefined
+  await assert.rejects(rt.ledger.written('pair-a-b'), /not persisted/)
+})
+
+test('a failed import is not accepted as a persisted delivery record', async (t) => {
+  const { rt, home } = host(t)
+  rt.ledger.importer('pair-', () => {
+    writeFileSync(join(home, 'ledger'), 'not a directory')
+    return [{ id: 'x', text: 'old' }]
+  })
+  assert.equal(rt.ledger.records('pair-a-b')[0].id, 'x')
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+})
+
+test('an unreadable book is not replaced by an importer', async (t) => {
+  const { rt, home } = host(t)
+  mkdirSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger', `${bookFile('pair-a-b')}`))
+  let imported = false
+  rt.ledger.importer('pair-', () => { imported = true; return [{ id: 'x' }] })
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  assert.equal(imported, false)
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.equal(existsSync(join(home, 'ledger', bookFile('pair-a-b'))), true)
 })

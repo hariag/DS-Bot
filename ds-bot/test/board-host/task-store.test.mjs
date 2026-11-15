@@ -1,17 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { openTaskStore } from '../../src/host/task-store.mjs'
+import { privateTempDir } from '../private-temp.mjs'
+import { stoppedBeforeSuccess } from '../process-stop.mjs'
 
 const hex = 'a'.repeat(40)
 const opts = { assertWriteLock() {}, authorize() { return true }, verifyRegistration() { return true }, verifyEvidence() { return true }, verifyReceipt() { return true }, verifyInvalidation() { return true }, verifyAttachment() { return true }, verifyAdmission() { return true } }
 function fixture(t, options = opts) {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-task-test-'))
+  const dir = privateTempDir(join(tmpdir(), 'dsbot-task-test-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const path = join(dir, 'store.sqlite'), store = openTaskStore(path, options)
   t.after(() => { try { store.close() } catch {} })
@@ -212,10 +214,10 @@ test('admission intent is immutable and repeated claim is lookup-only', t => {
 })
 
 test('process death after admission intent commit preserves original identity without replay', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-admission-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const dir = privateTempDir(join(tmpdir(), 'dsbot-admission-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
   const path = join(dir, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./admission-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
   const store = openTaskStore(path, opts); t.after(() => store.close())
   const action = store.listActions('t')[0], saved = store.admission(action.id)
   assert.equal(saved.state, 'claimed'); assert.equal(saved.admissionId, 'admission-1'); assert.equal(saved.targetSessionId, 'session-1')
@@ -274,9 +276,9 @@ test('cancellation and action state roll back together if the home lock is lost'
 })
 
 test('process death after cancellation commit retains uncertain intent and decision', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-decision-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const dir = privateTempDir(join(tmpdir(), 'dsbot-decision-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
   const path = join(dir, 'tasks.sqlite'), child = spawnSync(process.execPath, [fileURLToPath(new URL('./decision-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
   const store = openTaskStore(path, opts); t.after(() => store.close())
   const action = store.listActions('t')[0], intent = store.admission(action.id)
   assert.equal(action.state, 'uncertain'); assert.equal(intent.admissionId, 'admission-1'); assert.equal(store.operation('cancel-1').status, 'committed')
@@ -323,9 +325,9 @@ test('invalidating a reported task holds its accepted review without deleting it
 })
 
 test('SIGKILL after upstream invalidation preserves uncertain downstream intent', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-invalidate-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const dir = privateTempDir(join(tmpdir(), 'dsbot-invalidate-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
   const path = join(dir, 'tasks.sqlite'), child = spawnSync(process.execPath, [fileURLToPath(new URL('./invalidation-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
   const store = openTaskStore(path, opts); t.after(() => store.close())
   const action = store.listActions('b')[0], intent = store.admission(action.id)
   assert.equal(action.state, 'uncertain'); assert.equal(store.get('b').stale, true)
@@ -353,7 +355,7 @@ test('home lock loss before commit rolls back task and operation together', t =>
 })
 
 test('unknown database is never overwritten', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-task-unknown-')); t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const dir = privateTempDir(join(tmpdir(), 'dsbot-task-unknown-')); t.after(() => rmSync(dir, { recursive: true, force: true }))
   const path = join(dir, 'unknown.sqlite'); writeFileSync(path, 'not sqlite', { mode: 0o600 })
   assert.throws(() => openTaskStore(path, opts))
 })

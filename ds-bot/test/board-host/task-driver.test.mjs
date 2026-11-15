@@ -1,14 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { createTaskDriver } from '../../src/host/task-driver.mjs'
+import { privateTempDir } from '../private-temp.mjs'
 
 const opts = {assertWriteLock() {}, authorize() {return true}, verifyRegistration() {return true}, verifyAdmission() {return true}, verifyReceipt() {return true}}
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'board-driver-'))
+  const dir = privateTempDir(join(tmpdir(), 'board-driver-'))
   const store = openTaskStore(join(dir, 'tasks.sqlite'), opts)
   t.after(() => { store.close(); rmSync(dir, {recursive:true, force:true}) })
   store.create({operationId:'create', actor:'user', task:{id:'task',title:'Task',owner:'owner',reviewer:'reviewer',scope:'personal:owner',acceptance:'Review',dependencies:[]}})
