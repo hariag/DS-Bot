@@ -13,7 +13,7 @@ import { install as installDelivery } from '../../src/host/delivery.js'
 import { install as installPrivacy } from '../../src/host/privacy.js'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
-import { privateTempDir } from '../private-temp.mjs'
+import { describePrivateTempAcl, privateTempDir } from '../private-temp.mjs'
 import { stoppedBeforeSuccess } from '../process-stop.mjs'
 
 function fixture(t) {
@@ -97,7 +97,8 @@ test('actual task journal backs the five instance-user endpoints with isolated g
   const upload = { scope, taskId:'t1', operationId:'upload-1', expectedRevision:2, images:[image, image2] }
   const uploaded = await route.fetch(request(upload))
   const uploadResult = await uploaded.json()
-  assert.equal(uploadResult.ok, true, uploadResult.error?.message)
+  const aclDetails = !uploadResult.ok ? describePrivateTempAcl(join(rt.home, 'board-v1', 'images')) : ''
+  assert.equal(uploadResult.ok, true, [uploadResult.error?.message, aclDetails].filter(Boolean).join('\n'))
   assert.equal((await (await route.fetch(request(upload))).json()).ok, true)
   const changed = { ...upload, images:[image, { ...image2, name:'different.png' }] }
   assert.equal((await (await route.fetch(request(changed))).json()).ok, false)
@@ -510,20 +511,22 @@ test('sharing rejects private bots and removes visibility when source membership
 })
 
 test('process death before the request commit leaves neither task nor rejection receipt', t => {
-  const home = privateTempDir(join(tmpdir(), 'dsbot-board-crash-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-crash-')); let store
+  t.after(() => { try { store?.close() } catch {} rmSync(home, { recursive:true, force:true }) })
   const path = join(home, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./board-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
   assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
-  const store = openTaskStore(path, { assertWriteLock() {} }); t.after(() => store.close())
+  store = openTaskStore(path, { assertWriteLock() {} })
   assert.equal(store.get('crash-task'), undefined); assert.equal(store.operation('crash-op'), undefined)
 })
 
 test('process death after cancel commit preserves its rejection tombstone', t => {
-  const home = privateTempDir(join(tmpdir(), 'dsbot-board-cancel-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-cancel-')); let store
+  t.after(() => { try { store?.close() } catch {} rmSync(home, { recursive:true, force:true }) })
   const path = join(home, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./board-cancel-child.mjs', import.meta.url)), path], { encoding:'utf8' })
   assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
-  const store = openTaskStore(path, { assertWriteLock() {}, authorize() { return true } }); t.after(() => store.close())
+  store = openTaskStore(path, { assertWriteLock() {}, authorize() { return true } })
   assert.equal(store.operation('cancel-crash').status, 'rejected')
   assert.equal(store.cancelRequest({ operationId:'cancel-crash', actor:'user' }).state, 'rejected')
 })

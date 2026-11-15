@@ -25,6 +25,16 @@ const WINDOWS_PRIVATE_ACL = [
   'Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop',
 ].join('\n')
 
+const WINDOWS_ACL_DETAILS = [
+  "$ErrorActionPreference = 'Stop'",
+  '$path = $env:DSBOT_TEST_PRIVATE_PATH',
+  '$acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+  '$identity = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+  '$owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value',
+  'Write-Output "identity=$identity owner=$owner"',
+  'foreach ($entry in $acl.Access) { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; Write-Output "$sid $($entry.AccessControlType) $($entry.FileSystemRights) inherited=$($entry.IsInherited)" }',
+].join('\n')
+
 export function setPrivateTempAcl(path, { shared = false } = {}) {
   if (process.platform !== 'win32') return path
   const systemRoot = process.env.SystemRoot
@@ -40,6 +50,16 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
   }
   invalidateWindowsAclCache(path)
   return path
+}
+
+export function describePrivateTempAcl(path) {
+  if (process.platform !== 'win32') return ''
+  const executable = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_DETAILS], {
+    encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
+    env: { ...process.env, DSBOT_TEST_PRIVATE_PATH: path },
+  })
+  return result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `PowerShell exited with ${result.status}`
 }
 
 export function privateTempDir(prefix) {
