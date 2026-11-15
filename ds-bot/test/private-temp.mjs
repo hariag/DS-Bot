@@ -12,6 +12,7 @@ const WINDOWS_PRIVATE_ACL = [
   '$path = $env:DSBOT_TEST_PRIVATE_PATH',
   "if ([string]::IsNullOrWhiteSpace($path)) { exit 10 }",
   '$acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+  '$acl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)',
   '$acl.SetAccessRuleProtection($true, $false)',
   'foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }',
   '$inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit',
@@ -33,7 +34,10 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
     encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
     env: { ...process.env, DSBOT_TEST_PRIVATE_PATH: path, DSBOT_TEST_SHARED_ACCESS: shared ? '1' : '0' },
   })
-  if (result.error || result.status !== 0) throw new Error('Could not secure Windows test temp directory')
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `PowerShell exited with ${result.status}`
+    throw new Error(`Could not secure Windows test temp directory: ${detail}`)
+  }
   invalidateWindowsAclCache(path)
   return path
 }
