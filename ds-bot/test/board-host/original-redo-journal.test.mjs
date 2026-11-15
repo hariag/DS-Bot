@@ -8,7 +8,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { createOriginalRedoJournal, originalRedoIdentity } from '../../src/host/original-redo-journal.mjs'
 import { userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
 import { install as installStore } from '../../src/host/store.js'
-import { grantSharedTempAccessForTest, privateTempDirAsync, setPrivateTempAcl } from '../private-temp.mjs'
+import { grantSharedTempAccessForTest, privateTempDirAsync } from '../private-temp.mjs'
 
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d', otherId = 'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454'
 const recoveryId = 'a'.repeat(64), scope = { kind:'room', id:'room-1' }
@@ -113,7 +113,6 @@ test('rejects a private directory whose permissions were widened', async t => {
   const dir = join(f.home, 'original-redo-v1')
   if (process.platform === 'win32') grantSharedTempAccessForTest(dir)
   else await chmod(dir, 0o755)
-  t.after(() => process.platform === 'win32' ? setPrivateTempAcl(dir) : chmod(dir, 0o700).catch(() => {}))
   await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), Error)
   assert.equal(JSON.parse(await readFile(join(dir, `${operationId}.json`), 'utf8')).state, 'prepared')
 })
@@ -183,7 +182,6 @@ test('missing or altered journal and recovery markers fail closed', async t => {
 test('a callback that widens the journal directory is fenced before dispatch', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
   const root = join(f.home, 'original-redo-v1')
-  t.after(() => process.platform === 'win32' ? setPrivateTempAcl(root) : chmod(root, 0o700).catch(() => {}))
   f.dependencies.validateBinding = () => { if (process.platform === 'win32') grantSharedTempAccessForTest(root); else fs.chmodSync(root, 0o755); return true }
   const journal = createOriginalRedoJournal(f.rt, f.dependencies)
   await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /directory changed/)
