@@ -1304,6 +1304,54 @@ test('a queued delivery with unreadable history is retained and reported', async
   assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
 })
 
+test('a queued delivery is matched through DSH event pages without using inspect', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const first = await start(home)
+  await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
+  const message = first.agentOf('b').calls[0]
+  await settle(() => notes(home).queued?.b?.length === 1)
+  await first.stop()
+
+  let inspectCalls = 0
+  const second = await start(home, undefined, async () => {
+    inspectCalls += 1
+    throw new Error('inspect must not be used when DSH provides events')
+  })
+  const requests = []
+  second.ctx.sessionController.events = async (request, signal) => {
+    requests.push(request)
+    assert.equal(signal.aborted, false)
+    if (requests.length === 1) return {
+      cursor: 50,
+      hasMore: true,
+      records: [
+        { type: 'event', event: { type: 'turn/start', seq: 48, time: 1, data: { turn: 4 } } },
+        { type: 'event', event: { type: 'user/message', seq: 49, time: 2, data: { source: { exchangeId: 'newer-exchange' } } } },
+        { type: 'event', event: { type: 'turn/end', seq: 50, time: 3, data: { turn: 4 } } },
+      ],
+    }
+    return {
+      cursor: 50,
+      hasMore: false,
+      records: [
+        { type: 'event', event: { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } } },
+        { type: 'event', event: { type: 'user/message', seq: 7, time: 1, data: { source: message.source } } },
+        { type: 'event', event: { type: 'turn/end', seq: 47, time: 2, data: { turn: 3 } } },
+      ],
+    }
+  }
+
+  t.mock.timers.tick(3000)
+  await settle(() => notes(home).queued.b[0]?.recoveryHold === 'history-seen')
+  assert.equal(second.agentOf('b').calls.length, 0)
+  assert.equal(inspectCalls, 0)
+  assert.deepEqual(requests, [
+    { address: { kind: 'session', sessionId: 'b' }, maxMessages: 50 },
+    { address: { kind: 'session', sessionId: 'b' }, maxMessages: 50, throughSeq: 50, beforeSeq: 48 },
+  ])
+})
+
 test('an uncertain queued exchange is not restarted through the interrupted-turn path', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
