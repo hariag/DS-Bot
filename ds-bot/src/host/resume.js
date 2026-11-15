@@ -24,6 +24,8 @@ import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecor
 export const RESUME_DELAY_MS = 3000
 const RECOVERY_VIEW_MAX_BYTES = 64 * 1024 * 1024
 const RECOVERY_VIEW_TIMEOUT_MS = 5000
+const HISTORY_PAGE_SIZE = 50
+const HISTORY_MAX_PAGES = 200
 const unavailableRecoveryView = () => ({ available: false, incomplete: true, items: [] })
 
 // A stuck filesystem or writer must not keep a board request open indefinitely.
@@ -913,10 +915,41 @@ export function install(rt) {
     }
   }
 
-  // A Session's durable log, as DSH keeps it: what happened there, and what it said.
-  // Undefined when this DSH cannot read it, or when the Session is gone.
+  // Current DSH exposes bounded `events` pages. Keep a compatibility path for
+  // older Hosts that still expose `inspect`; incomplete reads remain unknown.
   async function logOf(sessionId) {
-    const inspect = ctx.sessionController?.inspect
+    const controller = ctx.sessionController
+    const readPage = typeof controller?.events === 'function' ? controller.events.bind(controller)
+      : typeof controller?.page === 'function' ? controller.page.bind(controller) : undefined
+    if (readPage) {
+      const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS), pages = []
+      let throughSeq, beforeSeq
+      for (let pageNumber = 0; pageNumber < HISTORY_MAX_PAGES; pageNumber += 1) {
+        const request = { address:{ kind:'session', sessionId }, maxMessages:HISTORY_PAGE_SIZE,
+          ...(throughSeq !== undefined ? { throughSeq } : {}), ...(beforeSeq !== undefined ? { beforeSeq } : {}) }
+        const page = await readPage(request, signal).catch(() => undefined)
+        if (!page || !Array.isArray(page.records) || !Number.isSafeInteger(page.cursor) || page.cursor < -1
+          || typeof page.hasMore !== 'boolean' || (throughSeq !== undefined && page.cursor !== throughSeq)) return undefined
+        if (throughSeq === undefined) throughSeq = page.cursor
+        const events = []
+        let previousSeq = -1
+        for (const record of page.records) {
+          const event = record?.type === 'event' ? record.event : undefined
+          if (!event || typeof event.type !== 'string' || !Number.isSafeInteger(event.seq)
+            || event.seq <= previousSeq || event.seq > throughSeq || (beforeSeq !== undefined && event.seq >= beforeSeq)) return undefined
+          previousSeq = event.seq
+          events.push(event)
+        }
+        if (events.length === 0 && (page.hasMore || page.cursor !== -1)) return undefined
+        pages.unshift(events)
+        if (!page.hasMore) return pages.flat()
+        const firstSeq = events[0]?.seq
+        if (!Number.isSafeInteger(firstSeq) || firstSeq < 0 || (beforeSeq !== undefined && firstSeq >= beforeSeq)) return undefined
+        beforeSeq = firstSeq
+      }
+      return undefined
+    }
+    const inspect = controller?.inspect
     if (typeof inspect !== 'function') return undefined
     const seen = await inspect(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS)).catch(() => undefined)
     return Array.isArray(seen?.events) ? seen.events : undefined
