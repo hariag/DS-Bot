@@ -2647,12 +2647,22 @@ test('a post waiting for the next round does not start one after the user stops 
   assert.equal(host.agentOf('ga').calls.length, 0, 'nothing started after the stop')
   assert.equal(rt.roomActive('r1'), false)
   // The group's next message takes the draft with it: the admin is called for the goal.
-  host.round('c3', host.say('继续'))
+  const third = host.round('c3', host.say('继续'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   assert.equal(rt.roomLaterCount('r1'), 0, 'the item left the next-round queue')
   assert.match(text(host.agentOf('ga').calls[0]), /the user wants to set a goal/)
   host.begin('ga')
   host.finish('ga', '[PASS]')
+  await settle(() => third() !== undefined)
+})
+
+test('disposing the runtime aborts and waits for active group rounds', async (t) => {
+  const host = await start(t)
+  host.round('dispose', host.say('@Writer keep working'))
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  assert.equal(rt.roomRounds('r1').length, 1)
+  await host.ctx.dispose()
+  assert.equal(rt.roomRounds('r1').length, 0)
 })
 
 // While a round finishes (goal check, save), the group is still taken: a message that comes
