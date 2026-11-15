@@ -3,7 +3,7 @@ import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openS
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { userRedoConfirmation } from './user-redo-journal.mjs'
-import { invalidateWindowsAclCache, isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
+import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectorySync } from './directory-sync.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
@@ -29,16 +29,8 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     || typeof authorize !== 'function' || typeof proveOriginal !== 'function' || typeof validateBinding !== 'function') throw Error('redo authority unavailable')
   const root = join(rt.home, 'original-redo-v1'), marker = join(rt.home, '.original-redo-v1.identity'), innerMarker = join(root, '.identity'), busy = rt.originalRedoBusy ??= new Set()
   let directoryIdentity
-  function validateBindingAtBoundary(...args) {
-    invalidateWindowsAclCache()
-    try {
-      return validateBinding(...args)
-    } finally {
-      invalidateWindowsAclCache()
-    }
-  }
   function readMarker(path, sync = false) {
-    const fd = openSync(path, (sync && process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | nofollow)
+    const fd = openSync(path, constants.O_RDONLY | nofollow)
     try {
       const stat = fstatSync(fd)
       if (!isPrivateFile(path, stat) || stat.size > 1024) throw Error('redo identity unavailable')
@@ -90,7 +82,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   function pathFor(operationId) { if (!uuid(operationId)) throw Error('invalid redo operation'); return join(root, `${operationId}.json`) }
   function witnessFor(row) {
     return { version:1, recoveryId:row.recoveryId, operationId:row.operationId,
-      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest, row.previewOnly === true]) }
+      bindingHash:hash([row.recoveryId, row.operationId, row.scope, row.principal, row.identity, row.original, row.confirmationDigest]) }
   }
   function witnessTable() {
     const table = rt.state.originalRedoWitness
@@ -100,7 +92,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
   }
   function confirmWitnessTable(generation) {
     sameLease(generation)
-    const expected = copy(witnessTable()), fd = openSync(rt.statePath, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | nofollow)
+    const expected = copy(witnessTable()), fd = openSync(rt.statePath, constants.O_RDONLY | nofollow)
     try {
       const before = fstatSync(fd)
       if (!before.isFile() || before.size > 64 * 1024 * 1024) throw Error('redo witness unavailable')
@@ -180,7 +172,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     } finally { closeSync(fd) }
   }
   function confirm(row, generation) {
-    const path = pathFor(row.operationId), fd = openSync(path, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | nofollow)
+    const path = pathFor(row.operationId), fd = openSync(path, constants.O_RDONLY | nofollow)
     try {
       const before = fstatSync(fd)
       if (!before.isFile() || before.size > 65536 || !isDeepStrictEqual(JSON.parse(readFileSync(fd, 'utf8')), row)) throw Error('redo snapshot unavailable')
@@ -238,10 +230,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     if (!isDeepStrictEqual(readRecovery(row.recoveryId, generation), { recoveryId:row.recoveryId, operationId:row.operationId })) throw Error('redo recovery marker unavailable')
     confirmWitness(row, generation)
   }
-  async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest, previewOnly = false }) {
+  async function prepare({ operationId, recoveryId, scope, principal, acknowledged, confirmationDigest }) {
     const identity = originalRedoIdentity(operationId)
     if (!principalValid(principal)
-      || typeof previewOnly !== 'boolean' || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)) throw Error('redo confirmation required')
+      || acknowledged !== true || !scopeValid(scope) || !digest(recoveryId) || !digest(confirmationDigest)) throw Error('redo confirmation required')
     scope = copy(scope); principal = copy(principal)
     if (busy.has(operationId)) throw Error('redo outcome unknown')
     busy.add(operationId)
@@ -262,7 +254,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       if (reserved && (!existing || reserved.operationId !== operationId)) throw Error('redo already exists; inspect outcome')
       if (existing) {
         if (!reserved) throw Error('redo preparation outcome unknown')
-        if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest || (existing.previewOnly === true) !== previewOnly
+        if (existing.recoveryId !== recoveryId || !isDeepStrictEqual(existing.scope, scope) || !isDeepStrictEqual(existing.principal, principal) || existing.confirmationDigest !== confirmationDigest
           || !isDeepStrictEqual(existing.original, source)) throw Error('redo identity conflict')
         try { confirm(existing, generation); checkAccess(existing, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed'); confirm(existing, generation); confirmPhase(existing, generation); confirmWitness(existing, generation) }
         catch { throw Error('redo preparation outcome unknown') }
@@ -270,7 +262,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       }
       if (rows.some(row => row.recoveryId === recoveryId)) throw Error('redo already exists; inspect outcome')
       const row = { version:1, operationId, recoveryId, scope:copy(scope), principal:copy(principal), identity, original:source, confirmationDigest,
-        acknowledged:true, previewOnly, state:'prepared', createdAt:Date.now() }
+        acknowledged:true, state:'prepared', createdAt:Date.now() }
       try {
         rt.state.originalRedoWitness = { ...witnessTable(), [recoveryId]:witnessFor(row) }
         await rt.save({ required:true })
@@ -291,17 +283,16 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const generation = lease(); directory(generation)
       const row = read(operationId); checkAccess(row, generation)
       if (!isDeepStrictEqual(row.principal, principal)) throw Error('redo unavailable')
-      if (row.previewOnly === true) throw Error('redo execution was not authorized')
       confirmPhase(row, generation)
       if (row.state !== 'prepared') return { state:'unknown', operationId }
       const proof = await proveOriginal(copy(row.scope), row.recoveryId)
       const source = original(proof, row.recoveryId, row.scope, row.confirmationDigest)
       checkAccess(row, generation)
       if (!isDeepStrictEqual(source, row.original) || proof.isCurrent() !== true || !isDeepStrictEqual(read(operationId), row)) throw Error('redo proof changed')
-      if (validateBindingAtBoundary(copy(row), undefined) !== true) throw Error('redo binding unavailable')
+      if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding unavailable')
       checkAccess(row, generation); sameLease(generation)
       const next = { ...row, state:'dispatching' }
-      try { markPhase(row, 'dispatching', generation); write(next, generation, row); checkAccess(next, generation); confirmPhase(next, generation); if (proof.isCurrent() !== true || validateBindingAtBoundary(copy(next), undefined) !== true) throw Error('redo binding changed'); checkAccess(next, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed'); confirm(next, generation); confirmPhase(next, generation); confirmWitness(next, generation) }
+      try { markPhase(row, 'dispatching', generation); write(next, generation, row); checkAccess(next, generation); confirmPhase(next, generation); if (proof.isCurrent() !== true || validateBinding(copy(next), undefined) !== true) throw Error('redo binding changed'); checkAccess(next, generation); if (proof.isCurrent() !== true) throw Error('redo proof changed'); confirm(next, generation); confirmPhase(next, generation); confirmWitness(next, generation) }
       catch { throw Error('redo dispatch outcome unknown') }
       return { state:'dispatching', operationId, perform:true, binding:copy(next) }
     } finally { busy.delete(operationId) }
@@ -315,8 +306,8 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const row = read(operationId); checkAccess(row, generation)
       confirmPhase(row, generation)
       if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
-        || validateBindingAtBoundary(copy(row), undefined) !== true) throw Error('redo dispatch unavailable')
-      try { confirm(row, generation); checkAccess(row, generation); confirmPhase(row, generation); if (validateBindingAtBoundary(copy(row), undefined) !== true) throw Error('redo binding changed'); checkAccess(row, generation); confirm(row, generation); confirmPhase(row, generation); confirmWitness(row, generation) }
+        || validateBinding(copy(row), undefined) !== true) throw Error('redo dispatch unavailable')
+      try { confirm(row, generation); checkAccess(row, generation); confirmPhase(row, generation); if (validateBinding(copy(row), undefined) !== true) throw Error('redo binding changed'); checkAccess(row, generation); confirm(row, generation); confirmPhase(row, generation); confirmWitness(row, generation) }
       catch { throw Error('redo dispatch outcome unknown') }
       return copy(row)
     } finally { busy.delete(operationId) }
@@ -333,10 +324,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
       const row = read(operationId); checkAccess(row, generation)
       confirmPhase(row, generation)
       if (row.state !== 'dispatching' || !isDeepStrictEqual(row, binding) || !isDeepStrictEqual(row.principal, principal)
-        || validateBindingAtBoundary(copy(row), boundary) !== true) throw Error('redo claim unavailable')
+        || validateBinding(copy(row), boundary) !== true) throw Error('redo claim unavailable')
       checkAccess(row, generation); sameLease(generation)
       const next = { ...row, state:'claiming', turn:boundary }
-      try { markPhase(row, 'claiming', generation, boundary); write(next, generation, row); checkAccess(next, generation); confirmPhase(next, generation); if (validateBindingAtBoundary(copy(next), boundary) !== true) throw Error('redo binding changed'); checkAccess(next, generation); confirm(next, generation); confirmPhase(next, generation); confirmWitness(next, generation) }
+      try { markPhase(row, 'claiming', generation, boundary); write(next, generation, row); checkAccess(next, generation); confirmPhase(next, generation); if (validateBinding(copy(next), boundary) !== true) throw Error('redo binding changed'); checkAccess(next, generation); confirm(next, generation); confirmPhase(next, generation); confirmWitness(next, generation) }
       catch { throw Error('redo claim outcome unknown') }
       return copy(next)
     } finally { busy.delete(operationId) }

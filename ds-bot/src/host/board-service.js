@@ -1,5 +1,5 @@
 import { mkdirSync, lstatSync } from 'node:fs'
-import { link, open, rm } from 'node:fs/promises'
+import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -14,6 +14,8 @@ import { createTaskDriver } from './task-driver.mjs'
 import { createGoalBoardEditor } from './goal-board-editor.js'
 import { userRedoView } from './user-redo-view.mjs'
 import { createUserRedoPreparation } from './user-redo-preparation.mjs'
+import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
+import { syncDirectory } from './directory-sync.mjs'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -36,7 +38,7 @@ function privateDirectory(path, assertWritable) {
     try { mkdirSync(path, { mode: 0o700 }) } catch (e) { if (e.code !== 'EEXIST') throw e }
   }
   const stat = lstatSync(path)
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Board directory is not private')
+  if (!isPrivateDirectory(path, stat)) throw new Error('Board directory is not private')
 }
 
 // User requests and scoped Bot tools share one journal and transaction authority.
@@ -176,7 +178,7 @@ export function install(rt) {
         if (!proof || proof.taskId !== task.id || JSON.stringify(proof.reference) !== JSON.stringify(item)) return false
         try {
           const s = lstatSync(join(imageDir, proof.name))
-          return s.isFile() && !s.isSymbolicLink() && s.uid === process.getuid() && !(s.mode & 0o077)
+          return isPrivateFile(join(imageDir, proof.name), s)
             && s.dev === proof.stat.dev && s.ino === proof.stat.ino && s.size === proof.stat.size && s.mtimeMs === proof.stat.mtimeMs
         } catch { return false }
       },
@@ -436,8 +438,7 @@ export function install(rt) {
       if (!final.isFile() || final.isSymbolicLink() || (entry.existing ? !sameStat(final, entry.existing) : !sameStat(final, entry.staged))) throw new Error('Image identity changed')
       proofs.set(references[i].id, { taskId:meta.taskId, reference:references[i], name:entry.name, stat:{ dev:final.dev, ino:final.ino, size:final.size, mtimeMs:final.mtimeMs } })
     }
-    const dir = await open(inst.imageDir, 'r')
-    try { await dir.sync() } finally { await dir.close() }
+    await syncDirectory(inst.imageDir)
     return proofs
   }
   const upload = request => run(async () => {

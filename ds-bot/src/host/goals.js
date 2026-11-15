@@ -12,6 +12,7 @@ import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
 import { GOAL_IDLE_NUDGES, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
+import { syncDirectory } from './directory-sync.mjs'
 
 const TITLE_MAX = 80
 const BRIEF_MAX = 2000
@@ -770,8 +771,7 @@ export function install(rt) {
       const saved = JSON.parse(await file.readFile('utf8'))?.rooms?.[room.id]?.goal
       if (saved?.id !== goal.id || JSON.stringify(saved.reviewResolutions) !== JSON.stringify(entries)) throw new Error('Review decision was not saved')
       await file.sync()
-      const directory = await open(dirname(rt.statePath),constants.O_RDONLY)
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectory(dirname(rt.statePath))
       const afterFile = await file.stat(), after = await lstat(rt.statePath)
       rt.requireHomeLock()
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino

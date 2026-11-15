@@ -10,7 +10,7 @@
 // that waits for it, and an outcome that cannot be read is said to be unknown. The
 // request itself is never sent again there.
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, readFileSync } from 'node:fs'
+import { constants, lstatSync, readFileSync } from 'node:fs'
 import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
@@ -19,11 +19,14 @@ import { replaceFile } from './files.js'
 import { textOf } from './text.js'
 import { heldTurnsView, queuedDeliveriesView } from './recovery-held.js'
 import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
+import { syncDirectory } from './directory-sync.mjs'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
 const RECOVERY_VIEW_MAX_BYTES = 64 * 1024 * 1024
 const RECOVERY_VIEW_TIMEOUT_MS = 5000
+const HISTORY_PAGE_SIZE = 50
+const HISTORY_MAX_PAGES = 200
 const unavailableRecoveryView = () => ({ available: false, incomplete: true, items: [] })
 
 // A stuck filesystem or writer must not keep a board request open indefinitely.
@@ -293,6 +296,90 @@ export function install(rt) {
       () => { if (recoverySample === work) recoverySample = undefined })
     return boundedRecoveryView(work)
   }
+  // Internal evidence for an explicit user redo. This is not a public view:
+  // it contains the original trigger. Callers must first authenticate the user
+  // and authorize the board scope, and recheck isCurrent across every await.
+  // A scoped metadata listing alone is not authorization for a group input
+  // to be executed from a personal context.
+  const readRecoveryHeldOriginal = async (scope, recoveryId) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId)) return undefined
+    const pending = writing
+    await pending
+    if (writing !== pending || ownsRecoveryView() !== true) return undefined
+    const view = await rt.recoveryHeldView(scope)
+    if (writing !== pending || !view.available || !view.items.some(item => item.recoveryId === recoveryId)) return undefined
+    const hold = heldTurns[recoveryId], record = hold?.record, sessionId = hold?.sessionId
+    if (!record || typeof sessionId !== 'string' || typeof record.botId !== 'string'
+      || createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex') !== recoveryId) return undefined
+    const bot = rt.botOf(record.botId), roomId = record.roomId ?? record.trigger?.roomId
+    if (!bot || (record.roomId !== undefined && record.trigger?.roomId !== undefined && record.roomId !== record.trigger.roomId)) return undefined
+    const validScope = () => {
+      if (rt.botOf(record.botId) !== bot) return false
+      // A stale or corrupt roster can assign one Session to several places;
+      // the convenience indexes silently choose one and cannot prove origin.
+      let origins = 0
+      for (const candidate of Object.values(rt.state.bots ?? {})) {
+        if (rt.chatOf(candidate.id) === sessionId) origins += 1
+        origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
+      }
+      for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
+      for (const room of Object.values(rt.state.rooms ?? {})) {
+        if (rt.sessionOfRoom(room) === sessionId) origins += 1
+        origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
+        origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
+        for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
+      }
+      if (origins !== 1) return false
+      const owner = rt.groupOwners.get(sessionId) ?? rt.pastOwners.get(sessionId)
+      if (scope.kind === 'room') {
+        const room = rt.roomOf(scope.id)
+        return roomId === scope.id && !!room && room.members?.includes(record.botId) === true
+          && owner?.botId === record.botId && owner?.roomId === scope.id
+      }
+      return scope.kind === 'personal' && (scope.id === 'user' || scope.id === record.botId)
+        && roomId === undefined && (rt.chatOwners.get(sessionId) === record.botId
+          || (owner?.botId === record.botId && owner.roomId === undefined && rt.pastOwners.has(sessionId)))
+    }
+    if (!validScope() || ownsRecoveryView() !== true) return undefined
+    const generation = rt.homeLockVersion(), saved = expected, snapshot = JSON.stringify(hold)
+    if (generation === undefined) return undefined
+    const validMemory = () => ownsRecoveryView() === true && rt.homeLockVersion() === generation
+      && writing === pending && expected === saved && JSON.stringify(heldTurns[recoveryId]) === snapshot && validScope()
+    let handle
+    try {
+      handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      const before = await handle.stat({ bigint:true })
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || await handle.readFile('utf8') !== saved || !validMemory()) return undefined
+      await handle.sync()
+      await syncDirectory(dirname(file))
+      const after = await handle.stat({ bigint:true }), path = await lstat(file, { bigint:true })
+      if (!path.isFile() || path.isSymbolicLink() || !validMemory()) return undefined
+      for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+        if (before[key] !== after[key] || after[key] !== path[key]) return undefined
+      }
+      const isCurrent = () => {
+        if (!validMemory()) return false
+        try {
+          const current = lstatSync(file, { bigint:true })
+          return current.isFile() && !current.isSymbolicLink()
+            && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(key => current[key] === before[key])
+        } catch { return false }
+      }
+      return isCurrent() ? { sessionId, record:JSON.parse(JSON.stringify(record)), isCurrent } : undefined
+    } catch { return undefined } finally { await handle?.close().catch(() => {}) }
+  }
+  let recoveryOriginalPending
+  rt.recoveryHeldOriginal = async (scope, recoveryId) => {
+    if (recoveryOriginalPending) return undefined
+    const work = readRecoveryHeldOriginal(scope, recoveryId)
+    recoveryOriginalPending = work
+    void work.then(() => { if (recoveryOriginalPending === work) recoveryOriginalPending = undefined },
+      () => { if (recoveryOriginalPending === work) recoveryOriginalPending = undefined })
+    let timer
+    try {
+      return await Promise.race([work.catch(() => undefined), new Promise(resolve => { timer = setTimeout(resolve, RECOVERY_VIEW_TIMEOUT_MS) })])
+    } finally { clearTimeout(timer) }
+  }
   // Read-only origins for an owner-initiated manual review. A missing result is
   // not evidence that the work did not execute; it never triggers a delivery.
   rt.recoveryWorkOrigins = async workId => {
@@ -379,8 +466,7 @@ export function install(rt) {
       const saved = JSON.parse(await handle.readFile('utf8'))?.heldTurns?.[recoveryId]
       if (!saved?.decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
       await handle.sync()
-      const directory = await open(dirname(file),constants.O_RDONLY)
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectory(dirname(file))
       const afterHandle = await handle.stat(), after = await lstat(file)
       rt.requireHomeLock()
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
@@ -410,8 +496,7 @@ export function install(rt) {
         ? entries.filter(item => item?.args?.exchangeId && queuedRecoveryId(sessionId, item.args.exchangeId) === recoveryId) : [])
       if (matches.length !== 1 || !matches[0].decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
       await handle.sync()
-      const directory = await open(dirname(file),constants.O_RDONLY)
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectory(dirname(file))
       const afterHandle = await handle.stat(), after = await lstat(file)
       rt.requireHomeLock()
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
@@ -667,7 +752,9 @@ export function install(rt) {
         const botId = owner?.botId ?? rt.chatOwners.get(id)
         // turns.js runs first and has already claimed or restored the trigger.
         const info = rt.live.get(id)?.info
-        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(), ...(info !== undefined ? { trigger: triggerOf(info) } : {}) }))
+        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(),
+          ...(Number.isSafeInteger(event.data?.turn) && event.data.turn >= 0 ? { turn:event.data.turn } : {}),
+          ...(info !== undefined ? { trigger: triggerOf(info) } : {}) }))
         break
       }
       case 'user/message': {
@@ -826,10 +913,41 @@ export function install(rt) {
     }
   }
 
-  // A Session's durable log, as DSH keeps it: what happened there, and what it said.
-  // Undefined when this DSH cannot read it, or when the Session is gone.
+  // Current DSH exposes bounded `events` pages. Keep a compatibility path for
+  // older Hosts that still expose `inspect`; incomplete reads remain unknown.
   async function logOf(sessionId) {
-    const inspect = ctx.sessionController?.inspect
+    const controller = ctx.sessionController
+    const readPage = typeof controller?.events === 'function' ? controller.events.bind(controller)
+      : typeof controller?.page === 'function' ? controller.page.bind(controller) : undefined
+    if (readPage) {
+      const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS), pages = []
+      let throughSeq, beforeSeq
+      for (let pageNumber = 0; pageNumber < HISTORY_MAX_PAGES; pageNumber += 1) {
+        const request = { address:{ kind:'session', sessionId }, maxMessages:HISTORY_PAGE_SIZE,
+          ...(throughSeq !== undefined ? { throughSeq } : {}), ...(beforeSeq !== undefined ? { beforeSeq } : {}) }
+        const page = await readPage(request, signal).catch(() => undefined)
+        if (!page || !Array.isArray(page.records) || !Number.isSafeInteger(page.cursor) || page.cursor < -1
+          || typeof page.hasMore !== 'boolean' || (throughSeq !== undefined && page.cursor !== throughSeq)) return undefined
+        if (throughSeq === undefined) throughSeq = page.cursor
+        const events = []
+        let previousSeq = -1
+        for (const record of page.records) {
+          const event = record?.type === 'event' ? record.event : undefined
+          if (!event || typeof event.type !== 'string' || !Number.isSafeInteger(event.seq)
+            || event.seq <= previousSeq || event.seq > throughSeq || (beforeSeq !== undefined && event.seq >= beforeSeq)) return undefined
+          previousSeq = event.seq
+          events.push(event)
+        }
+        if (events.length === 0 && (page.hasMore || page.cursor !== -1)) return undefined
+        pages.unshift(events)
+        if (!page.hasMore) return pages.flat()
+        const firstSeq = events[0]?.seq
+        if (!Number.isSafeInteger(firstSeq) || firstSeq < 0 || (beforeSeq !== undefined && firstSeq >= beforeSeq)) return undefined
+        beforeSeq = firstSeq
+      }
+      return undefined
+    }
+    const inspect = controller?.inspect
     if (typeof inspect !== 'function') return undefined
     const seen = await inspect(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS)).catch(() => undefined)
     return Array.isArray(seen?.events) ? seen.events : undefined
