@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { invalidateWindowsAclCache } from '../src/host/private-storage.mjs'
 
 let windowsPrivateRoot
 
@@ -33,17 +34,18 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
     env: { ...process.env, DSBOT_TEST_PRIVATE_PATH: path, DSBOT_TEST_SHARED_ACCESS: shared ? '1' : '0' },
   })
   if (result.error || result.status !== 0) throw new Error('Could not secure Windows test temp directory')
+  invalidateWindowsAclCache(path)
   return path
 }
 
 export function privateTempDir(prefix) {
   if (process.platform !== 'win32') return mkdtempSync(prefix)
-  return mkdtempSync(join(ensureWindowsPrivateRoot(), `${basename(prefix)}XXXXXX`))
+  return mkdtempSync(join(ensureWindowsPrivateRoot(), `${basename(prefix)}-`))
 }
 
 export async function privateTempDirAsync(prefix) {
   if (process.platform !== 'win32') return mkdtemp(prefix)
-  return mkdtemp(join(ensureWindowsPrivateRoot(), `${basename(prefix)}XXXXXX`))
+  return mkdtemp(join(ensureWindowsPrivateRoot(), `${basename(prefix)}-`))
 }
 
 export function grantSharedTempAccessForTest(path) {
