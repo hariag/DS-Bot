@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { openGroupOutbox } from '../src/host/group-outbox.js'
+import { stoppedBeforeSuccess } from './process-stop.mjs'
 
 const writable = () => true
 function scratch(t) {
@@ -146,12 +147,12 @@ test('opening an existing database reports BUSY while it is exclusively locked a
 test('process killed during an uncommitted transaction leaves no partial candidate', async (t) => {
   const { file, track } = scratch(t)
   const box = track(await openGroupOutbox(file, { requireWritable: writable })); box.close()
-  const program = `const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]);
+  const program = `const { DatabaseSync } = require('node:sqlite'); const { writeSync } = require('node:fs'); const db = new DatabaseSync(process.argv[1]);
     db.exec('PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
     db.prepare('INSERT INTO candidates(id,room,origin_session,origin_message,insertion_seq,insertion_index,payload,recipients,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run('partial','r1','s1','m1',1,0,'{}','[]',1);
-    process.kill(process.pid, 'SIGKILL');`
+    writeSync(1, 'DSBOT_TEST_KILL_REQUESTED\\n'); process.kill(process.pid, 'SIGKILL');`
   const child = spawnSync(process.execPath, ['-e', program, file], { encoding: 'utf8' })
-  assert.equal(child.signal, 'SIGKILL', child.stderr)
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
   const reopened = track(await openGroupOutbox(file, { requireWritable: writable }))
   assert.deepEqual(reopened.list('r1'), [])
 })

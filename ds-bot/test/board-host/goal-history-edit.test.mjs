@@ -4,7 +4,7 @@
 // it is not a real DSH Agent, production storage, or a crash-durability proof.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -12,6 +12,7 @@ import pngjs from 'pngjs'
 import { install, BOARD_UPLOAD_PATH } from '../../src/host/board-service.js'
 import { legacyGoalCardId } from '../../src/host/legacy-goal.js'
 import { archiveGoal } from '../../src/host/goals.js'
+import { privateTempDir } from '../private-temp.mjs'
 
 const group={kind:'room',id:'group'}, own={kind:'personal',id:'one'}, other={kind:'personal',id:'two'}
 const png=pngjs.PNG.sync.write({width:1,height:1,data:Buffer.from([1,2,3,255])}).toString('base64')
@@ -53,7 +54,7 @@ function openHost(t,home,state) {
   cleanups.push(close)
   return {rt,route:routes.find(route=>route.path===BOARD_UPLOAD_PATH),close}
 }
-function setup(t){const home=mkdtempSync(join(tmpdir(),'dsbot-goal-history-'));const state=seeded();writeFileSync(join(home,'state.json'),JSON.stringify(state));return {home,...openHost(t,home,state)}}
+function setup(t){const home=privateTempDir(join(tmpdir(),'dsbot-goal-history-'));const state=seeded();writeFileSync(join(home,'state.json'),JSON.stringify(state));return {home,...openHost(t,home,state)}}
 async function board(rt,scope=group){return rt.boardCall('board-list',{scope})}
 function currentCard(view,id){const item=view.tasks.find(card=>card.id===id);assert.ok(item,`missing original ${id}`);return item}
 function boardRevision(card){return card.legacy?.boardRevision??0}

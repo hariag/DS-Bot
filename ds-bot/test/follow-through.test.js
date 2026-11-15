@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,7 @@ import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
 import { writeNotesAtomically } from '../src/host/resume.js'
 import { errorCode } from '../src/host/channel.js'
+import { privateTempDir } from './private-temp.mjs'
 
 // Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
@@ -85,7 +86,7 @@ async function start(home, logs, inspect) {
 }
 
 const freshHome = (t, state = seed()) => {
-  const home = mkdtempSync(join(tmpdir(), 'ds-bot-follow-'))
+  const home = privateTempDir(join(tmpdir(), 'ds-bot-follow-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(state))
   t.after(async () => {
     await Promise.all((started.get(home) ?? []).map(host => host.stop()))

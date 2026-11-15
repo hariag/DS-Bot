@@ -65,7 +65,7 @@ export function createUserRedoJournal(rt, { authorize, proveOriginal } = {}) {
     return rows ?? {}
   }
   async function durable(entry, generation) {
-    const file = await open(rt.statePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const file = await open(rt.statePath, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await file.stat(), disk = JSON.parse(await file.readFile('utf8'))
       if (!before.isFile() || !isDeepStrictEqual(disk.userRedos?.[entry.operationId], entry)) throw new Error('redo snapshot unavailable')

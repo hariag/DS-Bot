@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isPrivateDirectory, isPrivateFile, isPrivatePath } from '../src/host/private-storage.mjs'
 import { syncDirectory, syncDirectorySync } from '../src/host/directory-sync.mjs'
+import { grantSharedTempAccessForTest, privateTempDir } from './private-temp.mjs'
 
 const stat = ({ directory = false, file = false, symlink = false, mode = 0o100600, uid = 1000, dev = 1, ino = 1 } = {}) => ({
   isDirectory: () => directory, isFile: () => file, isSymbolicLink: () => symlink, mode, uid, dev, ino,
@@ -51,4 +52,13 @@ test('exported storage helpers inspect real POSIX temporary directories and file
   const fd = openSync(file, 'wx', 0o600)
   closeSync(fd)
   assert.equal(isPrivateFile(file), true)
+})
+
+test('Windows private ACL checks accept an isolated temp directory and reject shared access', t => {
+  if (process.platform !== 'win32') return t.skip('This test inspects Windows ACLs')
+  const root = privateTempDir(join(tmpdir(), 'ds-bot-private-acl-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  assert.equal(isPrivateDirectory(root), true)
+  grantSharedTempAccessForTest(root)
+  assert.equal(isPrivateDirectory(root), false)
 })

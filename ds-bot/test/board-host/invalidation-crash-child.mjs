@@ -1,4 +1,5 @@
 import { openTaskStore } from '../../src/host/task-store.mjs'
+import { killProcessForTest } from '../process-stop.mjs'
 const opts = { assertWriteLock() {}, authorize() { return true }, verifyRegistration() { return true }, verifyAdmission() { return true }, verifyEvidence() { return true }, verifyReceipt() { return true }, verifyInvalidation() { return true } }
 const store = openTaskStore(process.argv[2], opts)
 const task = (id, dependencies = []) => ({ id, title:id, owner:'owner', reviewer:'reviewer', scope:'personal:user', acceptance:'review', dependencies })
@@ -21,4 +22,4 @@ store.create({ operationId:'create-b', actor:'user', task:task('b',['a']) })
 command('b','register','user',{ kind:'personal', reference:'test' })
 claim('b','execute')
 command('a','invalidate','user',{ reason:'target changed', evidence:'new revision' })
-process.kill(process.pid, 'SIGKILL')
+killProcessForTest()

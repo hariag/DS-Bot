@@ -347,7 +347,7 @@ export function install(rt) {
       && writing === pending && expected === saved && JSON.stringify(heldTurns[recoveryId]) === snapshot && validScope()
     let handle
     try {
-      handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
       const before = await handle.stat({ bigint:true })
       if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || await handle.readFile('utf8') !== saved || !validMemory()) return undefined
       await handle.sync()
@@ -459,7 +459,7 @@ export function install(rt) {
   // the inbox, or establish whether an external effect occurred.
   const syncHeldDecision = async (recoveryId, entry) => {
     rt.requireHomeLock()
-    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('Decision journal unavailable')
@@ -487,7 +487,7 @@ export function install(rt) {
   }
   const syncQueuedDecision = async (recoveryId, entry) => {
     rt.requireHomeLock()
-    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('Decision journal unavailable')

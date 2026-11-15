@@ -65,7 +65,7 @@ export function createGoalBoardEditor(rt) {
   }
   const durable=async(id,record)=>{
     const lease=rt.homeLockVersion()
-    const file=await open(rt.statePath,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const file=await open(rt.statePath,(process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before=await file.stat()
       if(!before.isFile())throw new Error('Goal state is unavailable')

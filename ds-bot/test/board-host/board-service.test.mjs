@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -13,9 +13,11 @@ import { install as installDelivery } from '../../src/host/delivery.js'
 import { install as installPrivacy } from '../../src/host/privacy.js'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
+import { privateTempDir } from '../private-temp.mjs'
+import { stoppedBeforeSuccess } from '../process-stop.mjs'
 
 function fixture(t) {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-host-'))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-host-'))
   const effects = [], routes = [], drains = [], deliveries = [], agents = new Map()
   const agentFor = id => {
     if (!agents.has(id)) {
@@ -507,26 +509,26 @@ test('sharing rejects private bots and removes visibility when source membership
 })
 
 test('process death before the request commit leaves neither task nor rejection receipt', t => {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-crash-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-crash-')); t.after(() => rmSync(home, { recursive:true, force:true }))
   const path = join(home, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./board-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
   const store = openTaskStore(path, { assertWriteLock() {} }); t.after(() => store.close())
   assert.equal(store.get('crash-task'), undefined); assert.equal(store.operation('crash-op'), undefined)
 })
 
 test('process death after cancel commit preserves its rejection tombstone', t => {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-cancel-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-cancel-')); t.after(() => rmSync(home, { recursive:true, force:true }))
   const path = join(home, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./board-cancel-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
   const store = openTaskStore(path, { assertWriteLock() {}, authorize() { return true } }); t.after(() => store.close())
   assert.equal(store.operation('cancel-crash').status, 'rejected')
   assert.equal(store.cancelRequest({ operationId:'cancel-crash', actor:'user' }).state, 'rejected')
 })
 
 test('unknown version and missing schema are rejected without overwriting database', t => {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-schema-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-schema-')); t.after(() => rmSync(home, { recursive:true, force:true }))
   for (const [name, mutate, probe] of [
     ['old', db => db.exec('PRAGMA user_version=1'), db => db.prepare('PRAGMA user_version').get().user_version === 1],
     ['missing', db => db.exec('DROP TABLE history'), db => !db.prepare("SELECT 1 FROM sqlite_master WHERE name='history'").get()],
