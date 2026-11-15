@@ -96,7 +96,8 @@ test('actual task journal backs the five instance-user endpoints with isolated g
   assert.equal((await rt.boardCall('board-command', edit)).title, 'New title')
   const upload = { scope, taskId:'t1', operationId:'upload-1', expectedRevision:2, images:[image, image2] }
   const uploaded = await route.fetch(request(upload))
-  assert.equal((await uploaded.json()).ok, true)
+  const uploadResult = await uploaded.json()
+  assert.equal(uploadResult.ok, true, uploadResult.error?.message)
   assert.equal((await (await route.fetch(request(upload))).json()).ok, true)
   const changed = { ...upload, images:[image, { ...image2, name:'different.png' }] }
   assert.equal((await (await route.fetch(request(changed))).json()).ok, false)
