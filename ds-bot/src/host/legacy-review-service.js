@@ -1,6 +1,8 @@
 // Manual owner review only: no agent admission, work settlement, or dispatch.
 import { createHash } from 'node:crypto'
 import { constants, lstatSync, mkdirSync } from 'node:fs'
+import { isPrivateDirectory } from './private-storage.mjs'
+import { syncDirectory } from './directory-sync.mjs'
 import { lstat, open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { openReviewLedger, readReviewReceipt } from './review-ledger.mjs'
@@ -42,8 +44,7 @@ export function install(rt) {
       const before=await file.stat();if(!before.isFile())throw Error('work decision journal unavailable')
       const saved=JSON.parse(await file.readFile('utf8'))?.legacyWorkDecisions
       if(JSON.stringify(saved)!==JSON.stringify(table))throw Error('work decisions are not saved')
-      await file.sync();const directory=await open(dirname(rt.statePath),constants.O_RDONLY)
-      try{await directory.sync()}finally{await directory.close()}
+      await file.sync();await syncDirectory(dirname(rt.statePath))
       const afterFile=await file.stat(),after=await lstat(rt.statePath);writable()
       if(!after.isFile()||after.isSymbolicLink()||before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.size!==afterFile.size||before.mtimeMs!==afterFile.mtimeMs||rt.homeLockVersion()!==lease||decisions()!==table)throw Error('work decisions changed during confirmation')
       confirmedTable=table;confirmedLease=lease;decisionBlocked=false
@@ -55,7 +56,7 @@ export function install(rt) {
     if(scope.kind==='room')return !!rt.state.rooms?.[scope.id]&&Array.isArray(snapshot.archiveScopes)&&snapshot.archiveScopes.includes(`room:${scope.id}`)
     return scope.kind==='personal'&&!!rt.state.bots?.[scope.id]&&[snapshot.owner,snapshot.sender].includes(scope.id)
   }
-  function privateDir(){const root=join(rt.home,'legacy-reviews-v1');try{lstatSync(root)}catch(e){if(e.code!=='ENOENT')throw e;writable();try{mkdirSync(root,{mode:0o700})}catch(x){if(x.code!=='EEXIST')throw x}}const stat=lstatSync(root);if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==process.getuid()||(stat.mode&0o077))throw Error('manual review unavailable');return root}
+  function privateDir(){const root=join(rt.home,'legacy-reviews-v1');try{lstatSync(root)}catch(e){if(e.code!=='ENOENT')throw e;writable();try{mkdirSync(root,{mode:0o700})}catch(x){if(x.code!=='EEXIST')throw x}}const stat=lstatSync(root);if(!isPrivateDirectory(root,stat))throw Error('manual review unavailable');return root}
   function current(snapshot){const work=rt.state.works?.[snapshot.workId];return !!work && validWorkTime(work.at)&&validWorkTime(snapshot.workAt)&&work.at===snapshot.workAt&&work.from===snapshot.sender&&work.to===snapshot.owner&&workHash(snapshot.workId,work)===snapshot.snapshotId}
   function service(){if(ledger)return ledger;writable();ledger=openReviewLedger(join(privateDir(),'reviews.sqlite'),{assertLease:()=>{try{writable();return true}catch{return false}},assertActor:actor=>actor==='user',verifySnapshot:current});return ledger}
   async function call(endpoint,payload={}){

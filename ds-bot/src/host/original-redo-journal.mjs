@@ -3,6 +3,8 @@ import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openS
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { userRedoConfirmation } from './user-redo-journal.mjs'
+import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
+import { syncDirectorySync } from './directory-sync.mjs'
 
 const nofollow = constants.O_NOFOLLOW ?? 0
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -31,7 +33,7 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     const fd = openSync(path, constants.O_RDONLY | nofollow)
     try {
       const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.size > 1024 || (stat.mode & 0o077) || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw Error('redo identity unavailable')
+      if (!isPrivateFile(path, stat) || stat.size > 1024) throw Error('redo identity unavailable')
       const value = JSON.parse(readFileSync(fd, 'utf8'))
       if (sync) fsyncSync(fd)
       return value
@@ -42,18 +44,17 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     if (lease() !== generation) throw Error('redo lease changed')
     if (directoryIdentity) {
       const current = lstatSync(root), home = lstatSync(rt.home)
-      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino
-        || (current.mode & 0o077) || (typeof process.getuid === 'function' && current.uid !== process.getuid())
+      if (!isPrivateDirectory(root, current) || current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino
         || !home.isDirectory() || home.isSymbolicLink() || home.dev !== directoryIdentity.homeDev || home.ino !== directoryIdentity.homeIno
         || !isDeepStrictEqual(readMarker(marker), directoryIdentity) || !isDeepStrictEqual(readMarker(innerMarker), { token:directoryIdentity.token })) throw Error('redo directory changed')
     }
   }
-  const dirSync = path => { const fd = openSync(path, constants.O_RDONLY | nofollow); try { fsyncSync(fd) } finally { closeSync(fd) } }
+  const dirSync = syncDirectorySync
   function directory(generation) {
     sameLease(generation)
     try { mkdirSync(root, { mode:0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
     const stat = lstatSync(root), home = lstatSync(rt.home)
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (typeof process.getuid === 'function' && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('redo directory unavailable')
+    if (!isPrivateDirectory(root, stat)) throw Error('redo directory unavailable')
     if (!home.isDirectory() || home.isSymbolicLink()) throw Error('redo directory unavailable')
     let identity
     try {
@@ -156,10 +157,10 @@ export function createOriginalRedoJournal(rt, { authorize, proveOriginal, valida
     if (!isDeepStrictEqual(readRecovery(recoveryId, generation), { recoveryId, operationId })) throw Error('redo recovery marker unavailable')
   }
   function read(operationId) {
-    const fd = openSync(pathFor(operationId), constants.O_RDONLY | nofollow)
+    const path = pathFor(operationId), fd = openSync(path, constants.O_RDONLY | nofollow)
     try {
       const stat = fstatSync(fd)
-      if (!stat.isFile() || stat.size > 65536 || (stat.mode & 0o077) || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw Error('redo record unavailable')
+      if (!isPrivateFile(path, stat) || stat.size > 65536) throw Error('redo record unavailable')
       const value = JSON.parse(readFileSync(fd, 'utf8'))
       const source = value?.original
       if (value?.version !== 1 || value.operationId !== operationId || !isDeepStrictEqual(value.identity, originalRedoIdentity(operationId))
