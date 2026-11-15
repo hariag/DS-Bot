@@ -125,5 +125,5 @@ test('fast-forward updates a real Git checkout to the fetched upstream commit', 
   assert.equal(result.status, 'fast-forwarded')
   assert.equal(result.head, target)
   assert.equal(git('rev-parse', 'HEAD'), target)
-  assert.equal(readFileSync(join(root, 'version.txt'), 'utf8'), 'two\n')
+  assert.equal(readFileSync(join(root, 'version.txt'), 'utf8').replaceAll('\r\n', '\n'), 'two\n')
 })
