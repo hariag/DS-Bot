@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { lstatSync, mkdtempSync, rmSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -33,6 +33,7 @@ const WINDOWS_ACL_DETAILS = [
   '$owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value',
   'Write-Output "identity=$identity owner=$owner"',
   'foreach ($entry in $acl.Access) { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; Write-Output "$sid $($entry.AccessControlType) $($entry.FileSystemRights) inherited=$($entry.IsInherited)" }',
+  'foreach ($item in @(Get-ChildItem -LiteralPath $path -Force)) { $childAcl = Get-Acl -LiteralPath $item.FullName; Write-Output "child=$($item.Name) attributes=$($item.Attributes) owner=$($childAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value)" }',
 ].join('\n')
 
 export function setPrivateTempAcl(path, { shared = false } = {}) {
@@ -55,17 +56,19 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
 export function describePrivateTempAcl(path) {
   if (process.platform !== 'win32') return ''
   const executable = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  let structural
+  let structural, defaultDecision, children
   try {
     const stat = lstatSync(path)
     structural = isPrivateDirectory(path, stat, { platform:'win32', checkWindowsAcl:() => true })
+    defaultDecision = isPrivateDirectory(path, stat)
+    children = readdirSync(path).join(',') || '(empty)'
   } catch (error) { structural = error.message }
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_DETAILS], {
     encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
     env: { ...process.env, DSBOT_TEST_PRIVATE_PATH: path },
   })
   const acl = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `PowerShell exited with ${result.status}`
-  return `node-structure=${structural}\n${acl}`
+  return `node-structure=${structural} node-default=${defaultDecision} children=${children}\n${acl}`
 }
 
 export function privateTempDir(prefix) {

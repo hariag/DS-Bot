@@ -17,6 +17,40 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Select tests for changed product areas
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.scope.outputs.app }}
+      mobile: ${{ steps.scope.outputs.mobile }}
+      link: ${{ steps.scope.outputs.link }}
+      docker: ${{ steps.scope.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git fetch origin "$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+            changed="$(git diff --name-only "origin/$GITHUB_BASE_REF...HEAD")"
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$EVENT_BEFORE" ] && [[ ! "$EVENT_BEFORE" =~ ^0+$ ]]; then
+            changed="$(git diff --name-only "$EVENT_BEFORE" "$CURRENT_SHA")"
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            changed="$(git ls-tree -r --name-only "$CURRENT_SHA")"
+          else
+            changed=''
+          fi
+          matches() { printf '%s\n' "$changed" | grep -E "$1" >/dev/null; }
+          if matches '^app/'; then echo 'app=true' >> "$GITHUB_OUTPUT"; else echo 'app=false' >> "$GITHUB_OUTPUT"; fi
+          if matches '^(mobile/|link/)'; then echo 'mobile=true' >> "$GITHUB_OUTPUT"; else echo 'mobile=false' >> "$GITHUB_OUTPUT"; fi
+          if matches '^link/'; then echo 'link=true' >> "$GITHUB_OUTPUT"; else echo 'link=false' >> "$GITHUB_OUTPUT"; fi
+          if matches '^(docker/|docker-compose[^/]*\.yml$|\.dockerignore$)'; then echo 'docker=true' >> "$GITHUB_OUTPUT"; else echo 'docker=false' >> "$GITHUB_OUTPUT"; fi
+
   test:
     name: ${{ matrix.os }} · Node ${{ matrix.node }} · DSH ${{ matrix.dsh }}
     runs-on: ${{ matrix.os }}
@@ -67,6 +101,8 @@ jobs:
 
   app:
     name: Desktop app profile
+    needs: [changes]
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -85,6 +121,8 @@ jobs:
 
   mobile:
     name: Mobile app typecheck
+    needs: [changes]
+    if: needs.changes.outputs.mobile == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -104,6 +142,8 @@ jobs:
 
   link:
     name: Phone link and Relay Server
+    needs: [changes]
+    if: needs.changes.outputs.link == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -120,6 +160,8 @@ jobs:
 
   app-package:
     name: Desktop app package (Windows)
+    needs: [changes]
+    if: needs.changes.outputs.app == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -255,6 +297,8 @@ jobs:
 
   app-package-macos:
     name: Desktop app package (macOS ${{ matrix.arch }})
+    needs: [changes]
+    if: needs.changes.outputs.app == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -332,6 +376,8 @@ jobs:
 
   app-package-linux:
     name: Desktop app package (Linux x64)
+    needs: [changes]
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -433,9 +479,10 @@ jobs:
 
   docker:
     name: Docker startup and data migration
+    needs: [changes, test, scan]
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [test, scan]
     permissions:
       contents: read
       packages: write
@@ -473,13 +520,30 @@ jobs:
           docker push "$image:sha-$GHCR_SHA"
           docker push "$image:$tag"
 
-  # The one check that branch rules require. A job whose needs failed is skipped,
-  # and GitHub counts a skipped required check as passed, so this job always runs
-  # and fails unless the matrix, leak scan, app, mobile app, phone link, app package and Docker checks passed.
+  # The one check that branch rules require. Product-specific jobs run only when their
+  # files change; plugin-only changes still require the plugin matrix and leak scan.
   result:
     name: Test result
-    needs: [test, scan, app, mobile, link, app-package, app-package-macos, app-package-linux, docker]
+    needs: [changes, test, scan, app, mobile, link, app-package, app-package-macos, app-package-linux, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success && test "${{ needs.scan.result }}" = success && test "${{ needs.app.result }}" = success && test "${{ needs.mobile.result }}" = success && test "${{ needs.link.result }}" = success && test "${{ needs.app-package.result }}" = success && test "${{ needs.app-package-macos.result }}" = success && test "${{ needs.app-package-linux.result }}" = success && test "${{ needs.docker.result }}" = success
+      - name: Require plugin checks and any selected product checks
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          PLUGIN_RESULT: ${{ needs.test.result }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+          APP_RESULT: ${{ needs.app.result }}
+          MOBILE_RESULT: ${{ needs.mobile.result }}
+          LINK_RESULT: ${{ needs.link.result }}
+          APP_WINDOWS_RESULT: ${{ needs.app-package.result }}
+          APP_MACOS_RESULT: ${{ needs.app-package-macos.result }}
+          APP_LINUX_RESULT: ${{ needs.app-package-linux.result }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          test "$PLUGIN_RESULT" = success
+          test "$SCAN_RESULT" = success
+          for result in "$APP_RESULT" "$MOBILE_RESULT" "$LINK_RESULT" "$APP_WINDOWS_RESULT" "$APP_MACOS_RESULT" "$APP_LINUX_RESULT" "$DOCKER_RESULT"; do
+            test "$result" = success || test "$result" = skipped
+          done
