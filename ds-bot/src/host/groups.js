@@ -860,8 +860,9 @@ export function install(rt) {
     return waiters.length > 0
   }
   rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
-  // The team's own tools are quick; any other tool is the start of work.
-  const QUICK_TOOLS = new Set(TEAM_TOOLS)
+  // The team's own tools are quick; remote Git sync can block and may update a
+  // checkout, so a group round must treat it as work.
+  const QUICK_TOOLS = new Set(TEAM_TOOLS.filter(tool => tool !== 'sync_shared_repository'))
   rt.workRoomTurn = (sessionId, tool) => {
     if (QUICK_TOOLS.has(tool)) return
     const waiters = waitersOf(sessionId)
