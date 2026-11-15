@@ -63,7 +63,11 @@ function windowsAclIsPrivate(path) {
     encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
     env: { ...process.env, DSBOT_PRIVATE_PATH: path },
   })
-  return result.error === undefined && result.status === 0
+  const valid = result.error === undefined && result.status === 0
+  if (!valid && process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS === '1') {
+    process.stderr.write(`[ds-bot test] Windows ACL check ${JSON.stringify({ path, status:result.status, signal:result.signal, error:result.error?.message, stderr:result.stderr?.trim(), stdout:result.stdout?.trim() })}\n`)
+  }
+  return valid
 }
 
 const sameIdentity = (left, right) => left.dev === right.dev && left.ino === right.ino
