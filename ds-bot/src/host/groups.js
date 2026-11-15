@@ -500,7 +500,7 @@ export function install(rt) {
       members,
       notice,
       goal,
-      ...(round.reviewInspect ? ['Inspection only: earlier group delivery outcomes are unknown. Review and report existing evidence; do not assign, dispatch, modify tasks, or take external actions.'] : []),
+      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. Do not act on those owners or any ambiguous owner. First inspect and report. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state, pass a stage, or take external actions.'] : []),
       leads ? adminNote(room) : '',
       earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
       owed.length ? `Results of the work you asked for that the lines here leave out (oldest first):\n${owed.map(result => (result.line
