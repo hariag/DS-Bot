@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -13,9 +13,11 @@ import { install as installDelivery } from '../../src/host/delivery.js'
 import { install as installPrivacy } from '../../src/host/privacy.js'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
+import { describePrivateTempAcl, privateTempDir } from '../private-temp.mjs'
+import { stoppedBeforeSuccess } from '../process-stop.mjs'
 
 function fixture(t) {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-host-'))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-host-'))
   const effects = [], routes = [], drains = [], deliveries = [], agents = new Map()
   const agentFor = id => {
     if (!agents.has(id)) {
@@ -83,6 +85,9 @@ test('remote code status is limited to the owner personal board', async t => {
 })
 
 test('actual task journal backs the five instance-user endpoints with isolated group and personal views', async t => {
+  const previousAclDiagnostics = process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS
+  process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS = '1'
+  t.after(() => { if (previousAclDiagnostics === undefined) delete process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS; else process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS = previousAclDiagnostics })
   const { rt, route } = fixture(t)
   assert.equal(route.requestBody, 'streaming')
   const created = await rt.boardCall('board-command', create)
@@ -94,7 +99,9 @@ test('actual task journal backs the five instance-user endpoints with isolated g
   assert.equal((await rt.boardCall('board-command', edit)).title, 'New title')
   const upload = { scope, taskId:'t1', operationId:'upload-1', expectedRevision:2, images:[image, image2] }
   const uploaded = await route.fetch(request(upload))
-  assert.equal((await uploaded.json()).ok, true)
+  const uploadResult = await uploaded.json()
+  const aclDetails = !uploadResult.ok ? describePrivateTempAcl(join(rt.home, 'board-v1', 'images')) : ''
+  assert.equal(uploadResult.ok, true, [uploadResult.error?.message, aclDetails].filter(Boolean).join('\n'))
   assert.equal((await (await route.fetch(request(upload))).json()).ok, true)
   const changed = { ...upload, images:[image, { ...image2, name:'different.png' }] }
   assert.equal((await (await route.fetch(request(changed))).json()).ok, false)
@@ -507,26 +514,28 @@ test('sharing rejects private bots and removes visibility when source membership
 })
 
 test('process death before the request commit leaves neither task nor rejection receipt', t => {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-crash-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-crash-')); let store
+  t.after(() => { try { store?.close() } catch {} rmSync(home, { recursive:true, force:true }) })
   const path = join(home, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./board-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
-  const store = openTaskStore(path, { assertWriteLock() {} }); t.after(() => store.close())
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
+  store = openTaskStore(path, { assertWriteLock() {} })
   assert.equal(store.get('crash-task'), undefined); assert.equal(store.operation('crash-op'), undefined)
 })
 
 test('process death after cancel commit preserves its rejection tombstone', t => {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-cancel-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-cancel-')); let store
+  t.after(() => { try { store?.close() } catch {} rmSync(home, { recursive:true, force:true }) })
   const path = join(home, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./board-cancel-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
-  const store = openTaskStore(path, { assertWriteLock() {}, authorize() { return true } }); t.after(() => store.close())
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
+  store = openTaskStore(path, { assertWriteLock() {}, authorize() { return true } })
   assert.equal(store.operation('cancel-crash').status, 'rejected')
   assert.equal(store.cancelRequest({ operationId:'cancel-crash', actor:'user' }).state, 'rejected')
 })
 
 test('unknown version and missing schema are rejected without overwriting database', t => {
-  const home = mkdtempSync(join(tmpdir(), 'dsbot-board-schema-')); t.after(() => rmSync(home, { recursive:true, force:true }))
+  const home = privateTempDir(join(tmpdir(), 'dsbot-board-schema-')); t.after(() => rmSync(home, { recursive:true, force:true }))
   for (const [name, mutate, probe] of [
     ['old', db => db.exec('PRAGMA user_version=1'), db => db.prepare('PRAGMA user_version').get().user_version === 1],
     ['missing', db => db.exec('DROP TABLE history'), db => !db.prepare("SELECT 1 FROM sqlite_master WHERE name='history'").get()],

@@ -19,6 +19,7 @@ import { replaceFile } from './files.js'
 import { textOf } from './text.js'
 import { heldTurnsView, queuedDeliveriesView } from './recovery-held.js'
 import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
+import { syncDirectory } from './directory-sync.mjs'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
@@ -346,12 +347,11 @@ export function install(rt) {
       && writing === pending && expected === saved && JSON.stringify(heldTurns[recoveryId]) === snapshot && validScope()
     let handle
     try {
-      handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
       const before = await handle.stat({ bigint:true })
       if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || await handle.readFile('utf8') !== saved || !validMemory()) return undefined
       await handle.sync()
-      const directory = await open(dirname(file), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectory(dirname(file))
       const after = await handle.stat({ bigint:true }), path = await lstat(file, { bigint:true })
       if (!path.isFile() || path.isSymbolicLink() || !validMemory()) return undefined
       for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
@@ -459,15 +459,14 @@ export function install(rt) {
   // the inbox, or establish whether an external effect occurred.
   const syncHeldDecision = async (recoveryId, entry) => {
     rt.requireHomeLock()
-    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('Decision journal unavailable')
       const saved = JSON.parse(await handle.readFile('utf8'))?.heldTurns?.[recoveryId]
       if (!saved?.decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
       await handle.sync()
-      const directory = await open(dirname(file),constants.O_RDONLY)
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectory(dirname(file))
       const afterHandle = await handle.stat(), after = await lstat(file)
       rt.requireHomeLock()
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
@@ -488,7 +487,7 @@ export function install(rt) {
   }
   const syncQueuedDecision = async (recoveryId, entry) => {
     rt.requireHomeLock()
-    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('Decision journal unavailable')
@@ -497,8 +496,7 @@ export function install(rt) {
         ? entries.filter(item => item?.args?.exchangeId && queuedRecoveryId(sessionId, item.args.exchangeId) === recoveryId) : [])
       if (matches.length !== 1 || !matches[0].decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
       await handle.sync()
-      const directory = await open(dirname(file),constants.O_RDONLY)
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectory(dirname(file))
       const afterHandle = await handle.stat(), after = await lstat(file)
       rt.requireHomeLock()
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino

@@ -1,17 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stageBoardImages, readBoardImage } from '../../src/host/board-images.js'
 import pngjs from 'pngjs'
 import jpeg from 'jpeg-js'
+import { privateTempDir } from '../private-temp.mjs'
 
 const makePng = color => pngjs.PNG.sync.write({ width:1, height:1, data:Buffer.from(color) }).toString('base64')
 const png = makePng([0,0,0,255])
 const photo = id => ({ uploadId: id, name: 'one.png', mediaType: 'image/png', data: png })
 function fixture(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'dsbot-board-image-'))
+  const directory = privateTempDir(join(tmpdir(), 'dsbot-board-image-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   return { directory, taskId: 'task-1', assertWriteLock() {} }
 }

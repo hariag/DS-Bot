@@ -4,6 +4,7 @@ import { lstat, open } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { legacyGoalCards } from './legacy-goal.js'
 import { taskGoal, touchGoal } from './goals.js'
+import { syncDirectory } from './directory-sync.mjs'
 
 const invalid = message => Object.assign(new Error(message), { code:'bot/invalid' })
 const scopeKey = scope => JSON.stringify([scope?.kind,scope?.id])
@@ -64,15 +65,14 @@ export function createGoalBoardEditor(rt) {
   }
   const durable=async(id,record)=>{
     const lease=rt.homeLockVersion()
-    const file=await open(rt.statePath,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const file=await open(rt.statePath,(process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before=await file.stat()
       if(!before.isFile())throw new Error('Goal state is unavailable')
       const saved=JSON.parse(await file.readFile('utf8'))?.goalBoardOperations?.[id]
       if(JSON.stringify(saved)!==JSON.stringify(record))throw new Error('Goal operation is not in the current state')
       await file.sync()
-      const directory=await open(dirname(rt.statePath),constants.O_RDONLY)
-      try {await directory.sync()} finally {await directory.close()}
+      await syncDirectory(dirname(rt.statePath))
       const afterFile=await file.stat()
       const after=await lstat(rt.statePath)
       if(!after.isFile()||after.isSymbolicLink()||before.dev!==after.dev||before.ino!==after.ino

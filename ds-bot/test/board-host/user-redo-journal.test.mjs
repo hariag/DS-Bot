@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createUserRedoJournal, userRedoConfirmation, userRedoIdentity } from '../../src/host/user-redo-journal.mjs'
+import { privateTempDirAsync } from '../private-temp.mjs'
 
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d'
 const recoveryId = 'a'.repeat(64)
@@ -15,7 +16,7 @@ const confirmationDigest = userRedoConfirmation(scope, recoveryId, sourceProof)
 const request = { operationId, recoveryId, scope, acknowledged:true, confirmationDigest }
 
 async function fixture(t) {
-  const dir = await mkdtemp(join(tmpdir(), 'dsbot-user-redo-'))
+  const dir = await privateTempDirAsync(join(tmpdir(), 'dsbot-user-redo-'))
   t.after(() => rm(dir, { recursive:true, force:true }))
   const statePath = join(dir, 'state.json')
   const state = { works:{ 'original-work':{ state:'unknown' } } }

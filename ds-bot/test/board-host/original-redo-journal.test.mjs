@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, chmod, rename, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rm, chmod, rename, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import fs from 'node:fs'
@@ -8,11 +8,12 @@ import { syncBuiltinESMExports } from 'node:module'
 import { createOriginalRedoJournal, originalRedoIdentity } from '../../src/host/original-redo-journal.mjs'
 import { userRedoConfirmation } from '../../src/host/user-redo-journal.mjs'
 import { install as installStore } from '../../src/host/store.js'
+import { grantSharedTempAccessForTest, privateTempDirAsync } from '../private-temp.mjs'
 
 const operationId = '9d5b1723-7063-4e3e-b27e-12f44dd0033d', otherId = 'c2a7ed5e-3b37-4a48-bb72-3d82f9d8c454'
 const recoveryId = 'a'.repeat(64), scope = { kind:'room', id:'room-1' }
 async function fixture(t) {
-  const home = await mkdtemp(join(tmpdir(), 'original-redo-'))
+  const home = await privateTempDirAsync(join(tmpdir(), 'original-redo-'))
   t.after(() => rm(home, { recursive:true, force:true }))
   let generation = 1, allowed = true, bound = true, current = true, resultProof
   const message = { id:'input-1', role:'user', source:{ kind:'bot', role:'request', work:'old-work' }, content:[{ type:'text', text:'sensitive original task' }] }
@@ -109,8 +110,9 @@ test('does not claim with changed admission binding, invalid turn or revoked sco
 
 test('rejects a private directory whose permissions were widened', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
-  const dir = join(f.home, 'original-redo-v1'); await chmod(dir, 0o755)
-  t.after(() => chmod(dir, 0o700).catch(() => {}))
+  const dir = join(f.home, 'original-redo-v1')
+  if (process.platform === 'win32') grantSharedTempAccessForTest(dir)
+  else await chmod(dir, 0o755)
   await assert.rejects(f.journal.beginDispatch(operationId, f.request.principal), Error)
   assert.equal(JSON.parse(await readFile(join(dir, `${operationId}.json`), 'utf8')).state, 'prepared')
 })
@@ -180,8 +182,7 @@ test('missing or altered journal and recovery markers fail closed', async t => {
 test('a callback that widens the journal directory is fenced before dispatch', async t => {
   const f = await fixture(t); await f.journal.prepare(f.request)
   const root = join(f.home, 'original-redo-v1')
-  t.after(() => chmod(root, 0o700).catch(() => {}))
-  f.dependencies.validateBinding = () => { fs.chmodSync(root, 0o755); return true }
+  f.dependencies.validateBinding = () => { if (process.platform === 'win32') grantSharedTempAccessForTest(root); else fs.chmodSync(root, 0o755); return true }
   const journal = createOriginalRedoJournal(f.rt, f.dependencies)
   await assert.rejects(journal.beginDispatch(operationId, f.request.principal), /directory changed/)
 })

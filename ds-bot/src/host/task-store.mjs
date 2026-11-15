@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { lstatSync, openSync, closeSync, fsyncSync, constants } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
+import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
+import { syncDirectorySync } from './directory-sync.mjs'
 
 // The caller must authenticate actors and authorize every command and query.
 // This module is an isolated task journal: it does not send messages or prove
@@ -58,7 +60,7 @@ const keysOnly = (value, allowed) => {
 export function openTaskStore(path, { authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyReceipt = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
-  if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o077) || dir.uid !== process.getuid()) throw new Error('database directory must be private')
+  if (!isPrivateDirectory(dirname(path), dir)) throw new Error('database directory must be private')
   let created = false
   try {
     if (!lstatSync(path)) throw new Error('unreachable')
@@ -69,7 +71,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     fsyncSync(fd); closeSync(fd); created = true
   }
   const file = lstatSync(path)
-  if (!file.isFile() || file.isSymbolicLink() || (file.mode & 0o077) || file.uid !== process.getuid()) throw new Error('database must be a private file')
+  if (!isPrivateFile(path, file)) throw new Error('database must be a private file')
   const db = new DatabaseSync(path)
   db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON')
   if (created) db.exec('PRAGMA journal_mode=DELETE')
@@ -81,8 +83,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     for (const item of schema.filter(item => item.type === 'index')) db.exec(item.sql)
     db.exec('PRAGMA application_id=1146307156; PRAGMA user_version=5')
     try { assertWriteLock(); db.exec('COMMIT') } catch (e) { try { db.exec('ROLLBACK') } finally { db.close() }; throw e }
-    const dirFd = openSync(dirname(path), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-    try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
+    syncDirectorySync(dirname(path))
   }
   const objects = db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all().map(row => ({ ...row }))
   if (JSON.stringify(objects) !== JSON.stringify(schema) || db.prepare('PRAGMA foreign_key_check').all().length) { db.close(); throw new Error('unknown or damaged task database schema') }

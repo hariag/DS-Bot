@@ -1336,9 +1336,12 @@ export function install(rt) {
   ctx.effect(() => () => {
     disposed = true
     for (const round of rt.roomProgress.values()) round.abort?.abort()
+    return Promise.allSettled([...roundRuns.values()].flatMap(runs => [...runs]))
+      .then(() => rt.ledger?.flush?.())
   }, 'ds-bot: group rounds')
 
   function startRound(room, queued, agent, key = randomUUID()) {
+    if (disposed) return undefined
     const controller = new AbortController()
     // Taken at once, so a call that comes in while this one sets up joins it.
     const holder = { roomId: room.id, slots: [], starting: true, abort: controller }

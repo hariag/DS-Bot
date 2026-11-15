@@ -198,11 +198,12 @@ test('a failed import is not accepted as a persisted delivery record', async (t)
 
 test('an unreadable book is not replaced by an importer', async (t) => {
   const { rt, home } = host(t)
-  writeFileSync(join(home, 'ledger'), 'not a directory')
+  mkdirSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger', `${bookFile('pair-a-b')}`))
   let imported = false
   rt.ledger.importer('pair-', () => { imported = true; return [{ id: 'x' }] })
   assert.deepEqual(rt.ledger.records('pair-a-b'), [])
   assert.equal(imported, false)
   await assert.rejects(rt.ledger.written('pair-a-b'))
-  assert.equal(readFileSync(join(home, 'ledger'), 'utf8'), 'not a directory')
+  assert.equal(existsSync(join(home, 'ledger', bookFile('pair-a-b'))), true)
 })
