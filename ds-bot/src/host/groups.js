@@ -1336,6 +1336,7 @@ export function install(rt) {
     disposed = true
     for (const round of rt.roomProgress.values()) round.abort?.abort()
     return Promise.allSettled([...roundRuns.values()].flatMap(runs => [...runs]))
+      .then(() => rt.ledger?.flush?.())
   }, 'ds-bot: group rounds')
 
   function startRound(room, queued, agent, key = randomUUID()) {

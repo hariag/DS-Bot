@@ -499,7 +499,7 @@ test('a Bot cut off at the output limit with nothing written moves on to a fresh
     idle()
     await settle()
   }
-  await until(() => host.state().bots.b.sessionId === 's1')
+  await until(() => host.state().bots.b.sessionId === 's1' && host.archived.length === 1)
 
   // The diagnostics name the route and the input size, so a wrong window is findable.
   const entries = (await host.rt.diagnostics.entries()).filter(entry => entry.code === 'MAX_TOKENS')
