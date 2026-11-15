@@ -4,6 +4,16 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-11-15
+
+### Changed
+
+- Bots working on one project across multiple groups now use a shared project and repository identity, a reachable Project Manager route for conflicts, short checked code slices, and freshness checks before commits or merges and during continuing work. Clean branches may fast-forward; dirty or diverged work stays untouched. ([#8](https://github.com/hariag/DS-Bot/pull/8), [#9](https://github.com/hariag/DS-Bot/pull/9))
+
+### Fixed
+
+- An unresolved delivery review no longer blocks unrelated, unblocked owners from progressing; task identity and queue state are rechecked before follow-up work is assigned. ([#7](https://github.com/hariag/DS-Bot/pull/7))
+
 ## [0.3.6] - 2026-11-12
 
 ### Fixed
