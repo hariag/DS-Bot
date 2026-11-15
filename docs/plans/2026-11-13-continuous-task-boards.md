@@ -56,3 +56,9 @@ Remaining checks:
 - Do not use or restart 10.10.0.180; its 8888 proxy must remain available.
 
 The board host tests are part of `npm test` in `ds-bot/`. The separate browser fixture runs with `npm run test:board:browser` after installing the plugin's development dependencies and setting `DSH_HARNESS` to a local Harness checkout. Set `CHROME_PATH` if Chrome is not at its default executable path. Both use synthetic data; neither should use a real user's DSH data.
+
+### UI follow-up — 2026-11-15
+
+An isolated 1440 × 1000 browser render showed that empty workflow columns only wrapped their controls, leaving most of the board surface unused, while every lane's create action competed as a full accent button. Workflow lanes now stretch into a visible drop area, empty-state text sits within that area, and lane actions use a compact neutral control. Board headings follow the existing 13/18/600 section style; the card dialog uses the standard 15/20/600 title. Board surfaces use the shared theme variables and flat card treatment. Horizontal overflow remains available through the arrow controls with the scrollbar hidden. Browser assertions cover the column height, action treatment, and existing drag-to-schedule semantics.
+
+Synthetic browser preview: [task-board-preview-2026-11-15.png](../images/task-board-preview-2026-11-15.png).
