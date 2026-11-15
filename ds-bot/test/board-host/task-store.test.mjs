@@ -14,9 +14,10 @@ const hex = 'a'.repeat(40)
 const opts = { assertWriteLock() {}, authorize() { return true }, verifyRegistration() { return true }, verifyEvidence() { return true }, verifyReceipt() { return true }, verifyInvalidation() { return true }, verifyAttachment() { return true }, verifyAdmission() { return true } }
 function fixture(t, options = opts) {
   const dir = privateTempDir(join(tmpdir(), 'dsbot-task-test-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const path = join(dir, 'store.sqlite'), store = openTaskStore(path, options)
-  t.after(() => { try { store.close() } catch {} })
+  let store
+  t.after(() => { try { store?.close() } catch {} rmSync(dir, { recursive: true, force: true }) })
+  const path = join(dir, 'store.sqlite')
+  store = openTaskStore(path, options)
   return { path, store }
 }
 const task = (id, dependencies = []) => ({ id, title: `task ${id}`, scope: 'personal:user', owner: 'owner', reviewer: 'reviewer', acceptance: 'independent acceptance', dependencies })
