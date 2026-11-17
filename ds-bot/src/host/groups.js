@@ -1385,8 +1385,8 @@ export function install(rt) {
     // late failure, its work picked up after a restart, its work the user stopped, or
     // the end of work whose result it already posted is an event of the round.
     const event = item => item.failed || item.resumed || item.stopped || item.done || item.goal === 'nudge' || item.goal === 'resume'
-    // A user post has no botId and is no round event or kickoff; a goal draft counts
-    // as the user's own line too.
+    // A user post has no botId and is no round event, kickoff or scheduled
+    // reminder; a goal draft counts as the user's own line too.
     const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post) && !rt.isScheduledRoomPost(post)
     const stoppedOnly = posts.length > 0 && posts.every(item => event(item) && item.stopped === true)
     for (const post of posts.filter(item => !item.kickoff && !event(item) && item.logged === undefined)) {
