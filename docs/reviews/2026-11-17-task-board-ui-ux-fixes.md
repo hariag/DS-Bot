@@ -44,6 +44,8 @@
   - 卡片 More actions 提供 `Archive card` / `Restore from archive`；
   - 批量归档后 toast 提供 Undo，可恢复整批卡片。
 - **批量归档/取消**：`Select` 进入选择模式，卡片出现复选框；`Archive selected` / `Cancel selected` 批量执行并 reload；toast 里的 Undo 通过 `unarchive`/`restore` 恢复。
+- **批量状态**：`Apply status` 支持 Submit / Schedule Bot / Restore / Restore from archive；只执行当前卡片真实可用的 command。
+- **批量 Undo**：状态、负责人、Release 归属、复制副本、个人进度移动都可撤销；归档/取消/类型编辑的 Undo 保留。
 - **列操作**：每条 lane 可折叠/展开，减少长看板的视觉噪音。
 - **撤销**：归档/批量归档和批量取消提供 Undo toast；类型编辑提供局部 Undo。状态/Release 变更仍依赖确认层和安全操作。
 - **键盘**：`N` 打开新建卡片，`/` 聚焦搜索；`Esc` 仍是关闭最上层。
@@ -65,8 +67,8 @@
 ### 本轮验证
 
 - `build-client --check` 通过；`npm run lint` 0 errors（96 条既有 warning）。
-- Browser fixture：278 assertions，0 failed（新增列区间/Release 紧凑 chip/取消菜单/空恢复面板断言）。
-- Board e2e：22/22 passed（run `20261117060903`）。
+- Browser fixture：285 assertions，0 failed（新增批量状态/Undo、Archive 批量恢复、个人批量移动、批量复制与批量 owner 断言）。
+- Board e2e：22/22 passed（run `20261117070314`）。
 - Board-host：234 tests，231 passed，1 failed（Windows symlink `EPERM`），2 skipped。
 - Lifecycle e2e：`--fresh` 通过（11 tasks、app tests、health、publish、report）。
 - 完整 `npm test`：2894 tests，2871 passed，11 failed，12 skipped；2 个 i18n 缺键已修复并单独重跑通过，其余为已知 Windows 环境/依赖失败。
@@ -76,7 +78,7 @@
 
 本轮已补齐此前列出的核心缺口；剩余项按产品边界记录，不用 UI 假象冒充完成：
 
-- **批量操作**：归档/取消/类型/负责人/Release/复制；个人看板支持批量移动到 todo/doing/finished。工作流跨列仍由 submit/schedule/cancel/restore 等真实命令驱动，不支持任意状态跳转。
+- **批量操作**：归档/取消/类型/负责人/Release/复制/状态（Submit、Schedule、Restore、Restore from archive）；状态、负责人、Release、复制、个人进度移动均支持 Undo。工作流跨列仍由真实 command 驱动，不支持任意状态跳转。
 - **文件附件**：支持 PNG/JPEG、PDF、ZIP、纯文本、Markdown、JSON；图片可预览/设为封面，其他文件显示文件卡并可下载。host 校验内容 magic、UTF-8/JSON、大小和名称；单文件 5 MiB、每批 10 个、每任务 20 个。
 - **列表菜单**：lane 支持折叠/展开、重命名、左/右移动、归档全部卡片，以及手动/截止/标题/类型排序；轨道显示当前列区间和剩余列数。
 - **撤销**：归档/批量归档/批量取消/类型编辑/状态取消提交/Release 移动/同列拖拽排序/调度有 Undo；跨列状态变更仍依赖各自命令和确认层。`unschedule` 只取消尚未被 claim 的 pending execute action。

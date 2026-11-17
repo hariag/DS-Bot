@@ -35,7 +35,9 @@
 
 ## 3. 仍未覆盖 / 保留的限制
 
-- 批量工作流移动仍不是“任意拖到任意列”：状态由任务账本和工作流动作决定。批量移动只对个人看板三个进度列开放。
+- 批量工作流移动仍不是“任意拖到任意列”：状态由任务账本和工作流动作决定。第二轮新增 `Apply status`（Submit / Schedule / Restore / Restore from archive），只执行当前卡片可用 command；个人看板支持批量移动三个进度列。
+- 批量 Undo 已覆盖状态、负责人、Release 归属、复制副本和个人进度移动；归档/取消/类型编辑保留。
+- Archive 视图支持选中归档卡片并批量恢复。
 - `Move to…` 菜单只列当前命令允许的目标，不提供伪造的状态跳转。
 - Release 对话框没有直接创建 Bot 的表单；缺少角色时给出明确操作提示，创建 Bot 仍在 Bot 设置中完成。
 - 乐观 UI 未实现；所有写操作仍以 host 回执和重新读取为准，避免回执不确定时显示假状态。
@@ -48,11 +50,13 @@
 本轮收尾后重新执行：
 
 - `node scripts/build-client.mjs --check`：通过。
-- `node test/task-board.browser.mjs`：**278 assertions, 0 failed**。
-- `node test/e2e/board.e2e.mjs --fresh`：**22/22 passed**，run `20261117060903`。
+- `node test/task-board.browser.mjs`：**285 assertions, 0 failed**。
+- `node test/e2e/board.e2e.mjs --fresh`：**22/22 passed**，run `20261117070314`。
 - board-host 全量：**234 tests，231 passed，1 failed（Windows symlink `EPERM`），2 skipped**。
 - `node test/e2e/lifecycle.e2e.mjs --fresh`：**PASS**（11 tasks、TDD/app tests、HTTP health/GPA、publish、summary report）。
 - `npm run lint`：**0 errors**，96 条既有 warning。
 - 完整 `npm test`：**2894 tests，2871 passed，11 failed，12 skipped**。11 个失败中 2 个是新 i18n 键缺失，已补齐并单独重跑 `i18n.test.js` / `legacy-review-i18n.test.js` 为 4/4 通过；其余 9 个为已知 Windows 环境/依赖问题（symlink EPERM、缺少 link 依赖、ACL、connectors/phone/local-agent、`git` 不在 Node 子进程 PATH、roster 并发时序）。
 
-具体结果记录在修复记录和 PR 描述中；不以“代码看起来正确”代替实际运行。
+具体结果记录在修复记录、第二轮批量记录和 PR 描述中；不以“代码看起来正确”代替实际运行。
+
+第二轮记录：[批量操作与 Undo 完善记录](2026-11-17-bulk-actions-undo-round.md)。

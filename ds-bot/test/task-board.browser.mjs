@@ -58,7 +58,7 @@ const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').spli
 state.images=images;
 function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';const card=state.card;return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),description:card.description||'',labels:card.labels,checklist:card.checklist,dueDate:card.dueDate||'',dueComplete:card.dueComplete===true,...(card.coverImageId?{coverImageId:card.coverImageId}:{}),comments:card.comments,owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:state.shares,images:state.gallery}}
 globalThis.resetBoardState=()=>{state.calls=[];state.revision=1;state.progress='todo';state.boardStatus='proposed';state.card={description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null};state.shares=[{id:'grant-old',targetRoomId:'g2',fields:['status']}];state.gallery=[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}];state.created=[];state.commentSeq=0}
-function phase2Commands(task){const commands=[{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft')commands.push({type:'submit'},{type:'cancel'});else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
+function phase2Commands(task){const commands=[{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft')commands.push({type:'submit'},{type:'cancel'});else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
 globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
@@ -137,6 +137,8 @@ async function request(endpoint,payload){
    }
    if(type==='submit'||type==='restore')task.status='proposed';
    if(type==='cancel')task.status='cancelled';
+   if(type==='archive')task.archivedAt=1700000000000;
+   if(type==='unarchive')delete task.archivedAt;
    task.revision++;
    return {};
   }
@@ -604,6 +606,34 @@ try {
   await page.keyboard.press('Escape')
   await personalModal.waitFor({state:'detached'})
   await page.setViewportSize({width:1280,height:720})
+  await page.getByRole('button',{name:'Select',exact:true}).click()
+  await page.locator('[data-stage="finished"] [data-task-id="T1"]').getByLabel('Select card').check()
+  await page.getByLabel('Move selected cards').selectOption('todo')
+  await page.locator('.bt-board-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='personal-progress'&&call.payload.value.progress==='todo'))
+  const bulkPersonalMove=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='personal-progress'&&call.payload.value.progress==='todo'))
+  assert.equal(bulkPersonalMove.payload.taskId,'T1','selected personal cards move through the existing progress command')
+  await page.locator('[data-stage="todo"] [data-task-id="T1"]').waitFor()
+  await page.getByRole('button',{name:'Select',exact:true}).click()
+  await page.locator('[data-stage="todo"] [data-task-id="T1"]').getByLabel('Select card').check()
+  await page.getByRole('button',{name:'Duplicate selected',exact:true}).click()
+  await page.locator('.bt-board-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='create'))
+  const bulkCopy=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='create'))
+  assert.equal(bulkCopy.payload.value.title,'Copy of Personal task','bulk duplicate copies the selected card title')
+  await page.locator('.bt-board-toast-action').click()
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='archive'&&call.payload.taskId===id),bulkCopy.payload.taskId)
+  await page.getByRole('button',{name:'Select',exact:true}).click()
+  await page.locator('[data-stage="todo"] [data-task-id="T1"]').getByLabel('Select card').check()
+  await page.getByLabel('Set owner for selected cards').selectOption('a')
+  await page.locator('.bt-board-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.value.owner==='a'))
+  const bulkOwner=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.value.owner==='a'))
+  assert.equal(bulkOwner.payload.taskId,'T1','bulk owner applies to the selected card')
+  await page.locator('.bt-board-toast-action').click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.value.owner==='user'))
+  const bulkOwnerUndo=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.value.owner==='user'))
+  assert.equal(bulkOwnerUndo.payload.taskId,'T1','bulk owner undo restores the previous owner')
 
   await page.evaluate(() => { globalThis.resetBoardState(); globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal') })
   await page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary').click()
@@ -1294,6 +1324,34 @@ try {
   assert.equal(rejectDecision.payload.expectedRevision,1)
   await rejectProposal.waitFor({state:'detached'})
   assert.equal(await proposalPanel.locator('.bt-board-proposal').count(),0)
+
+  // Bulk status + archive view: a draft can be submitted and undone, and an
+  // archived card can be restored from the Archive view.
+  await page.evaluate(()=>{const s=globalThis.fixture;s.phase2Tasks=[
+    {id:'D1',title:'Bulk draft',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'draft',comments:[]},
+    {id:'A1',title:'Archived card',type:'bugfix',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',archivedAt:1700000000000,comments:[]},
+  ];s.phase2Reject=undefined;s.calls=[];globalThis.renderFixture({kind:'room',id:'g1'},'phase2',true)})
+  await page.locator('[aria-label="Draft"] [data-task-id="D1"]').waitFor()
+  await page.getByRole('button',{name:'Select',exact:true}).click()
+  await page.getByLabel('Select card').check()
+  await page.getByLabel('Apply status to selected cards').selectOption('submit')
+  await page.locator('.bt-board-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='submit'&&call.payload.taskId==='D1'))
+  const bulkSubmit=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='submit'))
+  assert.equal(bulkSubmit.payload.taskId,'D1','bulk status applies to the selected draft')
+  await page.locator('.bt-board-toast-action').click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='cancel'&&call.payload.taskId==='D1'))
+  const bulkUndo=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='cancel'))
+  assert.equal(bulkUndo.payload.taskId,'D1','bulk status undo uses the inverse command')
+  await page.locator('.bt-board-views').getByRole('button',{name:'Archive',exact:true}).click()
+  await page.locator('.bt-board-section[aria-label="Archive"] [data-task-id="A1"]').waitFor()
+  await page.getByRole('button',{name:'Select',exact:true}).click()
+  await page.getByLabel('Select card').check()
+  await page.getByLabel('Apply status to selected cards').selectOption('unarchive')
+  await page.locator('.bt-board-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='unarchive'&&call.payload.taskId==='A1'))
+  const bulkUnarchive=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='unarchive'))
+  assert.equal(bulkUnarchive.payload.taskId,'A1','Archive view restores selected archived cards')
 
   assert.deepEqual(errors, [])
   console.log('PASS ' + assertions + ' assertions: board images, legacy cards, description/labels/due/checklist/comments, attachments and covers, quick add, personal progress, group scheduling, sharing, explicit cancellation, late response, reopen, scoped rendering and conflicts, task types, draft/cancelled, releases and proposals')
