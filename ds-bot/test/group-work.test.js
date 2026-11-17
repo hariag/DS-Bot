@@ -240,7 +240,7 @@ test('message_bot from a group to one of its members calls it there, as "@Name" 
   host.agentOf('gb').inbox.nextTurn.push({ source: { kind: 'bot' } }, { source: { kind: 'bot' } }, { source: { kind: 'user' } })
   const sent = await host.tool('message_bot', { to: 'Writer', message: '把文档整理好' }, 'ga')
   assert.match(sent, /^Called Writer in "Ops"/)
-  assert.match(sent, /Before this call, its inbox in this group had 2 Bot message\(s\) waiting/)
+  assert.match(sent, /Nothing went to its own chat/)
   host.finish('ga', '安排好了。')
   await settle(() => host.agentOf('gb').calls.length === 1)
   const called = host.begin('gb')
@@ -2830,4 +2830,96 @@ test('stopping a group while its round finishes starts nothing afterwards', asyn
   await settle(() => first() !== undefined && !rt.roomActive('r1'))
   for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve))
   assert.equal(host.agentOf('gc').calls.length, 0, 'nothing started after the stop')
+})
+
+test('scheduled group messages do not impersonate a new user instruction', async t => {
+  const host = await start(t)
+  let userMessages = 0
+  rt.goalUserMessage = () => { userMessages++ }
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } }
+  const result = host.round('schedule-origin', reminder)
+  await until(() => [...rt.roomProgress.values()].some(round => round.roomId === 'r1' && !round.starting))
+  await until(() => host.agentOf('gb').calls.length > 0)
+  assert.notEqual([...rt.roomProgress.values()].find(round => round.roomId === 'r1' && !round.starting).userMessage, true)
+  assert.equal(userMessages, 0)
+  assert.match(logLines(host).at(-1).text, /inspect/)
+  result.cancel()
+})
+
+test('a real user message still resumes the goal when queued with a scheduled message', async t => {
+  const host = await start(t)
+  let userMessages = 0
+  rt.goalUserMessage = () => { userMessages++ }
+  host.emit('r1', 'user/message', { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } })
+  const result = host.round('mixed-origin', host.say('@Writer continue'))
+  await until(() => [...rt.roomProgress.values()].some(round => round.roomId === 'r1' && !round.starting))
+  assert.equal([...rt.roomProgress.values()].find(round => round.roomId === 'r1' && !round.starting).userMessage, true)
+  assert.equal(userMessages, 1)
+  result.cancel()
+})
+
+test('a real user message still resumes the goal when the scheduled message arrives second', async t => {
+  const host = await start(t)
+  let userMessages = 0
+  rt.goalUserMessage = () => { userMessages++ }
+  host.emit('r1', 'user/message', host.say('@Writer continue'))
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } }
+  const result = host.round('mixed-reverse-origin', reminder)
+  await until(() => [...rt.roomProgress.values()].some(round => round.roomId === 'r1' && !round.starting))
+  assert.equal([...rt.roomProgress.values()].find(round => round.roomId === 'r1' && !round.starting).userMessage, true)
+  assert.equal(userMessages, 1)
+  result.cancel()
+})
+
+test('a scheduled message can still pass an urgent handoff through an idle-paused room', async t => {
+  const host = await start(t, { idlePaused: { from: 'a', count: 2, noticed: true } })
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } }
+  const result = host.round('idle-schedule', reminder)
+  await until(() => host.agentOf('gb').calls.length > 0)
+  host.begin('gb')
+  host.finish('gb', '@Tester urgent follow-up')
+  await until(() => host.agentOf('gc').calls.length > 0)
+  host.begin('gc')
+  host.finish('gc', '@Chief urgent escalation')
+  await until(() => host.agentOf('ga').calls.length > 0)
+  result.cancel()
+})
+
+test('a scheduled message still releases an already parked handoff', async t => {
+  const host = await start(t, {
+    idlePaused: { from: 'a', count: 2, noticed: true },
+    paused: [{ id: 'c', name: 'Tester', by: 'a', note: 'urgent follow-up', idle: true }],
+  })
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } }
+  const result = host.round('parked-schedule', reminder)
+  await until(() => host.agentOf('gc').calls.length > 0)
+  assert.equal(rt.roomOf('r1').paused, undefined)
+  result.cancel()
+})
+
+test('a user cannot disguise an instruction as a scheduled message by its text', async t => {
+  const host = await start(t)
+  let userMessages = 0
+  rt.goalUserMessage = () => { userMessages++ }
+  const result = host.round('user-origin', host.say('reminder_prompt_json: "@Writer inspect"'))
+  await until(() => [...rt.roomProgress.values()].some(round => round.roomId === 'r1' && !round.starting))
+  assert.equal([...rt.roomProgress.values()].find(round => round.roomId === 'r1' && !round.starting).userMessage, true)
+  assert.equal(userMessages, 1)
+  result.cancel()
+})
+
+test('a scheduled message joining a running round does not reset user progress', async t => {
+  const host = await start(t)
+  let userMessages = 0
+  rt.goalUserMessage = () => { userMessages++ }
+  const first = host.round('running-origin', host.say('@Writer work'))
+  await until(() => host.agentOf('gb').calls.length > 0)
+  assert.equal(userMessages, 1)
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Tester inspect"' }], source: { kind: 'schedule' } }
+  const joined = host.round('joined-schedule', reminder)
+  await until(() => host.agentOf('gc').calls.length > 0)
+  assert.equal(userMessages, 1)
+  assert.match(logLines(host).at(-1).text, /inspect/)
+  joined.cancel()
+  first.cancel()
 })

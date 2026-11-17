@@ -240,6 +240,8 @@ export function install(rt) {
   const roomProgress = new Map()
   /** @type {Map<string, {text:string, botId?:string, name?:string, reportBack?:boolean, kickoff?:boolean, references?:{labels:string[], text:string}[]}[]>} messages a room's next relay posts */
   const roomInbox = new Map()
+  const scheduledRoomPosts = new WeakSet()
+  const isScheduledRoomPost = post => scheduledRoomPosts.has(post)
   const queueRoomMessage = (roomId, item) => roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
   // Member turns of a group round the user stopped: what they end with stays out of the group.
   const stoppedRoomTurns = new Set()
@@ -1258,8 +1260,11 @@ export function install(rt) {
           // A mid-turn relay that owes no reply only informs the turn: it neither
           // claims the running turn nor queues as the next one's trigger.
         } else if (source?.kind === 'schedule' && rt.roomOf(id)) {
-          // A group's scheduled task reaches the group as the user's message.
-          queueRoomMessage(rt.roomOf(id).id, { text: reminderText(textOf(event.data.content)) })
+          // Keep the host-provided origin on the actual queue object, not in
+          // message text that a sender could imitate.
+          const post = { text: reminderText(textOf(event.data.content)) }
+          scheduledRoomPosts.add(post)
+          queueRoomMessage(rt.roomOf(id).id, post)
         } else if (source?.kind === REFERENCE_KIND && rt.roomOf(id)) {
           attachReference(roomInbox.get(rt.roomOf(id).id), source, textOf(event.data.content))
         } else if (source?.kind === 'subagent-settled') {
@@ -1650,5 +1655,5 @@ export function install(rt) {
     }, 'ds-bot: prompt rejection reasons')
   }
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, stopChat, releaseBot, unblockBots, resumeBot, markSteerCut, hasSubagents, stopSubagents, adoptLiveWork })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, isScheduledRoomPost, activityView, workView, roomWorkView, turnsView, steeredView, callDetail, doingOf, stopRoomTurn, stopChat, releaseBot, unblockBots, resumeBot, markSteerCut, hasSubagents, stopSubagents, adoptLiveWork })
 }
