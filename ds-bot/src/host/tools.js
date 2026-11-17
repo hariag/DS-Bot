@@ -414,7 +414,7 @@ export function install(rt) {
       }
       const why = String(args.reason ?? '').trim() || 'Stop what you are doing; the previous turn was ended on purpose. Acknowledge briefly.'
       await rt.deliver({ fromId: sender.id, toId: target.id, ...callerPart(exec), text: why, role: 'stopped', ...callerRoom(exec) })
-      return `Stopped ${target.name} in ${running.map(whereOf).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
+      return `Stopped ${target.name} in ${running.map(sessionId => whereOf(sessionId, sender.id, target.id)).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
     },
   }))
 
