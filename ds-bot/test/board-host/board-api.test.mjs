@@ -16,7 +16,8 @@ function fixture() {
     create: ({ operationId, actor, task }) => {
       const found = operations.get(operationId)
       if (found) { if (found.input !== JSON.stringify(task)) throw new Error('operation conflict'); return found.result }
-      assert.equal(actor, 'user'); const record = { ...task, status: 'proposed', revision: 1, attachments: [] }
+      assert.equal(actor, 'user'); const record = { ...task, status: task.draft === true ? 'draft' : 'proposed', revision: 1, attachments: [] }
+      delete record.draft
       rows.push(record); operations.set(operationId, { taskId: task.id, result: record, input: JSON.stringify(task) }); return record
     },
     command: ({ operationId, taskId, expectedRevision, actor, type, value }) => {
@@ -26,7 +27,16 @@ function fixture() {
       if (found) { if (found.input !== input) throw new Error('operation conflict'); return found.result }
       if (task.revision !== expectedRevision) throw new Error('revision conflict')
       if (type === 'edit' || type === 'card-details') Object.assign(task, value)
+      else if (type === 'submit' || type === 'restore') task.status = 'proposed'
+      else if (type === 'cancel') task.status = 'cancelled'
+      else if (type === 'archive') task.archivedAt = 1
+      else if (type === 'unarchive') delete task.archivedAt
+      else if (type === 'release-assign') { task.releaseId = value.releaseId; task.releasePosition = value.releasePosition ?? null }
       else if (type === 'personal-progress') task.personalProgress = value.progress
+      else if (type === 'reorder') task.position = value.afterId
+      else if (type === 'card-comment') task.comments = [...(task.comments ?? []), { id:operationId, author:'user', text:value.text, at:1 }]
+      else if (type === 'card-comment-edit') task.comments = (task.comments ?? []).map(comment => comment.id === value.commentId ? { ...comment, text:value.text } : comment)
+      else if (type === 'card-comment-delete') task.comments = (task.comments ?? []).filter(comment => comment.id !== value.commentId)
       else if (type === 'attach') task.attachments.push(...value.images)
       else if (type === 'remove-image') task.attachments = task.attachments.filter(image => image.id !== value.imageId)
       task.revision += 1
@@ -140,6 +150,24 @@ test('card details are scoped, explicit capabilities and do not leak into shared
   assert.throws(()=>f.api.command(room,user,{...request,operationId:'locked',expectedRevision:2}),/locked/)
 })
 
+test('card fields, ordering and comment commands cross the API while a Bot stays unauthorized', () => {
+  const f = fixture()
+  const card = f.api.create(room, user, { ...proposal, description:'Copy', dueDate:'2028-02-29T09:30', dueComplete:true, labels:['Urgent'], checklist:[{ id:'check', text:'Inspect', checked:false }] })
+  assert.equal(card.description, 'Copy'); assert.equal(card.dueDate, '2028-02-29T09:30'); assert.equal(card.dueComplete, true)
+  const board = f.api.list(room, user)
+  assert.ok(board.capabilities.commands.task1.some(command => command.type === 'reorder'))
+  const ordered = f.api.command(room, user, { operationId:'reorder-1', taskId:'task1', expectedRevision:1, type:'reorder', value:{ afterId:null } })
+  assert.equal(ordered.revision, 2)
+  assert.throws(() => f.api.command(room, user, { operationId:'reorder-bad', taskId:'task1', expectedRevision:2, type:'reorder', value:{} }), /Invalid reorder/)
+  const commented = f.api.command(room, user, { operationId:'comment-1', taskId:'task1', expectedRevision:2, type:'card-comment', value:{ text:'Note' } })
+  assert.equal(commented.comments.length, 1)
+  assert.ok(f.api.list(room, user).capabilities.commands.task1.some(command => command.type === 'card-comment-edit'))
+  const edited = f.api.command(room, user, { operationId:'comment-edit', taskId:'task1', expectedRevision:3, type:'card-comment-edit', value:{ commentId:'comment-1', text:'Edited' } })
+  assert.equal(edited.comments[0].text, 'Edited')
+  const deleted = f.api.command(room, user, { operationId:'comment-delete', taskId:'task1', expectedRevision:4, type:'card-comment-delete', value:{ commentId:'comment-1' } })
+  assert.deepEqual(deleted.comments, [])
+  assert.throws(() => f.api.command(room, { kind:'bot', id:'one' }, { operationId:'bot-reorder', taskId:'task1', expectedRevision:5, type:'reorder', value:{ afterId:null } }), /Only the instance user/)
+})
 test('a task on another group board cannot be edited from the wrong scope', () => {
   const f = fixture(); f.api.create(room, user, proposal)
   f.state.rooms.other = { members: ['one', 'two'] }
@@ -158,4 +186,64 @@ test('personal progress is offered only for the user’s own unregistered card',
   assert.throws(()=>f.api.command(scope,user,{operationId:'bad',taskId:'group',expectedRevision:1,type:'personal-progress',value:{progress:'finished'}}),/unavailable/)
   f.rows.find(task=>task.id==='mine').status='reported'
   assert.ok(!f.api.list(scope,user).capabilities.commands.mine.some(command=>command.type==='personal-progress'))
+})
+
+test('a card cover crosses the card-details command and appears in the board list', () => {
+  const f = fixture(); f.api.create(room, user, proposal)
+  f.rows[0].attachments = [{ id:'image-1', name:'cover.png', mediaType:'image/png' }]
+  assert.equal(f.api.list(room, user).tasks[0].coverImageId, null)
+  const covered = f.api.command(room, user, { operationId:'cover-set', taskId:'task1', expectedRevision:1, type:'card-details', value:{ coverImageId:'image-1' } })
+  assert.equal(covered.coverImageId, 'image-1')
+  assert.equal(f.api.list(room, user).tasks[0].coverImageId, 'image-1')
+  const cleared = f.api.command(room, user, { operationId:'cover-clear', taskId:'task1', expectedRevision:2, type:'card-details', value:{ coverImageId:null } })
+  assert.equal(cleared.coverImageId, null)
+  assert.equal(f.api.list(room, user).tasks[0].coverImageId, null)
+})
+
+test('the board view exposes task types, draft/cancel commands and release summaries', () => {
+  const f = fixture(), scope = room
+  f.api.create(scope, user, { ...proposal, operationId:'typed', taskId:'typed', type:'requirement', draft:true })
+  const board = f.api.list(scope, user)
+  const typed = board.tasks.find(task => task.id === 'typed')
+  assert.equal(typed.type, 'requirement')
+  assert.equal(typed.status, 'draft')
+  assert.ok(board.capabilities.commands.typed.some(command => command.type === 'submit'))
+  assert.ok(board.capabilities.commands.typed.some(command => command.type === 'cancel'))
+  const submitted = f.api.command(scope, user, { operationId:'submit-typed', taskId:'typed', expectedRevision:1, type:'submit' })
+  assert.equal(submitted.status, 'proposed')
+  const cancelled = f.api.command(scope, user, { operationId:'cancel-typed', taskId:'typed', expectedRevision:2, type:'cancel' })
+  assert.equal(cancelled.status, 'cancelled')
+  const restored = f.api.command(scope, user, { operationId:'restore-typed', taskId:'typed', expectedRevision:3, type:'restore' })
+  assert.equal(restored.status, 'proposed')
+})
+
+test('a title-only draft gets safe defaults and remains a draft', () => {
+  const f = fixture()
+  const created = f.api.create(room, user, { operationId:'quick-draft', taskId:'quick-draft-task', title:'Remember this', draft:true, dependencies:[] })
+  assert.equal(created.status, 'draft')
+  assert.equal(created.owner, 'one')
+  assert.equal(created.reviewer, 'two')
+  assert.equal(created.acceptance, 'To be defined.')
+  assert.equal(created.type, 'feature')
+  const board = f.api.list(room, user)
+  assert.equal(board.summary.total, 1)
+  assert.equal(board.summary.statuses.draft, 1)
+  assert.ok(Array.isArray(board.releaseCandidates.projectManager))
+})
+
+test('archive hides a card from the active summary and offers restore', () => {
+  const f = fixture()
+  f.api.create(room, user, proposal)
+  const archived = f.api.command(room, user, { operationId:'archive-task', taskId:'task1', expectedRevision:1, type:'archive' })
+  assert.ok(archived.archivedAt)
+  let board = f.api.list(room, user)
+  assert.equal(board.tasks[0].archivedAt, archived.archivedAt)
+  assert.equal(board.summary.total, 0)
+  assert.equal(board.summary.archived, 1)
+  assert.ok(board.capabilities.commands.task1.some(command => command.type === 'unarchive'))
+  const restored = f.api.command(room, user, { operationId:'unarchive-task', taskId:'task1', expectedRevision:archived.revision, type:'unarchive' })
+  assert.equal(restored.archivedAt, undefined)
+  board = f.api.list(room, user)
+  assert.equal(board.summary.total, 1)
+  assert.equal(board.summary.archived, 0)
 })

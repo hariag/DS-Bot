@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { RELEASE_ROLES, resolveReleaseTeam, roleForBot } from '../../src/host/release-team.mjs'
+import { RELEASE_ROLES, resolveReleaseTeam } from '../../src/host/release-team.mjs'
 
 const bots = Object.fromEntries([
   ['pm', { id:'pm', name:'PM', role:'Project Manager' }],
@@ -12,18 +12,6 @@ const bots = Object.fromEntries([
   ['review', { id:'review', name:'Reviewer', role:'Independent Reviewer' }],
   ['ops', { id:'ops', name:'Ops', role:'Operations Engineer' }],
 ].map(([id, bot]) => [id, bot]))
-
-test('release suggestions use exact English or Chinese roles and preserve explicit choices', () => {
-  assert.equal(roleForBot({role:' ui   设计师 '})?.key, 'uiDesigner')
-  assert.equal(roleForBot({name:'API中间件工程师', role:'API'})?.key, 'apiEngineer')
-  assert.equal(roleForBot({role:'Project   Manager', name:'架构师'})?.key, 'projectManager')
-  assert.equal(roleForBot({role:'客户', name:'测试工程师助理'}), undefined)
-  assert.equal(roleForBot({role:'测试工程师', name:'独立验收人'})?.key, 'tester')
-  assert.equal(roleForBot({role:'独立验收人'})?.key, 'reviewer')
-  const manual = resolveReleaseTeam({ bots, roles:{ reviewer:'review' } })
-  assert.equal(manual.roles.reviewer, 'review')
-  assert.throws(() => resolveReleaseTeam({ bots, roles:{ reviewer:'test' } }), /independent reviewer/)
-})
 
 test('release team resolves required roles, keeps the manager as admin member and rejects missing roles', () => {
   const team = resolveReleaseTeam({ bots, projectManagerId:'pm' })

@@ -99,6 +99,40 @@ const WRITTEN_CALL = '我先看一下目录。\n<tool_call>\n<function=pwsh>\n<p
 // Deterministic filler that grows a conversation by about `chars` characters.
 const filler = (chars, tag) => Array.from({ length: Math.ceil(chars / 20) }, (_, index) => `${tag}第${index + 1}段：这是一段用来撑长上下文的测试文字。`).join('').slice(0, chars)
 const isResults = message => Array.isArray(message?.content) && message.content.some(block => block.type === 'tool_result')
+// Optional deterministic board lifecycle: when the bench asks for it, a Bot
+// answers a Trello task delivery by starting the card, reporting evidence and
+// (for the independent reviewer) passing the review. This keeps the mock model
+// out of the product path; it is only used by the lifecycle end-to-end check.
+const boardTaskPrompt = messages => {
+  const latest = [...messages].reverse().find(message => message.role === 'user' && !isResults(message))
+  const text = latest ? textOf(latest.content) : ''
+  return /Task ID: .+ \(revision \d+\)/.test(text) && /(task from Trello|Independently compare|Use board_task show first|board_task)/.test(text) ? text : undefined
+}
+const boardTaskArgs = prompt => {
+  const id = /Task ID: (.+?) \(revision (\d+)\)/.exec(prompt)
+  return id ? { taskId:id[1], revision:Number(id[2]), review:/Independently compare/.test(prompt) } : undefined
+}
+function boardAuto(messages, tools, result, used) {
+  if (process.env.MOCK_BOARD_AUTORUN !== '1') return undefined
+  const prompt = boardTaskPrompt(messages)
+  const task = prompt && boardTaskArgs(prompt)
+  if (!task) return undefined
+  if (!tools.has('board_task')) { console.error('board-auto: board_task is not in tools: ' + [...tools].join(',')); return undefined }
+  if (result && used?.name === 'board_task') {
+    try {
+      const parsed = JSON.parse(typeof result.content === 'string' ? result.content : textOf(result.content))
+      const state = parsed?.task
+      if (!state) return undefined
+      if (state.status === 'ready') return [tool('board_task', { action:'start', task_id:state.id, operation_id:`mock-start-${state.id}-${state.revision}`, expected_revision:state.revision })]
+      if (state.status === 'working') return [tool('board_task', { action:'report', task_id:state.id, operation_id:`mock-report-${state.id}-${state.revision}`, expected_revision:state.revision, value:{ kind:'personal', evidence:`mock evidence for ${state.title ?? state.id}`, environment:'mock-bench' } })]
+      if (state.status === 'done') return [text('Task is complete.')]
+      return undefined
+    } catch { return undefined }
+  }
+  if (result) return undefined
+  if (task.review) return [tool('board_task', { action:'review', task_id:task.taskId, operation_id:`mock-review-${task.taskId}-${task.revision}`, expected_revision:task.revision, value:{ evidence:'mock independent review passed', result:'pass' } })]
+  return [tool('board_task', { action:'start', task_id:task.taskId, operation_id:`mock-start-${task.taskId}-${task.revision}`, expected_revision:task.revision })]
+}
 // 'handoff' or 'backend' for a summary request, by its final prompt. The adapter merges
 // that prompt into the user message before it, so it is the last text block, not the
 // whole message.
@@ -191,10 +225,16 @@ function decide(body) {
   // A stopped call's result can share a message with the next group turn, which wins.
   const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat'))
   const result = fresh ? undefined : blocks.find(block => block.type === 'tool_result')
+  if (!result) {
+    const board = boardAuto(messages, tools, undefined, undefined)
+    if (board) return board
+  }
   if (result) {
     const resultText = typeof result.content === 'string' ? result.content : textOf(result.content)
     const call = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
     const used = call?.content.find(b => b.type === 'tool_use' && b.id === result.tool_use_id) ?? call?.content.find(b => b.type === 'tool_use')
+    const board = boardAuto(messages, tools, result, used)
+    if (board) return board
     // "长任务 N [K]": N steps in one turn, each adding about K thousand characters (default 4).
     const openerAt = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content).trimStart()))
     if (openerAt !== -1 && used?.name === 'list_bots') {
@@ -354,6 +394,9 @@ function decide(body) {
     const room = /^\[Group chat "([^"]+)"/.exec(userText)?.[1] ?? ''
     const leads = /^Members: .* and you \(admin\)\./m.test(userText)
     let ask
+    if ((ask = /^User: 调用\s*(\S+)(?:\s+([\s\S]+))?$/.exec(userLine))) {
+      try { return [tool(ask[1], ask[2] ? JSON.parse(ask[2]) : {})] } catch { return [text('调用参数不是有效 JSON')] }
+    }
     if ((ask = /把\s*(\S+?)\s*拉进群/.exec(userLine))) return [tool('update_group', { group: room, add_members: [ask[1]] })]
     if ((ask = /把\s*(\S+?)\s*踢出群/.exec(userLine))) return [tool('update_group', { group: room, remove_members: [ask[1]] })]
     if ((ask = /群名改成\s*(\S+)/.exec(userLine))) return [tool('update_group', { group: room, name: ask[1] })]

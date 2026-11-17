@@ -33,7 +33,7 @@ export function createTaskDriver({ store, admission, authorized = () => false, a
     // This capability is intentionally absent in the host until the real
     // preclaim implementation and recovery contract pass independent tests.
     if (!admission || await admission.available() !== true || stopped) return
-    const tasks = store.list()
+    const tasks = typeof store.listSchedule === 'function' ? store.listSchedule() : store.list()
     if (!Array.isArray(tasks) || !tasks.length) return
     const start = cursor % tasks.length
     const ordered = tasks.slice(start).concat(tasks.slice(0, start))

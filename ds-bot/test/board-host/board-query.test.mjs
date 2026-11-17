@@ -42,9 +42,31 @@ test('object prototype keys are not valid roster identities', () => {
   assert.throws(() => list({ kind: 'personal', id: '__proto__' }, { kind: 'user' }), /not available/)
 })
 
+test('cards are ordered by position with legacy cards first, and completion is visible', () => {
+  const scoped = [
+    { id:'new-b', revision:1, title:'B', status:'working', owner:'one', reviewer:'two', scope:'room:a', dependencies:[], position:'r' },
+    { id:'legacy-b', revision:1, title:'Legacy B', status:'working', owner:'one', reviewer:'two', scope:'room:a', dependencies:[] },
+    { id:'new-a', revision:1, title:'A', status:'working', owner:'one', reviewer:'two', scope:'room:a', dependencies:[], position:'i', dueComplete:true },
+    { id:'legacy-a', revision:1, title:'Legacy A', status:'working', owner:'one', reviewer:'two', scope:'room:a', dependencies:[] },
+  ]
+  const view = boardList({ scope:{ kind:'room', id:'a' }, principal:{ kind:'user' }, rooms, bots, tasks:scoped })
+  assert.deepEqual(view.tasks.map(task => task.id), ['legacy-a', 'legacy-b', 'new-a', 'new-b'])
+  assert.equal(view.tasks[2].dueComplete, true)
+  assert.equal(view.tasks[3].dueComplete, false)
+})
 test('a status-only share never reveals card description, due date, labels or checklist', () => {
   const source={...tasks[0],description:'private details',dueDate:'2028-02-29',labels:['private'],checklist:[{id:'x',text:'private',checked:false}],shares:[{id:'grant',taskId:'a1',targetRoomId:'b',fields:['status'],revoked:false}]}
   const view=boardList({scope:{kind:'room',id:'b'},principal:{kind:'user'},rooms,bots,tasks:[source],verifyShare:()=>true})
   assert.equal(view.tasks.length,1)
   assert.deepEqual(view.tasks[0],{id:'a1',title:'Shared task',status:'working',shared:true})
+})
+
+test('a card cover id is exposed in the board projection and defaults to null', () => {
+  const scoped = [
+    { id:'covered', revision:1, title:'Covered', status:'working', owner:'one', reviewer:'two', scope:'room:a', dependencies:[], coverImageId:'image-1' },
+    { id:'plain', revision:1, title:'Plain', status:'working', owner:'one', reviewer:'two', scope:'room:a', dependencies:[] },
+  ]
+  const view = boardList({ scope:{ kind:'room', id:'a' }, principal:{ kind:'user' }, rooms, bots, tasks:scoped })
+  assert.equal(view.tasks.find(task => task.id === 'covered').coverImageId, 'image-1')
+  assert.equal(view.tasks.find(task => task.id === 'plain').coverImageId, null)
 })

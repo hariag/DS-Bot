@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { lstatSync, openSync, closeSync, fsyncSync, constants } from 'node:fs'
+import { lstatSync, openSync, closeSync, readSync, fsyncSync, constants } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
 import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectorySync } from './directory-sync.mjs'
@@ -39,6 +39,7 @@ const digest = x => createHash('sha256').update(stable(x)).digest('hex')
 const read = row => row ? JSON.parse(row.body) : undefined
 const actionId = (id, rev, kind) => digest([id, rev, kind])
 export const boardRegistrationReference = task => `board:${task.id}:${task.revision}`
+export const TASK_TYPES = ['requirement','design','feature','development','test','deployment','operations','bugfix','ui','ux','other']
 const MAX_TASKS = 1000
 const schema = [
   { type:'index', name:'actions_task', tbl_name:'actions', sql:'CREATE INDEX actions_task ON actions(task_id,state)' },
@@ -49,11 +50,102 @@ const schema = [
   { type:'table', name:'board_requests', tbl_name:'board_requests', sql:'CREATE TABLE board_requests (operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, status TEXT NOT NULL, result TEXT, message TEXT)' },
   { type:'table', name:'events', tbl_name:'events', sql:'CREATE TABLE events (operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, result TEXT NOT NULL, FOREIGN KEY(task_id) REFERENCES tasks(id))' },
   { type:'table', name:'history', tbl_name:'history', sql:'CREATE TABLE history (sequence INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, actor TEXT NOT NULL, task_id TEXT NOT NULL, before TEXT, after TEXT NOT NULL)' },
+  { type:'table', name:'operations', tbl_name:'operations', sql:'CREATE TABLE operations (operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, subject_id TEXT NOT NULL, result TEXT NOT NULL)' },
+  { type:'table', name:'proposals', tbl_name:'proposals', sql:'CREATE TABLE proposals (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL)' },
+  { type:'table', name:'releases', tbl_name:'releases', sql:'CREATE TABLE releases (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL)' },
   { type:'table', name:'task_dependencies', tbl_name:'task_dependencies', sql:'CREATE TABLE task_dependencies (task_id TEXT NOT NULL, dependency_id TEXT NOT NULL, grant_id TEXT, PRIMARY KEY(task_id,dependency_id), FOREIGN KEY(task_id) REFERENCES tasks(id), FOREIGN KEY(dependency_id) REFERENCES tasks(id))' },
   { type:'table', name:'tasks', tbl_name:'tasks', sql:'CREATE TABLE tasks (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, body TEXT NOT NULL)' },
 ]
 const keysOnly = (value, allowed) => {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !allowed.includes(k))) throw new Error('invalid fields')
+}
+const POSITION_DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz'
+const positionDigit = value => POSITION_DIGITS.indexOf(value)
+const validPosition = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && value.at(-1) !== '0'
+  && [...value].every(digit => positionDigit(digit) !== -1)
+const positionMidpoint = (lower, upper) => {
+  let prefix = ''
+  for (let index = 0; ; index += 1) {
+    if (prefix.length >= 256) throw new Error('invalid position')
+    const left = index < lower.length ? positionDigit(lower[index]) : 0
+    const right = upper !== null && index < upper.length ? positionDigit(upper[index]) : POSITION_DIGITS.length
+    if (left === right) { prefix += POSITION_DIGITS[left]; continue }
+    if (right - left > 1) return prefix + POSITION_DIGITS[Math.floor((left + right) / 2)]
+    return prefix + POSITION_DIGITS[left] + positionMidpoint(lower.slice(index + 1), null)
+  }
+}
+// Keys are base-36 fractions compared as strings: no trailing zero keeps
+// lexicographic order equal to numeric order so a card can always be placed
+// between two existing neighbours.
+const positionBetween = (lower, upper) => {
+  if (lower !== null && !validPosition(lower)) throw new Error('invalid position')
+  if (upper !== null && !validPosition(upper)) throw new Error('invalid position')
+  if (lower !== null && upper !== null && lower >= upper) throw new Error('invalid position order')
+  return positionMidpoint(lower ?? '', upper)
+}
+const positionOf = task => task && typeof task.position === 'string' ? task.position : undefined
+const compareCards = (left, right) => {
+  const a = positionOf(left), b = positionOf(right)
+  if (a === undefined && b !== undefined) return -1
+  if (a !== undefined && b === undefined) return 1
+  if (a !== undefined && a !== b) return a < b ? -1 : 1
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+}
+const cardLane = task => task.personalProgress ?? task.status
+const sameCardLane = (left, right) => left.scope === right.scope && cardLane(left) === cardLane(right)
+const TASK_TYPE_SET = new Set(TASK_TYPES)
+const validTaskType = value => typeof value === 'string' && TASK_TYPE_SET.has(value)
+const dueDateIsValid = value => {
+  if (typeof value !== 'string') return false
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(value)
+  if (!match) return false
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3])
+  if (month < 1 || month > 12 || day < 1) return false
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (day > days[month - 1]) return false
+  return match[4] === undefined || (Number(match[4]) <= 23 && Number(match[5]) <= 59)
+}
+const applyCardDetails = (target, value) => {
+  keysOnly(value, ['description', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
+  if (Object.hasOwn(value, 'type')) {
+    if (!validTaskType(value.type)) throw new Error('invalid card details')
+    target.type = value.type
+  }
+  if (Object.hasOwn(value, 'description')) {
+    if (typeof value.description !== 'string' || Buffer.byteLength(value.description) > 8192) throw new Error('invalid card details')
+    target.description = value.description
+  }
+  if (Object.hasOwn(value, 'dueDate')) {
+    if (value.dueDate !== null && !dueDateIsValid(value.dueDate)) throw new Error('invalid card details')
+    target.dueDate = value.dueDate
+  }
+  if (Object.hasOwn(value, 'dueComplete')) {
+    if (typeof value.dueComplete !== 'boolean') throw new Error('invalid card details')
+    target.dueComplete = value.dueComplete
+  }
+  if (Object.hasOwn(value, 'labels')) {
+    if (!Array.isArray(value.labels) || value.labels.length > 20 || value.labels.some(label => typeof label !== 'string' || !label.trim() || Buffer.byteLength(label) > 40)) throw new Error('invalid card details')
+    const labels = value.labels.map(label => label.trim())
+    if (new Set(labels).size !== labels.length) throw new Error('invalid card details')
+    target.labels = labels
+  }
+  if (Object.hasOwn(value, 'checklist')) {
+    if (!Array.isArray(value.checklist) || value.checklist.length > 100) throw new Error('invalid card details')
+    const ids = new Set()
+    target.checklist = value.checklist.map(item => {
+      keysOnly(item, ['id', 'text', 'checked'])
+      if (!validId(item.id) || ids.has(item.id) || typeof item.text !== 'string' || !item.text.trim() || Buffer.byteLength(item.text) > 512 || typeof item.checked !== 'boolean') throw new Error('invalid card details')
+      ids.add(item.id)
+      return { id: item.id, text: item.text.trim(), checked: item.checked }
+    })
+  }
+  if (Object.hasOwn(value, 'coverImageId')) {
+    // A cover names an image already on the card; a new card has no
+    // attachments, so it can only be chosen after an upload.
+    if (value.coverImageId !== null && (typeof value.coverImageId !== 'string' || !(target.attachments ?? []).some(item => item.id === value.coverImageId))) throw new Error('invalid card details')
+    target.coverImageId = value.coverImageId
+  }
 }
 
 /** Open a private task journal. The containing directory must be private. */
@@ -72,17 +164,42 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
   }
   const file = lstatSync(path)
   if (!isPrivateFile(path, file)) throw new Error('database must be a private file')
+  if (!created) {
+    // Refuse an unknown file before sqlite opens it: a failed constructor can
+    // leave the handle to be reclaimed only by GC, which keeps the file locked.
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const header = Buffer.alloc(16), bytes = readSync(fd, header, 0, header.length, 0)
+      if (bytes !== header.length || header.toString('latin1') !== 'SQLite format 3\u0000') throw new Error('unknown or damaged task database')
+    } finally { closeSync(fd) }
+  }
   const db = new DatabaseSync(path)
   db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON')
   if (created) db.exec('PRAGMA journal_mode=DELETE')
   if (db.prepare('PRAGMA journal_mode').get().journal_mode !== 'delete') { db.close(); throw new Error('invalid task journal mode') }
-  if (!created && (db.prepare('PRAGMA application_id').get().application_id !== 0x44534254 || db.prepare('PRAGMA user_version').get().user_version !== 5 || db.prepare('PRAGMA quick_check').get().quick_check !== 'ok')) { db.close(); throw new Error('unknown or damaged task database') }
+  const version = db.prepare('PRAGMA user_version').get().user_version
+  if (!created && (db.prepare('PRAGMA application_id').get().application_id !== 0x44534254 || ![5, 6].includes(version) || db.prepare('PRAGMA quick_check').get().quick_check !== 'ok')) { db.close(); throw new Error('unknown or damaged task database') }
   if (created) {
     db.exec('BEGIN IMMEDIATE')
     for (const item of schema.filter(item => item.type === 'table')) db.exec(item.sql)
     for (const item of schema.filter(item => item.type === 'index')) db.exec(item.sql)
-    db.exec('PRAGMA application_id=1146307156; PRAGMA user_version=5')
+    db.exec('PRAGMA application_id=1146307156; PRAGMA user_version=6')
     try { assertWriteLock(); db.exec('COMMIT') } catch (e) { try { db.exec('ROLLBACK') } finally { db.close() }; throw e }
+    syncDirectorySync(dirname(path))
+  } else if (version === 5) {
+    // Schema v5 lacks releases and proposals. Create only the missing objects
+    // after proving every existing object still matches its declared SQL.
+    const existing = db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all()
+    const expected = new Map(schema.map(item => [`${item.type}:${item.name}`, item]))
+    if (existing.some(item => expected.get(`${item.type}:${item.name}`)?.sql !== item.sql)) { db.close(); throw new Error('unknown or damaged task database schema') }
+    const missing = schema.filter(item => !existing.some(row => row.type === item.type && row.name === item.name))
+    assertWriteLock()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const item of missing) db.exec(item.sql)
+      db.exec('PRAGMA user_version=6')
+      db.exec('COMMIT')
+    } catch (error) { try { db.exec('ROLLBACK') } finally { db.close() }; throw error }
     syncDirectorySync(dirname(path))
   }
   const objects = db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all().map(row => ({ ...row }))
@@ -103,6 +220,121 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
   const getRow = db.prepare('SELECT * FROM tasks WHERE id=?')
   const getTask = id => read(getRow.get(id))
   const getAll = () => db.prepare('SELECT body FROM tasks ORDER BY id').all().map(read)
+  const getReleaseRow = db.prepare('SELECT * FROM releases WHERE id=?')
+  const getRelease = id => read(getReleaseRow.get(id))
+  const getAllReleases = () => db.prepare('SELECT body FROM releases ORDER BY id').all().map(read)
+  const saveRelease = (before, after) => {
+    if (before) {
+      if (db.prepare('UPDATE releases SET revision=?,body=? WHERE id=? AND revision=?').run(after.revision, JSON.stringify(after), before.id, before.revision).changes !== 1) throw new Error('release revision conflict')
+    } else db.prepare('INSERT INTO releases(id,revision,body) VALUES(?,?,?)').run(after.id, after.revision, JSON.stringify(after))
+  }
+  const releaseItems = id => getAll().filter(task => task.releaseId === id).sort((left, right) => {
+    const a = typeof left.releasePosition === 'string' ? left.releasePosition : undefined
+    const b = typeof right.releasePosition === 'string' ? right.releasePosition : undefined
+    if (a === undefined && b !== undefined) return -1
+    if (a !== undefined && b === undefined) return 1
+    if (a !== undefined && a !== b) return a < b ? -1 : 1
+    return compareCards(left, right)
+  })
+  const releaseOrder = scope => getAllReleases().filter(release => release.scope === scope).sort((left, right) => left.position < right.position ? -1 : left.position > right.position ? 1 : 0)
+  const releasePositionAfter = (releaseId, afterId, exceptId) => {
+    const items = releaseItems(releaseId).filter(task => task.id !== exceptId)
+    let index = -1
+    if (afterId === null) {
+      // Release assignment appends by default; item reordering passes an explicit afterId.
+      const last = items.at(-1)
+      return positionBetween(typeof last?.releasePosition === 'string' ? last.releasePosition : null, null)
+    }
+    if (afterId !== null) {
+      index = items.findIndex(task => task.id === afterId)
+      if (index === -1) throw new Error('release item target unavailable')
+    }
+    const previous = index >= 0 ? items[index] : undefined
+    const next = items[index + 1]
+    const before = typeof previous?.releasePosition === 'string' ? previous.releasePosition : undefined
+    const after = typeof next?.releasePosition === 'string' ? next.releasePosition : undefined
+    if (before !== undefined && after !== undefined) return positionBetween(before, after)
+    if (after !== undefined) return positionBetween(null, after)
+    if (before !== undefined) return positionBetween(before, null)
+    return positionBetween(null, null)
+  }
+  const RELEASE_GATES = ['docs', 'artifacts', 'environment', 'summary']
+const RELEASE_GATE_STATUSES = new Set(['pending', 'passed', 'failed'])
+const defaultReleaseGates = () => Object.fromEntries(RELEASE_GATES.map(gate => [gate, { status:'pending' }]))
+const gatesPassed = release => {
+  const gates = release?.gates
+  return !!gates && RELEASE_GATES.every(gate => gates[gate]?.status === 'passed')
+}
+const releaseIsDone = release => {
+    if (!release || release.status !== 'running' || !gatesPassed(release)) return false
+    const items = releaseItems(release.id)
+    return items.length > 0 && items.every(task => task.status === 'done' && task.stale !== true)
+  }
+  const startReleaseTx = release => {
+    if (!release || !['draft','queued'].includes(release.status)) throw new Error('release is not startable')
+    if (getAllReleases().some(item => item.scope === release.scope && item.status === 'running' && item.id !== release.id)) throw new Error('another release is running in this scope')
+    const items = releaseItems(release.id)
+    if (!items.length) throw new Error('release has no items')
+    const nextRelease = { ...release, revision: release.revision + 1, status:'running', startedAt: Date.now(), updatedAt: Date.now() }
+    saveRelease(release, nextRelease)
+    for (const task of items) {
+      if (!['draft','proposed','waiting','ready'].includes(task.status) || task.blocked || task.stale) continue
+      let next = { ...task, revision: task.revision + 1, authority: { kind:'personal', reference:boardRegistrationReference({ id:task.id, revision:task.revision + 1 }) } }
+      if (next.status === 'draft' || next.status === 'proposed') next.status = 'waiting'
+      save(task, next)
+      if (dependenciesDone(next)) ready(next)
+    }
+    return nextRelease
+  }
+  const reconcileRelease = releaseId => {
+    const release = getRelease(releaseId)
+    if (!releaseIsDone(release)) return release
+    const published = { ...release, revision: release.revision + 1, status:'published', publishedAt: Date.now(), updatedAt: Date.now() }
+    saveRelease(release, published)
+    const next = releaseOrder(release.scope).find(item => item.status === 'queued')
+    if (next) {
+      db.exec('SAVEPOINT next_release')
+      try { startReleaseTx(next); db.exec('RELEASE next_release') }
+      catch { db.exec('ROLLBACK TO next_release'); db.exec('RELEASE next_release') }
+    }
+    return published
+  }
+  const getProposalRow = db.prepare('SELECT * FROM proposals WHERE id=?')
+  const getProposal = id => read(getProposalRow.get(id))
+  const getAllProposals = () => db.prepare('SELECT body FROM proposals ORDER BY id').all().map(read)
+  const saveProposal = (before, after) => {
+    if (before) {
+      if (db.prepare('UPDATE proposals SET revision=?,body=? WHERE id=? AND revision=?').run(after.revision, JSON.stringify(after), before.id, before.revision).changes !== 1) throw new Error('proposal revision conflict')
+    } else db.prepare('INSERT INTO proposals(id,revision,body) VALUES(?,?,?)').run(after.id, after.revision, JSON.stringify(after))
+  }
+  const appendPosition = scope => {
+    let last
+    for (const task of getAll()) {
+      if (task.scope !== scope) continue
+      const value = positionOf(task)
+      if (value !== undefined && (last === undefined || value > last)) last = value
+    }
+    return positionBetween(last ?? null, null)
+  }
+  const laneOrder = (scope, lane, exceptId) => getAll()
+    .filter(task => task.scope === scope && cardLane(task) === lane && task.id !== exceptId)
+    .sort(compareCards)
+  const positionAfter = (scope, lane, afterId, exceptId) => {
+    const list = laneOrder(scope, lane, exceptId)
+    let index = -1
+    if (afterId !== null) {
+      if (afterId === exceptId) throw new Error('invalid reorder')
+      index = list.findIndex(task => task.id === afterId)
+      if (index === -1) throw new Error('reorder target unavailable')
+    }
+    const previous = index >= 0 ? list[index] : undefined
+    const next = list[index + 1]
+    const before = positionOf(previous), after = positionOf(next)
+    if (before !== undefined && after !== undefined) return positionBetween(before, after)
+    if (after !== undefined) return positionBetween(null, after)
+    if (before !== undefined) return positionBetween(before, null)
+    return positionBetween(null, null)
+  }
   const getOp = db.prepare('SELECT * FROM events WHERE operation_id=?')
   const addOp = db.prepare('INSERT INTO events(operation_id,fingerprint,task_id,result) VALUES(?,?,?,?)')
   const update = db.prepare('UPDATE tasks SET revision=?,body=? WHERE id=? AND revision=?')
@@ -137,6 +369,17 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     requireId(op, 'operation id'); const fingerprint = digest(payload); const existing = getOp.get(op)
     if (existing) { if (existing.fingerprint !== fingerprint) throw new Error('operation id conflict'); return JSON.parse(existing.result) }
     audit = { operationId: op, actor }; try { const result = work(); addOp.run(op, fingerprint, result.id, JSON.stringify(result)); return result } finally { audit = undefined }
+  })
+  const getSubjectOp = db.prepare('SELECT * FROM operations WHERE operation_id=?')
+  const addSubjectOp = db.prepare('INSERT INTO operations(operation_id,fingerprint,subject_id,result) VALUES(?,?,?,?)')
+  // Releases and proposals are not task rows, so their durable operation
+  // receipt uses the FK-free operations table instead of events.
+  const transactSubject = (op, actor, payload, permission, work) => tx(() => {
+    if (authorize(permission()) !== true) throw new Error('not authorized')
+    requireId(op, 'operation id'); const fingerprint = digest(payload); const existing = getSubjectOp.get(op)
+    if (existing) { if (existing.fingerprint !== fingerprint) throw new Error('operation id conflict'); return JSON.parse(existing.result) }
+    audit = { operationId: op, actor }
+    try { const result = work(); addSubjectOp.run(op, fingerprint, result.id, JSON.stringify(result)); return result } finally { audit = undefined }
   })
   const checkGraph = (id, depends) => {
     if (!Array.isArray(depends) || depends.length > 100 || new Set(depends).size !== depends.length) throw new Error('invalid dependencies')
@@ -201,6 +444,256 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     },
     get(id) { return getTask(requireId(id, 'task id')) },
     list() { return getAll() },
+    listSchedule() {
+      const releases = new Map(getAllReleases().map(release => [release.id, release]))
+      return getAll().filter(task => !task.archivedAt && (!task.releaseId || releases.get(task.releaseId)?.status === 'running')).sort((left, right) => {
+        const a = left.releaseId ? releases.get(left.releaseId) : undefined
+        const b = right.releaseId ? releases.get(right.releaseId) : undefined
+        const priority = item => item?.status === 'running' ? 0 : 1
+        if (priority(a) !== priority(b)) return priority(a) - priority(b)
+        if (priority(a) === 0) {
+          const ap = typeof left.releasePosition === 'string' ? left.releasePosition : undefined
+          const bp = typeof right.releasePosition === 'string' ? right.releasePosition : undefined
+          if (ap !== undefined && bp !== undefined && ap !== bp) return ap < bp ? -1 : 1
+          if (ap !== undefined && bp === undefined) return -1
+          if (ap === undefined && bp !== undefined) return 1
+        }
+        return compareCards(left, right)
+      })
+    },
+    listReleases(scope) {
+      if (typeof scope !== 'string' || !scope) throw new Error('invalid release scope')
+      return releaseOrder(scope).map(release => ({ ...release, items: releaseItems(release.id).map(task => ({ id:task.id, title:task.title, status:task.status, owner:task.owner, revision:task.revision })) }))
+    },
+    getRelease(id) { return getRelease(requireId(id, 'release id')) },
+    createRelease({ operationId, actor, release }) {
+      requireId(actor, 'actor')
+      if (!release || typeof release !== 'object' || Array.isArray(release)) throw new Error('invalid release')
+      keysOnly(release, ['id','scope','name','version','position','note','groupId','projectManagerId','roles','gates'])
+      const id = requireId(release.id, 'release id'), scope = requireId(release.scope, 'scope')
+      string(release.name, 'release name'); string(release.version, 'release version')
+      if (release.groupId !== undefined) requireId(release.groupId, 'release group id')
+      if (release.projectManagerId !== undefined) requireId(release.projectManagerId, 'project manager id')
+      if (release.roles !== undefined) {
+        if (!release.roles || typeof release.roles !== 'object' || Array.isArray(release.roles) || Object.values(release.roles).some(value => !validId(value))) throw new Error('invalid release roles')
+      }
+      if (release.gates !== undefined) {
+        if (!release.gates || typeof release.gates !== 'object' || Array.isArray(release.gates) || Object.keys(release.gates).some(key => !RELEASE_GATES.includes(key))
+          || Object.values(release.gates).some(gate => !gate || typeof gate !== 'object' || Array.isArray(gate) || !RELEASE_GATE_STATUSES.has(gate.status))) throw new Error('invalid release gates')
+      }
+      if (release.note !== undefined && (typeof release.note !== 'string' || Buffer.byteLength(release.note) > 4096)) throw new Error('invalid release note')
+      const payload = { type:'release-create', actor, release }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release creation is not authorized')
+        if (getRelease(id)) throw new Error('release id exists')
+        let position = release.position
+        if (position !== undefined && !validPosition(position)) throw new Error('invalid release position')
+        if (position === undefined) {
+          const last = releaseOrder(scope).at(-1)
+          position = positionBetween(typeof last?.position === 'string' ? last.position : null, null)
+        }
+        const now = Date.now()
+        const record = { id, scope, revision:1, name:release.name.trim(), version:release.version.trim(), position, status:'draft', createdAt:now, updatedAt:now, createdBy:actor,
+          gates: release.gates ?? defaultReleaseGates(), ...(release.groupId ? { groupId:release.groupId } : {}),
+          ...(release.projectManagerId ? { projectManagerId:release.projectManagerId } : {}),
+          ...(release.roles ? { roles:release.roles } : {}), ...(release.note ? { note:release.note } : {}) }
+        saveRelease(null, record)
+        return record
+      })
+    },
+    updateRelease({ operationId, actor, releaseId, expectedRevision, value }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid release update')
+      keysOnly(value, ['name','version','position','note'])
+      if (!Object.keys(value).length) throw new Error('empty release update')
+      const payload = { type:'release-update', actor, releaseId, expectedRevision, value }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release update is not authorized')
+        const old = getRelease(releaseId)
+        if (!old || old.revision !== expectedRevision) throw new Error('release revision conflict')
+        if (!['draft','queued'].includes(old.status)) throw new Error('release is not editable')
+        const next = { ...old, revision: old.revision + 1, updatedAt: Date.now() }
+        if (Object.hasOwn(value, 'name')) next.name = string(value.name, 'release name').trim()
+        if (Object.hasOwn(value, 'version')) next.version = string(value.version, 'release version').trim()
+        if (Object.hasOwn(value, 'position')) { if (!validPosition(value.position)) throw new Error('invalid release position'); next.position = value.position }
+        if (Object.hasOwn(value, 'note')) { if (typeof value.note !== 'string' || Buffer.byteLength(value.note) > 4096) throw new Error('invalid release note'); next.note = value.note }
+        saveRelease(old, next); return next
+      })
+    },
+    assignRelease({ operationId, actor, releaseId, expectedReleaseRevision, taskId, expectedTaskRevision, afterId = null }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id'); requireId(taskId, 'task id')
+      if (!Number.isSafeInteger(expectedReleaseRevision) || expectedReleaseRevision < 1 || !Number.isSafeInteger(expectedTaskRevision) || expectedTaskRevision < 1) throw new Error('invalid release assignment')
+      if (afterId !== null && !validId(afterId)) throw new Error('invalid release position')
+      const payload = { type:'release-assign', actor, releaseId, expectedReleaseRevision, taskId, expectedTaskRevision, afterId }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release assignment is not authorized')
+        const release = getRelease(releaseId)
+        if (!release) throw new Error('release unavailable')
+        if (release.revision !== expectedReleaseRevision) throw new Error('release revision conflict')
+        if (!['draft','queued'].includes(release.status)) throw new Error('release is not editable')
+        const task = getTask(taskId)
+        if (!task || task.revision !== expectedTaskRevision) throw new Error('task revision conflict')
+        if (task.scope !== release.scope || ['done','cancelled'].includes(task.status)) throw new Error('release task unavailable')
+        const next = { ...task, revision: task.revision + 1, releaseId, releasePosition: releasePositionAfter(releaseId, afterId, taskId) }
+        save(task, next); return next
+      })
+    },
+    removeFromRelease({ operationId, actor, releaseId, expectedReleaseRevision, taskId, expectedTaskRevision }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id'); requireId(taskId, 'task id')
+      if (!Number.isSafeInteger(expectedReleaseRevision) || expectedReleaseRevision < 1 || !Number.isSafeInteger(expectedTaskRevision) || expectedTaskRevision < 1) throw new Error('invalid release removal')
+      const payload = { type:'release-remove', actor, releaseId, expectedReleaseRevision, taskId, expectedTaskRevision }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release removal is not authorized')
+        const release = getRelease(releaseId)
+        if (!release || release.revision !== expectedReleaseRevision) throw new Error('release revision conflict')
+        if (!['draft','queued'].includes(release.status)) throw new Error('release is not editable')
+        const task = getTask(taskId)
+        if (!task || task.revision !== expectedTaskRevision || task.releaseId !== releaseId) throw new Error('release task unavailable')
+        const next = { ...task, revision: task.revision + 1, releaseId: null, releasePosition: null }
+        save(task, next); return next
+      })
+    },
+    startRelease({ operationId, actor, releaseId, expectedRevision }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid release start')
+      const payload = { type:'release-start', actor, releaseId, expectedRevision }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release start is not authorized')
+        const release = getRelease(releaseId)
+        if (!release || release.revision !== expectedRevision) throw new Error('release revision conflict')
+        return startReleaseTx(release)
+      })
+    },
+    queueRelease({ operationId, actor, releaseId, expectedRevision }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid release queue')
+      const payload = { type:'release-queue', actor, releaseId, expectedRevision }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release queue is not authorized')
+        const release = getRelease(releaseId)
+        if (!release || release.revision !== expectedRevision) throw new Error('release revision conflict')
+        if (release.status !== 'draft') throw new Error('release is not queueable')
+        const next = { ...release, revision: release.revision + 1, status:'queued', updatedAt: Date.now() }
+        saveRelease(release, next); return next
+      })
+    },
+    cancelRelease({ operationId, actor, releaseId, expectedRevision }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid release cancellation')
+      const payload = { type:'release-cancel', actor, releaseId, expectedRevision }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release cancellation is not authorized')
+        const release = getRelease(releaseId)
+        if (!release || release.revision !== expectedRevision) throw new Error('release revision conflict')
+        if (!['draft','queued','running'].includes(release.status)) throw new Error('release is not cancellable')
+        const items = releaseItems(release.id)
+        if (release.status === 'running' && items.some(task => ['working','reported'].includes(task.status) || unresolved(task.id))) throw new Error('release has active work')
+        const next = { ...release, revision: release.revision + 1, status:'cancelled', updatedAt: Date.now() }
+        saveRelease(release, next)
+        for (const task of items) {
+          if (['done','cancelled'].includes(task.status)) continue
+          db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(task.id)
+          save(task, { ...task, revision: task.revision + 1, status:'proposed', actionRevision:null, authority:null, blocked:null, stale:false, releaseId:null, releasePosition:null })
+        }
+        return next
+      })
+    },
+    setReleaseGate({ operationId, actor, releaseId, expectedRevision, gate, status, evidence }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !RELEASE_GATES.includes(gate)
+        || !RELEASE_GATE_STATUSES.has(status) || (evidence !== undefined && (typeof evidence !== 'string' || Buffer.byteLength(evidence) > 16384))) throw new Error('invalid release gate')
+      const payload = { type:'release-gate', actor, releaseId, expectedRevision, gate, status, evidence }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release gate is not authorized')
+        const old = getRelease(releaseId)
+        if (!old || old.revision !== expectedRevision) throw new Error('release revision conflict')
+        if (!['draft','queued','running'].includes(old.status)) throw new Error('release is not editable')
+        const gates = { ...(old.gates ?? defaultReleaseGates()), [gate]: { status, updatedAt: Date.now(), ...(evidence ? { evidence } : {}) } }
+        const next = { ...old, revision: old.revision + 1, updatedAt: Date.now(), gates }
+        saveRelease(old, next); return next
+      })
+    },
+    checkRelease({ operationId, actor, releaseId, expectedRevision }) {
+      requireId(actor, 'actor'); requireId(releaseId, 'release id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid release check')
+      const payload = { type:'release-check', actor, releaseId, expectedRevision }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        if (actor !== 'user') throw new Error('release check is not authorized')
+        const old = getRelease(releaseId)
+        if (!old || old.revision !== expectedRevision) throw new Error('release revision conflict')
+        if (old.status !== 'running') throw new Error('release is not running')
+        const items = releaseItems(old.id)
+        const failedGate = RELEASE_GATES.find(gate => old.gates?.[gate]?.status === 'failed')
+        if (!items.length || items.some(task => task.status === 'cancelled') || failedGate) {
+          const reason = failedGate ? `Release gate ${failedGate} failed` : !items.length ? 'Release has no items' : 'A release item was cancelled'
+          const next = { ...old, revision: old.revision + 1, status:'failed', failure:reason, updatedAt: Date.now() }
+          saveRelease(old, next); return next
+        }
+        if (!items.every(task => task.status === 'done' && task.stale !== true) || !gatesPassed(old)) return old
+        const published = { ...old, revision: old.revision + 1, status:'published', publishedAt: Date.now(), updatedAt: Date.now() }
+        saveRelease(old, published)
+        const nextQueued = releaseOrder(old.scope).find(item => item.status === 'queued')
+        if (nextQueued) {
+          db.exec('SAVEPOINT next_release')
+          try { startReleaseTx(nextQueued); db.exec('RELEASE next_release') }
+          catch { db.exec('ROLLBACK TO next_release'); db.exec('RELEASE next_release') }
+        }
+        return published
+      })
+    },
+    listRunningReleases() {
+      return getAllReleases().filter(release => release.status === 'running')
+    },
+    setReleaseReport({ releaseId, report }) {
+      requireId(releaseId, 'release id')
+      if (!report || typeof report !== 'object' || Array.isArray(report) || typeof report.markdownPath !== 'string' || typeof report.htmlPath !== 'string' || !Number.isSafeInteger(report.generatedAt)) throw new Error('invalid release report')
+      return tx(() => {
+        const old = getRelease(releaseId)
+        if (!old) throw new Error('release unavailable')
+        const next = { ...old, revision: old.revision + 1, updatedAt: Date.now(), report }
+        saveRelease(old, next); return next
+      })
+    },
+    listProposals(scope) {
+      if (typeof scope !== 'string' || !scope) throw new Error('invalid proposal scope')
+      return getAllProposals().filter(proposal => proposal.scope === scope).sort((left, right) => {
+        if (left.status === 'pending' && right.status !== 'pending') return -1
+        if (left.status !== 'pending' && right.status === 'pending') return 1
+        return (right.createdAt ?? 0) - (left.createdAt ?? 0)
+      })
+    },
+    createProposal({ operationId, actor, proposal }) {
+      requireId(actor, 'actor')
+      if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) throw new Error('invalid proposal')
+      const id = requireId(proposal.id, 'proposal id'), scope = requireId(proposal.scope, 'scope')
+      if (!['create','update','status','release'].includes(proposal.kind)) throw new Error('invalid proposal kind')
+      if (!['pending','confirmed','rejected'].includes(proposal.status ?? 'pending')) throw new Error('invalid proposal status')
+      const payload = { type:'proposal-create', actor, proposal }
+      const target = getTask(proposal.taskId) ?? (proposal.kind === 'create' ? {
+        id: proposal.taskId, scope: proposal.scope, owner: proposal.command?.value?.owner, reviewer: proposal.command?.value?.reviewer,
+      } : undefined)
+      return transactSubject(operationId, actor, payload, () => ({ type:'proposal', actor, task:target }), () => {
+        if (getProposal(id)) throw new Error('proposal id exists')
+        if (getAllProposals().filter(item => item.status === 'pending').length >= 200) throw new Error('proposal limit reached')
+        const now = Date.now()
+        const record = { ...proposal, id, scope, revision:1, status:'pending', proposer:actor, createdAt:now }
+        saveProposal(null, record); return record
+      })
+    },
+    decideProposal({ operationId, actor, proposalId, expectedRevision, decision, note, apply }) {
+      requireId(actor, 'actor'); requireId(proposalId, 'proposal id')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !['confirm','reject'].includes(decision) || typeof apply !== 'function') throw new Error('invalid proposal decision')
+      if (note !== undefined && (typeof note !== 'string' || Buffer.byteLength(note) > 2000)) throw new Error('invalid proposal note')
+      return tx(() => {
+        if (actor !== 'user') throw new Error('proposal decision is not authorized')
+        const old = getProposal(proposalId)
+        if (!old || old.revision !== expectedRevision || old.status !== 'pending') throw new Error('proposal revision conflict')
+        const applied = decision === 'confirm' ? apply(old) : undefined
+        const next = { ...old, revision: old.revision + 1, status: decision === 'confirm' ? 'confirmed' : 'rejected', decidedAt: Date.now(), decidedBy: actor, decisionOperationId: operationId, ...(note ? { decisionNote: note } : {}) }
+        saveProposal(old, next)
+        return { proposal: next, ...(applied === undefined ? {} : { applied }) }
+      })
+    },
     admission(id) {
       requireId(id, 'action id')
       const row = db.prepare('SELECT i.*,a.state FROM admission_intents i JOIN actions a ON a.id=i.action_id WHERE i.action_id=?').get(id)
@@ -239,6 +732,8 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
       requireId(id, 'operation id')
       const request = db.prepare('SELECT * FROM board_requests WHERE operation_id=?').get(id)
       if (request) return { taskId: request.task_id, fingerprint: request.fingerprint, status: request.status, ...(request.status === 'committed' ? { result: JSON.parse(request.result) } : { message: request.message }) }
+      const subject = getSubjectOp.get(id)
+      if (subject) return { taskId: subject.subject_id, fingerprint: subject.fingerprint, status: 'committed', result: JSON.parse(subject.result) }
       const row = getOp.get(id); return row ? { taskId: row.task_id, fingerprint: row.fingerprint, status: 'committed', result: JSON.parse(row.result) } : undefined
     },
     request({ operationId, actor, taskId, payload, isRejection }, execute) {
@@ -283,7 +778,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
     history(id) {
       const rows = db.prepare('SELECT before,after FROM history WHERE task_id=? ORDER BY sequence DESC LIMIT 51').all(requireId(id, 'task id'))
-      const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'dueDate', 'labels', 'checklist']
+      const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId']
       const project = value => {
         if (!value) return null
         const record = JSON.parse(value), result = { revision:record.revision }
@@ -294,7 +789,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     },
     create({ operationId, actor, task }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
-      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress'])
+      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress','description','dueDate','dueComplete','labels','checklist','coverImageId','type','draft'])
       const payload = { type: 'create', actor, task }
       return transact(operationId, actor, payload, () => ({ type: 'create', actor, task }), () => {
         const id = requireId(task.id, 'task id'), owner = requireId(task.owner, 'owner'), reviewer = requireId(task.reviewer, 'reviewer')
@@ -305,8 +800,12 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
         const dependencies = task.dependencies ?? [], dependencyGrants = task.dependencyGrants ?? []; checkGraph(id, dependencies)
         checkBindings({ scope:task.scope, owner, reviewer }, dependencies, dependencyGrants)
-        const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: 'proposed', authority: null, evidence: null, blocked: null, stale: false,
-          ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}) }
+        const card = {}
+        applyCardDetails(card, Object.fromEntries(['description','dueDate','dueComplete','labels','checklist','coverImageId','type']
+          .filter(key => Object.hasOwn(task, key)).map(key => [key, task[key]])))
+        if (task.draft !== undefined && typeof task.draft !== 'boolean') throw new Error('invalid draft state')
+        const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: task.draft === true ? 'draft' : 'proposed', type: 'other', authority: null, evidence: null, blocked: null, stale: false, position: appendPosition(task.scope),
+          ...card, ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
       })
@@ -314,7 +813,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     proposeChange({ operationId, actor, taskId, expectedRevision, value }) {
       requireId(actor, 'actor'); requireId(taskId, 'task id')
       if (actor !== 'user' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
-      keysOnly(value, ['title','owner','reviewer','acceptance','dependencies','dependencyGrants','description'])
+      keysOnly(value, ['title','owner','reviewer','acceptance','dependencies','dependencyGrants','description','type'])
       const payload = { type:'propose-change', actor, taskId, expectedRevision, value }; stable(payload)
       return transact(operationId, actor, payload, () => ({type:'edit', actor, task:getTask(taskId)}), () => {
         const old = getTask(taskId)
@@ -322,11 +821,14 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         if (old.revision !== expectedRevision) throw new Error('revision conflict')
         if (!['working','reported','done'].includes(old.status)) throw new Error('change proposal unavailable')
         if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
-        const fields = ['title','owner','reviewer','acceptance','dependencies','description']
+        const fields = ['title','owner','reviewer','acceptance','dependencies','description','type']
         const before = Object.fromEntries(fields.map(field => [field, old[field]]))
         const after = Object.fromEntries(fields.map(field => [field, value[field]]))
         before.description ??= ''
+        before.type ??= 'other'
+        after.type ??= before.type
         string(after.title, 'title'); string(after.acceptance, 'acceptance')
+        if (after.type !== undefined && !validTaskType(after.type)) throw new Error('invalid card details')
         if (typeof after.description !== 'string' || Buffer.byteLength(after.description) > 8192) throw new Error('invalid card details')
         requireId(after.owner, 'owner'); requireId(after.reviewer, 'reviewer')
         if (after.owner === after.reviewer) throw new Error('reviewer must be independent')
@@ -340,7 +842,8 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         if (duplicate) throw new Error('change proposal already exists')
         const record = { id, title:after.title, owner:after.owner, reviewer:after.reviewer, scope:old.scope,
           acceptance:after.acceptance, description:after.description, dependencies, dependencyGrants:grants, attachments:[], shares:[], revision:1,
-          actionRevision:null, status:'waiting', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false, change }
+          actionRevision:null, status:'waiting', type:after.type ?? old.type ?? 'other', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false,
+          position:appendPosition(old.scope), change }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return ready(record)
       })
@@ -360,43 +863,38 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             // cannot complete a dependency or grant an Agent an action.
             if (actor !== 'user' || old.owner !== 'user' || old.scope !== 'personal:user'
               || old.status !== 'proposed' || old.actionRevision != null || old.evidence || old.blocked || old.stale) throw new Error('personal progress unavailable')
-            keysOnly(value, ['progress'])
+            keysOnly(value, ['progress', 'afterId'])
             if (!['todo', 'doing', 'finished'].includes(value.progress)) throw new Error('invalid personal progress')
+            if (Object.hasOwn(value, 'afterId')) {
+              const afterId = value.afterId
+              if (afterId !== null && (!validId(afterId) || afterId === taskId)) throw new Error('invalid personal progress')
+              if (afterId !== null) {
+                const after = getTask(afterId)
+                if (!after) throw new Error('reorder target unavailable')
+                if (!sameCardLane({ ...old, personalProgress: value.progress }, after)) throw new Error('cards must be in the same lane')
+              }
+              next.position = positionAfter(old.scope, value.progress, afterId, old.id)
+            }
             next.personalProgress = value.progress; break
           case 'card-details': {
             // Card presentation is distinct from acceptance and workflow.
             // An item ticked here never completes a task or a dependency.
-            keysOnly(value, ['description', 'dueDate', 'labels', 'checklist'])
+            keysOnly(value, ['description', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
             if (!Object.keys(value).length) throw new Error('invalid card details')
-            if (Object.hasOwn(value, 'description')) {
-              if (typeof value.description !== 'string' || Buffer.byteLength(value.description) > 8192) throw new Error('invalid card details')
-              next.description = value.description
+            applyCardDetails(next, value)
+            break
+          }
+          case 'reorder': {
+            keysOnly(value, ['afterId'])
+            if (!Object.hasOwn(value, 'afterId')) throw new Error('invalid reorder')
+            const afterId = value.afterId
+            if (afterId !== null && (!validId(afterId) || afterId === taskId)) throw new Error('invalid reorder')
+            if (afterId !== null) {
+              const after = getTask(afterId)
+              if (!after) throw new Error('reorder target unavailable')
+              if (!sameCardLane(old, after)) throw new Error('cards must be in the same lane')
             }
-            if (Object.hasOwn(value, 'dueDate')) {
-              const d = value.dueDate
-              if (d !== null) {
-                if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new Error('invalid card details')
-                const parsed = new Date(`${d}T00:00:00.000Z`)
-                if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== d) throw new Error('invalid card details')
-              }
-              next.dueDate = d
-            }
-            if (Object.hasOwn(value, 'labels')) {
-              if (!Array.isArray(value.labels) || value.labels.length > 20 || value.labels.some(label => typeof label !== 'string' || !label.trim() || Buffer.byteLength(label) > 40)) throw new Error('invalid card details')
-              const labels = value.labels.map(label => label.trim())
-              if (new Set(labels).size !== labels.length) throw new Error('invalid card details')
-              next.labels = labels
-            }
-            if (Object.hasOwn(value, 'checklist')) {
-              if (!Array.isArray(value.checklist) || value.checklist.length > 100) throw new Error('invalid card details')
-              const ids = new Set()
-              next.checklist = value.checklist.map(item => {
-                keysOnly(item, ['id', 'text', 'checked'])
-                if (!validId(item.id) || ids.has(item.id) || typeof item.text !== 'string' || !item.text.trim() || Buffer.byteLength(item.text) > 512 || typeof item.checked !== 'boolean') throw new Error('invalid card details')
-                ids.add(item.id)
-                return { id: item.id, text: item.text.trim(), checked: item.checked }
-              })
-            }
+            next.position = positionAfter(old.scope, cardLane(old), afterId, old.id)
             break
           }
           case 'card-comment': {
@@ -405,6 +903,55 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             const comments=Array.isArray(old.comments)?old.comments:[]
             if(comments.length>=100)throw new Error('card comment limit reached')
             next.comments=[...comments,{id:operationId,author:'user',text:value.text.trim(),at:Date.now()}]
+            break
+          }
+          case 'card-comment-edit': {
+            keysOnly(value, ['commentId', 'text'])
+            if (actor !== 'user' || typeof value.text !== 'string' || !value.text.trim() || Buffer.byteLength(value.text) > 2048) throw new Error('invalid card comment')
+            requireId(value.commentId, 'comment id')
+            const comments = Array.isArray(old.comments) ? old.comments : []
+            const index = comments.findIndex(comment => comment?.id === value.commentId)
+            if (index === -1) throw new Error('unknown card comment')
+            next.comments = comments.map((comment, at) => at === index ? { ...comment, text: value.text.trim() } : comment)
+            break
+          }
+          case 'card-comment-delete': {
+            keysOnly(value, ['commentId'])
+            if (actor !== 'user') throw new Error('invalid card comment')
+            requireId(value.commentId, 'comment id')
+            const comments = Array.isArray(old.comments) ? old.comments : []
+            if (!comments.some(comment => comment?.id === value.commentId)) throw new Error('unknown card comment')
+            next.comments = comments.filter(comment => comment?.id !== value.commentId)
+            break
+          }
+          case 'submit':
+            if (actor !== 'user' || old.status !== 'draft') throw new Error('invalid state')
+            next.status = 'proposed'; break
+          case 'cancel': {
+            if (actor !== 'user' || old.status === 'done' || old.status === 'cancelled') throw new Error('invalid state')
+            if (unresolved(old.id)) throw new Error('task action unresolved')
+            const reason = value === undefined ? 'Cancelled by the user' : (typeof value?.reason === 'string' && value.reason.trim() ? value.reason.trim().slice(0, 500) : '')
+            if (!reason) throw new Error('invalid cancellation reason')
+            db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(old.id)
+            next.status = 'cancelled'; next.actionRevision = null
+            next.blocked = { reason, condition: 'user restores the task', owner: 'user' }
+            break
+          }
+          case 'restore':
+            if (actor !== 'user' || old.status !== 'cancelled') throw new Error('invalid state')
+            next.status = 'proposed'; next.actionRevision = null; next.authority = null; next.blocked = null; next.stale = false; break
+          case 'release-assign': {
+            if (actor !== 'user' || !value || typeof value !== 'object' || !Object.hasOwn(value, 'releaseId')) throw new Error('invalid release assignment')
+            keysOnly(value, ['releaseId', 'releasePosition'])
+            const releaseId = value.releaseId
+            if (releaseId !== null && !validId(releaseId)) throw new Error('invalid release assignment')
+            if (releaseId !== null) {
+              const release = getRelease(releaseId)
+              if (!release || release.scope !== old.scope || !['draft','queued'].includes(release.status) || old.status === 'done' || old.status === 'cancelled') throw new Error('release unavailable')
+            }
+            next.releaseId = releaseId
+            next.releasePosition = releaseId === null ? null : (value.releasePosition ?? null)
+            if (next.releasePosition !== null && !validPosition(next.releasePosition)) throw new Error('invalid release position')
             break
           }
           case 'register':
@@ -429,6 +976,17 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
               if (old.status === 'ready') throw new Error('task action unavailable')
             } else throw new Error('task is not schedulable')
             break
+          case 'unschedule':
+            if (actor !== 'user' || old.blocked || old.stale || old.change) throw new Error('task is not scheduled')
+            if (old.status === 'ready') {
+              const pending = db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state='pending' AND kind='execute'").get(old.id)
+              if (!pending) throw new Error('task action unavailable')
+              db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(old.id)
+              next.status = 'waiting'; next.actionRevision = null
+            } else if (old.status === 'waiting' && old.authority) {
+              next.status = 'proposed'; next.authority = null; next.actionRevision = null
+            } else throw new Error('task is not scheduled')
+            break
           case 'start':
             if (old.status !== 'ready' || old.stale || old.blocked || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot start')
             if (!db.prepare("SELECT 1 FROM actions WHERE task_id=? AND revision=? AND kind='execute' AND state='accepted'").get(old.id, old.actionRevision)) throw new Error('verified action receipt required')
@@ -445,6 +1003,22 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             next.evidence = JSON.parse(JSON.stringify(value))
             if (verifyEvidence(old, value, actor, 'report') !== true) throw new Error('report evidence unverified')
             finishAction(old.id, 'execute'); next.status = 'reported'; next.actionRevision = next.revision; break
+          case 'archive':
+            if (actor !== 'user') throw new Error('archive is not authorized')
+            if (old.archivedAt) throw new Error('task is already archived')
+            if (['ready', 'working', 'reported'].includes(old.status)) throw new Error('finish or cancel active work before archiving')
+            if (old.releaseId) {
+              const release = getRelease(old.releaseId)
+              if (release && !['published', 'cancelled'].includes(release.status)) throw new Error('remove the card from its release before archiving')
+            }
+            next = { ...next, archivedAt: Date.now() }
+            break
+          case 'unarchive':
+            if (actor !== 'user') throw new Error('unarchive is not authorized')
+            if (!old.archivedAt) throw new Error('task is not archived')
+            next = { ...next }
+            delete next.archivedAt
+            break
           case 'review':
             if (old.status !== 'reported' || old.stale || old.blocked || actor !== old.reviewer || actor === old.owner || !dependenciesDone(old)) throw new Error('cannot review')
             keysOnly(value, ['evidence','result']); string(value.evidence, 'review evidence'); if (!['pass', 'rework'].includes(value.result)) throw new Error('invalid review')
@@ -498,7 +1072,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             const items = [...old.attachments], seen = new Map(items.map(item => [item.id, item]))
             for (const item of value.images) {
               keysOnly(item, ['id','sha256','mediaType','size','name']); requireId(item.id, 'attachment id')
-              if (!/^[0-9a-f]{64}$/.test(item.sha256) || !['image/png','image/jpeg','image/webp','image/gif'].includes(item.mediaType) || !Number.isSafeInteger(item.size) || item.size < 1 || item.size > 20 * 1024 * 1024 || typeof item.name !== 'string' || !item.name.trim() || Buffer.byteLength(item.name) > 255 || /[\\/\x00-\x1f]/.test(item.name)) throw new Error('invalid attachment reference')
+              if (!/^[0-9a-f]{64}$/.test(item.sha256) || !['image/png','image/jpeg','image/webp','image/gif','application/pdf','application/zip','text/plain','text/markdown','application/json'].includes(item.mediaType) || !Number.isSafeInteger(item.size) || item.size < 1 || item.size > 20 * 1024 * 1024 || typeof item.name !== 'string' || !item.name.trim() || Buffer.byteLength(item.name) > 255 || /[\\/\x00-\x1f]/.test(item.name)) throw new Error('invalid attachment reference')
               if (verifyAttachment(old, item, actor) !== true) throw new Error('attachment unverified')
               const prior = seen.get(item.id)
               if (prior && stable(prior) !== stable(item)) throw new Error('attachment id conflict')
@@ -511,12 +1085,12 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
             keysOnly(value, ['ids'])
             if (!Array.isArray(value.ids) || !value.ids.length || value.ids.length > 20 || new Set(value.ids).size !== value.ids.length) throw new Error('invalid attachments')
             for (const id of value.ids) if (!validId(id) || !old.attachments.some(item => item.id === id)) throw new Error('unknown attachment')
-            next.attachments = old.attachments.filter(item => !value.ids.includes(item.id)); break
+            next.attachments = old.attachments.filter(item => !value.ids.includes(item.id)); if (value.ids.includes(next.coverImageId)) next.coverImageId = null; break
           }
           case 'remove-image': {
             keysOnly(value, ['imageId']); requireId(value.imageId, 'image id')
             if (!old.attachments.some(item => item.id === value.imageId)) throw new Error('unknown attachment')
-            next.attachments = old.attachments.filter(item => item.id !== value.imageId); break
+            next.attachments = old.attachments.filter(item => item.id !== value.imageId); if (next.coverImageId === value.imageId) next.coverImageId = null; break
           }
           case 'share': {
             keysOnly(value, ['targetRoomId','fields']); requireId(value.targetRoomId, 'target room id')
@@ -536,7 +1110,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
           }
           default: throw new Error('unknown command')
         }
-        if(['edit','card-details','card-comment','personal-progress','attach','remove-image','share','unshare'].includes(type)) {
+        if(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','reorder','personal-progress','attach','remove-image','share','unshare','submit','cancel','restore','release-assign'].includes(type)) {
           const activity=Array.isArray(old.boardActivity)?old.boardActivity:[]
           next.boardActivity=[...activity,{id:operationId,actor,type,at:Date.now()}].slice(-50)
         }
@@ -545,6 +1119,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
         if (type === 'register' || type === 'schedule' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
         if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
         if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
+        if (next.status === 'done' && next.releaseId) reconcileRelease(next.releaseId)
         if (type === 'invalidate') {
           db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(taskId)
           db.prepare("UPDATE actions SET state='uncertain',receipt=COALESCE(receipt,'evidence invalidated; outcome unknown') WHERE task_id=? AND state IN ('claimed','accepted')").run(taskId)

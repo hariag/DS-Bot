@@ -285,7 +285,7 @@ export function install(rt) {
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['board-list', 'board-history', 'board-operation', 'board-image', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'file-download'])
+  const READS = new Set(['board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'file-download'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -364,6 +364,20 @@ export function install(rt) {
         case 'legacy-review-decision':
           return ok(await rt.legacyReviewCall(endpoint, body))
         case 'board-list':
+        case 'board-release-list':
+        case 'board-release-create':
+        case 'board-release-plan':
+        case 'board-release-update':
+        case 'board-release-assign':
+        case 'board-release-remove':
+        case 'board-release-queue':
+        case 'board-release-start':
+        case 'board-release-cancel':
+        case 'board-release-gate':
+        case 'board-release-check':
+        case 'board-release-report':
+        case 'board-proposal-list':
+        case 'board-proposal-decide':
         case 'board-history':
         case 'board-redo-preview':
         case 'board-redo-confirm':
