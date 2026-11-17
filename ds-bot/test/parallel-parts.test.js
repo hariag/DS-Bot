@@ -203,6 +203,26 @@ test('a new part takes a model picked while the part was being made', async (t) 
   assert.deepEqual(selections, ['w5:deepseek/old', 'w2:deepseek/new', 'w5:deepseek/new'])
 })
 
+test('overlapping new-part requests cannot replace a changed foreground thread', async (t) => {
+  const { call, rt } = await team(t)
+  await call('state')
+  let created = 0
+  const release = []
+  rt.createSession = async () => `new-${++created}`
+  rt.resolveAgent = async () => ({ id: 'w2', status: 'running', session: { id: 'w2', requestHeader: () => undefined } })
+  rt.applyPermission = () => new Promise(resolve => release.push(resolve))
+  const first = call('bot-new-part', { botId: 'w1' })
+  const second = call('bot-new-part', { botId: 'w1' })
+  await until(() => release.length === 2)
+  release[0]()
+  assert.equal((await first).ok, true)
+  release[1]()
+  assert.equal((await second).ok, false)
+  const bot = rt.botOf('w1')
+  assert.equal(bot.sessionId, 'new-1')
+  assert.deepEqual(bot.openParts.map(part => part.sessionId), ['w3', 'w2'])
+})
+
 test('a foreground switch to an archived part does not touch the background part', async (t) => {
   const { home, registry, call, rt } = await team(t, ['w1'])
   await call('state')
