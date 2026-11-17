@@ -22,11 +22,18 @@ try {
     [data-conversation-scroll]{height:300px;overflow-y:auto;width:min(500px,90vw)}
     .content{padding:20px}
     .message{padding:12px;background:color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:12px}
-  </style><div data-conversation-scroll><div class="content">${messages}</div></div>`)
+    .host-slot{position:fixed;top:80px;right:16px}
+    .host_marks button{display:block;width:20px;height:10px}
+  </style><div data-conversation-scroll><div class="content">${messages}</div></div>
+    <div class="host-slot"><nav aria-label="Turn navigation"><div class="host_marks"><button type="button">1</button><button type="button">2</button></div></nav></div>`)
   await page.addStyleTag({ content: loaded.exports.CONVERSATION_CSS })
   const scroll = page.locator('[data-conversation-scroll]')
   assert.equal(await scroll.evaluate(el => getComputedStyle(el, '::-webkit-scrollbar').width), '5px', 'scrollbar is unchanged without the Bot layout flag')
   await page.locator('body').evaluate(el => { el.dataset.btLayout = 'bubble' })
+  const turnNavigation = page.getByRole('navigation', { name: 'Turn navigation' })
+  assert.equal(await turnNavigation.locator('..').evaluate(el => getComputedStyle(el).display), 'block', 'the host turn navigation is not hidden by Bot styles')
+  assert.equal(await turnNavigation.getByRole('button').count(), 2)
+  await turnNavigation.getByRole('button', { name: '2' }).click()
   const thumbColors = new Set()
   for (const [theme, ink, background] of [['light', '#141414', '#fcfcfc'], ['dark', '#f2f2f2', '#141414']]) {
     await page.locator('body').evaluate((el, colors) => {
