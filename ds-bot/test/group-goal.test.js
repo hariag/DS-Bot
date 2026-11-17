@@ -423,6 +423,22 @@ test('a group context lost during loading is not redirected to a private chat', 
   await settle(() => read() !== undefined)
 })
 
+test('an unavailable group is not treated as a private chat', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('missing-group-object', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.roomOf
+  host.rt.roomOf = id => id === 'r1' ? undefined : original(id)
+  const response = await host.tool('message_bot', { to: 'Writer', message: 'status?' }, 'ga')
+  assert.match(response, /Not sent/)
+  assert.equal(host.agentOf('b').calls.length, 0)
+  host.rt.roomOf = original
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
 test('a review source remains fenced if its live metadata changes while looking up a request', async (t) => {
   const host = await start(t)
   await startGoal(host)
