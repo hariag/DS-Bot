@@ -683,14 +683,21 @@ test('markdown-image serves workspace images and blocks traversal, unowned sessi
   assert.equal(Buffer.from(fileUrl.value.bytes, 'base64').equals(imgBytes), true)
 
   const escapeLink = join(workDir, 'charts', 'escape-link.png')
-  symlinkSync(outsideFile, escapeLink)
-  const symlinkEscape = await call('markdown-image', { sessionId, path: './charts/escape-link.png' })
-  assert.deepEqual([symlinkEscape.ok, symlinkEscape.error.code], [false, 'bot/forbidden'])
+  let linksAllowed = true
+  try { symlinkSync(outsideFile, escapeLink) } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error?.code)) throw error
+    linksAllowed = false
+    t.diagnostic('this Windows session cannot create file symbolic links; the link-traversal checks are covered on POSIX CI')
+  }
+  if (linksAllowed) {
+    const symlinkEscape = await call('markdown-image', { sessionId, path: './charts/escape-link.png' })
+    assert.deepEqual([symlinkEscape.ok, symlinkEscape.error.code], [false, 'bot/forbidden'])
 
-  const brokenOutsideLink = join(workDir, 'charts', 'dangling-outside.png')
-  symlinkSync(join(tmpdir(), `missing-outside-${Date.now()}`, 'secret.png'), brokenOutsideLink)
-  const brokenTraversal = await call('markdown-image', { sessionId, path: './charts/dangling-outside.png' })
-  assert.deepEqual([brokenTraversal.ok, brokenTraversal.error.code], [false, 'bot/not-found'])
+    const brokenOutsideLink = join(workDir, 'charts', 'dangling-outside.png')
+    symlinkSync(join(tmpdir(), `missing-outside-${Date.now()}`, 'secret.png'), brokenOutsideLink)
+    const brokenTraversal = await call('markdown-image', { sessionId, path: './charts/dangling-outside.png' })
+    assert.deepEqual([brokenTraversal.ok, brokenTraversal.error.code], [false, 'bot/not-found'])
+  }
 
   const traversal = await call('markdown-image', { sessionId, path: '../outside.png' })
   assert.deepEqual([traversal.ok, traversal.error.code], [false, 'bot/forbidden'])
