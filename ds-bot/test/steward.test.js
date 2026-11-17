@@ -92,8 +92,19 @@ test('checkpoints are counted from the summary the backend wrapped, not from use
 
 test('a checkpoint keeps the messages to the Bot word for word after the summary', () => {
   const text = checkpointText({ number: 2, summary: '  - Done: outline\n', kept: ['[part 1 #4 · 10-09 15:01] User: 按这个大纲写'], more: true })
-  assert.match(text, /^\[Checkpoint 2\]\n- Done: outline\n\nYour own replies up to here are condensed above; read_own_chat finds them word for word\.\n\n## Messages to you, word for word \(oldest first\)\n\(Older messages are not shown here; read_own_chat finds them\.\)\n\[part 1 #4 · 10-09 15:01\] User: 按这个大纲写$/)
+  assert.match(text, /^\[Checkpoint 2\]\n- Done: outline\n\nYour own replies up to here are condensed above\. read_own_chat finds the saved chat\.\n\n## Messages to you, word for word \(oldest first\)\n\(Older messages are not shown here\. read_own_chat finds the saved chat\.\)\n\[part 1 #4 · 10-09 15:01\] User: 按这个大纲写$/)
   assert.match(checkpointText({ number: 1, summary: 'x', kept: [], more: false }), /\(none\)$/)
+})
+
+test('group checkpoints distinguish omitted summaries from searchable posted messages', () => {
+  for (const coverage of ['none', 'partial', 'full']) {
+    const text = checkpointText({ number: 1, summary: 'x', kept: [], more: true, coverage, group: true })
+    assert.match(text, /read_group_chat retrieves posted group messages/)
+    assert.match(text, /internal steps and tool results may not be available/)
+    assert.doesNotMatch(text, /read_own_chat/)
+    if (coverage === 'none') assert.match(text, /earlier replies were not summarized/)
+    if (coverage === 'partial') assert.match(text, /Only excerpts/)
+  }
 })
 
 test('the checkpoint also reads the messages the backend keeps after it', () => {
