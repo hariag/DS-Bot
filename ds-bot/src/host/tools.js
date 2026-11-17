@@ -100,7 +100,7 @@ export function install(rt) {
     const section = sectionNameOf(bot.sectionId)
     const tags = [bot.role, section ? `section "${section}"` : '', model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.private === true ? 'private' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
     const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
-    const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id)}`
+    const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id, self)}`
     return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}${now}`
   }
   // The Bots and group chats list_bots shows: the whole team, one Bot, one group's
@@ -344,7 +344,7 @@ export function install(rt) {
         const fromPart = callerPart(exec).fromPart
         const chat = rt.chatOf(target.id)
         await rt.resolveAgent(chat)
-        const status = rt.statusOf(target.id)
+        const status = rt.statusOf(target.id, sender.id)
         // Every request is a separate unit of work. In particular, never promote a
         // queued request into an unread steer or append to a named request's payload.
         const long = await rt.attachLong(text, `Message from ${sender.name}.txt`)
