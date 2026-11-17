@@ -61,7 +61,11 @@ test('a replaced or corrupt stored image cannot be read as a valid reference', t
   const f = fixture(t), [ref] = stageBoardImages({ ...f, images: [photo('one')] })
   const target = join(f.directory, readdirSync(f.directory)[0]); writeFileSync(target, 'broken')
   assert.throws(() => readBoardImage({ ...f, reference: ref }), /does not match/)
-  rmSync(target); symlinkSync('/etc/passwd', target)
+  try { rmSync(target); symlinkSync('/etc/passwd', target) } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error?.code)) throw error
+    t.diagnostic('this Windows session cannot create file symbolic links; the link-rejection check is covered on POSIX CI')
+    return
+  }
   assert.throws(() => readBoardImage({ ...f, reference: ref }))
 })
 

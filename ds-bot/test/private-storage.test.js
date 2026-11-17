@@ -59,6 +59,11 @@ test('Windows private ACL checks accept an isolated temp directory and reject sh
   const root = privateTempDir(join(tmpdir(), 'ds-bot-private-acl-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   assert.equal(isPrivateDirectory(root), true)
-  grantSharedTempAccessForTest(root)
+  try { grantSharedTempAccessForTest(root) } catch (error) {
+    if (/PrivilegeNotHeld|SeSecurityPrivilege/.test(String(error?.message))) {
+      return t.skip('granting shared access needs SeSecurityPrivilege, which this account does not hold')
+    }
+    throw error
+  }
   assert.equal(isPrivateDirectory(root), false)
 })

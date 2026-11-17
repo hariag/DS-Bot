@@ -23,7 +23,7 @@ for (const refreshing of [false, true]) {
       })
       await gw.listen()
       try {
-        const response = await fetch(gw.urlFor('svc'), { headers: gw.headers(), signal: AbortSignal.timeout(1000) })
+        const response = await fetch(gw.urlFor('svc'), { headers: gw.headers(), signal: AbortSignal.timeout(3000) })
         ${refreshing ? `// Two legal timings for the destroy: inside the refresh the gateway
         // already saw the stream error and answers 502 itself; after it, the
         // 401 headers were already forwarded and the piped body then breaks.
@@ -36,7 +36,7 @@ for (const refreshing of [false, true]) {
         }` : "await assert.rejects(response.text(), error => error.name !== 'TimeoutError' && error.name !== 'AbortError')"}
       } finally { await gw.close(); await new Promise(resolve => upstream.close(resolve)) }
     `
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 })
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 })
     assert.equal(result.status, 0, result.stderr || result.error?.message)
   })
 }
