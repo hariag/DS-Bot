@@ -103,11 +103,16 @@ export function install(rt) {
       }
     } catch (error) { rt.warn?.('ds-bot: release status not delivered: %s', error) }
   }
-  const notifyBoardChange = async (taskId, change) => {
+  // Content, status, responsibility and release membership all belong to the item a
+  // release is delivering, so the release group and project manager hear about them.
+  const releaseSyncTypes = new Set(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','attach','remove-image','submit','cancel','restore','archive','unarchive','release-assign','schedule','unschedule'])
+  const notifyBoardChange = async (taskId, change, releaseId) => {
     if (!taskId) return
     const task = service().store.get(taskId)
-    if (!task?.releaseId) return
-    const release = service().store.getRelease(task.releaseId)
+    if (!task) return
+    const id = releaseId ?? task.releaseId
+    if (!id) return
+    const release = service().store.getRelease(id)
     if (!release) return
     const value = change?.value
     const summary = value && typeof value === 'object' && !Array.isArray(value)
@@ -372,7 +377,7 @@ export function install(rt) {
     })
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
     const result = outcome.value
-    if (['edit','card-details','submit','cancel','restore','archive','unarchive','release-assign','schedule','unschedule'].includes(payload.type)) void notifyBoardChange(payload.taskId, payload).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+    if (releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, payload).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
   }
   let redoPreparation
@@ -444,14 +449,22 @@ export function install(rt) {
         if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
         return store.updateRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedRevision: payload.expectedRevision, value: payload.value })
       }
-      case 'board-release-assign':
+      case 'board-release-assign': {
         api.list(scope, principal)
-        return store.assignRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
+        const result = store.assignRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
           taskId: payload.taskId, expectedTaskRevision: payload.expectedTaskRevision, afterId: payload.afterId ?? null })
-      case 'board-release-remove':
+        void notifyBoardChange(payload.taskId, { type:'release-assign', value:{ releaseId: payload.releaseId } }, payload.releaseId).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+        return result
+      }
+      case 'board-release-remove': {
         api.list(scope, principal)
-        return store.removeFromRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
+        const result = store.removeFromRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
           taskId: payload.taskId, expectedTaskRevision: payload.expectedTaskRevision })
+        // The task left this release, so name it explicitly instead of reading the task's
+        // current (now empty) membership.
+        void notifyBoardChange(payload.taskId, { type:'release-remove', value:{ releaseId: payload.releaseId } }, payload.releaseId).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+        return result
+      }
       case 'board-release-start': {
         api.list(scope, principal)
         const release = store.getRelease(payload.releaseId)
@@ -531,6 +544,10 @@ export function install(rt) {
             }
             throw new Error('Proposal target is unavailable')
           } })
+        if (payload.decision === 'confirm' && proposal.taskId) {
+          void notifyBoardChange(proposal.taskId, { type:'proposal-confirm', value:{ proposalId: proposal.id, change: proposal.command?.type ?? proposal.kind } })
+            .catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+        }
         if (payload.decision === 'confirm') notifyDriver()
         return result
       }
@@ -706,6 +723,8 @@ export function install(rt) {
       let outcome
       try { outcome = inst.store.request(options, () => inst.api.uploadPrepared(meta.scope, principal, meta, references)) }
       finally { inst.proofs.clear() }
+      if (outcome.state === 'committed') void notifyBoardChange(meta.taskId, { type:'attach', value:{ images: references.map(reference => reference.id) } })
+        .catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
       return response(outcome.state === 'committed' ? ok(outcome.value) : fail(outcome.message))
     } catch (error) {
       const frames = typeof error?.stack === 'string' ? error.stack.split('\n').slice(1, 9).join('\n') : ''
