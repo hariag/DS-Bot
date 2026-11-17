@@ -152,7 +152,7 @@ const zh = {
   uploadImages: /^(上传文件|Upload files)$/,
   chooseFiles: /^(选择文件|Choose files)$/,
   setCover: /^(Set as cover|Set cover|设为封面)$/,
-  draft: /^(Save as draft|保存草稿|保存为草稿)$/,
+  draft: /^(Save as draft|保存起草|保存为起草)$/,
   cancelCard: /^(Cancel card|取消卡片)$/,
   restoreCard: /^(Restore card|恢复卡片)$/,
   closeCard: /^(关闭卡片|Close card)$/,
