@@ -271,7 +271,21 @@ export function install(rt) {
     },
     output,
     async execute(args, exec) {
+      const origin = rt.live.get(exec.agent?.id)
+      const originTurn = origin?.turn
+      const reviewId = origin?.info?.reviewId
+      const originalOwner = rt.groupOwners.get(exec.agent?.id)
+      const originalRoomId = originalOwner?.roomId
+      const originalBotId = originalOwner?.botId
+      const sameOwner = () => {
+        const owner = rt.groupOwners.get(exec.agent?.id)
+        return owner?.roomId === originalRoomId && owner?.botId === originalBotId
+      }
       await rt.load()
+      if (!sameOwner()) return 'Not sent: the caller\'s group context changed before dispatch.'
+      if (originalOwner !== undefined && (typeof originalRoomId !== 'string' || typeof originalBotId !== 'string' || rt.roomOf(originalRoomId) === undefined)) {
+        return 'Not sent: the caller\'s group is unavailable.'
+      }
       const sender = callerBot(exec)
       if (sender === undefined) return 'Only Bots on the team can use message_bot.'
       const target = rt.findBot(args.to)
@@ -310,7 +324,23 @@ export function install(rt) {
       if (room !== undefined) {
         const refusal = groupRefusal(room, sender, target)
         if (refusal !== undefined) refuse(refusal)
-        const send = () => callInGroup(exec, room, sender, target, text.trim())
+        if (rt.goalDispatchBlocked?.(room, target.id)) refuse(`Not sent: work for ${target.name} in this group was stopped or its stop state is unknown. The user must explicitly resume the affected work first.`)
+        const blocked = () => !sameOwner() || rt.roomOf(room.id) !== room || !room.members.includes(target.id)
+          || !room.members.includes(sender.id) || rt.botOf(target.id) === undefined
+          || rt.botOf(sender.id) === undefined || rt.goalDispatchBlocked?.(room, target.id)
+          || (originTurn !== undefined && rt.live.get(exec.agent?.id)?.turn !== originTurn)
+          || (reviewId && !rt.goalReviewAllowed?.(room, reviewId))
+        const send = async () => {
+          // A stop can arrive while admitRequest persists the pending receipt.
+          if (blocked()) {
+            if (request !== undefined) request.unsent = true
+            return `Not sent: the group, membership or stop state changed before dispatch.`
+          }
+          const receipt = await callInGroup(exec, room, sender, target, text.trim())
+          // Delivery may have happened while the call yielded; do not retry it.
+          if (blocked()) throw new Error('Group state changed during dispatch; inspect the original message before retrying.')
+          return receipt
+        }
         return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
       }
       const posted = calledInPosts.get(exec.agent?.id)

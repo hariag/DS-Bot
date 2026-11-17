@@ -267,6 +267,201 @@ test('stop while request receipt saves refuses group dispatch', async (t) => {
   await settle(() => read() !== undefined)
 })
 
+test('a stop racing with group dispatch leaves the original request uncertain', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('stop-after-dispatch', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.roomStepText
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  host.rt.roomStepText = async (...args) => {
+    const result = await original(...args)
+    entered()
+    await gate
+    return result
+  }
+  const request = { to: 'Writer', message: 'status?', request_id: 'stop-after-dispatch' }
+  const send = host.tool('message_bot', request, 'ga')
+  await ready
+  await host.rt.goalUserStopped('r1')
+  release()
+  await assert.rejects(send, /Group state changed during dispatch/)
+  await assert.rejects(host.tool('message_bot', request, 'ga'), /outcome.*not known/i)
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('a replaced group cannot receive a request admitted for the old group', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('replaced-room-request', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.save
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  let held = false
+  host.rt.save = async (...args) => {
+    if (args[0]?.required && !held) { held = true; entered(); await gate }
+    return original(...args)
+  }
+  const send = host.tool('message_bot', { to: 'Writer', message: 'status?', request_id: 'old-room-request' }, 'ga')
+  await ready
+  host.rt.state.rooms.r1 = { ...host.rt.state.rooms.r1 }
+  release()
+  assert.match(await send, /Not sent/)
+  assert.equal(host.agentOf('gb').calls.length, 0)
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('a removed member cannot receive a request admitted before removal', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('removed-member-request', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.save
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  let held = false
+  host.rt.save = async (...args) => {
+    if (args[0]?.required && !held) { held = true; entered(); await gate }
+    return original(...args)
+  }
+  const send = host.tool('message_bot', { to: 'Writer', message: 'status?', request_id: 'removed-member-request' }, 'ga')
+  await ready
+  host.rt.roomOf('r1').members = host.rt.roomOf('r1').members.filter(id => id !== 'b')
+  release()
+  assert.match(await send, /Not sent/)
+  assert.equal(host.agentOf('gb').calls.length, 0)
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('a removed sender cannot dispatch a request admitted before removal', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('removed-sender-request', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.save
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  let held = false
+  host.rt.save = async (...args) => {
+    if (args[0]?.required && !held) { held = true; entered(); await gate }
+    return original(...args)
+  }
+  const send = host.tool('message_bot', { to: 'Writer', message: 'status?', request_id: 'removed-sender-request' }, 'ga')
+  await ready
+  host.rt.roomOf('r1').members = host.rt.roomOf('r1').members.filter(id => id !== 'a')
+  release()
+  assert.match(await send, /Not sent/)
+  assert.equal(host.agentOf('gb').calls.length, 0)
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('a changed caller group cannot redirect a request after receipt persistence', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('changed-caller-group', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.save
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  let held = false
+  host.rt.save = async (...args) => {
+    if (args[0]?.required && !held) {
+      held = true
+      const result = await original(...args)
+      entered()
+      await gate
+      return result
+    }
+    return original(...args)
+  }
+  const send = host.tool('message_bot', { to: 'Writer', message: 'status?', request_id: 'changed-caller-group' }, 'ga')
+  await ready
+  host.rt.groupOwners.set('ga', { botId: 'a', roomId: 'different-room' })
+  release()
+  assert.match(await send, /Not sent/)
+  assert.equal(host.agentOf('gb').calls.length, 0)
+  host.rt.groupOwners.set('ga', { botId: 'a', roomId: 'r1' })
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('a group context lost during loading is not redirected to a private chat', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('lost-caller-group', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.load
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  host.rt.load = async () => { entered(); await gate; return original() }
+  const send = host.tool('message_bot', { to: 'Writer', message: 'status?' }, 'ga')
+  await ready
+  host.rt.groupOwners.delete('ga')
+  release()
+  assert.match(await send, /Not sent/)
+  assert.equal(host.agentOf('b').calls.length, 0)
+  host.rt.groupOwners.set('ga', { botId: 'a', roomId: 'r1' })
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('an unavailable group is not treated as a private chat', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('missing-group-object', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const original = host.rt.roomOf
+  host.rt.roomOf = id => id === 'r1' ? undefined : original(id)
+  const response = await host.tool('message_bot', { to: 'Writer', message: 'status?' }, 'ga')
+  assert.match(response, /Not sent/)
+  assert.equal(host.agentOf('b').calls.length, 0)
+  host.rt.roomOf = original
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
+test('a review source remains fenced if its live metadata changes while looking up a request', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const read = host.round('stale-review-source', host.say('@Chief check status'))
+  await settle(() => host.agentOf('ga').calls.length > 0)
+  host.begin('ga')
+  const live = host.rt.live.get('ga')
+  live.info = { ...live.info, reviewId: 'original-review' }
+  let entered, release
+  const ready = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  host.rt.knownRequest = async () => { entered(); await gate; return undefined }
+  host.rt.goalReviewAllowed = (_room, id) => id !== 'original-review'
+  const send = host.tool('message_bot', { to: 'Writer', message: 'status?', request_id: 'stale-review-source' }, 'ga')
+  await ready
+  live.info = { ...live.info, reviewId: undefined }
+  release()
+  assert.match(await send, /Not sent/)
+  assert.equal(host.agentOf('gb').calls.length, 0)
+  host.finish('ga', '[PASS]')
+  await settle(() => read() !== undefined)
+})
+
 test('owner check survives restart without falsely completing remaining tasks', async (t) => {
   const host = await start(t)
   await startGoal(host, { stages: [{ title: 'Draft', acceptance: 'reviewed', tasks: [{ bot: 'Writer', task: 'write' }, { bot: 'Tester', task: 'test' }] }] })
