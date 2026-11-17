@@ -458,7 +458,7 @@ export function install(rt) {
         if (name !== undefined) unread.set(name, (unread.get(name) ?? 0) + 1)
       }
       if (unread.size > 0) lines.push(`unread Bot inputs in own chat: ${[...unread].map(([name, count]) => `${count} from ${name}`).join(', ')}`)
-    }
+    } else lines.push('own chat pending inputs: unavailable')
     const groups = sessions.filter(sessionId => {
       if (sessionId === chat) return false
       const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)

@@ -372,6 +372,22 @@ test('status counts live private and group inboxes and marks unavailable session
   assert.match(await tool('list_bots', {}, 'a'), /group pending inputs: 0 in 0 available session\(s\); 1 group session\(s\) unavailable/)
 })
 
+test('message receipts include group pending counts only for an authorized viewer', async (t) => {
+  const seed = team({ group: true })
+  seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
+  seed.bots.d = { id: 'd', name: 'Editor', role: 'Edit', sessionId: 'd', createdAt: 4 }
+  seed.rooms.r1.members.push('d')
+  const { ctx, agents, agentOf, tool, stop } = await start(seed)
+  t.after(stop)
+  const get = ctx.get
+  ctx.get = name => name === 'agents' ? { get: id => agents.get(id) } : get(name)
+  agentOf('b')
+  agentOf('gb').inbox.nextTurn.push({ source: { kind: 'user' } })
+  assert.match(await tool('message_bot', { to: 'Writer', message: 'for the team' }, 'a'), /group pending inputs: 1/)
+  assert.match(await tool('message_bot', { to: 'Writer', message: 'from a member' }, 'd'), /group pending inputs: 1/)
+  assert.doesNotMatch(await tool('message_bot', { to: 'Writer', message: 'another request' }, 'c'), /group pending inputs/)
+})
+
 test('requests from two Bots, or for different work, stay apart', async (t) => {
   const seed = team()
   seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
