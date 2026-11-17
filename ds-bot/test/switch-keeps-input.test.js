@@ -584,6 +584,20 @@ test('a cut-off at the model output limit is not a window cut, so the part stays
   assert.deepEqual(host.created, [])
 })
 
+test('a short cutoff with no known output budget does not infer a window overflow', async (t) => {
+  const host = await start({ services: cutOffServices })
+  t.after(host.stop)
+  const agent = host.agentOf('b')
+  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5' } })
+  for (const turn of [1, 2]) {
+    shortCutOff(host, turn, { inputTokens: 129_000, outputTokens: 40 })
+    host.ctx.emit('agent/status', { agent, status: 'idle' })
+    await settle()
+  }
+  assert.equal(host.state().bots.b.sessionId, 'b')
+  assert.deepEqual(host.created, [])
+})
+
 test('a group conversation cut off with nothing written moves on too', async (t) => {
   const host = await start({ services: cutOffServices, state: GROUP_TEAM })
   t.after(host.stop)
