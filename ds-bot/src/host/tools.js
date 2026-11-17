@@ -283,6 +283,9 @@ export function install(rt) {
       }
       await rt.load()
       if (!sameOwner()) return 'Not sent: the caller\'s group context changed before dispatch.'
+      if (originalOwner !== undefined && (typeof originalRoomId !== 'string' || typeof originalBotId !== 'string' || rt.roomOf(originalRoomId) === undefined)) {
+        return 'Not sent: the caller\'s group is unavailable.'
+      }
       const sender = callerBot(exec)
       if (sender === undefined) return 'Only Bots on the team can use message_bot.'
       const target = rt.findBot(args.to)
