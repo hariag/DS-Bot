@@ -28,7 +28,7 @@
 
 ### 交互与数据
 
-- **Draft 快速捕获**：草稿现在只填标题即可保存；owner/reviewer 自动取看板内可用 Bot，acceptance 默认 `To be defined.`，之后可补充。
+- **Draft 快速捕获**：起草现在只填标题即可保存；owner/reviewer 自动取看板内可用 Bot，acceptance 默认 `To be defined.`，之后可补充。
 - **Release 团队自动填充**：
   - board-list 返回 `releaseCandidates`（按 Bot `role` 标签匹配）；
   - Release 对话框自动预选 PM 和 required 角色；
