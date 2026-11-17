@@ -34,7 +34,6 @@ const NODE = process.env.BOARD_E2E_NODE || (process.versions.electron ? 'C:\\Pro
 // processes the ordinary Windows variables they expect. In a normal shell this
 // merges into the inherited environment unchanged.
 function benchEnv(extra = {}) {
-  if (process.platform !== 'win32') return { ...process.env, ...extra }
   const home = (() => { try { return os.userInfo().homedir } catch { return 'C:\\Users\\Public' } })()
   const base = {
     SystemRoot: 'C:\\Windows',

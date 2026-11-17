@@ -12604,6 +12604,24 @@ var ZH = {
   "Task shared": "任务已分享",
   "Share revoked": "已撤销分享",
   "Card updated": "卡片已更新",
+  "Card restored": "卡片已恢复",
+  "Card moved": "卡片已移动",
+  "Card reordered": "卡片已重新排序",
+  "Card order restored": "卡片顺序已恢复",
+  "The undo could not be completed.": "撤销未能完成。",
+  "Archive {count} cards": "归档 {count} 张卡片",
+  "Lane": "列表",
+  "Selected lane": "所选列表",
+  "Archived": "已归档",
+  "Selected cards": "所选卡片",
+  "Cards": "卡片",
+  "Card types restored": "卡片类型已恢复",
+  "Columns {from}–{to} of {total}": "第 {from}–{to} 列，共 {total} 列",
+  "{count} more": "还有 {count} 列",
+  "Release actions": "发布操作",
+  "Cancel release": "取消发布",
+  "Unschedule": "取消调度",
+  "No Bot is tagged for {roles}. Pick another Bot, or create one with that role in Bots settings.": "没有 Bot 标记为 {roles}。请选择其他 Bot，或在 Bot 设置中创建带该角色的 Bot。",
   "Invalid card comment": "评论无效。",
   "invalid card comment": "评论无效。",
   "card comment limit reached": "评论已达上限。",
@@ -12630,6 +12648,88 @@ var ZH = {
   "Reported or completed work must be reconciled before changing its description.": "任务已汇报或完成，修改说明前须先核对并处理原工作。",
   "Owner, acceptance and completed status are managed by the group goal.": "负责人、验收条件和完成状态由群目标管理。",
   "Original group goal task": "群目标原任务",
+  "Just now": "刚刚",
+  "{count}m ago": "{count} 分钟前",
+  "{count}h ago": "{count} 小时前",
+  "Goal task": "群目标任务",
+  "Remove label {label}": "移除标签 {label}",
+  "Attachments": "附件",
+  "The card was rejected. Check the fields and try again.": "卡片被拒绝。请检查填写内容后重试。",
+  "The card could not be created. Check the board and try again.": "无法创建卡片。请检查看板后重试。",
+  "Create card": "创建卡片",
+  "Add to {lane}": "添加到「{lane}」",
+  "New card": "新卡片",
+  "Card title": "卡片标题",
+  "Independent reviewer": "独立验收人",
+  "What must be true for this card to be accepted?": "满足什么条件才算验收通过？",
+  "Description (optional)": "说明（可选）",
+  "Add a description to give the Bot more context": "添加说明，给 Bot 更多上下文",
+  "Description is too long.": "说明过长。",
+  "The description could not be saved. Check the board and try again.": "无法保存说明。请检查看板后重试。",
+  "Task changed. Your draft was kept; reload the current values before saving.": "任务已变化。草稿已保留，请重新载入当前内容后再保存。",
+  "Add a more detailed description": "添加详细说明",
+  "Choose a valid date.": "请选择有效日期。",
+  "The due date could not be saved.": "无法保存截止日期。",
+  "Due time": "截止时间",
+  "Mark due date complete": "标记截止日期已完成",
+  "Use up to 20 unique labels of 40 bytes each.": "最多 20 个标签，每个不超过 40 字节，且不能重复。",
+  "The labels could not be saved.": "无法保存标签。",
+  "No labels": "无标签",
+  "The checklist could not be saved.": "无法保存清单。",
+  "Use up to 100 checklist items of 512 bytes each.": "最多 100 个清单项，每项不超过 512 字节。",
+  "Remove checklist item": "移除清单项",
+  "No checklist items yet.": "暂无清单项。",
+  "Add an item": "添加项目",
+  "Attachment": "附件",
+  "The images could not be uploaded.": "无法上传图片。",
+  "Drop images here, paste, or": "拖入或粘贴图片，或",
+  "The comment could not be saved.": "无法保存评论。",
+  "Confirm delete": "确认删除",
+  "Edit comment": "编辑评论",
+  "The comment could not be posted.": "无法发表评论。",
+  "Write a comment": "写下评论",
+  "People": "成员",
+  "The title could not be saved.": "无法保存标题。",
+  "Rename card": "重命名卡片",
+  "This shared card is read only in this board.": "此共享卡片在当前看板中只读。",
+  "This board is read only.": "此看板为只读。",
+  "More actions": "更多操作",
+  "Duplicate card": "复制卡片",
+  "Duplicate selected": "复制所选",
+  "Duplicate {count} cards": "复制 {count} 张卡片",
+  "Duplicated {count} cards": "已复制 {count} 张卡片",
+  "Unable to duplicate cards": "无法复制卡片",
+  "New copies": "新副本",
+  "Move {count} cards": "移动 {count} 张卡片",
+  "Move selected cards": "移动所选卡片",
+  "Move to": "移动到",
+  "Moved {count} cards": "已移动 {count} 张卡片",
+  "Unable to move cards": "无法移动卡片",
+  "Cover": "封面",
+  "Set cover": "设为封面",
+  "Set as cover": "设为封面",
+  "Remove cover": "移除封面",
+  "Edit checklist item": "编辑清单项",
+  "Enter a title": "输入标题",
+  "Close image": "关闭图片",
+  "Add card to {lane}": "在「{lane}」添加卡片",
+  "Add card": "添加卡片",
+  "Drop cards here": "拖放卡片到这里",
+  "This card cannot be moved to {lane}.": "此卡片不能移动到「{lane}」。",
+  "Copy of {title}": "{title}（副本）",
+  "{count} / {limit}": "{count} / {limit}",
+  "{count} cards": "{count} 张卡片",
+  "Filter by member": "按成员筛选",
+  "All members": "全部成员",
+  "Filter by label": "按标签筛选",
+  "All labels": "全部标签",
+  "Filter by due date": "按截止日期筛选",
+  "Any due date": "全部截止日期",
+  "Overdue": "已逾期",
+  "Due soon": "即将到期",
+  "Due complete": "已完成截止",
+  "No due date": "无截止日期",
+  "Clear filters": "清除筛选",
   "Earlier group goal task · read only": "历史群目标任务 · 仅可查看",
   "Group goal cards edit the original task. Earlier stages remain read only.": "群目标卡片直接编辑原任务；历史阶段仅可查看。",
   "A previous review action is still unconfirmed. Check again before saving.": "之前的复核操作尚未确认，请再次核查后再保存。",
@@ -12763,6 +12863,65 @@ var ZH = {
   "Acceptance criteria": "验收条件",
   "Dependency IDs, separated by commas": "依赖任务 ID，以逗号分隔",
   "Choose a Bot": "选择负责人",
+  "Auto-fill roles": "自动填充角色",
+  "Sort cards": "排序卡片",
+  "Manual order": "手动顺序",
+  "Filters": "筛选",
+  "Board tools": "看板工具",
+  "Board summary": "看板概览",
+  "Archived cards": "已归档卡片",
+  "No archived cards": "暂无归档卡片",
+  "Archived cards are hidden from the workflow and release views. Restore a card to return it to the board.": "已归档卡片不会出现在流程和 Release 视图中。恢复卡片即可将其放回看板。",
+  "Archive card": "归档卡片",
+  "Restore from archive": "从归档恢复",
+  "Archive selected": "归档所选",
+  "Cancel selected": "取消所选",
+  "Set type": "设置类型",
+  "Set type for selected cards": "设置所选卡片的类型",
+  "Change the type of {count} cards": "修改 {count} 张卡片的类型",
+  "Updated the type of {count} cards": "已更新 {count} 张卡片的类型",
+  "Unable to update card types": "无法更新卡片类型",
+  "Set owner": "设置负责人",
+  "Set owner for selected cards": "设置所选卡片的负责人",
+  "Change the owner of {count} cards": "修改 {count} 张卡片的负责人",
+  "Updated the owner of {count} cards": "已更新 {count} 张卡片的负责人",
+  "Unable to update card owners": "无法更新卡片负责人",
+  "Add selected cards to release": "将所选卡片加入 Release",
+  "Add to release": "加入 Release",
+  "Add {count} cards to {release}": "将 {count} 张卡片加入 {release}",
+  "Added {count} cards to {release}": "已将 {count} 张卡片加入 {release}",
+  "Unable to assign release": "无法加入 Release",
+  "Collapse lane": "收起列",
+  "Expand lane": "展开列",
+  "Lane actions": "列操作",
+  "Rename lane": "重命名列",
+  "Move lane left": "左移列",
+  "Move lane right": "右移列",
+  "Archive all cards": "归档全部卡片",
+  "Cancel {count} cards": "取消 {count} 张卡片",
+  "Cancelled {count} cards": "已取消 {count} 张卡片",
+  "Cancelled cards restored": "已恢复取消的卡片",
+  "Unable to cancel cards": "无法取消卡片",
+  "Clear selection": "清除选择",
+  Select: "选择",
+  "{count} selected": "已选 {count} 项",
+  "Select card": "选择卡片",
+  "Choose PNG/JPEG, PDF, ZIP, plain text, Markdown or JSON: up to 20 per task, 10 per batch, 5 MiB each and 20 MiB per batch.": "支持 PNG/JPEG、PDF、ZIP、纯文本、Markdown 或 JSON：每张卡片最多 20 个，每批最多 10 个，单个不超过 5 MiB，每批不超过 20 MiB。",
+  "Drop files here, paste, or": "拖入文件、粘贴，或",
+  "Choose files": "选择文件",
+  "Upload files": "上传文件",
+  "PNG/JPEG, PDF, ZIP, text, Markdown and JSON are supported.": "支持 PNG/JPEG、PDF、ZIP、文本、Markdown 和 JSON。",
+  "Remove attachment": "移除附件",
+  "The attachments could not be uploaded.": "附件上传失败。",
+  "Unable to preview attachments": "无法预览附件",
+  "Task changed. Remove selected attachments and choose them again.": "任务已变化，请移除已选附件后重新选择。",
+  Image: "图片",
+  Text: "文本",
+  "Recent changes across the board.": "看板最近的变更。",
+  "No activity yet.": "暂无活动。",
+  "Archived {count} cards": "已归档 {count} 张卡片",
+  "Archived cards restored": "已恢复归档卡片",
+  "Unable to archive cards": "无法归档卡片",
   "Submit proposal": "提交提案",
   "Invalid board response": "看板数据无效",
   "Unable to load board": "无法读取看板",
@@ -14405,7 +14564,111 @@ var ZH = {
   "Bcc": "密送",
   "Attachments: {names}": "附件：{names}",
   "Sent": "已发送",
-  "Failed": "失败"
+  "Failed": "失败",
+  "Requirement": "需求",
+  "Feature": "功能拆分",
+  "Development": "开发",
+  "Deployment": "部署",
+  "Operations": "运维",
+  "Bugfix": "缺陷",
+  "UI design": "UI 设计",
+  "UX": "UX 交互",
+  "Draft": "草稿",
+  "Queued": "已排队",
+  "Running": "运行中",
+  "Published": "已发布",
+  "Release": "发布",
+  "Releases": "发布",
+  "Yes": "是",
+  "No": "否",
+  "Version": "版本",
+  "Cover image": "封面图片",
+  "Due date complete": "截止日期已完成",
+  "Release name": "发布名称",
+  "Create release": "创建发布",
+  "New release": "新建发布",
+  "Unassigned": "未分配",
+  "No releases yet": "暂无发布",
+  "Untitled release": "未命名发布",
+  "{done}/{total} done": "已完成 {done}/{total}",
+  "Move release up": "上移发布",
+  "Move release down": "下移发布",
+  "No pending changes.": "没有待处理的变更。",
+  "Proposed by {name}": "由 {name} 提出",
+  "Task types": "任务类型",
+  "Task type": "任务类型",
+  "By type": "按类型",
+  "All types": "全部类型",
+  "Filter by type": "按类型筛选",
+  "Board view": "看板视图",
+  "Changes": "变更",
+  "Submit card": "提交卡片",
+  "Cancel card": "取消卡片",
+  "Restore card": "恢复卡片",
+  "Draft cards are not scheduled.": "草稿卡片不会进入调度。",
+  "Save as draft": "保存为草稿",
+  "Draft cards stay in Draft until they are submitted.": "草稿卡片会留在草稿列，提交后才会进入流程。",
+  "Draft cards stay in Draft until they are submitted. A draft can be saved with only a title; owner, reviewer and acceptance can be added later.": "草稿卡片会留在草稿列，提交后才会进入流程。草稿只需标题即可保存，负责人、验收人和验收条件可以稍后补充。",
+  "Cancelled cards are not scheduled and can be restored.": "已取消的卡片不会进入调度，可以恢复。",
+  "Confirm change": "确认变更",
+  "Review the before and after values before applying this change.": "应用变更前，请核对修改前后的内容。",
+  "No visible field changes.": "没有可见的字段变化。",
+  "The type could not be saved.": "无法保存类型，请重试。",
+  "The release could not be created. Check the fields and try again.": "无法创建发布，请检查字段后重试。",
+  "Unable to update release": "无法更新发布，请刷新后重试。",
+  "The proposal decision failed.": "变更处理失败，请刷新后重试。",
+  "Drag a card to another type lane to change its type without changing its status.": "将卡片拖到其他类型列可修改类型，状态不变。",
+  "Drag cards between release lanes. Arrow controls reorder draft and queued releases.": "在发布列之间拖动卡片；用箭头按钮调整草稿和排队发布的顺序。",
+  "Release team": "发布团队",
+  "A release group is created with the project manager as admin.": "发布群会以项目经理为管理员创建。",
+  "Project Manager": "项目经理",
+  "Product Manager": "产品经理",
+  "Architect": "架构师",
+  "UI Designer": "UI 设计师",
+  "UX Designer": "UX 设计师",
+  "Frontend Developer": "前端开发",
+  "Backend Developer": "后端开发",
+  "API Engineer": "API 中间件工程师",
+  "Database Administrator": "数据库管理员",
+  "Test Engineer": "测试工程师",
+  "Independent Reviewer": "独立验收人",
+  "Operations Engineer": "运维工程师",
+  "Required": "必填",
+  "Choose a project manager and every required role.": "请选择项目经理和所有必填角色。",
+  "Release details": "发布详情",
+  "Project manager": "项目经理",
+  "Project manager: {name}": "项目经理：{name}",
+  "Release group": "发布群",
+  "Group {id}": "群 {id}",
+  "No release team": "未设置发布团队",
+  "{count} roles": "{count} 个角色",
+  "{count} assigned": "{count} 已分配",
+  "Role assignments": "角色分配",
+  "Not created": "未创建",
+  "Started": "开始时间",
+  "Published at": "发布时间",
+  "Failure": "失败原因",
+  "Items": "发布项",
+  "Gates": "发布门禁",
+  "Docs": "文档",
+  "Artifacts": "产物",
+  "Env": "环境",
+  "Pending": "待处理",
+  "Passed": "已通过",
+  "No evidence": "暂无证据",
+  "Gate status": "门禁状态",
+  "Short evidence": "简述证据",
+  "Save gate": "保存门禁",
+  "Evidence is required to pass a gate.": "通过门禁前必须填写证据。",
+  "Check release": "检查发布",
+  "Only a running release can be checked.": "只有运行中的发布可以检查。",
+  "Awaiting gates": "等待门禁",
+  "Open summary report": "打开总结报告",
+  "Summary report": "总结报告",
+  "Unable to load release report": "无法读取发布报告。",
+  "The report is read only.": "报告为只读。",
+  "Generated at {time}": "生成时间 {time}",
+  "Back to release": "返回发布"
 };
 var HOST_ERRORS = [
   [/^Goal task changed or is unavailable; refresh the board$/, "群目标任务已变化或不可用，请刷新看板。"],
@@ -14468,7 +14731,15 @@ var HOST_ERRORS = [
   [/^There is no entry (.+)\.$/, "没有第 $1 条"],
   [/^No entry in [\s\S]* matches "([\s\S]*)"\.[\s\S]*$/, "找不到「$1」这条记忆"],
   [/^"([\s\S]*)" matches (\d+) entries in [\s\S]*$/, "「$1」对应了 $2 条记忆，请说得更具体"],
-  [/^Memory cannot change now: [\s\S]*$/, "现在不能修改记忆：另一个 dsh 正在使用这个 Bot 团队"]
+  [/^Memory cannot change now: [\s\S]*$/, "现在不能修改记忆：另一个 dsh 正在使用这个 Bot 团队"],
+  // Release groups, gates and reports; the host sends these from the board service.
+  [/^Missing release roles: (.+)$/, "缺少发布角色：$1"],
+  [/^another release is running in this scope$/, "这个看板已有运行中的发布"],
+  [/^release has no items$/, "发布没有发布项"],
+  [/^release is not running$/, "发布未在运行中"],
+  [/^release is not editable$/, "发布当前不可编辑"],
+  [/^release revision conflict$/, "发布已被其他操作更新，请刷新后重试"],
+  [/^Release report is unavailable$/, "发布报告不可用"]
 ];
 var HOST_ZH = {
   "The Server address must start with ws:// or wss://": "服务器地址必须以 ws:// 或 wss:// 开头",
@@ -36821,6 +37092,7 @@ var SETTINGS_SHELL_CSS = `
 var import_react50 = require("react");
 var import_react_dom8 = require("react-dom");
 var COLUMNS = [
+  ["draft", "Draft"],
   ["proposed", "Preparing"],
   ["waiting", "Waiting"],
   ["ready", "Ready"],
@@ -36828,11 +37100,48 @@ var COLUMNS = [
   ["working", "In progress"],
   ["reported", "Awaiting review"],
   ["done", "Done"],
-  ["legacy-done", "Goal marked done"]
+  ["legacy-done", "Goal marked done"],
+  ["cancelled", "Cancelled"]
 ];
 var PERSONAL_COLUMNS = [["todo", "To do"], ["doing", "Doing"], ["finished", "Personally finished"]];
+var TASK_TYPES = [
+  ["requirement", "Requirement"],
+  ["design", "Design"],
+  ["feature", "Feature"],
+  ["development", "Development"],
+  ["test", "Test"],
+  ["deployment", "Deployment"],
+  ["operations", "Operations"],
+  ["bugfix", "Bugfix"],
+  ["ui", "UI design"],
+  ["ux", "UX"],
+  ["other", "Other"]
+];
+var TASK_TYPE_LABELS = Object.fromEntries(TASK_TYPES);
+var TASK_TYPE_KEYS = new Set(TASK_TYPES.map(([id]) => id));
+var RELEASE_STATUS_LABELS = { draft: "Draft", queued: "Queued", running: "Running", published: "Published", failed: "Failed", cancelled: "Cancelled" };
+var RELEASE_GATES = [["docs", "Docs"], ["artifacts", "Artifacts"], ["environment", "Environment"], ["summary", "Summary"]];
+var RELEASE_GATE_KEYS = new Set(RELEASE_GATES.map(([key]) => key));
+var RELEASE_GATE_SHORT = { docs: "Docs", artifacts: "Artifacts", environment: "Env", summary: "Summary" };
+var RELEASE_GATE_STATUSES = /* @__PURE__ */ new Set(["pending", "passed", "failed"]);
+var RELEASE_GATE_STATUS_LABELS = { pending: "Pending", passed: "Passed", failed: "Failed" };
+var RELEASE_ROLE_LABELS = {
+  projectManager: "Project Manager",
+  productManager: "Product Manager",
+  architect: "Architect",
+  uiDesigner: "UI Designer",
+  uxDesigner: "UX Designer",
+  frontend: "Frontend Developer",
+  backend: "Backend Developer",
+  apiEngineer: "API Engineer",
+  dba: "Database Administrator",
+  tester: "Test Engineer",
+  reviewer: "Independent Reviewer",
+  ops: "Operations Engineer"
+};
 var KNOWN = new Set(COLUMNS.map(([status]) => status));
 var IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg"]);
+var FILE_TYPES = /* @__PURE__ */ new Set([...IMAGE_TYPES, "application/pdf", "application/zip", "text/plain", "text/markdown", "application/json"]);
 var IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 var IMAGE_BATCH_MAX_COUNT = 10;
 var IMAGE_TASK_MAX_COUNT = 20;
@@ -36843,6 +37152,46 @@ var textValue = (value) => typeof value === "string" ? value : "";
 var cardStamp = (task) => ({ revision: task.revision, ...task.legacy?.useOverlay ? { boardRevision: task.legacy.boardRevision, position: task.legacy.position } : {} });
 var sameCardStamp = (task, stamp) => JSON.stringify(cardStamp(task)) === JSON.stringify(stamp);
 var stampedTask = (task, stamp) => ({ ...task, revision: stamp.revision, ...task.legacy ? { legacy: { ...task.legacy, useOverlay: stamp.position !== void 0, boardRevision: stamp.boardRevision, position: stamp.position } } : {} });
+var taskType = (task) => TASK_TYPE_KEYS.has(task?.type) ? task.type : "other";
+var releaseStatusLabel = (value) => t(RELEASE_STATUS_LABELS[value] ?? "Unknown");
+var releasePosition = (release) => typeof release?.position === "string" ? release.position : "";
+var releaseRolesOf = (release) => release?.roles && typeof release.roles === "object" && !Array.isArray(release.roles) ? release.roles : {};
+var releaseRoleId = (release, key) => textValue(releaseRolesOf(release)[key]);
+var releaseRoleCount = (release) => Object.values(releaseRolesOf(release)).filter((id) => typeof id === "string" && id !== "").length;
+var releaseRoleLabel = (role) => {
+  const label = RELEASE_ROLE_LABELS[role?.key] ?? textValue(role?.label);
+  return label ? t(label) : textValue(role?.key);
+};
+var releaseGateStatus = (release, key) => RELEASE_GATE_KEYS.has(key) && RELEASE_GATE_STATUSES.has(release?.gates?.[key]?.status) ? release.gates[key].status : "pending";
+var releaseGatePassedCount = (release) => RELEASE_GATES.filter(([key]) => releaseGateStatus(release, key) === "passed").length;
+var releaseGatesPassed = (release) => RELEASE_GATES.every(([key]) => releaseGateStatus(release, key) === "passed");
+var releaseEditable = (release) => !!release && ["draft", "queued", "running"].includes(release.status);
+var releaseItemsDone = (release) => Number.isSafeInteger(release?.itemCount) && release.itemCount > 0 && release?.doneCount === release.itemCount;
+var formatMoment = (value) => {
+  try {
+    return new Date(value).toLocaleString(dateLocale());
+  } catch {
+    return "";
+  }
+};
+var confirmCommands = /* @__PURE__ */ new Set(["edit", "card-details", "goal-task-edit", "goal-history-title", "goal-card-details"]);
+var CONFIRM_FIELD_LABELS = {
+  title: "Title",
+  owner: "Owner",
+  reviewer: "Reviewer",
+  acceptance: "Acceptance criteria",
+  dependencies: "Dependencies",
+  description: "Description",
+  dueDate: "Due date",
+  dueComplete: "Due date complete",
+  labels: "Labels",
+  checklist: "Checklist",
+  coverImageId: "Cover image",
+  type: "Type",
+  note: "Goal task note",
+  status: "Goal task status",
+  reason: "Reason for correction"
+};
 function boardColumns(tasks) {
   const columns2 = new Map(COLUMNS.map(([key]) => [key, []]));
   columns2.set("unknown", []);
@@ -36920,7 +37269,7 @@ function RemoteChanges({ monitor }) {
   );
 }
 var snapshotTime = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 864e13 ? new Date(value).toISOString() : t("Unknown");
-var shortIdentity = (value) => typeof value !== "string" ? t("Unknown") : value.length > 32 ? `${value.slice(0, 20)}…${value.slice(-8)}` : value;
+var shortIdentity = (value) => typeof value !== "string" ? t("Unknown") : value.length > 32 ? `${value.slice(0, 20)}…{value.slice(-8)}` : value;
 var matchesRecovery = (needle, values) => !needle || values.some((value) => textValue(value).toLocaleLowerCase().includes(needle));
 function recoveryGroups(rows2, idOf, nameOf2) {
   const groups = /* @__PURE__ */ new Map();
@@ -37083,6 +37432,7 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const filteredDeliveries = deliveries.filter((item) => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]));
   const pendingDeliveries = filteredDeliveries.filter((item) => item.decision !== "ignored");
   const ignoredDeliveries = filteredDeliveries.filter((item) => item.decision === "ignored");
+  if (!recovery.incomplete && !rows2.length && !deliveries.length) return null;
   const renderDeliveries = (list) => (0, import_react50.createElement)("div", { className: "bt-recovery-deliveries" }, recoveryGroups(list, (item) => item.recipientId, (item) => item.recipientName).map((group) => (0, import_react50.createElement)(
     "section",
     { key: group.id, className: "bt-recovery-group" },
@@ -37659,73 +38009,1153 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     )
   );
 }
-function DependenciesField({ tasks, value, disabled, exclude, onChange }) {
-  const options = (Array.isArray(tasks) ? tasks : []).filter((task) => task && !task.legacy && typeof task.id === "string" && task.id !== exclude);
-  return (0, import_react50.createElement)("label", null, t("Dependencies"), (0, import_react50.createElement)(
-    "select",
-    {
-      "aria-label": t("Dependencies"),
-      multiple: true,
-      value,
-      disabled,
-      onChange: (event) => onChange([...event.target.selectedOptions].map((option) => option.value))
-    },
-    options.map((task) => (0, import_react50.createElement)("option", { key: task.id, value: task.id }, `${textValue(task.title) || t("Shared task")} · ${task.id}`))
-  ));
+var IMAGE_CACHE_LIMIT = 80;
+var boardImageCache = /* @__PURE__ */ new Map();
+var RefreshIcon = () => (0, import_react50.createElement)(
+  "svg",
+  { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
+  (0, import_react50.createElement)("path", { d: "M16 10a6 6 0 1 1-1.76-4.24" }),
+  (0, import_react50.createElement)("path", { d: "M16 3.5V7h-3.5" })
+);
+var labelTone = (value) => {
+  let hash = 0;
+  for (const char of textValue(value)) hash = (hash * 31 + char.codePointAt(0)) % 1009;
+  return hash % 6;
+};
+var LABEL_TONE_NAMES = ["blue", "green", "rose", "amber", "violet", "slate"];
+var labelToneName = (value) => LABEL_TONE_NAMES[labelTone(value)];
+var initials = (value) => {
+  const text = textValue(value).trim();
+  if (!text) return "?";
+  const words = text.split(/\s+/).filter(Boolean);
+  return (words.length > 1 ? words[0][0] + words[1][0] : [...text][0]).toUpperCase();
+};
+var relativeTime = (value) => {
+  if (!Number.isFinite(value)) return "";
+  const delta = Date.now() - value;
+  if (delta < 6e4) return t("Just now");
+  if (delta < 36e5) return t("{count}m ago", { count: Math.floor(delta / 6e4) });
+  if (delta < 864e5) return t("{count}h ago", { count: Math.floor(delta / 36e5) });
+  try {
+    return new Date(value).toLocaleDateString(dateLocale(), { month: "short", day: "numeric" });
+  } catch {
+    return "";
+  }
+};
+var formatDay = (value) => {
+  try {
+    return new Date(value).toLocaleDateString(dateLocale(), { month: "short", day: "numeric" });
+  } catch {
+    return "";
+  }
+};
+var formatClock = (value) => {
+  try {
+    return new Date(value).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+};
+var dueMoment = (value) => {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const hour = match[4] === void 0 ? 23 : Number(match[4]);
+  const minute = match[5] === void 0 ? 59 : Number(match[5]);
+  const local = new Date(year, month - 1, day, hour, minute, match[4] === void 0 ? 59 : 0, match[4] === void 0 ? 999 : 0);
+  if (!Number.isFinite(local.getTime()) || local.getFullYear() !== year || local.getMonth() !== month - 1 || local.getDate() !== day) return null;
+  if (match[4] !== void 0 && (hour > 23 || minute > 59)) return null;
+  return local;
+};
+var dueInfo = (task) => {
+  const moment = dueMoment(task.dueDate);
+  if (!moment) return null;
+  const complete = task.dueComplete === true;
+  const now = Date.now();
+  const state = complete ? "complete" : moment.getTime() < now ? "overdue" : moment.getTime() - now < 7 * 864e5 ? "soon" : "normal";
+  const day = formatDay(moment);
+  const label = task.dueDate.includes("T") ? day + " " + formatClock(moment) : day;
+  return { moment, complete, state, label, title: moment.toLocaleString(dateLocale()) };
+};
+var dueFilterMatch = (task, filter) => {
+  if (!filter) return true;
+  const info = dueInfo(task);
+  if (filter === "none") return !info;
+  if (!info) return false;
+  if (filter === "overdue") return info.state === "overdue";
+  if (filter === "soon") return info.state === "overdue" || info.state === "soon";
+  if (filter === "complete") return info.complete;
+  return true;
+};
+var checklistDone = (task) => Array.isArray(task.checklist) ? task.checklist.filter((item) => item?.checked === true).length : 0;
+var commentsOf = (task) => Array.isArray(task.comments) ? task.comments : [];
+var imagesOf = (task) => Array.isArray(task.images) ? task.images : [];
+var labelsOf = (task) => Array.isArray(task.labels) ? task.labels : [];
+var dependenciesOf = (task) => Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
+var commandOf = (commands, type) => Array.isArray(commands) && commands.some((command) => command?.type === type);
+var stageLabelOf = (task) => task?.legacy ? { current: "Current goal task", previous: "Earlier goal stage", future: "Upcoming goal stage", archived: "Archived goal task", closed: "Closed goal task" }[task.legacy.position] ?? t("Goal task") : t((COLUMNS.find(([status]) => status === task?.status) ?? [null, "Status unknown"])[1]);
+var actorName = (value, actors) => actorLabel(value, actors) || t("Unknown");
+var hiddenInClosedDetails = (item) => {
+  const closed = item.closest("details:not([open])");
+  if (!closed) return false;
+  if (item.tagName !== "SUMMARY" || item.parentElement !== closed) return true;
+  return !!closed.parentElement?.closest("details:not([open])");
+};
+function useBoardImage(scope, taskId, image, request) {
+  const key = scope.kind + ":" + scope.id + ":" + taskId + ":" + (image?.id ?? "");
+  const [url, setUrl] = (0, import_react50.useState)(() => boardImageCache.get(key) ?? "");
+  const [failed, setFailed] = (0, import_react50.useState)(false);
+  (0, import_react50.useEffect)(() => {
+    if (!image?.id) {
+      setUrl("");
+      setFailed(false);
+      return void 0;
+    }
+    const cached = boardImageCache.get(key);
+    if (cached) {
+      setUrl(cached);
+      setFailed(false);
+      return void 0;
+    }
+    let live = true;
+    setUrl("");
+    setFailed(false);
+    request("board-image", { scope, taskId, imageId: image.id }).then((result) => {
+      if (!live) return;
+      if (!FILE_TYPES.has(result?.mediaType) || typeof result.data !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(result.data)) throw new Error("invalid attachment");
+      const data = "data:" + result.mediaType + ";base64," + result.data;
+      if (boardImageCache.size >= IMAGE_CACHE_LIMIT) boardImageCache.delete(boardImageCache.keys().next().value);
+      boardImageCache.set(key, data);
+      setUrl(data);
+    }).catch(() => {
+      if (live) setFailed(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [key]);
+  return { url, failed };
 }
-function CreateTask({ disabled, actors, tasks, onCreate, defaultOwner = "", ownerOnly = false, personalProgress, scheduleOnCreate = false, followup = false }) {
-  const [open, setOpen] = (0, import_react50.useState)(false);
-  const [title, setTitle] = (0, import_react50.useState)("");
-  const [owner, setOwner] = (0, import_react50.useState)(defaultOwner);
-  const [reviewer, setReviewer] = (0, import_react50.useState)("");
-  const [acceptance, setAcceptance] = (0, import_react50.useState)("");
-  const [dependencies, setDependencies] = (0, import_react50.useState)([]);
-  (0, import_react50.useEffect)(() => setOwner(defaultOwner), [defaultOwner]);
-  const valid = title.trim() && owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim() && (!scheduleOnCreate || owner.trim() !== "user" && reviewer.trim() !== "user");
-  const buttonLabel = followup ? "Add follow-up" : scheduleOnCreate ? "Add and schedule" : personalProgress !== void 0 ? "Add task" : "Create task";
-  if (!open) return (0, import_react50.createElement)("button", { className: "bt-board-primary", type: "button", disabled, onClick: () => setOpen(true) }, (0, import_react50.createElement)("span", { "aria-hidden": "true" }, "+ "), t(buttonLabel));
-  const field = (label, value, update) => (0, import_react50.createElement)("label", null, t(label), (0, import_react50.createElement)("input", { "aria-label": t(label), value, disabled, onChange: (event) => update(event.target.value) }));
-  const actorField = (label, value, update) => Array.isArray(actors) ? (0, import_react50.createElement)("label", null, t(label), (0, import_react50.createElement)(
-    "select",
-    { "aria-label": t(label), value, disabled, onChange: (event) => update(event.target.value) },
-    (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
-    actors.filter((actor) => typeof actor?.id === "string" && (label !== "Owner ID" || !ownerOnly || actor.id === defaultOwner) && (!scheduleOnCreate || actor.id !== "user")).map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
-  )) : field(label, value, update);
+function MemberAvatar({ name, size = 22, muted = false }) {
+  return (0, import_react50.createElement)("span", { className: "bt-board-avatar" + (muted ? " bt-board-avatar-muted" : ""), style: { width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.42)) }, "aria-hidden": true }, initials(name));
+}
+function LabelChip({ label, onRemove, disabled }) {
   return (0, import_react50.createElement)(
-    "form",
-    { className: "bt-board-create", onSubmit: (event) => {
-      event.preventDefault();
-      if (!valid || disabled) return;
-      void onCreate({
+    "span",
+    { className: "bt-board-label bt-board-label-" + labelToneName(label) },
+    (0, import_react50.createElement)("span", null, label),
+    onRemove ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-label-remove", "aria-label": t("Remove label {label}", { label }), disabled, onClick: onRemove }, "×") : null
+  );
+}
+function TypeChip({ type }) {
+  const id = TASK_TYPE_KEYS.has(type) ? type : "other";
+  return (0, import_react50.createElement)("span", { className: "bt-board-type bt-board-type-" + id, title: t(TASK_TYPE_LABELS[id]) }, t(TASK_TYPE_LABELS[id]));
+}
+function ReleaseStatusChip({ status }) {
+  return (0, import_react50.createElement)("span", { className: "bt-board-release-status bt-board-release-status-" + (RELEASE_STATUS_LABELS[status] ? status : "unknown") }, releaseStatusLabel(status));
+}
+function ReleaseGateStrip({ release, compact: compact2 = false }) {
+  return (0, import_react50.createElement)("span", { className: "bt-board-release-gates" }, RELEASE_GATES.map(([key, label]) => {
+    const status = releaseGateStatus(release, key);
+    const text = t(compact2 ? RELEASE_GATE_SHORT[key] : label);
+    return (0, import_react50.createElement)(
+      "span",
+      { key, className: "bt-board-gate bt-board-gate-" + status, title: t(label) + ": " + t(RELEASE_GATE_STATUS_LABELS[status]) },
+      (0, import_react50.createElement)("span", { className: "bt-board-gate-dot", "aria-hidden": true }),
+      text
+    );
+  }));
+}
+var statusValueLabel = (value) => t({ draft: "Draft", proposed: "Preparing", waiting: "Waiting", ready: "Ready", pending: "Not started", working: "In progress", reported: "Awaiting review", done: "Done", cancelled: "Cancelled" }[value] ?? "Status unknown");
+var displayFieldValue = (value, field, task, actors, tasks) => {
+  if (field === "type") return t(TASK_TYPE_LABELS[value] ?? "Other");
+  if (field === "status") return statusValueLabel(value);
+  if (field === "owner" || field === "reviewer") return actorName(value, actors);
+  if (field === "coverImageId") {
+    const image = (task?.images ?? []).find((item) => item.id === value);
+    return value ? textValue(image?.name) || value : t("None");
+  }
+  if (field === "dueComplete") return value ? t("Yes") : t("No");
+  if (field === "labels") return Array.isArray(value) && value.length ? value.join(", ") : t("None");
+  if (field === "checklist") return Array.isArray(value) && value.length ? value.map((item) => (item?.checked === true ? "✓ " : "") + textValue(item?.text)).join(" · ") : t("None");
+  if (field === "dependencies") return Array.isArray(value) && value.length ? value.map((id) => textValue((Array.isArray(tasks) ? tasks : []).find((task2) => task2.id === id)?.title) || id).join(", ") : t("None");
+  if (value === null || value === void 0 || value === "") return t("None");
+  if (Array.isArray(value)) return value.length ? value.join(", ") : t("None");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+var confirmationRows = (task, command, value, actors, tasks) => {
+  const before = command.type === "goal-task-edit" ? { title: textValue(task.legacy?.originalTitle ?? task.title), note: textValue(task.goalNote), status: task.legacy?.originalStatus ?? "" } : command.type === "goal-history-title" ? { title: textValue(task.title), reason: "" } : task;
+  return Object.keys(value ?? {}).map((field) => ({
+    field,
+    label: CONFIRM_FIELD_LABELS[field] ?? field,
+    before: displayFieldValue(field === "type" ? taskType(task) : before?.[field], field, task, actors, tasks),
+    after: displayFieldValue(value[field], field, task, actors, tasks)
+  })).filter((row) => row.before !== row.after);
+};
+var proposalRows = (proposal, actors, tasks, releases = []) => {
+  const task = (Array.isArray(tasks) ? tasks : []).find((item) => item.id === proposal?.taskId);
+  const releaseName = (id) => {
+    const release = releases.find((item) => item.id === id);
+    return release ? [textValue(release.name), textValue(release.version)].filter(Boolean).join(" · ") : textValue(id) || t("None");
+  };
+  if (proposal?.kind === "status") {
+    const action = proposal.command?.type ?? proposal.after?.type;
+    return [{
+      field: "status",
+      label: "Status",
+      before: task ? statusValueLabel(task.status) : t("Unknown"),
+      after: t({ submit: "Submit card", cancel: "Cancel card", restore: "Restore card" }[action] ?? "Status unknown")
+    }];
+  }
+  if (proposal?.kind === "release") {
+    const target = proposal.command?.value?.releaseId ?? proposal.after?.releaseId;
+    return [{ field: "releaseId", label: "Release", before: task?.releaseId ? releaseName(task.releaseId) : t("Unassigned"), after: releaseName(target) }];
+  }
+  const before = proposal?.before && typeof proposal.before === "object" ? proposal.before : {};
+  const after = proposal?.after && typeof proposal.after === "object" ? proposal.after : {};
+  return [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])].filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null)).map((field) => ({
+    field,
+    label: CONFIRM_FIELD_LABELS[field] ?? field,
+    before: displayFieldValue(before[field], field, task, actors, tasks),
+    after: displayFieldValue(after[field], field, task, actors, tasks)
+  }));
+};
+function DueChip({ task }) {
+  const info = dueInfo(task);
+  if (!info) return null;
+  return (0, import_react50.createElement)("span", { className: "bt-board-due bt-board-due-" + info.state, title: info.title }, info.complete ? (0, import_react50.createElement)(CheckIcon) : (0, import_react50.createElement)(ClockIcon), (0, import_react50.createElement)("span", null, info.label));
+}
+function ChecklistProgress({ task, compact: compact2 = false }) {
+  const items = Array.isArray(task.checklist) ? task.checklist : [];
+  if (!items.length) return null;
+  const done = checklistDone(task);
+  const percent3 = items.length ? Math.round(done / items.length * 100) : 0;
+  return (0, import_react50.createElement)(
+    "span",
+    { className: "bt-board-progress" + (compact2 ? " bt-board-progress-compact" : ""), title: done + "/" + items.length },
+    (0, import_react50.createElement)("span", { className: "bt-board-progress-track" }, (0, import_react50.createElement)("span", { className: "bt-board-progress-fill", style: { width: percent3 + "%" } })),
+    (0, import_react50.createElement)("span", { className: "bt-board-progress-text" }, done + "/" + items.length)
+  );
+}
+function CardCover({ scope, task, request }) {
+  const images = imagesOf(task).filter((item) => typeof item.mediaType === "string" && item.mediaType.startsWith("image/"));
+  const image = images.find((item) => item.id === task.coverImageId) ?? images[0];
+  const state = useBoardImage(scope, task.id, image, request);
+  if (!image || state.failed || !state.url) return null;
+  return (0, import_react50.createElement)("div", { className: "bt-board-card-cover", "aria-hidden": true }, (0, import_react50.createElement)("img", { src: state.url, alt: "" }));
+}
+function TaskCard({ scope, task, commands, actors, uncertain, dragging, dragEnabled, request, onOpen, onDragStart, onDragEnd, onDragOverCard, selectionMode = false, selected = false, onSelect }) {
+  const owner = actorLabel(task.owner, actors);
+  const labels2 = labelsOf(task);
+  const dependencies = dependenciesOf(task);
+  const info = dueInfo(task);
+  const comments = commentsOf(task);
+  const images = imagesOf(task);
+  const canReorder = commandOf(commands, "reorder");
+  const canMove = commandOf(commands, "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
+  const canSchedule = commandOf(commands, "schedule") && ["proposed", "waiting"].includes(task.status);
+  const canDrag = !uncertain && !task.shared && (dragEnabled === true || canReorder || canMove || canSchedule);
+  const deliveryLabel = task.dispatchState === "uncertain" ? t("Delivery needs review") : task.dispatchState === "accepted" ? t("Sent to Bot") : task.dispatchState === "claimed" ? t("Preparing delivery") : task.dispatchState === "pending" ? t("Bot queued") : "";
+  return (0, import_react50.createElement)(
+    "article",
+    {
+      className: "bt-board-card" + (dragging ? " bt-board-card-dragging" : ""),
+      "data-task-id": task.id,
+      draggable: canDrag,
+      onDragStart: (event) => onDragStart?.(task, event),
+      onDragEnd,
+      onDragOver: (event) => onDragOverCard?.(task, event)
+    },
+    (0, import_react50.createElement)(CardCover, { scope, task, request }),
+    selectionMode ? (0, import_react50.createElement)(
+      "label",
+      { className: "bt-board-select", onClick: (event) => event.stopPropagation() },
+      (0, import_react50.createElement)("input", { type: "checkbox", checked: selected, "aria-label": t("Select card"), onChange: (event) => onSelect?.(task.id, event.target.checked) })
+    ) : null,
+    (0, import_react50.createElement)(
+      "button",
+      { type: "button", className: "bt-board-card-summary", onClick: (event) => onOpen(task.id, event.currentTarget) },
+      labels2.length ? (0, import_react50.createElement)("span", { className: "bt-board-card-labels" }, labels2.slice(0, 4).map((label) => (0, import_react50.createElement)(LabelChip, { key: label, label })), labels2.length > 4 ? (0, import_react50.createElement)("span", { className: "bt-board-card-more-labels" }, "+" + (labels2.length - 4)) : null) : null,
+      (0, import_react50.createElement)("strong", { className: "bt-board-card-title" }, textValue(task.title) || task.id),
+      (0, import_react50.createElement)(
+        "span",
+        { className: "bt-board-card-meta" },
+        (0, import_react50.createElement)(TypeChip, { type: taskType(task) }),
+        info ? (0, import_react50.createElement)(DueChip, { task }) : null,
+        (0, import_react50.createElement)(ChecklistProgress, { task, compact: true }),
+        textValue(task.description) ? (0, import_react50.createElement)("span", { className: "bt-board-card-count", title: t("Description") }, (0, import_react50.createElement)(TextIcon)) : null,
+        comments.length ? (0, import_react50.createElement)("span", { className: "bt-board-card-count", title: t("Comments") }, (0, import_react50.createElement)(ChatsIcon), comments.length) : null,
+        images.length ? (0, import_react50.createElement)("span", { className: "bt-board-card-count", title: t("Attachments") }, (0, import_react50.createElement)(PaperclipIcon), images.length) : null,
+        deliveryLabel ? (0, import_react50.createElement)("span", { className: "bt-board-chip" + (task.dispatchState === "uncertain" ? " bt-board-chip-blocked" : ""), role: task.dispatchState === "uncertain" ? "status" : void 0 }, t(deliveryLabel)) : null,
+        task.blocked ? (0, import_react50.createElement)("span", { className: "bt-board-chip bt-board-chip-blocked" }, t("Blocked")) : null,
+        dependencies.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} dependencies", { count: dependencies.length })) : null,
+        task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("Shared task · read only")) : null
+      ),
+      (0, import_react50.createElement)(
+        "span",
+        { className: "bt-board-card-foot" },
+        (0, import_react50.createElement)("span", { className: "bt-board-card-owner" }, (0, import_react50.createElement)(MemberAvatar, { name: owner || t("You"), size: 22, muted: !owner || owner === t("You") }), (0, import_react50.createElement)("span", null, owner || t("Unknown")))
+      )
+    )
+  );
+}
+var byteLength = (value) => new TextEncoder().encode(textValue(value)).length;
+function CreateCardDialog({ laneLabel, disabled, actors, tasks, defaultOwner = "", ownerOnly = false, personalProgress, scheduleOnCreate = false, followup = false, defaultDraft = false, initial, onClose, onCreate }) {
+  const seed = initial ?? {};
+  const seedDetails = seed.details ?? {};
+  const draftAllowed = !scheduleOnCreate && personalProgress === void 0 && !followup;
+  const [title, setTitle] = (0, import_react50.useState)(() => textValue(seed.title));
+  const [owner, setOwner] = (0, import_react50.useState)(() => textValue(seed.owner) || defaultOwner);
+  const [reviewer, setReviewer] = (0, import_react50.useState)(() => textValue(seed.reviewer));
+  const [acceptance, setAcceptance] = (0, import_react50.useState)(() => textValue(seed.acceptance));
+  const [type, setType] = (0, import_react50.useState)(() => TASK_TYPE_KEYS.has(seed.type) ? seed.type : "feature");
+  const [draft, setDraft] = (0, import_react50.useState)(() => draftAllowed && (seed.draft === true || defaultDraft === true));
+  const [description, setDescription] = (0, import_react50.useState)(() => textValue(seedDetails.description));
+  const [dependencies, setDependencies] = (0, import_react50.useState)(() => Array.isArray(seed.dependencies) ? seed.dependencies.map(asText2).filter(Boolean) : []);
+  const [error, setError] = (0, import_react50.useState)("");
+  const [saving, setSaving] = (0, import_react50.useState)(false);
+  const first = (0, import_react50.useRef)(null);
+  (0, import_react50.useEffect)(() => {
+    first.current?.focus();
+  }, []);
+  (0, import_react50.useEffect)(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const candidates = Array.isArray(actors) ? actors.filter((actor) => typeof actor?.id === "string") : [];
+  const ownerCandidates = candidates.filter((actor) => (!ownerOnly || actor.id === defaultOwner) && (!scheduleOnCreate || actor.id !== "user"));
+  const reviewerCandidates = candidates.filter((actor) => actor.id !== owner && (!scheduleOnCreate || actor.id !== "user"));
+  (0, import_react50.useEffect)(() => {
+    if (reviewer && reviewer === owner) setReviewer("");
+  }, [owner, reviewer]);
+  const available = (Array.isArray(tasks) ? tasks : []).filter((task) => task && !task.legacy && typeof task.id === "string" && task.id !== seed.id);
+  const draftOwner = owner || (ownerOnly ? defaultOwner : candidates.find((actor) => actor.id !== "user")?.id ?? defaultOwner);
+  const draftReviewer = reviewer || candidates.find((actor) => actor.id !== draftOwner && actor.id !== "user")?.id;
+  const valid = title.trim() && (draft ? Boolean(draftOwner && draftReviewer && draftOwner !== draftReviewer) : Boolean(owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim())) && byteLength(title.trim()) <= 200 && byteLength(acceptance.trim()) <= 8192 && dependencies.length <= 100 && dependencies.every((id) => available.some((task) => task.id === id)) && (!scheduleOnCreate || owner.trim() !== "user" && reviewer.trim() !== "user");
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!valid || disabled || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const value = {
         title: title.trim(),
-        owner: owner.trim(),
-        reviewer: reviewer.trim(),
-        acceptance: acceptance.trim(),
+        owner: draft ? draftOwner : owner.trim(),
+        reviewer: draft ? draftReviewer : reviewer.trim(),
+        acceptance: draft ? acceptance.trim() || "To be defined." : acceptance.trim(),
         dependencies,
+        type,
+        ...draft ? { draft: true } : {},
         ...personalProgress !== void 0 ? { personalProgress } : {},
-        ...scheduleOnCreate ? { schedule: true } : {}
-      }).then((result) => {
-        if (result !== "committed") return;
-        setTitle("");
-        setOwner(defaultOwner);
-        setReviewer("");
-        setAcceptance("");
-        setDependencies([]);
-        setOpen(false);
-      });
+        ...scheduleOnCreate ? { schedule: true } : {},
+        ...description.trim() ? { description: description.trim() } : {},
+        ...seedDetails.dueDate ? { dueDate: seedDetails.dueDate } : {},
+        ...seedDetails.dueComplete ? { dueComplete: true } : {},
+        ...Array.isArray(seedDetails.labels) && seedDetails.labels.length ? { labels: seedDetails.labels } : {},
+        ...Array.isArray(seedDetails.checklist) && seedDetails.checklist.length ? { checklist: seedDetails.checklist } : {}
+      };
+      const result = await onCreate(value);
+      if (result === "committed") onClose();
+      else if (result === "rejected") setError(t("The card was rejected. Check the fields and try again."));
+      else if (result === void 0) setError(t("The card could not be created. Check the board and try again."));
+    } catch (caught) {
+      setError(caught?.message || t("The card could not be created. Check the board and try again."));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const close = () => {
+    if (!saving) onClose();
+  };
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-modal-backdrop bt-create-backdrop", onMouseDown: (event) => {
+      if (event.target === event.currentTarget) close();
     } },
-    (0, import_react50.createElement)("p", null, t(personalProgress !== void 0 ? "Personal progress does not dispatch a Bot or complete shared work." : scheduleOnCreate ? "This task will be sent to its Bot owner when its dependencies are met." : followup ? "This creates a follow-up in Preparing; reported and completed work cannot be created without evidence." : "New tasks start in Preparing.")),
-    field("Title", title, setTitle),
-    actorField("Owner ID", owner, setOwner),
-    actorField("Independent reviewer ID", reviewer, setReviewer),
-    field("Acceptance criteria", acceptance, setAcceptance),
-    (0, import_react50.createElement)(DependenciesField, { tasks, value: dependencies, disabled, onChange: setDependencies }),
+    (0, import_react50.createElement)(
+      "section",
+      { className: "bt-card-modal bt-create-modal", role: "dialog", "aria-modal": "true", "aria-label": t("Create card"), tabIndex: -1 },
+      (0, import_react50.createElement)(
+        "header",
+        { className: "bt-card-modal-header" },
+        (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("p", null, laneLabel ? t("Add to {lane}", { lane: laneLabel }) : t("New card")), (0, import_react50.createElement)("h2", null, t("Create card"))),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), onClick: close }, (0, import_react50.createElement)(CloseIcon))
+      ),
+      (0, import_react50.createElement)(
+        "form",
+        { className: "bt-create-form", onSubmit: submit },
+        (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Title")), (0, import_react50.createElement)("input", { ref: first, value: title, disabled: disabled || saving, maxLength: 200, placeholder: t("Card title"), "aria-label": t("Title"), onChange: (event) => setTitle(event.target.value) })),
+        (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Type")), (0, import_react50.createElement)(
+          "select",
+          { value: type, disabled: disabled || saving, "aria-label": t("Task type"), onChange: (event) => setType(event.target.value) },
+          TASK_TYPES.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label)))
+        )),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-create-row" },
+          (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Owner")), (0, import_react50.createElement)(
+            "select",
+            { value: owner, disabled: disabled || saving, "aria-label": t("Owner"), onChange: (event) => setOwner(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
+            ownerCandidates.map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+          )),
+          (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Independent reviewer")), (0, import_react50.createElement)(
+            "select",
+            { value: reviewer, disabled: disabled || saving, "aria-label": t("Independent reviewer"), onChange: (event) => setReviewer(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
+            reviewerCandidates.map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+          ))
+        ),
+        (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Acceptance criteria")), (0, import_react50.createElement)("textarea", { value: acceptance, disabled: disabled || saving, rows: 3, placeholder: t("What must be true for this card to be accepted?"), "aria-label": t("Acceptance criteria"), onChange: (event) => setAcceptance(event.target.value) })),
+        (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Description (optional)")), (0, import_react50.createElement)("textarea", { value: description, disabled: disabled || saving, rows: 3, placeholder: t("Add a description to give the Bot more context"), "aria-label": t("Description"), onChange: (event) => setDescription(event.target.value) })),
+        available.length ? (0, import_react50.createElement)(
+          "fieldset",
+          { className: "bt-field bt-dependency-field" },
+          (0, import_react50.createElement)("legend", null, t("Dependencies")),
+          (0, import_react50.createElement)("div", { className: "bt-dependency-list" }, available.map((task) => (0, import_react50.createElement)(
+            "label",
+            { key: task.id, className: "bt-dependency-option" },
+            (0, import_react50.createElement)("input", {
+              type: "checkbox",
+              checked: dependencies.includes(task.id),
+              disabled: disabled || saving,
+              "aria-label": textValue(task.title) || task.id,
+              onChange: (event) => setDependencies((current) => event.target.checked ? [...current, task.id] : current.filter((id) => id !== task.id))
+            }),
+            (0, import_react50.createElement)("span", null, textValue(task.title) || task.id)
+          )))
+        ) : null,
+        draftAllowed ? (0, import_react50.createElement)("label", { className: "bt-card-check" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: draft, disabled: disabled || saving, "aria-label": t("Save as draft"), onChange: (event) => setDraft(event.target.checked) }), t("Save as draft")) : null,
+        (0, import_react50.createElement)("p", { className: "bt-create-note" }, t(draft ? "Draft cards stay in Draft until they are submitted. A draft can be saved with only a title; owner, reviewer and acceptance can be added later." : personalProgress !== void 0 ? "Personal progress does not dispatch a Bot or complete shared work." : scheduleOnCreate ? "This card will be sent to its Bot owner when its dependencies are met." : followup ? "This creates a follow-up in Preparing; reported and completed work cannot be created without evidence." : "New cards start in Preparing.")),
+        error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-create-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: saving, onClick: close }, t("Cancel")),
+          (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !valid }, t(draft ? "Save as draft" : scheduleOnCreate ? "Create and schedule" : followup ? "Create follow-up" : "Create card"))
+        )
+      )
+    )
+  );
+}
+function CardSection({ title, action, children, className = "" }) {
+  if (!children) return null;
+  return (0, import_react50.createElement)(
+    "section",
+    { className: "bt-card-section " + className },
+    (0, import_react50.createElement)("div", { className: "bt-card-section-head" }, (0, import_react50.createElement)("h3", null, title), action),
+    children
+  );
+}
+function DescriptionEditor({ task, editable, disabled, onSave }) {
+  const [editing, setEditing] = (0, import_react50.useState)(false);
+  const [draft, setDraft] = (0, import_react50.useState)("");
+  const [base, setBase] = (0, import_react50.useState)(null);
+  const [error, setError] = (0, import_react50.useState)("");
+  const description = textValue(task.description);
+  const start = () => {
+    setBase(cardStamp(task));
+    setDraft(description);
+    setError("");
+    setEditing(true);
+  };
+  const save = async () => {
+    if (!base || disabled) return;
+    if (byteLength(draft) > 8192) {
+      setError(t("Description is too long."));
+      return;
+    }
+    const result = await onSave(stampedTask(task, base), { description: draft });
+    if (result === "committed") setEditing(false);
+    else if (result !== "cancelled") setError(t("The description could not be saved. Check the board and try again."));
+  };
+  const changed = base && !sameCardStamp(task, base);
+  const dirty = base && draft !== description;
+  if (!editable && !description) return null;
+  return (0, import_react50.createElement)(
+    CardSection,
+    { title: t("Description"), action: editable && !editing ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: start }, (0, import_react50.createElement)(PencilIcon), t(description ? "Edit" : "Add")) : null, className: "bt-card-description" },
+    editing ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-editor" },
+      changed ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Your draft was kept; reload the current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: start }, t("Reload"))) : null,
+      (0, import_react50.createElement)("textarea", { value: draft, rows: 6, disabled, "aria-label": t("Description"), onChange: (event) => {
+        setDraft(event.target.value);
+        setError("");
+      } }),
+      error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-card-editor-actions" },
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setEditing(false) }, t("Cancel")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || changed || !dirty, onClick: () => void save() }, t("Save"))
+      )
+    ) : description ? (0, import_react50.createElement)("p", { className: "bt-card-rich-text" }, description) : (0, import_react50.createElement)("button", { type: "button", className: "bt-card-ghost", onClick: start }, t("Add a more detailed description"))
+  );
+}
+function DueEditor({ task, editable, disabled, legacy, onSave }) {
+  const [date, setDate] = (0, import_react50.useState)(() => {
+    const value = textValue(task.dueDate);
+    return value.includes("T") ? value.slice(0, 10) : value;
+  });
+  const [time, setTime] = (0, import_react50.useState)(() => {
+    const value = textValue(task.dueDate);
+    return value.includes("T") ? value.slice(11, 16) : "";
+  });
+  const [complete, setComplete] = (0, import_react50.useState)(task.dueComplete === true);
+  const [base, setBase] = (0, import_react50.useState)(null);
+  const [error, setError] = (0, import_react50.useState)("");
+  (0, import_react50.useEffect)(() => {
+    const value = textValue(task.dueDate);
+    setDate(value.includes("T") ? value.slice(0, 10) : value);
+    setTime(value.includes("T") ? value.slice(11, 16) : "");
+    setComplete(task.dueComplete === true);
+  }, [task.dueDate, task.dueComplete]);
+  const info = dueInfo(task);
+  if (!editable && !info) return null;
+  if (!editable) return (0, import_react50.createElement)("div", { className: "bt-card-side-block" }, (0, import_react50.createElement)("h4", null, t("Due date")), (0, import_react50.createElement)(DueChip, { task }));
+  const start = () => {
+    setBase(cardStamp(task));
+    setError("");
+  };
+  const save = async (clear = false) => {
+    if (!base || disabled) return;
+    if (!clear && date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError(t("Choose a valid date."));
+      return;
+    }
+    const value = clear ? null : date ? time ? date + "T" + time : date : null;
+    const payload = legacy ? { dueDate: value } : { dueDate: value, dueComplete: complete };
+    const result = await onSave(stampedTask(task, base), payload);
+    if (result !== "committed" && result !== "cancelled") setError(t("The due date could not be saved."));
+  };
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-side-block bt-card-due-editor" },
+    (0, import_react50.createElement)("h4", null, t("Due date")),
     (0, import_react50.createElement)(
       "div",
+      { className: "bt-card-due-inputs" },
+      (0, import_react50.createElement)("input", { type: "date", value: date, disabled, "aria-label": t("Due date"), onFocus: start, onChange: (event) => {
+        start();
+        setDate(event.target.value);
+      } }),
+      legacy ? null : (0, import_react50.createElement)("input", { type: "time", value: time, disabled, "aria-label": t("Due time"), onFocus: start, onChange: (event) => {
+        start();
+        setTime(event.target.value);
+      } })
+    ),
+    legacy ? null : (0, import_react50.createElement)("label", { className: "bt-card-check" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: complete, disabled, onChange: (event) => {
+      start();
+      setComplete(event.target.checked);
+    } }), t("Mark due date complete")),
+    error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-editor-actions" },
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => {
+        start();
+        void save(true);
+      } }, t("Clear")),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || !base, onClick: () => void save(false) }, t("Save"))
+    )
+  );
+}
+function LabelsEditor({ task, editable, disabled, onSave }) {
+  const labels2 = labelsOf(task);
+  const [editing, setEditing] = (0, import_react50.useState)(false);
+  const [draft, setDraft] = (0, import_react50.useState)([]);
+  const [entry, setEntry2] = (0, import_react50.useState)("");
+  const [base, setBase] = (0, import_react50.useState)(null);
+  const [error, setError] = (0, import_react50.useState)("");
+  const start = () => {
+    setBase(cardStamp(task));
+    setDraft([...labels2]);
+    setEntry2("");
+    setError("");
+    setEditing(true);
+  };
+  const add = () => {
+    const label = entry.trim();
+    if (!label || draft.includes(label) || draft.length >= 20 || byteLength(label) > 40) {
+      setError(t("Use up to 20 unique labels of 40 bytes each."));
+      return;
+    }
+    setDraft([...draft, label]);
+    setEntry2("");
+    setError("");
+  };
+  const save = async () => {
+    if (!base || disabled) return;
+    const result = await onSave(stampedTask(task, base), { labels: draft });
+    if (result === "committed") {
+      setEditing(false);
+      setError("");
+    } else if (result !== "cancelled") setError(t("The labels could not be saved."));
+  };
+  if (!editable && !labels2.length) return null;
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-side-block bt-card-labels" },
+    (0, import_react50.createElement)("div", { className: "bt-card-side-head" }, (0, import_react50.createElement)("h4", null, t("Labels")), editable && !editing ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: start }, (0, import_react50.createElement)(PencilIcon), t("Edit")) : null),
+    editing ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-editor" },
+      (0, import_react50.createElement)("div", { className: "bt-board-card-labels" }, draft.length ? draft.map((label) => (0, import_react50.createElement)(LabelChip, { key: label, label, disabled, onRemove: () => setDraft((current) => current.filter((item) => item !== label)) })) : (0, import_react50.createElement)("span", { className: "bt-card-muted" }, t("No labels"))),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-card-inline" },
+        (0, import_react50.createElement)("input", { value: entry, disabled, placeholder: t("Add a label"), "aria-label": t("Add a label"), onChange: (event) => setEntry2(event.target.value), onKeyDown: (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            add();
+          }
+        } }),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: add }, t("Add"))
+      ),
+      error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-card-editor-actions" },
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setEditing(false) }, t("Cancel")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled, onClick: () => void save() }, t("Save"))
+      )
+    ) : labels2.length ? (0, import_react50.createElement)("div", { className: "bt-board-card-labels" }, labels2.map((label) => (0, import_react50.createElement)(LabelChip, { key: label, label }))) : (0, import_react50.createElement)("span", { className: "bt-card-muted" }, t("No labels"))
+  );
+}
+function ChecklistEditor({ task, editable, disabled, onSave }) {
+  const items = Array.isArray(task.checklist) ? task.checklist : [];
+  const [entry, setEntry2] = (0, import_react50.useState)("");
+  const [error, setError] = (0, import_react50.useState)("");
+  const [saving, setSaving] = (0, import_react50.useState)(false);
+  const [editingId, setEditingId] = (0, import_react50.useState)("");
+  const [draft, setDraft] = (0, import_react50.useState)("");
+  const write = async (next) => {
+    if (disabled || saving) return void 0;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await onSave(task, { checklist: next });
+      if (result !== "committed" && result !== "cancelled") setError(t("The checklist could not be saved."));
+      return result;
+    } catch {
+      setError(t("The checklist could not be saved."));
+      return void 0;
+    } finally {
+      setSaving(false);
+    }
+  };
+  const add = () => {
+    const text = entry.trim();
+    if (!text || items.length >= 100 || byteLength(text) > 512 || !window.crypto?.randomUUID) {
+      setError(t("Use up to 100 checklist items of 512 bytes each."));
+      return;
+    }
+    setEntry2("");
+    void write([...items, { id: window.crypto.randomUUID(), text, checked: false }]);
+  };
+  const startEdit = (item) => {
+    if (!editable || disabled || saving) return;
+    setEditingId(item.id);
+    setDraft(item.text);
+    setError("");
+  };
+  const saveEdit = async (item) => {
+    const text = draft.trim();
+    if (!text || byteLength(text) > 512) {
+      setError(t("Use up to 100 checklist items of 512 bytes each."));
+      return;
+    }
+    const result = await write(items.map((row) => row.id === item.id ? { ...row, text } : row));
+    if (result === "committed") setEditingId("");
+  };
+  if (!editable && !items.length) return null;
+  return (0, import_react50.createElement)(
+    CardSection,
+    { title: t("Checklist"), action: items.length ? (0, import_react50.createElement)(ChecklistProgress, { task }) : null, className: "bt-card-checklist" },
+    items.length ? (0, import_react50.createElement)("ul", { className: "bt-card-checklist-list" }, items.map((item) => (0, import_react50.createElement)(
+      "li",
+      { key: item.id, className: "bt-card-checklist-item" },
+      editingId === item.id ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-card-inline bt-card-checklist-edit" },
+        (0, import_react50.createElement)("input", { value: draft, disabled: disabled || saving, "aria-label": t("Edit checklist item"), autoFocus: true, onChange: (event) => setDraft(event.target.value), onKeyDown: (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void saveEdit(item);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setEditingId("");
+          }
+        } }),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !draft.trim(), onClick: () => void saveEdit(item) }, t("Save")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: saving, onClick: () => setEditingId("") }, t("Cancel"))
+      ) : (0, import_react50.createElement)("label", { className: "bt-card-check" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: item.checked === true, disabled: !editable || disabled || saving, "aria-label": t("Mark checklist item"), onChange: (event) => void write(items.map((row) => row.id === item.id ? { ...row, checked: event.target.checked } : row)) }), (0, import_react50.createElement)("span", { className: item.checked ? "bt-card-checked" : "" }, item.text)),
+      editable && editingId !== item.id ? (0, import_react50.createElement)(
+        "span",
+        { className: "bt-card-checklist-actions" },
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", "aria-label": t("Edit checklist item"), disabled: disabled || saving, onClick: () => startEdit(item) }, (0, import_react50.createElement)(PencilIcon)),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-icon-danger", "aria-label": t("Remove checklist item"), disabled: disabled || saving, onClick: () => void write(items.filter((row) => row.id !== item.id)) }, (0, import_react50.createElement)(TrashIcon))
+      ) : null
+    ))) : (0, import_react50.createElement)("p", { className: "bt-card-muted" }, t("No checklist items yet.")),
+    editable ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-inline" },
+      (0, import_react50.createElement)("input", { value: entry, disabled: disabled || saving, placeholder: t("Add an item"), "aria-label": t("New checklist item"), onChange: (event) => setEntry2(event.target.value), onKeyDown: (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          add();
+        }
+      } }),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: disabled || saving || !entry.trim(), onClick: add }, t("Add item"))
+    ) : null,
+    error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+    (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Checklist items do not complete the task or its dependencies."))
+  );
+}
+function AttachmentTile({ scope, task, image, request, canRemove, canCover, isCover, disabled, onRemove, onCover, onOpen }) {
+  const state = useBoardImage(scope, task.id, image, request);
+  const isImage = typeof image.mediaType === "string" && image.mediaType.startsWith("image/");
+  return (0, import_react50.createElement)(
+    "figure",
+    { className: "bt-attachment" + (isCover ? " bt-attachment-cover" : "") + (isImage ? "" : " bt-attachment-file") },
+    (0, import_react50.createElement)(
+      "button",
+      { type: "button", className: "bt-attachment-open", disabled, onClick: () => onOpen?.(image, state.url), title: textValue(image.name) || t("Attachment") },
+      isImage ? state.url ? (0, import_react50.createElement)("img", { src: state.url, alt: textValue(image.name) || "" }) : (0, import_react50.createElement)("span", { className: "bt-attachment-placeholder" }, state.failed ? t("Image unavailable") : t("Loading…")) : (0, import_react50.createElement)("span", { className: "bt-attachment-placeholder" }, (0, import_react50.createElement)(PaperclipIcon), (0, import_react50.createElement)("span", null, textValue(image.name) || t("Attachment")), (0, import_react50.createElement)("small", null, image.mediaType === "application/pdf" ? "PDF" : image.mediaType === "application/zip" ? "ZIP" : image.mediaType === "application/json" ? "JSON" : t("Text"))),
+      isCover ? (0, import_react50.createElement)("span", { className: "bt-attachment-cover-flag" }, t("Cover")) : null
+    ),
+    canCover && isImage ? (0, import_react50.createElement)("button", { type: "button", className: "bt-attachment-cover-action", disabled, title: t(isCover ? "Remove cover" : "Set as cover"), "aria-label": t(isCover ? "Remove cover" : "Set as cover"), onClick: () => onCover?.(isCover ? null : image.id) }, t(isCover ? "Remove cover" : "Set cover")) : null,
+    (0, import_react50.createElement)(
+      "figcaption",
       null,
-      (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || !valid }, t(scheduleOnCreate ? "Create and schedule" : followup ? "Create follow-up" : "Submit proposal")),
-      " ",
-      (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel"))
+      (0, import_react50.createElement)("span", { className: "bt-attachment-name", title: textValue(image.name) }, textValue(image.name) || t("Attachment")),
+      canRemove ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-icon-danger", "aria-label": t("Remove attachment"), disabled, onClick: () => onRemove?.(image.id) }, (0, import_react50.createElement)(TrashIcon)) : null
+    )
+  );
+}
+function ImageUploader({ task, disabled, onUpload }) {
+  const [queue, setQueue] = (0, import_react50.useState)([]);
+  const [error, setError] = (0, import_react50.useState)("");
+  const [base, setBase] = (0, import_react50.useState)(null);
+  const [dragging, setDragging] = (0, import_react50.useState)(false);
+  const [saving, setSaving] = (0, import_react50.useState)(false);
+  const input = (0, import_react50.useRef)(null);
+  const urls = (0, import_react50.useRef)(/* @__PURE__ */ new Set());
+  (0, import_react50.useEffect)(() => () => {
+    for (const url of urls.current) URL.revokeObjectURL(url);
+    urls.current.clear();
+  }, []);
+  const remove = (image) => {
+    URL.revokeObjectURL(image.url);
+    urls.current.delete(image.url);
+    setQueue((current) => current.filter((item) => item.uploadId !== image.uploadId));
+  };
+  const add = (files) => {
+    const list = [...files];
+    if (!list.length) return;
+    if (!base) setBase(cardStamp(task));
+    const count = imagesOf(task).length + queue.length + list.length;
+    const bytes = queue.reduce((sum, image) => sum + image.file.size, 0) + list.reduce((sum, file) => sum + file.size, 0);
+    if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || queue.length + list.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || list.some((file) => !FILE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
+      setError(t("Choose PNG/JPEG, PDF, ZIP, plain text, Markdown or JSON: up to 20 per task, 10 per batch, 5 MiB each and 20 MiB per batch."));
+      return;
+    }
+    setError("");
+    const fresh = [];
+    try {
+      for (const file of list) {
+        const url = URL.createObjectURL(file);
+        urls.current.add(url);
+        fresh.push({ file, url, uploadId: window.crypto.randomUUID() });
+      }
+      setQueue((current) => [...current, ...fresh]);
+    } catch {
+      for (const image of fresh) {
+        URL.revokeObjectURL(image.url);
+        urls.current.delete(image.url);
+      }
+      setError(t("Unable to preview attachments"));
+    }
+  };
+  const choose = (event) => {
+    add(event.target.files ?? []);
+    event.target.value = "";
+  };
+  const upload = async () => {
+    if (!base || disabled || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await onUpload(stampedTask(task, base), queue);
+      if (result === "committed") {
+        for (const image of queue) {
+          URL.revokeObjectURL(image.url);
+          urls.current.delete(image.url);
+        }
+        setQueue([]);
+        setBase(null);
+      } else setError(t("The attachments could not be uploaded."));
+    } catch (caught) {
+      setError(caught?.message || t("The attachments could not be uploaded."));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const changed = base && !sameCardStamp(task, base);
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-attachment-uploader" },
+    (0, import_react50.createElement)(
+      "div",
+      {
+        className: "bt-dropzone" + (dragging ? " bt-dropzone-active" : ""),
+        onDragOver: (event) => {
+          event.preventDefault();
+          setDragging(true);
+        },
+        onDragLeave: () => setDragging(false),
+        onDrop: (event) => {
+          event.preventDefault();
+          setDragging(false);
+          add(event.dataTransfer.files ?? []);
+        },
+        onPaste: (event) => {
+          if (event.clipboardData?.files?.length) {
+            event.preventDefault();
+            add(event.clipboardData.files);
+          }
+        }
+      },
+      (0, import_react50.createElement)(PaperclipIcon),
+      (0, import_react50.createElement)("span", null, t("Drop files here, paste, or")),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => input.current?.click() }, t("Choose files")),
+      (0, import_react50.createElement)("input", { ref: input, type: "file", multiple: true, accept: "image/png,image/jpeg,application/pdf,application/zip,text/plain,text/markdown,application/json", hidden: true, disabled, onChange: choose })
+    ),
+    (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("PNG/JPEG, PDF, ZIP, text, Markdown and JSON are supported.")),
+    changed ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Remove selected attachments and choose them again.")) : null,
+    queue.length ? (0, import_react50.createElement)("div", { className: "bt-attachment-queue" }, queue.map((image) => (0, import_react50.createElement)(
+      "figure",
+      { key: image.uploadId, className: "bt-attachment" + (image.file.type.startsWith("image/") ? "" : " bt-attachment-file") },
+      image.file.type.startsWith("image/") ? (0, import_react50.createElement)("img", { src: image.url, alt: image.file.name }) : (0, import_react50.createElement)("span", { className: "bt-attachment-placeholder" }, (0, import_react50.createElement)(PaperclipIcon), (0, import_react50.createElement)("span", null, image.file.name)),
+      (0, import_react50.createElement)("figcaption", null, (0, import_react50.createElement)("span", { className: "bt-attachment-name" }, image.file.name), (0, import_react50.createElement)("button", { type: "button", className: "bt-card-icon-danger", "aria-label": t("Remove attachment"), onClick: () => remove(image) }, (0, import_react50.createElement)(TrashIcon)))
+    ))) : null,
+    error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+    queue.length ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving || changed, onClick: () => void upload() }, t("Upload files")) : null
+  );
+}
+function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCover, disabled, onUpload, onRemove, onCover, onOpenImage }) {
+  const images = imagesOf(task);
+  if (!images.length && !canUpload) return null;
+  return (0, import_react50.createElement)(
+    CardSection,
+    { title: t("Attachments"), action: images.length ? (0, import_react50.createElement)("span", { className: "bt-card-count" }, images.length) : null, className: "bt-card-attachments" },
+    images.length ? (0, import_react50.createElement)("div", { className: "bt-attachment-grid" }, images.map((image) => (0, import_react50.createElement)(AttachmentTile, { key: image.id, scope, task, image, request, canRemove, canCover, isCover: task.coverImageId === image.id, disabled, onRemove, onCover, onOpen: onOpenImage }))) : null,
+    canUpload ? (0, import_react50.createElement)(ImageUploader, { task, disabled, onUpload }) : null
+  );
+}
+function CommentItem({ comment, actors, canEdit, canDelete, disabled, onEdit, onDelete }) {
+  const [editing, setEditing] = (0, import_react50.useState)(false);
+  const [draft, setDraft] = (0, import_react50.useState)(textValue(comment.text));
+  const [confirming, setConfirming] = (0, import_react50.useState)(false);
+  const [error, setError] = (0, import_react50.useState)("");
+  const save = async () => {
+    if (disabled || !draft.trim() || byteLength(draft) > 2048) return;
+    const result = await onEdit(comment.id, draft.trim());
+    if (result === "committed") setEditing(false);
+    else setError(t("The comment could not be saved."));
+  };
+  const author = actorName(comment.author, actors);
+  return (0, import_react50.createElement)(
+    "article",
+    { className: "bt-comment" },
+    (0, import_react50.createElement)(MemberAvatar, { name: author, size: 28 }),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-comment-body" },
+      (0, import_react50.createElement)(
+        "header",
+        null,
+        (0, import_react50.createElement)("strong", null, author),
+        (0, import_react50.createElement)("time", { dateTime: Number.isFinite(comment.at) ? new Date(comment.at).toISOString() : void 0 }, relativeTime(comment.at)),
+        canEdit && !editing ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: () => {
+          setDraft(textValue(comment.text));
+          setEditing(true);
+          setError("");
+        } }, t("Edit")) : null,
+        canDelete && !editing ? confirming ? (0, import_react50.createElement)("span", { className: "bt-comment-confirm" }, (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini bt-card-icon-danger", disabled, onClick: () => void onDelete(comment.id) }, t("Confirm delete")), (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => setConfirming(false) }, t("Cancel"))) : (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: () => setConfirming(true) }, t("Delete")) : null
+      ),
+      editing ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-card-editor" },
+        (0, import_react50.createElement)("textarea", { value: draft, rows: 3, disabled, "aria-label": t("Edit comment"), onChange: (event) => setDraft(event.target.value) }),
+        error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+        (0, import_react50.createElement)("div", { className: "bt-card-editor-actions" }, (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => setEditing(false) }, t("Cancel")), (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || !draft.trim() || byteLength(draft) > 2048, onClick: () => void save() }, t("Save")))
+      ) : (0, import_react50.createElement)("p", { className: "bt-comment-text" }, textValue(comment.text))
+    )
+  );
+}
+function CommentsEditor({ task, actors, canPost, canEdit, canDelete, disabled, postType, onCommand }) {
+  const comments = commentsOf(task);
+  const [text, setText] = (0, import_react50.useState)("");
+  const [error, setError] = (0, import_react50.useState)("");
+  const [saving, setSaving] = (0, import_react50.useState)(false);
+  const post = async () => {
+    if (!canPost || disabled || saving || !text.trim() || byteLength(text) > 2048) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await onCommand(task, { type: postType }, { text: text.trim() });
+      if (result === "committed") setText("");
+      else setError(t("The comment could not be posted."));
+    } catch (caught) {
+      setError(caught?.message || t("The comment could not be posted."));
+    } finally {
+      setSaving(false);
+    }
+  };
+  if (!comments.length && !canPost) return null;
+  return (0, import_react50.createElement)(
+    CardSection,
+    { title: t("Comments"), action: comments.length ? (0, import_react50.createElement)("span", { className: "bt-card-count" }, comments.length) : null, className: "bt-card-comments" },
+    comments.length ? (0, import_react50.createElement)("div", { className: "bt-comment-list" }, comments.map((comment) => (0, import_react50.createElement)(CommentItem, {
+      key: comment.id,
+      comment,
+      actors,
+      canEdit,
+      canDelete,
+      disabled,
+      onEdit: async (id, value) => onCommand(task, { type: "card-comment-edit" }, { commentId: id, text: value }),
+      onDelete: async (id) => {
+        const result = await onCommand(task, { type: "card-comment-delete" }, { commentId: id });
+        return result;
+      }
+    }))) : (0, import_react50.createElement)("p", { className: "bt-card-muted" }, t("No comments yet.")),
+    canPost ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-comment-compose" },
+      (0, import_react50.createElement)("textarea", { value: text, rows: 3, disabled: disabled || saving, placeholder: t("Write a comment"), "aria-label": t("Add a comment"), onChange: (event) => {
+        setText(event.target.value);
+        setError("");
+      } }),
+      error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+      (0, import_react50.createElement)("div", { className: "bt-card-editor-actions" }, (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !text.trim() || byteLength(text) > 2048, onClick: () => void post() }, t("Post comment")))
+    ) : null
+  );
+}
+var ACTIVITY_LABELS = {
+  edit: "Task edited",
+  details: "Card details updated",
+  "card-details": "Card details updated",
+  comment: "Comment added",
+  "card-comment": "Comment added",
+  "card-comment-edit": "Comment edited",
+  "card-comment-delete": "Comment deleted",
+  attach: "Images added",
+  "remove-image": "Image removed",
+  "personal-progress": "Personal progress updated",
+  share: "Task shared",
+  unshare: "Share revoked",
+  reorder: "Card reordered",
+  create: "Card created"
+};
+function ActivitySection({ task }) {
+  const activity = Array.isArray(task.boardActivity) ? task.boardActivity : [];
+  if (!activity.length) return null;
+  return (0, import_react50.createElement)(
+    "details",
+    { className: "bt-card-activity" },
+    (0, import_react50.createElement)("summary", null, t("Activity"), (0, import_react50.createElement)("span", { className: "bt-card-count" }, activity.length)),
+    (0, import_react50.createElement)("ul", null, [...activity].reverse().slice(0, 20).map((item) => (0, import_react50.createElement)(
+      "li",
+      { key: item.id },
+      (0, import_react50.createElement)("span", { className: "bt-card-activity-dot", "aria-hidden": true }),
+      (0, import_react50.createElement)("span", null, t(ACTIVITY_LABELS[item.type] ?? "Card updated")),
+      (0, import_react50.createElement)("time", { dateTime: Number.isFinite(item.at) ? new Date(item.at).toISOString() : void 0 }, relativeTime(item.at))
+    )))
+  );
+}
+function SideSection({ title, action, children, className = "" }) {
+  if (!children) return null;
+  return (0, import_react50.createElement)(
+    "section",
+    { className: "bt-card-side-block " + className },
+    title ? (0, import_react50.createElement)("div", { className: "bt-card-side-head" }, (0, import_react50.createElement)("h4", null, title), action) : action,
+    children
+  );
+}
+function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
+  const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress);
+  const canSubmit = commandOf(commands, "submit") && task.status === "draft";
+  const canCancel = commandOf(commands, "cancel") && !["done", "cancelled"].includes(task.status);
+  const canRestore = commandOf(commands, "restore") && task.status === "cancelled";
+  const moves = [
+    canSubmit ? { key: "submit", label: t("Preparing"), run: () => onCommand(task, { type: "submit" }) } : null,
+    canSchedule ? { key: "schedule", label: t("Ready"), run: () => onCommand(task, { type: "schedule" }) } : null,
+    canRestore ? { key: "restore", label: t("Preparing"), run: () => onCommand(task, { type: "restore" }) } : null,
+    canCancel ? { key: "cancel", label: t("Cancelled"), run: () => onCommand(task, { type: "cancel" }) } : null
+  ].filter(Boolean);
+  return (0, import_react50.createElement)(
+    SideSection,
+    { title: t("Status") },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-status" },
+      (0, import_react50.createElement)("span", { className: "bt-board-stage-dot bt-board-stage-dot-" + (task.status || "unknown"), "aria-hidden": true }),
+      (0, import_react50.createElement)("strong", null, progress ? t(progress[1]) : stageLabelOf(task))
+    ),
+    task.status === "draft" ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Draft cards are not scheduled.")) : null,
+    task.status === "cancelled" ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Cancelled cards are not scheduled and can be restored.")) : null,
+    task.dispatchState === "uncertain" ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
+    canMove ? (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Personal progress")), (0, import_react50.createElement)("select", { value: task.personalProgress, disabled, "aria-label": t("Move personal task"), onChange: (event) => void onCommand(task, { type: "personal-progress" }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label))))) : null,
+    canSchedule ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary bt-btn-block", disabled, onClick: () => void onCommand(task, { type: "schedule" }) }, t("Schedule Bot")) : null,
+    canSubmit || canRestore || canCancel ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-status-actions" },
+      canSubmit ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary bt-btn-block", disabled, onClick: () => void onCommand(task, { type: "submit" }) }, t("Submit card")) : null,
+      canRestore ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary bt-btn-block", disabled, onClick: () => void onCommand(task, { type: "restore" }) }, t("Restore card")) : null,
+      canCancel ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost bt-btn-block bt-card-cancel", disabled, onClick: () => void onCommand(task, { type: "cancel" }) }, t("Cancel card")) : null
+    ) : null,
+    moves.length ? (0, import_react50.createElement)(
+      "details",
+      { className: "bt-card-move" },
+      (0, import_react50.createElement)("summary", null, t("Move to…")),
+      (0, import_react50.createElement)("div", { className: "bt-card-move-body" }, moves.map((move) => (0, import_react50.createElement)("button", { key: move.key, type: "button", className: "bt-card-mini", disabled, onClick: () => void move.run() }, move.label)))
+    ) : null,
+    notice
+  );
+}
+function TypeBlock({ task, editable, disabled, onSave }) {
+  const [value, setValue] = (0, import_react50.useState)(() => taskType(task));
+  const [busy, setBusy] = (0, import_react50.useState)(false);
+  const [error, setError] = (0, import_react50.useState)("");
+  const [undoType, setUndoType] = (0, import_react50.useState)(null);
+  const undoTimer = (0, import_react50.useRef)(null);
+  (0, import_react50.useEffect)(() => {
+    setValue(taskType(task));
+    setError("");
+  }, [task.type]);
+  (0, import_react50.useEffect)(() => () => clearTimeout(undoTimer.current), []);
+  if (!editable) return (0, import_react50.createElement)(SideSection, { title: t("Type") }, (0, import_react50.createElement)("div", { className: "bt-card-status" }, (0, import_react50.createElement)(TypeChip, { type: taskType(task) })));
+  const save = async (next) => {
+    const previous = taskType(task);
+    if (busy || disabled || next === previous) return;
+    setValue(next);
+    setBusy(true);
+    setError("");
+    try {
+      const result = await onSave(task, { type: next });
+      if (result !== "committed" && result !== "cancelled") {
+        setValue(previous);
+        setError(t("The type could not be saved."));
+      } else if (result === "cancelled") setValue(previous);
+      else {
+        setUndoType(previous);
+        clearTimeout(undoTimer.current);
+        undoTimer.current = setTimeout(() => setUndoType(null), 6e3);
+      }
+    } catch {
+      setValue(previous);
+      setError(t("The type could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const change = (event) => void save(event.target.value);
+  return (0, import_react50.createElement)(
+    SideSection,
+    { title: t("Type") },
+    (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Type")), (0, import_react50.createElement)(
+      "select",
+      { value, disabled: disabled || busy, "aria-label": t("Task type"), onChange: change },
+      TASK_TYPES.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label)))
+    )),
+    undoType ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: busy || disabled, onClick: () => void save(undoType) }, t("Undo")) : null,
+    error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null
+  );
+}
+function PeopleBlock({ task, actors }) {
+  const rows2 = [["Owner", task.owner], ["Reviewer", task.reviewer]];
+  return (0, import_react50.createElement)(SideSection, { title: t("People") }, (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-people" },
+    rows2.filter(([, id]) => id).map(([role, id]) => (0, import_react50.createElement)(
+      "div",
+      { key: role, className: "bt-card-person" },
+      (0, import_react50.createElement)(MemberAvatar, { name: actorName(id, actors), size: 28 }),
+      (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("strong", null, actorName(id, actors)), (0, import_react50.createElement)("small", null, t(role)))
+    ))
+  ));
+}
+function DependenciesBlock({ task, tasks }) {
+  const ids = dependenciesOf(task);
+  if (!ids.length) return null;
+  return (0, import_react50.createElement)(SideSection, { title: t("Dependencies") }, (0, import_react50.createElement)("div", { className: "bt-card-dependency-list" }, ids.map((id) => {
+    const item = Array.isArray(tasks) ? tasks.find((task2) => task2.id === id) : void 0;
+    return (0, import_react50.createElement)("span", { key: id, className: "bt-board-chip" }, textValue(item?.title) || id);
+  })));
+}
+function FactsBlock({ task }) {
+  const evidence = task.evidence && typeof task.evidence === "object" ? [textValue(task.evidence.evidence), textValue(task.evidence.environment)].filter(Boolean).join(" · ") : Array.isArray(task.evidence) ? task.evidence.map(asText2).filter(Boolean).join(" · ") : asText2(task.evidence);
+  return (0, import_react50.createElement)(
+    SideSection,
+    { title: t("Details") },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-facts" },
+      (0, import_react50.createElement)(Fact, { label: t("Acceptance criteria"), value: textValue(task.acceptance) }),
+      (0, import_react50.createElement)(Fact, { label: t("Next action"), value: asText2(task.nextAction) }),
+      (0, import_react50.createElement)(Fact, { label: t("Blocked"), value: asText2(task.blocked) }),
+      (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: evidence }),
+      (0, import_react50.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
+      task.legacy ? (0, import_react50.createElement)(Fact, { label: t("Goal task note"), value: textValue(task.goalNote) }) : null,
+      task.legacy?.useOverlay ? (0, import_react50.createElement)(Fact, { label: t("Original task description"), value: textValue(task.legacy.originalTitle) }) : null
+    )
+  );
+}
+function ChangeBlock({ task }) {
+  if (!task.change) return null;
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-change" },
+    (0, import_react50.createElement)("strong", null, t("Requirement change")),
+    (0, import_react50.createElement)(Fact, { label: t("Original task"), value: task.change.sourceTaskId + " · " + t("Revision") + " " + task.change.sourceRevision }),
+    (0, import_react50.createElement)("p", { role: "status" }, t(task.status === "working" ? "This change is being worked as a separate task; the original stays unchanged." : task.status === "ready" ? "The source task is complete; this requirement change is queued as its own task." : "This change waits for the original task to complete. It has not been dispatched.")),
+    Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description" }).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field, label]) => (0, import_react50.createElement)(
+      "div",
+      { key: field },
+      (0, import_react50.createElement)("strong", null, t(label)),
+      (0, import_react50.createElement)("p", null, t("Before") + ": " + (typeof task.change.before?.[field] === "string" ? task.change.before[field] : JSON.stringify(task.change.before?.[field] ?? ""))),
+      (0, import_react50.createElement)("p", null, t("After") + ": " + (typeof task.change.after?.[field] === "string" ? task.change.after[field] : JSON.stringify(task.change.after?.[field] ?? "")))
+    ))
+  );
+}
+function DependencySelect({ tasks, value, disabled, exclude, onChange }) {
+  const options = (Array.isArray(tasks) ? tasks : []).filter((task) => task && !task.legacy && typeof task.id === "string" && task.id !== exclude);
+  return (0, import_react50.createElement)(
+    "label",
+    { className: "bt-field" },
+    (0, import_react50.createElement)("span", null, t("Dependencies")),
+    (0, import_react50.createElement)(
+      "select",
+      {
+        multiple: true,
+        size: Math.min(4, Math.max(2, options.length)),
+        value,
+        disabled,
+        "aria-label": t("Dependencies"),
+        onChange: (event) => onChange([...event.target.selectedOptions].map((option) => option.value))
+      },
+      options.map((task) => (0, import_react50.createElement)("option", { key: task.id, value: task.id }, (textValue(task.title) || t("Shared task")) + " · " + task.id))
     )
   );
 }
@@ -37740,25 +39170,30 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
       owner: asText2(task.owner),
       reviewer: asText2(task.reviewer),
       acceptance: textValue(task.acceptance),
-      dependencies: (task.dependencies ?? []).map(asText2).filter(Boolean)
+      dependencies: dependenciesOf(task)
     });
   };
   const changed = task.revision !== base;
   const valid = draft.title?.trim() && draft.owner?.trim() && draft.reviewer?.trim() && draft.acceptance?.trim() && draft.owner !== draft.reviewer;
-  if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
+  if (!open) return (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => {
     reset();
     setOpen(true);
   } }, t("Edit task"));
-  const field = (label, key) => (0, import_react50.createElement)("label", null, t(label), (0, import_react50.createElement)("input", { "aria-label": t(label), value: draft[key] ?? "", disabled, onChange: (event) => setDraft({ ...draft, [key]: event.target.value }) }));
-  const actorField = (label, key) => (0, import_react50.createElement)("label", null, t(label), (0, import_react50.createElement)(
-    "select",
-    { "aria-label": t(label), value: draft[key] ?? "", disabled, onChange: (event) => setDraft({ ...draft, [key]: event.target.value }) },
-    (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
-    actors.filter((actor) => typeof actor?.id === "string").map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
-  ));
+  const field = (label, key) => (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t(label)), (0, import_react50.createElement)("input", { value: draft[key] ?? "", disabled, onChange: (event) => setDraft({ ...draft, [key]: event.target.value }) }));
+  const actorField = (label, key) => (0, import_react50.createElement)(
+    "label",
+    { className: "bt-field" },
+    (0, import_react50.createElement)("span", null, t(label)),
+    (0, import_react50.createElement)(
+      "select",
+      { value: draft[key] ?? "", disabled, onChange: (event) => setDraft({ ...draft, [key]: event.target.value }) },
+      (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
+      (Array.isArray(actors) ? actors : []).filter((actor) => typeof actor?.id === "string").map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+    )
+  );
   return (0, import_react50.createElement)(
     "form",
-    { className: "bt-board-actions", onSubmit: (event) => {
+    { className: "bt-card-form", onSubmit: (event) => {
       event.preventDefault();
       if (disabled || changed || !valid) return;
       void onEdit({ ...task, revision: base }, {
@@ -37771,206 +39206,19 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
         if (result === "committed") setOpen(false);
       });
     } },
-    changed ? (0, import_react50.createElement)(
-      "div",
-      { role: "alert" },
-      t("Task changed. Reload its current values before saving."),
-      " ",
-      (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))
-    ) : null,
-    ["working", "reported", "done"].includes(task.status) ? (0, import_react50.createElement)("p", { role: "note" }, t("Saving creates a separate change proposal after the original task.")) : null,
+    changed ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: reset }, t("Reload values"))) : null,
+    ["working", "reported", "done"].includes(task.status) ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Saving creates a separate change proposal after the original task.")) : null,
     field("Title", "title"),
-    actorField("Owner ID", "owner"),
-    actorField("Independent reviewer ID", "reviewer"),
+    actorField("Owner", "owner"),
+    actorField("Independent reviewer", "reviewer"),
     field("Acceptance criteria", "acceptance"),
-    (0, import_react50.createElement)(DependenciesField, { tasks, exclude: task.id, value: draft.dependencies ?? [], disabled, onChange: (value) => setDraft({ ...draft, dependencies: value }) }),
+    (0, import_react50.createElement)(DependencySelect, { tasks, exclude: task.id, value: draft.dependencies ?? [], disabled, onChange: (value) => setDraft({ ...draft, dependencies: value }) }),
     (0, import_react50.createElement)(
       "div",
-      null,
-      (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")),
-      " ",
-      (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel"))
+      { className: "bt-card-editor-actions" },
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setOpen(false) }, t("Cancel")),
+      (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || changed || !valid }, t("Save changes"))
     )
-  );
-}
-function CardDetails({ task, editable, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [draft, setDraft] = (0, import_react50.useState)({}), [entry, setEntry2] = (0, import_react50.useState)("");
-  const reset = () => {
-    setBase(cardStamp(task));
-    setEntry2("");
-    setDraft({ description: textValue(task.description), dueDate: textValue(task.dueDate), labels: (Array.isArray(task.labels) ? task.labels : []).join("\n"), checklist: (Array.isArray(task.checklist) ? task.checklist : []).map((item) => ({ ...item })) });
-  };
-  const checklist = Array.isArray(task.checklist) ? task.checklist : [];
-  const labels2 = Array.isArray(task.labels) ? task.labels : [];
-  const changed = !sameCardStamp(task, base);
-  const labelValues = (draft.labels ?? "").split("\n").map((value) => value.trim()).filter(Boolean);
-  const bytes = (value) => new TextEncoder().encode(value).length;
-  const valid = bytes(draft.description ?? "") <= 8192 && labelValues.length <= 20 && new Set(labelValues).size === labelValues.length && labelValues.every((value) => bytes(value) <= 40) && (draft.checklist ?? []).length <= 100 && (draft.checklist ?? []).every((item) => item.text.trim() && bytes(item.text.trim()) <= 512);
-  return (0, import_react50.createElement)(
-    "div",
-    { className: "bt-board-card-details-fields" },
-    !open ? (0, import_react50.createElement)(
-      "div",
-      null,
-      (0, import_react50.createElement)(Fact, { label: t("Description"), value: textValue(task.description) }),
-      (0, import_react50.createElement)(Fact, { label: t("Due date"), value: textValue(task.dueDate) }),
-      labels2.length ? (0, import_react50.createElement)(Fact, { label: t("Labels"), value: labels2.join(" · ") }) : null,
-      checklist.length ? (0, import_react50.createElement)(
-        "div",
-        { className: "bt-board-checklist" },
-        (0, import_react50.createElement)("strong", null, t("Checklist")),
-        checklist.map((item) => (0, import_react50.createElement)("label", { key: item.id }, (0, import_react50.createElement)("input", { type: "checkbox", checked: item.checked === true, disabled: true }), ` ${item.text}`))
-      ) : null,
-      editable ? (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
-        reset();
-        setOpen(true);
-      } }, t("Edit card details")) : null
-    ) : (0, import_react50.createElement)(
-      "form",
-      { className: "bt-board-actions", onSubmit: (event) => {
-        event.preventDefault();
-        if (disabled || changed || !valid) return;
-        void onEdit(stampedTask(task, base), { description: draft.description, dueDate: draft.dueDate || null, labels: labelValues, checklist: draft.checklist.map((item) => ({ ...item, text: item.text.trim() })) }).then((result) => {
-          if (result === "committed") setOpen(false);
-        });
-      } },
-      changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
-      (0, import_react50.createElement)("label", null, t("Description"), (0, import_react50.createElement)("textarea", { "aria-label": t("Description"), value: draft.description ?? "", disabled, onChange: (event) => setDraft({ ...draft, description: event.target.value }) })),
-      (0, import_react50.createElement)("label", null, t("Due date"), (0, import_react50.createElement)("input", { type: "date", "aria-label": t("Due date"), value: draft.dueDate ?? "", disabled, onChange: (event) => setDraft({ ...draft, dueDate: event.target.value }) })),
-      (0, import_react50.createElement)("label", null, t("Labels, one per line"), (0, import_react50.createElement)("textarea", { "aria-label": t("Labels, one per line"), value: draft.labels ?? "", disabled, onChange: (event) => setDraft({ ...draft, labels: event.target.value }) })),
-      (0, import_react50.createElement)(
-        "fieldset",
-        null,
-        (0, import_react50.createElement)("legend", null, t("Checklist")),
-        (draft.checklist ?? []).map((item) => (0, import_react50.createElement)(
-          "div",
-          { key: item.id, className: "bt-board-check-row" },
-          (0, import_react50.createElement)("input", { type: "checkbox", "aria-label": t("Mark checklist item"), checked: item.checked, disabled, onChange: (event) => setDraft({ ...draft, checklist: draft.checklist.map((row) => row.id === item.id ? { ...row, checked: event.target.checked } : row) }) }),
-          (0, import_react50.createElement)("input", { "aria-label": t("Checklist item"), value: item.text, disabled, onChange: (event) => setDraft({ ...draft, checklist: draft.checklist.map((row) => row.id === item.id ? { ...row, text: event.target.value } : row) }) }),
-          (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setDraft({ ...draft, checklist: draft.checklist.filter((row) => row.id !== item.id) }) }, t("Remove"))
-        )),
-        (0, import_react50.createElement)("label", null, t("New checklist item"), (0, import_react50.createElement)("input", { "aria-label": t("New checklist item"), value: entry, disabled, onChange: (event) => setEntry2(event.target.value) })),
-        (0, import_react50.createElement)("button", { type: "button", disabled: disabled || !entry.trim() || bytes(entry.trim()) > 512 || (draft.checklist ?? []).length >= 100, onClick: () => {
-          if (!window.crypto?.randomUUID) return;
-          setDraft({ ...draft, checklist: [...draft.checklist ?? [], { id: window.crypto.randomUUID(), text: entry.trim(), checked: false }] });
-          setEntry2("");
-        } }, t("Add item"))
-      ),
-      !valid ? (0, import_react50.createElement)("p", { role: "alert" }, t("Check the card details and size limits.")) : null,
-      (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Checklist items do not complete the task or its dependencies.")),
-      (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
-    )
-  );
-}
-function CardConversation({ task, commands, disabled, onCommand }) {
-  const [text, setText] = (0, import_react50.useState)("");
-  const comments = Array.isArray(task.comments) ? task.comments : [];
-  const activity = Array.isArray(task.boardActivity) ? task.boardActivity : [];
-  const type = task.legacy ? "goal-card-comment" : "card-comment";
-  const labels2 = { edit: "Task edited", details: "Card details updated", "card-details": "Card details updated", comment: "Comment added", "card-comment": "Comment added", attach: "Images added", "remove-image": "Image removed", "personal-progress": "Personal progress updated", share: "Task shared", unshare: "Share revoked" };
-  const when3 = (value) => Number.isFinite(value) ? new Date(value).toLocaleString() : "";
-  return (0, import_react50.createElement)(
-    "section",
-    { className: "bt-board-conversation" },
-    (0, import_react50.createElement)("strong", null, t("Comments")),
-    comments.length ? comments.map((comment) => (0, import_react50.createElement)(
-      "div",
-      { key: comment.id, className: "bt-board-comment" },
-      (0, import_react50.createElement)("small", null, `${t("You")} · ${when3(comment.at)}`),
-      (0, import_react50.createElement)("p", null, textValue(comment.text))
-    )) : (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("No comments yet.")),
-    commands.some((command) => command.type === type) ? (0, import_react50.createElement)(
-      "form",
-      { onSubmit: (event) => {
-        event.preventDefault();
-        if (disabled || !text.trim() || new TextEncoder().encode(text) > 2048) return;
-        const submitted = text;
-        void onCommand(task, { type }, { text: submitted }).then((result) => {
-          if (result === "committed") setText((current) => current === submitted ? "" : current);
-        });
-      } },
-      (0, import_react50.createElement)("label", null, t("Add a comment"), (0, import_react50.createElement)("textarea", { "aria-label": t("Add a comment"), value: text, disabled, onChange: (event) => setText(event.target.value) })),
-      (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || !text.trim() || new TextEncoder().encode(text) > 2048 }, t("Post comment"))
-    ) : null,
-    activity.length ? (0, import_react50.createElement)(
-      "details",
-      null,
-      (0, import_react50.createElement)("summary", null, t("Recent card activity")),
-      (0, import_react50.createElement)("ul", null, activity.map((item) => (0, import_react50.createElement)("li", { key: item.id }, `${when3(item.at)} · ${t(labels2[item.type] ?? "Card updated")}`)))
-    ) : null
-  );
-}
-function EditGoalTask({ task, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
-  const reset = () => {
-    setBase(cardStamp(task));
-    setTitle(textValue(task.legacy?.originalTitle ?? task.title));
-    setNote(textValue(task.goalNote));
-    setStatus(task.legacy?.originalStatus ?? "");
-  };
-  const changed = !sameCardStamp(task, base), original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
-  const titleLocked = ["reported", "done"].includes(original);
-  const next = original === "pending" ? "working" : original === "working" ? "reported" : void 0;
-  const statuses = [original, ...!paused && next ? [next] : []].filter(Boolean);
-  const modified = title.trim() !== textValue(task.legacy?.originalTitle ?? task.title) || note !== textValue(task.goalNote) || status !== original;
-  const valid = title.trim() && modified && (!status || status === original || note.trim());
-  if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
-    reset();
-    setOpen(true);
-  } }, t("Edit goal task"));
-  return (0, import_react50.createElement)(
-    "form",
-    { className: "bt-board-actions", onSubmit: (event) => {
-      event.preventDefault();
-      if (disabled || changed || !valid) return;
-      const value = {};
-      if (title.trim() !== textValue(task.legacy?.originalTitle ?? task.title)) value.title = title.trim();
-      if (note !== textValue(task.goalNote) || status !== original) value.note = note;
-      if (status !== original) value.status = status;
-      void onEdit(stampedTask(task, base), value).then((result) => {
-        if (result === "committed") setOpen(false);
-      });
-    } },
-    changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
-    (0, import_react50.createElement)("label", null, t("Task description"), (0, import_react50.createElement)("textarea", { "aria-label": t("Task description"), value: title, disabled: disabled || titleLocked, onChange: (event) => setTitle(event.target.value) })),
-    titleLocked ? (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Reported or completed work must be reconciled before changing its description.")) : null,
-    (0, import_react50.createElement)("label", null, t("Goal task status"), (0, import_react50.createElement)(
-      "select",
-      { "aria-label": t("Goal task status"), value: status, disabled: disabled || paused, onChange: (event) => setStatus(event.target.value) },
-      statuses.map((value) => (0, import_react50.createElement)("option", { key: value, value }, t({ pending: "Not started", working: "In progress", reported: "Awaiting review", done: "Done" }[value] ?? "Status unknown")))
-    )),
-    (0, import_react50.createElement)("label", null, t("Goal task note"), (0, import_react50.createElement)("textarea", { "aria-label": t("Goal task note"), value: note, disabled: disabled || paused, onChange: (event) => setNote(event.target.value) })),
-    (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("Owner, acceptance and completed status are managed by the group goal.")),
-    (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
-  );
-}
-function EditHistoryTitle({ task, disabled, onEdit }) {
-  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [reason, setReason] = (0, import_react50.useState)("");
-  const reset = () => {
-    setBase(cardStamp(task));
-    setTitle(textValue(task.title));
-    setReason("");
-  };
-  const changed = !sameCardStamp(task, base);
-  const valid = title.trim() && title.trim().length <= 500 && title.trim() !== task.title && reason.trim() && reason.length <= 300;
-  if (!open) return (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
-    reset();
-    setOpen(true);
-  } }, t("Correct card title"));
-  return (0, import_react50.createElement)(
-    "form",
-    { className: "bt-board-actions", onSubmit: (event) => {
-      event.preventDefault();
-      if (disabled || changed || !valid) return;
-      void onEdit(stampedTask(task, base), { title: title.trim(), reason: reason.trim() }).then((result) => {
-        if (result === "committed") setOpen(false);
-      });
-    } },
-    changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: reset }, t("Reload values"))) : null,
-    (0, import_react50.createElement)("label", null, t("Card display title"), (0, import_react50.createElement)("input", { "aria-label": t("Card display title"), value: title, disabled, onChange: (event) => setTitle(event.target.value) })),
-    (0, import_react50.createElement)("label", null, t("Reason for correction"), (0, import_react50.createElement)("textarea", { "aria-label": t("Reason for correction"), value: reason, disabled, onChange: (event) => setReason(event.target.value) })),
-    (0, import_react50.createElement)("p", { className: "bt-board-readonly" }, t("The original task and acceptance record remain unchanged.")),
-    (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !valid }, t("Save changes")), " ", (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel")))
   );
 }
 function ShareTask({ task, commands, targets, disabled, onCommand }) {
@@ -37978,22 +39226,22 @@ function ShareTask({ task, commands, targets, disabled, onCommand }) {
   const [base, setBase] = (0, import_react50.useState)(task.revision);
   const [target, setTarget] = (0, import_react50.useState)("");
   const [includeTitle, setIncludeTitle] = (0, import_react50.useState)(false);
-  const canShare = commands.some((command) => command.type === "share") && Array.isArray(targets);
-  const canRevoke = commands.some((command) => command.type === "unshare");
+  const canShare = commandOf(commands, "share") && Array.isArray(targets);
+  const canRevoke = commandOf(commands, "unshare");
   const shares = Array.isArray(task.shares) ? task.shares.filter((share) => typeof share?.id === "string") : [];
   if (!canShare && (!canRevoke || !shares.length)) return null;
   const changed = open && base !== task.revision;
   const targetName = (id) => targets?.find((item) => item?.id === id)?.name || t("Shared group");
   return (0, import_react50.createElement)(
     "div",
-    { className: "bt-board-shares" },
-    shares.length ? (0, import_react50.createElement)("div", null, t("Shared with"), shares.map((share) => (0, import_react50.createElement)(
+    { className: "bt-card-shares" },
+    shares.length ? (0, import_react50.createElement)("div", { className: "bt-card-share-list" }, shares.map((share) => (0, import_react50.createElement)(
       "div",
-      { className: "bt-board-share-row", key: share.id },
+      { className: "bt-card-share-row", key: share.id },
       (0, import_react50.createElement)("span", null, targetName(share.targetRoomId)),
-      canRevoke ? (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => onCommand(task, { type: "unshare" }, { shareId: share.id }) }, t("Revoke share")) : null
+      canRevoke ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: () => onCommand(task, { type: "unshare" }, { shareId: share.id }) }, t("Revoke share")) : null
     ))) : null,
-    canShare && !open ? (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => {
+    canShare && !open ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => {
       setBase(task.revision);
       setTarget("");
       setIncludeTitle(false);
@@ -38001,225 +39249,29 @@ function ShareTask({ task, commands, targets, disabled, onCommand }) {
     } }, t("Share with group")) : null,
     canShare && open ? (0, import_react50.createElement)(
       "form",
-      { className: "bt-board-actions", onSubmit: (event) => {
+      { className: "bt-card-form", onSubmit: (event) => {
         event.preventDefault();
         if (disabled || changed || !target || !targets.some((item) => item?.id === target)) return;
-        void onCommand({ ...task, revision: base }, { type: "share" }, {
-          targetRoomId: target,
-          fields: includeTitle ? ["status", "title"] : ["status"]
-        }).then((result) => {
+        void onCommand({ ...task, revision: base }, { type: "share" }, { targetRoomId: target, fields: includeTitle ? ["status", "title"] : ["status"] }).then((result) => {
           if (result === "committed") setOpen(false);
         });
       } },
-      changed ? (0, import_react50.createElement)("div", { role: "alert" }, t("Task changed. Reopen sharing before saving.")) : null,
-      (0, import_react50.createElement)("label", null, t("Target group"), (0, import_react50.createElement)(
+      changed ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Reopen sharing before saving.")) : null,
+      (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Target group")), (0, import_react50.createElement)(
         "select",
-        { "aria-label": t("Target group"), value: target, disabled, onChange: (event) => setTarget(event.target.value) },
+        { value: target, disabled, onChange: (event) => setTarget(event.target.value) },
         (0, import_react50.createElement)("option", { value: "" }, t("Choose a group")),
         targets.filter((item) => typeof item?.id === "string").map((item) => (0, import_react50.createElement)("option", { key: item.id, value: item.id }, item.name || t("Shared group")))
       )),
-      (0, import_react50.createElement)("label", { className: "bt-board-share-check" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: includeTitle, disabled, onChange: (event) => setIncludeTitle(event.target.checked) }), t("Share title too")),
-      (0, import_react50.createElement)("span", null, t("Status is always shared.")),
+      (0, import_react50.createElement)("label", { className: "bt-card-check" }, (0, import_react50.createElement)("input", { type: "checkbox", checked: includeTitle, disabled, onChange: (event) => setIncludeTitle(event.target.checked) }), t("Share title too")),
+      (0, import_react50.createElement)("span", { className: "bt-card-note" }, t("Status is always shared.")),
       (0, import_react50.createElement)(
         "div",
-        null,
-        (0, import_react50.createElement)("button", { type: "submit", disabled: disabled || changed || !target }, t("Share")),
-        " ",
-        (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => setOpen(false) }, t("Cancel"))
+        { className: "bt-card-editor-actions" },
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setOpen(false) }, t("Cancel")),
+        (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || changed || !target }, t("Share"))
       )
     ) : null
-  );
-}
-function BoardImage({ scope, taskId, image, request, disabled, onRemove, canRemove }) {
-  const [url, setUrl] = (0, import_react50.useState)("");
-  const [failed, setFailed] = (0, import_react50.useState)(false);
-  (0, import_react50.useEffect)(() => {
-    let live = true;
-    setUrl("");
-    setFailed(false);
-    request("board-image", { scope, taskId, imageId: image.id }).then((result) => {
-      if (!live) return;
-      if (!IMAGE_TYPES.has(result?.mediaType) || typeof result.data !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(result.data)) throw new Error("invalid image");
-      setUrl(`data:${result.mediaType};base64,${result.data}`);
-    }).catch(() => {
-      if (live) setFailed(true);
-    });
-    return () => {
-      live = false;
-    };
-  }, [scope.kind, scope.id, taskId, image.id]);
-  return (0, import_react50.createElement)(
-    "div",
-    { className: "bt-board-photo" },
-    url ? (0, import_react50.createElement)("img", { src: url, alt: textValue(image.name) || t("Task image"), onError: () => {
-      setUrl("");
-      setFailed(true);
-    } }) : (0, import_react50.createElement)("span", null, failed ? t("Image unavailable") : t("Loading…")),
-    canRemove ? (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => onRemove(taskId, image.id) }, t("Remove image")) : null
-  );
-}
-function UploadImages({ task, disabled, onUpload }) {
-  const [images, setImages] = (0, import_react50.useState)([]);
-  const [error, setError] = (0, import_react50.useState)("");
-  const [base, setBase] = (0, import_react50.useState)(() => cardStamp(task));
-  const changed = images.length > 0 && !sameCardStamp(task, base);
-  const urls = (0, import_react50.useRef)(/* @__PURE__ */ new Set());
-  (0, import_react50.useEffect)(() => () => {
-    for (const url of urls.current) URL.revokeObjectURL(url);
-    urls.current.clear();
-  }, []);
-  const remove = (image) => {
-    URL.revokeObjectURL(image.url);
-    urls.current.delete(image.url);
-    setImages((current) => current.filter((item) => item.uploadId !== image.uploadId));
-  };
-  const choose = (event) => {
-    const files = [...event.target.files ?? []];
-    event.target.value = "";
-    if (!images.length) setBase(cardStamp(task));
-    const count = (Array.isArray(task.images) ? task.images.length : 0) + images.length + files.length;
-    const bytes = images.reduce((sum, image) => sum + image.file.size, 0) + files.reduce((sum, file) => sum + file.size, 0);
-    if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || images.length + files.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || files.some((file) => !IMAGE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
-      setError(t("Choose non-interlaced PNG or JPEG: up to 20 per task, 10 per batch, 5 MiB each and 20 MiB per batch."));
-      return;
-    }
-    setError("");
-    const fresh = [];
-    try {
-      for (const file of files) {
-        const url = URL.createObjectURL(file);
-        urls.current.add(url);
-        fresh.push({ file, url, uploadId: window.crypto.randomUUID() });
-      }
-      setImages((current) => [...current, ...fresh]);
-    } catch {
-      for (const image of fresh) {
-        URL.revokeObjectURL(image.url);
-        urls.current.delete(image.url);
-      }
-      setError(t("Unable to preview images"));
-    }
-  };
-  return (0, import_react50.createElement)(
-    "div",
-    { className: "bt-board-upload" },
-    (0, import_react50.createElement)("label", null, t("Choose images"), (0, import_react50.createElement)("input", { type: "file", multiple: true, accept: "image/png,image/jpeg", disabled: disabled || changed, onChange: choose })),
-    (0, import_react50.createElement)("span", null, t("Non-interlaced PNG and JPEG are supported.")),
-    error ? (0, import_react50.createElement)("span", { role: "alert" }, error) : null,
-    changed ? (0, import_react50.createElement)("span", { role: "alert" }, t("Task changed. Remove selected images and choose them again.")) : null,
-    (0, import_react50.createElement)("div", { className: "bt-board-images" }, images.map((image) => (0, import_react50.createElement)(
-      "div",
-      { className: "bt-board-photo", key: image.uploadId },
-      (0, import_react50.createElement)("img", { src: image.url, alt: image.file.name }),
-      (0, import_react50.createElement)("button", { type: "button", disabled, onClick: () => remove(image) }, t("Remove image"))
-    ))),
-    images.length ? (0, import_react50.createElement)("button", { type: "button", disabled: disabled || changed, onClick: () => {
-      void onUpload(stampedTask(task, base), images).then((result) => {
-        if (result !== "committed") return;
-        for (const image of images) {
-          URL.revokeObjectURL(image.url);
-          urls.current.delete(image.url);
-        }
-        setImages([]);
-      });
-    } }, t("Upload images")) : null
-  );
-}
-function ColumnRail({ label, personal, children }) {
-  const rail = (0, import_react50.useRef)(null);
-  const [overflow, setOverflow] = (0, import_react50.useState)(false);
-  const move = (direction) => {
-    const node = rail.current;
-    if (node) node.scrollBy({ left: direction * Math.max(240, node.clientWidth * 0.8), behavior: "smooth" });
-  };
-  (0, import_react50.useEffect)(() => {
-    const node = rail.current;
-    if (!node) return;
-    const update = () => setOverflow(node.scrollWidth > node.clientWidth + 1);
-    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
-    const mutation = typeof MutationObserver === "function" ? new MutationObserver(() => {
-      resize?.disconnect();
-      resize?.observe(node);
-      for (const child of node.children) resize?.observe(child);
-      update();
-    }) : null;
-    resize?.observe(node);
-    for (const child of node.children) resize?.observe(child);
-    mutation?.observe(node, { childList: true, subtree: true, attributes: true });
-    window.addEventListener("resize", update);
-    update();
-    return () => {
-      resize?.disconnect();
-      mutation?.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-  return (0, import_react50.createElement)(
-    "div",
-    { className: "bt-board-rail" },
-    (0, import_react50.createElement)(
-      "div",
-      { className: "bt-board-rail-controls", hidden: !overflow },
-      (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Previous columns"), onClick: () => move(-1) }, "←"),
-      (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Next columns"), onClick: () => move(1) }, "→")
-    ),
-    (0, import_react50.createElement)("div", {
-      ref: rail,
-      className: `bt-board-columns${personal ? " bt-board-columns-personal" : ""}`,
-      role: "region",
-      "aria-label": label,
-      tabIndex: 0,
-      onKeyDown: (event) => {
-        if (event.target === event.currentTarget && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
-          event.preventDefault();
-          move(event.key === "ArrowLeft" ? -1 : 1);
-        }
-      }
-    }, children)
-  );
-}
-function TaskCard({ scope, task, commands, actors, uncertain, onOpen }) {
-  const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
-  const blocker = asText2(task.blocked);
-  const canMove = commands.some((command) => command.type === "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
-  const canSchedule = commands.some((command) => command.type === "schedule") && ["proposed", "waiting"].includes(task.status);
-  const deliveryLabel = task.dispatchState === "uncertain" ? "Delivery needs review" : task.dispatchState === "accepted" ? "Sent to Bot" : task.dispatchState === "claimed" ? "Preparing delivery" : task.dispatchState === "pending" ? "Bot queued" : "";
-  const owner = scope.kind === "personal" && scope.id === "user" && task.owner === "user" ? "" : actorLabel(task.owner, actors);
-  return (0, import_react50.createElement)(
-    "article",
-    {
-      className: "bt-board-card",
-      "data-task-id": task.id,
-      draggable: (canMove || canSchedule) && !uncertain,
-      onDragStart: (event) => {
-        if (canMove && !uncertain) {
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("application/x-ds-bot-personal-task", task.id);
-        } else if (canSchedule && !uncertain) {
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("application/x-ds-bot-task", task.id);
-        }
-      }
-    },
-    (0, import_react50.createElement)(
-      "button",
-      { type: "button", className: "bt-board-card-summary", onClick: (event) => onOpen(task.id, event.currentTarget) },
-      (0, import_react50.createElement)("strong", { className: "bt-board-title" }, textValue(task.title) || task.id),
-      (0, import_react50.createElement)(
-        "span",
-        { className: "bt-board-card-meta" },
-        owner ? (0, import_react50.createElement)("span", { className: "bt-board-owner" }, owner) : null,
-        task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("Shared task · read only")) : null,
-        deliveryLabel ? (0, import_react50.createElement)("span", { className: `bt-board-chip${task.dispatchState === "uncertain" ? " bt-board-chip-blocked" : ""}`, role: task.dispatchState === "uncertain" ? "status" : void 0 }, t(deliveryLabel)) : null,
-        blocker ? (0, import_react50.createElement)("span", { className: "bt-board-chip bt-board-chip-blocked" }, t("Blocked")) : null,
-        dependencies.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} dependencies", { count: dependencies.length })) : null,
-        task.dueDate ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${t("Due date")}: ${textValue(task.dueDate)}`) : null,
-        Array.isArray(task.labels) ? task.labels.slice(0, 3).map((label) => (0, import_react50.createElement)("span", { key: label, className: "bt-board-chip" }, label)) : null,
-        Array.isArray(task.checklist) && task.checklist.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, `${task.checklist.filter((item) => item.checked).length}/${task.checklist.length} ${t("Checklist")}`) : null,
-        task.images?.length ? (0, import_react50.createElement)("span", { className: "bt-board-chip" }, t("{count} images", { count: task.images.length })) : null,
-        (0, import_react50.createElement)("span", { className: "bt-board-open-hint" }, t("View details"))
-      )
-    )
   );
 }
 function TaskHistory({ scope, task, request }) {
@@ -38240,42 +39292,182 @@ function TaskHistory({ scope, task, request }) {
     try {
       const result = await request("board-history", { scope, taskId: task.id });
       if (sequence.current === id) setHistory(result);
-    } catch (err) {
-      if (sequence.current === id) setError(err?.message || t("Board unavailable"));
+    } catch (caught) {
+      if (sequence.current === id) setError(caught?.message || t("Board unavailable"));
     }
   };
-  const fields = { title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description", dueDate: "Due date", labels: "Labels", checklist: "Checklist" };
+  const fields = { title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description", dueDate: "Due date", dueComplete: "Due date complete", labels: "Labels", checklist: "Checklist" };
   return (0, import_react50.createElement)(
     "details",
-    { className: "bt-board-history", onToggle: load },
+    { className: "bt-card-history", onToggle: load },
     (0, import_react50.createElement)("summary", null, t("Card revision history")),
-    error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null,
-    !history && !error ? (0, import_react50.createElement)("p", null, t("Loading…")) : null,
-    history?.truncated ? (0, import_react50.createElement)("p", null, t("Showing the latest 50 revisions.")) : null,
+    error ? (0, import_react50.createElement)("p", { role: "alert", className: "bt-form-error" }, error) : null,
+    !history && !error ? (0, import_react50.createElement)("p", { className: "bt-card-muted" }, t("Loading…")) : null,
+    history?.truncated ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Showing the latest 50 revisions.")) : null,
     (history?.entries ?? []).map((entry) => {
       const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null));
       if (!changed.length) return null;
       return (0, import_react50.createElement)(
         "article",
         { key: entry.after.revision },
-        (0, import_react50.createElement)("strong", null, `${t("Revision")} ${entry.after.revision}`),
+        (0, import_react50.createElement)("strong", null, t("Revision") + " " + entry.after.revision),
         changed.map(([key, label]) => (0, import_react50.createElement)(
           "div",
           { key },
           (0, import_react50.createElement)("strong", null, t(label)),
-          (0, import_react50.createElement)("p", null, `${t("Before")}: ${typeof entry.before?.[key] === "string" ? entry.before[key] : JSON.stringify(entry.before?.[key] ?? "")}`),
-          (0, import_react50.createElement)("p", null, `${t("After")}: ${typeof entry.after?.[key] === "string" ? entry.after[key] : JSON.stringify(entry.after?.[key] ?? "")}`)
+          (0, import_react50.createElement)("p", null, t("Before") + ": " + (typeof entry.before?.[key] === "string" ? entry.before[key] : JSON.stringify(entry.before?.[key] ?? ""))),
+          (0, import_react50.createElement)("p", null, t("After") + ": " + (typeof entry.after?.[key] === "string" ? entry.after[key] : JSON.stringify(entry.after?.[key] ?? "")))
         ))
       );
     })
   );
 }
-function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy }) {
+function EditGoalTask({ task, disabled, onEdit }) {
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [note, setNote] = (0, import_react50.useState)(""), [status, setStatus] = (0, import_react50.useState)("");
+  const reset = () => {
+    setBase(cardStamp(task));
+    setTitle(textValue(task.legacy?.originalTitle ?? task.title));
+    setNote(textValue(task.goalNote));
+    setStatus(task.legacy?.originalStatus ?? "");
+  };
+  const changed = !sameCardStamp(task, base), original = task.legacy?.originalStatus, paused = task.legacy?.goalStatus !== "active";
+  const titleLocked = ["reported", "done"].includes(original);
+  const next = original === "pending" ? "working" : original === "working" ? "reported" : void 0;
+  const statuses = [original, ...!paused && next ? [next] : []].filter(Boolean);
+  const modified = title.trim() !== textValue(task.legacy?.originalTitle ?? task.title) || note !== textValue(task.goalNote) || status !== original;
+  const valid = title.trim() && modified && (!status || status === original || note.trim());
+  if (!open) return (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => {
+    reset();
+    setOpen(true);
+  } }, t("Edit goal task"));
+  return (0, import_react50.createElement)(
+    "form",
+    { className: "bt-card-form", onSubmit: (event) => {
+      event.preventDefault();
+      if (disabled || changed || !valid) return;
+      const value = {};
+      if (title.trim() !== textValue(task.legacy?.originalTitle ?? task.title)) value.title = title.trim();
+      if (note !== textValue(task.goalNote) || status !== original) value.note = note;
+      if (status !== original) value.status = status;
+      void onEdit(stampedTask(task, base), value).then((result) => {
+        if (result === "committed") setOpen(false);
+      });
+    } },
+    changed ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: reset }, t("Reload values"))) : null,
+    (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Task description")), (0, import_react50.createElement)("textarea", { value: title, disabled: disabled || titleLocked, onChange: (event) => setTitle(event.target.value) })),
+    titleLocked ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Reported or completed work must be reconciled before changing its description.")) : null,
+    (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Goal task status")), (0, import_react50.createElement)(
+      "select",
+      { value: status, disabled: disabled || paused, onChange: (event) => setStatus(event.target.value) },
+      statuses.map((value) => (0, import_react50.createElement)("option", { key: value, value }, t({ pending: "Not started", working: "In progress", reported: "Awaiting review", done: "Done" }[value] ?? "Status unknown")))
+    )),
+    (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Goal task note")), (0, import_react50.createElement)("textarea", { value: note, disabled: disabled || paused, onChange: (event) => setNote(event.target.value) })),
+    (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Owner, acceptance and completed status are managed by the group goal.")),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-editor-actions" },
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setOpen(false) }, t("Cancel")),
+      (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || changed || !valid }, t("Save changes"))
+    )
+  );
+}
+function EditHistoryTitle({ task, disabled, onEdit }) {
+  const [open, setOpen] = (0, import_react50.useState)(false), [base, setBase] = (0, import_react50.useState)(() => cardStamp(task)), [title, setTitle] = (0, import_react50.useState)(""), [reason, setReason] = (0, import_react50.useState)("");
+  const reset = () => {
+    setBase(cardStamp(task));
+    setTitle(textValue(task.title));
+    setReason("");
+  };
+  const changed = !sameCardStamp(task, base);
+  const valid = title.trim() && title.trim().length <= 500 && title.trim() !== task.title && reason.trim() && reason.length <= 300;
+  if (!open) return (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => {
+    reset();
+    setOpen(true);
+  } }, t("Correct card title"));
+  return (0, import_react50.createElement)(
+    "form",
+    { className: "bt-card-form", onSubmit: (event) => {
+      event.preventDefault();
+      if (disabled || changed || !valid) return;
+      void onEdit(stampedTask(task, base), { title: title.trim(), reason: reason.trim() }).then((result) => {
+        if (result === "committed") setOpen(false);
+      });
+    } },
+    changed ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: reset }, t("Reload values"))) : null,
+    (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Card display title")), (0, import_react50.createElement)("input", { value: title, disabled, onChange: (event) => setTitle(event.target.value) })),
+    (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Reason for correction")), (0, import_react50.createElement)("textarea", { value: reason, disabled, onChange: (event) => setReason(event.target.value) })),
+    (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("The original task and acceptance record remain unchanged.")),
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-card-editor-actions" },
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setOpen(false) }, t("Cancel")),
+      (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || changed || !valid }, t("Save changes"))
+    )
+  );
+}
+function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
   const modal = (0, import_react50.useRef)(null);
-  const dependencies = Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
-  const evidence = task.evidence && typeof task.evidence === "object" ? [textValue(task.evidence.evidence), textValue(task.evidence.environment)].filter(Boolean).join(" · ") : Array.isArray(task.evidence) ? task.evidence.map(asText2).filter(Boolean).join(" · ") : asText2(task.evidence);
-  const blocker = asText2(task.blocked);
-  const canMove = commands.some((command) => command.type === "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
+  const lightboxRef = (0, import_react50.useRef)(null);
+  const confirmationRef = (0, import_react50.useRef)(null);
+  const confirmBox = (0, import_react50.useRef)(null);
+  const [lightbox, setLightbox] = (0, import_react50.useState)(null);
+  const [confirmation, setConfirmation] = (0, import_react50.useState)(null);
+  const [editingTitle, setEditingTitle] = (0, import_react50.useState)(false);
+  const [titleDraft, setTitleDraft] = (0, import_react50.useState)(textValue(task.title));
+  const [titleError, setTitleError] = (0, import_react50.useState)("");
+  lightboxRef.current = lightbox;
+  confirmationRef.current = confirmation;
+  const legacy = !!task.legacy;
+  const detailsType = legacy ? "goal-card-details" : "card-details";
+  const commentType = legacy ? "goal-card-comment" : "card-comment";
+  const removeType = legacy ? "goal-image-remove" : "remove-image";
+  const canDetails = commandOf(commands, detailsType);
+  const canComment = commandOf(commands, commentType);
+  const canEditComment = !legacy && commandOf(commands, "card-comment-edit");
+  const canDeleteComment = !legacy && commandOf(commands, "card-comment-delete");
+  const canUpload = uploadEnabled && commandOf(commands, "upload");
+  const canRemoveImage = commandOf(commands, removeType);
+  const canShare = commandOf(commands, "share");
+  const canUnshare = commandOf(commands, "unshare");
+  const canEdit = commandOf(commands, "edit");
+  const canSchedule = commandOf(commands, "schedule") && ["proposed", "waiting"].includes(task.status) && !task.blocked && !task.stale;
+  const canMove = commandOf(commands, "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
+  const canArchive = commandOf(commands, "archive");
+  const canUnarchive = commandOf(commands, "unarchive");
+  const canGoalEdit = commandOf(commands, "goal-task-edit");
+  const canHistoryTitle = commandOf(commands, "goal-history-title");
+  const canRename = !legacy && !task.shared && canEdit && ["proposed", "waiting", "ready"].includes(task.status) && !uncertain;
+  const stage = task.personalProgress ? t((PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress) ?? [null, "Status unknown"])[1]) : stageLabelOf(task);
+  const cancelConfirmation = () => {
+    const current = confirmationRef.current;
+    if (!current) return;
+    confirmationRef.current = null;
+    setConfirmation(null);
+    current.resolve?.("cancelled");
+  };
+  const applyConfirmation = async () => {
+    const current = confirmationRef.current;
+    if (!current) return;
+    confirmationRef.current = null;
+    setConfirmation(null);
+    let result;
+    try {
+      result = await onCommand(current.target, current.command, current.value);
+    } catch {
+      result = void 0;
+    }
+    current.resolve?.(result);
+  };
+  const confirmCommand = (target, command, value) => {
+    if (task.shared || !confirmCommands.has(command.type)) return onCommand(target, command, value);
+    if (confirmationRef.current) return Promise.resolve("cancelled");
+    return new Promise((resolve2) => {
+      setConfirmation({ target, command, value, rows: confirmationRows(task, command, value, actors, tasks), resolve: resolve2 });
+    });
+  };
+  (0, import_react50.useEffect)(() => {
+    if (confirmation) confirmBox.current?.focus();
+  }, [confirmation]);
   (0, import_react50.useEffect)(() => {
     const popup = modal.current, backdrop = popup?.parentElement, parent = backdrop?.parentElement;
     const keyDown = (event) => {
@@ -38283,10 +39475,18 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.key === "Escape") {
+        if (lightboxRef.current) {
+          setLightbox(null);
+          return;
+        }
+        if (confirmationRef.current) {
+          cancelConfirmation();
+          return;
+        }
         onClose();
         return;
       }
-      const choices = [...popup.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter((item) => item.tabIndex >= 0 && !item.closest("[inert]") && item.getClientRects().length > 0);
+      const choices = [...popup.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter((item) => item.tabIndex >= 0 && !item.closest("[inert]") && !hiddenInClosedDetails(item) && item.getClientRects().length > 0);
       if (!choices.length) {
         popup.focus();
         return;
@@ -38328,6 +39528,26 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
       else boardRef.current?.focus();
     };
   }, []);
+  (0, import_react50.useEffect)(() => {
+    if (!lightbox) return void 0;
+    const close = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setLightbox(null);
+      }
+    };
+    window.addEventListener("keydown", close, true);
+    return () => window.removeEventListener("keydown", close, true);
+  }, [lightbox]);
+  const saveTitle = async () => {
+    if (!canRename || !titleDraft.trim() || byteLength(titleDraft.trim()) > 200) return;
+    setTitleError("");
+    const result = await confirmCommand(task, { type: "edit" }, { title: titleDraft.trim(), owner: asText2(task.owner), reviewer: asText2(task.reviewer), acceptance: textValue(task.acceptance), dependencies: dependenciesOf(task) });
+    if (result === "committed") setEditingTitle(false);
+    else if (result !== "cancelled") setTitleError(t("The title could not be saved."));
+  };
+  const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value);
   return (0, import_react50.createElement)(
     "div",
     { className: "bt-card-modal-backdrop", onMouseDown: (event) => {
@@ -38339,105 +39559,744 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
       (0, import_react50.createElement)(
         "header",
         { className: "bt-card-modal-header" },
-        (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("p", null, t("Task details")), (0, import_react50.createElement)("h2", null, textValue(task.title) || task.id)),
-        (0, import_react50.createElement)("button", { type: "button", "aria-label": t("Close card"), "data-close-card": "true", onClick: onClose }, "×")
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-modal-heading" },
+          (0, import_react50.createElement)("p", { className: "bt-card-eyebrow" }, (scope.kind === "room" ? t("Group task board") : t("Personal task board")) + " · " + stage),
+          editingTitle ? (0, import_react50.createElement)(
+            "form",
+            { className: "bt-card-title-form", onSubmit: (event) => {
+              event.preventDefault();
+              void saveTitle();
+            } },
+            (0, import_react50.createElement)("input", { value: titleDraft, disabled: uncertain || busy, "aria-label": t("Card title"), onChange: (event) => setTitleDraft(event.target.value) }),
+            (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: uncertain || busy || !titleDraft.trim() }, t("Save")),
+            (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => setEditingTitle(false) }, t("Cancel")),
+            titleError ? (0, import_react50.createElement)("span", { className: "bt-form-error", role: "alert" }, titleError) : null
+          ) : (0, import_react50.createElement)("h2", null, textValue(task.title) || task.id),
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-card-submeta" },
+            (0, import_react50.createElement)("span", { className: "bt-card-head-status" }, (0, import_react50.createElement)("span", { className: "bt-board-stage-dot bt-board-stage-dot-" + (task.status || "unknown"), "aria-hidden": true }), (0, import_react50.createElement)("span", null, stageLabelOf(task))),
+            (0, import_react50.createElement)(TypeChip, { type: taskType(task) }),
+            (0, import_react50.createElement)("span", { className: "bt-board-id" }, task.id),
+            legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, stageLabelOf(task)) : null,
+            task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Shared task · read only")) : null
+          )
+        ),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-modal-actions" },
+          canRename && !editingTitle ? (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Rename card"), title: t("Rename card"), onClick: () => {
+            setTitleDraft(textValue(task.title));
+            setEditingTitle(true);
+          } }, (0, import_react50.createElement)(PencilIcon)) : null,
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close card"), "data-close-card": "true", onClick: onClose }, (0, import_react50.createElement)(CloseIcon))
+        )
       ),
+      confirmation ? (0, import_react50.createElement)(
+        "section",
+        { ref: confirmBox, className: "bt-card-confirm", role: "alertdialog", "aria-label": t("Confirm change"), tabIndex: -1 },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-confirm-head" },
+          (0, import_react50.createElement)("h3", null, t("Confirm change")),
+          (0, import_react50.createElement)("p", null, t("Review the before and after values before applying this change."))
+        ),
+        (0, import_react50.createElement)("div", { className: "bt-card-diff" }, confirmation.rows.length ? confirmation.rows.map((row) => (0, import_react50.createElement)(
+          "div",
+          { key: row.field, className: "bt-card-diff-row" },
+          (0, import_react50.createElement)("strong", null, t(row.label)),
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-card-diff-values" },
+            (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, t("Before") + ": "), row.before),
+            (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, t("After") + ": "), row.after)
+          )
+        )) : (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("No visible field changes."))),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-editor-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: cancelConfirmation }, t("Cancel")),
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", onClick: () => void applyConfirmation() }, t("Confirm"))
+        )
+      ) : null,
       pending ? (0, import_react50.createElement)(
         "div",
-        { className: "bt-card-modal-status", role: "status" },
+        { className: "bt-card-banner", role: "status" },
         t(busy ? "Saving…" : "An action needs confirmation."),
         " ",
-        (0, import_react50.createElement)("button", { type: "button", onClick: () => onCheck(pending) }, t("Check action")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => onCheck(pending) }, t("Check action")),
         " ",
-        (0, import_react50.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => onCancel(pending) }, t("Safely cancel pending request")),
-        error ? (0, import_react50.createElement)("p", { role: "alert" }, error) : null
-      ) : error ? (0, import_react50.createElement)("div", { className: "bt-card-modal-status", role: "alert" }, error) : null,
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: cancelBusy, onClick: () => onCancel(pending) }, t("Safely cancel pending request"))
+      ) : error ? (0, import_react50.createElement)("div", { className: "bt-card-banner bt-card-banner-error", role: "alert" }, error) : null,
       (0, import_react50.createElement)(
         "div",
-        { className: "bt-board-card-body" },
-        canMove ? (0, import_react50.createElement)(
-          "label",
-          { className: "bt-board-move" },
-          (0, import_react50.createElement)("span", null, t("Personal progress")),
-          (0, import_react50.createElement)(
-            "select",
-            {
-              "aria-label": t("Move personal task"),
-              disabled: uncertain,
-              value: task.personalProgress,
-              onChange: (event) => {
-                void onCommand(task, { type: "personal-progress" }, { progress: event.target.value });
+        { className: "bt-card-modal-body" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-mobile-bar" },
+          (0, import_react50.createElement)("span", { className: "bt-card-head-status" }, (0, import_react50.createElement)("span", { className: "bt-board-stage-dot bt-board-stage-dot-" + (task.status || "unknown"), "aria-hidden": true }), (0, import_react50.createElement)("span", null, stageLabelOf(task))),
+          (0, import_react50.createElement)(TypeChip, { type: taskType(task) }),
+          (0, import_react50.createElement)("span", { className: "bt-board-card-owner" }, (0, import_react50.createElement)(MemberAvatar, { name: actorName(task.owner, actors), size: 22 }), (0, import_react50.createElement)("span", null, actorName(task.owner, actors))),
+          task.dueDate ? (0, import_react50.createElement)(DueChip, { task }) : null,
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => modal.current?.querySelector(".bt-card-side")?.scrollIntoView({ behavior: "smooth", block: "start" }) }, t("Manage"))
+        ),
+        (0, import_react50.createElement)(
+          "main",
+          { className: "bt-card-main", onPaste: (event) => {
+            const files = [...event.clipboardData?.files ?? []].filter((file) => FILE_TYPES.has(file.type));
+            if (files.length && canUpload) {
+              event.preventDefault();
+              const input = event.currentTarget.querySelector(".bt-attachment-uploader input[type=file]");
+              if (input) {
+                const transfer = new DataTransfer();
+                for (const file of files) transfer.items.add(file);
+                input.files = transfer.files;
+                input.dispatchEvent(new Event("change", { bubbles: true }));
               }
-            },
-            PERSONAL_COLUMNS.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label)))
+            }
+          } },
+          task.legacy?.pending ? (0, import_react50.createElement)("p", { className: "bt-card-note", role: "status" }, t("A card change is awaiting confirmation in its original board.")) : null,
+          task.legacy?.titleStale ? (0, import_react50.createElement)("p", { className: "bt-card-note", role: "status" }, t("The original task changed after this display title was corrected. Review the title.")) : null,
+          task.shared ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("This shared card is read only in this board.")) : null,
+          (0, import_react50.createElement)(ChangeBlock, { task }),
+          (0, import_react50.createElement)(DescriptionEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
+          (0, import_react50.createElement)(ChecklistEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: (target, value) => detailsSave(target, value) }),
+          (0, import_react50.createElement)(AttachmentsEditor, { scope, task, request, canUpload, canRemove: canRemoveImage, canCover: !legacy && canDetails, disabled: uncertain || busy, onUpload, onRemove: (imageId) => onCommand(task, { type: removeType }, { imageId }), onCover: (imageId) => detailsSave(task, { coverImageId: imageId }), onOpenImage: (image, url) => {
+            if (!url) return;
+            if (typeof image.mediaType === "string" && image.mediaType.startsWith("image/")) setLightbox({ url, name: textValue(image.name) });
+            else {
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = textValue(image.name) || "attachment";
+              link.click();
+            }
+          } }),
+          (0, import_react50.createElement)(CommentsEditor, { task, actors, canPost: canComment, canEdit: canEditComment, canDelete: canDeleteComment, disabled: uncertain || busy, postType: commentType, onCommand }),
+          (0, import_react50.createElement)(ActivitySection, { task })
+        ),
+        (0, import_react50.createElement)(
+          "aside",
+          { className: "bt-card-side" },
+          (0, import_react50.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          (0, import_react50.createElement)(PeopleBlock, { task, actors }),
+          (0, import_react50.createElement)(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
+          (0, import_react50.createElement)(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
+          (0, import_react50.createElement)(LabelsEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
+          (0, import_react50.createElement)(DependenciesBlock, { task, tasks }),
+          (0, import_react50.createElement)(FactsBlock, { task }),
+          (0, import_react50.createElement)("div", { className: "bt-card-side-block" }, (0, import_react50.createElement)(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
+          !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Read only")) : null,
+          (0, import_react50.createElement)(
+            "details",
+            { className: "bt-card-more" },
+            (0, import_react50.createElement)("summary", null, t("More actions")),
+            (0, import_react50.createElement)(
+              "div",
+              { className: "bt-card-more-body" },
+              canEdit ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: "edit" }, value) }) : null,
+              onDuplicate && !legacy && !task.shared ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: uncertain || busy, onClick: () => onDuplicate(task) }, (0, import_react50.createElement)(CopyIcon), t("Duplicate card")) : null,
+              canArchive ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: uncertain || busy, onClick: () => void onCommand(task, { type: "archive" }) }, t("Archive card")) : null,
+              canUnarchive ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: uncertain || busy, onClick: () => void onCommand(task, { type: "unarchive" }) }, t("Restore from archive")) : null,
+              canGoalEdit ? (0, import_react50.createElement)(EditGoalTask, { task, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: "goal-task-edit" }, value) }) : null,
+              canHistoryTitle ? (0, import_react50.createElement)(EditHistoryTitle, { task, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: "goal-history-title" }, value) }) : null,
+              !legacy ? (0, import_react50.createElement)(TaskHistory, { scope, task, request }) : null,
+              legacy && Array.isArray(task.boardHistory) && task.boardHistory.length ? (0, import_react50.createElement)(
+                "details",
+                { className: "bt-card-history" },
+                (0, import_react50.createElement)("summary", null, t("Card revision history")),
+                task.boardHistory.map((entry) => (0, import_react50.createElement)(
+                  "article",
+                  { key: entry.operationId },
+                  (0, import_react50.createElement)("strong", null, (Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString() : "") + " · " + t("You") + " · " + entry.kind),
+                  entry.reason ? (0, import_react50.createElement)("p", null, entry.reason) : null,
+                  (0, import_react50.createElement)("p", null, t("Before") + ": " + JSON.stringify(entry.before)),
+                  (0, import_react50.createElement)("p", null, t("After") + ": " + JSON.stringify(entry.after))
+                ))
+              ) : null,
+              !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle ? (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("Read only")) : null
+            )
+          )
+        )
+      ),
+      lightbox ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-lightbox", onMouseDown: (event) => {
+          if (event.target === event.currentTarget) setLightbox(null);
+        } },
+        (0, import_react50.createElement)("img", { src: lightbox.url, alt: lightbox.name || t("Attachment") }),
+        (0, import_react50.createElement)("div", { className: "bt-lightbox-bar" }, (0, import_react50.createElement)("span", null, lightbox.name || t("Attachment")), (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close image"), onClick: () => setLightbox(null) }, (0, import_react50.createElement)(CloseIcon)))
+      ) : null
+    )
+  );
+}
+function ColumnRail({ label, personal, children }) {
+  const rail = (0, import_react50.useRef)(null);
+  const [overflow, setOverflow] = (0, import_react50.useState)(false);
+  const [range, setRange] = (0, import_react50.useState)({ from: 1, to: 0, total: 0 });
+  const move = (direction) => {
+    const node = rail.current;
+    if (node) node.scrollBy({ left: direction * Math.max(240, node.clientWidth * 0.8), behavior: "smooth" });
+  };
+  (0, import_react50.useEffect)(() => {
+    const node = rail.current;
+    if (!node) return;
+    const update = () => {
+      setOverflow(node.scrollWidth > node.clientWidth + 1);
+      const lanes = [...node.children].filter((child) => child.nodeType === 1);
+      if (!lanes.length) {
+        setRange({ from: 0, to: 0, total: 0 });
+        return;
+      }
+      const left = node.scrollLeft, right = left + node.clientWidth;
+      const visible = lanes.map((child, index) => ({ index, start: child.offsetLeft, end: child.offsetLeft + child.offsetWidth })).filter((item) => item.end > left + 1 && item.start < right - 1);
+      setRange({ from: (visible[0]?.index ?? 0) + 1, to: (visible.at(-1)?.index ?? 0) + 1, total: lanes.length });
+    };
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
+    const mutation = typeof MutationObserver === "function" ? new MutationObserver(() => {
+      resize?.disconnect();
+      resize?.observe(node);
+      for (const child of node.children) resize?.observe(child);
+      update();
+    }) : null;
+    resize?.observe(node);
+    for (const child of node.children) resize?.observe(child);
+    mutation?.observe(node, { childList: true, subtree: true, attributes: true });
+    window.addEventListener("resize", update);
+    node.addEventListener("scroll", update, { passive: true });
+    update();
+    return () => {
+      resize?.disconnect();
+      mutation?.disconnect();
+      window.removeEventListener("resize", update);
+      node.removeEventListener("scroll", update);
+    };
+  }, []);
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-board-rail" },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-board-rail-controls", hidden: !overflow },
+      (0, import_react50.createElement)(
+        "span",
+        { className: "bt-board-rail-status", role: "status", "aria-live": "polite" },
+        t("Columns {from}–{to} of {total}", { from: range.from, to: range.to, total: range.total }),
+        range.total > range.to ? (0, import_react50.createElement)("span", { className: "bt-board-rail-more" }, " · ", t("{count} more", { count: range.total - range.to })) : null
+      ),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Previous columns"), onClick: () => move(-1) }, (0, import_react50.createElement)(ChevronLeftIcon)),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Next columns"), onClick: () => move(1) }, (0, import_react50.createElement)(ChevronRightIcon))
+    ),
+    (0, import_react50.createElement)("div", {
+      ref: rail,
+      className: "bt-board-columns" + (personal ? " bt-board-columns-personal" : ""),
+      role: "region",
+      "aria-label": label,
+      tabIndex: 0,
+      onKeyDown: (event) => {
+        if (event.target === event.currentTarget && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+          event.preventDefault();
+          move(event.key === "ArrowLeft" ? -1 : 1);
+        }
+      }
+    }, children)
+  );
+}
+function BoardLane({ kind, stage, label, count, meta, actions, releaseId, focus, createEnabled, onCreate, dropActive, empty, children, onDragOver, onDragLeave, onDrop, onRename, onMove, onArchiveAll }) {
+  const [adding, setAdding] = (0, import_react50.useState)(false);
+  const [collapsed, setCollapsed] = (0, import_react50.useState)(false);
+  const [renameValue, setRenameValue] = (0, import_react50.useState)(label);
+  const menu = (0, import_react50.useRef)(null);
+  const [title, setTitle] = (0, import_react50.useState)("");
+  const closeComposer = () => {
+    setAdding(false);
+    setTitle("");
+  };
+  const submit = (event) => {
+    event?.preventDefault?.();
+    const value = title.trim();
+    if (!value) return;
+    closeComposer();
+    onCreate(value);
+  };
+  const rename = (event) => {
+    event.preventDefault();
+    if (renameValue.trim()) onRename?.(renameValue);
+    menu.current?.removeAttribute("open");
+  };
+  return (0, import_react50.createElement)(
+    "section",
+    {
+      className: "bt-board-lane" + (dropActive ? " bt-board-lane-drop" : "") + (focus ? " bt-board-lane-focus" : "") + (collapsed ? " bt-board-lane-collapsed" : ""),
+      "aria-label": label,
+      "data-stage": stage,
+      "data-kind": kind,
+      ...releaseId ? { "data-release-id": releaseId } : {},
+      onDragOver,
+      onDragLeave,
+      onDrop
+    },
+    (0, import_react50.createElement)(
+      "header",
+      { className: "bt-board-lane-head" },
+      (0, import_react50.createElement)("div", { className: "bt-board-lane-title" }, (0, import_react50.createElement)("span", { className: "bt-board-stage-dot bt-board-stage-dot-" + stage, "aria-hidden": true }), (0, import_react50.createElement)("h3", null, label), count ? (0, import_react50.createElement)("span", { className: "bt-board-count" }, count) : null, meta ?? null),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-board-lane-head-actions" },
+        onRename || onMove || onArchiveAll ? (0, import_react50.createElement)(
+          "details",
+          { ref: menu, className: "bt-board-lane-menu" },
+          (0, import_react50.createElement)("summary", { className: "bt-icon-btn", "aria-label": t("Lane actions"), title: t("Lane actions") }, "⋯"),
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-board-lane-menu-body" },
+            onRename ? (0, import_react50.createElement)("form", { className: "bt-board-lane-rename", onSubmit: rename }, (0, import_react50.createElement)("input", { value: renameValue, "aria-label": t("Rename lane"), maxLength: 40, onChange: (event) => setRenameValue(event.target.value) }), (0, import_react50.createElement)("button", { type: "submit", className: "bt-card-mini" }, t("Save"))) : null,
+            onMove ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-lane-menu-item", onClick: () => {
+              onMove(-1);
+              menu.current?.removeAttribute("open");
+            } }, t("Move lane left")) : null,
+            onMove ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-lane-menu-item", onClick: () => {
+              onMove(1);
+              menu.current?.removeAttribute("open");
+            } }, t("Move lane right")) : null,
+            onArchiveAll ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-lane-menu-item bt-card-cancel", onClick: () => {
+              onArchiveAll();
+              menu.current?.removeAttribute("open");
+            } }, t("Archive all cards")) : null
           )
         ) : null,
-        (0, import_react50.createElement)("span", { className: "bt-board-id" }, task.id),
-        task.legacy ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t({ current: "Current goal task", previous: "Earlier goal stage", future: "Upcoming goal stage", archived: "Archived goal task", closed: "Closed goal task" }[task.legacy.position] ?? (task.legacy.current ? "Current goal task" : "Earlier goal stage"))) : null,
-        task.legacy?.useOverlay ? (0, import_react50.createElement)(Fact, { label: t("Original task description"), value: textValue(task.legacy.originalTitle) }) : null,
-        task.legacy?.titleStale ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("The original task changed after this display title was corrected. Review the title.")) : null,
-        task.legacy?.pending ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("A card change is awaiting confirmation in its original board.")) : null,
-        task.shared ? (0, import_react50.createElement)("span", { className: "bt-board-legacy" }, t("Shared task · read only")) : null,
-        task.dispatchState === "uncertain" ? (0, import_react50.createElement)("p", { className: "bt-board-pending", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
-        commands.some((command) => command.type === "schedule") ? (0, import_react50.createElement)("button", { type: "button", disabled: uncertain, onClick: () => void onCommand(task, { type: "schedule" }) }, t("Schedule Bot")) : null,
-        task.legacy && !KNOWN.has(task.status) ? (0, import_react50.createElement)(Fact, { label: t("Original status"), value: textValue(task.legacy.originalStatus) || t("Status unknown") }) : null,
-        (0, import_react50.createElement)(Fact, { label: t("Owner"), value: actorLabel(task.owner, actors) }),
-        (0, import_react50.createElement)(Fact, { label: t("Reviewer"), value: actorLabel(task.reviewer, actors) }),
-        (0, import_react50.createElement)(Fact, { label: t("Acceptance criteria"), value: textValue(task.acceptance) }),
-        task.legacy ? (0, import_react50.createElement)(Fact, { label: t("Goal task note"), value: textValue(task.goalNote) }) : null,
-        (0, import_react50.createElement)(Fact, { label: t("Dependencies"), value: dependencies.join(" · ") }),
-        (0, import_react50.createElement)(Fact, { label: t("Next action"), value: asText2(task.nextAction) }),
-        (0, import_react50.createElement)(Fact, { label: t("Blocked"), value: blocker }),
-        (0, import_react50.createElement)(Fact, { label: t("Evidence"), value: evidence }),
-        (0, import_react50.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
-        task.change ? (0, import_react50.createElement)(
-          "div",
-          { className: "bt-board-actions" },
-          (0, import_react50.createElement)("strong", null, t("Requirement change")),
-          (0, import_react50.createElement)(Fact, { label: t("Original task"), value: `${task.change.sourceTaskId} · ${t("Revision")} ${task.change.sourceRevision}` }),
-          (0, import_react50.createElement)("p", { role: "status" }, t(task.status === "working" ? "This change is being worked as a separate task; the original stays unchanged." : task.status === "ready" ? "The source task is complete; this requirement change is queued as its own task." : "This change waits for the original task to complete. It has not been dispatched.")),
-          Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description" }).filter(([field]) => JSON.stringify(task.change.before?.[field]) !== JSON.stringify(task.change.after?.[field])).map(([field, label]) => (0, import_react50.createElement)(
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t(collapsed ? "Expand lane" : "Collapse lane"), title: t(collapsed ? "Expand lane" : "Collapse lane"), "aria-expanded": !collapsed, onClick: () => setCollapsed((value) => !value) }, (0, import_react50.createElement)(ChevronRightIcon, { className: "bt-lane-chevron" + (collapsed ? " bt-lane-chevron-collapsed" : "") })),
+        actions ?? (createEnabled ? (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn bt-board-lane-add-icon", "aria-label": t("Add card to {lane}", { lane: label }), title: t("Add card"), onClick: () => {
+          closeComposer();
+          onCreate();
+        } }, (0, import_react50.createElement)(PlusIcon)) : null)
+      )
+    ),
+    collapsed ? null : (0, import_react50.createElement)("div", { className: "bt-board-lane-cards" }, children),
+    !collapsed && empty ? (0, import_react50.createElement)("p", { className: "bt-board-lane-empty" }, typeof empty === "string" ? empty : t("Drop cards here")) : null,
+    !collapsed && createEnabled ? adding ? (0, import_react50.createElement)(
+      "form",
+      { className: "bt-board-quick-add", onSubmit: submit },
+      (0, import_react50.createElement)("textarea", { value: title, rows: 2, autoFocus: true, "aria-label": t("Card title"), placeholder: t("Enter a title"), onChange: (event) => setTitle(event.target.value), onKeyDown: (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeComposer();
+        }
+      } }),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-board-quick-add-actions" },
+        (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: !title.trim() }, t("Add card")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: closeComposer }, t("Cancel"))
+      )
+    ) : (0, import_react50.createElement)("button", { type: "button", className: "bt-board-lane-add", onClick: () => setAdding(true) }, (0, import_react50.createElement)(PlusIcon), t("Add card")) : null
+  );
+}
+function ReleaseChip({ release, onOpen }) {
+  const total = Number.isSafeInteger(release.itemCount) ? release.itemCount : 0;
+  const done = Number.isSafeInteger(release.doneCount) ? release.doneCount : 0;
+  return (0, import_react50.createElement)(
+    "button",
+    {
+      type: "button",
+      className: "bt-board-release-chip",
+      onClick: onOpen,
+      title: [release.name, release.version, t(RELEASE_STATUS_LABELS[release.status] ?? "Status unknown")].filter(Boolean).join(" · "),
+      "aria-label": [release.name, release.version, t(RELEASE_STATUS_LABELS[release.status] ?? "Status unknown"), `${done}/${total}`].filter(Boolean).join(" · ")
+    },
+    (0, import_react50.createElement)("span", { className: "bt-board-release-version" }, release.version || textValue(release.name) || t("Untitled release")),
+    (0, import_react50.createElement)("span", { className: "bt-board-release-progress" }, `${done}/${total}`)
+  );
+}
+function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors, onClose, onCreate }) {
+  const roles = Array.isArray(releaseRoles) ? releaseRoles.filter((role) => role && typeof role.key === "string" && role.key) : [];
+  const teamSupported = roles.length > 0;
+  const bots = (Array.isArray(actors) ? actors : []).filter((actor) => actor && typeof actor.id === "string" && actor.id !== "user");
+  const candidates = releaseCandidates && typeof releaseCandidates === "object" && !Array.isArray(releaseCandidates) ? releaseCandidates : {};
+  const firstCandidate = (key) => candidates[key]?.[0]?.id ?? "";
+  const teamRoles = roles.filter((role) => role.key !== "projectManager");
+  const [name, setName] = (0, import_react50.useState)("");
+  const [version, setVersion] = (0, import_react50.useState)("");
+  const [manager, setManager] = (0, import_react50.useState)(() => firstCandidate("projectManager"));
+  const [assignments, setAssignments] = (0, import_react50.useState)(() => Object.fromEntries(teamRoles.filter((role) => role.required === true).map((role) => [role.key, firstCandidate(role.key)])));
+  const [error, setError] = (0, import_react50.useState)("");
+  const [saving, setSaving] = (0, import_react50.useState)(false);
+  const first = (0, import_react50.useRef)(null);
+  (0, import_react50.useEffect)(() => {
+    first.current?.focus();
+  }, []);
+  (0, import_react50.useEffect)(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const requiredMissing = teamRoles.filter((role) => role.required === true && !assignments[role.key]);
+  const missingCandidates = teamRoles.filter((role) => role.required === true && !(Array.isArray(candidates[role.key]) && candidates[role.key].length));
+  const teamReady = !!manager && requiredMissing.length === 0;
+  const valid = !!name.trim() && !!version.trim() && (!teamSupported || teamReady);
+  const assign = (key, value) => setAssignments((current) => ({ ...current, [key]: value }));
+  const autoFill = () => {
+    setManager(firstCandidate("projectManager"));
+    setAssignments(Object.fromEntries(teamRoles.map((role) => [role.key, firstCandidate(role.key)]).filter(([, id]) => id)));
+  };
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!valid || disabled || saving) return;
+    setSaving(true);
+    setError("");
+    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => typeof id === "string" && id));
+    const team = teamSupported ? { projectManagerId: manager, roles: { ...picked, projectManager: manager } } : void 0;
+    try {
+      await onCreate({ name: name.trim(), version: version.trim(), ...team ? { team } : {} });
+      onClose();
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("The release could not be created. Check the fields and try again."));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const close = () => {
+    if (!saving) onClose();
+  };
+  const botSelect = (value, label, onPick, roleKey) => {
+    const choices = Array.isArray(candidates[roleKey]) && candidates[roleKey].length ? candidates[roleKey] : bots;
+    return (0, import_react50.createElement)(
+      "select",
+      { value, "aria-label": label, disabled: disabled || saving, onChange: (event) => onPick(event.target.value) },
+      (0, import_react50.createElement)("option", { value: "" }, t("Choose a Bot")),
+      choices.map((bot) => (0, import_react50.createElement)("option", { key: bot.id, value: bot.id }, textValue(bot.name) || bot.id, bot.role ? " · " + bot.role : ""))
+    );
+  };
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-modal-backdrop bt-create-backdrop", onMouseDown: (event) => {
+      if (event.target === event.currentTarget) close();
+    } },
+    (0, import_react50.createElement)(
+      "section",
+      { className: "bt-card-modal bt-create-modal bt-release-modal" + (teamSupported ? " bt-release-modal-team" : ""), role: "dialog", "aria-modal": "true", "aria-label": t("New release"), tabIndex: -1 },
+      (0, import_react50.createElement)(
+        "header",
+        { className: "bt-card-modal-header" },
+        (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("p", { className: "bt-card-eyebrow" }, t("Releases")), (0, import_react50.createElement)("h2", null, t("New release"))),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), onClick: close }, (0, import_react50.createElement)(CloseIcon))
+      ),
+      (0, import_react50.createElement)(
+        "form",
+        { className: "bt-create-form", onSubmit: submit },
+        (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Release name")), (0, import_react50.createElement)("input", { ref: first, value: name, maxLength: 200, disabled: disabled || saving, "aria-label": t("Release name"), placeholder: t("Release name"), onChange: (event) => setName(event.target.value) })),
+        (0, import_react50.createElement)("label", { className: "bt-field" }, (0, import_react50.createElement)("span", null, t("Version")), (0, import_react50.createElement)("input", { value: version, maxLength: 100, disabled: disabled || saving, "aria-label": t("Version"), placeholder: t("Version"), onChange: (event) => setVersion(event.target.value) })),
+        teamSupported ? (0, import_react50.createElement)(
+          "section",
+          { className: "bt-release-team", "aria-label": t("Release team") },
+          (0, import_react50.createElement)(
             "div",
-            { key: field },
-            (0, import_react50.createElement)("strong", null, t(label)),
-            (0, import_react50.createElement)("p", null, `${t("Before")}: ${typeof task.change.before?.[field] === "string" ? task.change.before[field] : JSON.stringify(task.change.before?.[field] ?? "")}`),
-            (0, import_react50.createElement)("p", null, `${t("After")}: ${typeof task.change.after?.[field] === "string" ? task.change.after[field] : JSON.stringify(task.change.after?.[field] ?? "")}`)
-          ))
+            { className: "bt-release-team-head" },
+            (0, import_react50.createElement)("h3", null, t("Release team")),
+            (0, import_react50.createElement)("span", { className: "bt-release-team-count" }, t("{count} roles", { count: roles.length })),
+            (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: disabled || saving, onClick: autoFill }, t("Auto-fill roles"))
+          ),
+          (0, import_react50.createElement)("p", { className: "bt-create-note" }, t("A release group is created with the project manager as admin.")),
+          (0, import_react50.createElement)(
+            "label",
+            { className: "bt-field bt-release-team-pm" },
+            (0, import_react50.createElement)("span", null, t("Project Manager"), (0, import_react50.createElement)("span", { className: "bt-release-required" }, " *")),
+            botSelect(manager, t("Project Manager"), setManager, "projectManager")
+          ),
+          (0, import_react50.createElement)("div", { className: "bt-release-team-grid" }, teamRoles.map((role) => (0, import_react50.createElement)(
+            "label",
+            { key: role.key, className: "bt-field" },
+            (0, import_react50.createElement)("span", null, releaseRoleLabel(role), role.required === true ? (0, import_react50.createElement)("span", { className: "bt-release-required" }, " *") : null),
+            botSelect(assignments[role.key] ?? "", releaseRoleLabel(role), (value) => assign(role.key, value), role.key)
+          ))),
+          teamReady ? null : (0, import_react50.createElement)(
+            "p",
+            { className: "bt-release-team-hint", role: "note" },
+            missingCandidates.length ? t("No Bot is tagged for {roles}. Pick another Bot, or create one with that role in Bots settings.", { roles: missingCandidates.map(releaseRoleLabel).join(", ") }) : t("Choose a project manager and every required role.")
+          )
         ) : null,
-        !task.shared ? (0, import_react50.createElement)(CardDetails, { task, editable: commands.some((command) => command.type === (task.legacy ? "goal-card-details" : "card-details")), disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: task.legacy ? "goal-card-details" : "card-details" }, value) }) : null,
-        !task.shared ? (0, import_react50.createElement)(CardConversation, { task, commands, disabled: uncertain, onCommand }) : null,
-        !canMove && !commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Status changes are not available for this task.")) : null,
-        Array.isArray(task.images) && task.images.length ? (0, import_react50.createElement)("div", { className: "bt-board-images" }, task.images.map((image) => (0, import_react50.createElement)(BoardImage, {
-          key: image.id,
-          scope,
-          taskId: task.id,
-          image,
-          request,
-          disabled: uncertain,
-          canRemove: commands.some((command) => command.type === (task.legacy ? "goal-image-remove" : "remove-image")),
-          onRemove: (_, imageId) => onCommand(task, { type: task.legacy ? "goal-image-remove" : "remove-image" }, { imageId })
-        }))) : null,
-        uploadEnabled && commands.some((command) => command.type === "upload") ? (0, import_react50.createElement)(UploadImages, { task, disabled: uncertain, onUpload }) : null,
-        (0, import_react50.createElement)(ShareTask, { task, commands, targets, disabled: uncertain, onCommand }),
-        !task.legacy && !task.shared ? (0, import_react50.createElement)(TaskHistory, { scope, task, request }) : null,
-        commands.some((command) => command.type === "goal-history-title") ? (0, import_react50.createElement)(EditHistoryTitle, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-history-title" }, value) }) : null,
-        Array.isArray(task.boardHistory) && task.boardHistory.length ? (0, import_react50.createElement)(
-          "details",
-          { className: "bt-board-history" },
-          (0, import_react50.createElement)("summary", null, t("Card revision history")),
-          task.boardHistory.map((entry) => (0, import_react50.createElement)(
-            "article",
-            { key: entry.operationId },
-            (0, import_react50.createElement)("strong", null, `${Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString() : ""} · ${t("You")} · ${entry.kind}`),
-            entry.reason ? (0, import_react50.createElement)("p", null, entry.reason) : null,
-            (0, import_react50.createElement)("p", null, `${t("Before")}: ${JSON.stringify(entry.before)}`),
-            (0, import_react50.createElement)("p", null, `${t("After")}: ${JSON.stringify(entry.after)}`)
-          ))
-        ) : null,
-        commands.some((command) => command.type === "goal-task-edit") ? (0, import_react50.createElement)(EditGoalTask, { task, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "goal-task-edit" }, value) }) : null,
-        commands.some((command) => command.type === "edit") && Array.isArray(actors) ? (0, import_react50.createElement)(EditTask, { task, actors, tasks, disabled: uncertain, onEdit: (item, value) => onCommand(item, { type: "edit" }, value) }) : !commands.some((command) => ["goal-task-edit", "goal-history-title", "goal-card-details", "goal-card-comment", "goal-image-remove", "remove-image", "share", "unshare"].includes(command.type) || uploadEnabled && command.type === "upload") ? (0, import_react50.createElement)("span", { className: "bt-board-readonly" }, t("Read only")) : null
+        error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-create-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: saving, onClick: close }, t("Cancel")),
+          (0, import_react50.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !valid }, t("Create release"))
+        )
       )
     )
+  );
+}
+function ReleaseGateRow({ gateKey, label, gate, editable, disabled, onSave }) {
+  const status = RELEASE_GATE_STATUSES.has(gate?.status) ? gate.status : "pending";
+  const saved = textValue(gate?.evidence);
+  const [draftStatus, setDraftStatus] = (0, import_react50.useState)(status);
+  const [draftEvidence, setDraftEvidence] = (0, import_react50.useState)(saved);
+  const evidence = draftEvidence.trim();
+  const needsEvidence = draftStatus === "passed" && !evidence;
+  const changed = draftStatus !== status || evidence !== saved.trim();
+  return (0, import_react50.createElement)(
+    "article",
+    { className: "bt-release-gate" },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-release-gate-head" },
+      (0, import_react50.createElement)("strong", null, t(label)),
+      (0, import_react50.createElement)("span", { className: "bt-release-gate-state bt-release-gate-state-" + status }, t(RELEASE_GATE_STATUS_LABELS[status]))
+    ),
+    (0, import_react50.createElement)("p", { className: "bt-release-gate-evidence" }, saved || t("No evidence")),
+    editable ? (0, import_react50.createElement)(
+      "div",
+      { className: "bt-release-gate-edit" },
+      (0, import_react50.createElement)(
+        "label",
+        { className: "bt-release-gate-field" },
+        (0, import_react50.createElement)("span", null, t("Gate status")),
+        (0, import_react50.createElement)(
+          "select",
+          { value: draftStatus, disabled, "aria-label": t(label) + " " + t("Gate status"), onChange: (event) => setDraftStatus(event.target.value) },
+          ["pending", "passed", "failed"].map((value) => (0, import_react50.createElement)("option", { key: value, value }, t(RELEASE_GATE_STATUS_LABELS[value])))
+        )
+      ),
+      (0, import_react50.createElement)(
+        "label",
+        { className: "bt-release-gate-field bt-release-gate-field-evidence" },
+        (0, import_react50.createElement)("span", null, t("Evidence")),
+        (0, import_react50.createElement)("input", { value: draftEvidence, maxLength: 500, disabled, placeholder: t("Short evidence"), "aria-label": t(label) + " " + t("Evidence"), onChange: (event) => setDraftEvidence(event.target.value) })
+      ),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost bt-release-gate-save", disabled: disabled || !changed || needsEvidence, onClick: () => onSave(gateKey, draftStatus, evidence) }, t("Save gate"))
+    ) : null,
+    needsEvidence ? (0, import_react50.createElement)("p", { className: "bt-release-gate-hint", role: "note" }, t("Evidence is required to pass a gate.")) : null
+  );
+}
+function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onClose, onCheck, onSaveGate, onOpenReport }) {
+  const modal = (0, import_react50.useRef)(null);
+  (0, import_react50.useEffect)(() => {
+    modal.current?.focus();
+  }, []);
+  (0, import_react50.useEffect)(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const roles = Array.isArray(releaseRoles) && releaseRoles.length ? releaseRoles.filter((role) => role && typeof role.key === "string" && role.key) : Object.keys(releaseRolesOf(release)).map((key) => ({ key, required: false }));
+  const name = textValue(release.name) || t("Untitled release");
+  const groupId = textValue(release.groupId);
+  const total = Number.isSafeInteger(release.itemCount) ? release.itemCount : 0;
+  const done = Number.isSafeInteger(release.doneCount) ? release.doneCount : 0;
+  const passed = releaseGatePassedCount(release);
+  const running = release.status === "running";
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-modal-backdrop", onMouseDown: (event) => {
+      if (event.target === event.currentTarget) onClose();
+    } },
+    (0, import_react50.createElement)(
+      "section",
+      { ref: modal, className: "bt-card-modal bt-release-detail", role: "dialog", "aria-modal": "true", "aria-label": t("Release details") + ": " + name, tabIndex: -1 },
+      (0, import_react50.createElement)(
+        "header",
+        { className: "bt-card-modal-header" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-modal-heading" },
+          (0, import_react50.createElement)("p", { className: "bt-card-eyebrow" }, t("Release details")),
+          (0, import_react50.createElement)("h2", null, release.version ? name + " · " + release.version : name),
+          (0, import_react50.createElement)("div", { className: "bt-card-submeta" }, (0, import_react50.createElement)(ReleaseStatusChip, { status: release.status }), (0, import_react50.createElement)("span", { className: "bt-board-id" }, release.id))
+        ),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-modal-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), "data-close-card": "true", onClick: onClose }, (0, import_react50.createElement)(CloseIcon))
+        )
+      ),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-release-detail-body" },
+        error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+        release.failure ? (0, import_react50.createElement)("p", { className: "bt-card-warning", role: "status" }, t("Failure") + ": " + textValue(release.failure)) : null,
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-release-facts" },
+          (0, import_react50.createElement)(Fact, { label: t("Project manager"), value: release.projectManagerId ? actorName(release.projectManagerId, actors) : t("Unassigned") }),
+          (0, import_react50.createElement)(Fact, { label: t("Release group"), value: groupId || t("Not created") }),
+          (0, import_react50.createElement)(Fact, { label: t("Items"), value: t("{done}/{total} done", { done, total }) }),
+          (0, import_react50.createElement)(Fact, { label: t("Gates"), value: `${passed}/${RELEASE_GATES.length}` }),
+          release.startedAt ? (0, import_react50.createElement)(Fact, { label: t("Started"), value: formatMoment(release.startedAt) }) : null,
+          release.publishedAt ? (0, import_react50.createElement)(Fact, { label: t("Published at"), value: formatMoment(release.publishedAt) }) : null
+        ),
+        (0, import_react50.createElement)(
+          "section",
+          { className: "bt-release-section" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-release-section-head" },
+            (0, import_react50.createElement)("h3", null, t("Role assignments")),
+            (0, import_react50.createElement)("span", { className: "bt-release-section-count" }, t("{count} assigned", { count: releaseRoleCount(release) }))
+          ),
+          roles.length ? (0, import_react50.createElement)("div", { className: "bt-release-role-list" }, roles.map((role) => {
+            const id = releaseRoleId(release, role.key);
+            return (0, import_react50.createElement)(
+              "div",
+              { key: role.key, className: "bt-release-role" },
+              (0, import_react50.createElement)("span", null, releaseRoleLabel(role), role.required === true ? (0, import_react50.createElement)("span", { className: "bt-release-required" }, " *") : null),
+              (0, import_react50.createElement)("span", { className: id ? "bt-release-role-name" : "bt-release-role-name bt-release-role-none" }, id ? actorLabel(id, actors) : t("Unassigned"))
+            );
+          })) : (0, import_react50.createElement)("p", { className: "bt-card-muted" }, t("No release team"))
+        ),
+        (0, import_react50.createElement)(
+          "section",
+          { className: "bt-release-section" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-release-section-head" },
+            (0, import_react50.createElement)("h3", null, t("Gates")),
+            (0, import_react50.createElement)("span", { className: "bt-release-section-count" }, `${passed}/${RELEASE_GATES.length}`)
+          ),
+          (0, import_react50.createElement)("div", { className: "bt-release-gates" }, RELEASE_GATES.map(([key, label]) => (0, import_react50.createElement)(ReleaseGateRow, {
+            key: `${release.id}:${key}:${release.gates?.[key]?.updatedAt ?? 0}`,
+            gateKey: key,
+            label,
+            gate: release.gates?.[key],
+            editable: canEdit,
+            disabled: busy || canEdit !== true,
+            onSave: onSaveGate
+          })))
+        ),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-release-detail-actions" },
+          release.report ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => onOpenReport(release) }, t("Open summary report")) : null,
+          (0, import_react50.createElement)("button", {
+            type: "button",
+            className: "bt-btn bt-btn-primary",
+            disabled: busy || !running,
+            ...running ? {} : { title: t("Only a running release can be checked.") },
+            onClick: () => onCheck(release)
+          }, t("Check release"))
+        )
+      )
+    )
+  );
+}
+function ReleaseReportDialog({ release, report, onClose, onBack }) {
+  const modal = (0, import_react50.useRef)(null);
+  (0, import_react50.useEffect)(() => {
+    modal.current?.focus();
+  }, []);
+  (0, import_react50.useEffect)(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const name = textValue(release.name) || t("Untitled release");
+  return (0, import_react50.createElement)(
+    "div",
+    { className: "bt-card-modal-backdrop", onMouseDown: (event) => {
+      if (event.target === event.currentTarget) onClose();
+    } },
+    (0, import_react50.createElement)(
+      "section",
+      { ref: modal, className: "bt-card-modal bt-release-report", role: "dialog", "aria-modal": "true", "aria-label": t("Summary report") + ": " + name, tabIndex: -1 },
+      (0, import_react50.createElement)(
+        "header",
+        { className: "bt-card-modal-header" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-modal-heading" },
+          (0, import_react50.createElement)("p", { className: "bt-card-eyebrow" }, t("Summary report")),
+          (0, import_react50.createElement)("h2", null, release.version ? name + " · " + release.version : name),
+          (0, import_react50.createElement)("p", { className: "bt-card-note" }, t("The report is read only."))
+        ),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-card-modal-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), "data-close-card": "true", onClick: onClose }, (0, import_react50.createElement)(CloseIcon))
+        )
+      ),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-release-report-body" },
+        report?.error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, report.error) : report && report.loading !== true ? (0, import_react50.createElement)("pre", { className: "bt-release-report-text" }, report.text) : (0, import_react50.createElement)("p", { className: "bt-card-muted", role: "status" }, t("Loading…"))
+      ),
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-release-report-foot" },
+        (0, import_react50.createElement)("span", { className: "bt-card-note" }, report?.generatedAt ? t("Generated at {time}", { time: formatMoment(report.generatedAt) }) : ""),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-release-report-buttons" },
+          onBack ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: onBack }, t("Back to release")) : null,
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", onClick: onClose }, t("Close"))
+        )
+      )
+    )
+  );
+}
+var PROPOSAL_KIND_LABELS = { create: "Create", update: "Update", status: "Status", release: "Release" };
+function ProposalPanel({ proposals, actors, tasks, releases, disabled, busy, error, onDecide, onClose }) {
+  return (0, import_react50.createElement)(
+    "section",
+    { className: "bt-board-proposals", role: "region", "aria-label": t("Changes") },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-board-proposals-head" },
+      (0, import_react50.createElement)("h3", null, t("Changes")),
+      (0, import_react50.createElement)("span", { className: "bt-board-count" }, proposals.length),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: onClose }, t("Close"))
+    ),
+    error ? (0, import_react50.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+    proposals.length ? proposals.map((proposal) => {
+      const title = textValue(proposal.taskTitle) || textValue((Array.isArray(tasks) ? tasks : []).find((task) => task.id === proposal.taskId)?.title) || textValue(proposal.taskId) || t("Unknown");
+      const rows2 = proposalRows(proposal, actors, tasks, releases);
+      return (0, import_react50.createElement)(
+        "article",
+        { key: proposal.id, className: "bt-board-proposal" },
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-board-proposal-head" },
+          (0, import_react50.createElement)("strong", null, title),
+          (0, import_react50.createElement)("span", { className: "bt-board-proposal-kind" }, t(PROPOSAL_KIND_LABELS[proposal.kind] ?? "Update"))
+        ),
+        (0, import_react50.createElement)("p", { className: "bt-board-proposal-meta" }, t("Proposed by {name}", { name: actorName(proposal.proposer, actors) }), " · ", relativeTime(proposal.createdAt)),
+        proposal.note ? (0, import_react50.createElement)("p", { className: "bt-board-proposal-note" }, proposal.note) : null,
+        rows2.length ? (0, import_react50.createElement)("div", { className: "bt-board-proposal-diff" }, rows2.map((row) => (0, import_react50.createElement)(
+          "div",
+          { key: row.field, className: "bt-card-diff-row" },
+          (0, import_react50.createElement)("strong", null, t(row.label)),
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-card-diff-values" },
+            (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, t("Before") + ": "), row.before),
+            (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, t("After") + ": "), row.after)
+          )
+        ))) : null,
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-board-proposal-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: disabled || busy === proposal.id, onClick: () => onDecide(proposal, "reject") }, t("Reject")),
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || busy === proposal.id, onClick: () => onDecide(proposal, "confirm") }, t("Confirm"))
+        )
+      );
+    }) : (0, import_react50.createElement)("p", { className: "bt-card-muted" }, t("No pending changes."))
   );
 }
 function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false }) {
@@ -38445,23 +40304,110 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const [snapshot, setData] = (0, import_react50.useState)(null);
   const [error, setError] = (0, import_react50.useState)("");
   const [search, setSearch] = (0, import_react50.useState)("");
+  const [filtersOpen, setFiltersOpen] = (0, import_react50.useState)(false);
+  const [toolsOpen, setToolsOpen] = (0, import_react50.useState)(false);
+  const [memberFilter, setMemberFilter] = (0, import_react50.useState)("");
+  const [labelFilter, setLabelFilter] = (0, import_react50.useState)("");
+  const [dueFilter, setDueFilter] = (0, import_react50.useState)("");
+  const [typeFilter, setTypeFilter] = (0, import_react50.useState)("");
+  const [sortMode, setSortMode] = (0, import_react50.useState)("");
+  const preferenceKey = `ds-bot:board-prefs:${scope.kind}:${scope.id}`;
+  const [lanePrefs, setLanePrefs] = (0, import_react50.useState)(() => {
+    try {
+      const value = JSON.parse(globalThis.localStorage?.getItem(preferenceKey) ?? "{}");
+      return { names: value.names ?? {}, order: Array.isArray(value.order) ? value.order : [] };
+    } catch {
+      return { names: {}, order: [] };
+    }
+  });
+  (0, import_react50.useEffect)(() => {
+    try {
+      globalThis.localStorage?.setItem(preferenceKey, JSON.stringify(lanePrefs));
+    } catch {
+    }
+  }, [preferenceKey, lanePrefs]);
+  const [view, setView] = (0, import_react50.useState)("status");
+  const [releaseFocus, setReleaseFocus] = (0, import_react50.useState)("");
+  const [changesOpen, setChangesOpen] = (0, import_react50.useState)(false);
+  const [proposalUnread, setProposalUnread] = (0, import_react50.useState)(0);
+  const knownProposals = (0, import_react50.useRef)(0);
+  const loadRef = (0, import_react50.useRef)(null);
+  const [newRelease, setNewRelease] = (0, import_react50.useState)(false);
+  const [releasePanel, setReleasePanel] = (0, import_react50.useState)(null);
+  const [releaseReport, setReleaseReport] = (0, import_react50.useState)(null);
+  const [releaseBusy, setReleaseBusy] = (0, import_react50.useState)("");
+  const [releaseError, setReleaseError] = (0, import_react50.useState)("");
+  const [proposalBusy, setProposalBusy] = (0, import_react50.useState)("");
+  const [proposalError, setProposalError] = (0, import_react50.useState)("");
   const [selectedCard, setSelectedCard] = (0, import_react50.useState)(null);
+  const [createFor, setCreateFor] = (0, import_react50.useState)(null);
+  const [notice, setNotice] = (0, import_react50.useState)("");
+  const [noticeAction, setNoticeAction] = (0, import_react50.useState)(null);
+  const [dragId, setDragId] = (0, import_react50.useState)("");
+  const [selectionMode, setSelectionMode] = (0, import_react50.useState)(false);
+  const [selectedIds, setSelectedIds] = (0, import_react50.useState)(() => /* @__PURE__ */ new Set());
+  const [drop, setDrop] = (0, import_react50.useState)(null);
+  const [boardConfirm, setBoardConfirm] = (0, import_react50.useState)(null);
+  const boardConfirmRef = (0, import_react50.useRef)(null);
+  const boardConfirmBox = (0, import_react50.useRef)(null);
   const cardOpener = (0, import_react50.useRef)(null);
+  const noticeTimer = (0, import_react50.useRef)(null);
   const [pending, setPending] = (0, import_react50.useState)(() => pendingStore(scope)?.current ?? "");
   const [busy, setBusy] = (0, import_react50.useState)(false);
+  const [bulkBusy, setBulkBusy] = (0, import_react50.useState)(false);
   const [cancelBusy, setCancelBusy] = (0, import_react50.useState)(false);
   const active = (0, import_react50.useRef)(false);
   const generation = (0, import_react50.useRef)(0);
   const loadSequence = (0, import_react50.useRef)(0);
   const dialog = (0, import_react50.useRef)(null);
+  const searchRef = (0, import_react50.useRef)(null);
   const dispose = (0, import_react50.useRef)(null);
   const dismissed = (0, import_react50.useRef)(false);
   const pendingRef = (0, import_react50.useRef)(pending);
   const fetching = (0, import_react50.useRef)(null);
   const cancelling = (0, import_react50.useRef)(null);
   const store = (0, import_react50.useRef)(null);
-  const key = `${scope.kind}:${scope.id}`;
+  const key = scope.kind + ":" + scope.id;
   const data = snapshot?.key === key ? snapshot.value : null;
+  const notify = (text, action) => {
+    clearTimeout(noticeTimer.current);
+    setNotice(text);
+    setNoticeAction(action ? { label: t("Undo"), run: action } : null);
+    noticeTimer.current = setTimeout(() => {
+      setNotice("");
+      setNoticeAction(null);
+    }, 5200);
+  };
+  const runNoticeAction = async () => {
+    const action = noticeAction;
+    setNotice("");
+    setNoticeAction(null);
+    clearTimeout(noticeTimer.current);
+    try {
+      await action?.run();
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("The undo could not be completed."));
+    }
+  };
+  (0, import_react50.useEffect)(() => () => clearTimeout(noticeTimer.current), []);
+  const askBoardConfirm = (payload) => new Promise((resolve2) => {
+    if (boardConfirmRef.current) {
+      resolve2(false);
+      return;
+    }
+    const entry = { ...payload, resolve: resolve2 };
+    boardConfirmRef.current = entry;
+    setBoardConfirm(entry);
+  });
+  const settleBoardConfirm = (approved) => {
+    const current2 = boardConfirmRef.current;
+    boardConfirmRef.current = null;
+    setBoardConfirm(null);
+    current2?.resolve(approved);
+  };
+  (0, import_react50.useEffect)(() => {
+    if (boardConfirm) boardConfirmBox.current?.focus();
+  }, [boardConfirm]);
   const current = (epoch) => active.current && generation.current === epoch;
   const load = async (epoch = generation.current, preserveError = false) => {
     const sequence = ++loadSequence.current;
@@ -38471,13 +40417,29 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       if (!next || !Array.isArray(next.tasks)) throw new Error(t("Invalid board response"));
       boardColumns(next.tasks);
       setData({ key, value: next });
+      const nextProposals = Array.isArray(next.proposals) ? next.proposals.length : 0;
+      if (!changesOpen && nextProposals > knownProposals.current) setProposalUnread((value) => value + (nextProposals - knownProposals.current));
+      knownProposals.current = nextProposals;
       if (!pendingRef.current && !preserveError) setError("");
       return true;
-    } catch (err) {
-      if (current(epoch) && sequence === loadSequence.current) setError(err?.message || t("Unable to load board"));
+    } catch (caught) {
+      if (current(epoch) && sequence === loadSequence.current) setError(caught?.message || t("Unable to load board"));
     }
     return false;
   };
+  loadRef.current = load;
+  (0, import_react50.useEffect)(() => {
+    if (!visible) return;
+    const refresh = () => {
+      if (!document.hidden && !selectedCard && !createFor) void loadRef.current?.();
+    };
+    const timer = setInterval(refresh, 15e3);
+    window.addEventListener("focus", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [key, selectedCard, createFor, visible]);
   const settle = async (id, result, epoch) => {
     if (!current(epoch) || pendingRef.current !== id) return;
     if (!finalOperation(result?.state)) {
@@ -38485,7 +40447,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       return;
     }
     if (result.state === "rejected") setError(result.message ? hostText(result.message) : t("Action rejected"));
-    const refreshed = await load(epoch, true);
+    const refreshed = await load(epoch, true) || (await new Promise((resolve2) => setTimeout(resolve2, 180)), await load(epoch, true));
     if (!refreshed || !current(epoch) || pendingRef.current !== id) return;
     store.current?.clear();
     pendingRef.current = "";
@@ -38538,16 +40500,53 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     cancelling.current = null;
     setBusy(false);
     setCancelBusy(false);
-    const operation = store.current?.current ?? "";
-    pendingRef.current = operation;
-    setPending(operation);
     setData(null);
     setError("");
     setSearch("");
+    setMemberFilter("");
+    setLabelFilter("");
+    setDueFilter("");
+    setTypeFilter("");
+    setView("status");
+    setReleaseFocus("");
+    setChangesOpen(false);
+    setNewRelease(false);
+    setReleasePanel(null);
+    setReleaseReport(null);
+    setReleaseBusy("");
+    setReleaseError("");
+    setProposalBusy("");
+    setProposalError("");
+    setCreateFor(null);
+    setSelectedCard(null);
+    setDragId("");
+    setDrop(null);
+    setBoardConfirm(null);
+    boardConfirmRef.current = null;
+    const operation = store.current?.current ?? "";
+    pendingRef.current = operation;
+    setPending(operation);
     void load(epoch);
     if (operation) void check(operation, epoch);
     dialog.current?.focus();
     const keyDown = (event) => {
+      const createModal = dialog.current?.querySelector(".bt-create-modal");
+      if (event.key === "Escape" && boardConfirmRef.current) {
+        event.preventDefault();
+        event.stopPropagation();
+        settleBoardConfirm(false);
+        return;
+      }
+      if (event.key === "Tab" && boardConfirmRef.current && boardConfirmBox.current) {
+        const buttons = [...boardConfirmBox.current.querySelectorAll("button:not([disabled])")];
+        if (!buttons.length) return;
+        const index2 = buttons.indexOf(document.activeElement);
+        const next = event.shiftKey ? index2 <= 0 ? buttons.length - 1 : index2 - 1 : index2 < 0 || index2 === buttons.length - 1 ? 0 : index2 + 1;
+        event.preventDefault();
+        buttons[next].focus();
+        return;
+      }
+      if (createModal && event.key === "Escape") return;
       const modal = dialog.current?.querySelector(".bt-card-modal");
       if (event.key === "Escape") {
         event.preventDefault();
@@ -38558,7 +40557,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       }
       if (event.key !== "Tab" || !dialog.current) return;
       const root = modal ?? dialog.current;
-      const focusable = [...root.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter((item) => !item.closest("[inert]") && item.getClientRects().length > 0);
+      const focusable = [...root.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,a[href],[tabindex="0"]')].filter((item) => !item.closest("[inert]") && !hiddenInClosedDetails(item) && item.getClientRects().length > 0);
       if (!focusable.length) {
         event.preventDefault();
         root.focus();
@@ -38591,7 +40590,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   }, [key, visible]);
   const run2 = async (task, command, value) => {
     if (fetching.current || pendingRef.current || !store.current || !window.crypto?.randomUUID) return;
-    const operationId = `${command.type.startsWith("goal-") ? "goal:" : ""}${window.crypto.randomUUID()}`;
+    const operationId = (command.type.startsWith("goal-") ? "goal:" : "") + window.crypto.randomUUID();
     fetching.current = operationId;
     const epoch = generation.current;
     try {
@@ -38608,16 +40607,36 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
         type: command.type,
         ...value !== void 0 ? { value } : {}
       });
-      return await check(operationId, epoch);
-    } catch (err) {
+      const state = await check(operationId, epoch);
+      const inverse = { cancel: "restore", submit: "cancel", archive: "unarchive", schedule: "unschedule" }[command.type];
+      if (state === "committed" && inverse) {
+        notify(t("Card updated"), async () => {
+          const latest = await request("board-list", { scope });
+          const currentTask = (latest?.tasks ?? []).find((item) => item.id === task.id);
+          if (!currentTask) return;
+          await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: currentTask.revision, type: inverse });
+          await load();
+          notify(t("Card restored"));
+        });
+      }
+      return state;
+    } catch (caught) {
       if (current(epoch) && pendingRef.current === operationId) return await check(operationId, epoch);
-      if (current(epoch) && !pendingRef.current && fetching.current === operationId) setError(err?.message || t("Unable to save action"));
+      if (current(epoch) && !pendingRef.current && fetching.current === operationId) setError(caught?.message || t("Unable to save action"));
     } finally {
       if (fetching.current === operationId) {
         fetching.current = null;
         if (current(epoch)) setBusy(false);
       }
     }
+  };
+  const undoReorder = (afterId) => async (taskId) => {
+    const latest = await request("board-list", { scope });
+    const current2 = (latest?.tasks ?? []).find((item) => item.id === taskId);
+    if (!current2) return;
+    await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId, expectedRevision: current2.revision, type: "reorder", value: { afterId } });
+    await load();
+    notify(t("Card order restored"));
   };
   const upload = async (task, images) => {
     if (fetching.current || pendingRef.current || !store.current || !window.crypto?.randomUUID) return;
@@ -38631,23 +40650,23 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
         const reader = new FileReader();
         reader.onerror = () => reject(new Error(t("Unable to read image")));
         reader.onload = () => {
-          const data2 = String(reader.result ?? "").split(",")[1];
-          if (!data2 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data2)) reject(new Error(t("Unable to read image")));
-          else resolve2({ uploadId: image.uploadId, mediaType: image.file.type, name: image.file.name, data: data2 });
+          const encodedData = String(reader.result ?? "").split(",")[1];
+          if (!encodedData || !/^[A-Za-z0-9+/]+={0,2}$/.test(encodedData)) reject(new Error(t("Unable to read image")));
+          else resolve2({ uploadId: image.uploadId, mediaType: image.file.type, name: image.file.name, data: encodedData });
         };
         reader.readAsDataURL(image.file);
       })));
       if (!current(epoch)) return;
-      operationId = `${task.legacy ? "goal:" : ""}${window.crypto.randomUUID()}`;
+      operationId = (task.legacy ? "goal:" : "") + window.crypto.randomUUID();
       store.current.put(operationId);
       pendingRef.current = operationId;
       fetching.current = operationId;
       setPending(operationId);
       await request("board-upload", { scope, taskId: task.id, expectedRevision: task.revision, ...task.legacy?.useOverlay ? { expectedBoardRevision: task.legacy.boardRevision, expectedPosition: task.legacy.position } : {}, operationId, images: encoded });
       return await check(operationId, epoch);
-    } catch (err) {
+    } catch (caught) {
       if (current(epoch) && operationId && pendingRef.current === operationId) return await check(operationId, epoch);
-      if (current(epoch) && !pendingRef.current && (fetching.current === token || fetching.current === operationId)) setError(err?.message || t("Image upload failed"));
+      if (current(epoch) && !pendingRef.current && (fetching.current === token || fetching.current === operationId)) setError(caught?.message || t("Image upload failed"));
     } finally {
       if (fetching.current === token || fetching.current === operationId) {
         fetching.current = null;
@@ -38660,234 +40679,1160 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const capacity = data?.capabilities;
   const showCapacity = Number.isSafeInteger(capacity?.taskCount) && capacity.taskCount >= 0 && Number.isSafeInteger(capacity?.taskLimit) && capacity.taskLimit > 0;
   const capacityReached = capacity?.taskLimitReached === true;
+  const actors = capacity?.actors;
+  const createEnabled = canAct && capacity?.create === true && Array.isArray(actors) && !capacityReached;
+  (0, import_react50.useEffect)(() => {
+    if (!visible) return;
+    const onKey = (event) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || selectedCard || createFor) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (event.key === "/") {
+        event.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (event.key.toLowerCase() === "n" && createEnabled) {
+        event.preventDefault();
+        setCreateFor({ laneLabel: t("Preparing"), scheduleOnCreate: false, followup: false });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedCard, createFor, createEnabled, visible]);
   const createCard = (value) => {
     if (!window.crypto?.randomUUID) return Promise.resolve(void 0);
     return run2({ id: window.crypto.randomUUID() }, { type: "create" }, value);
   };
+  const bulkArchive = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || bulkBusy || !window.crypto?.randomUUID) return;
+    setBulkBusy(true);
+    try {
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || task.archivedAt || !commandsFor(task).some((command) => command.type === "archive")) continue;
+        await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: task.revision, type: "archive" });
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      notify(t("Archived {count} cards", { count: ids.length }), async () => {
+        const latest = await request("board-list", { scope });
+        const current2 = (latest?.tasks ?? []).filter((task) => ids.includes(task.id) && task.archivedAt);
+        for (const task of current2) await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "unarchive" });
+        await load();
+        notify(t("Archived cards restored"));
+      });
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to archive cards"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkCancel = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || bulkBusy || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Cancel {count} cards", { count: ids.length }), rows: [{ label: t("Status"), before: t("Selected"), after: t("Cancelled") }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    try {
+      let changed = 0;
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || ["done", "cancelled"].includes(task.status) || !commandsFor(task).some((command) => command.type === "cancel")) continue;
+        await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: task.revision, type: "cancel", value: { reason: "Cancelled from bulk selection" } });
+        changed += 1;
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      if (changed) notify(t("Cancelled {count} cards", { count: changed }), async () => {
+        const latest = await request("board-list", { scope });
+        const current2 = (latest?.tasks ?? []).filter((task) => ids.includes(task.id) && task.status === "cancelled");
+        for (const task of current2) await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "restore" });
+        await load();
+        notify(t("Cancelled cards restored"));
+      });
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to cancel cards"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const archiveLane = async (kind, stage, laneTasks) => {
+    const ids = laneTasks.filter((task) => !task.archivedAt && commandsFor(task).some((command) => command.type === "archive")).map((task) => task.id);
+    if (!ids.length || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Archive {count} cards", { count: ids.length }), rows: [{ label: t("Lane"), before: t("Selected lane"), after: t("Archived") }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    try {
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task) continue;
+        await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: task.revision, type: "archive" });
+      }
+      await load();
+      notify(t("Archived {count} cards", { count: ids.length }), async () => {
+        const latest = await request("board-list", { scope });
+        for (const task of (latest?.tasks ?? []).filter((task2) => ids.includes(task2.id) && task2.archivedAt)) {
+          await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "unarchive" });
+        }
+        await load();
+        notify(t("Archived cards restored"));
+      });
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to archive cards"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkSetType = async (next) => {
+    const ids = [...selectedIds];
+    if (!ids.length || !next || bulkBusy || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Change the type of {count} cards", { count: ids.length }), rows: [{ label: t("Type"), before: t("Selected cards"), after: t(TASK_TYPE_LABELS[next] ?? "Other") }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    const changed = [];
+    try {
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || !commandsFor(task).some((command) => command.type === "card-details")) continue;
+        changed.push([id, taskType(task)]);
+        await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: task.revision, type: "card-details", value: { type: next } });
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      notify(t("Updated the type of {count} cards", { count: ids.length }), changed.length ? async () => {
+        for (const [id, previous] of changed) {
+          const latest = await request("board-list", { scope });
+          const current2 = (latest?.tasks ?? []).find((item) => item.id === id);
+          if (!current2) continue;
+          await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: current2.revision, type: "card-details", value: { type: previous } });
+        }
+        await load();
+        notify(t("Card types restored"));
+      } : void 0);
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to update card types"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkSetOwner = async (next) => {
+    const ids = [...selectedIds];
+    if (!ids.length || !next || bulkBusy || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Change the owner of {count} cards", { count: ids.length }), rows: [{ label: t("Owner"), before: t("Selected cards"), after: actorName(next, actors) }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    try {
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || task.owner === next || task.reviewer === next || !commandsFor(task).some((command) => command.type === "edit")) continue;
+        await request("board-command", {
+          scope,
+          operationId: window.crypto.randomUUID(),
+          taskId: id,
+          expectedRevision: task.revision,
+          type: "edit",
+          value: { title: task.title, owner: next, reviewer: task.reviewer, acceptance: task.acceptance, dependencies: dependenciesOf(task) }
+        });
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      notify(t("Updated the owner of {count} cards", { count: ids.length }));
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to update card owners"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkAssignRelease = async (releaseId) => {
+    const ids = [...selectedIds];
+    const release = releases.find((item) => item.id === releaseId);
+    if (!ids.length || !release || bulkBusy || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Add {count} cards to {release}", { count: ids.length, release: textValue(release.name) || release.id }), rows: [{ label: t("Release"), before: t("Selected cards"), after: textValue(release.name) || release.id }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    try {
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || task.releaseId === release.id) continue;
+        await request("board-release-assign", {
+          scope,
+          operationId: window.crypto.randomUUID(),
+          releaseId: release.id,
+          expectedReleaseRevision: release.revision,
+          taskId: id,
+          expectedTaskRevision: task.revision,
+          afterId: null
+        });
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      notify(t("Added {count} cards to {release}", { count: ids.length, release: textValue(release.name) || release.id }));
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to assign release"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkDuplicate = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || !createEnabled || bulkBusy || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Duplicate {count} cards", { count: ids.length }), rows: [{ label: t("Cards"), before: t("Selected"), after: t("New copies") }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    try {
+      let copied = 0;
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || task.legacy || task.shared) continue;
+        const value = {
+          title: t("Copy of {title}", { title: textValue(task.title) }),
+          owner: asText2(task.owner),
+          reviewer: asText2(task.reviewer),
+          acceptance: textValue(task.acceptance),
+          dependencies: [],
+          type: taskType(task),
+          ...textValue(task.description) ? { description: textValue(task.description) } : {},
+          ...textValue(task.dueDate) ? { dueDate: textValue(task.dueDate), dueComplete: task.dueComplete === true } : {},
+          ...labelsOf(task).length ? { labels: labelsOf(task) } : {},
+          ...Array.isArray(task.checklist) && task.checklist.length ? { checklist: task.checklist.map((item) => ({ ...item })) } : {},
+          ...task.status === "draft" ? { draft: true } : {},
+          ...task.personalProgress !== void 0 ? { personalProgress: task.personalProgress } : {}
+        };
+        await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: `card-${window.crypto.randomUUID()}`, type: "create", value });
+        copied += 1;
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      notify(t("Duplicated {count} cards", { count: copied }));
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to duplicate cards"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkMovePersonal = async (progress) => {
+    const ids = [...selectedIds];
+    if (!ids.length || !progress || bulkBusy || !window.crypto?.randomUUID) return;
+    const approved = await askBoardConfirm({ title: t("Move {count} cards", { count: ids.length }), rows: [{ label: t("Personal progress"), before: t("Selected"), after: t(PERSONAL_COLUMNS.find(([id]) => id === progress)?.[1] ?? "Personal progress") }] });
+    if (!approved) return;
+    setBulkBusy(true);
+    try {
+      for (const id of ids) {
+        const task = allTasks.find((item) => item.id === id);
+        if (!task || task.personalProgress === progress || !commandsFor(task).some((command) => command.type === "personal-progress")) continue;
+        await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: task.revision, type: "personal-progress", value: { progress } });
+      }
+      setSelectedIds(/* @__PURE__ */ new Set());
+      setSelectionMode(false);
+      await load();
+      notify(t("Moved {count} cards", { count: ids.length }));
+    } catch (caught) {
+      setError(hostText(caught?.message) || t("Unable to move cards"));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const releases = Array.isArray(data?.releases) ? data.releases : [];
+  const releaseSupported = Array.isArray(data?.releases);
+  const orderedReleases = [...releases].sort((left, right) => {
+    const a = releasePosition(left), b = releasePosition(right);
+    return a < b ? -1 : a > b ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  });
+  const releaseById = new Map(releases.map((release) => [release.id, release]));
+  const releaseRoles = Array.isArray(data?.releaseRoles) ? data.releaseRoles.filter((role) => role && typeof role.key === "string" && role.key) : null;
+  const releaseTeamSupported = scope.kind === "room" && !!releaseRoles?.length;
+  const proposals = Array.isArray(data?.proposals) ? data.proposals : [];
+  const proposalSupported = Array.isArray(data?.proposals);
+  const hasBoardTools = Boolean(data?.recovery?.items?.length || data?.recovery?.deliveries?.length || data?.recovery?.incomplete || data?.remoteChanges?.items?.length || data?.remoteChanges?.incomplete || initialReview);
+  const chooseView = (next) => {
+    setView(next);
+    setReleaseFocus("");
+  };
+  const openRelease = (id) => {
+    setView("release");
+    setReleaseFocus(id);
+  };
+  const createRelease = async (value) => {
+    if (!window.crypto?.randomUUID) throw new Error(t("Unable to update release"));
+    const operationId = window.crypto.randomUUID();
+    const { team, ...release } = value;
+    await request("board-release-create", { scope, operationId, release: { id: window.crypto.randomUUID(), ...release }, ...team ? { team } : {} });
+    await load(generation.current, true);
+  };
+  const releaseRequest = async (endpoint, payload) => {
+    if (releaseBusy || !window.crypto?.randomUUID) return false;
+    const operationId = window.crypto.randomUUID();
+    setReleaseBusy(payload.releaseId || "new");
+    setReleaseError("");
+    try {
+      await request(endpoint, { scope, operationId, ...payload });
+      await load(generation.current, true);
+      return true;
+    } catch (caught) {
+      setReleaseError(hostText(caught?.message) || t("Unable to update release"));
+      await load(generation.current, true);
+      return false;
+    } finally {
+      setReleaseBusy("");
+    }
+  };
+  const releaseAction = (release, endpoint) => releaseRequest(endpoint, { releaseId: release.id, expectedRevision: release.revision });
+  const openReleaseDetails = (id) => {
+    setReleaseError("");
+    setReleasePanel({ id, mode: "detail" });
+  };
+  const closeReleasePanel = () => {
+    setReleasePanel(null);
+    setReleaseReport(null);
+  };
+  const openReleaseReport = async (release) => {
+    const id = release.id;
+    setReleasePanel({ id, mode: "report" });
+    setReleaseReport({ id, loading: true, error: "", text: "", generatedAt: 0 });
+    try {
+      const result = await request("board-release-report", { scope, releaseId: id });
+      if (typeof result?.markdown !== "string") throw new Error("invalid release report");
+      setReleaseReport((current2) => current2?.id === id ? { id, loading: false, error: "", text: result.markdown, generatedAt: Number.isSafeInteger(result.generatedAt) ? result.generatedAt : 0 } : current2);
+    } catch (caught) {
+      setReleaseReport((current2) => current2?.id === id ? { id, loading: false, error: hostText(caught?.message) || t("Unable to load release report"), text: "", generatedAt: 0 } : current2);
+    }
+  };
+  const saveReleaseGate = (release, gate, status, evidence) => {
+    if (status === "passed" && !evidence) return Promise.resolve(false);
+    return releaseRequest("board-release-gate", { releaseId: release.id, expectedRevision: release.revision, gate, status, ...evidence ? { evidence } : {} });
+  };
+  const checkRelease = (release) => releaseRequest("board-release-check", { releaseId: release.id });
+  const moveRelease = async (release, direction) => {
+    if (releaseBusy || !window.crypto?.randomUUID) return;
+    const index = orderedReleases.findIndex((item) => item.id === release.id);
+    const neighbor = orderedReleases[index + direction];
+    if (!neighbor) return;
+    setReleaseBusy(release.id);
+    setReleaseError("");
+    try {
+      await request("board-release-update", { scope, operationId: window.crypto.randomUUID(), releaseId: release.id, expectedRevision: release.revision, value: { position: neighbor.position } });
+      await request("board-release-update", { scope, operationId: window.crypto.randomUUID(), releaseId: neighbor.id, expectedRevision: neighbor.revision, value: { position: release.position } });
+      await load(generation.current, true);
+    } catch (caught) {
+      setReleaseError(hostText(caught?.message) || t("Unable to update release"));
+      await load(generation.current, true);
+    } finally {
+      setReleaseBusy("");
+    }
+  };
+  const assignInRelease = async (task, release, laneTasks, dropIndex) => {
+    if (releaseBusy || !window.crypto?.randomUUID) return;
+    const previousReleaseId = task.releaseId;
+    setReleaseBusy(task.id);
+    setReleaseError("");
+    try {
+      if (!release) {
+        const source = task.releaseId ? releaseById.get(task.releaseId) : null;
+        if (!source) return;
+        await request("board-release-remove", {
+          scope,
+          operationId: window.crypto.randomUUID(),
+          releaseId: source.id,
+          expectedReleaseRevision: source.revision,
+          taskId: task.id,
+          expectedTaskRevision: task.revision
+        });
+      } else {
+        const without = laneTasks.filter((item) => item.id !== task.id);
+        const originalIndex = laneTasks.findIndex((item) => item.id === task.id);
+        const target = Math.max(0, Math.min(without.length, dropIndex - (originalIndex >= 0 && originalIndex < dropIndex ? 1 : 0)));
+        const afterId = target > 0 ? without[target - 1].id : null;
+        await request("board-release-assign", {
+          scope,
+          operationId: window.crypto.randomUUID(),
+          releaseId: release.id,
+          expectedReleaseRevision: release.revision,
+          taskId: task.id,
+          expectedTaskRevision: task.revision,
+          afterId
+        });
+      }
+      await load(generation.current, true);
+      notify(t("Card moved"), async () => {
+        const latest = await request("board-list", { scope });
+        const currentTask = (latest?.tasks ?? []).find((item) => item.id === task.id);
+        if (!currentTask) return;
+        if (previousReleaseId) {
+          const target = (latest.releases ?? []).find((item) => item.id === previousReleaseId);
+          if (!target || !["draft", "queued"].includes(target.status)) return;
+          await request("board-release-assign", {
+            scope,
+            operationId: window.crypto.randomUUID(),
+            releaseId: target.id,
+            expectedReleaseRevision: target.revision,
+            taskId: task.id,
+            expectedTaskRevision: currentTask.revision,
+            afterId: null
+          });
+        } else if (currentTask.releaseId) {
+          const target = (latest.releases ?? []).find((item) => item.id === currentTask.releaseId);
+          if (!target) return;
+          await request("board-release-remove", {
+            scope,
+            operationId: window.crypto.randomUUID(),
+            releaseId: target.id,
+            expectedReleaseRevision: target.revision,
+            taskId: task.id,
+            expectedTaskRevision: currentTask.revision
+          });
+        }
+        await load();
+      });
+    } catch (caught) {
+      setReleaseError(hostText(caught?.message) || t("Unable to update release"));
+      await load(generation.current, true);
+    } finally {
+      setReleaseBusy("");
+    }
+  };
+  const decideProposal = async (proposal, decision) => {
+    if (proposalBusy || !canAct || !window.crypto?.randomUUID) return;
+    const operationId = window.crypto.randomUUID();
+    setProposalBusy(proposal.id);
+    setProposalError("");
+    try {
+      await request("board-proposal-decide", { scope, operationId, proposalId: proposal.id, expectedRevision: proposal.revision, decision });
+      await load(generation.current, true);
+    } catch (caught) {
+      setProposalError(caught?.message || t("The proposal decision failed."));
+      await load(generation.current, true);
+    } finally {
+      setProposalBusy("");
+    }
+  };
   const hasLegacy = data?.tasks?.some((task) => task.legacy) === true;
+  const allTasks = data?.tasks ?? [];
   const needle = search.trim().toLocaleLowerCase();
-  const filtered = (data?.tasks ?? []).filter((task) => !needle || [task.title, task.id, actorLabel(task.owner, data?.capabilities?.actors), actorLabel(task.reviewer, data?.capabilities?.actors)].some((value) => textValue(value).toLocaleLowerCase().includes(needle)));
+  const textOf2 = (value) => textValue(value).toLocaleLowerCase();
+  const filtered = allTasks.filter((task) => {
+    const labels2 = labelsOf(task);
+    const comments = commentsOf(task);
+    const type = taskType(task), typeText = TASK_TYPE_LABELS[type];
+    const matched = !needle || [task.title, task.id, task.description, task.acceptance, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels2, ...comments.map((comment) => comment.text)].some((value) => textOf2(value).includes(needle));
+    const memberOk = !memberFilter || asText2(task.owner) === memberFilter || asText2(task.reviewer) === memberFilter;
+    const labelOk = !labelFilter || labels2.includes(labelFilter);
+    const dueOk = dueFilterMatch(task, dueFilter);
+    const typeOk = !typeFilter || type === typeFilter;
+    return matched && memberOk && labelOk && dueOk && typeOk;
+  });
   const personal = scope.kind === "personal" && scope.id === "user";
-  const personalTasks = personal ? filtered.filter((task) => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : [];
+  const archivedTasks = filtered.filter((task) => task.archivedAt);
+  const activeFiltered = filtered.filter((task) => !task.archivedAt);
+  const personalTasks = personal ? activeFiltered.filter((task) => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : [];
   const personalIds = new Set(personalTasks.map((task) => task.id));
-  const columns2 = boardColumns(filtered.filter((task) => !personalIds.has(task.id)));
-  const listed = [...COLUMNS.filter(([status]) => !["legacy-pending", "legacy-done"].includes(status) || columns2.get(status).length), ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const columns2 = boardColumns(activeFiltered.filter((task) => !personalIds.has(task.id)));
+  const listedBase = [...COLUMNS.filter(([status]) => !["legacy-pending", "legacy-done"].includes(status) || columns2.get(status).length), ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const listed = lanePrefs.order.length ? [...listedBase].sort((left, right) => {
+    const li = lanePrefs.order.indexOf(left[0]), ri = lanePrefs.order.indexOf(right[0]);
+    return (li === -1 ? 999 : li) - (ri === -1 ? 999 : ri);
+  }) : listedBase;
+  const laneKey = (kind, stage) => kind + ":" + stage;
+  const laneLabelFor = (kind, stage, label) => lanePrefs.names[laneKey(kind, stage)] || label;
+  const renameLane = (kind, stage, value) => setLanePrefs((current2) => ({ ...current2, names: { ...current2.names, [laneKey(kind, stage)]: value.trim() } }));
+  const moveLane = (kind, stage, direction) => {
+    const keys = listed.map(([status]) => status);
+    const index = keys.indexOf(stage);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= keys.length) return;
+    [keys[index], keys[target]] = [keys[target], keys[index]];
+    setLanePrefs((current2) => ({ ...current2, order: keys }));
+  };
   const commandsFor = (task) => !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter((command) => command && typeof command.type === "string") : [];
-  const card = (task) => (0, import_react50.createElement)(TaskCard, {
+  const memberOptions = [...new Set((Array.isArray(actors) ? actors : []).map((actor) => actor.id).filter(Boolean))];
+  const labelOptions = [...new Set(allTasks.flatMap(labelsOf))].sort((a, b) => a.localeCompare(b));
+  const hasFilters = !!(search || memberFilter || labelFilter || dueFilter || typeFilter);
+  const laneOf = (task) => personal && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress) ? task.personalProgress : task.status;
+  const taskById = new Map(filtered.map((task) => [task.id, task]));
+  const canDropOn = (task, kind, stage) => {
+    if (!task || task.shared) return false;
+    const commands = commandsFor(task);
+    if (kind === "personal") return commandOf(commands, "personal-progress");
+    if (kind === "type") return commandOf(commands, "card-details") && taskType(task) !== stage;
+    if (kind === "release") {
+      if (["done", "cancelled"].includes(task.status)) return false;
+      if (stage === "unassigned") {
+        const source = task.releaseId ? releaseById.get(task.releaseId) : null;
+        return !!source && ["draft", "queued"].includes(source.status);
+      }
+      const release = releaseById.get(stage);
+      return !!release && ["draft", "queued"].includes(release.status) && commandOf(commands, "release-assign");
+    }
+    if (laneOf(task) === stage && commandOf(commands, "reorder")) return true;
+    if (stage === "cancelled") return task.status !== "cancelled" && commandOf(commands, "cancel");
+    if (task.status === "draft" && stage === "proposed") return commandOf(commands, "submit");
+    if (task.status === "cancelled" && stage === "proposed") return commandOf(commands, "restore");
+    return ["waiting", "ready", "working"].includes(stage) && commandOf(commands, "schedule");
+  };
+  const openCard = (id, opener) => {
+    cardOpener.current = opener;
+    setSelectedCard({ key, id });
+  };
+  const card = (task, index, laneTasks, kind, stage) => (0, import_react50.createElement)(TaskCard, {
     key: task.id,
     scope,
     task,
     commands: commandsFor(task),
-    actors: data?.capabilities?.actors,
+    actors,
     uncertain: !canAct,
-    onOpen: (id, opener) => {
-      cardOpener.current = opener;
-      setSelectedCard({ key, id });
+    dragging: dragId === task.id,
+    dragEnabled: kind === "type" || kind === "release",
+    request,
+    selectionMode,
+    selected: selectedIds.has(task.id),
+    onSelect: (id, checked) => setSelectedIds((current2) => {
+      const next = new Set(current2);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    }),
+    onOpen: openCard,
+    onDragStart: (item, event) => {
+      if (!canAct) return;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-ds-bot-card", item.id);
+      setDragId(item.id);
+      setDrop(null);
+    },
+    onDragEnd: () => {
+      setDragId("");
+      setDrop(null);
+    },
+    onDragOverCard: (item, event) => {
+      if (!dragId || item.id === dragId) return;
+      const dragged = taskById.get(dragId);
+      if (!canDropOn(dragged, kind, stage)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      const rect = event.currentTarget.getBoundingClientRect();
+      setDrop({ kind, stage, index: index + (event.clientY > rect.top + rect.height / 2 ? 1 : 0) });
     }
   });
   const selected = selectedCard?.key === key ? data?.tasks?.find((task) => task.id === selectedCard.id) : void 0;
+  const panelRelease = releasePanel ? releaseById.get(releasePanel.id) : null;
+  (0, import_react50.useEffect)(() => {
+    if (releasePanel && data && !panelRelease) {
+      setReleasePanel(null);
+      setReleaseReport(null);
+    }
+  }, [releasePanel, data, panelRelease]);
   (0, import_react50.useEffect)(() => {
     if (selectedCard && (selectedCard.key !== key || data && !selected)) setSelectedCard(null);
   }, [key, data, selectedCard, selected]);
+  const laneHandlers = (kind, stage, laneTasks) => {
+    const labelText = kind === "type" ? t(TASK_TYPE_LABELS[stage] ?? "Other") : kind === "release" ? stage === "unassigned" ? t("Unassigned") : textValue(releaseById.get(stage)?.name) || t("Untitled release") : t((COLUMNS.find(([status]) => status === stage) ?? PERSONAL_COLUMNS.find(([value]) => value === stage) ?? [null, stage])[1]);
+    if (kind === "release") {
+      const release = stage === "unassigned" ? null : releaseById.get(stage);
+      return {
+        onDragOver: (event) => {
+          const dragged = taskById.get(dragId);
+          if (!dragged || !canDropOn(dragged, kind, stage)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setDrop({ kind, stage, index: laneTasks.length });
+        },
+        onDragLeave: (event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setDrop(null);
+        },
+        onDrop: (event) => {
+          const id = event.dataTransfer.getData("application/x-ds-bot-card") || dragId;
+          const task = taskById.get(id);
+          if (!task) {
+            setDragId("");
+            setDrop(null);
+            return;
+          }
+          if (stage === "unassigned" && !task.releaseId) {
+            setDragId("");
+            setDrop(null);
+            return;
+          }
+          if (!canDropOn(task, kind, stage)) {
+            event.preventDefault();
+            notify(t("This card cannot be moved to {lane}.", { lane: labelText }));
+            setDragId("");
+            setDrop(null);
+            return;
+          }
+          event.preventDefault();
+          const dropIndex = drop && drop.kind === kind && drop.stage === stage ? drop.index : laneTasks.length;
+          setDragId("");
+          setDrop(null);
+          void assignInRelease(task, release, laneTasks, dropIndex);
+        }
+      };
+    }
+    return {
+      onDragOver: (event) => {
+        const dragged = taskById.get(dragId);
+        if (!dragged || !canDropOn(dragged, kind, stage)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setDrop({ kind, stage, index: laneTasks.length });
+      },
+      onDragLeave: (event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setDrop(null);
+      },
+      onDrop: (event) => {
+        const id = event.dataTransfer.getData("application/x-ds-bot-card") || dragId;
+        const task = taskById.get(id);
+        if (!task) {
+          setDragId("");
+          setDrop(null);
+          return;
+        }
+        if (kind === "type" && taskType(task) === stage) {
+          setDragId("");
+          setDrop(null);
+          return;
+        }
+        if (!canDropOn(task, kind, stage)) {
+          event.preventDefault();
+          notify(t("This card cannot be moved to {lane}.", { lane: labelText }));
+          setDragId("");
+          setDrop(null);
+          return;
+        }
+        event.preventDefault();
+        const dropIndex = drop && drop.kind === kind && drop.stage === stage ? drop.index : laneTasks.length;
+        const originalIndex = laneTasks.findIndex((item) => item.id === id);
+        const without = laneTasks.filter((item) => item.id !== id);
+        const target = Math.max(0, Math.min(without.length, dropIndex - (originalIndex >= 0 && originalIndex < dropIndex ? 1 : 0)));
+        const afterId = target > 0 ? without[target - 1].id : null;
+        setDragId("");
+        setDrop(null);
+        const commands = commandsFor(task);
+        const previousAfterId = originalIndex > 0 ? laneTasks[originalIndex - 1].id : null;
+        if (kind === "personal") {
+          if (task.personalProgress === stage && commandOf(commands, "reorder")) void run2(task, { type: "reorder" }, { afterId }).then((state) => {
+            if (state === "committed") notify(t("Card reordered"), () => undoReorder(previousAfterId)(task.id));
+          });
+          else void run2(task, { type: "personal-progress" }, { progress: stage, afterId });
+        } else if (kind === "type") {
+          if (taskType(task) !== stage) {
+            const before = t(TASK_TYPE_LABELS[taskType(task)] ?? "Other"), after = t(TASK_TYPE_LABELS[stage] ?? "Other");
+            void askBoardConfirm({ title: task.title, rows: [{ label: t("Type"), before, after }] }).then((ok) => {
+              if (ok) void run2(task, { type: "card-details" }, { type: stage });
+            });
+          }
+        } else if (task.status === stage && commandOf(commands, "reorder")) void run2(task, { type: "reorder" }, { afterId }).then((state) => {
+          if (state === "committed") notify(t("Card reordered"), () => undoReorder(previousAfterId)(task.id));
+        });
+        else if (stage === "cancelled") void run2(task, { type: "cancel" });
+        else if (task.status === "draft" && stage === "proposed") void run2(task, { type: "submit" });
+        else if (task.status === "cancelled" && stage === "proposed") void run2(task, { type: "restore" });
+        else if (["waiting", "ready", "working"].includes(stage) && commandOf(commands, "schedule")) void run2(task, { type: "schedule" });
+        else notify(t("This card cannot be moved to {lane}.", { lane: labelText }));
+      }
+    };
+  };
+  const openCreate = (config, title2 = "") => {
+    if (!createEnabled) return;
+    setCreateFor(title2 ? { ...config, initial: { ...config.initial, title: title2 } } : config);
+  };
+  const duplicate = (task) => {
+    setSelectedCard(null);
+    setCreateFor({
+      laneLabel: stageLabelOf(task),
+      defaultOwner: asText2(task.owner),
+      ownerOnly: false,
+      scheduleOnCreate: false,
+      followup: false,
+      initial: {
+        title: t("Copy of {title}", { title: textValue(task.title) }),
+        owner: asText2(task.owner),
+        reviewer: asText2(task.reviewer),
+        acceptance: textValue(task.acceptance),
+        type: taskType(task),
+        dependencies: dependenciesOf(task),
+        details: { description: textValue(task.description), dueDate: textValue(task.dueDate), dueComplete: task.dueComplete === true, labels: labelsOf(task), checklist: Array.isArray(task.checklist) ? task.checklist.map((item) => ({ ...item })) : [] }
+      }
+    });
+  };
+  const renderLane = (kind, stage, label, laneTasks, config) => {
+    const shownLabel = laneLabelFor(kind, stage, label);
+    const sorted = sortMode === "title" ? [...laneTasks].sort((a, b) => textValue(a.title).localeCompare(textValue(b.title))) : sortMode === "due" ? [...laneTasks].sort((a, b) => (textValue(a.dueDate) || "9999").localeCompare(textValue(b.dueDate) || "9999")) : sortMode === "type" ? [...laneTasks].sort((a, b) => taskType(a).localeCompare(taskType(b))) : laneTasks;
+    const dropHere = drop && drop.kind === kind && drop.stage === stage;
+    const children = [];
+    sorted.forEach((task, index) => {
+      if (dropHere && drop.index === index) children.push((0, import_react50.createElement)("span", { key: "drop-" + index, className: "bt-board-drop-line", "aria-hidden": true }));
+      children.push(card(task, index, laneTasks, kind, stage));
+    });
+    if (dropHere && drop.index >= sorted.length) children.push((0, import_react50.createElement)("span", { key: "drop-end", className: "bt-board-drop-line", "aria-hidden": true }));
+    return (0, import_react50.createElement)(BoardLane, {
+      key: stage,
+      kind,
+      stage,
+      label: shownLabel,
+      count: laneTasks.length,
+      meta: config?.meta,
+      actions: config?.actions,
+      releaseId: config?.releaseId,
+      focus: config?.focus,
+      createEnabled: config?.noCreate ? false : createEnabled,
+      onCreate: (title2) => openCreate({ ...config, laneLabel: shownLabel }, title2),
+      dropActive: !!dropHere,
+      empty: laneTasks.length ? false : config?.emptyLabel ?? true,
+      onRename: kind === "workflow" ? (value) => renameLane(kind, stage, value) : void 0,
+      onMove: kind === "workflow" ? (direction) => moveLane(kind, stage, direction) : void 0,
+      onArchiveAll: kind === "workflow" ? () => void archiveLane(kind, stage, laneTasks) : void 0,
+      ...laneHandlers(kind, stage, laneTasks)
+    }, children);
+  };
+  (0, import_react50.useEffect)(() => {
+    if (view === "release" && data && !releaseSupported) setView("status");
+  }, [view, data, releaseSupported]);
+  (0, import_react50.useEffect)(() => {
+    if (view !== "release" || !releaseFocus) return void 0;
+    const frame = window.requestAnimationFrame(() => {
+      const node = [...dialog.current?.querySelectorAll("[data-release-id]") ?? []].find((item) => item.dataset.releaseId === releaseFocus);
+      node?.scrollIntoView({ block: "nearest", inline: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [view, releaseFocus, orderedReleases.length]);
+  const releaseActionButton = (release, label, endpoint, extraClass = "") => (0, import_react50.createElement)("button", {
+    type: "button",
+    className: "bt-card-mini " + extraClass,
+    disabled: !!releaseBusy || !canAct,
+    onClick: () => void releaseAction(release, endpoint)
+  }, t(label));
+  const releaseCheckButton = (release) => (0, import_react50.createElement)("button", {
+    type: "button",
+    className: "bt-card-mini",
+    disabled: !!releaseBusy || !canAct,
+    onClick: () => void checkRelease(release)
+  }, t("Check"));
+  const cancelRelease = (release) => {
+    void askBoardConfirm({ title: release.name, rows: [{ label: t("Status"), before: release.status, after: t("Cancelled") }] }).then((approved) => {
+      if (approved) void releaseAction(release, "board-release-cancel");
+    });
+  };
+  const releaseActions = (release) => {
+    const editable = ["draft", "queued"].includes(release.status);
+    const index = orderedReleases.findIndex((item) => item.id === release.id);
+    const destructive = ["draft", "queued", "running"].includes(release.status);
+    return (0, import_react50.createElement)(
+      "div",
+      { className: "bt-board-release-actions" },
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => openReleaseDetails(release.id) }, t("Details")),
+      release.status === "running" ? releaseCheckButton(release) : null,
+      release.status === "draft" ? releaseActionButton(release, "Queue", "board-release-queue") : null,
+      ["draft", "queued"].includes(release.status) ? releaseActionButton(release, "Start", "board-release-start") : null,
+      destructive || editable ? (0, import_react50.createElement)(
+        "details",
+        { className: "bt-board-lane-menu bt-board-release-menu" },
+        (0, import_react50.createElement)("summary", { className: "bt-card-mini", "aria-label": t("Release actions"), title: t("Release actions") }, "···"),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-board-lane-menu-body" },
+          destructive ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini bt-board-release-cancel", disabled: !!releaseBusy || !canAct, onClick: () => cancelRelease(release) }, t("Cancel release")) : null,
+          editable && index > 0 ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: !!releaseBusy || !canAct, onClick: () => void moveRelease(release, -1) }, t("Move release up")) : null,
+          editable && index >= 0 && index < orderedReleases.length - 1 ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: !!releaseBusy || !canAct, onClick: () => void moveRelease(release, 1) }, t("Move release down")) : null
+        )
+      ) : null
+    );
+  };
+  const releaseMeta = (release) => {
+    const manager = release.projectManagerId ? actorName(release.projectManagerId, actors) : "";
+    const roleCount = releaseRoleCount(release);
+    const groupId = textValue(release.groupId);
+    return (0, import_react50.createElement)(
+      "span",
+      { className: "bt-board-release-meta" },
+      release.version ? (0, import_react50.createElement)("span", { className: "bt-board-release-version" }, release.version) : null,
+      (0, import_react50.createElement)(ReleaseStatusChip, { status: release.status }),
+      (0, import_react50.createElement)("span", { className: "bt-board-release-progress" }, t("{done}/{total} done", { done: release.doneCount ?? 0, total: release.itemCount ?? 0 })),
+      manager ? (0, import_react50.createElement)("span", { className: "bt-board-release-pm", title: t("Project manager") }, t("Project manager: {name}", { name: manager })) : null,
+      roleCount ? (0, import_react50.createElement)("span", { className: "bt-board-release-roles", title: t("Role assignments") }, t("{count} roles", { count: roleCount })) : null,
+      groupId ? (0, import_react50.createElement)("span", { className: "bt-board-release-group", title: groupId }, t("Group {id}", { id: shortIdentity(groupId) })) : null,
+      !manager && !roleCount && !groupId ? (0, import_react50.createElement)("span", { className: "bt-board-release-pm bt-board-release-team-none" }, t("No release team")) : null,
+      (0, import_react50.createElement)(ReleaseGateStrip, { release, compact: true }),
+      release.status === "running" && releaseItemsDone(release) && !releaseGatesPassed(release) ? (0, import_react50.createElement)("span", { className: "bt-board-release-awaiting", role: "status" }, t("Awaiting gates")) : null
+    );
+  };
+  const releaseBar = releaseSupported && orderedReleases.length ? (0, import_react50.createElement)(
+    "div",
+    { className: "bt-board-release-bar" },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-board-release-chips", role: "group", "aria-label": t("Releases") },
+      orderedReleases.map((release) => (0, import_react50.createElement)(ReleaseChip, { key: release.id, release, onOpen: () => openRelease(release.id) }))
+    )
+  ) : null;
+  const typeSection = (0, import_react50.createElement)(
+    "section",
+    { className: "bt-board-section", "aria-label": t("Task types") },
+    (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("By type")), (0, import_react50.createElement)("p", null, t("Drag a card to another type lane to change its type without changing its status."))),
+    (0, import_react50.createElement)(ColumnRail, { label: t("Task types") }, TASK_TYPES.map(([id, label]) => renderLane("type", id, t(label), activeFiltered.filter((task) => taskType(task) === id), { noCreate: true, laneLabel: t(label) })))
+  );
+  const activityItems = Array.isArray(data?.activity) ? data.activity : [];
+  const activitySection = (0, import_react50.createElement)(
+    "section",
+    { className: "bt-board-section", "aria-label": t("Activity") },
+    (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("Activity")), (0, import_react50.createElement)("p", null, t("Recent changes across the board."))),
+    activityItems.length ? (0, import_react50.createElement)("div", { className: "bt-board-activity" }, activityItems.map((item) => (0, import_react50.createElement)(
+      "button",
+      { key: item.id, type: "button", className: "bt-board-activity-row", onClick: () => openCard(item.taskId) },
+      (0, import_react50.createElement)("span", { className: "bt-card-activity-dot", "aria-hidden": true }),
+      (0, import_react50.createElement)("span", { className: "bt-board-activity-text" }, (0, import_react50.createElement)("strong", null, t(ACTIVITY_LABELS[item.type] ?? "Card updated")), (0, import_react50.createElement)("span", null, textValue(item.taskTitle) || item.taskId)),
+      (0, import_react50.createElement)("span", { className: "bt-board-activity-by" }, actorName(item.actor, actors)),
+      (0, import_react50.createElement)("time", { dateTime: Number.isFinite(item.at) ? new Date(item.at).toISOString() : void 0 }, relativeTime(item.at))
+    ))) : (0, import_react50.createElement)("p", { className: "bt-card-muted" }, t("No activity yet."))
+  );
+  const archiveSection = (0, import_react50.createElement)(
+    "section",
+    { className: "bt-board-section", "aria-label": t("Archive") },
+    (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("Archive")), (0, import_react50.createElement)("p", null, t("Archived cards are hidden from the workflow and release views. Restore a card to return it to the board."))),
+    (0, import_react50.createElement)(ColumnRail, { label: t("Archive") }, renderLane("archive", "archived", t("Archived cards"), archivedTasks, { noCreate: true, laneLabel: t("Archived cards"), emptyLabel: t("No archived cards") }))
+  );
+  const releaseSection = releaseSupported ? (0, import_react50.createElement)(
+    "section",
+    { className: "bt-board-section", "aria-label": t("Releases") },
+    (0, import_react50.createElement)(
+      "div",
+      { className: "bt-board-section-heading bt-board-section-heading-row" },
+      (0, import_react50.createElement)("div", null, (0, import_react50.createElement)("h3", null, t("Releases")), (0, import_react50.createElement)("p", null, t("Drag cards between release lanes. Arrow controls reorder draft and queued releases."))),
+      (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: !canAct, onClick: () => setNewRelease(true) }, (0, import_react50.createElement)(PlusIcon), t("New release"))
+    ),
+    (0, import_react50.createElement)(ColumnRail, { label: t("Releases") }, [
+      ...orderedReleases.map((release) => {
+        const label = textValue(release.name) || textValue(release.version) || t("Untitled release");
+        return renderLane("release", release.id, label, activeFiltered.filter((task) => task.releaseId === release.id), {
+          noCreate: true,
+          laneLabel: label,
+          releaseId: release.id,
+          focus: releaseFocus === release.id,
+          meta: releaseMeta(release),
+          actions: releaseActions(release)
+        });
+      }),
+      renderLane("release", "unassigned", t("Unassigned"), activeFiltered.filter((task) => !task.releaseId), { noCreate: true, laneLabel: t("Unassigned") })
+    ])
+  ) : null;
   if (!visible) return null;
   return (0, import_react_dom8.createPortal)((0, import_react50.createElement)(
     "div",
     { className: "bt-board-backdrop" },
     (0, import_react50.createElement)(
       "section",
-      { ref: dialog, tabIndex: -1, className: "bt-board-dialog", role: "dialog", "aria-modal": "true", "aria-label": title || t("Task board") },
+      { ref: dialog, tabIndex: -1, className: "bt-board-dialog", role: "dialog", "aria-modal": selectedCard || createFor ? "false" : "true", "aria-label": title || t("Task board") },
       (0, import_react50.createElement)(
         "header",
         { className: "bt-board-header" },
         (0, import_react50.createElement)(
           "div",
-          null,
-          (0, import_react50.createElement)("h2", null, title || t("Task board")),
-          (0, import_react50.createElement)("p", null, scope.kind === "room" ? t("Group task board") : t("Personal task board")),
-          showCapacity ? (0, import_react50.createElement)("p", null, t("Instance task capacity: {count} / {limit}", { count: capacity.taskCount, limit: capacity.taskLimit })) : null
+          { className: "bt-board-heading" },
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-board-title-row" },
+            (0, import_react50.createElement)("h2", null, title || t("Task board")),
+            showCapacity ? (0, import_react50.createElement)("span", { className: "bt-board-capacity" }, t("{count} / {limit}", { count: capacity.taskCount, limit: capacity.taskLimit })) : null
+          ),
+          (0, import_react50.createElement)("p", null, scope.kind === "room" ? t("Group task board") : t("Personal task board"), data ? " · " + t("{count} cards", { count: filtered.length }) : "")
         ),
         (0, import_react50.createElement)(
           "div",
-          null,
-          (0, import_react50.createElement)("button", { type: "button", onClick: () => void load() }, t("Refresh")),
-          " ",
-          (0, import_react50.createElement)("button", { type: "button", onClick: dismiss }, t("Close"))
+          { className: "bt-board-head-actions" },
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Refresh"), title: t("Refresh"), onClick: () => void load() }, (0, import_react50.createElement)(RefreshIcon)),
+          (0, import_react50.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), title: t("Close"), onClick: dismiss }, (0, import_react50.createElement)(CloseIcon))
         )
       ),
+      boardConfirm ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-board-confirm-layer", onMouseDown: (event) => {
+          if (event.target === event.currentTarget) settleBoardConfirm(false);
+        } },
+        (0, import_react50.createElement)(
+          "section",
+          { ref: boardConfirmBox, className: "bt-board-confirm", role: "alertdialog", "aria-label": t("Confirm change"), tabIndex: -1 },
+          (0, import_react50.createElement)("div", { className: "bt-card-confirm-head" }, (0, import_react50.createElement)("h3", null, t("Confirm change")), (0, import_react50.createElement)("p", null, t("Review the before and after values before applying this change."))),
+          (0, import_react50.createElement)("p", { className: "bt-board-confirm-title" }, textValue(boardConfirm.title)),
+          (0, import_react50.createElement)("div", { className: "bt-card-diff" }, (boardConfirm.rows ?? []).map((row) => (0, import_react50.createElement)(
+            "div",
+            { key: row.label, className: "bt-card-diff-row" },
+            (0, import_react50.createElement)("strong", null, row.label),
+            (0, import_react50.createElement)("div", { className: "bt-card-diff-values" }, (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, t("Before") + ": "), row.before), (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, t("After") + ": "), row.after))
+          ))),
+          (0, import_react50.createElement)(
+            "div",
+            { className: "bt-card-editor-actions" },
+            (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => settleBoardConfirm(false) }, t("Cancel")),
+            (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", onClick: () => settleBoardConfirm(true) }, t("Confirm"))
+          )
+        )
+      ) : null,
       error ? (0, import_react50.createElement)("div", { className: "bt-board-error", role: "alert" }, error) : null,
       capacityReached ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "status" }, t("Task limit reached. New tasks cannot be created.")) : null,
-      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-pending", role: "note" }, t("Goal card details can be corrected without changing the original task or acceptance record.")) : null,
+      hasLegacy ? (0, import_react50.createElement)("div", { className: "bt-board-legacy-note", role: "note" }, t("Goal card details can be corrected without changing the original task or acceptance record.")) : null,
+      data && capacity?.create !== true ? (0, import_react50.createElement)("div", { className: "bt-board-legacy-note", role: "note" }, t("This board is read only.")) : null,
       pending ? (0, import_react50.createElement)(
         "div",
         { className: "bt-board-pending", role: "status" },
         t(busy ? "Saving…" : "An action needs confirmation."),
         " ",
-        (0, import_react50.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => check(pending) }, t("Check action")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: cancelBusy, onClick: () => check(pending) }, t("Check action")),
         " ",
-        (0, import_react50.createElement)("button", { type: "button", disabled: cancelBusy, onClick: () => cancel(pending) }, t("Safely cancel pending request"))
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: cancelBusy, onClick: () => cancel(pending) }, t("Safely cancel pending request"))
       ) : null,
       (0, import_react50.createElement)(
         "div",
         { className: "bt-board-toolbar" },
         (0, import_react50.createElement)(
-          "label",
-          { className: "bt-board-search" },
-          (0, import_react50.createElement)("span", { className: "bt-board-search-icon", "aria-hidden": "true" }, "⌕"),
-          (0, import_react50.createElement)("input", { type: "search", "aria-label": t("Search tasks"), placeholder: t("Search tasks"), value: search, onChange: (event) => setSearch(event.target.value) })
+          "div",
+          { className: "bt-board-views", role: "group", "aria-label": t("Board view") },
+          [["status", "Status"], ["type", "Type"], ...releaseSupported ? [["release", "Release"]] : [], ...archivedTasks.length > 0 || canAct ? [["archive", "Archive"]] : [], ["activity", "Activity"]].map(([id, label]) => (0, import_react50.createElement)("button", { key: id, type: "button", className: "bt-board-view", "aria-pressed": view === id, onClick: () => chooseView(id) }, t(label)))
         ),
-        null
+        (0, import_react50.createElement)("label", { className: "bt-board-search" }, (0, import_react50.createElement)(SearchIcon), (0, import_react50.createElement)("input", { ref: searchRef, type: "search", "aria-label": t("Search tasks"), placeholder: t("Search tasks"), value: search, onChange: (event) => setSearch(event.target.value) })),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-board-filter-toggle", "aria-expanded": filtersOpen, onClick: () => setFiltersOpen((value) => !value) }, t("Filters"), hasFilters ? (0, import_react50.createElement)("span", { className: "bt-board-count" }, "•") : null),
+        (0, import_react50.createElement)(
+          "div",
+          { className: "bt-board-filters" + (filtersOpen ? " bt-board-filters-open" : "") },
+          (0, import_react50.createElement)(
+            "select",
+            { value: memberFilter, "aria-label": t("Filter by member"), onChange: (event) => setMemberFilter(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("All members")),
+            memberOptions.map((id) => (0, import_react50.createElement)("option", { key: id, value: id }, actorName(id, actors)))
+          ),
+          (0, import_react50.createElement)(
+            "select",
+            { value: typeFilter, "aria-label": t("Filter by type"), onChange: (event) => setTypeFilter(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("All types")),
+            TASK_TYPES.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label)))
+          ),
+          labelOptions.length ? (0, import_react50.createElement)(
+            "select",
+            { value: labelFilter, "aria-label": t("Filter by label"), onChange: (event) => setLabelFilter(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("All labels")),
+            labelOptions.map((label) => (0, import_react50.createElement)("option", { key: label, value: label }, label))
+          ) : null,
+          (0, import_react50.createElement)(
+            "select",
+            { value: dueFilter, "aria-label": t("Filter by due date"), onChange: (event) => setDueFilter(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("Any due date")),
+            (0, import_react50.createElement)("option", { value: "overdue" }, t("Overdue")),
+            (0, import_react50.createElement)("option", { value: "soon" }, t("Due soon")),
+            (0, import_react50.createElement)("option", { value: "complete" }, t("Due complete")),
+            (0, import_react50.createElement)("option", { value: "none" }, t("No due date"))
+          ),
+          (0, import_react50.createElement)(
+            "select",
+            { value: sortMode, "aria-label": t("Sort cards"), onChange: (event) => setSortMode(event.target.value) },
+            (0, import_react50.createElement)("option", { value: "" }, t("Manual order")),
+            (0, import_react50.createElement)("option", { value: "due" }, t("Due date")),
+            (0, import_react50.createElement)("option", { value: "title" }, t("Title")),
+            (0, import_react50.createElement)("option", { value: "type" }, t("Type"))
+          ),
+          hasFilters ? (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => {
+            setSearch("");
+            setMemberFilter("");
+            setLabelFilter("");
+            setDueFilter("");
+            setTypeFilter("");
+          } }, t("Clear filters")) : null
+        ),
+        proposalSupported ? (0, import_react50.createElement)(
+          "button",
+          {
+            type: "button",
+            className: "bt-board-changes" + (changesOpen ? " bt-board-changes-open" : "") + (proposalUnread > 0 && !changesOpen ? " bt-board-changes-new" : ""),
+            "aria-pressed": changesOpen,
+            onClick: () => {
+              setChangesOpen((value) => !value);
+              if (!changesOpen) {
+                setProposalUnread(0);
+                void load();
+              }
+            }
+          },
+          t("Changes"),
+          proposals.length ? (0, import_react50.createElement)("span", { className: "bt-board-count" }, proposals.length) : null
+        ) : null,
+        canAct ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-select-toggle", "aria-pressed": selectionMode, onClick: () => {
+          setSelectionMode((value) => !value);
+          setSelectedIds(/* @__PURE__ */ new Set());
+        } }, selectionMode ? t("Done") : t("Select")) : null
       ),
-      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" }, (0, import_react50.createElement)(HeldTurns, { key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(WorkDecisions, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(LegacyWorkReview, { key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { monitor: data.remoteChanges })) : null,
-      !data ? (0, import_react50.createElement)(
+      selectionMode ? (0, import_react50.createElement)(
         "div",
-        { className: "bt-board-empty" },
-        error ? t("Board unavailable") : t("Loading…"),
-        error ? (0, import_react50.createElement)("button", { type: "button", onClick: () => load() }, t("Retry")) : null
-      ) : (0, import_react50.createElement)(
+        { className: "bt-board-bulk", role: "status" },
+        (0, import_react50.createElement)("span", null, t("{count} selected", { count: selectedIds.size })),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: bulkBusy || !selectedIds.size, onClick: () => void bulkArchive() }, t("Archive selected")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: bulkBusy || !selectedIds.size || !createEnabled, onClick: () => void bulkDuplicate() }, t("Duplicate selected")),
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini bt-card-mini-danger", disabled: bulkBusy || !selectedIds.size, onClick: () => void bulkCancel() }, t("Cancel selected")),
+        personal && selectionMode ? (0, import_react50.createElement)("label", { className: "bt-board-bulk-select" }, (0, import_react50.createElement)("span", null, t("Personal progress")), (0, import_react50.createElement)(
+          "select",
+          { defaultValue: "", disabled: bulkBusy || !selectedIds.size, "aria-label": t("Move selected cards"), onChange: (event) => {
+            const next = event.target.value;
+            event.target.value = "";
+            if (next) void bulkMovePersonal(next);
+          } },
+          (0, import_react50.createElement)("option", { value: "" }, t("Move to")),
+          PERSONAL_COLUMNS.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label)))
+        )) : null,
+        (0, import_react50.createElement)("label", { className: "bt-board-bulk-select" }, (0, import_react50.createElement)("span", null, t("Type")), (0, import_react50.createElement)(
+          "select",
+          { defaultValue: "", disabled: bulkBusy || !selectedIds.size, "aria-label": t("Set type for selected cards"), onChange: (event) => {
+            const next = event.target.value;
+            event.target.value = "";
+            if (next) void bulkSetType(next);
+          } },
+          (0, import_react50.createElement)("option", { value: "" }, t("Set type")),
+          TASK_TYPES.map(([id, label]) => (0, import_react50.createElement)("option", { key: id, value: id }, t(label)))
+        )),
+        (0, import_react50.createElement)("label", { className: "bt-board-bulk-select" }, (0, import_react50.createElement)("span", null, t("Owner")), (0, import_react50.createElement)(
+          "select",
+          { defaultValue: "", disabled: bulkBusy || !selectedIds.size, "aria-label": t("Set owner for selected cards"), onChange: (event) => {
+            const next = event.target.value;
+            event.target.value = "";
+            if (next) void bulkSetOwner(next);
+          } },
+          (0, import_react50.createElement)("option", { value: "" }, t("Set owner")),
+          (Array.isArray(actors) ? actors : []).filter((actor) => actor.id !== "user").map((actor) => (0, import_react50.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+        )),
+        orderedReleases.some((release) => ["draft", "queued"].includes(release.status)) ? (0, import_react50.createElement)("label", { className: "bt-board-bulk-select" }, (0, import_react50.createElement)("span", null, t("Release")), (0, import_react50.createElement)(
+          "select",
+          { defaultValue: "", disabled: bulkBusy || !selectedIds.size, "aria-label": t("Add selected cards to release"), onChange: (event) => {
+            const next = event.target.value;
+            event.target.value = "";
+            if (next) void bulkAssignRelease(next);
+          } },
+          (0, import_react50.createElement)("option", { value: "" }, t("Add to release")),
+          orderedReleases.filter((release) => ["draft", "queued"].includes(release.status)).map((release) => (0, import_react50.createElement)("option", { key: release.id, value: release.id }, textValue(release.name) || release.id))
+        )) : null,
+        (0, import_react50.createElement)("button", { type: "button", className: "bt-card-mini", disabled: bulkBusy, onClick: () => {
+          setSelectedIds(/* @__PURE__ */ new Set());
+          setSelectionMode(false);
+        } }, t("Clear selection"))
+      ) : null,
+      view === "status" && data?.summary ? (0, import_react50.createElement)(
+        "div",
+        { className: "bt-board-summary", role: "status", "aria-label": t("Board summary") },
+        (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, data.summary.statuses?.working ?? 0), " ", t("In progress")),
+        (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, data.summary.statuses?.waiting ?? 0), " ", t("Waiting")),
+        (0, import_react50.createElement)("span", { className: data.summary.blocked ? "bt-board-summary-alert" : "" }, (0, import_react50.createElement)("b", null, data.summary.blocked ?? 0), " ", t("Blocked")),
+        (0, import_react50.createElement)("span", { className: data.summary.overdue ? "bt-board-summary-alert" : "" }, (0, import_react50.createElement)("b", null, data.summary.overdue ?? 0), " ", t("Overdue")),
+        (0, import_react50.createElement)("span", null, (0, import_react50.createElement)("b", null, data.summary.statuses?.done ?? 0), " ", t("Done"))
+      ) : null,
+      hasBoardTools ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => setToolsOpen((value) => !value) }, t("Board tools")) : null,
+      data ? (0, import_react50.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react50.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react50.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react50.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react50.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
+      !data ? (0, import_react50.createElement)("div", { className: "bt-board-empty" }, error ? t("Board unavailable") : t("Loading…"), error ? (0, import_react50.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => load() }, t("Retry")) : null) : (0, import_react50.createElement)(
         "div",
         { className: "bt-board-content" },
-        personal ? (0, import_react50.createElement)(
+        changesOpen && proposalSupported ? (0, import_react50.createElement)(ProposalPanel, {
+          proposals,
+          actors,
+          tasks: data.tasks,
+          releases,
+          disabled: !canAct || !!proposalBusy,
+          busy: proposalBusy,
+          error: proposalError,
+          onDecide: decideProposal,
+          onClose: () => setChangesOpen(false)
+        }) : null,
+        releaseError ? (0, import_react50.createElement)("div", { className: "bt-board-release-error", role: "alert" }, releaseError) : null,
+        view === "status" && releaseSupported ? releaseBar : null,
+        view === "status" && personal ? (0, import_react50.createElement)(
           "section",
           { className: "bt-board-section", "aria-label": t("Personal progress") },
-          (0, import_react50.createElement)(
-            "div",
-            { className: "bt-board-section-heading" },
-            (0, import_react50.createElement)("h3", null, t("Personal progress")),
-            (0, import_react50.createElement)("p", null, t("Drag a card or use its progress menu."), " ", t("Your own progress markers do not complete shared work or unblock dependencies."))
-          ),
-          (0, import_react50.createElement)(ColumnRail, { label: t("Personal progress"), personal: true }, PERSONAL_COLUMNS.map(([progress, label]) => {
-            const tasks = personalTasks.filter((task) => task.personalProgress === progress);
-            const accepts = (event) => canAct && [...event.dataTransfer.types].includes("application/x-ds-bot-personal-task");
-            return (0, import_react50.createElement)(
-              "section",
-              {
-                className: "bt-board-column",
-                key: progress,
-                "aria-label": t(label),
-                "data-stage": progress,
-                onDragOver: (event) => {
-                  if (accepts(event)) {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                  }
-                },
-                onDrop: (event) => {
-                  if (!accepts(event)) return;
-                  event.preventDefault();
-                  const id = event.dataTransfer.getData("application/x-ds-bot-personal-task");
-                  const task = personalTasks.find((item) => item.id === id);
-                  if (task && task.personalProgress !== progress && commandMap[task.id]?.some((command) => command.type === "personal-progress")) void run2(task, { type: "personal-progress" }, { progress });
-                }
-              },
-              (0, import_react50.createElement)("h3", null, (0, import_react50.createElement)("span", null, t(label)), (0, import_react50.createElement)("span", { className: "bt-board-count" }, tasks.length)),
-              tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-drop-hint" }, t("Drag a card here")),
-              data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? (0, import_react50.createElement)(CreateTask, {
-                disabled: !canAct || capacityReached,
-                actors: data.capabilities.actors,
-                tasks: data.tasks,
-                defaultOwner: "user",
-                ownerOnly: true,
-                personalProgress: progress,
-                onCreate: createCard
-              }) : null
-            );
-          }))
+          (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("Personal progress")), (0, import_react50.createElement)("p", null, t("Drag a card or use its progress menu."), " ", t("Your own progress markers do not complete shared work or unblock dependencies."))),
+          (0, import_react50.createElement)(ColumnRail, { label: t("Personal progress"), personal: true }, PERSONAL_COLUMNS.map(([progress, label]) => renderLane(
+            "personal",
+            progress,
+            t(label),
+            personalTasks.filter((task) => task.personalProgress === progress),
+            { laneLabel: t(label), personalProgress: progress, defaultOwner: "user", ownerOnly: true, scheduleOnCreate: false, followup: false }
+          )))
         ) : null,
-        !personal || filtered.some((task) => !personalIds.has(task.id)) ? (0, import_react50.createElement)(
+        view === "status" && (!personal || filtered.some((task) => !personalIds.has(task.id))) ? (0, import_react50.createElement)(
           "section",
           { className: "bt-board-section", "aria-label": t("Workflow") },
           personal ? (0, import_react50.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react50.createElement)("h3", null, t("Shared workflow")), (0, import_react50.createElement)("p", null, t("These statuses reflect the shared task workflow."))) : null,
           (0, import_react50.createElement)(ColumnRail, { label: t("Workflow") }, listed.map(([status, label]) => {
-            const tasks = columns2.get(status);
-            const acceptsTask = ["waiting", "ready", "working"].includes(status);
-            const acceptDrop = (event) => canAct && acceptsTask && [...event.dataTransfer.types].includes("application/x-ds-bot-task");
-            const addInThisColumn = ["proposed", "waiting", "ready", "working", "reported", "done", "legacy-pending", "legacy-done", "unknown"].includes(status);
             const scheduleOnCreate = !personal && ["waiting", "ready", "working"].includes(status);
             const followup = personal || ["reported", "done", "legacy-pending", "legacy-done", "unknown"].includes(status);
-            return (0, import_react50.createElement)(
-              "section",
-              {
-                className: "bt-board-column",
-                key: status,
-                "aria-label": t(label),
-                "data-stage": status,
-                onDragOver: (event) => {
-                  if (acceptDrop(event)) {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    event.currentTarget.dataset.dropActive = "true";
-                  }
-                },
-                onDragLeave: (event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget)) delete event.currentTarget.dataset.dropActive;
-                },
-                onDrop: (event) => {
-                  delete event.currentTarget.dataset.dropActive;
-                  if (!acceptDrop(event)) return;
-                  event.preventDefault();
-                  const id = event.dataTransfer.getData("application/x-ds-bot-task"), task = filtered.find((item) => item.id === id);
-                  if (task && commandsFor(task).some((command) => command.type === "schedule")) void run2(task, { type: "schedule" });
-                }
-              },
-              (0, import_react50.createElement)("h3", null, (0, import_react50.createElement)("span", null, t(label)), tasks.length ? (0, import_react50.createElement)("span", { className: "bt-board-count" }, tasks.length) : null),
-              tasks.length ? tasks.map(card) : (0, import_react50.createElement)("p", { className: "bt-board-lane-empty" }, t("No tasks")),
-              addInThisColumn && data?.capabilities?.create === true && Array.isArray(data.capabilities.actors) ? (0, import_react50.createElement)(CreateTask, {
-                disabled: !canAct || capacityReached,
-                actors: data.capabilities.actors,
-                tasks: data.tasks,
-                defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "",
-                ownerOnly: scope.kind === "personal",
-                personalProgress: personal ? "todo" : void 0,
-                scheduleOnCreate,
-                followup,
-                onCreate: createCard
-              }) : null
-            );
+            return renderLane("workflow", status, t(label), columns2.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
           }))
-        ) : null
+        ) : null,
+        view === "type" ? typeSection : null,
+        view === "release" && releaseSupported ? releaseSection : null,
+        view === "archive" ? archiveSection : null,
+        view === "activity" ? activitySection : null,
+        selected ? (0, import_react50.createElement)(TaskCardDialog, {
+          key: selected.id,
+          scope,
+          task: selected,
+          tasks: data.tasks,
+          commands: commandsFor(selected),
+          actors: data.capabilities?.actors,
+          targets: data.capabilities?.shareTargets?.[selected.id],
+          uploadEnabled: data.capabilities?.upload === true,
+          uncertain: !canAct,
+          onCommand: run2,
+          onUpload: upload,
+          request,
+          onClose: () => setSelectedCard(null),
+          focusReturn: cardOpener,
+          boardRef: dialog,
+          pending,
+          busy,
+          error,
+          onCheck: check,
+          onCancel: cancel,
+          cancelBusy,
+          onDuplicate: createEnabled ? duplicate : void 0
+        }) : null,
+        createFor ? (0, import_react50.createElement)(CreateCardDialog, { key: "create:" + (createFor.laneLabel || "") + ":" + (createFor.personalProgress || ""), ...createFor, disabled: !createEnabled, actors, tasks: data.tasks, onCreate: createCard, onClose: () => setCreateFor(null) }) : null,
+        newRelease ? (0, import_react50.createElement)(ReleaseDialog, {
+          disabled: !canAct,
+          releaseRoles: releaseTeamSupported ? releaseRoles : null,
+          releaseCandidates: data.releaseCandidates,
+          actors,
+          onClose: () => setNewRelease(false),
+          onCreate: createRelease
+        }) : null,
+        panelRelease && releasePanel?.mode === "report" ? (0, import_react50.createElement)(ReleaseReportDialog, {
+          key: "report:" + panelRelease.id,
+          release: panelRelease,
+          report: releaseReport?.id === panelRelease.id ? releaseReport : null,
+          onClose: closeReleasePanel,
+          onBack: () => setReleasePanel({ id: panelRelease.id, mode: "detail" })
+        }) : panelRelease ? (0, import_react50.createElement)(ReleaseDetailDialog, {
+          key: "release:" + panelRelease.id,
+          release: panelRelease,
+          actors,
+          releaseRoles,
+          canEdit: releaseEditable(panelRelease),
+          busy: !!releaseBusy,
+          error: releaseError,
+          onClose: closeReleasePanel,
+          onCheck: (release) => void checkRelease(release),
+          onSaveGate: (gate, status, evidence) => void saveReleaseGate(panelRelease, gate, status, evidence),
+          onOpenReport: (release) => void openReleaseReport(release)
+        }) : null
       ),
-      selected ? (0, import_react50.createElement)(TaskCardDialog, {
-        key: selected.id,
-        scope,
-        task: selected,
-        tasks: data.tasks,
-        commands: commandsFor(selected),
-        actors: data.capabilities?.actors,
-        targets: data.capabilities?.shareTargets?.[selected.id],
-        uploadEnabled: data.capabilities?.upload === true,
-        uncertain: !canAct,
-        onCommand: run2,
-        onUpload: upload,
-        request,
-        onClose: () => setSelectedCard(null),
-        focusReturn: cardOpener,
-        boardRef: dialog,
-        pending,
-        busy,
-        error,
-        onCheck: check,
-        onCancel: cancel,
-        cancelBusy
-      }) : null
+      (0, import_react50.createElement)(
+        "div",
+        { className: "bt-board-toast", role: "status", hidden: !notice },
+        notice,
+        noticeAction ? (0, import_react50.createElement)("button", { type: "button", className: "bt-board-toast-action", onClick: () => void runNoticeAction() }, noticeAction.label) : null
+      )
     )
   ), document.body);
 }
 var TASK_BOARD_CSS = `
-.bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:4px 8px;cursor:pointer}
-.bt-board-backdrop{position:fixed;inset:0;z-index:10000;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));display:flex;align-items:center;justify-content:center;padding:18px}
-.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;height:min(900px,calc(100vh - 36px));max-height:calc(100vh - 36px);width:min(1920px,100%);background:var(--bt-main);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:var(--bt-dialog-shadow,0 24px 70px color-mix(in srgb,var(--bt-ink) 22%,transparent));overflow:hidden}
-.bt-board-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 26px 16px;border-bottom:1px solid var(--bt-line);flex:none}
-.bt-board-header h2{font-size:20px;line-height:1.3;letter-spacing:-.025em;margin:0}.bt-board-header p{font-size:12px;color:var(--bt-ink-2);margin:4px 0 0}
-.bt-board-dialog button,.bt-board-dialog select,.bt-board-dialog textarea,.bt-board-dialog input{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:7px 10px}
-.bt-board-dialog button:disabled,.bt-board-dialog select:disabled{opacity:.5}.bt-board-dialog button:not(:disabled){cursor:pointer}
-.bt-board-dialog :is(button,input,select,textarea,summary):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
-.bt-board-dialog button:not(:disabled):hover{background:var(--bt-hover)}
-.bt-board-dialog button.bt-board-primary{background:var(--bt-accent);color:var(--bt-accent-ink);border-color:transparent;font-weight:600;white-space:nowrap}
-.bt-board-dialog button.bt-board-primary:not(:disabled):hover{filter:brightness(.94)}
-.bt-board-toolbar{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;padding:14px 24px;border-bottom:1px solid var(--bt-line);flex:none}
-.bt-board-search{display:flex;align-items:center;gap:8px;min-width:200px;max-width:360px;flex:1;color:var(--bt-ink-2);background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding-left:11px}
-.bt-board-search-icon{font-size:20px;line-height:1}.bt-board-dialog .bt-board-search input{min-width:0;width:100%;border:0;background:transparent;outline:none;padding:9px 8px 9px 0}
-.bt-board-search:focus-within{outline:2px solid var(--bt-accent);outline-offset:2px}
 .bt-board-review-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));align-items:start;gap:10px;padding:10px 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:min(46vh,480px);overflow:auto}
 .bt-board-recovery-clear{font-size:12px;color:var(--bt-ink-2);padding:10px 0;margin:0}
 .bt-board-error,.bt-board-pending{padding:10px 20px;background:var(--bt-danger-soft);font-size:13px}.bt-board-empty{padding:24px}
@@ -38907,35 +41852,587 @@ var TASK_BOARD_CSS = `
 .bt-recovery-candidate{display:grid;gap:8px;padding:10px;min-width:0}.bt-recovery-candidate-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-sidebar);color:var(--bt-ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:600px){.bt-recovery-workspace{grid-template-columns:1fr}.bt-recovery-record-summary{flex-wrap:wrap}.bt-recovery-record-time{order:3;width:100%}.bt-recovery-groups,.bt-recovery-work-groups{max-height:190px}}
 
-.bt-board-content{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:24px 26px 28px;background:var(--dsw-alias-bg-base,var(--bt-main))}
-.bt-board-section+.bt-board-section{margin-top:32px}.bt-board-section-heading{margin:0 0 16px}.bt-board-section-heading h3{font-size:15px;font-weight:700;margin:0}.bt-board-section-heading p{font-size:12px;line-height:1.5;color:var(--bt-ink-2);margin:5px 0 0}
-.bt-board-rail{min-width:0}.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}.bt-board-rail-controls[hidden]{display:none}.bt-board-dialog .bt-board-rail-controls button{min-width:36px;padding:4px 8px;line-height:1.3;font-size:17px}
-.bt-board-columns{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:2px 2px 20px;align-items:flex-start;min-height:190px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.bt-board-columns::-webkit-scrollbar{display:none}
-.bt-board-column{flex:0 0 280px;min-width:0;border:1px solid color-mix(in srgb,var(--bt-ink) 9%,transparent);border-radius:12px;background:color-mix(in srgb,var(--bt-ink) 7%,var(--bt-card));padding:12px;box-sizing:border-box;box-shadow:0 4px 12px color-mix(in srgb,var(--bt-ink) 9%,transparent);transition:border-color .15s,background-color .15s,box-shadow .15s}
-.bt-board-column[data-drop-active=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 7%,var(--bt-card));box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 20%,transparent)}
-.bt-board-columns-personal>.bt-board-column{flex:1 0 300px;max-width:420px;min-height:150px}
-.bt-board-column h3{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;margin:4px 4px 14px}.bt-board-count{min-width:20px;padding:2px 6px;text-align:center;background:color-mix(in srgb,var(--bt-ink) 8%,var(--bt-card));color:var(--bt-ink-2);border-radius:8px;font-size:11px;font-weight:600}
-.bt-board-column h3>span:first-child{display:flex;align-items:center;gap:8px}.bt-board-column h3>span:first-child:before{content:'';width:8px;height:8px;border-radius:50%;background:var(--bt-ink-3)}
-.bt-board-column:is([data-stage=doing],[data-stage=working],[data-stage=reported]) h3>span:first-child:before{background:var(--bt-accent)}
-.bt-board-column:is([data-stage=finished],[data-stage=done]) h3>span:first-child:before{background:var(--bt-green)}
-.bt-board-lane-empty{font-size:12px;color:var(--bt-ink-3);margin:14px 4px}.bt-board-drop-hint{display:flex;align-items:center;min-height:60px;box-sizing:border-box;border:1px dashed color-mix(in srgb,var(--bt-ink) 20%,transparent);border-radius:8px;color:var(--bt-ink-2);font-size:12px;margin:0;padding:12px}.bt-board-card{background:var(--bt-card);border:1px solid color-mix(in srgb,var(--bt-ink) 8%,transparent);border-radius:10px;margin-bottom:9px;overflow-wrap:anywhere;box-shadow:0 2px 5px color-mix(in srgb,var(--bt-ink) 12%,transparent)}
-.bt-board-card[draggable=true]{cursor:grab}.bt-board-card[draggable=true]:active{cursor:grabbing}.bt-board-card:hover{border-color:var(--bt-line-2)}
-.bt-board-dialog .bt-board-card-summary{box-sizing:border-box;display:flex;width:100%;text-align:left;background:transparent;border:0;border-radius:10px;padding:11px 12px}
-.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.48));overscroll-behavior:contain}
-.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(860px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-card);color:var(--bt-ink);border:1px solid var(--bt-line);border-radius:16px;box-shadow:var(--bt-dialog-shadow,0 24px 70px color-mix(in srgb,var(--bt-ink) 22%,transparent))}
-.bt-card-modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--bt-line);flex:none}.bt-card-modal-header p{margin:0 0 5px;color:var(--bt-ink-2);font-size:12px}.bt-card-modal-header h2{margin:0;font-size:21px;line-height:1.3;overflow-wrap:anywhere}.bt-card-modal-header button{font-size:22px;line-height:1;min-width:38px}
-.bt-card-modal .bt-board-card-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;overscroll-behavior:contain;min-height:0;gap:12px;padding:20px 24px 28px}.bt-card-modal .bt-board-actions textarea,.bt-card-modal .bt-board-actions input{box-sizing:border-box;max-width:100%;width:100%}.bt-card-modal-status{padding:10px 24px;background:var(--bt-danger-soft);font-size:13px;overflow-wrap:anywhere}
-.bt-board-card-details>summary{list-style:none;cursor:pointer}.bt-board-card-details>summary::-webkit-details-marker{display:none}.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;padding:11px 12px}
-.bt-board-conversation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:10px}.bt-board-conversation form,.bt-board-conversation label{display:flex;flex-direction:column;gap:6px}.bt-board-comment{padding:8px;border-radius:8px;background:var(--bt-sidebar);white-space:pre-wrap;overflow-wrap:anywhere}.bt-board-comment p{margin:4px 0 0}.bt-board-comment small{color:var(--bt-ink-2)}
-.bt-board-card-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.bt-board-owner,.bt-board-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);padding:3px 7px;font-size:11px}.bt-board-chip-blocked{color:var(--bt-danger);background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card))}
-.bt-board-open-hint{font-size:11px;color:var(--bt-ink-2);margin-left:auto}.bt-board-card-details[open] .bt-board-open-hint{display:none}.bt-board-card-body{display:flex;flex-direction:column;gap:8px;padding:0 13px 13px}.bt-board-move{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--bt-line);font-size:12px;color:var(--bt-ink-2)}.bt-board-dialog .bt-board-move select{max-width:60%;font-size:12px;padding:4px 6px}
-.bt-board-title{font-size:14px;line-height:1.4}.bt-board-id{font-size:11px;color:var(--bt-ink-3)}.bt-board-fact{display:flex;flex-direction:column;font-size:12px;gap:2px}.bt-board-fact>:first-child{color:var(--bt-ink-2)}
-.bt-board-legacy{font-size:11px;color:var(--bt-ink-2)}
-.bt-board-actions{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--bt-line);padding-top:8px}.bt-board-actions label{display:flex;flex-direction:column;gap:4px;font-size:12px}.bt-board-actions input{font:inherit;color:inherit;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:8px;padding:6px 9px}.bt-board-readonly{font-size:11px;color:var(--bt-ink-3)}
-.bt-board-shares{display:flex;flex-direction:column;gap:6px;font-size:12px}.bt-board-share-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.bt-board-actions .bt-board-share-check{flex-direction:row;align-items:center}
-.bt-board-create{display:flex;gap:10px;flex-wrap:wrap;width:100%;padding:14px;background:var(--bt-sidebar);border:1px solid var(--bt-line);border-radius:10px}.bt-board-create p{width:100%;font-size:12px;margin:0;color:var(--bt-ink-2)}.bt-board-create label{display:flex;flex-direction:column;gap:4px;font-size:12px;flex:1 1 160px}.bt-board-create>div{display:flex;align-items:flex-end;gap:6px}
-.bt-board-images{display:flex;gap:6px;flex-wrap:wrap}.bt-board-photo{display:flex;flex-direction:column;gap:4px;max-width:100px;font-size:11px}.bt-board-photo img{width:92px;height:72px;object-fit:cover;border-radius:6px}.bt-board-photo button{font-size:11px;padding:3px}.bt-board-upload{display:flex;flex-direction:column;gap:6px;font-size:12px}.bt-board-upload input{width:100%;font-size:11px}
-@media(max-width:600px){.bt-board-backdrop{padding:0}.bt-board-dialog{height:100%;max-height:none;border-radius:0}.bt-board-header{padding:14px 16px}.bt-board-toolbar{padding:12px 16px}.bt-board-review-tools{padding:0 16px}.bt-board-content{padding:16px}.bt-board-column,.bt-board-columns-personal>.bt-board-column{flex:0 0 min(82vw,274px)}.bt-card-modal-backdrop{padding:0}.bt-card-modal{width:100%;height:100dvh;max-height:100dvh;border-radius:0}.bt-card-modal-header{padding:16px}.bt-card-modal .bt-board-card-body{padding:16px 16px 28px}}
+
+
+.bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:999px;padding:4px 10px;cursor:pointer}
+.bt-board-launch:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-board-backdrop{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.32))}
+.bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;width:min(1680px,100%);height:min(920px,calc(100vh - 48px));max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-family:var(--bt-font,inherit);font-size:13px;line-height:18px}
+.bt-board-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:none;padding:16px 24px;border-bottom:1px solid var(--bt-line)}
+.bt-board-heading{min-width:0}
+.bt-board-title-row{display:flex;align-items:center;gap:10px;min-width:0}
+.bt-board-header h2{font-size:17px;line-height:24px;font-weight:500;letter-spacing:0;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-board-header p{font-size:12px;line-height:18px;color:var(--bt-ink-2);margin:3px 0 0}
+.bt-board-capacity{flex:none;padding:2px 8px;border-radius:999px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-board-head-actions{display:flex;align-items:center;gap:4px;flex:none}
+.bt-board-dialog button{font:inherit;color:inherit;cursor:pointer}
+.bt-board-dialog button:disabled{opacity:.4;cursor:not-allowed}
+.bt-board-dialog button:not([class]){background:var(--bt-hover);border:1px solid var(--bt-line);border-radius:8px;padding:6px 10px;font-size:12px;line-height:16px;color:var(--bt-ink)}
+.bt-board-dialog button:not([class]):hover:not(:disabled){background:var(--bt-active)}
+.bt-board-dialog input,.bt-board-dialog select,.bt-board-dialog textarea{box-sizing:border-box;font:inherit;font-size:13px;line-height:18px;color:var(--bt-ink);background:var(--bt-card);border:1px solid var(--bt-line);border-radius:8px;padding:7px 9px}
+.bt-board-dialog input::placeholder,.bt-board-dialog textarea::placeholder{color:var(--bt-ink-3)}
+.bt-board-dialog :is(button,input,select,textarea,summary,a[href],[tabindex="0"]):focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
+.bt-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:0;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink);font-size:13px;line-height:18px;font-weight:500;white-space:nowrap;text-decoration:none}
+.bt-btn:hover:not(:disabled){background:var(--bt-active)}
+.bt-btn svg{width:15px;height:15px;flex:none}
+.bt-btn-primary{background:var(--bt-accent);color:var(--bt-accent-ink)}
+.bt-btn-primary:hover:not(:disabled){background:color-mix(in srgb,var(--bt-accent) 88%,var(--bt-ink))}
+.bt-btn-ghost{background:transparent;border:1px solid var(--bt-line)}
+.bt-btn-ghost:hover:not(:disabled){background:var(--bt-hover)}
+.bt-btn-block{width:100%}
+.bt-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:999px;background:transparent;color:var(--bt-ink-2);flex:none}
+.bt-icon-btn:hover:not(:disabled){background:var(--bt-hover);color:var(--bt-ink)}
+.bt-icon-btn svg{width:16px;height:16px}
+.bt-card-mini{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:28px;min-height:28px;padding:2px 6px;border:0;border-radius:6px;background:transparent;color:var(--bt-ink-2);font-size:12px;line-height:16px}
+.bt-card-mini:hover:not(:disabled){background:var(--bt-hover);color:var(--bt-ink)}
+.bt-card-mini svg{width:14px;height:14px}
+.bt-card-icon-danger{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--bt-danger);flex:none}
+.bt-card-icon-danger:hover:not(:disabled){background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.bt-card-icon-danger svg{width:14px;height:14px}
+.bt-board-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:none;padding:10px 24px;border-bottom:1px solid var(--bt-line)}
+.bt-board-search{display:flex;align-items:center;gap:8px;flex:1 1 240px;max-width:420px;min-width:200px;height:36px;box-sizing:border-box;padding:0 10px;border:0.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-card);color:var(--bt-ink-2)}
+.bt-board-search:focus-within{border-color:var(--bt-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
+.bt-board-search svg{width:15px;height:15px;flex:none}
+.bt-board-dialog .bt-board-search input{flex:1;min-width:0;height:100%;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;outline:none;font-size:13px;color:var(--bt-ink)}
+.bt-board-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bt-board-dialog .bt-board-filters select{height:32px;padding:0 26px 0 12px;border:0;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:12px;line-height:16px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 14px) 14px,calc(100% - 10px) 14px;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
+.bt-board-dialog .bt-board-filters select:hover{background-color:var(--bt-active);color:var(--bt-ink)}
+.bt-board-review-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));align-items:start;gap:10px;padding:10px 24px;border-bottom:1px solid var(--bt-line);flex:none;max-height:min(42vh,420px);overflow:auto}
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:min(68vh,680px)}
+.bt-board-error,.bt-board-pending{padding:9px 24px;background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-card));color:var(--bt-ink);font-size:12px;line-height:18px;border-bottom:1px solid var(--bt-line)}
+.bt-board-legacy-note{padding:8px 24px;background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-card));color:var(--bt-ink-2);font-size:12px;line-height:18px;border-bottom:1px solid var(--bt-line)}
+.bt-board-empty{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:40px;color:var(--bt-ink-2);font-size:13px}
+.bt-board-content{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px 24px 24px;background:var(--dsw-alias-bg-base,var(--bt-main))}
+.bt-board-section+.bt-board-section{margin-top:24px}
+.bt-board-section-heading{margin:0 0 10px}
+.bt-board-section-heading h3{font-size:13px;line-height:18px;font-weight:600;margin:0}
+.bt-board-section-heading p{font-size:12px;line-height:18px;color:var(--bt-ink-2);margin:3px 0 0}
+.bt-board-activity{display:flex;flex-direction:column;border:.5px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card)}
+.bt-board-activity-row{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:0;border-bottom:.5px solid var(--bt-line);background:transparent;color:var(--bt-ink);font:inherit;font-size:13px;line-height:18px;text-align:left}
+.bt-board-activity-row:last-child{border-bottom:0}
+.bt-board-activity-row:hover{background:var(--bt-hover)}
+.bt-board-activity-text{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.bt-board-activity-text strong{font-size:12px;line-height:16px;font-weight:500}
+.bt-board-activity-text span{color:var(--bt-ink-2);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-board-activity-by,.bt-board-activity-row time{color:var(--bt-ink-2);font-size:11px;line-height:16px;white-space:nowrap}
+.bt-board-activity-row time{margin-left:auto}
+.bt-board-rail{min-width:0}
+.bt-board-rail{position:relative}
+.bt-board-rail::after{content:"";position:absolute;top:0;right:-1px;bottom:14px;width:26px;pointer-events:none;background:linear-gradient(to right,transparent,var(--dsw-alias-bg-base,var(--bt-main)))}
+.bt-board-columns{scroll-snap-type:x proximity}
+.bt-board-lane{scroll-snap-align:start}
+.bt-board-rail-controls{display:flex;justify-content:flex-end;gap:4px;margin-bottom:6px}
+.bt-board-rail-status{display:inline-flex;align-items:center;gap:2px;margin-right:auto;color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-board-rail-more{color:var(--bt-ink-3)}
+.bt-board-rail-controls[hidden]{display:none}
+.bt-board-columns{display:flex;gap:12px;align-items:stretch;min-height:clamp(280px,52vh,620px);overflow-x:auto;overflow-y:hidden;padding:0 0 14px;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x pan-y}
+.bt-board-columns::-webkit-scrollbar{display:none}
+.bt-board-lane{display:flex;flex-direction:column;flex:0 0 300px;min-width:0;min-height:260px;box-sizing:border-box;padding:8px;border:1px solid transparent;border-radius:12px;background:color-mix(in srgb,var(--bt-ink) 3.5%,var(--bt-card));transition:background-color .12s,border-color .12s}
+.bt-board-lane-drop{border-color:color-mix(in srgb,var(--bt-accent) 46%,transparent);background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-card))}
+.bt-board-columns-personal .bt-board-lane{flex:1 0 280px;max-width:420px;min-height:180px}
+.bt-board-lane-head{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:2px 4px 8px}
+.bt-board-lane-head-actions{display:flex;align-items:center;gap:2px;flex:none}
+.bt-board-lane-menu{position:relative}
+.bt-board-lane-menu>summary{list-style:none;cursor:pointer}
+.bt-board-lane-menu>summary::-webkit-details-marker{display:none}
+.bt-board-lane-menu-body{position:absolute;right:0;top:30px;z-index:5;display:flex;flex-direction:column;gap:3px;width:210px;padding:6px;border:.5px solid var(--bt-line-2);border-radius:10px;background:var(--bt-main);box-shadow:0 10px 20px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1)}
+.bt-board-release-menu>summary{display:inline-flex;align-items:center;justify-content:center;min-width:28px;list-style:none;cursor:pointer}
+.bt-board-release-menu>summary::-webkit-details-marker{display:none}
+.bt-board-lane-rename{display:flex;gap:4px;padding:2px}
+.bt-board-lane-rename input{flex:1;min-width:0;height:28px;padding:0 7px;border:1px solid var(--bt-line);border-radius:6px;background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:12px}
+.bt-board-lane-menu-item{padding:6px 8px;border:0;border-radius:6px;background:transparent;color:var(--bt-ink);font:inherit;font-size:12px;line-height:16px;text-align:left}
+.bt-board-lane-menu-item:hover{background:var(--bt-hover)}
+.bt-lane-chevron{transform:rotate(90deg);transition:transform .12s}
+.bt-lane-chevron-collapsed{transform:rotate(0)}
+.bt-board-lane-collapsed{align-self:flex-start;min-height:0;max-height:none}
+.bt-board-lane-title{display:flex;align-items:center;gap:8px;min-width:0}
+.bt-board-lane-title h3{font-size:13px;line-height:18px;font-weight:600;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-board-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:18px;padding:0 6px;border-radius:999px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;flex:none}
+.bt-board-stage-dot{width:8px;height:8px;border-radius:50%;background:var(--bt-ink-3);flex:none;corner-shape:round}
+.bt-board-stage-dot-waiting,.bt-board-stage-dot-todo{background:var(--bt-star)}
+.bt-board-stage-dot-ready{background:var(--bt-accent)}
+.bt-board-stage-dot-working,.bt-board-stage-dot-doing{background:var(--bt-green)}
+.bt-board-stage-dot-reported{background:color-mix(in srgb,var(--bt-accent) 55%,var(--bt-danger))}
+.bt-board-stage-dot-done,.bt-board-stage-dot-finished,.bt-board-stage-dot-legacy-done{background:var(--bt-green)}
+.bt-board-stage-dot-proposed,.bt-board-stage-dot-unknown,.bt-board-stage-dot-legacy-pending{background:var(--bt-ink-3)}
+.bt-board-lane-cards{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0}
+.bt-board-lane-empty{display:flex;flex:1;align-items:center;justify-content:center;min-height:84px;margin:0;padding:12px;border:1px dashed color-mix(in srgb,var(--bt-ink) 16%,transparent);border-radius:10px;color:var(--bt-ink-3);font-size:12px;line-height:18px}
+.bt-board-lane-add{display:flex;align-items:center;gap:6px;width:100%;height:32px;margin-top:6px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--bt-ink-2);font-size:13px;line-height:18px;text-align:left}
+.bt-board-lane-add:hover:not(:disabled){background:var(--bt-hover);color:var(--bt-ink)}
+.bt-board-lane-add svg{width:16px;height:16px}
+.bt-board-drop-line{display:block;height:2px;margin:1px 2px 5px;border-radius:999px;background:var(--bt-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
+.bt-board-card{overflow:hidden;border:1px solid var(--bt-line);border-radius:12px;background:var(--bt-card);box-shadow:0 1px 2px rgba(0,0,0,.03);transition:box-shadow .12s,border-color .12s;position:relative}
+.bt-board-select{position:absolute;right:6px;top:6px;z-index:2;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:color-mix(in srgb,var(--bt-card) 88%,transparent)}
+.bt-board-select input{width:16px;height:16px;accent-color:var(--bt-accent)}
+.bt-board-select-toggle{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 10px;border:.5px solid var(--bt-line-2);border-radius:999px;background:var(--bt-card);color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px}
+.bt-board-select-toggle[aria-pressed=true]{background:var(--bt-active);color:var(--bt-ink)}
+.bt-board-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 24px;border-bottom:1px solid var(--bt-line);background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-card));color:var(--bt-ink-2);font-size:12px;line-height:16px}
+.bt-card-mini-danger{color:var(--bt-danger)}
+.bt-board-bulk-select{display:inline-flex;align-items:center;gap:5px;color:var(--bt-ink-2);font-size:12px;line-height:16px}
+.bt-board-bulk-select select{height:28px;padding:0 22px 0 8px;border:.5px solid var(--bt-line-2);border-radius:6px;background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:12px}
+.bt-board-card:hover{border-color:var(--bt-line-2);box-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04)}
+.bt-board-card[draggable=true]{cursor:grab}
+.bt-board-card[draggable=true]:active{cursor:grabbing}
+.bt-board-card-dragging{opacity:.55}
+.bt-board-card-cover{height:112px;overflow:hidden;background:var(--bt-sidebar)}
+.bt-board-card-cover img{display:block;width:100%;height:100%;object-fit:cover}
+.bt-board-card-summary{display:flex;flex-direction:column;gap:6px;width:100%;padding:10px 12px;border:0;border-radius:0;background:transparent;color:inherit;text-align:left}
+.bt-board-card-summary:hover{background:transparent}
+.bt-board-card-title{font-size:13px;line-height:18px;font-weight:500;overflow-wrap:anywhere}
+.bt-board-card-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-height:16px}
+.bt-board-card-labels{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.bt-board-card-more-labels{font-size:11px;line-height:16px;color:var(--bt-ink-2)}
+.bt-board-label{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:2px 7px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-ink);font-size:11px;line-height:16px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-board-label-blue{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));color:color-mix(in srgb,var(--bt-accent) 72%,var(--bt-ink))}
+.bt-board-label-green{background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));color:color-mix(in srgb,var(--bt-green) 58%,var(--bt-ink))}
+.bt-board-label-rose{background:color-mix(in srgb,var(--bt-danger) 12%,var(--bt-card));color:color-mix(in srgb,var(--bt-danger) 74%,var(--bt-ink))}
+.bt-board-label-amber{background:color-mix(in srgb,var(--bt-star) 14%,var(--bt-card));color:color-mix(in srgb,var(--bt-star) 62%,var(--bt-ink))}
+.bt-board-label-violet{background:color-mix(in srgb,var(--bt-accent) 22%,var(--bt-danger) 10%,var(--bt-card));color:color-mix(in srgb,var(--bt-accent) 52%,var(--bt-danger) 30%,var(--bt-ink))}
+.bt-board-label-slate{background:var(--bt-tag-bg);color:var(--bt-ink-2)}
+.bt-board-label-remove{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin:-6px -7px -6px 0;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;font-size:12px;line-height:1;opacity:.65}
+.bt-board-label-remove:hover{opacity:1;background:color-mix(in srgb,var(--bt-ink) 12%,transparent)}
+.bt-board-due{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bt-board-due svg{width:12px;height:12px;flex:none}
+.bt-board-due-overdue{background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card));color:var(--bt-danger)}
+.bt-board-due-soon{background:color-mix(in srgb,var(--bt-star) 13%,var(--bt-card));color:color-mix(in srgb,var(--bt-star) 62%,var(--bt-ink))}
+.bt-board-due-complete{background:color-mix(in srgb,var(--bt-green) 13%,var(--bt-card));color:color-mix(in srgb,var(--bt-green) 56%,var(--bt-ink))}
+.bt-board-progress{display:inline-flex;align-items:center;gap:6px;color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-board-progress-track{display:block;width:36px;height:3px;overflow:hidden;border-radius:999px;background:var(--bt-tag-bg)}
+.bt-board-progress-fill{display:block;height:100%;border-radius:inherit;background:var(--bt-green)}
+.bt-board-card-count{display:inline-flex;align-items:center;gap:3px;color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-board-card-count svg{width:12px;height:12px}
+.bt-board-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;min-width:0}
+.bt-board-card-owner{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-board-card-owner>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-board-open-hint{color:var(--bt-ink-3);font-size:11px;line-height:16px;white-space:nowrap}
+.bt-board-avatar{display:inline-grid;place-items:center;flex:none;border-radius:50%;background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));color:var(--bt-ink);font-weight:600;line-height:1;corner-shape:round}
+.bt-board-avatar-muted{background:var(--bt-hover);color:var(--bt-ink-2)}
+.bt-board-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:2px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-board-chip-blocked{background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card));color:var(--bt-danger)}
+.bt-board-id{font:11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--bt-ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.bt-board-legacy{color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-board-toast{position:fixed;left:50%;bottom:32px;z-index:10005;transform:translateX(-50%);padding:8px 14px;border-radius:999px;background:var(--bt-ink);color:var(--bt-card);font-size:12px;line-height:18px;box-shadow:0 8px 28px rgba(0,0,0,.14);max-width:min(520px,calc(100vw - 48px));text-align:center}
+.bt-board-toast[hidden]{display:none}
+.bt-board-toast-action{margin-left:10px;padding:2px 8px;border:1px solid color-mix(in srgb,var(--bt-card) 35%,transparent);border-radius:999px;background:transparent;color:inherit;font:inherit;font-weight:600}
+.bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.32));overscroll-behavior:contain}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(920px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-size:13px;line-height:18px}
+.bt-create-modal{width:min(680px,100%)}
+.bt-card-modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex:none;padding:20px 24px 16px;border-bottom:1px solid var(--bt-line)}
+.bt-card-modal-heading{min-width:0;flex:1}
+.bt-card-eyebrow{margin:0 0 4px;color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-card-modal-header h2{margin:0;font-size:15px;line-height:20px;font-weight:600;overflow-wrap:anywhere}
+.bt-card-submeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.bt-card-head-status{display:inline-flex;align-items:center;gap:5px;color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-card-mobile-bar{display:none}
+.bt-card-modal-actions{display:flex;align-items:center;gap:2px;flex:none}
+.bt-card-title-form{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bt-card-title-form input{min-width:240px;flex:1;font-size:15px;line-height:20px;font-weight:600;padding:6px 8px}
+.bt-card-banner{padding:8px 24px;background:var(--bt-hover);font-size:12px;line-height:18px;border-bottom:1px solid var(--bt-line)}
+.bt-card-banner-error{background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-card));color:var(--bt-ink)}
+.bt-card-modal-body{display:grid;grid-template-columns:minmax(0,1fr) 272px;min-height:0;overflow-y:auto}
+.bt-card-main{display:flex;flex-direction:column;gap:20px;min-width:0;padding:20px 24px 28px}
+.bt-card-side{display:flex;flex-direction:column;gap:18px;min-width:0;padding:20px;border-left:1px solid var(--bt-line);background:var(--dsw-alias-bg-module-platform,var(--bt-sidebar))}
+.bt-card-section{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-card-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.bt-card-section-head h3{margin:0;font-size:13px;line-height:18px;font-weight:600}
+.bt-card-rich-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:20px;color:var(--bt-ink)}
+.bt-card-muted{color:var(--bt-ink-3);font-size:12px;line-height:18px;margin:0}
+.bt-card-note{margin:0;color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-card-warning{margin:0;padding:7px 9px;border-radius:8px;background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-card));color:var(--bt-ink);font-size:12px;line-height:18px}
+.bt-card-ghost{display:flex;align-items:center;gap:6px;width:100%;padding:8px 10px;border:1px dashed var(--bt-line-2);border-radius:8px;background:transparent;color:var(--bt-ink-2);font-size:12px;line-height:18px;text-align:left}
+.bt-card-ghost:hover:not(:disabled){background:var(--bt-hover);color:var(--bt-ink)}
+.bt-card-editor{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-board-dialog .bt-card-editor textarea,.bt-card-modal .bt-card-editor textarea{width:100%;min-height:86px;resize:vertical}
+.bt-card-editor-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.bt-card-inline{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bt-card-inline input{flex:1;min-width:140px}
+.bt-card-check{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:18px;color:var(--bt-ink)}
+.bt-card-check input{width:15px;height:15px;margin:1px 0 0;flex:none;accent-color:var(--bt-accent)}
+.bt-card-checklist-list{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.bt-card-checklist-item{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card)}
+.bt-card-checklist-item .bt-card-check{flex:1;min-width:0}
+.bt-card-checked{color:var(--bt-ink-3);text-decoration:line-through}
+.bt-card-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:18px;padding:0 6px;border-radius:999px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-attachment-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px}
+.bt-attachment{margin:0;overflow:hidden;border:1px solid var(--bt-line);border-radius:10px;background:var(--bt-card)}
+.bt-attachment-open{display:block;width:100%;height:92px;padding:0;border:0;border-radius:0;background:var(--bt-sidebar)}
+.bt-attachment-open img{display:block;width:100%;height:100%;object-fit:cover}
+.bt-attachment-placeholder{display:flex;align-items:center;justify-content:center;height:100%;padding:8px;color:var(--bt-ink-3);font-size:11px;line-height:16px;text-align:center}
+.bt-attachment-file .bt-attachment-open{background:var(--bt-hover)}
+.bt-attachment-file .bt-attachment-placeholder{flex-direction:column;gap:5px;color:var(--bt-ink-2);overflow:hidden}
+.bt-attachment-file .bt-attachment-placeholder svg{width:20px;height:20px}
+.bt-attachment-file .bt-attachment-placeholder small{color:var(--bt-ink-3);font-size:11px;line-height:16px}
+.bt-attachment figcaption{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:5px 6px;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
+.bt-attachment-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-attachment-queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px}
+.bt-attachment-queue img{display:block;width:100%;height:92px;object-fit:cover}
+.bt-dropzone{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px dashed var(--bt-line-2);border-radius:10px;background:var(--bt-card);color:var(--bt-ink-2);font-size:12px;line-height:18px}
+.bt-dropzone-active{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-card))}
+.bt-dropzone svg{width:15px;height:15px}
+.bt-comment-list{display:flex;flex-direction:column;gap:12px}
+.bt-comment{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.bt-comment-body{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.bt-comment-body header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bt-comment-body header strong{font-size:12px;line-height:16px}
+.bt-comment-body header time{color:var(--bt-ink-3);font-size:11px;line-height:16px}
+.bt-comment-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:20px;color:var(--bt-ink)}
+.bt-comment-confirm{display:inline-flex;align-items:center;gap:4px}
+.bt-comment-compose{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea{width:100%;min-height:64px;resize:vertical}
+.bt-card-side-block{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-card-side-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bt-card-side-head h4{margin:0;font-size:11px;line-height:16px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--bt-ink-2)}
+.bt-card-status{display:flex;align-items:center;gap:8px;font-size:13px;line-height:18px}
+.bt-card-people{display:flex;flex-direction:column;gap:8px}
+.bt-card-person{display:flex;align-items:center;gap:8px;min-width:0}
+.bt-card-person>span:last-child{display:flex;flex-direction:column;min-width:0;line-height:16px}
+.bt-card-person strong{font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-card-person small{color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-card-facts{display:flex;flex-direction:column;gap:8px}
+.bt-board-fact{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12px;line-height:18px}
+.bt-board-fact>span:first-child{color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-board-fact>span:last-child{overflow-wrap:anywhere}
+.bt-card-dependency-list{display:flex;flex-wrap:wrap;gap:4px}
+.bt-card-due-inputs{display:flex;gap:6px;flex-wrap:wrap}
+.bt-card-due-inputs input{flex:1;min-width:120px}
+.bt-card-shares{display:flex;flex-direction:column;gap:8px;font-size:12px;line-height:18px}
+.bt-card-share-list{display:flex;flex-direction:column;gap:4px}
+.bt-card-share-row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.bt-card-more>summary{list-style:none;cursor:pointer;color:var(--bt-ink-2);font-size:12px;line-height:18px;padding:4px 0}
+.bt-card-more>summary::-webkit-details-marker{display:none}
+.bt-card-more>summary:hover{color:var(--bt-ink)}
+.bt-card-more-body{display:flex;flex-direction:column;gap:10px;padding-top:4px}
+.bt-card-form{display:flex;flex-direction:column;gap:10px;min-width:0}
+.bt-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-2)}
+.bt-field>span:first-child,.bt-field>legend{color:var(--bt-ink-2);font-size:12px;line-height:16px}
+.bt-field input,.bt-field select,.bt-field textarea{width:100%;color:var(--bt-ink)}
+.bt-field textarea{min-height:72px;resize:vertical}
+.bt-card-history{display:flex;flex-direction:column;gap:8px;font-size:12px;line-height:18px}
+.bt-card-history>summary{list-style:none;cursor:pointer;color:var(--bt-ink-2)}
+.bt-card-history>summary::-webkit-details-marker{display:none}
+.bt-card-history article{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card)}
+.bt-card-history p{margin:0;color:var(--bt-ink-2);overflow-wrap:anywhere}
+.bt-card-activity{display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:18px}
+.bt-card-activity>summary{display:flex;align-items:center;gap:8px;list-style:none;cursor:pointer;color:var(--bt-ink-2)}
+.bt-card-activity>summary::-webkit-details-marker{display:none}
+.bt-card-activity ul{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
+.bt-card-activity li{display:flex;align-items:center;gap:8px;min-width:0}
+.bt-card-activity time{margin-left:auto;color:var(--bt-ink-3);font-size:11px;line-height:16px;white-space:nowrap}
+.bt-card-activity-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-accent);flex:none}
+.bt-card-change{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--bt-line);border-radius:10px;background:var(--bt-card)}
+.bt-card-change p{margin:0;color:var(--bt-ink-2);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.bt-create-form{display:flex;flex-direction:column;gap:14px;padding:18px 24px 24px;overflow-y:auto}
+.bt-create-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bt-dependency-field{border:0;margin:0;padding:0}
+.bt-dependency-list{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto;padding:6px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-card)}
+.bt-dependency-option{display:flex;align-items:center;gap:8px;font-size:12px;line-height:18px;color:var(--bt-ink)}
+.bt-dependency-option input{width:14px;height:14px;flex:none;accent-color:var(--bt-accent)}
+.bt-create-note{margin:0;color:var(--bt-ink-2);font-size:12px;line-height:18px}
+.bt-create-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding-top:14px;border-top:1px solid var(--bt-line)}
+.bt-form-error{margin:0;color:var(--bt-danger);font-size:12px;line-height:18px}
+.bt-lightbox{position:fixed;inset:0;z-index:10002;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:32px;background:var(--dsw-alias-bg-mask-photo,rgba(0,0,0,.88))}
+.bt-lightbox img{max-width:min(1100px,100%);max-height:calc(100vh - 120px);object-fit:contain;border-radius:8px;background:var(--dsw-alias-bg-mask-photo,rgba(0,0,0,.88))}
+.bt-lightbox-bar{display:flex;align-items:center;gap:12px;max-width:100%;color:var(--dsw-alias-label-primary-inverted,var(--bt-main));font-size:13px;line-height:18px}
+.bt-lightbox-bar span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-lightbox-bar .bt-icon-btn{color:var(--dsw-alias-label-primary-inverted,var(--bt-main))}
+.bt-lightbox-bar .bt-icon-btn:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary-inverted,var(--bt-main)) 14%,transparent)}
+@media(max-width:900px){.bt-card-modal-body{grid-template-columns:1fr}.bt-card-side{border-left:0;border-top:1px solid var(--bt-line)}}
+@media(max-width:700px){.bt-board-backdrop{padding:0}.bt-board-dialog{height:100%;max-height:none;border:0;border-radius:0}.bt-board-header{padding:12px 16px}.bt-board-toolbar{padding:10px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:14px 16px 20px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,300px);max-width:none}.bt-card-modal-backdrop{padding:0}.bt-card-modal{height:100dvh;max-height:100dvh;border:0;border-radius:0}.bt-card-modal-header{padding:16px}.bt-card-main{padding:16px 16px 24px}.bt-card-side{padding:16px}.bt-create-modal{height:100dvh;max-height:100dvh}.bt-create-form{padding:16px}.bt-create-row{grid-template-columns:1fr}.bt-lightbox{padding:16px}}
+@media(prefers-reduced-motion:reduce){.bt-board-lane,.bt-board-card{transition:none}}
+
+/* Harness skin: board surfaces, lanes and the card detail use the same hairline,
+   quiet-hover and type steps as the rest of DeepSeek Harness. The rules above keep
+   the recovery tools and legacy behaviour; these later rules own the board look. */
+.bt-board-dialog,.bt-card-modal-backdrop,.bt-create-backdrop,.bt-lightbox{
+  --bt-board-primary:var(--dsw-alias-button-primary-fill,var(--bt-ink));
+  --bt-board-primary-ink:var(--dsw-alias-label-primary-inverted,var(--bt-main));
+  --bt-board-primary-hover:var(--dsw-alias-button-primary-hover,color-mix(in srgb,var(--bt-ink) 82%,var(--bt-main)));
+  --bt-board-canvas:color-mix(in srgb,var(--bt-sidebar) 55%,var(--bt-main));
+  --bt-board-lane:color-mix(in srgb,var(--bt-card) 58%,var(--bt-sidebar));
+  --bt-board-card-shadow:0 2px 8px -1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04)}
+.bt-board-backdrop{animation:bt-veil-in .22s ease-out}
+.bt-board-dialog{animation:bt-dialog-rise ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .22s ease-out}
+.bt-board-header{padding:14px 20px;border-bottom:1px solid var(--bt-line)}
+.bt-board-header h2{font-size:17px;line-height:24px;font-weight:500}
+.bt-board-header p{font-size:12px;line-height:18px;margin-top:2px}
+.bt-board-head-actions{gap:2px}
+.bt-board-toolbar{padding:8px 20px;gap:8px}
+.bt-board-search{height:34px;border-radius:10px;background:var(--bt-main);border:.5px solid var(--bt-line-2)}
+.bt-board-search:focus-within{border-color:var(--bt-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
+.bt-board-dialog .bt-board-filters select{height:30px;border-radius:999px;background-color:var(--bt-hover);font-size:12px;line-height:16px}
+.bt-board-dialog .bt-board-filters select:hover{background-color:var(--bt-active)}
+.bt-board-review-tools{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;padding:8px 20px;max-height:none;overflow:visible}
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:none}
+.bt-recovery-panel{flex:0 1 auto;min-width:0;background:transparent;border:.5px solid var(--bt-line-2);border-radius:999px;box-shadow:none}
+.bt-recovery-summary{padding:4px 10px;gap:6px}
+.bt-recovery-icon{width:14px;height:14px;border-radius:0;background:none;color:var(--bt-ink-3);font-size:12px;line-height:14px}
+.bt-recovery-summary-text{flex-direction:row;align-items:center;gap:6px}
+.bt-recovery-summary-text strong{font-size:12px;line-height:16px;font-weight:500}
+.bt-recovery-summary-text small{display:none}
+.bt-recovery-count,.bt-recovery-badge{padding:0 6px;border-radius:999px;background:var(--bt-tag-bg);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-recovery-panel[open]{flex:1 0 100%;border-radius:12px;background:var(--bt-card)}
+.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
+.bt-recovery-body{padding:12px;max-height:none;overflow:visible}
+.bt-recovery-groups,.bt-recovery-work-groups,.bt-recovery-deliveries{max-height:none;overflow:visible}
+.bt-board-error,.bt-board-pending{padding:8px 20px;background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-main));font-size:12px;line-height:18px}
+.bt-board-legacy-note{padding:7px 20px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-main));font-size:12px;line-height:18px}
+.bt-board-content{display:flex;flex-direction:column;gap:16px;flex:1;min-height:0;overflow:hidden;padding:16px 20px 18px;background:color-mix(in srgb,var(--bt-sidebar) 82%,var(--bt-main))}
+.bt-board-section{display:flex;flex-direction:column;flex:1;min-height:0}
+.bt-board-section+.bt-board-section{margin-top:0}
+.bt-board-section-heading{margin:0 0 8px}
+.bt-board-section-heading h3{font-size:13px;line-height:18px;font-weight:600}
+.bt-board-section-heading p{font-size:12px;line-height:18px;margin-top:2px}
+.bt-board-rail{display:flex;flex-direction:column;flex:1;min-height:0}
+.bt-board-rail-controls{margin-bottom:4px}
+.bt-board-columns{flex:1;min-height:0;height:auto;align-items:stretch;gap:12px;padding:0 0 2px;overflow-x:auto;overflow-y:hidden}
+.bt-board-columns-personal .bt-board-lane{flex:1 0 260px;max-width:420px;min-height:180px}
+.bt-board-lane{flex:0 0 clamp(220px,18vw,288px);min-height:220px;max-height:100%;padding:8px;border:.5px solid var(--bt-line);border-radius:12px;background:var(--bt-card);transition:background-color .12s,border-color .12s}
+.bt-board-lane-drop{border-color:color-mix(in srgb,var(--bt-accent) 46%,transparent);background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-card))}
+.bt-board-lane-head{padding:1px 4px 6px}
+.bt-board-lane-title h3{font-size:13px;line-height:18px;font-weight:600}
+.bt-board-lane-cards{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 2px 2px;scrollbar-width:thin}
+.bt-board-lane-cards:empty{display:none}
+.bt-board-lane-empty{flex:1;min-height:80px;margin:0;padding:10px;border:.5px dashed color-mix(in srgb,var(--bt-ink) 16%,transparent);border-radius:10px;font-size:12px;line-height:18px}
+.bt-board-lane-add{height:30px;margin-top:4px;padding:0 6px;border-radius:8px;font-size:13px;line-height:18px}
+.bt-board-quick-add{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.bt-board-quick-add textarea{width:100%;min-height:56px;resize:vertical;border-radius:8px;font-size:13px;line-height:18px}
+.bt-board-quick-add-actions{display:flex;align-items:center;gap:6px}
+.bt-board-card{border:.5px solid var(--bt-line);border-radius:12px;background:var(--bt-card);box-shadow:none;transition:box-shadow .12s,border-color .12s}
+.bt-board-card:hover{border-color:var(--bt-line-2);box-shadow:var(--bt-board-card-shadow)}
+.bt-board-card-cover{height:128px;border-bottom:.5px solid var(--bt-line)}
+.bt-board-card-summary{padding:9px 10px 8px;gap:6px}
+.bt-board-card-title{font-size:13px;line-height:18px;font-weight:500}
+.bt-board-card-meta{gap:6px}
+.bt-board-card-foot{margin-top:4px}
+.bt-board-open-hint{display:none}
+.bt-board-label{padding:2px 6px;border-radius:4px;font-size:11px;line-height:16px}
+.bt-board-due,.bt-board-chip{border-radius:4px}
+.bt-board-card-count svg,.bt-board-due svg{width:12px;height:12px}
+.bt-board-progress-track{width:32px;height:3px}
+.bt-board-avatar{border-radius:50%;corner-shape:round}
+.bt-board-toast{border-radius:12px;background:var(--dsw-alias-toast-bg,var(--bt-ink));color:var(--dsw-alias-toast-label,var(--bt-card));box-shadow:0 8px 28px rgba(0,0,0,.14);font-size:12px;line-height:18px;animation:bt-veil-in .16s ease-out}
+.bt-card-modal-backdrop{animation:bt-veil-in .16s ease-out}
+.bt-card-modal{background:var(--bt-main);border:.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);animation:bt-dialog-rise ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing},bt-veil-in .22s ease-out}
+.bt-card-modal-header{padding:18px 22px 14px}
+.bt-card-modal-header h2{font-size:17px;line-height:24px;font-weight:500}
+.bt-card-eyebrow{font-size:11px;line-height:16px;margin-bottom:2px}
+.bt-card-submeta{margin-top:4px}
+.bt-card-modal-body{grid-template-columns:minmax(0,1fr) 280px}
+.bt-card-main{gap:18px;padding:18px 22px 26px}
+.bt-card-side{gap:16px;padding:18px;border-left:.5px solid var(--bt-line);background:var(--bt-sidebar)}
+.bt-card-section{gap:8px}
+.bt-card-section-head h3{font-size:13px;line-height:18px;font-weight:600}
+.bt-card-rich-text{font-size:13px;line-height:20px}
+.bt-card-side-head h4{font-size:12px;line-height:16px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--bt-ink-2)}
+.bt-card-muted,.bt-card-note{font-size:12px;line-height:18px}
+.bt-card-warning{border-radius:8px;font-size:12px;line-height:18px}
+.bt-card-ghost{padding:7px 9px;border:.5px dashed var(--bt-line-2);border-radius:8px;font-size:12px;line-height:18px}
+.bt-board-dialog .bt-card-editor textarea,.bt-card-modal .bt-card-editor textarea{min-height:80px}
+.bt-card-checklist-item{padding:5px 7px;border:.5px solid var(--bt-line);border-radius:8px}
+.bt-card-inline input{height:30px;font-size:13px;line-height:18px}
+.bt-card-check{font-size:12px;line-height:18px}
+.bt-card-count{border-radius:999px;font-size:11px;line-height:16px}
+.bt-attachment-grid,.bt-attachment-queue{grid-template-columns:repeat(auto-fill,minmax(112px,1fr))}
+.bt-attachment{position:relative;border:.5px solid var(--bt-line);border-radius:10px}
+.bt-attachment-open{height:82px}
+.bt-attachment figcaption{padding:4px 6px;font-size:11px;line-height:16px}
+.bt-attachment-cover-flag{position:absolute;left:5px;top:5px;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-toast-bg,var(--bt-ink));color:var(--dsw-alias-toast-label,var(--bt-card));font-size:11px;line-height:16px;font-weight:500}
+.bt-attachment-cover{position:relative}
+.bt-attachment-cover .bt-attachment-open{position:relative}
+.bt-card-checklist-actions{display:flex;align-items:center;gap:2px;flex:none}
+.bt-card-checklist-edit{flex:1;min-width:0}
+.bt-card-checklist-edit input{flex:1;min-width:80px}
+.bt-attachment-cover-action{position:absolute;right:5px;bottom:27px;z-index:1;display:inline-flex;align-items:center;padding:1px 6px;border:0;border-radius:4px;background:var(--dsw-alias-toast-bg,var(--bt-ink));color:var(--dsw-alias-toast-label,var(--bt-card));font-size:11px;line-height:16px;font-weight:500;opacity:0;transition:opacity .12s}
+.bt-attachment:hover .bt-attachment-cover-action,.bt-attachment-cover-action:focus-visible,.bt-attachment-cover .bt-attachment-cover-action{opacity:1}
+.bt-dropzone{padding:8px 10px;border:.5px dashed var(--bt-line-2);border-radius:10px;font-size:12px;line-height:18px;gap:6px;flex-direction:row;justify-content:center;min-height:44px}
+.bt-dropzone svg{width:14px;height:14px}
+.bt-comment-list{gap:14px}
+.bt-comment{gap:8px}
+.bt-comment-body header strong{font-size:12px;line-height:16px;font-weight:600}
+.bt-comment-text{font-size:13px;line-height:20px}
+.bt-comment-compose textarea{min-height:56px}
+.bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea{min-height:56px}
+.bt-card-activity,.bt-card-history{font-size:12px;line-height:18px}
+.bt-card-change{padding:9px 11px;border:.5px solid var(--bt-line);border-radius:10px}
+.bt-board-dialog input,.bt-board-dialog select,.bt-board-dialog textarea,.bt-card-modal input,.bt-card-modal select,.bt-card-modal textarea{border:.5px solid var(--bt-line-2);background:var(--bt-card);border-radius:8px;font-size:13px;line-height:18px;padding:6px 9px}
+.bt-btn{height:32px;padding:0 12px;border-radius:999px;background:var(--bt-hover);font-size:13px;line-height:18px;font-weight:500}
+.bt-btn-primary{background:var(--bt-board-primary);color:var(--bt-board-primary-ink)}
+.bt-btn-primary:hover:not(:disabled){background:var(--bt-board-primary-hover)}
+.bt-board-dialog .bt-btn-primary,.bt-card-modal .bt-btn-primary,.bt-create-modal .bt-btn-primary{background:var(--bt-board-primary);color:var(--bt-board-primary-ink)}
+.bt-board-dialog .bt-btn-primary:hover:not(:disabled),.bt-card-modal .bt-btn-primary:hover:not(:disabled),.bt-create-modal .bt-btn-primary:hover:not(:disabled){background:var(--bt-board-primary-hover)}
+.bt-btn-ghost{background:transparent;border:.5px solid var(--bt-line-2)}
+.bt-icon-btn{width:28px;height:28px}
+.bt-card-mini{padding:2px 5px;border-radius:6px;font-size:12px;line-height:16px}
+.bt-field{gap:4px;font-size:12px;line-height:16px}
+.bt-field>span:first-child,.bt-field>legend{font-size:12px;line-height:16px;font-weight:500;color:var(--bt-ink-2)}
+.bt-field textarea{min-height:64px}
+.bt-create-modal{width:min(620px,100%)}
+.bt-create-form{gap:12px;padding:16px 22px 20px}
+.bt-create-row{gap:10px}
+.bt-create-note,.bt-create-actions{font-size:12px;line-height:18px}
+.bt-create-actions{padding-top:12px}
+.bt-form-error{font-size:12px;line-height:18px}
+@media(max-width:900px){.bt-card-modal-body{grid-template-columns:1fr}.bt-card-side{border-left:0;border-top:.5px solid var(--bt-line)}.bt-board-review-tools{max-height:38vh;overflow:auto}
+  .bt-card-mobile-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;grid-column:1/-1;position:sticky;top:0;z-index:3;padding:8px 16px;border-bottom:.5px solid var(--bt-line);background:color-mix(in srgb,var(--bt-main) 94%,transparent);backdrop-filter:blur(8px)}
+  .bt-card-mobile-bar .bt-board-card-owner{font-size:12px;line-height:16px;min-width:0;flex:1}
+  .bt-card-mobile-bar .bt-card-mini{margin-left:auto;background:var(--bt-hover)}
+}
+@media(max-width:700px){.bt-board-header{padding:12px 16px}.bt-board-capacity{display:none}.bt-board-toolbar{padding:8px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:12px 16px 16px;gap:12px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,288px);max-width:none}.bt-card-modal-header{padding:14px 16px 12px}.bt-card-main{padding:16px}.bt-card-side{padding:16px}.bt-create-form{padding:16px}}
+@media(prefers-reduced-motion:reduce){.bt-board-backdrop,.bt-board-dialog,.bt-card-modal-backdrop,.bt-card-modal{animation:none!important}.bt-board-lane,.bt-board-card{transition:none}}
+
+/* Phase 2: task types, lifecycle lanes, releases and confirmations. */
+.bt-board-views{display:inline-flex;align-items:center;gap:2px;flex:none;padding:2px;border-radius:10px;background:var(--bt-hover)}
+.bt-board-view{height:28px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px}
+.bt-board-view:hover:not(:disabled){color:var(--bt-ink)}
+.bt-board-view[aria-pressed=true]{background:var(--bt-card);color:var(--bt-ink);box-shadow:0 .5px 2px rgba(0,0,0,.06)}
+.bt-board-changes{display:inline-flex;align-items:center;gap:6px;flex:none;height:30px;padding:0 10px;border:.5px solid var(--bt-line-2);border-radius:999px;background:var(--bt-card);color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px}
+.bt-board-changes:hover:not(:disabled){background:var(--bt-hover);color:var(--bt-ink)}
+.bt-board-changes[aria-pressed=true]{color:var(--bt-ink);background:var(--bt-active)}
+.bt-board-changes-new .bt-board-count{background:var(--bt-accent);color:var(--bt-accent-ink)}
+.bt-board-filter-toggle,.bt-board-tools-toggle{display:none}
+.bt-board-summary{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:7px 24px;border-bottom:1px solid var(--bt-line);color:var(--bt-ink-2);font-size:12px;line-height:16px}
+.bt-board-summary b{color:var(--bt-ink);font-weight:600;font-variant-numeric:tabular-nums}
+.bt-board-summary-alert,.bt-board-summary-alert b{color:var(--bt-danger)}
+.bt-board-type{display:inline-flex;align-items:center;max-width:100%;padding:1px 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-board-stage-dot-draft{background:var(--bt-ink-3)}
+.bt-board-stage-dot-cancelled{background:color-mix(in srgb,var(--bt-danger) 55%,var(--bt-ink-3))}
+.bt-board-stage-dot-unassigned{background:var(--bt-ink-3)}
+.bt-card-status-actions{display:flex;flex-direction:column;gap:6px}
+.bt-card-move>summary{display:flex;align-items:center;min-height:28px;cursor:pointer;color:var(--bt-ink-2);font-size:12px;line-height:16px;list-style:none}
+.bt-card-move>summary::-webkit-details-marker{display:none}
+.bt-card-move-body{display:flex;flex-direction:column;gap:4px;padding-top:4px}
+.bt-card-move-body .bt-card-mini{width:100%;justify-content:flex-start}
+.bt-card-cancel{color:var(--bt-danger)}
+.bt-card-cancel:hover:not(:disabled){background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.bt-card-confirm{display:flex;flex-direction:column;gap:10px;flex:none;padding:12px 22px;border-bottom:1px solid var(--bt-line);background:var(--bt-sidebar)}
+.bt-card-confirm:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
+.bt-card-confirm-head h3{margin:0;font-size:13px;line-height:18px;font-weight:600}
+.bt-card-confirm-head p{margin:2px 0 0;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
+.bt-card-diff{display:flex;flex-direction:column;max-height:min(34vh,320px);overflow:auto;border:.5px solid var(--bt-line);border-radius:8px;background:var(--bt-card)}
+.bt-card-diff-row{display:grid;gap:2px;min-width:0;padding:7px 9px;border-top:.5px solid var(--bt-line)}
+.bt-card-diff-row:first-child{border-top:0}
+.bt-card-diff-row strong{font-size:11px;line-height:16px;font-weight:500;color:var(--bt-ink-2)}
+.bt-card-diff-values{display:flex;flex-direction:column;gap:1px;min-width:0;font-size:12px;line-height:18px}
+.bt-card-diff-values span{overflow-wrap:anywhere}
+.bt-card-diff-values b{font-weight:500;color:var(--bt-ink-2)}
+.bt-board-release-bar{display:flex;align-items:center;gap:8px;flex:none;min-width:0;padding:7px 0 9px;border-bottom:1px solid var(--bt-line)}
+.bt-board-release-chips{display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow-x:auto;padding:1px;scrollbar-width:none}
+.bt-board-release-chips::-webkit-scrollbar{display:none}
+.bt-board-release-chip{display:inline-flex;align-items:center;gap:6px;flex:none;height:28px;padding:0 9px;border:.5px solid var(--bt-line-2);border-radius:999px;background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:11px;line-height:16px;white-space:nowrap}
+.bt-board-release-chip:hover:not(:disabled){background:var(--bt-hover)}
+.bt-board-release-name{max-width:130px;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.bt-board-release-version{color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-board-release-status{display:inline-flex;align-items:center;padding:0 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-weight:500}
+.bt-board-release-status-queued{background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));color:color-mix(in srgb,var(--bt-accent) 70%,var(--bt-ink))}
+.bt-board-release-status-running,.bt-board-release-status-published{background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));color:color-mix(in srgb,var(--bt-green) 58%,var(--bt-ink))}
+.bt-board-release-status-cancelled{background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card));color:var(--bt-danger)}
+.bt-board-release-progress{color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-board-release-meta{display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
+.bt-board-lane-actions,.bt-board-release-actions{display:flex;align-items:center;justify-content:flex-end;gap:2px;flex-wrap:wrap;min-width:0}
+.bt-board-release-actions .bt-card-mini{border:.5px solid var(--bt-line);background:var(--bt-card)}
+.bt-board-release-actions .bt-card-mini:hover:not(:disabled){background:var(--bt-hover)}
+.bt-board-dialog{position:relative}
+.bt-board-confirm-layer{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.32))}
+.bt-board-confirm{box-sizing:border-box;display:flex;flex-direction:column;width:min(440px,100%);max-height:min(70vh,520px);overflow:auto;padding:16px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-main);box-shadow:0 24px 80px rgba(0,0,0,.24);color:var(--bt-ink)}
+.bt-board-confirm:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
+.bt-board-confirm-title{margin:2px 0 0;font-size:13px;line-height:18px;font-weight:500;overflow-wrap:anywhere}
+.bt-board-confirm .bt-card-diff{margin-top:10px}
+.bt-board-confirm .bt-card-editor-actions{margin-top:12px}
+.bt-board-lane[data-kind="release"] .bt-board-lane-head{flex-wrap:wrap;row-gap:4px}
+.bt-board-lane[data-kind="release"] .bt-board-lane-title{flex:1 1 100%;flex-wrap:wrap;row-gap:2px}
+.bt-board-lane[data-kind="release"] .bt-board-lane-title h3{white-space:normal;overflow:visible;text-overflow:clip;min-width:0}
+.bt-board-lane[data-kind="release"] .bt-board-release-meta{flex:1 0 100%;order:2}
+.bt-board-lane[data-kind="release"] .bt-board-release-actions{flex:1 1 100%;justify-content:flex-start;flex-wrap:wrap}
+.bt-board-release-cancel{color:var(--bt-danger)}
+.bt-board-lane-focus{border-color:color-mix(in srgb,var(--bt-accent) 46%,var(--bt-line));box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
+.bt-board-release-error{margin:0;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-card));color:var(--bt-ink);font-size:12px;line-height:18px;flex:none}
+.bt-board-section-heading-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.bt-board-new-release{flex:none}
+.bt-release-modal{width:min(420px,100%)}
+.bt-board-proposals{display:flex;flex-direction:column;gap:8px;flex:none;min-width:0;max-height:min(42vh,420px);overflow:auto;padding:10px 12px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-card);box-shadow:var(--bt-board-card-shadow)}
+.bt-board-proposals-head{display:flex;align-items:center;gap:8px}
+.bt-board-proposals-head h3{margin:0;flex:1;font-size:13px;line-height:18px;font-weight:600}
+.bt-board-proposal{display:flex;flex-direction:column;gap:6px;min-width:0;padding:9px 0 0;border-top:.5px solid var(--bt-line)}
+.bt-board-proposal-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.bt-board-proposal-head strong{font-size:13px;line-height:18px;overflow-wrap:anywhere}
+.bt-board-proposal-kind{flex:none;padding:0 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px}
+.bt-board-proposal-meta{margin:0;font-size:11px;line-height:16px;color:var(--bt-ink-3)}
+.bt-board-proposal-note{margin:0;font-size:12px;line-height:18px;color:var(--bt-ink-2);overflow-wrap:anywhere}
+.bt-board-proposal-diff{display:flex;flex-direction:column;overflow:hidden;border:.5px solid var(--bt-line);border-radius:8px}
+.bt-board-proposal-actions{display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+@media(max-width:700px){.bt-board-release-bar{flex-wrap:wrap}.bt-board-release-chips{flex-basis:100%;order:2}.bt-card-confirm{padding:10px 16px}.bt-board-proposals{max-height:46vh}.bt-board-proposal-diff,.bt-card-diff{max-height:40vh}}
+
+/* Release teams, gates, the release detail and its read-only summary report. */
+.bt-board-release-status-failed{background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card));color:var(--bt-danger)}
+.bt-board-release-pm,.bt-board-release-roles,.bt-board-release-group{display:inline-flex;align-items:center;max-width:100%;min-width:0;color:var(--bt-ink-2);font-size:11px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-board-release-pm{max-width:190px}
+.bt-board-release-team-none{color:var(--bt-ink-3)}
+.bt-board-release-gates{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap;min-width:0}
+.bt-board-gate{display:inline-flex;align-items:center;gap:3px;padding:0 5px;border:.5px solid var(--bt-line);border-radius:4px;background:var(--bt-card);color:var(--bt-ink-3);font-size:11px;line-height:16px}
+.bt-board-gate-dot{width:5px;height:5px;flex:none;border-radius:50%;background:var(--bt-ink-3);corner-shape:round}
+.bt-board-gate-passed{color:color-mix(in srgb,var(--bt-green) 58%,var(--bt-ink));border-color:color-mix(in srgb,var(--bt-green) 34%,var(--bt-line))}
+.bt-board-gate-passed .bt-board-gate-dot{background:var(--bt-green)}
+.bt-board-gate-failed{color:var(--bt-danger);border-color:color-mix(in srgb,var(--bt-danger) 34%,var(--bt-line))}
+.bt-board-gate-failed .bt-board-gate-dot{background:var(--bt-danger)}
+.bt-board-release-awaiting{padding:0 6px;border-radius:4px;background:color-mix(in srgb,var(--bt-star) 14%,var(--bt-card));color:color-mix(in srgb,var(--bt-star) 62%,var(--bt-ink));font-size:11px;line-height:16px;font-weight:500}
+.bt-release-modal-team{width:min(620px,100%)}
+.bt-release-team{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-sidebar)}
+.bt-release-team-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bt-release-team-head h3{margin:0;font-size:12px;line-height:16px;font-weight:600}
+.bt-release-team-count{color:var(--bt-ink-3);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-release-team-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:8px}
+.bt-release-team .bt-field{gap:3px}
+.bt-release-team select{box-sizing:border-box;width:100%;height:30px;padding:4px 8px;font-size:13px;line-height:18px}
+.bt-release-required{color:var(--bt-ink-3);font-weight:400}
+.bt-release-team-hint{margin:0;color:var(--bt-ink-3);font-size:11px;line-height:16px}
+.bt-release-detail{width:min(760px,100%)}
+.bt-release-detail-body{display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto;padding:16px 22px 22px}
+.bt-release-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:10px;padding:10px 12px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-card)}
+.bt-release-section{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-release-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bt-release-section-head h3{margin:0;font-size:12px;line-height:16px;font-weight:600}
+.bt-release-section-count{color:var(--bt-ink-3);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.bt-release-role-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:6px 12px;padding:10px 12px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-card)}
+.bt-release-role{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0;font-size:12px;line-height:16px}
+.bt-release-role>span:first-child{color:var(--bt-ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-release-role-name{color:var(--bt-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-release-role-none{color:var(--bt-ink-3)}
+.bt-release-gates{display:flex;flex-direction:column;gap:8px}
+.bt-release-gate{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--bt-line);border-radius:12px;background:var(--bt-card)}
+.bt-release-gate-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bt-release-gate-head strong{font-size:12px;line-height:16px;font-weight:600}
+.bt-release-gate-state{padding:0 6px;border-radius:4px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px;line-height:16px;font-weight:500}
+.bt-release-gate-state-passed{background:color-mix(in srgb,var(--bt-green) 14%,var(--bt-card));color:color-mix(in srgb,var(--bt-green) 58%,var(--bt-ink))}
+.bt-release-gate-state-failed{background:color-mix(in srgb,var(--bt-danger) 10%,var(--bt-card));color:var(--bt-danger)}
+.bt-release-gate-evidence{margin:0;color:var(--bt-ink-2);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.bt-release-gate-edit{display:grid;grid-template-columns:minmax(110px,140px) minmax(0,1fr) auto;gap:6px;align-items:end;min-width:0}
+.bt-release-gate-field{display:flex;flex-direction:column;gap:3px;min-width:0;color:var(--bt-ink-2);font-size:12px;line-height:16px}
+.bt-release-gate .bt-release-gate-field select,.bt-release-gate .bt-release-gate-field input{box-sizing:border-box;width:100%;height:30px;padding:4px 8px;font-size:13px;line-height:18px}
+.bt-release-gate-save{flex:none;white-space:nowrap}
+.bt-release-gate-hint{margin:0;color:var(--bt-ink-3);font-size:11px;line-height:16px}
+.bt-release-detail-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding-top:2px}
+.bt-release-report{width:min(760px,100%)}
+.bt-release-report-body{flex:1;min-height:0;overflow:auto;padding:16px 22px}
+.bt-release-report-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
+.bt-release-report-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;flex:none;padding:12px 22px 16px;border-top:1px solid var(--bt-line)}
+.bt-release-report-buttons{display:flex;align-items:center;gap:8px}
+@media(max-width:700px){.bt-release-detail-body,.bt-release-report-body{padding:12px 16px}.bt-release-gate-edit{grid-template-columns:1fr;align-items:stretch}.bt-release-report-foot{padding:10px 16px 14px}}
+.bt-board-lane-cards>.bt-board-card{flex:none}
+.bt-card-icon-danger{width:28px;height:28px}
+@media(max-width:700px){
+  .bt-board-filter-toggle,.bt-board-tools-toggle{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:30px;padding:0 10px;border:.5px solid var(--bt-line-2);border-radius:999px;background:var(--bt-card);color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px}
+  .bt-board-tools-toggle{align-self:flex-start;margin:6px 16px 0}
+  .bt-board-summary{display:none}
+  .bt-board-new-release{display:none}
+  .bt-board-bulk{padding:6px 16px;flex-wrap:nowrap;overflow-x:auto}
+  .bt-board-filters{display:none}
+  .bt-board-filters-open{display:grid;grid-template-columns:1fr;gap:8px;position:fixed;left:12px;right:12px;bottom:16px;z-index:10002;max-height:min(70vh,520px);overflow:auto;padding:14px;border:.5px solid var(--bt-line-2);border-radius:16px;background:var(--bt-main);box-shadow:0 24px 80px rgba(0,0,0,.22);mask-image:none}
+  .bt-board-filters-open>*{width:100%;min-height:36px}
+  .bt-board-review-tools{display:none}
+  .bt-board-review-tools-open{display:flex;flex-wrap:wrap;max-height:34vh;overflow:auto;mask-image:none}
+  .bt-board-release-chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;mask-image:linear-gradient(to right,#000 0,#000 calc(100% - 18px),transparent 100%)}
+  .bt-board-release-chips::-webkit-scrollbar{display:none}
+}
 `;
 
 // src/client/header.js

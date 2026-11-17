@@ -820,6 +820,16 @@ for (const ErrorType of [TypeError, ReferenceError, RangeError, SyntaxError]) {
   })
 }
 
+test('a prepared delivery forwards the after-admission observer through recovery notes', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  let admitted = 0
+  const result = await host.rt.deliver({ toId: 'b', role: 'reply', text: 'result' }, { afterAdmission: () => { admitted += 1 } })
+  assert.equal(admitted, 1, 'the caller sees the exact admission receipt after the recovery note is written')
+  assert.equal(typeof result, 'string')
+  assert.equal(host.agentOf('b').calls.length, 1)
+})
+
 test('observers are per delivery even if the same error object is thrown concurrently', async (t) => {
   const home = freshHome(t)
   const host = await start(home)

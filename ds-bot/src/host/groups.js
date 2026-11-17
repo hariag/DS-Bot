@@ -399,6 +399,7 @@ export function install(rt) {
     }
     room.sessions[member.id] = id
     rt.groupOwners.set(id, { botId: member.id, roomId: room.id })
+    room.seen ??= {}
     delete room.seen[member.id]
     const ref = await rt.desiredModel(member)
     if (ref !== undefined) {

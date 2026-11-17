@@ -2,6 +2,14 @@
 // principal and a current roster; request parameters never select the principal.
 const text = value => typeof value === 'string' && value.length > 0
 const own = (table, id) => Object.hasOwn(table, id) ? table[id] : undefined
+const positionOf = task => typeof task?.position === 'string' ? task.position : undefined
+const byPositionThenId = (left, right) => {
+  const a = positionOf(left), b = positionOf(right)
+  if (a === undefined && b !== undefined) return -1
+  if (a !== undefined && b === undefined) return 1
+  if (a !== undefined && a !== b) return a < b ? -1 : 1
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+}
 
 const parseScope = scope => {
   if (!scope || !['room', 'personal'].includes(scope.kind) || !text(scope.id)) throw new Error('Invalid board scope')
@@ -36,7 +44,7 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
     ? task.scope === key
     : scope.id === 'user'
       ? task.scope === key || task.owner === 'user' || task.reviewer === 'user'
-      : task.scope === key || task.owner === scope.id || task.reviewer === scope.id)
+      : task.scope === key || task.owner === scope.id || task.reviewer === scope.id).sort(byPositionThenId)
   const shares = scope.kind !== 'room' ? [] : tasks.flatMap(task => (task.shares ?? [])
     .filter(grant => grant && !grant.revoked && grant.targetRoomId === scope.id && grant.taskId === task.id && verifyShare(task, grant, scope, principal) === true)
     .map(grant => ({ id:task.id, title:grant.fields.includes('title') ? grant.titleSnapshot : 'Shared task', status:task.stale ? 'shared-stale' : task.blocked ? 'shared-blocked' : task.status, shared:true })))
@@ -63,7 +71,10 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
         after:{...task.change.after, dependencies:(task.change.after.dependencies ?? []).filter(id => visibleIds.has(id))}}} : {}),
       ...(principal.kind === 'user' && task.dispatchState ? {dispatchState:task.dispatchState} : {}),
       ...(principal.kind === 'user' && task.review ? {review:task.review} : {}),
-      description: task.description ?? '', dueDate: task.dueDate ?? null,
+      description: task.description ?? '', dueDate: task.dueDate ?? null, dueComplete: task.dueComplete ?? false,
+      type: task.type ?? 'other', releaseId: task.releaseId ?? null,
+      ...(task.archivedAt ? { archivedAt: task.archivedAt } : {}),
+      coverImageId: task.coverImageId ?? null,
       labels: task.labels ?? [], checklist: task.checklist ?? [],
       comments: task.comments ?? [], boardActivity: task.boardActivity ?? [],
       ...(principal.kind === 'user' && task.scope === 'personal:user' && task.owner === 'user' && task.status === 'proposed'

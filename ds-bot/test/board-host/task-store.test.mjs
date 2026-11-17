@@ -138,6 +138,7 @@ test('editing running work creates one separate change proposal with an immutabl
   assert.equal(store.get('active').title, old.title)
   assert.equal(store.get('active').status, 'working')
   assert.equal(proposal.status, 'waiting'); assert.deepEqual(proposal.dependencies, ['active'])
+  assert.equal(typeof proposal.position, 'string'); assert.ok(proposal.position > store.get('active').position)
   assert.equal(proposal.change.before.acceptance, old.acceptance); assert.equal(proposal.change.after.acceptance, 'New acceptance')
   assert.equal(proposal.change.before.description, ''); assert.equal(proposal.change.after.description, 'New description')
   assert.equal(store.listActions(proposal.id).length, 0)
@@ -397,6 +398,58 @@ test('multiple image references require host validation, revision and idempotent
   assert.equal(command(store, 'a', 'detach', 'user', { ids: [images[1].id] }, 'remove-images').attachments.length, 0)
 })
 
+test('a card cover names an attached image, persists and shows in card history', t => {
+  const { store, path, trackStore } = fixture(t); create(store, 'card')
+  const images = [{ id:'cover-1', sha256:'1'.repeat(64), mediaType:'image/png', size:10, name:'cover.png' }, { id:'photo-2', sha256:'2'.repeat(64), mediaType:'image/png', size:20, name:'other.png' }]
+  command(store, 'card', 'attach', 'user', { images })
+  const covered = command(store, 'card', 'card-details', 'user', { coverImageId:'cover-1' })
+  assert.equal(covered.coverImageId, 'cover-1')
+  const history = store.history('card')
+  assert.equal(history.entries[0].after.coverImageId, 'cover-1')
+  assert.equal(history.entries[0].before.coverImageId, undefined)
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('card').coverImageId, 'cover-1')
+  const cleared = command(reopened, 'card', 'card-details', 'user', { coverImageId:null }, 'clear-cover')
+  assert.equal(cleared.coverImageId, null)
+  assert.equal(reopened.history('card').entries[0].before.coverImageId, 'cover-1')
+  assert.equal(reopened.history('card').entries[0].after.coverImageId, null)
+})
+
+test('a card cover must name an image already on the card and only after an upload', t => {
+  const { store } = fixture(t); create(store, 'empty')
+  const image = { id:'photo-1', sha256:'1'.repeat(64), mediaType:'image/png', size:10, name:'a.png' }
+  for (const [index, coverImageId] of ['photo-1', '', 7, ['photo-1']].entries()) {
+    assert.throws(() => command(store, 'empty', 'card-details', 'user', { coverImageId }, 'bad-cover-' + index), /invalid card details/)
+  }
+  command(store, 'empty', 'attach', 'user', { images:[image] })
+  assert.throws(() => command(store, 'empty', 'card-details', 'user', { coverImageId:'missing' }, 'unknown-cover'), /invalid card details/)
+  assert.throws(() => command(store, 'empty', 'card-details', 'user', { coverImageId:'missing', description:'note' }, 'mixed-cover'), /invalid card details/)
+  assert.equal(store.get('empty').coverImageId, undefined)
+  assert.equal(store.get('empty').description, undefined)
+  const created = store.create({ operationId:'create-null-cover', actor:'user', task:{ ...task('null-cover'), coverImageId:null } })
+  assert.equal(created.coverImageId, null)
+  assert.throws(() => store.create({ operationId:'create-cover', actor:'user', task:{ ...task('cover'), coverImageId:'photo-1' } }), /invalid card details/)
+})
+
+test('removing the image used as a card cover clears the cover and leaves other covers alone', t => {
+  const { store, path, trackStore } = fixture(t); create(store, 'card')
+  const images = ['photo-1', 'photo-2', 'photo-3'].map((id, index) => ({ id, sha256:String(index + 1).repeat(64), mediaType:'image/png', size:10 + index, name:id + '.png' }))
+  command(store, 'card', 'attach', 'user', { images })
+  command(store, 'card', 'card-details', 'user', { coverImageId:'photo-1' })
+  const removedCover = command(store, 'card', 'remove-image', 'user', { imageId:'photo-1' })
+  assert.equal(removedCover.coverImageId, null); assert.deepEqual(removedCover.attachments.map(item => item.id), ['photo-2', 'photo-3'])
+  command(store, 'card', 'card-details', 'user', { coverImageId:'photo-2' }, 'cover-two')
+  const removedOther = command(store, 'card', 'remove-image', 'user', { imageId:'photo-3' }, 'remove-other')
+  assert.equal(removedOther.coverImageId, 'photo-2')
+  const detached = command(store, 'card', 'detach', 'user', { ids:['photo-2'] }, 'detach-cover')
+  assert.equal(detached.coverImageId, null); assert.deepEqual(detached.attachments, [])
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('card').coverImageId, null)
+  create(reopened, 'plain'); command(reopened, 'plain', 'attach', 'user', { images:[images[0]] })
+  command(reopened, 'plain', 'remove-image', 'user', { imageId:'photo-1' })
+  assert.equal(Object.hasOwn(reopened.get('plain'), 'coverImageId'), false)
+})
+
 test('cross-room grant revocation cancels pending and holds claimed work and transitive dependents', t => {
   const { store } = fixture(t, { ...opts, verifyShare() { return true }, verifyDependency() { return true } })
   const scoped = (id, scope, dependencies = [], dependencyGrants = []) => store.create({ operationId:`create-${id}`, actor:'user', task:{ ...task(id, dependencies), scope, dependencyGrants } })
@@ -416,6 +469,113 @@ test('cross-room grant revocation cancels pending and holds claimed work and tra
   assert.equal(claim(store, claimed).claimedNow, false)
 })
 
+test('cards receive stable fractional positions and reorder inside one lane', t => {
+  const { store, path, trackStore } = fixture(t)
+  create(store, 'one'); create(store, 'two'); create(store, 'three')
+  const position = id => store.get(id).position
+  assert.equal(typeof position('one'), 'string')
+  assert.ok(position('one') < position('two') && position('two') < position('three'))
+  const moved = command(store, 'three', 'reorder', 'user', { afterId:'one' })
+  assert.equal(moved.revision, 2)
+  assert.equal(moved.boardActivity.at(-1).type, 'reorder')
+  assert.ok(position('one') < moved.position && moved.position < position('two'))
+  const input = { operationId:'reorder-three', taskId:'three', expectedRevision:1, actor:'user', type:'reorder', value:{afterId:'one'} }
+  assert.deepEqual(store.command(input), moved)
+  assert.throws(() => store.command({ ...input, value:{afterId:'two'} }), /operation id conflict/)
+  const first = command(store, 'two', 'reorder', 'user', { afterId:null }, 'reorder-two')
+  assert.ok(first.position < position('one'))
+  assert.throws(() => command(store, 'three', 'reorder', 'user', { afterId:'missing' }, 'bad-after'), /unavailable/)
+  assert.throws(() => command(store, 'three', 'reorder', 'user', {}, 'missing-after'), /invalid reorder/)
+  assert.throws(() => command(store, 'three', 'reorder', 'user', { afterId:'three' }, 'self-after'), /invalid reorder/)
+  create(store, 'ready'); register(store, 'ready')
+  assert.throws(() => command(store, 'three', 'reorder', 'user', { afterId:'ready' }, 'cross-lane'), /same lane/)
+  assert.equal(store.get('three').revision, 2)
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('two').position, first.position)
+})
+
+test('personal progress accepts afterId and updates order atomically', t => {
+  const { store, path, trackStore } = fixture(t)
+  const personal = (id, progress) => store.create({ operationId:'create-' + id, actor:'user', task:{ ...task(id), owner:'user', personalProgress:progress } })
+  personal('a', 'todo'); personal('b', 'todo'); personal('c', 'doing')
+  const moved = command(store, 'b', 'personal-progress', 'user', { progress:'doing', afterId:'c' })
+  assert.equal(moved.personalProgress, 'doing')
+  assert.ok(moved.position > store.get('c').position)
+  assert.equal(moved.boardActivity.at(-1).type, 'personal-progress')
+  const first = command(store, 'b', 'personal-progress', 'user', { progress:'doing', afterId:null }, 'personal-first')
+  assert.ok(first.position < store.get('c').position)
+  assert.throws(() => command(store, 'a', 'personal-progress', 'user', { progress:'finished', afterId:'b' }, 'personal-cross'), /same lane/)
+  assert.throws(() => command(store, 'a', 'personal-progress', 'user', { progress:'doing', afterId:'a' }, 'personal-self'), /invalid personal progress/)
+  assert.equal(store.get('a').revision, 1)
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('b').personalProgress, 'doing'); assert.equal(reopened.get('b').position, first.position)
+})
+
+test('card due dates accept an optional local time and completion mark', t => {
+  const { store } = fixture(t); create(store, 'card')
+  const timed = command(store, 'card', 'card-details', 'user', { dueDate:'2028-02-29T23:59', dueComplete:true })
+  assert.equal(timed.dueDate, '2028-02-29T23:59'); assert.equal(timed.dueComplete, true)
+  const dated = command(store, 'card', 'card-details', 'user', { dueDate:'2028-02-29' }, 'date-only')
+  assert.equal(dated.dueDate, '2028-02-29')
+  const cleared = command(store, 'card', 'card-details', 'user', { dueDate:null, dueComplete:false }, 'clear-due')
+  assert.equal(cleared.dueDate, null); assert.equal(cleared.dueComplete, false)
+  const history = store.history('card')
+  assert.equal(history.entries[0].after.dueComplete, false)
+  assert.equal(history.entries[2].after.dueComplete, true)
+  assert.equal(history.entries[2].before.dueComplete, undefined)
+  const bad = ['2027-02-29', '2028-02-30', '2028-00-01', '2028-13-01', '2028-01-00', '2028-02-29T24:00', '2028-02-29T12:60', '2028-02-29T1:00', '2028-2-9', 'tomorrow', '2028-02-29T12:00:00', '']
+  for (const [index, dueDate] of bad.entries()) assert.throws(() => command(store, 'card', 'card-details', 'user', { dueDate }, 'bad-due-' + index), /invalid card details/)
+  assert.throws(() => command(store, 'card', 'card-details', 'user', { dueComplete:'yes' }, 'bad-complete'), /invalid card details/)
+  assert.equal(store.get('card').revision, 4)
+})
+
+test('create accepts card presentation fields with card-details validation', t => {
+  const { store } = fixture(t)
+  const value = { ...task('card'), description:'Prefilled', dueDate:'2028-02-29T09:30', dueComplete:true, labels:[' Urgent '], checklist:[{id:'check', text:' Inspect ', checked:true}] }
+  const created = store.create({ operationId:'create-card', actor:'user', task:value })
+  assert.equal(created.description, 'Prefilled'); assert.equal(created.dueDate, '2028-02-29T09:30'); assert.equal(created.dueComplete, true)
+  assert.deepEqual(created.labels, ['Urgent']); assert.deepEqual(created.checklist, [{ id:'check', text:'Inspect', checked:true }])
+  assert.equal(typeof created.position, 'string')
+  const invalid = [
+    { ...value, id:'bad-date', dueDate:'2027-02-29' },
+    { ...value, id:'bad-time', dueDate:'2028-02-29T24:00' },
+    { ...value, id:'bad-complete', dueComplete:'yes' },
+    { ...value, id:'bad-labels', labels:['same','same'] },
+    { ...value, id:'bad-checklist', checklist:[{ id:'x', text:'a', checked:'yes' }] },
+  ]
+  for (const [index, taskValue] of invalid.entries()) assert.throws(() => store.create({ operationId:'create-bad-' + index, actor:'user', task:taskValue }), /invalid card details/)
+  assert.equal(store.list().length, 1)
+})
+
+test('card comments can be edited and deleted within the comment limit', t => {
+  const { store, path, trackStore } = fixture(t); create(store, 'card')
+  const added = command(store, 'card', 'card-comment', 'user', { text:' First note ' }, 'comment-one')
+  assert.equal(added.comments.length, 1)
+  const comment = added.comments[0]
+  assert.equal(comment.text, 'First note'); assert.equal(comment.author, 'user')
+  const edited = command(store, 'card', 'card-comment-edit', 'user', { commentId:comment.id, text:' Edited note ' }, 'comment-edit')
+  assert.equal(edited.comments.length, 1); assert.equal(edited.comments[0].text, 'Edited note')
+  assert.equal(edited.comments[0].id, comment.id); assert.equal(edited.comments[0].at, comment.at)
+  assert.equal(edited.boardActivity.at(-1).type, 'card-comment-edit')
+  const deleted = command(store, 'card', 'card-comment-delete', 'user', { commentId:comment.id }, 'comment-delete')
+  assert.deepEqual(deleted.comments, [])
+  assert.equal(deleted.boardActivity.at(-1).type, 'card-comment-delete')
+  assert.throws(() => command(store, 'card', 'card-comment-edit', 'user', { commentId:'missing', text:'x' }, 'comment-missing'), /unknown card comment/)
+  assert.throws(() => command(store, 'card', 'card-comment-delete', 'user', { commentId:'missing' }, 'comment-missing-delete'), /unknown card comment/)
+  assert.throws(() => command(store, 'card', 'card-comment-edit', 'owner', { commentId:comment.id, text:'x' }, 'comment-actor'), /invalid card comment/)
+  assert.throws(() => command(store, 'card', 'card-comment-edit', 'user', { commentId:comment.id, text:'   ' }, 'comment-blank'), /invalid card comment/)
+  assert.throws(() => command(store, 'card', 'card-comment-edit', 'user', { commentId:comment.id, text:'x'.repeat(2049) }, 'comment-long'), /invalid card comment/)
+  assert.equal(store.get('card').revision, 4)
+  for (let index = 0; index < 100; index += 1) command(store, 'card', 'card-comment', 'user', { text:'note ' + index }, 'fill-' + index)
+  assert.equal(store.get('card').comments.length, 100)
+  assert.throws(() => command(store, 'card', 'card-comment', 'user', { text:'overflow' }, 'comment-overflow'), /card comment limit reached/)
+  const removed = command(store, 'card', 'card-comment-delete', 'user', { commentId:store.get('card').comments[0].id }, 'comment-remove-one')
+  assert.equal(removed.comments.length, 99)
+  const readded = command(store, 'card', 'card-comment', 'user', { text:'replacement' }, 'comment-replace')
+  assert.equal(readded.comments.length, 100)
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('card').comments.length, 100)
+})
 test('dependency index follows edits atomically and mismatches are rejected on reopen', t => {
   const { store, path } = fixture(t)
   create(store, 'a'); create(store, 'b', ['a'])
@@ -428,4 +588,151 @@ test('dependency index follows edits atomically and mismatches are rejected on r
   const corrupt = new DatabaseSync(path); corrupt.exec("DELETE FROM task_dependencies WHERE task_id='b'"); corrupt.close()
   assert.throws(() => openTaskStore(path, opts), /dependency index/)
   const after = new DatabaseSync(path); assert.equal(after.prepare("SELECT count(*) AS n FROM task_dependencies WHERE task_id='b'").get().n, 0); after.close()
+})
+
+test('task types, draft submit, cancel and restore are durable and valid', t => {
+  const { store, path, trackStore } = fixture(t)
+  const typed = { ...task('typed'), type:'requirement', draft:true }
+  store.create({ operationId:'create-typed', actor:'user', task:typed })
+  assert.equal(store.get('typed').type, 'requirement')
+  assert.equal(store.get('typed').status, 'draft')
+  assert.throws(() => command(store, 'typed', 'card-details', 'user', { type:'not-a-type' }, 'bad-type'))
+  assert.equal(command(store, 'typed', 'submit', 'user').status, 'proposed')
+  assert.equal(command(store, 'typed', 'cancel', 'user', { reason:'duplicate' }).status, 'cancelled')
+  assert.equal(command(store, 'typed', 'restore', 'user').status, 'proposed')
+  store.close()
+  const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('typed').type, 'requirement')
+  assert.equal(reopened.get('typed').status, 'proposed')
+})
+
+test('release items keep an explicit order, start one running release and prioritize its scheduling', t => {
+  const { store } = fixture(t)
+  create(store, 'a'); create(store, 'b'); create(store, 'c')
+  const one = store.createRelease({ operationId:'release-one', actor:'user', release:{ id:'r1', scope:'personal:user', name:'Release one', version:'1.0.0' } })
+  const two = store.createRelease({ operationId:'release-two', actor:'user', release:{ id:'r2', scope:'personal:user', name:'Release two', version:'1.1.0' } })
+  assert.ok(one.position < two.position)
+  const assignedA = store.assignRelease({ operationId:'assign-a', actor:'user', releaseId:'r1', expectedReleaseRevision:one.revision, taskId:'a', expectedTaskRevision:1 })
+  store.assignRelease({ operationId:'assign-b', actor:'user', releaseId:'r1', expectedReleaseRevision:one.revision, taskId:'b', expectedTaskRevision:1 })
+  assert.equal(assignedA.releaseId, 'r1')
+  const started = store.startRelease({ operationId:'start-r1', actor:'user', releaseId:'r1', expectedRevision:one.revision })
+  assert.equal(started.status, 'running')
+  assert.equal(store.get('a').status, 'ready')
+  assert.equal(store.get('b').status, 'ready')
+  assert.deepEqual(store.listSchedule().slice(0,2).map(task => task.id), ['a','b'])
+  assert.equal(store.listSchedule().at(-1).id, 'c')
+  assert.throws(() => store.startRelease({ operationId:'start-r2', actor:'user', releaseId:'r2', expectedRevision:two.revision }), /another release/)
+  const cancelled = store.cancelRelease({ operationId:'cancel-r1', actor:'user', releaseId:'r1', expectedRevision:started.revision })
+  assert.equal(cancelled.status, 'cancelled')
+  assert.equal(store.get('a').status, 'proposed')
+  assert.equal(store.get('a').releaseId, null)
+})
+
+test('a proposal is durable, user-confirmed and applied against its base revision', t => {
+  const { store, path, trackStore } = fixture(t)
+  create(store, 'card')
+  const proposal = store.createProposal({ operationId:'proposal-create', actor:'owner', proposal:{
+    id:'proposal-1', scope:'personal:user', taskId:'card', kind:'update', baseRevision:1,
+    command:{ type:'card-details', value:{ description:'Bot draft' } }, before:{ description:'' }, after:{ description:'Bot draft' }, note:'Bot suggestion',
+  } })
+  assert.equal(proposal.status, 'pending')
+  assert.equal(store.get('card').description, undefined)
+  assert.throws(() => store.decideProposal({ operationId:'proposal-stale', actor:'user', proposalId:'proposal-1', expectedRevision:1, decision:'confirm',
+    apply: () => { throw new Error('should not run') } }), /should not run/)
+  const decided = store.decideProposal({ operationId:'proposal-confirm', actor:'user', proposalId:'proposal-1', expectedRevision:1, decision:'confirm',
+    apply: current => store.command({ operationId:'proposal-apply', taskId:current.taskId, expectedRevision:current.baseRevision, actor:'user', type:current.command.type, value:current.command.value }) })
+  assert.equal(decided.proposal.status, 'confirmed')
+  assert.equal(store.get('card').description, 'Bot draft')
+  assert.equal(store.listProposals('personal:user')[0].status, 'confirmed')
+  store.close()
+  const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('card').description, 'Bot draft')
+  assert.equal(reopened.listProposals('personal:user')[0].status, 'confirmed')
+})
+
+test('schema v5 is migrated in place without touching existing tasks', t => {
+  const { store, path, trackStore } = fixture(t)
+  create(store, 'kept')
+  store.close()
+  const old = new DatabaseSync(path)
+  old.exec('DROP TABLE operations; DROP TABLE proposals; DROP TABLE releases; PRAGMA user_version=5')
+  old.close()
+  const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.get('kept').title, 'task kept')
+  const db = new DatabaseSync(path)
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6)
+  for (const table of ['operations','proposals','releases']) assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name=?").get(table).n, 1)
+  db.close()
+})
+
+test('a release publishes when all items complete and starts the next queued release', t => {
+  const { store } = fixture(t)
+  create(store, 'a'); create(store, 'b')
+  const r1 = store.createRelease({ operationId:'rel-a', actor:'user', release:{ id:'r1', scope:'personal:user', name:'v1', version:'1.0.0' } })
+  const r2 = store.createRelease({ operationId:'rel-b', actor:'user', release:{ id:'r2', scope:'personal:user', name:'v2', version:'1.1.0' } })
+  store.assignRelease({ operationId:'assign-a', actor:'user', releaseId:'r1', expectedReleaseRevision:r1.revision, taskId:'a', expectedTaskRevision:1 })
+  store.assignRelease({ operationId:'assign-b', actor:'user', releaseId:'r2', expectedReleaseRevision:r2.revision, taskId:'b', expectedTaskRevision:1 })
+  store.queueRelease({ operationId:'queue-b', actor:'user', releaseId:'r2', expectedRevision:r2.revision })
+  store.startRelease({ operationId:'start-a', actor:'user', releaseId:'r1', expectedRevision:r1.revision })
+  for (const gate of ['docs','artifacts','environment','summary']) {
+    const current = store.getRelease('r1')
+    store.setReleaseGate({ operationId:`gate-${gate}`, actor:'user', releaseId:'r1', expectedRevision:current.revision, gate, status:'passed', evidence:`${gate} checked` })
+  }
+  const accept = (taskId, actor, admission) => {
+    const action = store.listActions(taskId).find(item => item.state === 'pending')
+    const messageId = `msg-${admission}`, intent = { admissionId:`adm-${admission}`, messageId, targetBotId:actor, targetSessionId:`sess-${actor}`,
+      payload:{ id:messageId, role:'user', content:[{ type:'text', text:'go' }], source:{ kind:'bot' } } }
+    store.claimAction({ operationId:`claim-${admission}`, actor:'scheduler', actionId:action.id, intent })
+    store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'accepted', receipt:'ok' })
+    return action
+  }
+  accept('a', 'owner', 'a-exec')
+  store.command({ operationId:'start-work-a', taskId:'a', expectedRevision:store.get('a').revision, actor:'owner', type:'start' })
+  store.command({ operationId:'report-a', taskId:'a', expectedRevision:store.get('a').revision, actor:'owner', type:'report',
+    value:{ kind:'personal', evidence:'done', environment:'test' } })
+  accept('a', 'reviewer', 'a-review')
+  store.command({ operationId:'review-a', taskId:'a', expectedRevision:store.get('a').revision, actor:'reviewer', type:'review',
+    value:{ evidence:'accepted', result:'pass' } })
+  assert.equal(store.get('a').status, 'done')
+  assert.equal(store.getRelease('r1').status, 'published')
+  assert.equal(store.getRelease('r2').status, 'running')
+  assert.equal(store.get('b').status, 'ready')
+})
+
+test('archive and unarchive are revision-bound and reversible', t => {
+  const { store } = fixture(t)
+  create(store, 'archive-me')
+  const archived = store.command({ operationId:'archive-1', actor:'user', taskId:'archive-me', expectedRevision:1, type:'archive' })
+  assert.ok(archived.archivedAt)
+  assert.throws(() => store.command({ operationId:'archive-2', actor:'user', taskId:'archive-me', expectedRevision:archived.revision, type:'archive' }), /already archived/)
+  const restored = store.command({ operationId:'unarchive-1', actor:'user', taskId:'archive-me', expectedRevision:archived.revision, type:'unarchive' })
+  assert.equal(restored.archivedAt, undefined)
+  assert.throws(() => store.command({ operationId:'unarchive-2', actor:'user', taskId:'archive-me', expectedRevision:restored.revision, type:'unarchive' }), /not archived/)
+})
+
+test('archived cards leave the scheduler and active work cannot be archived', t => {
+  const { store } = fixture(t)
+  create(store, 'active'); register(store, 'active')
+  const ready = command(store, 'active', 'schedule', 'user', { kind:'personal', reference:'owner approval' })
+  assert.equal(ready.status, 'ready')
+  assert.equal(store.listSchedule().some(task => task.id === 'active'), true)
+  assert.throws(() => command(store, 'active', 'archive', 'user'), /finish or cancel active work/)
+  const undone = command(store, 'active', 'unschedule', 'user')
+  assert.equal(undone.status, 'waiting')
+  assert.equal(store.listActions('active').filter(action => action.state === 'pending').length, 0)
+  const proposedAgain = store.command({ operationId:'unschedule-again', actor:'user', taskId:'active', expectedRevision:undone.revision, type:'unschedule' })
+  assert.equal(proposedAgain.status, 'proposed')
+  assert.equal(proposedAgain.authority, null)
+  assert.throws(() => store.command({ operationId:'unschedule-third', actor:'user', taskId:'active', expectedRevision:proposedAgain.revision, type:'unschedule' }), /not scheduled/)
+  create(store, 'archived-card')
+  command(store, 'archived-card', 'archive', 'user')
+  assert.equal(store.listSchedule().some(task => task.id === 'archived-card'), false)
+})
+
+test('a release item cannot be archived while the release is active', t => {
+  const { store } = fixture(t)
+  create(store, 'release-card')
+  const release = store.createRelease({ operationId:'archive-release', actor:'user', release:{ id:'archive-r1', scope:'personal:user', name:'v1', version:'1.0.0' } })
+  store.assignRelease({ operationId:'archive-assign', actor:'user', releaseId:'archive-r1', expectedReleaseRevision:release.revision, taskId:'release-card', expectedTaskRevision:1 })
+  assert.throws(() => command(store, 'release-card', 'archive', 'user'), /remove the card from its release/)
 })
