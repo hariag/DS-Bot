@@ -10,10 +10,19 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { LATE_ANSWER, SOURCE_KIND, TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
+import { isOpenPart, ownChatSessions } from './threads.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
   return count < 1 ? 'for less than a minute' : `for ${count} min`
+}
+// A card can wait for days.
+const forHowLong = since => {
+  const hours = Math.floor((Date.now() - since) / 3_600_000)
+  if (hours < 1) return minutes(since)
+  if (hours < 24) return `for ${hours} hour${hours === 1 ? '' : 's'}`
+  const days = Math.floor(hours / 24)
+  return `for ${days} day${days === 1 ? '' : 's'}`
 }
 
 export function install(rt) {
@@ -98,9 +107,11 @@ export function install(rt) {
   // `parent`: the work the sender was doing when it sent this one. `child`: the
   // session id of the subagent a run of this work belongs to — the run, not the
   // child, is the sub-work, so a child that is continued hands up a result per run.
-  function openWork(id, { from, to, parent, fromRoom, room, name, child }) {
+  // `fromPart`: the part of the sender's own chat it wrote from, which its answer goes
+  // back to when that is a background part.
+  function openWork(id, { from, to, parent, fromRoom, room, name, child, fromPart }) {
     const above = parent === undefined ? undefined : works()[parent]
-    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), open: [], results: [], at: Date.now() }
+    works()[id] = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(room ? { room } : {}), ...(above ? { parent } : {}), ...(fromRoom ? { fromRoom } : {}), ...(fromPart ? { fromPart } : {}), ...(name ? { name } : {}), ...(child ? { child } : {}), open: [], results: [], at: Date.now() }
     if (above !== undefined) above.open.push(id)
     save()
   }
@@ -235,7 +246,7 @@ export function install(rt) {
   // Who asked for the work, as the turn that answers a request sees its trigger.
   const askedBy = workId => {
     const work = works()[workId]
-    return work === undefined ? undefined : { kind: 'bot', role: 'request', exchangeId: workId, senderSessionId: work.from, ...(work.fromRoom ? { senderRoomId: work.fromRoom } : {}) }
+    return work === undefined ? undefined : { kind: 'bot', role: 'request', exchangeId: workId, senderSessionId: work.from, ...(work.fromPart ? { senderPart: work.fromPart } : {}), ...(work.fromRoom ? { senderRoomId: work.fromRoom } : {}) }
   }
   // The answer that goes up: what the Bot said last for this work, then what came back.
   function answerText(workId, reply, botName) {
@@ -388,10 +399,18 @@ export function install(rt) {
   // What a Bot is doing, in one line for the Bots that work with it.
   function statusOf(botId, viewerId) {
     const chat = rt.chatOf(botId)
-    const sessions = [...new Set([chat, ...(rt.groupSessionsOf?.(botId) ?? [])])]
+    const canSeeRoom = room => room !== undefined && (rt.isMain(viewerId) || room.members.includes(viewerId))
+    // A Bot's own chat may keep parts running in the background, as its group Sessions
+    // may run: a Bot working there is not idle, and the line says where.
+    const bot = rt.botOf(botId)
+    const own = bot === undefined ? [chat] : ownChatSessions(bot)
+    const canSeeSession = sessionId => sessionId !== undefined && (own.includes(sessionId) || canSeeRoom(rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)))
+    const sessions = [...new Set([...own, ...(rt.groupSessionsOf?.(botId) ?? [])])]
     const place = sessionId => {
       const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-      return room ? `in group "${room.name}"` : 'in its own chat'
+      if (room) return `in group "${room.name}"`
+      // The same words the message_bot note uses for a background part.
+      return isOpenPart(bot, sessionId) ? 'in another of its conversations' : 'in its own chat'
     }
     const forWhom = (sessionId, info) => {
       if (rt.groupOwners.has(sessionId)) return info?.askedBy && nameOf(info.askedBy) ? `, for ${nameOf(info.askedBy)}` : ''
@@ -408,35 +427,44 @@ export function install(rt) {
     const approval = (rt.approvalsView?.() ?? []).find(entry => entry.botId === botId)
     const switching = [...(rt.switchJobs?.() ?? [])].find(job => job.botId === botId)
     const running = sessions.filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
-    if (approval !== undefined) lines.push(`waiting for the user's approval to run ${approval.tool || 'a tool'} ${place(approval.sessionId)} (${minutes(approval.at)})`)
-    else if (switching !== undefined) lines.push(`moving on to a fresh part of its ${switching.roomId ? `conversation in group "${rt.roomOf(switching.roomId)?.name ?? '?'}"` : 'own chat'}`)
+    if (approval !== undefined) lines.push((approval.roomId ? canSeeRoom(rt.roomOf(approval.roomId)) : canSeeSession(approval.sessionId))
+      ? `waiting for the user's approval to run ${approval.tool || 'a tool'} ${approval.roomId ? `in group "${rt.roomOf(approval.roomId)?.name ?? '?'}"` : place(approval.sessionId)} (${minutes(approval.at)})`
+      : 'waiting for approval in another conversation')
+    else if (switching !== undefined) lines.push(switching.roomId && !canSeeRoom(rt.roomOf(switching.roomId))
+      ? 'moving on to a fresh part of another conversation'
+      : `moving on to a fresh part of its ${switching.roomId ? `conversation in group "${rt.roomOf(switching.roomId)?.name ?? '?'}"` : 'own chat'}`)
     for (const sessionId of approval === undefined && switching === undefined ? running : []) {
       const entry = rt.live.get(sessionId)
-      lines.push(`working ${place(sessionId)} ${minutes(entry.since ?? Date.now())}${forWhom(sessionId, entry.info)}${doing(entry)}`)
+      lines.push(canSeeSession(sessionId)
+        ? `working ${place(sessionId)} ${minutes(entry.since ?? Date.now())}${forWhom(sessionId, entry.info)}${doing(entry)}`
+        : 'working in another conversation')
     }
     for (const { work, out } of held(busyWith(running))) {
       if (work.to !== botId) continue
+      if ((work.room && !canSeeRoom(rt.roomOf(work.room))) || (work.fromRoom && !canSeeRoom(rt.roomOf(work.fromRoom)))) {
+        lines.push('waiting for work in another conversation')
+        continue
+      }
       const forName = nameOf(work.from) ? `, for ${nameOf(work.from)}` : ''
-      const on = [...new Set(out.map(({ work: child }) => (child.room ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : child.name ?? nameOf(child.to) ?? 'a teammate')))]
+      const on = [...new Set(out.map(({ work: child }) => ((child.fromRoom && !canSeeRoom(rt.roomOf(child.fromRoom))) ? 'another conversation' : child.room ? (canSeeRoom(rt.roomOf(child.room)) ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : 'another conversation') : child.name ?? nameOf(child.to) ?? 'a teammate')))]
       lines.push(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
     }
     if (lines.length === 0) lines.push('idle')
-    if (state.questions?.[chat] !== undefined) lines.push('a question card in its own chat waits for the user\'s answer')
-    if (state.views?.[chat] !== undefined) lines.push('a view card in its own chat waits for the user\'s answer')
+    for (const [kind, card] of [['question', state.questions?.[chat]], ['view', state.views?.[chat]]]) {
+      if (card !== undefined) lines.push(`a ${kind} card in its own chat has waited for the user's answer ${forHowLong(card.askedAt)}`)
+    }
     const registry = ctx.get?.('agents')
     const pending = (id) => {
       const inbox = registry?.get?.(id)?.inbox
       if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) return undefined
       return [...inbox.nextStep, ...inbox.nextTurn]
     }
-    const own = pending(chat)
-    if (own === undefined) {
-      lines.push('own chat pending inputs: unavailable')
-    } else {
-      const deferred = own.filter(message => message.source?.deferred === true).length
-      lines.push(`own chat pending inputs: ${own.length}${deferred > 0 ? ` (${deferred} deferred)` : ''}`)
+    const ownPending = pending(chat)
+    if (ownPending !== undefined) {
+      const deferred = ownPending.filter(message => message.source?.deferred === true).length
+      lines.push(`own chat pending inputs: ${ownPending.length}${deferred > 0 ? ` (${deferred} deferred)` : ''}`)
       const unread = new Map()
-      for (const message of own) {
+      for (const message of ownPending) {
         const source = message.source
         const name = source?.kind === SOURCE_KIND && !source.deferred ? nameOf(source.senderSessionId) : undefined
         if (name !== undefined) unread.set(name, (unread.get(name) ?? 0) + 1)
@@ -446,7 +474,7 @@ export function install(rt) {
     const groups = sessions.filter(sessionId => {
       if (sessionId === chat) return false
       const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-      return room !== undefined && (rt.isMain(viewerId) || room.members.includes(viewerId))
+      return canSeeRoom(room)
     }).map(pending)
     if (groups.length > 0) {
       const loaded = groups.filter(group => group !== undefined)

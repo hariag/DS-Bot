@@ -154,9 +154,11 @@ export function install(rt) {
       .filter(sessionId => sessionId !== undefined && rt.live.get(sessionId)?.turn !== undefined)
     return { running, idle: running.length === 0 }
   }
-  const whereOf = (sessionId) => {
+  const whereOf = (sessionId, viewerId, botId) => {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-    if (room) return `group "${room.name}"`
+    if (room) return rt.isMain(viewerId) || room.members.includes(viewerId) ? `group "${room.name}"` : 'another conversation'
+    const bot = rt.botOf(botId)
+    if (bot === undefined || !ownChatSessions(bot).includes(sessionId)) return 'another conversation'
     // A Bot's own chat may keep another part live in the background: it is a second
     // conversation of that Bot, not its foreground chat.
     return isOpenPart(rt.botOf(rt.chatOwners.get(sessionId)), sessionId) ? 'another of its conversations' : 'its own chat'
@@ -383,7 +385,7 @@ export function install(rt) {
         const elsewhere = activeSessions(target.id).running.filter(sessionId => sessionId !== chat)
         if (elsewhere.length === 0) return out
         const stop = rt.isMain(sender.id) ? ' If it must not go on there, use stop_bot.' : ''
-        return `${out} Your message does not reach its work in ${elsewhere.map(whereOf).join(' and ')}.${stop}`
+        return `${out} Your message does not reach its work in ${elsewhere.map(sessionId => whereOf(sessionId, sender.id, target.id)).join(' and ')}.${stop}`
       }
       return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
     },
