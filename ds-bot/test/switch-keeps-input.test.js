@@ -142,6 +142,7 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
       flush: async () => {
         flushes += 1
         if (fail.flush === true || fail.flush instanceof Error || fail.flush === flushes) throw errorOf(fail.flush)
+        if (fail.flushFalse === flushes) return false
       },
     },
   })
@@ -201,6 +202,19 @@ const moveWriter = async (host, input, step = 2) => {
   assert.equal((await host.tool('update_bot', { work_dir: host.project }, 'b')).includes('From your next step on'), true)
   assert.deepEqual(await host.preStep('b', input, step), { kind: 'reject' })
 }
+
+test('a review inspection on an earlier part is held instead of forwarded', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  await host.rt.load()
+  host.rt.pastOwners.set('old-review', { botId: 'b', roomId: 'r1' })
+  const failures = []
+  host.rt.noteFailure = failure => failures.push(failure)
+  const message = { id: 'inspect-one', content: [{ type: 'text', text: 'inspect' }], source: { reviewInspect: true, reviewId: 'review-one' } }
+  assert.deepEqual(await host.preStep('old-review', [message], 1), { kind: 'reject' })
+  assert.equal(failures[0]?.code, 'GOAL_REVIEW_UNCERTAIN')
+  assert.deepEqual(host.agentOf('b').calls, [])
+})
 
 test('a move that fails while the plugin unloads hands its input back to the part it left', async (t) => {
   // The first flush writes the fresh part's handoff; the second moves the input.
@@ -650,4 +664,100 @@ test('a configured small output limit is an ordinary cutoff, including reasoning
   }
   assert.equal(host.state().bots.b.sessionId, 'b')
   assert.deepEqual(host.created, [])
+})
+
+test('switching a Bot moves a pending delivery and its recovery note together', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  const writer = host.agentOf('b')
+  writer.followup = (message) => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
+  const remove = writer.inbox.remove.bind(writer.inbox)
+  writer.inbox.remove = (id) => {
+    const message = [...writer.inbox.nextStep, ...writer.inbox.nextTurn].find(item => item.id === id)
+    const removed = remove(id)
+    if (removed) host.ctx.emit('agent/inbox/discarded', { agent: writer, message })
+    return removed
+  }
+  await host.tool('message_bot', { to: 'Writer', message: 'queued task', when: 'queue' }, 'a')
+  const message = writer.inbox.nextTurn[0]
+  const notes = () => {
+    try { return JSON.parse(readFileSync(join(host.home, 'inflight.json'), 'utf8')).queued ?? {} } catch { return {} }
+  }
+  await until(() => notes().b?.length === 1)
+  await moveWriter(host, [])
+  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
+  await until(() => notes().s1?.length === 1 && notes().b === undefined)
+  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.source?.exchangeId === message.source.exchangeId)
+  assert.ok(forwarded)
+  assert.equal(notes().s1[0].args.exchangeId, message.source.exchangeId)
+})
+
+
+test('switching a Bot keeps a scheduled reminder queued under the same identity', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  const message = { id: 'schedule-one', role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER]\nScheduled inspection' }], source: { kind: 'schedule' } }
+  const batch = { id: 'schedule-batch', role: 'user', content: [{ type: 'text', text: '[SCHEDULE REMINDER BATCH]\nScheduled inspections' }], source: { kind: 'schedule' } }
+  host.agentOf('b').inbox.nextTurn.push(message, batch)
+  await moveWriter(host, [])
+  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
+  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.id === 'schedule-one')
+  assert.equal(forwarded?.[0], 'followup')
+  assert.deepEqual(forwarded?.[1], message)
+  assert.equal(host.agentOf('s1').calls.find(([, item]) => item.id === batch.id)?.[0], 'followup')
+  assert.equal(host.agentOf('b').inbox.nextTurn.some(item => item.id === message.id), false)
+})
+
+
+test('switching keeps a schedule change notice at the next-step boundary', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  const message = { id: 'schedule-notice', role: 'user', content: [{ type: 'text', text: '[SCHEDULE CHANGE]\nA task changed' }], source: { kind: 'schedule' } }
+  host.agentOf('b').inbox.nextStep.push(message)
+  await moveWriter(host, [])
+  await until(() => host.state().bots.b.sessionId === 's1' && host.state().switching?.b === undefined)
+  const forwarded = host.agentOf('s1').calls.find(([, item]) => item.id === 'schedule-notice')
+  assert.equal(forwarded?.[0], 'inject')
+  assert.deepEqual(forwarded?.[1], message)
+})
+
+
+test('a move keeps its old input when the new Session does not acknowledge persistence', async (t) => {
+  const host = await start({ fail: { flushFalse: 2 }, services })
+  t.after(host.stop)
+  host.agentOf('b').inbox.nextTurn.push(said('h1', 'waiting input', 'e-held'))
+  await moveWriter(host, [said('m1', 'carried input', 'e-carry')])
+  await until(() => host.warnings.some(line => line.includes('did not move on to a fresh part')))
+  assert.deepEqual(host.state().switching, { b: { botId: 'b' } })
+  assert.deepEqual(inboxTexts(host.agentOf('b')), ['carried input', 'waiting input'])
+})
+
+
+test('a model switch preserves a restricted group kickoff and neutralizes delayed mentions', async t => {
+  const host=await start({state:GROUP_TEAM})
+  t.after(host.stop)
+  const agent=host.agentOf('gb')
+  agent.status='running'
+  agent.session.requestHeader=()=>({config:{provider:'old',model:'old'}})
+  host.rt.engineOfBot=()=> 'new-engine'
+  host.rt.engineOf=()=> 'old-engine'
+  host.emit('gb','turn/start',{turn:1})
+  host.emit('gb','user/message',{content:[{type:'text',text:'Group greeting'}],source:{kind:'bot',form:'relay',role:'room',roomId:'r1',exchangeId:'kickoff-exchange',groupKickoff:true}})
+  assert.equal(host.rt.live.get('gb').info.groupKickoff,true)
+  assert.deepEqual(await host.preStep('gb',[],2),{kind:'reject'})
+  await until(()=>host.state().rooms.r1.sessions.b==='s1')
+  await until(()=>host.agentOf('s1').calls.some(([kind,message])=>kind==='followup'&&message.source?.handoff))
+  const handoff=host.agentOf('s1').calls.find(([kind,message])=>kind==='followup'&&message.source?.handoff)[1]
+  assert.equal(handoff.source.groupKickoff,true)
+  assert.equal(handoff.source.roomId,'r1')
+  assert.match(text(handoff),/Group boundary: room ID/)
+  host.emit('s1','turn/start',{turn:1})
+  host.emit('s1','user/message',{content:handoff.content,source:handoff.source})
+  const guard=host.ctx.guards.find(fn=>String(fn).includes('kickoffRestricted'))
+  assert.match(guard({agent:{id:'s1'},name:'run_code',arguments:{}}),/group greeting/)
+  await host.rt.lateRoomReply('s1',handoff.source,'@Chief unrelated task')
+  const post=host.agentOf('r1').calls.find(([kind,message])=>kind==='followup'&&message.source?.late)
+  assert.ok(post)
+  assert.equal(post[1].source.quiet,true)
+  assert.doesNotMatch(text(post[1]),/@Chief/)
 })
