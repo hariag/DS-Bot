@@ -1322,8 +1322,10 @@ export function install(rt) {
       const text = [post.text, ...(post.files ?? []).map(fileLine)].filter(Boolean).join('\n')
       say(room, { who: 'User', text, ...(post.files === undefined ? {} : { files: post.files }), ...(post.via === undefined ? {} : { via: post.via }), session: true })
       unpauseRoomIdle(room)
-      round.userMessage = true
-      rt.goalUserMessage?.(room.id)
+      if (!rt.isScheduledRoomPost(post)) {
+        round.userMessage = true
+        rt.goalUserMessage?.(room.id)
+      }
       const { all, found } = mentionsIn(post.text ?? '', members)
       const { speakers, ordered } = openingCall(room, { text: post.text ?? '' })
       callIn(round, speakers, all || found.length > 0 ? 'the user mentioned you' : 'new message from the user', undefined, { ordered })
@@ -1384,7 +1386,7 @@ export function install(rt) {
     const event = item => item.failed || item.resumed || item.stopped || item.done || item.goal === 'nudge' || item.goal === 'resume'
     // A user post has no botId and is no round event or kickoff; a goal draft counts
     // as the user's own line too.
-    const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post)
+    const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post) && !rt.isScheduledRoomPost(post)
     const stoppedOnly = posts.length > 0 && posts.every(item => event(item) && item.stopped === true)
     for (const post of posts.filter(item => !item.kickoff && !event(item) && item.logged === undefined)) {
       // Image readings go into the log only; `@` names are picked from what the user typed.
@@ -1424,7 +1426,7 @@ export function install(rt) {
     // streak. Only the user's message lifts a pause already in place.
     const poster = opener.botId === undefined ? undefined : rt.botOf(opener.botId)
     const idlePost = poster !== undefined && !event(opener) && opener.quiet !== true && isIdleRelayText(opener.text ?? '', everyone, [])
-    if (posts.some(userPost)) unpauseRoomIdle(room)
+    if (posts.some(post => userPost(post) || rt.isScheduledRoomPost(post))) unpauseRoomIdle(room)
     // The pause holds a status post back: it is not answered, and the members it named
     // wait for the user. A post with work in it goes ahead.
     const holdsPost = idlePost && room.idlePaused !== undefined
