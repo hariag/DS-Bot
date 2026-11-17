@@ -404,6 +404,32 @@ test('a marked part that stayed current is woken for its kept input, once, in or
   assert.deepEqual(second.state().switching, {})
 })
 
+test('a marked part with unknown thread keeps its input instead of sending it to the foreground', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  await host.rt.load()
+  host.rt.state.switching.unknown = { botId: 'b' }
+  host.agentOf('unknown').inbox.nextTurn.push(said('m-unknown', 'private background input', 'e-unknown'))
+  await host.rt.heldBack()
+  assert.deepEqual(inboxTexts(host.agentOf('unknown')), ['private background input'])
+  assert.equal(host.agentOf('b').calls.some(([, message]) => message?.source?.exchangeId === 'e-unknown'), false)
+  assert.ok(host.rt.state.switching.unknown)
+  assert.equal(host.archived.some(([id]) => id === 'unknown'), false)
+})
+
+test('a marked background part follows its thread after the recorded successor also moved', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  await host.rt.load()
+  host.rt.state.bots.b.openParts = [{ sessionId: 'fresh-two', segments: [{ sessionId: 'old' }, { sessionId: 'fresh-one' }] }]
+  host.rt.state.switching.old = { botId: 'b', next: 'fresh-one' }
+  host.agentOf('old').inbox.nextTurn.push(said('m-old', 'background input', 'e-old'))
+  await host.rt.heldBack()
+  assert.equal(host.agentOf('fresh-two').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), true)
+  assert.equal(host.agentOf('fresh-one').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), false)
+  assert.equal(host.agentOf('b').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), false)
+})
+
 // #571: archiving with stopActivity drops the tasks the earlier part still owns, so
 // the archive waits for the task move the switch started.
 test('an earlier part is stopped only after its tasks moved to the fresh part', async (t) => {
