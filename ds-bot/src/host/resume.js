@@ -20,6 +20,7 @@ import { textOf } from './text.js'
 import { heldTurnsView, queuedDeliveriesView } from './recovery-held.js'
 import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
 import { syncDirectory } from './directory-sync.mjs'
+import { threadCurrentOfPart } from './threads.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
@@ -113,6 +114,7 @@ const triggerOf = info => ({
   role: info.role,
   ...(info.exchangeId ? { exchangeId: info.exchangeId } : {}),
   ...(info.senderSessionId ? { senderSessionId: info.senderSessionId } : {}),
+  ...(info.senderPart ? { senderPart: info.senderPart } : {}),
   ...(info.roomId ? { roomId: info.roomId } : {}),
   ...(info.work ? { work: info.work } : {}),
   ...(info.audience ? { audience: info.audience } : {}),
@@ -789,7 +791,7 @@ export function install(rt) {
     if (record.trigger?.reviewId) {
       await rt.goalReviewFailed?.(rt.roomOf(record.roomId), sessionId, record.trigger.reviewId)
     }
-    rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
+rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
   }
   rt.holdInterruptedTurn = resumeTurn
 
@@ -997,7 +999,10 @@ export function install(rt) {
     // The answer went up in another run: the work closes with what it said, and
     // nothing is sent twice.
     const back = rt.roomOf(asker.senderRoomId)?.sessions?.[sender]
-    const sent = await logOf(back ?? rt.chatOf(sender))
+    // The answer would have gone to the part of the asking Bot's chat the request came
+    // from, which is not its foreground chat when that part is a background one.
+    const where = back ?? (asker.senderPart === undefined ? undefined : threadCurrentOfPart(rt.botOf(sender), asker.senderPart)) ?? rt.chatOf(sender)
+    const sent = await logOf(where)
     if (sent !== undefined && answeredIn(sent, workId)) {
       rt.closeWork?.(workId, name, rt.answerText(workId, said, name))
       return
