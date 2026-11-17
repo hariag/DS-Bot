@@ -2511,3 +2511,29 @@ test('old Sessions, missing room provenance, removed recipients and held turns r
   assert.ok(restarted.rt.unreadRoomOf('r1').some(item=>item.toId==='removed'))
   assert.ok(restarted.rt.unreadRoomOf('other').length>=2)
 })
+
+test('scheduled messages do not resume an idle goal, while a real user message does', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const current = host.rt.roomOf('r1').goal
+  current.idle = true
+  current.idleReason = 'nudge-limit'
+  current.idleRevision = current.revision
+  current.nudges = 2
+  await host.rt.save({ required: true })
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } }
+  const scheduled = host.round('idle-reminder', reminder)
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.finish('gb', 'no change')
+  await settle(() => scheduled() !== undefined)
+  assert.equal(goal(host).idle, true)
+  assert.equal(goal(host).nudges, 2)
+  assert.equal(host.takeGoal(), undefined)
+  const user = host.round('actual-user', host.say('@Writer continue'))
+  await settle(() => host.agentOf('gb').calls.length === 2)
+  host.begin('gb')
+  host.finish('gb', 'working')
+  await settle(() => user() !== undefined)
+  assert.equal(goal(host).idle, undefined)
+})
