@@ -327,6 +327,30 @@ test('unread requests stay separate and a queued request does not join a steer',
   assert.deepEqual((await exchanges()).map(entry => entry.text), ['urgent correction', 'first new task', 'second new task'])
 })
 
+test('queued, immediate, named and user-facing requests keep independent deliveries', async (t) => {
+  const { agentOf, emit, tool, stop } = await start(team())
+  t.after(stop)
+  const writer = agentOf('b')
+  writer.steer = message => { writer.calls.push(['steer', message]); writer.inbox.nextStep.push(message) }
+  writer.followup = message => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
+  emit('b', 'turn/start', { turn: 1 })
+
+  const args = [
+    { message: 'queued first', when: 'queue' },
+    { message: 'immediate second', when: 'now', request_id: 'named-task' },
+    { message: 'another immediate', when: 'now' },
+    { message: 'user result one', reply_to: 'user' },
+    { message: 'user result two', reply_to: 'user' },
+  ]
+  for (const item of args) await tool('message_bot', { to: 'Writer', ...item }, 'a')
+  assert.deepEqual(writer.calls.map(([kind]) => kind), ['followup', 'steer', 'steer', 'followup', 'followup'])
+  const sent = writer.calls.map(([, message]) => message)
+  assert.equal(new Set(sent.map(message => message.source.exchangeId)).size, 5)
+  assert.deepEqual(sent.map(message => textOf(message.content)), args.map(item => `[Message from Chief${item.reply_to === 'user' ? ' · the user sees your reply here' : ''}]\n${item.message}`))
+  await tool('message_bot', { to: 'Writer', ...args[1] }, 'a')
+  assert.equal(writer.calls.length, 5, 'replaying a named request must not send it again')
+})
+
 test('status counts live private and group inboxes and marks unavailable sessions', async (t) => {
   const seed = team({ group: true })
   seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
@@ -346,6 +370,76 @@ test('status counts live private and group inboxes and marks unavailable session
   assert.doesNotMatch(other[writerLine + 1], /group pending inputs/)
   agents.delete('gb')
   assert.match(await tool('list_bots', {}, 'a'), /group pending inputs: 0 in 0 available session\(s\); 1 group session\(s\) unavailable/)
+})
+
+test('message receipts include group pending counts only for an authorized viewer', async (t) => {
+  const seed = team({ group: true })
+  seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
+  seed.bots.d = { id: 'd', name: 'Editor', role: 'Edit', sessionId: 'd', createdAt: 4 }
+  seed.rooms.r1.members.push('d')
+  const { ctx, agents, agentOf, tool, stop } = await start(seed)
+  t.after(stop)
+  const get = ctx.get
+  ctx.get = name => name === 'agents' ? { get: id => agents.get(id) } : get(name)
+  agentOf('b')
+  agentOf('gb').inbox.nextTurn.push({ source: { kind: 'user' } })
+  assert.match(await tool('message_bot', { to: 'Writer', message: 'for the team' }, 'a'), /group pending inputs: 1/)
+  assert.match(await tool('message_bot', { to: 'Writer', message: 'from a member' }, 'd'), /group pending inputs: 1/)
+  assert.doesNotMatch(await tool('message_bot', { to: 'Writer', message: 'another request' }, 'c'), /group pending inputs/)
+})
+
+test('hidden group activity is reported as busy without disclosing its name or work', async (t) => {
+  const seed = team({ group: true })
+  seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
+  seed.bots.d = { id: 'd', name: 'Editor', role: 'Edit', sessionId: 'd', createdAt: 4 }
+  seed.rooms.r1.members.push('d')
+  const { rt, emit, tool, stop } = await start(seed)
+  t.after(stop)
+  emit('gb', 'turn/start', { turn: 1 })
+  rt.doingOf = () => ({ tool: 'secret-command', target: 'secret-target' })
+  const outsider = await tool('list_bots', {}, 'c')
+  assert.match(outsider, /working in another conversation/)
+  assert.doesNotMatch(outsider, /Ops|secret-command|secret-target/)
+  assert.match(await tool('list_bots', {}, 'd'), /working in group "Ops".*secret-command/)
+  assert.match(await tool('list_bots', {}, 'a'), /working in group "Ops".*secret-command/)
+  const receipt = await tool('message_bot', { to: 'Writer', message: 'hello' }, 'c')
+  assert.match(receipt, /another conversation/)
+  assert.doesNotMatch(receipt, /Ops|secret-command|secret-target/)
+
+  rt.approvalsView = () => [{ botId: 'b', sessionId: 'gb', tool: 'secret-command', at: Date.now() }]
+  assert.match(rt.statusOf('b', 'c'), /waiting for approval in another conversation/)
+  assert.doesNotMatch(rt.statusOf('b', 'c'), /Ops|secret-command/)
+  assert.match(rt.statusOf('b', 'd'), /secret-command in group "Ops"/)
+  rt.approvalsView = () => []
+  rt.switchJobs = () => [{ botId: 'b', roomId: 'r1' }]
+  assert.match(rt.statusOf('b', 'c'), /fresh part of another conversation/)
+  assert.doesNotMatch(rt.statusOf('b', 'c'), /Ops/)
+  assert.match(rt.statusOf('b', 'd'), /group "Ops"/)
+  rt.switchJobs = () => []
+  rt.groupOwners.delete('gb')
+  assert.match(rt.statusOf('b', 'c'), /working in another conversation/)
+  assert.doesNotMatch(rt.statusOf('b', 'c'), /Ops|secret-command|secret-target/)
+  rt.approvalsView = () => [{ botId: 'b', sessionId: 'gb', roomId: 'r1', tool: 'secret-command', at: Date.now() }]
+  assert.doesNotMatch(rt.statusOf('b', 'c'), /Ops|secret-command/)
+  assert.match(rt.statusOf('b', 'd'), /secret-command in group "Ops"/)
+})
+
+test('held work does not reveal names from an inaccessible parent or child group', async (t) => {
+  const seed = team({ group: true })
+  seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
+  const { rt, stop } = await start(seed)
+  t.after(stop)
+  rt.openWork('private-parent', { from: 'a', to: 'b', room: 'r1' })
+  rt.openWork('private-child', { from: 'b', to: 'c', parent: 'private-parent', name: 'hidden-parent-child' })
+  rt.openWork('public-parent', { from: 'a', to: 'b' })
+  rt.openWork('private-origin-child', { from: 'b', to: 'c', parent: 'public-parent', fromRoom: 'r1', name: 'hidden-child-name' })
+  const outsider = rt.statusOf('b', 'c')
+  assert.match(outsider, /waiting for work in another conversation/)
+  assert.match(outsider, /waiting for another conversation to hand back work/)
+  assert.doesNotMatch(outsider, /Ops|hidden-parent-child|hidden-child-name/)
+  const member = rt.statusOf('b', 'a')
+  assert.match(member, /hidden-parent-child/)
+  assert.match(member, /hidden-child-name/)
 })
 
 test('requests from two Bots, or for different work, stay apart', async (t) => {

@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readAvatar } from './avatar.js'
-import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, SOURCE_KIND, TEXT_KEPT } from './constants.js'
+import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, TEXT_KEPT } from './constants.js'
 import { within } from './folders.js'
 import { missingFileRefs } from './claims.js'
 import { absoluteLinks } from './links.js'
@@ -100,7 +100,7 @@ export function install(rt) {
     const section = sectionNameOf(bot.sectionId)
     const tags = [bot.role, section ? `section "${section}"` : '', model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.private === true ? 'private' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
     const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
-    const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id)}`
+    const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id, self)}`
     return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}${now}`
   }
   // The Bots and group chats list_bots shows: the whole team, one Bot, one group's
@@ -154,29 +154,15 @@ export function install(rt) {
       .filter(sessionId => sessionId !== undefined && rt.live.get(sessionId)?.turn !== undefined)
     return { running, idle: running.length === 0 }
   }
-  const whereOf = (sessionId) => {
+  const whereOf = (sessionId, viewerId, botId) => {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-    if (room) return `group "${room.name}"`
+    if (room) return rt.isMain(viewerId) || room.members.includes(viewerId) ? `group "${room.name}"` : 'another conversation'
+    const bot = rt.botOf(botId)
+    if (bot === undefined || !ownChatSessions(bot).includes(sessionId)) return 'another conversation'
     // A Bot's own chat may keep another part live in the background: it is a second
     // conversation of that Bot, not its foreground chat.
     return isOpenPart(rt.botOf(rt.chatOwners.get(sessionId)), sessionId) ? 'another of its conversations' : 'its own chat'
   }
-  // A Bot request still in the inbox: no step or turn has taken it out yet.
-  const unreadRequest = (agent, senderId, toUser) => {
-    for (const [message, steered] of [...(agent.inbox?.nextStep ?? []).map(message => [message, true]), ...(agent.inbox?.nextTurn ?? []).map(message => [message, false])]) {
-      const source = message.source
-      if (source?.kind === SOURCE_KIND && source.role === 'request' && source.senderSessionId === senderId
-        && (source.audience === 'user') === toUser && !source.deferred && !source.resumed) return { message, steered }
-    }
-    return undefined
-  }
-  // A message's own words and files, without its header line.
-  const bodyOf = (message) => {
-    const content = Array.isArray(message.content) ? message.content : []
-    const first = content.find(block => block?.type === 'text')?.text ?? ''
-    return { text: first.slice(first.indexOf('\n') + 1), files: content.filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment) }
-  }
-
   // A tool that throws shows as failed in the chat, instead of as sent or stopped.
   const refuse = (message) => { throw new Error(message) }
 
@@ -359,34 +345,25 @@ export function install(rt) {
         // to that part's thread.
         const fromPart = callerPart(exec).fromPart
         const chat = rt.chatOf(target.id)
-        const agent = await rt.resolveAgent(chat)
-        const status = rt.statusOf(target.id)
-        // A request it has not read yet, sent for the same work, takes this one in, so
-        // messages to a Bot that cannot read them do not pile up. Two parts of the
-        // sender's own chat are two conversations, though: one answer could come back to
-        // only one of them, so their requests are sent and answered apart.
-        const earlier = unreadRequest(agent, sender.id, toUser)
-        const joinable = earlier !== undefined && name === ''
-          && (toUser || ((earlier.message.source.senderPart ?? undefined) === fromPart && rt.sameWork(earlier.message.source.exchangeId, work)))
-        const before = joinable ? bodyOf(earlier.message) : undefined
-        let long = await rt.attachLong(before ? `${before.text}\n\n${text}` : text, `Message from ${sender.name}.txt`)
+        await rt.resolveAgent(chat)
+        const status = rt.statusOf(target.id, sender.id)
+        // Every request is a separate unit of work. In particular, never promote a
+        // queued request into an unread steer or append to a named request's payload.
+        const long = await rt.attachLong(text, `Message from ${sender.name}.txt`)
         // Nothing went out, so a named request must not take this as a delivered
         // receipt: admitRequest drops the pending record instead, and a retry can send.
         if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
-        const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
-        if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
         const working = rt.live.get(chat)?.turn !== undefined
-        const steer = (args.when !== 'queue' && !toUser) || (joins && earlier.steered)
-        const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
-        if (joins) rt.forgetDelivery?.(exchangeId)
-        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, ...(fromPart ? { fromPart } : {}) })
+        const steer = args.when !== 'queue' && !toUser
+        const exchangeId = randomUUID()
+        if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, ...(fromPart ? { fromPart } : {}) })
         try {
-          await rt.deliver({ fromId: sender.id, toId: target.id, ...(fromPart ? { fromPart } : {}), text: long.text, files: [...long.files, ...(joins ? before.files : [])], length: long.length, role: 'request', steer, exchangeId, ...(joins ? { merged: true } : {}), ...(toUser ? { audience: 'user' } : {}) })
+          await rt.deliver({ fromId: sender.id, toId: target.id, ...(fromPart ? { fromPart } : {}), text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) })
         } catch (error) {
           // The delivery stays noted for the next start while its Bot exists
           // (resume.js), and the resent request still answers up the tree, so the
           // work it opened stays too. Only a target that is gone drops the work.
-          if (!joins && rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
+          if (rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
           throw error
         }
         const sent = toUser
@@ -398,7 +375,6 @@ export function install(rt) {
               : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
         const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from)?.name : undefined
         const notes = [
-          joins ? `${target.name} had not read your earlier message yet, so this one was added to it, and it answers both at once.` : '',
           status === 'idle' ? '' : `${target.name} now: ${status}.`,
           asker ? `When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to ${asker} once all of it is back.` : '',
         ].filter(Boolean)
@@ -409,7 +385,7 @@ export function install(rt) {
         const elsewhere = activeSessions(target.id).running.filter(sessionId => sessionId !== chat)
         if (elsewhere.length === 0) return out
         const stop = rt.isMain(sender.id) ? ' If it must not go on there, use stop_bot.' : ''
-        return `${out} Your message does not reach its work in ${elsewhere.map(whereOf).join(' and ')}.${stop}`
+        return `${out} Your message does not reach its work in ${elsewhere.map(sessionId => whereOf(sessionId, sender.id, target.id)).join(' and ')}.${stop}`
       }
       return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
     },
@@ -438,7 +414,7 @@ export function install(rt) {
       }
       const why = String(args.reason ?? '').trim() || 'Stop what you are doing; the previous turn was ended on purpose. Acknowledge briefly.'
       await rt.deliver({ fromId: sender.id, toId: target.id, ...callerPart(exec), text: why, role: 'stopped', ...callerRoom(exec) })
-      return `Stopped ${target.name} in ${running.map(whereOf).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
+      return `Stopped ${target.name} in ${running.map(sessionId => whereOf(sessionId, sender.id, target.id)).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
     },
   }))
 

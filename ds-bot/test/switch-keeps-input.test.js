@@ -360,6 +360,32 @@ test('a marked part that stayed current is woken for its kept input, once, in or
   assert.deepEqual(second.state().switching, {})
 })
 
+test('a marked part with unknown thread keeps its input instead of sending it to the foreground', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  await host.rt.load()
+  host.rt.state.switching.unknown = { botId: 'b' }
+  host.agentOf('unknown').inbox.nextTurn.push(said('m-unknown', 'private background input', 'e-unknown'))
+  await host.rt.heldBack()
+  assert.deepEqual(inboxTexts(host.agentOf('unknown')), ['private background input'])
+  assert.equal(host.agentOf('b').calls.some(([, message]) => message?.source?.exchangeId === 'e-unknown'), false)
+  assert.ok(host.rt.state.switching.unknown)
+  assert.equal(host.archived.some(([id]) => id === 'unknown'), false)
+})
+
+test('a marked background part follows its thread after the recorded successor also moved', async (t) => {
+  const host = await start({ services })
+  t.after(host.stop)
+  await host.rt.load()
+  host.rt.state.bots.b.openParts = [{ sessionId: 'fresh-two', segments: [{ sessionId: 'old' }, { sessionId: 'fresh-one' }] }]
+  host.rt.state.switching.old = { botId: 'b', next: 'fresh-one' }
+  host.agentOf('old').inbox.nextTurn.push(said('m-old', 'background input', 'e-old'))
+  await host.rt.heldBack()
+  assert.equal(host.agentOf('fresh-two').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), true)
+  assert.equal(host.agentOf('fresh-one').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), false)
+  assert.equal(host.agentOf('b').calls.some(([, message]) => message?.source?.exchangeId === 'e-old'), false)
+})
+
 // #571: archiving with stopActivity drops the tasks the earlier part still owns, so
 // the archive waits for the task move the switch started.
 test('an earlier part is stopped only after its tasks moved to the fresh part', async (t) => {
@@ -552,6 +578,20 @@ test('a cut-off at the model output limit is not a window cut, so the part stays
   for (const turn of [1, 2]) {
     shortCutOff(host, turn, { inputTokens: 129_000, outputTokens: 120_000 })
     idle()
+    await settle()
+  }
+  assert.equal(host.state().bots.b.sessionId, 'b')
+  assert.deepEqual(host.created, [])
+})
+
+test('a short cutoff with no known output budget does not infer a window overflow', async (t) => {
+  const host = await start({ services: cutOffServices })
+  t.after(host.stop)
+  const agent = host.agentOf('b')
+  agent.session.requestHeader = () => ({ config: { provider: 'gateway', model: 'step-5' } })
+  for (const turn of [1, 2]) {
+    shortCutOff(host, turn, { inputTokens: 129_000, outputTokens: 40 })
+    host.ctx.emit('agent/status', { agent, status: 'idle' })
     await settle()
   }
   assert.equal(host.state().bots.b.sessionId, 'b')

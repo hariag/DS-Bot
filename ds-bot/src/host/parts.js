@@ -966,7 +966,10 @@ export function install(rt) {
   const threadTargetOf = (sessionId, owner) => {
     if (owner.roomId !== undefined || owner.botId === undefined) return currentOf(owner)
     const bot = rt.botOf(owner.botId)
-    return owner.next ?? threadCurrentOfPart(bot, sessionId) ?? rt.chatOf(owner.botId)
+    const target = threadCurrentOfPart(bot, sessionId)
+    if (owner.next === undefined) return target
+    const successor = threadCurrentOfPart(bot, owner.next)
+    return target !== undefined && target === successor ? target : undefined
   }
   const grown = (sessionId, tokens, lines) => tokens >= (partBase.get(sessionId) ?? 0) + lines.check / 4
   // A read-only process (another dsh holds the team) neither condenses nor switches.
@@ -974,8 +977,10 @@ export function install(rt) {
 
   // Input for an earlier part goes on in the current one: a browser may still show the
   // old part, and a turn stopped for a switch hands on what it claimed.
-  async function forward(owner, messages, target = currentOf(owner)) {
-    if (target === undefined || messages.length === 0) return
+  async function forward(owner, messages, ...targets) {
+    const target = targets.length > 0 ? targets[0] : currentOf(owner)
+    if (target === undefined) throw new Error('the destination thread is unknown; input remains in its original part')
+    if (messages.length === 0) return
     await rt.ensureCapabilities(target)
     const agent = await rt.resolveAgent(target)
     // A retry after a forward that stopped halfway must not deliver the same input twice.
@@ -2027,6 +2032,7 @@ export function install(rt) {
     }
     const bot = rt.botOf(place.botId)
     if (bot === undefined || switches.has(sessionId)) throw Object.assign(new Error('The Bot is working; wait for it to finish or stop it first'), { code: 'bot/busy' })
+    if (rt.chatOf(bot.id) !== sessionId) return false
     await openPartNow(bot, agent)
     return true
   }
