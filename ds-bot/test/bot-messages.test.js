@@ -327,6 +327,30 @@ test('unread requests stay separate and a queued request does not join a steer',
   assert.deepEqual((await exchanges()).map(entry => entry.text), ['urgent correction', 'first new task', 'second new task'])
 })
 
+test('queued, immediate, named and user-facing requests keep independent deliveries', async (t) => {
+  const { agentOf, emit, tool, stop } = await start(team())
+  t.after(stop)
+  const writer = agentOf('b')
+  writer.steer = message => { writer.calls.push(['steer', message]); writer.inbox.nextStep.push(message) }
+  writer.followup = message => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
+  emit('b', 'turn/start', { turn: 1 })
+
+  const args = [
+    { message: 'queued first', when: 'queue' },
+    { message: 'immediate second', when: 'now', request_id: 'named-task' },
+    { message: 'another immediate', when: 'now' },
+    { message: 'user result one', reply_to: 'user' },
+    { message: 'user result two', reply_to: 'user' },
+  ]
+  for (const item of args) await tool('message_bot', { to: 'Writer', ...item }, 'a')
+  assert.deepEqual(writer.calls.map(([kind]) => kind), ['followup', 'steer', 'steer', 'followup', 'followup'])
+  const sent = writer.calls.map(([, message]) => message)
+  assert.equal(new Set(sent.map(message => message.source.exchangeId)).size, 5)
+  assert.deepEqual(sent.map(message => textOf(message.content)), args.map(item => `[Message from Chief${item.reply_to === 'user' ? ' · the user sees your reply here' : ''}]\n${item.message}`))
+  await tool('message_bot', { to: 'Writer', ...args[1] }, 'a')
+  assert.equal(writer.calls.length, 5, 'replaying a named request must not send it again')
+})
+
 test('status counts live private and group inboxes and marks unavailable sessions', async (t) => {
   const seed = team({ group: true })
   seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
