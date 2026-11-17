@@ -20,6 +20,12 @@ const TASK_TYPES = [
 ]
 const TASK_TYPE_LABELS = Object.fromEntries(TASK_TYPES)
 const TASK_TYPE_KEYS = new Set(TASK_TYPES.map(([id]) => id))
+const BULK_STATUS_ACTIONS = [
+  { id:'submit', label:'Submit', inverse:'cancel' },
+  { id:'schedule', label:'Schedule Bot', inverse:'unschedule' },
+  { id:'restore', label:'Restore card', inverse:'cancel' },
+  { id:'unarchive', label:'Restore from archive', inverse:'archive' },
+]
 const RELEASE_STATUS_LABELS = { draft:'Draft', queued:'Queued', running:'Running', published:'Published', failed:'Failed', cancelled:'Cancelled' }
 const RELEASE_GATES = [['docs', 'Docs'], ['artifacts', 'Artifacts'], ['environment', 'Environment'], ['summary', 'Summary']]
 const RELEASE_GATE_KEYS = new Set(RELEASE_GATES.map(([key]) => key))
@@ -2311,6 +2317,37 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     } catch (caught) { setError(hostText(caught?.message) || t('Unable to cancel cards')) }
     finally { setBulkBusy(false) }
   }
+  const bulkApplyStatus = async action => {
+    const spec = BULK_STATUS_ACTIONS.find(item => item.id === action)
+    const ids = [...selectedIds]
+    if (!spec || !ids.length || bulkBusy || !window.crypto?.randomUUID) return
+    const approved = await askBoardConfirm({ title:t('Update {count} cards', { count:ids.length }), rows:[{ label:t('Status'), before:t('Selected cards'), after:t(spec.label) }] })
+    if (!approved) return
+    setBulkBusy(true)
+    const changed = []
+    try {
+      for (const id of ids) {
+        const task = allTasks.find(item => item.id === id)
+        if (!task || !commandsFor(task).some(command => command.type === spec.id)) continue
+        await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:task.revision, type:spec.id })
+        changed.push(id)
+      }
+      setSelectedIds(new Set()); setSelectionMode(false)
+      await load(); notify(t('Updated {count} cards', { count:changed.length }), changed.length ? async () => {
+        let failed = 0
+        for (const id of changed) {
+          const latest = await request('board-list', { scope })
+          const current = (latest?.tasks ?? []).find(item => item.id === id)
+          if (!current) continue
+          try { await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:current.revision, type:spec.inverse }) }
+          catch { failed += 1 }
+        }
+        await load()
+        notify(failed ? t('Some changes could not be undone.') : t('Card changes restored'))
+      } : undefined)
+    } catch (caught) { setError(hostText(caught?.message) || t('Unable to update cards')) }
+    finally { setBulkBusy(false) }
+  }
   const archiveLane = async (kind, stage, laneTasks) => {
     const ids = laneTasks.filter(task => !task.archivedAt && commandsFor(task).some(command => command.type === 'archive')).map(task => task.id)
     if (!ids.length || !window.crypto?.randomUUID) return
@@ -2367,15 +2404,26 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const approved = await askBoardConfirm({ title:t('Change the owner of {count} cards', { count:ids.length }), rows:[{ label:t('Owner'), before:t('Selected cards'), after:actorName(next, actors) }] })
     if (!approved) return
     setBulkBusy(true)
+    const changed = []
     try {
       for (const id of ids) {
         const task = allTasks.find(item => item.id === id)
         if (!task || task.owner === next || task.reviewer === next || !commandsFor(task).some(command => command.type === 'edit')) continue
+        changed.push({ id, owner:task.owner })
         await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:task.revision, type:'edit',
           value:{ title:task.title, owner:next, reviewer:task.reviewer, acceptance:task.acceptance, dependencies:dependenciesOf(task) } })
       }
       setSelectedIds(new Set()); setSelectionMode(false)
-      await load(); notify(t('Updated the owner of {count} cards', { count:ids.length }))
+      await load(); notify(t('Updated the owner of {count} cards', { count:changed.length }), changed.length ? async () => {
+        for (const entry of changed) {
+          const latest = await request('board-list', { scope })
+          const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
+          if (!current) continue
+          await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:entry.id, expectedRevision:current.revision, type:'edit',
+            value:{ title:current.title, owner:entry.owner, reviewer:current.reviewer, acceptance:current.acceptance, dependencies:dependenciesOf(current) } })
+        }
+        await load(); notify(t('Card owners restored'))
+      } : undefined)
     } catch (caught) { setError(hostText(caught?.message) || t('Unable to update card owners')) }
     finally { setBulkBusy(false) }
   }
@@ -2386,15 +2434,37 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const approved = await askBoardConfirm({ title:t('Add {count} cards to {release}', { count:ids.length, release:textValue(release.name) || release.id }), rows:[{ label:t('Release'), before:t('Selected cards'), after:textValue(release.name) || release.id }] })
     if (!approved) return
     setBulkBusy(true)
+    const changed = []
     try {
       for (const id of ids) {
         const task = allTasks.find(item => item.id === id)
         if (!task || task.releaseId === release.id) continue
+        changed.push({ id, releaseId:task.releaseId ?? null })
         await request('board-release-assign', { scope, operationId:window.crypto.randomUUID(), releaseId:release.id,
           expectedReleaseRevision:release.revision, taskId:id, expectedTaskRevision:task.revision, afterId:null })
       }
       setSelectedIds(new Set()); setSelectionMode(false)
-      await load(); notify(t('Added {count} cards to {release}', { count:ids.length, release:textValue(release.name) || release.id }))
+      await load(); notify(t('Added {count} cards to {release}', { count:changed.length, release:textValue(release.name) || release.id }), changed.length ? async () => {
+        let failed = 0
+        for (const entry of changed) {
+          const latest = await request('board-list', { scope })
+          const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
+          const currentRelease = (latest?.releases ?? []).find(item => item.id === release.id)
+          if (!current || !currentRelease || current.releaseId !== release.id) continue
+          try {
+            if (entry.releaseId === null) {
+              await request('board-release-remove', { scope, operationId:window.crypto.randomUUID(), releaseId:release.id,
+                expectedReleaseRevision:currentRelease.revision, taskId:entry.id, expectedTaskRevision:current.revision })
+            } else {
+              const previous = (latest?.releases ?? []).find(item => item.id === entry.releaseId)
+              if (!previous) { failed += 1; continue }
+              await request('board-release-assign', { scope, operationId:window.crypto.randomUUID(), releaseId:previous.id,
+                expectedReleaseRevision:previous.revision, taskId:entry.id, expectedTaskRevision:current.revision, afterId:null })
+            }
+          } catch { failed += 1 }
+        }
+        await load(); notify(failed ? t('Some release assignments could not be undone.') : t('Release assignments restored'))
+      } : undefined)
     } catch (caught) { setError(hostText(caught?.message) || t('Unable to assign release')) }
     finally { setBulkBusy(false) }
   }
@@ -2404,11 +2474,12 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const approved = await askBoardConfirm({ title:t('Duplicate {count} cards', { count:ids.length }), rows:[{ label:t('Cards'), before:t('Selected'), after:t('New copies') }] })
     if (!approved) return
     setBulkBusy(true)
+    const created = []
     try {
-      let copied = 0
       for (const id of ids) {
         const task = allTasks.find(item => item.id === id)
         if (!task || task.legacy || task.shared) continue
+        const taskId = `card-${window.crypto.randomUUID()}`
         const value = { title:t('Copy of {title}', { title:textValue(task.title) }), owner:asText(task.owner), reviewer:asText(task.reviewer),
           acceptance:textValue(task.acceptance), dependencies:[], type:taskType(task),
           ...(textValue(task.description) ? { description:textValue(task.description) } : {}),
@@ -2417,11 +2488,19 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
           ...(Array.isArray(task.checklist) && task.checklist.length ? { checklist:task.checklist.map(item => ({ ...item })) } : {}),
           ...(task.status === 'draft' ? { draft:true } : {}),
           ...(task.personalProgress !== undefined ? { personalProgress:task.personalProgress } : {}) }
-        await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:`card-${window.crypto.randomUUID()}`, type:'create', value })
-        copied += 1
+        await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId, type:'create', value })
+        created.push(taskId)
       }
       setSelectedIds(new Set()); setSelectionMode(false)
-      await load(); notify(t('Duplicated {count} cards', { count:copied }))
+      await load(); notify(t('Duplicated {count} cards', { count:created.length }), created.length ? async () => {
+        const latest = await request('board-list', { scope })
+        for (const id of created) {
+          const current = (latest?.tasks ?? []).find(item => item.id === id)
+          if (!current || current.archivedAt) continue
+          await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:current.revision, type:'archive' })
+        }
+        await load(); notify(t('Copies archived'))
+      } : undefined)
     } catch (caught) { setError(hostText(caught?.message) || t('Unable to duplicate cards')) }
     finally { setBulkBusy(false) }
   }
@@ -2431,14 +2510,24 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const approved = await askBoardConfirm({ title:t('Move {count} cards', { count:ids.length }), rows:[{ label:t('Personal progress'), before:t('Selected'), after:t(PERSONAL_COLUMNS.find(([id]) => id === progress)?.[1] ?? 'Personal progress') }] })
     if (!approved) return
     setBulkBusy(true)
+    const changed = []
     try {
       for (const id of ids) {
         const task = allTasks.find(item => item.id === id)
         if (!task || task.personalProgress === progress || !commandsFor(task).some(command => command.type === 'personal-progress')) continue
+        changed.push({ id, progress:task.personalProgress })
         await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:task.revision, type:'personal-progress', value:{ progress } })
       }
       setSelectedIds(new Set()); setSelectionMode(false)
-      await load(); notify(t('Moved {count} cards', { count:ids.length }))
+      await load(); notify(t('Moved {count} cards', { count:changed.length }), changed.length ? async () => {
+        for (const entry of changed) {
+          const latest = await request('board-list', { scope })
+          const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
+          if (!current) continue
+          await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:entry.id, expectedRevision:current.revision, type:'personal-progress', value:{ progress:entry.progress } })
+        }
+        await load(); notify(t('Card positions restored'))
+      } : undefined)
     } catch (caught) { setError(hostText(caught?.message) || t('Unable to move cards')) }
     finally { setBulkBusy(false) }
   }
@@ -2890,6 +2979,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('button', { type:'button', className:'bt-card-mini bt-card-mini-danger', disabled:bulkBusy || !selectedIds.size, onClick:() => void bulkCancel() }, t('Cancel selected')),
         personal && selectionMode ? h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Personal progress')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Move selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkMovePersonal(next) } },
           h('option', { value:'' }, t('Move to')), PERSONAL_COLUMNS.map(([id,label]) => h('option', { key:id, value:id }, t(label))))) : null,
+        h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Status')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Apply status to selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkApplyStatus(next) } },
+          h('option', { value:'' }, t('Apply status')), BULK_STATUS_ACTIONS.map(item => h('option', { key:item.id, value:item.id }, t(item.label))))),
         h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Type')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Set type for selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkSetType(next) } },
           h('option', { value:'' }, t('Set type')), TASK_TYPES.map(([id,label]) => h('option', { key:id, value:id }, t(label))))),
         h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Owner')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Set owner for selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkSetOwner(next) } },
