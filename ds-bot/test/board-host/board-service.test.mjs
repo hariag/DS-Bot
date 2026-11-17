@@ -731,6 +731,65 @@ test('a board edit on a release item is delivered to the release project manager
   assert.ok(deliveries.some(entry => entry.sessionId === 'chat-pm' && /Board change/.test(entry.message?.content?.[0]?.text ?? '')))
 })
 
+test('comments, attachments and release membership changes on a release item reach the project manager', async t => {
+  const { rt, deliveries, route } = fixture(t)
+  const roles = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }
+  for (const [id, bot] of Object.entries(roles)) rt.state.bots[id] = bot
+  const team = { projectManagerId:'pm', roles:{ projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'review', ops:'ops' } }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'sync-content-release', team, release:{ id:'r-content', name:'Content sync', version:'1.0.0' } })
+  await rt.boardCall('board-command', create)
+  let board = await rt.boardCall('board-list', { scope })
+  const task = board.tasks.find(item => item.id === 't1')
+  const texts = () => deliveries.filter(entry => entry.sessionId === 'chat-pm').map(entry => entry.message?.content?.[0]?.text ?? '')
+  await rt.boardCall('board-release-assign', { scope, operationId:'sync-content-assign', releaseId:release.id, expectedReleaseRevision:release.revision, taskId:'t1', expectedTaskRevision:task.revision })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.ok(texts().some(text => /Board change/.test(text) && /release-assign/.test(text)), 'assigning a card to the release reaches the PM')
+  board = await rt.boardCall('board-list', { scope })
+  const listed = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-command', { scope, operationId:'sync-content-comment', taskId:'t1', expectedRevision:listed.revision, type:'card-comment', value:{ text:'Check the export before review.' } })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.ok(texts().some(text => /card-comment/.test(text) && /Check the export before review\./.test(text)), 'a new comment reaches the PM')
+  board = await rt.boardCall('board-list', { scope })
+  const uploading = board.tasks.find(item => item.id === 't1')
+  const upload = { scope, taskId:'t1', operationId:'sync-content-upload', expectedRevision:uploading.revision, images:[image] }
+  assert.equal((await (await route.fetch(request(upload))).json()).ok, true)
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.ok(texts().some(text => /attach/.test(text)), 'adding an attachment reaches the PM')
+  board = await rt.boardCall('board-list', { scope })
+  const removing = board.tasks.find(item => item.id === 't1')
+  const currentRelease = board.releases.find(item => item.id === release.id)
+  await rt.boardCall('board-release-remove', { scope, operationId:'sync-content-remove', releaseId:release.id, expectedReleaseRevision:currentRelease.revision, taskId:'t1', expectedTaskRevision:removing.revision })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.ok(texts().some(text => /release-remove/.test(text)), 'removing a card from the release reaches the PM')
+})
+
+test('a confirmed board proposal on a release item reaches the project manager', async t => {
+  const { rt, deliveries } = fixture(t)
+  const roles = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }
+  for (const [id, bot] of Object.entries(roles)) rt.state.bots[id] = bot
+  const team = { projectManagerId:'pm', roles:{ projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'review', ops:'ops' } }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'sync-proposal-release', team, release:{ id:'r-proposal', name:'Proposal sync', version:'1.0.0' } })
+  await rt.boardCall('board-command', create)
+  let board = await rt.boardCall('board-list', { scope })
+  const task = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-release-assign', { scope, operationId:'sync-proposal-assign', releaseId:release.id, expectedReleaseRevision:release.revision, taskId:'t1', expectedTaskRevision:task.revision })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  board = await rt.boardCall('board-list', { scope })
+  const before = board.tasks.find(item => item.id === 't1')
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  assert.ok(tool, 'board_task tool is registered')
+  const result = JSON.parse(await tool.execute({ action:'propose', task_id:'t1', expected_revision:before.revision, operation_id:'sync-proposal',
+    change:{ kind:'update', value:{ description:'Bot proposal' } }, note:'Please confirm' }, { agent:{ id:'chat-one' }, callId:'c-sync' }))
+  assert.equal(result.proposal.status, 'pending')
+  const pending = await rt.boardCall('board-proposal-list', { scope })
+  const proposal = pending.find(item => item.taskId === 't1')
+  assert.ok(proposal)
+  await rt.boardCall('board-proposal-decide', { scope, operationId:'sync-proposal-decide', proposalId:proposal.id, expectedRevision:proposal.revision, decision:'confirm' })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const texts = deliveries.filter(entry => entry.sessionId === 'chat-pm').map(entry => entry.message?.content?.[0]?.text ?? '')
+  assert.ok(texts.some(text => /Board change/.test(text) && /proposal-confirm/.test(text)), 'a confirmed Bot proposal reaches the PM')
+})
+
 test('a release lifecycle plan creates a typed dependency chain assigned to the release', async t => {
   const { rt } = fixture(t)
   const bots = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, ui:{ name:'UI', role:'UI Designer' }, ux:{ name:'UX', role:'UX Designer' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }

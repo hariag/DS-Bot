@@ -199,7 +199,10 @@ test('env sanitization drops agent and key variables', () => {
   assert.equal(env.OPENAI_API_KEY, undefined)
   assert.equal(env.DS_BOT_HOME, undefined)
   assert.equal(env.EXTRA, '1')
-  assert.ok(env.PATH.startsWith(process.env.PATH))
+  // Windows spells the variable `Path`; case-insensitive hosts must keep the same value.
+  const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH')
+  const originalPath = pathKey === undefined ? undefined : process.env[pathKey]
+  assert.ok(pathKey !== undefined && typeof env[pathKey] === 'string' && typeof originalPath === 'string' && env[pathKey].startsWith(originalPath))
 })
 
 // A Dock-launched app has PATH=/usr/bin:/bin:…; a CLI found in ~/.local/bin or
@@ -817,6 +820,7 @@ test('a running turn of a local-agent part is not checked before its steps', asy
     groupOwners: new Map(),
     pastOwners: new Map(),
     roomOwners: new Map(),
+    live: new Map(),
     partsOf: () => [],
     resolveAgent: async id => ({ id, session: { id, deriveMessages: () => [] }, status: 'idle' }),
     teamTools: [],
