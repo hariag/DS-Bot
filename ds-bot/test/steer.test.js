@@ -307,6 +307,51 @@ test('shell shadow: bash is shadowed the same way', async () => {
   await stop()
 })
 
+test('shell shadows retry only registrations that failed and dispose independently', async () => {
+  const { ctx, stop, rt, agent } = await start()
+  const pwsh = shellDef('pwsh')
+  const bash = shellDef('bash')
+  ctx.tools.get = name => ({ pwsh, bash })[name]
+  const attempts = []
+  const disposed = []
+  let bashBlocked = true
+  agent.ctx.tools.register = def => {
+    attempts.push(def.name)
+    if (def.name === 'bash' && bashBlocked) throw new Error('already registered in this scope')
+    return () => disposed.push(def.name)
+  }
+  const first = rt.shadowShells(agent)
+  assert.deepEqual(attempts, ['pwsh', 'bash'])
+  assert.equal(first.length, 1)
+  bashBlocked = false
+  const second = rt.shadowShells(agent)
+  assert.deepEqual(attempts, ['pwsh', 'bash', 'bash'])
+  assert.equal(second.length, 1)
+  assert.equal(rt.shadowShells(agent).length, 0)
+  first[0]()
+  assert.deepEqual(disposed, ['pwsh'])
+  const third = rt.shadowShells(agent)
+  assert.deepEqual(attempts, ['pwsh', 'bash', 'bash', 'pwsh'])
+  assert.equal(third.length, 1)
+  second[0]()
+  third[0]()
+  await stop()
+})
+
+test('shell shadow retries when the first registration fails before any shell is installed', async () => {
+  const { stop, rt, agent } = await start({ def: shellDef('bash') })
+  let attempts = 0
+  agent.ctx.tools.register = () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('already registered in this scope')
+    return () => {}
+  }
+  assert.equal(rt.shadowShells(agent).length, 0)
+  assert.equal(rt.shadowShells(agent).length, 1)
+  assert.equal(attempts, 2)
+  await stop()
+})
+
 // Carry tests: the cut turn's routing state rides into the turn that claims the steer.
 test('steer carry: a cut request turn hands its answer on the next turn', async () => {
   const { emit, stop, rt, deliveries } = await start()
