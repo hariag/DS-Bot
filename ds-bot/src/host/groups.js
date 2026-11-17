@@ -941,7 +941,7 @@ export function install(rt) {
   // the round's speakers, and one already waiting in the round is not called twice.
   const releaseParked = (room, round) => {
     const parked = room.paused ?? []
-    const due = parked.filter(entry => entry.idle !== true || round.userMessage === true)
+    const due = parked.filter(entry => entry.idle !== true || round.userMessage === true || round.scheduledMessage === true)
     if (due.length === 0) return
     const left = parked.filter(entry => !due.includes(entry))
     if (left.length > 0) room.paused = left
@@ -1322,8 +1322,11 @@ export function install(rt) {
       const text = [post.text, ...(post.files ?? []).map(fileLine)].filter(Boolean).join('\n')
       say(room, { who: 'User', text, ...(post.files === undefined ? {} : { files: post.files }), ...(post.via === undefined ? {} : { via: post.via }), session: true })
       unpauseRoomIdle(room)
-      round.userMessage = true
-      rt.goalUserMessage?.(room.id)
+      if (rt.isScheduledRoomPost(post)) round.scheduledMessage = true
+      else {
+        round.userMessage = true
+        rt.goalUserMessage?.(room.id)
+      }
       const { all, found } = mentionsIn(post.text ?? '', members)
       const { speakers, ordered } = openingCall(room, { text: post.text ?? '' })
       callIn(round, speakers, all || found.length > 0 ? 'the user mentioned you' : 'new message from the user', undefined, { ordered })
@@ -1382,9 +1385,9 @@ export function install(rt) {
     // late failure, its work picked up after a restart, its work the user stopped, or
     // the end of work whose result it already posted is an event of the round.
     const event = item => item.failed || item.resumed || item.stopped || item.done || item.goal === 'nudge' || item.goal === 'resume'
-    // A user post has no botId and is no round event or kickoff; a goal draft counts
-    // as the user's own line too.
-    const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post)
+    // A user post has no botId and is no round event, kickoff or scheduled
+    // reminder; a goal draft counts as the user's own line too.
+    const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post) && !rt.isScheduledRoomPost(post)
     const stoppedOnly = posts.length > 0 && posts.every(item => event(item) && item.stopped === true)
     for (const post of posts.filter(item => !item.kickoff && !event(item) && item.logged === undefined)) {
       // Image readings go into the log only; `@` names are picked from what the user typed.
@@ -1424,7 +1427,7 @@ export function install(rt) {
     // streak. Only the user's message lifts a pause already in place.
     const poster = opener.botId === undefined ? undefined : rt.botOf(opener.botId)
     const idlePost = poster !== undefined && !event(opener) && opener.quiet !== true && isIdleRelayText(opener.text ?? '', everyone, [])
-    if (posts.some(userPost)) unpauseRoomIdle(room)
+    if (posts.some(post => userPost(post) || rt.isScheduledRoomPost(post))) unpauseRoomIdle(room)
     // The pause holds a status post back: it is not answered, and the members it named
     // wait for the user. A post with work in it goes ahead.
     const holdsPost = idlePost && room.idlePaused !== undefined
@@ -1452,6 +1455,7 @@ export function install(rt) {
       startSeq,
       goalRevision: room.goal?.revision,
       ...(posts.some(userPost) ? { userMessage: true } : {}),
+      ...(posts.some(post => rt.isScheduledRoomPost(post)) ? { scheduledMessage: true } : {}),
       ...(opener.kickoff ? { kickoff: true } : {}),
       ...(opener.goal === 'nudge' ? { goalNudge: true } : {}),
       ...(opener.reviewId ? { goalReviewId: opener.reviewId } : {}),
