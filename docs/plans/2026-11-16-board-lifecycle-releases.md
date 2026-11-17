@@ -72,7 +72,7 @@
 5. 调度器优先派发 running release 的 item；其他 release 的 item 不派发；非 release 任务可以在 release item 无可执行动作时继续（但不会并发第二个 release）。
 6. 当 release 的 item 全部 `done`，release 变 `published`，记录 `publishedAt`，然后自动启动下一个 `queued` release（按 position）。
 7. 有 item 被取消/移除时 release 不完成；用户可以移除 item 或取消 release。
-8. “发布版本”首先记录看板上的版本与 item 证据；真实 git tag/部署仍由 Bot 执行，后续可以在 release 完成时创建发布任务/通知。
+8. “发布版本”首先记录看板上的版本与 item 证据；真实 git tag/部署仍由 Bot 执行，后续可以在 release 完成时创建发布任务/通知。2026-11-17 落地为：发布或失败时通知 Release 群与项目经理并生成 Markdown/HTML 总结报告；不自动创建部署任务（部署由 Bot 执行）。
 
 约束：
 - 同一 scope 最多一个 `running` release。
