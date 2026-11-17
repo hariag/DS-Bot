@@ -12,7 +12,7 @@ const { outputFiles } = await build({
 })
 const loaded = { exports: {} }
 new Function('module', 'exports', 'require', outputFiles[0].text)(loaded, loaded.exports, () => ({}))
-const browser = await chromium.launch({ headless: true, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox'] })
+const browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ['--hide-scrollbars'], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox'] })
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   const messages = Array.from({ length: 24 }, (_, index) => `<p class="message">Example conversation message ${index + 1}</p>`).join('')
@@ -54,11 +54,17 @@ try {
       await page.mouse.wheel(0, 180)
       await page.waitForTimeout(100)
       assert.ok(await scroll.evaluate(el => el.scrollTop) > 0, `${theme} ${width}px conversation scrolls`)
+      await scroll.evaluate(el => { el.scrollTop = 0 })
+      await page.mouse.move(box.x + box.width - 4, box.y + 10)
+      await page.mouse.down()
+      await page.mouse.move(box.x + box.width - 4, box.y + 110, { steps: 5 })
+      await page.mouse.up()
+      assert.ok(await scroll.evaluate(el => el.scrollTop) > 0, `${theme} ${width}px scrollbar drags`)
       if (process.env.SCREENSHOT_DIR && width === 1440) {
         await mkdir(process.env.SCREENSHOT_DIR, { recursive: true })
         await page.screenshot({ path: resolve(process.env.SCREENSHOT_DIR, `conversation-scrollbar-${theme}.png`) })
       }
-      console.log(`${theme} ${width}px: scrollbar visible and wheel scrolling works`)
+      console.log(`${theme} ${width}px: scrollbar visible, wheel and drag work`)
     }
   }
   assert.equal(thumbColors.size, 2, 'the scrollbar thumb follows the light and dark ink colors')
