@@ -32,10 +32,22 @@ function fixture(t) {
       effect(fn) { const dispose = fn(); effects.push(dispose) }, connection: { fetch: { register(route) { routes.push(route); return () => {} } } } },
     onHomeDrain(fn) { drains.push(fn) }, async load() {}, readOnly() {}, requireHomeLock() {}, warn(...args) { console.log(...args) },
     botOf:id=>Object.hasOwn(rt.state.bots,id)?{id,...rt.state.bots[id]}:undefined,
+    selfOf:id=>id==='group-one'?'one':id==='group-two'?'two':id==='chat-one'?'one':id==='chat-two'?'two':undefined,
     roomOf:id=>Object.hasOwn(rt.state.rooms,id)?rt.state.rooms[id]:undefined,
     chatOf:id=>`chat-${id}`, ensureGroupTaskSession:async(roomId,botId)=>{
       const sessionId=`${roomId}-${botId}`;rt.state.rooms[roomId].sessions[botId]=sessionId;rt.groupOwners.set(sessionId,{botId,roomId});return sessionId
     }, ensureCapabilities:async()=>{}, hideBotUnusedTools(){}, save:async()=>{},
+    async createRoom({ members, name, admin }) {
+      const id = `release-room-${Object.keys(rt.state.rooms).length + 1}`
+      rt.state.rooms[id] = { id, name, members:[...new Set(members)], admin, sessions:{}, seen:{} }
+      return rt.state.rooms[id]
+    },
+    async updateRoom(id, patch) {
+      const room = rt.state.rooms[id]
+      if (!room) throw new Error('Unknown group chat')
+      if (Array.isArray(patch.add)) room.members = [...new Set([...room.members, ...patch.add])]
+      return { room, changes:{} }
+    },
     ledger:{importer(){},records(){return []},append(){},written:async()=>{}}, goalDispatchBlocked:()=>false,
   }
   installDelivery(rt)
@@ -127,7 +139,7 @@ test('a scheduled task enters the real DSH Session once with a revision-bound me
   while(!deliveries.length&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
   assert.equal(deliveries.length,1)
   const {sessionId,message}=deliveries[0]
-  assert.equal(sessionId,'group-one');assert.equal(message.role,'user')
+  assert.equal(sessionId,'chat-one');assert.equal(message.role,'user')
   assert.equal(message.source.taskAction.id.length,64);assert.equal(message.source.taskAction.taskRevision,scheduled.revision)
   assert.equal(message.source.taskAction.actionRevision,scheduled.actionRevision)
   assert.match(message.content[0].text,/Independent evidence/)
@@ -171,6 +183,37 @@ test('owner moves a personal card with a durable receipt without changing shared
   await assert.rejects(rt.boardCall('board-command',{...input,operationId:'other',expectedRevision:2,value:{progress:'done'}}),/unavailable|invalid/i)
 })
 
+test('card order, due metadata and comment editing round-trip through the host journal', async t => {
+  const { rt } = fixture(t), personal = { kind:'personal', id:'user' }
+  const createCard = (operationId, taskId, value) => rt.boardCall('board-command', { scope:personal, operationId, taskId, type:'create', value:{ title:taskId, owner:'user', reviewer:'one', acceptance:'Check', dependencies:[], personalProgress:'todo', ...value } })
+  const first = await createCard('card-a', 'a', { description:'Prefilled', dueDate:'2028-02-29T09:30', dueComplete:true, labels:['Urgent'], checklist:[{ id:'check', text:'Inspect', checked:false }] })
+  assert.equal(first.description, 'Prefilled'); assert.equal(first.dueDate, '2028-02-29T09:30'); assert.equal(first.dueComplete, true); assert.equal(typeof first.position, 'string')
+  await createCard('card-b', 'b', {}); await createCard('card-c', 'c', {})
+  let board = await rt.boardCall('board-list', { scope:personal })
+  assert.deepEqual(board.tasks.map(task => task.id), ['a', 'b', 'c'])
+  assert.equal(board.tasks[0].dueComplete, true)
+  const moved = await rt.boardCall('board-command', { scope:personal, operationId:'move-c', taskId:'c', expectedRevision:1, type:'reorder', value:{ afterId:null } })
+  assert.equal(moved.revision, 2); assert.equal(moved.boardActivity.at(-1).type, 'reorder')
+  board = await rt.boardCall('board-list', { scope:personal })
+  assert.deepEqual(board.tasks.map(task => task.id), ['c', 'a', 'b'])
+  const progressed = await rt.boardCall('board-command', { scope:personal, operationId:'progress-b', taskId:'b', expectedRevision:1, type:'personal-progress', value:{ progress:'doing', afterId:null } })
+  assert.equal(progressed.personalProgress, 'doing')
+  const added = await rt.boardCall('board-command', { scope:personal, operationId:'comment-a', taskId:'a', expectedRevision:1, type:'card-comment', value:{ text:' First note ' } })
+  assert.equal(added.comments.length, 1); assert.equal(added.comments[0].text, 'First note')
+  const edited = await rt.boardCall('board-command', { scope:personal, operationId:'comment-edit', taskId:'a', expectedRevision:2, type:'card-comment-edit', value:{ commentId:added.comments[0].id, text:' Edited note ' } })
+  assert.equal(edited.comments[0].text, 'Edited note'); assert.equal(edited.boardActivity.at(-1).type, 'card-comment-edit')
+  const deleted = await rt.boardCall('board-command', { scope:personal, operationId:'comment-delete', taskId:'a', expectedRevision:3, type:'card-comment-delete', value:{ commentId:added.comments[0].id } })
+  assert.deepEqual(deleted.comments, []); assert.equal(deleted.boardActivity.at(-1).type, 'card-comment-delete')
+  const missing = { scope:personal, operationId:'comment-missing', taskId:'a', expectedRevision:4, type:'card-comment-edit', value:{ commentId:'missing', text:'x' } }
+  await assert.rejects(rt.boardCall('board-command', missing), /unknown card comment/)
+  assert.equal((await rt.boardCall('board-operation', { scope:personal, operationId:'comment-missing' })).state, 'rejected')
+  const badDue = { scope:personal, operationId:'bad-due', taskId:'a', expectedRevision:4, type:'card-details', value:{ dueDate:'2027-02-29' } }
+  await assert.rejects(rt.boardCall('board-command', badDue), /invalid card details/)
+  assert.equal((await rt.boardCall('board-operation', { scope:personal, operationId:'bad-due' })).state, 'rejected')
+  const cross = { scope:personal, operationId:'cross-lane', taskId:'a', expectedRevision:4, type:'reorder', value:{ afterId:'b' } }
+  await assert.rejects(rt.boardCall('board-command', cross), /same lane/)
+  assert.equal((await rt.boardCall('board-operation', { scope:personal, operationId:'cross-lane' })).state, 'rejected')
+})
 test('a rejected stale edit has a durable outcome after a lost response and rejects changed payload reuse', async t => {
   const { rt } = fixture(t); await rt.boardCall('board-command', create)
   const edit = { scope, operationId:'reject-1', taskId:'t1', expectedRevision:3, type:'edit', value:create.value }
@@ -560,4 +603,150 @@ test('no private Bot is needed to block direct board path reads by a Bot', async
   await assert.rejects(hook({ name:'read', agent:{ id:'bot-session' }, arguments:{ file_path:'/safe/bot/board-v1/tasks.sqlite' } }, next), /private/)
   await assert.rejects(hook({ name:'bash', agent:{ id:'bot-session' }, arguments:{ command:'cat ~/.dsh/bot/board-v1/tasks.sqlite' } }, next), /private/)
   assert.equal(await hook({ name:'read', agent:{ id:'instance-user' }, arguments:{ file_path:'/safe/bot/board-v1/tasks.sqlite' } }, next), 'allowed')
+})
+
+test('release endpoints create, order, assign, start and cancel a release', async t => {
+  const { rt } = fixture(t)
+  await rt.boardCall('board-command', create)
+  const created = await rt.boardCall('board-release-create', { scope, operationId:'release-1', release:{ id:'r1', name:'Release one', version:'1.0.0' } })
+  assert.equal(created.status, 'draft')
+  const second = await rt.boardCall('board-release-create', { scope, operationId:'release-2', release:{ id:'r2', name:'Release two', version:'1.1.0' } })
+  assert.ok(created.position < second.position)
+  let board = await rt.boardCall('board-list', { scope })
+  const release = board.releases.find(item => item.id === 'r1'), task = board.tasks.find(item => item.id === 't1')
+  const assigned = await rt.boardCall('board-release-assign', { scope, operationId:'assign-1', releaseId:'r1', expectedReleaseRevision:release.revision, taskId:'t1', expectedTaskRevision:task.revision })
+  assert.equal(assigned.releaseId, 'r1')
+  const queued = await rt.boardCall('board-release-queue', { scope, operationId:'queue-2', releaseId:'r2', expectedRevision:second.revision })
+  assert.equal(queued.status, 'queued')
+  const cancelled = await rt.boardCall('board-release-cancel', { scope, operationId:'cancel-2', releaseId:'r2', expectedRevision:queued.revision })
+  assert.equal(cancelled.status, 'cancelled')
+  board = await rt.boardCall('board-list', { scope })
+  const running = await rt.boardCall('board-release-start', { scope, operationId:'start-1', releaseId:'r1', expectedRevision:board.releases.find(item => item.id === 'r1').revision })
+  assert.equal(running.status, 'running')
+  board = await rt.boardCall('board-list', { scope })
+  assert.equal(board.tasks.find(item => item.id === 't1').status, 'ready')
+  assert.equal(board.releases.find(item => item.id === 'r1').status, 'running')
+})
+
+test('the board_task tool creates a user-confirmed proposal that the board applies', async t => {
+  const { rt } = fixture(t)
+  await rt.boardCall('board-command', create)
+  await rt.boardCall('board-command', { scope, operationId:'schedule-1', taskId:'t1', expectedRevision:1, type:'schedule' })
+  const before = (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === 't1')
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  assert.ok(tool, 'board_task tool is registered')
+  const result = JSON.parse(await tool.execute({ action:'propose', task_id:'t1', expected_revision:before.revision, operation_id:'p1',
+    change:{ kind:'update', value:{ description:'Bot proposal' } }, note:'Please confirm' }, { agent:{ id:'chat-one' }, callId:'c1' }))
+  assert.equal(result.proposal.status, 'pending')
+  assert.equal(result.proposal.taskId, 't1')
+  const pending = await rt.boardCall('board-proposal-list', { scope })
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].after.description, 'Bot proposal')
+  const decided = await rt.boardCall('board-proposal-decide', { scope, operationId:'decide-p1', proposalId:pending[0].id, expectedRevision:pending[0].revision, decision:'confirm' })
+  assert.equal(decided.proposal.status, 'confirmed')
+  const after = (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === 't1')
+  assert.equal(after.description, 'Bot proposal')
+  assert.equal(after.revision > before.revision, true)
+})
+
+test('the board_task tool proposes a new card and confirmation creates it', async t => {
+  const { rt } = fixture(t)
+  const personalScope = { kind:'personal', id:'one' }
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  assert.ok(tool, 'board_task tool is registered')
+  const result = JSON.parse(await tool.execute({ action:'propose', operation_id:'new-card-1',
+    change:{ kind:'create', value:{ title:'Bot-created requirement', owner:'one', reviewer:'two', acceptance:'Independent proof', type:'requirement', description:'Proposed from a Bot' } },
+    note:'Please create this card' }, { agent:{ id:'chat-one' }, callId:'c-create' }))
+  assert.equal(result.proposal.kind, 'create')
+  assert.equal(result.proposal.status, 'pending')
+  assert.match(result.proposal.taskId, /^card-/)
+  const pending = await rt.boardCall('board-proposal-list', { scope: personalScope })
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].after.title, 'Bot-created requirement')
+  assert.equal(pending[0].taskTitle, 'Bot-created requirement')
+  const decided = await rt.boardCall('board-proposal-decide', { scope: personalScope, operationId:'decide-new-card', proposalId:pending[0].id, expectedRevision:pending[0].revision, decision:'confirm' })
+  assert.equal(decided.proposal.status, 'confirmed')
+  const created = (await rt.boardCall('board-list', { scope: personalScope })).tasks.find(item => item.id === result.proposal.taskId)
+  assert.equal(created.title, 'Bot-created requirement')
+  assert.equal(created.type, 'requirement')
+  assert.equal(created.status, 'proposed')
+})
+
+test('creating a release with a team creates a group with the project manager as admin and roles as members', async t => {
+  const { rt } = fixture(t)
+  const roles = {
+    pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' },
+    arch:{ name:'Architect', role:'Architect' }, fe:{ name:'Frontend', role:'Frontend Developer' },
+    be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' },
+    review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' },
+  }
+  for (const [id, bot] of Object.entries(roles)) rt.state.bots[id] = bot
+  const team = { projectManagerId:'pm', roles:Object.fromEntries(Object.keys(roles).map(id => [id === 'pm' ? 'projectManager' : id === 'product' ? 'productManager' : id === 'arch' ? 'architect' : id === 'fe' ? 'frontend' : id === 'be' ? 'backend' : id === 'test' ? 'tester' : id === 'review' ? 'reviewer' : 'ops', id])) }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'release-team', team,
+    release:{ id:'r-team', name:'Student grades', version:'1.0.0' } })
+  assert.ok(release.groupId)
+  assert.equal(release.projectManagerId, 'pm')
+  assert.equal(release.roles.tester, 'test')
+  assert.equal(rt.state.rooms[release.groupId].admin, 'pm')
+  for (const id of ['product','arch','fe','be','test','review','ops']) assert.equal(rt.state.rooms[release.groupId].members.includes(id), true)
+  assert.equal(rt.state.rooms.group.members.includes('test'), true, 'release roles can act on the project board')
+  assert.equal(release.gates.docs.status, 'pending')
+})
+
+test('release gates and checks fail a release when an item is cancelled', async t => {
+  const { rt } = fixture(t)
+  await rt.boardCall('board-command', create)
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'gate-release', release:{ id:'r-gate', name:'Gate release', version:'2.0.0' } })
+  let board = await rt.boardCall('board-list', { scope })
+  const task = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-release-assign', { scope, operationId:'gate-assign', releaseId:release.id, expectedReleaseRevision:release.revision, taskId:'t1', expectedTaskRevision:task.revision })
+  const gate = await rt.boardCall('board-release-gate', { scope, operationId:'gate-docs', releaseId:release.id, expectedRevision:release.revision, gate:'docs', status:'passed', evidence:'README and API docs reviewed' })
+  assert.equal(gate.gates.docs.status, 'passed')
+  board = await rt.boardCall('board-list', { scope })
+  const currentTask = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-command', { scope, operationId:'gate-cancel-task', taskId:'t1', expectedRevision:currentTask.revision, type:'cancel', value:{ reason:'scope changed' } })
+  board = await rt.boardCall('board-list', { scope })
+  const started = await rt.boardCall('board-release-start', { scope, operationId:'gate-start', releaseId:release.id, expectedRevision:board.releases.find(item => item.id === release.id).revision })
+  assert.equal(started.status, 'running')
+  board = await rt.boardCall('board-list', { scope })
+  const failed = await rt.boardCall('board-release-check', { scope, operationId:'gate-check', releaseId:release.id, expectedRevision:board.releases.find(item => item.id === release.id).revision })
+  assert.equal(failed.status, 'failed')
+  assert.match(failed.failure, /cancelled/i)
+})
+
+test('a board edit on a release item is delivered to the release project manager', async t => {
+  const { rt, deliveries } = fixture(t)
+  const roles = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }
+  for (const [id, bot] of Object.entries(roles)) rt.state.bots[id] = bot
+  const team = { projectManagerId:'pm', roles:{ projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'review', ops:'ops' } }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'sync-release', team, release:{ id:'r-sync', name:'Sync', version:'1.0.0' } })
+  await rt.boardCall('board-command', create)
+  let board = await rt.boardCall('board-list', { scope })
+  const task = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-release-assign', { scope, operationId:'sync-assign', releaseId:release.id, expectedReleaseRevision:release.revision, taskId:'t1', expectedTaskRevision:task.revision })
+  board = await rt.boardCall('board-list', { scope })
+  const current = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-command', { scope, operationId:'sync-edit', taskId:'t1', expectedRevision:current.revision, type:'card-details', value:{ description:'Changed from the board' } })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.ok(deliveries.some(entry => entry.sessionId === 'chat-pm' && /Board change/.test(entry.message?.content?.[0]?.text ?? '')))
+})
+
+test('a release lifecycle plan creates a typed dependency chain assigned to the release', async t => {
+  const { rt } = fixture(t)
+  const bots = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, ui:{ name:'UI', role:'UI Designer' }, ux:{ name:'UX', role:'UX Designer' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }
+  for (const [id, bot] of Object.entries(bots)) rt.state.bots[id] = bot
+  const roles = { projectManager:'pm', productManager:'product', architect:'arch', uiDesigner:'ui', uxDesigner:'ux', frontend:'fe', backend:'be', tester:'test', reviewer:'review', ops:'ops' }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'plan-release', team:{ projectManagerId:'pm', roles }, release:{ id:'r-plan', name:'Student grades', version:'1.0.0' } })
+  const beforePlan = await rt.boardCall('board-list', { scope })
+  assert.deepEqual(Object.fromEntries(beforePlan.capabilities.actors.map(actor => [actor.id, true])), { user:true, one:true, two:true, pm:true, product:true, arch:true, ui:true, ux:true, fe:true, be:true, test:true, review:true, ops:true }, JSON.stringify({ room:rt.state.rooms.group.members, roles }))
+  const planned = await rt.boardCall('board-release-plan', { scope, releaseId:release.id, requirement:'Build a student grade management system' })
+  assert.ok(planned.tasks.length >= 9)
+  const board = await rt.boardCall('board-list', { scope })
+  const items = board.tasks.filter(task => task.releaseId === release.id)
+  assert.equal(items.length, planned.tasks.length)
+  assert.ok(items.every(task => task.status === 'proposed' && task.owner && task.reviewer && task.type))
+  assert.equal(board.releases.find(item => item.id === release.id).itemCount, items.length)
+  const requirement = items.find(task => task.title.startsWith('Requirement'))
+  const design = items.find(task => task.title.startsWith('Technical'))
+  assert.ok(design.dependencies.includes(requirement.id))
 })

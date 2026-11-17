@@ -1,7 +1,18 @@
 import { createRequire } from 'node:module'
+import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
+
+let assertions = 0
+let assertionFailures = 0
+for (const name of ['ok', 'equal', 'deepEqual', 'match', 'doesNotMatch']) {
+  const original = assert[name]
+  assert[name] = (...args) => {
+    assertions += 1
+    try { return original.apply(assert, args) } catch (error) { assertionFailures += 1; throw error }
+  }
+}
 
 const dsbot = createRequire(new URL('../package.json', import.meta.url))
 const harness = process.env.DSH_HARNESS
@@ -9,18 +20,23 @@ if (!harness) throw new Error('Set DSH_HARNESS to a DeepSeek Harness checkout')
 const web = createRequire(join(harness, 'apps/web/package.json'))
 const boardEntry = fileURLToPath(new URL('../src/client/task-board.js', import.meta.url))
 const { build } = dsbot('esbuild')
-const { chromium } = web('playwright')
-const react = join(dirname(web.resolve('react')), 'umd/react.development.js')
-const reactDom = join(dirname(web.resolve('react-dom')), 'umd/react-dom.development.js')
+// The harness checkout normally owns React and Playwright. A source checkout without
+// node_modules can point this test at an installed fixture instead.
+const boardReact = process.env.BOARD_REACT_DIR || (() => { try { return dirname(web.resolve('react')) } catch { return '' } })()
+if (!boardReact) throw new Error('Set BOARD_REACT_DIR to a node_modules directory holding react and react-dom')
+const react = join(boardReact, 'umd/react.development.js')
+const reactDom = join(boardReact, '../react-dom/umd/react-dom.development.js')
+const { chromium } = (() => { try { return web('playwright') } catch { return dsbot('playwright-core') } })()
+const chrome = process.env.CHROME_PATH || (existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe') ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : undefined)
 
 const shim = {
   name: 'board-fixture',
   setup(b) {
     b.onResolve({ filter: /^(react|react-dom|\.\/api\.js|\.\/i18n\.js)$/ }, x => ({ path: x.path, namespace: 'fixture' }))
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, x => {
-      if (x.path === 'react') return { contents: 'export const {createElement,useEffect,useRef,useState}=globalThis.React' }
+      if (x.path === 'react') return { contents: 'export const {createElement,useEffect,useLayoutEffect,useRef,useState}=globalThis.React' }
       if (x.path === 'react-dom') return { contents: 'export const {createPortal,flushSync}=globalThis.ReactDOM' }
-      if (x.path.endsWith('i18n.js')) return { contents: 'export const hostText=x=>x;export const t=(x,v={})=>x.replace(/\\{(\\w+)\\}/g,(_,k)=>String(v[k]??""))' }
+      if (x.path.endsWith('i18n.js')) return { contents: 'export const hostText=x=>x;export const dateLocale=()=>"en-US";export const t=(x,v={})=>x.replace(/\\{(\\w+)\\}/g,(_,k)=>String(v[k]??""))' }
       return { contents: 'export const call=()=>{throw Error("request injection required")}' }
     })
   },
@@ -36,14 +52,24 @@ window.removeEventListener=(type,fn,options)=>{if(type==='keydown')keyListeners.
 globalThis.listenerCount=()=>keyListeners.size;
 const sheet=document.createElement('style');sheet.textContent=\`body{font-family:system-ui,sans-serif;--bt-main:#fcfcfc;--bt-sidebar:#f7f7f7;--bt-card:#fff;--bt-ink:#141414;--bt-ink-2:#666;--bt-ink-3:#999;--bt-line:#e8e8e8;--bt-line-2:#d9d9d9;--bt-hover:#eee;--bt-accent:#4d6bfe;--bt-accent-ink:#fff;--bt-tag-bg:#eee;--bt-green:#00c972;--bt-danger:#e02135;--bt-danger-soft:#faeeee;--bt-glass-shadow:0 18px 50px #0003}\`+TASK_BOARD_CSS;document.head.append(sheet);
 const actors=[{id:'a',name:'Alice'},{id:'b',name:'Bob'},{id:'user',name:'You'}];
-const state=globalThis.fixture={calls:[],mode:'normal',revision:1,heldDecisions:{},heldRedos:{},queuedDecisions:{},workDecisions:{},scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{},boardPlans:{},boardStarted:[],boardFinished:[],receiptPlans:{},receiptStarted:[],boardTitles:{}};
+const state=globalThis.fixture={calls:[],mode:'normal',revision:1,heldDecisions:{},heldRedos:{},queuedDecisions:{},workDecisions:{},scope:{kind:'room',id:'g1'},sealed:new Set(),resolvers:{},boardPlans:{},boardStarted:[],boardFinished:[],receiptPlans:{},receiptStarted:[],boardTitles:{},card:{description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null},shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],gallery:[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}],created:[],commentSeq:0,phase2Tasks:[],releases:[],proposals:[]};
 const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
-const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').split(',')[1]},jpeg:{mediaType:'image/jpeg',data:canvas.toDataURL('image/jpeg').split(',')[1]},bad:{mediaType:'image/png',data:'YWJj'}};
+const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').split(',')[1]},jpeg:{mediaType:'image/jpeg',data:canvas.toDataURL('image/jpeg').split(',')[1]},bad:{mediaType:'image/gif',data:'YWJj'}};
 state.images=images;
-function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:[{id:'grant-old',targetRoomId:'g2',fields:['status']}],images:[{id:'png',name:'existing.png'},{id:'jpeg',name:'existing.jpg'},{id:'bad',name:'broken.png'}]}}
+function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';const card=state.card;return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),description:card.description||'',labels:card.labels,checklist:card.checklist,dueDate:card.dueDate||'',dueComplete:card.dueComplete===true,...(card.coverImageId?{coverImageId:card.coverImageId}:{}),comments:card.comments,owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:state.shares,images:state.gallery}}
+globalThis.resetBoardState=()=>{state.calls=[];state.revision=1;state.progress='todo';state.boardStatus='proposed';state.card={description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null};state.shares=[{id:'grant-old',targetRoomId:'g2',fields:['status']}];state.gallery=[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}];state.created=[];state.commentSeq=0}
+function phase2Commands(task){const commands=[{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft')commands.push({type:'submit'},{type:'cancel'});else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
+globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
  if(endpoint==='board-list'){
+  if(state.mode==='phase2'){
+   const tasks=state.phase2Tasks.map(task=>({...task}));
+   const releases=state.releases.map(release=>({...release,itemCount:tasks.filter(task=>task.releaseId===release.id).length,doneCount:tasks.filter(task=>task.releaseId===release.id&&task.status==='done').length}));
+   const proposals=state.proposals.map(proposal=>({...proposal,taskTitle:tasks.find(task=>task.id===proposal.taskId)?.title}));
+   const commands=Object.fromEntries(tasks.map(task=>[task.id,phase2Commands(task)]));
+   return {tasks,releases,proposals,capabilities:{create:true,upload:false,actors,commands,shareTargets:{}}};
+  }
   // Capture the snapshot before blocking so a stale response is observably old.
   const task=record(payload.scope);
   const key=payload.scope.kind+':'+payload.scope.id, plan=state.boardPlans[key]?.shift();
@@ -55,9 +81,10 @@ async function request(endpoint,payload){
   }
   if(state.mode==='slow'&&payload.scope.id==='g1') await new Promise(resolve=>setTimeout(resolve,500));
   const position=state.mode.startsWith('history-')?state.mode.slice(8):null;
-  const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',owner:'a',revision:1,status:'legacy-pending',legacy:{originalStatus:'pending',current:true,goalStatus:'active'}},{id:'old-done',title:'Completed goal task',owner:'b',revision:1,status:'legacy-done',legacy:{originalTitle:'Completed goal task',originalStatus:'done',position:'previous',current:false,goalStatus:'active',useOverlay:true,boardRevision:0}}]:position?[{id:'history',title:state.historyTitle??'Original historical task',owner:'a',revision:5,status:position==='future'?'waiting':'legacy-done',legacy:{originalTitle:'Original historical task',originalStatus:position==='future'?'pending':'done',position,current:false,goalStatus:'active',useOverlay:true,boardRevision:state.historyRevision??0},boardHistory:state.historyAudit??[]}]:[];
+  const legacy=state.mode==='legacy'?[{id:'old',title:'Legacy task',owner:'a',revision:1,status:'legacy-pending',legacy:{originalStatus:'pending',current:true,position:'current',goalStatus:'active'}},{id:'old-done',title:'Completed goal task',owner:'b',revision:1,status:'legacy-done',legacy:{originalTitle:'Completed goal task',originalStatus:'done',position:'previous',current:false,goalStatus:'active',useOverlay:true,boardRevision:0}}]:position?[{id:'history',title:state.historyTitle??'Original historical task',owner:'a',revision:5,status:position==='future'?'waiting':'legacy-done',legacy:{originalTitle:'Original historical task',originalStatus:position==='future'?'pending':'done',position,current:false,goalStatus:'active',useOverlay:true,boardRevision:state.historyRevision??0},boardHistory:state.historyAudit??[]}]:[];
   const shared=[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}];
-  return {tasks:[task,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,deliveriesIncomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',decision:state.heldDecisions['rec-1']?.choice??'open',decisionRevision:state.heldDecisions['rec-1']?.revision??0,redo:{operationId:'attempt-1',status:'unknown'},evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',decision:'open',decisionRevision:0,redo:{available:false,state:'source-unavailable'},evidence:'inflight.json',secret:'SECRET-HIDDEN'}],deliveries:state.recoveryEmpty?[]:[{recoveryId:'d'.repeat(64),exchangeId:'queued-exchange-1',sessionId:'session-queued',recipientId:'b',recipientName:'Bob',status:'history-unavailable',decision:state.queuedDecisions['d'.repeat(64)]?.choice??'open',decisionRevision:state.queuedDecisions['d'.repeat(64)]?.revision??0,secret:'SECRET-QUEUED'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'card-details'},{type:'card-comment'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'}]:[]),...(state.mode==='schedule'?[{type:'schedule'}]:[])],old:[{type:'goal-task-edit'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],history:[{type:'goal-history-title'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+  const created=state.created.filter(item=>item.scope===payload.scope.kind+':'+payload.scope.id).map(item=>item.task);
+  return {tasks:[task,...created,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,deliveriesIncomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',decision:state.heldDecisions['rec-1']?.choice??'open',decisionRevision:state.heldDecisions['rec-1']?.revision??0,redo:{operationId:'attempt-1',status:'unknown'},evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',decision:'open',decisionRevision:0,redo:{available:false,state:'source-unavailable'},evidence:'inflight.json',secret:'SECRET-HIDDEN'}],deliveries:state.recoveryEmpty?[]:[{recoveryId:'d'.repeat(64),exchangeId:'queued-exchange-1',sessionId:'session-queued',recipientId:'b',recipientName:'Bob',status:'history-unavailable',decision:state.queuedDecisions['d'.repeat(64)]?.choice??'open',decisionRevision:state.queuedDecisions['d'.repeat(64)]?.revision??0,secret:'SECRET-QUEUED'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'card-details'},{type:'card-comment'},{type:'card-comment-edit'},{type:'card-comment-delete'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'},{type:'reorder'}]:[]),...(state.mode==='schedule'?[{type:'schedule'},{type:'reorder'}]:[])],old:[{type:'goal-task-edit'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],history:[{type:'goal-history-title'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
  }
  if(endpoint==='board-held-decision'){state.heldDecisions[payload.recoveryId]={choice:payload.choice,revision:payload.expectedRevision+1};return {decision:payload.choice,revision:payload.expectedRevision+1}}
  if(endpoint==='board-queued-delivery-decision'){state.queuedDecisions[payload.recoveryId]={choice:payload.choice,revision:payload.expectedRevision+1};return {decision:payload.choice,revision:payload.expectedRevision+1}}
@@ -96,13 +123,74 @@ async function request(endpoint,payload){
    await new Promise(resolve=>{state.resolvers[id]=resolve});
    if(state.sealed.has(id))throw Error('sealed');
   }
-  if(state.mode==='conflict')state.revision=2;
-  if(endpoint==='board-command'&&payload.type==='personal-progress'){state.progress=payload.value.progress;state.revision++}
-  if(endpoint==='board-command'&&payload.type==='schedule')state.boardStatus='ready'
-  if(endpoint==='board-command'&&payload.type==='goal-history-title'){state.historyTitle=payload.value.title;state.historyRevision=(state.historyRevision??0)+1;state.historyAudit=[{operationId:payload.operationId,at:1700000000000,kind:'title',reason:payload.value.reason,before:{title:'Original historical task'},after:{title:payload.value.title}}]}
+  if(state.mode==='phase2'&&endpoint==='board-command'){
+   const type=payload.type,value=payload.value??{};
+   if(type==='create'){
+    state.phase2Tasks.push({id:payload.taskId,title:value.title,type:value.type||'feature',owner:value.owner,reviewer:value.reviewer,acceptance:value.acceptance,dependencies:value.dependencies??[],revision:1,status:value.draft?'draft':'proposed',comments:[],...(value.description?{description:value.description}:{})});
+    return {};
+   }
+   const task=state.phase2Tasks.find(item=>item.id===payload.taskId);
+   if(!task)throw Error('unknown task');
+   if(type==='card-details'){
+    if(value.type)task.type=value.type;
+    if('description' in value)task.description=value.description;
+   }
+   if(type==='submit'||type==='restore')task.status='proposed';
+   if(type==='cancel')task.status='cancelled';
+   task.revision++;
+   return {};
+  }
+  if(state.mode==='conflict'){state.revision=2;return {}}
+  if(endpoint==='board-upload'){
+   for(const image of payload.images??[]){
+    const id='upload-'+image.uploadId;
+    state.gallery.push({id,name:image.name,mediaType:image.mediaType});
+    images[id]={mediaType:image.mediaType,data:image.data};
+   }
+   state.revision++;
+   return {};
+  }
+  const type=payload.type,value=payload.value??{};
+  if(type==='personal-progress')state.progress=value.progress;
+  if(type==='schedule')state.boardStatus='ready';
+  if(type==='card-details'){
+   for(const key of ['description','labels','checklist','dueDate','dueComplete'])if(key in value)state.card[key]=value[key];
+   if('coverImageId' in value)state.card.coverImageId=value.coverImageId;
+  }
+  if(type==='card-comment')state.card.comments=[...state.card.comments,{id:'comment-'+(++state.commentSeq),author:'user',at:1700000000000,text:value.text}];
+  if(type==='card-comment-edit')state.card.comments=state.card.comments.map(comment=>comment.id===value.commentId?{...comment,text:value.text}:comment);
+  if(type==='card-comment-delete')state.card.comments=state.card.comments.filter(comment=>comment.id!==value.commentId);
+  if(type==='remove-image')state.gallery=state.gallery.filter(image=>image.id!==value.imageId);
+  if(type==='share')state.shares=[...state.shares,{id:'grant-'+(++state.commentSeq),targetRoomId:value.targetRoomId,fields:value.fields}];
+  if(type==='unshare')state.shares=state.shares.filter(share=>share.id!==value.shareId);
+  if(type==='create')state.created.push({scope:payload.scope.kind+':'+payload.scope.id,task:{id:payload.taskId,title:value.title,owner:value.owner,reviewer:value.reviewer,acceptance:value.acceptance,dependencies:value.dependencies??[],revision:1,status:value.schedule?'ready':'proposed',description:value.description??'',labels:value.labels??[],checklist:value.checklist??[],dueDate:value.dueDate??'',dueComplete:value.dueComplete===true,comments:[],shares:[],images:[],...(value.personalProgress!==undefined?{personalProgress:value.personalProgress}:{})}});
+  if(type==='goal-history-title'){state.historyTitle=value.title;state.historyRevision=(state.historyRevision??0)+1;state.historyAudit=[{operationId:payload.operationId,at:1700000000000,kind:'title',reason:value.reason,before:{title:'Original historical task'},after:{title:value.title}}]}
+  state.revision++;
   return {};
  }
- if(endpoint==='board-operation-cancel'){
+ if(endpoint==='board-release-assign'||endpoint==='board-release-remove'){
+   const task=state.phase2Tasks.find(item=>item.id===payload.taskId);
+   const release=state.releases.find(item=>item.id===payload.releaseId);
+   if(!task||!release)throw Error('release task unavailable');
+   if(endpoint==='board-release-assign')task.releaseId=release.id; else delete task.releaseId;
+   task.revision++;release.revision++;
+   return {};
+  }
+  if(endpoint==='board-release-queue'||endpoint==='board-release-start'||endpoint==='board-release-cancel'){
+   const release=state.releases.find(item=>item.id===payload.releaseId);
+   if(!release)throw Error('release unavailable');
+   release.status=endpoint==='board-release-queue'?'queued':endpoint==='board-release-start'?'running':'cancelled';
+   release.revision++;
+   return {};
+  }
+  if(endpoint==='board-proposal-decide'){
+   const proposal=state.proposals.find(item=>item.id===payload.proposalId);
+   if(!proposal)throw Error('Proposal is unavailable');
+   state.proposals=state.proposals.filter(item=>item.id!==payload.proposalId);
+   if(payload.proposalId==='p1'&&payload.decision==='confirm'&&state.phase2Reject)state.proposals=[state.phase2Reject];
+   return {proposal:{...proposal,status:payload.decision==='confirm'?'confirmed':'rejected'}};
+  }
+  if(endpoint==='board-operation-cancel'){
   if(state.mode==='cancel-fails')throw Error('network lost');
   state.sealed.add(payload.operationId);return {state:'rejected',message:'safely cancelled'};
  }
@@ -114,13 +202,13 @@ async function request(endpoint,payload){
  throw Error('unexpected endpoint '+endpoint);
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));
-globalThis.renderFixture=(scope,mode='normal')=>{state.scope=scope;state.mode=mode;
+globalThis.renderFixture=(scope,mode='normal',fresh=false)=>{state.scope=scope;state.mode=mode;
  const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:mode==='periodic-paused'?'paused':'active',reviewAttempt:mode==='periodic-no-id'?{state:'uncertain',at:1}:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
  state.currentGoal=goal;
  const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline');const current=mode==='periodic-changed'?{...state.currentGoal,revision:2}:state.currentGoal;return {roomsById:{[scope.id]:{goal:current}}}};
  const currentRoomGoal=id=>id===scope.id?state.currentGoal:undefined;
  const resolveReview=async(goalId,reviewId)=>{state.calls.push({endpoint:'review-resolve',scope,payload:{goalId,reviewId}});if(mode==='periodic-error')throw Object.assign(Error('stale'),{code:'bot/stale'});if(mode==='periodic-network')throw Error('offline')};
- root.render(h(TaskBoard,{scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,currentRoomGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
+ root.render(h(TaskBoard,{...(fresh?{key:'board-'+(state.renderSeq=(state.renderSeq??0)+1)}:{}),scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,currentRoomGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
 globalThis.clearFixture=()=>ReactDOM.flushSync(()=>root.render(null));
 `
 const bundle = await build({ stdin: { contents: entry, resolveDir: dirname(boardEntry), sourcefile: 'board-globalThis.fixture.js' },
@@ -131,6 +219,10 @@ async function exerciseColumns(page, rail) {
   const previous=rail.getByRole('button',{name:/^(Previous columns|上一组列表)$/})
   const next=rail.getByRole('button',{name:/^(Next columns|下一组列表)$/})
   await previous.waitFor();await next.waitFor()
+  const railStatus=rail.locator('.bt-board-rail-status')
+  await railStatus.waitFor()
+  assert.match(await railStatus.innerText(),/Columns 1–\d+ of \d+/)
+  assert.match(await railStatus.innerText(),/more/)
   const measure=()=>viewport.evaluate(el=>{const style=getComputedStyle(el),bar=getComputedStyle(el,'::-webkit-scrollbar');const outer=el.closest('.bt-board-content');return {left:el.scrollLeft,max:el.scrollWidth-el.clientWidth,outerMax:outer?outer.scrollWidth-outer.clientWidth:0,hidden:style.scrollbarWidth==='none'||bar.display==='none'||parseFloat(bar.height)===0}})
   let m=await measure()
   assert.ok(m.max>1,'column rail retains horizontal overflow for navigation')
@@ -146,7 +238,14 @@ async function exerciseColumns(page, rail) {
   assert.equal(firstVisible,true,'first column is fully visible at the start')
 }
 
-const browser = await chromium.launch({ ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}), headless: true,
+async function approveChange(page, dialog) {
+  const panel = dialog.locator('.bt-card-confirm').first()
+  await panel.waitFor()
+  await panel.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await panel.waitFor({ state: 'detached' })
+}
+
+const browser = await chromium.launch({ ...(chrome ? { executablePath: chrome } : {}), headless: true,
   args: ['--no-sandbox', '--disable-background-networking'] })
 try {
   const page = await browser.newPage()
@@ -223,7 +322,8 @@ try {
   const beforeRefresh = await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)
   await page.evaluate(() => { globalThis.fixture.recoveryEmpty = true })
   await page.getByRole('button', { name:'Refresh', exact:true }).click()
-  await page.getByText('No interrupted turns in this snapshot.').waitFor()
+  await page.waitForFunction(() => ![...document.querySelectorAll('.bt-recovery-panel')].some(el => el.textContent.includes('Interrupted work')), null, { timeout:5000 })
+  assert.equal(await page.getByText('No interrupted turns in this snapshot.').count(),0,'an empty recovery panel is not left on the board')
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length), beforeRefresh + 1)
   await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal'))
   await page.getByText('Personal task', {exact:true}).waitFor()
@@ -372,36 +472,43 @@ try {
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'review-resolve').length), priorAttempts + 1, 'an uncertain request is not repeated automatically')
 
   await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'capacity'))
-  await page.getByText('Instance task capacity: 1000 / 1000').waitFor()
+  assert.equal((await page.locator('.bt-board-title-row .bt-board-capacity').innerText()).trim(), '1000 / 1000')
   await page.getByText('Task limit reached. New tasks cannot be created.').waitFor()
-  assert.equal(await page.locator('.bt-board-columns-personal > [data-stage="todo"]').getByRole('button', {name:'Add task'}).isDisabled(), true)
+  const capacityLane = page.locator('.bt-board-columns-personal > [data-stage="todo"]')
+  assert.equal(await capacityLane.getByRole('button', {name:'Add card'}).count(), 0, 'a full instance offers no add control')
+  assert.equal(await capacityLane.getByRole('button', {name:'Add card to To do'}).count(), 0)
+  assert.equal(await page.locator('.bt-board-quick-add').count(), 0, 'a full instance cannot open the quick add composer')
   await page.evaluate(() => globalThis.renderFixture({ kind: 'room', id: 'g1' }, 'readonly'))
-  await page.getByRole('heading', { name: 'Awaiting review 1' }).waitFor()
+  await page.getByRole('heading', { name: 'Awaiting review' }).waitFor()
+  const readOnlyLane = page.locator('[aria-label="Awaiting review"]')
+  assert.equal(await readOnlyLane.locator('.bt-board-count').innerText(), '1', 'the lane count is a separate span')
   await exerciseColumns(page,page.locator('.bt-board-rail').first())
   assert.equal(await page.locator('[aria-label="Done"] article').count(), 0, 'reported must not be displayed as done')
-  assert.equal(await page.getByRole('button', { name: 'Create task' }).count(), 0, 'missing capability is read only')
-  assert.equal(await page.getByText('Instance task capacity: 1000 / 1000').count(), 0, 'capacity is not shown when the host omits it')
+  assert.equal(await page.locator('.bt-board-lane-add, .bt-board-lane-add-icon, .bt-board-quick-add').count(), 0, 'missing capability is read only')
+  assert.equal(await page.getByText('This board is read only.').count(), 1)
+  assert.equal(await page.locator('.bt-board-capacity').count(), 0, 'capacity is not shown when the host omits it')
   await page.locator('article').filter({hasText:'Group task'}).locator('.bt-board-card-summary').click()
-  await page.locator('.bt-card-modal').waitFor()
-  assert.equal(await page.locator('.bt-card-modal').getByText('Read only').count(), 1)
-  assert.match(await page.locator('.bt-card-modal .bt-board-fact').filter({hasText:'Owner'}).innerText(), /\ba\b/, 'missing actor name falls back to ID')
-  await page.waitForFunction(() => {const imgs=[...document.querySelectorAll('.bt-board-photo img')];return imgs.length===2&&imgs.every(img=>img.complete&&img.naturalWidth===2&&img.naturalHeight===2)})
-  await page.getByText('Image unavailable').waitFor()
+  const readOnlyModal = page.locator('.bt-card-modal')
+  await readOnlyModal.waitFor()
+  assert.equal(await readOnlyModal.locator('.bt-card-side > p.bt-card-note').filter({hasText:'Read only'}).count(), 1)
+  assert.equal(await readOnlyModal.locator('textarea, input[type=file], select').count(), 0, 'a read only card exposes no editors')
+  assert.match(await readOnlyModal.locator('.bt-card-people').innerText(), /\ba\b[\s\S]*Owner/, 'missing actor name falls back to ID')
+  await page.waitForFunction(() => {const imgs=[...document.querySelectorAll('.bt-attachment-grid img')];return imgs.length===2&&imgs.every(img=>img.complete&&img.naturalWidth===2&&img.naturalHeight===2)})
+  await readOnlyModal.getByText('Image unavailable').waitFor()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-image' && x.payload.scope.id === 'g1' && x.payload.taskId === 'T1')), true)
-
   await page.keyboard.press('Escape')
-  await page.locator('.bt-card-modal').waitFor({state:'detached'})
-  await page.evaluate(() => {globalThis.fixture.calls=[];globalThis.renderFixture({kind:'room',id:'g1'},'schedule')})
-  await page.getByRole('button',{name:'Refresh',exact:true}).click()
-  await page.locator('[aria-label="Preparing"] article').waitFor()
-  for(const [lane,label] of [['Preparing','Create task'],['Waiting','Add and schedule'],['Ready','Add and schedule'],['In progress','Add and schedule'],['Awaiting review','Add follow-up'],['Done','Add follow-up']])
-    assert.equal(await page.locator(`[aria-label="${lane}"]`).getByRole('button',{name:label}).count(),1,`${lane} has a task creation entry`)
+  await readOnlyModal.waitFor({state:'detached'})
+
+  await page.evaluate(() => {globalThis.fixture.calls=[];globalThis.fixture.boardStatus='proposed';globalThis.renderFixture({kind:'room',id:'g1'},'schedule',true)})
+  await page.locator('[aria-label="Preparing"] [data-task-id="T1"]').waitFor()
+  for(const lane of ['Preparing','Waiting','Ready','In progress','Awaiting review','Done']){
+    assert.equal(await page.locator('[aria-label="'+lane+'"]').getByRole('button',{name:'Add card',exact:true}).count(),1,`${lane} has a quick-add entry`)
+    assert.equal(await page.locator('[aria-label="'+lane+'"]').getByRole('button',{name:'Add card to '+lane}).count(),1,`${lane} has a card creation entry`)
+  }
   const proposedLane=page.locator('[aria-label="Preparing"]'),workingLane=page.locator('[aria-label="In progress"]')
-  assert.equal(await proposedLane.locator('article .bt-board-card-summary').getAttribute('draggable'),'true','the card title is an explicit drag handle')
-  const laneStyle=await proposedLane.evaluate(el=>({height:el.getBoundingClientRect().height,buttonBackground:getComputedStyle(el.querySelector('.bt-board-primary')).backgroundColor,buttonHeight:getComputedStyle(el.querySelector('.bt-board-primary')).height,headingWeight:getComputedStyle(el.querySelector('h3')).fontWeight}))
+  assert.equal(await proposedLane.locator('article').getAttribute('draggable'),'true','the card is an explicit drag handle')
+  const laneStyle=await proposedLane.evaluate(el=>({height:el.getBoundingClientRect().height,headingWeight:getComputedStyle(el.querySelector('h3')).fontWeight}))
   assert.ok(laneStyle.height>=300,`empty workflow lanes provide a usable drop area: ${laneStyle.height}px`)
-  assert.equal(laneStyle.buttonBackground,'rgb(238, 238, 238)','lane creation actions use the quiet Harness hover surface')
-  assert.equal(laneStyle.buttonHeight,'32px','lane creation actions use the compact standard control size')
   assert.equal(laneStyle.headingWeight,'600','lane headings use the standard UI weight')
   await proposedLane.locator('article').dragTo(workingLane)
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='schedule'))
@@ -425,71 +532,158 @@ try {
   await page.getByText('Saving…').waitFor({state:'hidden'})
   await page.locator('[aria-label="Ready"] [data-task-id="T1"]').waitFor()
   if(process.env.GROUP_BOARD_SCREENSHOT){await page.screenshot({path:process.env.GROUP_BOARD_SCREENSHOT})}
-  await waitingLane.getByRole('button',{name:'Add and schedule'}).click()
-  await waitingLane.getByLabel('Title',{exact:true}).fill('Created from waiting')
-  await waitingLane.getByLabel('Owner ID',{exact:true}).selectOption('a')
-  await waitingLane.getByLabel('Independent reviewer ID',{exact:true}).selectOption('b')
-  await waitingLane.getByLabel('Dependencies',{exact:true}).selectOption('T2')
-  await waitingLane.getByLabel('Acceptance criteria').fill('Evidence')
-  await waitingLane.getByRole('button',{name:'Create and schedule'}).click()
+  await waitingLane.getByRole('button',{name:'Add card to Waiting'}).click()
+  const createModal=page.locator('.bt-create-modal')
+  await createModal.waitFor()
+  await createModal.getByLabel('Title').fill('Created from waiting')
+  await createModal.getByLabel('Owner').selectOption('a')
+  await createModal.getByLabel('Independent reviewer').selectOption('b')
+  await createModal.getByLabel('Description').fill('Planned work')
+  await createModal.getByRole('checkbox',{name:'Shared dependency'}).check()
+  await createModal.getByLabel('Acceptance criteria').fill('Evidence')
+  await createModal.getByRole('button',{name:'Create and schedule'}).click()
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created from waiting'))
   const scheduledCreate=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created from waiting'))
   assert.equal(scheduledCreate.payload.value.schedule,true)
   assert.deepEqual(scheduledCreate.payload.value.dependencies,['T2'],'a visible shared group dependency can be selected')
-  assert.equal(await page.locator('[aria-label="Awaiting review"]').getByRole('button',{name:'Add follow-up'}).count(),1)
-  assert.equal(await page.locator('[aria-label="Done"]').getByRole('button',{name:'Add follow-up'}).count(),1)
+  assert.equal(scheduledCreate.payload.value.description,'Planned work')
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===globalThis.fixture.calls.find(c=>c.endpoint==='board-command'&&c.payload.type==='create')?.payload.operationId))
+  await createModal.waitFor({state:'detached'})
+  assert.equal(await page.locator('[aria-label="Awaiting review"]').getByRole('button',{name:'Add card',exact:true}).count(),1)
+  assert.equal(await page.locator('[aria-label="Done"]').getByRole('button',{name:'Add card',exact:true}).count(),1)
+  const groupPreparing=page.locator('[aria-label="Preparing"]')
+  await groupPreparing.getByRole('button',{name:'Add card',exact:true}).click()
+  const groupQuick=groupPreparing.locator('.bt-board-quick-add')
+  await groupQuick.getByLabel('Card title').fill('Quick group card')
+  await groupQuick.getByRole('button',{name:'Add card'}).click()
+  const groupCreate=page.locator('.bt-create-modal')
+  await groupCreate.waitFor()
+  assert.equal(await groupCreate.getByLabel('Title').inputValue(),'Quick group card','quick add prefills the create dialog title')
+  await groupCreate.getByLabel('Owner').selectOption('a')
+  await groupCreate.getByLabel('Independent reviewer').selectOption('b')
+  await groupCreate.getByLabel('Acceptance criteria').fill('Quick evidence')
+  await groupCreate.getByRole('button',{name:'Create card'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Quick group card'))
+  const groupQuickCommand=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Quick group card'))
+  assert.equal(groupQuickCommand.payload.value.owner,'a')
+  assert.equal(groupQuickCommand.payload.value.reviewer,'b')
+  assert.equal(groupQuickCommand.payload.value.schedule,undefined,'a plain quick add does not dispatch work')
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),groupQuickCommand.payload.operationId)
+  await groupCreate.waitFor({state:'detached'})
+  await page.getByText('Quick group card',{exact:true}).waitFor()
 
-  await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'manual'))
-  await page.getByText('Personal task', { exact: true }).waitFor()
+  await page.evaluate(() => { globalThis.resetBoardState(); globalThis.renderFixture({ kind: 'personal', id: 'user' }, 'manual') })
+  await page.locator('[data-stage="todo"] [data-task-id="T1"]').waitFor()
+  assert.equal(await page.getByText('Personal task', { exact: true }).count(), 1)
   assert.equal(await page.getByText('Group task', { exact: true }).count(), 0, 'group data must not persist in another scope')
+  assert.equal(await page.getByText('Your own progress markers do not complete shared work or unblock dependencies.').count(), 1)
   await page.setViewportSize({width:1600,height:900})
   const personalRail=page.locator('.bt-board-columns-personal')
   await personalRail.waitFor()
   await page.waitForFunction(()=>{const el=document.querySelector('.bt-board-columns-personal');return el&&el.scrollWidth<=el.clientWidth+1})
   assert.equal(await personalRail.locator('..').locator('.bt-board-rail-controls').isVisible(),false,'column controls are hidden when all personal columns fit')
+  const personalFrom=await page.locator('[data-stage="todo"] [data-task-id="T1"] .bt-board-card-summary').boundingBox()
+  const personalTo=await page.locator('[data-stage="doing"]').boundingBox()
+  assert.ok(personalFrom&&personalTo,'the personal card and destination lane are visible')
+  await page.mouse.move(personalFrom.x+personalFrom.width/2,personalFrom.y+personalFrom.height/2)
+  await page.mouse.down()
+  await page.mouse.move(personalTo.x+personalTo.width/2,personalTo.y+personalTo.height/2,{steps:12})
+  await page.mouse.up()
+  await page.locator('[data-stage="doing"] [data-task-id="T1"]').waitFor()
+  const personalDrag=await page.evaluate(()=>globalThis.fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.type==='personal-progress').at(-1))
+  assert.equal(personalDrag.payload.value.progress,'doing')
+  assert.ok(personalDrag.payload.operationId)
+  assert.equal(await page.evaluate(id=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),personalDrag.payload.operationId),true)
+  await page.locator('[data-stage="doing"] [data-task-id="T1"] .bt-board-card-summary').click()
+  const personalModal=page.locator('.bt-card-modal')
+  await personalModal.waitFor()
+  await personalModal.getByLabel('Move personal task').selectOption('finished')
+  await page.locator('[data-stage="finished"] [data-task-id="T1"]').waitFor()
+  const personalSelect=await page.evaluate(()=>globalThis.fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.type==='personal-progress').at(-1))
+  assert.equal(personalSelect.payload.value.progress,'finished')
+  await page.keyboard.press('Escape')
+  await personalModal.waitFor({state:'detached'})
   await page.setViewportSize({width:1280,height:720})
-  await page.evaluate(() => globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal'))
-  await page.getByText('Personal task', { exact: true }).waitFor()
-  const namedCardTrigger = page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary')
-  await namedCardTrigger.click()
+
+  await page.evaluate(() => { globalThis.resetBoardState(); globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal') })
+  await page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary').click()
   const namedCard = page.locator('.bt-card-modal')
   await namedCard.waitFor()
-  await namedCard.getByRole('button',{name:'Edit card details'}).click()
-  await namedCard.getByLabel('Description',{exact:true}).fill('Release details')
-  await namedCard.getByLabel('Due date').fill('2026-12-01')
-  await namedCard.getByLabel('Labels, one per line').fill('Design\nUrgent')
-  await namedCard.getByLabel('New checklist item').fill('Verify layout')
-  await namedCard.getByRole('button',{name:'Add item'}).click()
-  await namedCard.getByRole('button',{name:'Save changes'}).click()
-  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'))
-  const details=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'))
-  assert.equal(details.payload.value.description,'Release details')
-  assert.equal(details.payload.value.dueDate,'2026-12-01')
-  assert.deepEqual(details.payload.value.labels,['Design','Urgent'])
-  assert.equal(details.payload.value.checklist[0].text,'Verify layout')
-  await namedCard.getByLabel('Add a comment').fill('Personal board comment')
-  await namedCard.getByRole('button',{name:'Post comment'}).click()
-  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment'))
-  const personalComment=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment'))
-  assert.equal(personalComment.payload.value.text,'Personal board comment')
-  assert.match(await namedCard.locator('.bt-board-fact').filter({hasText:'Owner'}).innerText(), /Alice/)
-  assert.match(await namedCard.locator('.bt-board-fact').filter({hasText:'Reviewer'}).innerText(), /Bob/)
+  const description=namedCard.locator('.bt-card-description')
+  await description.getByRole('button',{name:/^(Add|Edit)$/}).click()
+  const descriptionInput=description.getByLabel('Description',{exact:true})
+  await descriptionInput.waitFor()
+  assert.equal(await description.getByRole('button',{name:'Save'}).isDisabled(),true,'Save stays disabled while the draft matches')
+  await descriptionInput.fill('Release details')
+  assert.equal(await description.getByRole('button',{name:'Save'}).isEnabled(),true,'a changed description enables Save')
+  await description.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.description==='Release details'))
+  await description.getByText('Release details',{exact:true}).waitFor()
+  const descriptionCommand=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.description))
+  assert.equal(descriptionCommand.payload.value.description,'Release details')
+
+  const labels=namedCard.locator('.bt-card-labels')
+  await labels.getByRole('button',{name:'Edit'}).click()
+  await labels.getByLabel('Add a label').fill('Design')
+  await labels.getByRole('button',{name:'Add',exact:true}).click()
+  await labels.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&Array.isArray(x.payload.value.labels)&&x.payload.value.labels.includes('Design')))
+  const labelsCommand=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&Array.isArray(x.payload.value.labels)))
+  assert.deepEqual(labelsCommand.payload.value.labels,['Design'])
+  await labels.getByText('Design',{exact:true}).waitFor()
+
+  const due=namedCard.locator('.bt-card-due-editor')
+  await due.getByLabel('Due date',{exact:true}).fill('2026-12-01')
+  await due.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.dueDate==='2026-12-01'))
+  const dueCommand=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.dueDate==='2026-12-01'))
+  assert.equal(dueCommand.payload.value.dueComplete,false)
+  await page.waitForFunction(()=>document.querySelector('.bt-card-due-editor input[type=date]')?.value==='2026-12-01')
+  assert.equal(await due.getByLabel('Due date',{exact:true}).inputValue(),'2026-12-01')
+
+  const checklist=namedCard.locator('.bt-card-checklist')
+  await checklist.getByLabel('New checklist item').fill('Verify layout')
+  await checklist.getByRole('button',{name:'Add item'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.checklist?.[0]?.text==='Verify layout'))
+  const addedItem=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.checklist?.[0]?.text==='Verify layout'))
+  const itemId=addedItem.payload.value.checklist[0].id
+  assert.ok(itemId)
+  await checklist.getByText('Verify layout',{exact:true}).waitFor()
+  await checklist.getByRole('button',{name:'Edit checklist item'}).click()
+  await checklist.getByLabel('Edit checklist item').fill('Verify layout twice')
+  await checklist.locator('.bt-card-checklist-edit').getByRole('button',{name:'Save'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.checklist?.[0]?.text==='Verify layout twice'))
+  const editedItem=await page.evaluate(()=>globalThis.fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.type==='card-details').at(-1))
+  assert.equal(editedItem.payload.value.checklist[0].id,itemId,'editing keeps the checklist item ID')
+  await checklist.getByText('Verify layout twice',{exact:true}).waitFor()
+
   await page.keyboard.press('Escape')
   await namedCard.waitFor({state:'detached'})
-  await page.locator('[aria-label="Preparing"]').getByRole('button', { name: 'Create task' }).click()
-  assert.equal(await page.getByLabel('Owner ID',{exact:true}).inputValue(),'a','a personal Bot board defaults new work to its owner')
-  await page.getByLabel('Title', { exact: true }).fill('New task')
-  await page.getByLabel('Owner ID', { exact: true }).selectOption('a')
-  await page.getByLabel('Independent reviewer ID', { exact: true }).selectOption('b')
-  await page.getByLabel('Acceptance criteria').fill('Review evidence')
-  await page.getByRole('button', { name: 'Submit proposal' }).click()
-  await page.locator('[aria-label="Preparing"]').getByRole('button', { name: 'Create task' }).waitFor()
-  const proposal = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'board-command' && x.payload.type === 'create' && x.payload.value.title==='New task'))
-  assert.equal(proposal.payload.type, 'create')
-  assert.equal(proposal.payload.value.owner, 'a')
-  assert.equal(proposal.payload.value.reviewer, 'b')
-  assert.deepEqual(proposal.payload.value.dependencies, [], 'personal tasks do not inherit a group dependency')
-  assert.equal(await page.evaluate(id => globalThis.fixture.calls.some(x => x.endpoint === 'board-operation' && x.payload.operationId === id), proposal.payload.operationId), true)
+
+  const personalPreparing=page.locator('[aria-label="Preparing"]')
+  await personalPreparing.getByRole('button',{name:'Add card',exact:true}).click()
+  const personalQuick=personalPreparing.locator('.bt-board-quick-add')
+  await personalQuick.getByLabel('Card title').fill('Personal quick card')
+  await personalQuick.getByRole('button',{name:'Add card'}).click()
+  const personalCreate=page.locator('.bt-create-modal')
+  await personalCreate.waitFor()
+  assert.equal(await personalCreate.getByLabel('Title').inputValue(),'Personal quick card')
+  assert.equal(await personalCreate.getByLabel('Owner').inputValue(),'a')
+  const reviewerOptions=await personalCreate.getByLabel('Independent reviewer').evaluate(select=>[...select.options].map(option=>option.value))
+  assert.ok(reviewerOptions.includes('b'),'a personal-board owner can choose an independent reviewer')
+  assert.equal(reviewerOptions.includes('a'),false,'the current owner is not offered as reviewer')
+  await personalCreate.getByLabel('Independent reviewer').selectOption('b')
+  const personalCreateButton=personalCreate.getByRole('button',{name:'Create card'})
+  assert.equal(await personalCreateButton.isDisabled(),true,'Create card waits for the required acceptance criteria')
+  await personalCreate.getByLabel('Acceptance criteria').fill('Independent review evidence')
+  assert.equal(await personalCreateButton.isEnabled(),true,'Create card enables once the reviewer and acceptance are set')
+  await personalCreate.getByRole('button',{name:'Cancel'}).click()
+  await personalCreate.waitFor({state:'detached'})
 
   const shared = page.locator('article').filter({hasText:'Shared dependency'})
   assert.match(await shared.innerText(), /Shared task · read only/)
@@ -500,217 +694,202 @@ try {
   assert.equal(await sharedModal.getByRole('button', {name:'Share with group'}).count(), 0)
   await page.keyboard.press('Escape')
   await sharedModal.waitFor({state:'detached'})
-  await namedCardTrigger.click()
+  await page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary').click()
   await namedCard.waitFor()
-  await page.getByRole('button', {name:'Share with group'}).click()
-  await page.getByLabel('Target group', {exact:true}).selectOption('g2')
-  await page.getByRole('button', {name:'Share',exact:true}).click()
-  await page.getByRole('button', {name:'Share with group'}).waitFor()
+  const shares=namedCard.locator('.bt-card-shares')
+  const shareRevision=await page.evaluate(()=>globalThis.fixture.revision)
+  await shares.getByRole('button', {name:'Share with group'}).click()
+  await shares.getByLabel('Target group').selectOption('g2')
+  await shares.getByRole('button', {name:'Share',exact:true}).click()
+  await shares.getByRole('button', {name:'Share with group'}).waitFor()
   const share = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint==='board-command' && x.payload.type==='share'))
   assert.deepEqual(share.payload.value, {targetRoomId:'g2',fields:['status']})
-  assert.equal(share.payload.expectedRevision, 1)
-  await page.getByRole('button', {name:'Share with group'}).click()
-  await page.getByLabel('Target group', {exact:true}).selectOption('g2')
-  await page.getByLabel('Share title too').check()
-  await page.getByRole('button', {name:'Share',exact:true}).click()
-  await page.getByRole('button', {name:'Share with group'}).waitFor()
+  assert.equal(share.payload.expectedRevision, shareRevision)
+  await page.waitForFunction(()=>document.querySelectorAll('.bt-card-shares .bt-card-share-row').length===2)
+  assert.equal(await shares.getByText('Design group',{exact:true}).count(),2,'the committed share appears beside the existing grant')
+  await shares.getByRole('button', {name:'Share with group'}).click()
+  await shares.getByLabel('Target group').selectOption('g2')
+  await shares.getByLabel('Share title too').check()
+  await shares.getByRole('button', {name:'Share',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.type==='share').length===2)
   const titled = await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint==='board-command' && x.payload.type==='share')[1])
   assert.deepEqual(titled.payload.value.fields, ['status','title'])
-  await page.getByRole('button', {name:'Revoke share'}).click()
+  await shares.getByRole('button', {name:'Share with group'}).waitFor()
+  await shares.getByRole('button', {name:'Revoke share'}).first().click()
   await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint==='board-command' && x.payload.type==='unshare'))
   const unshare = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint==='board-command' && x.payload.type==='unshare'))
   assert.equal(unshare.payload.value.shareId, 'grant-old')
   await page.evaluate(() => { globalThis.fixture.mode='lost' })
-  await page.getByRole('button', {name:'Share with group'}).click()
-  await page.getByLabel('Target group', {exact:true}).selectOption('g2')
-  await page.getByRole('button', {name:'Share',exact:true}).click()
+  await shares.getByRole('button', {name:'Share with group'}).click()
+  await shares.getByLabel('Target group').selectOption('g2')
+  await shares.getByRole('button', {name:'Share',exact:true}).click()
   await namedCard.getByText('An action needs confirmation.').waitFor()
   const shareCount = await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint==='board-command' && x.payload.type==='share').length)
   await namedCard.getByRole('button', {name:'Check action'}).click()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint==='board-command' && x.payload.type==='share').length), shareCount, 'checking an uncertain share must not resend it')
   await namedCard.getByRole('button', {name:'Safely cancel pending request'}).click()
   await namedCard.getByText('An action needs confirmation.').waitFor({state:'hidden'})
-  await page.locator('form').filter({hasText:'Target group'}).getByRole('button', {name:'Cancel'}).click()
+  await shares.getByRole('button', {name:'Cancel'}).click()
   await page.evaluate(() => { globalThis.fixture.mode='normal' })
 
-  await page.evaluate(() => { globalThis.fixture.mode='conflict'; globalThis.fixture.revision=1 })
-  await page.getByRole('button', { name: 'Edit task' }).click()
-  await page.locator('.bt-board-actions').getByLabel('Title', { exact: true }).fill('Unsaved draft')
-  await page.getByRole('button', { name: 'Save changes' }).click()
-  await page.getByText('Task changed. Reload its current values before saving.').waitFor()
-  assert.equal(await page.locator('.bt-board-actions').getByLabel('Title', { exact: true }).inputValue(), 'Unsaved draft')
-  assert.equal(await page.getByRole('button', { name: 'Save changes' }).isDisabled(), true, 'conflict must not silently overwrite revision 2')
+  await namedCard.locator('.bt-card-more > summary').click()
+  const beforeRevision=await page.evaluate(()=>globalThis.fixture.revision)
+  await page.evaluate(() => { globalThis.fixture.mode='conflict' })
+  await namedCard.getByRole('button', { name: 'Edit task' }).click()
+  const editForm=namedCard.locator('.bt-card-more .bt-card-form')
+  await editForm.getByLabel('Title', { exact: true }).fill('Unsaved draft')
+  await editForm.getByRole('button', { name: 'Save changes' }).click()
+  await approveChange(page, namedCard)
+  await namedCard.getByText('Task changed. Reload its current values before saving.').waitFor()
+  assert.equal(await editForm.getByLabel('Title', { exact: true }).inputValue(), 'Unsaved draft')
+  assert.equal(await editForm.getByRole('button', { name: 'Save changes' }).isDisabled(), true, 'conflict must not silently overwrite revision 2')
   const edit = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'board-command' && x.payload.type === 'edit'))
-  assert.equal(edit.payload.expectedRevision, 1)
+  assert.equal(edit.payload.expectedRevision, beforeRevision)
 
+  await editForm.getByRole('button',{name:'Cancel'}).click()
   await page.evaluate(() => { globalThis.fixture.mode='normal' })
   const png = Buffer.from(await page.evaluate(() => globalThis.fixture.images.png.data), 'base64')
-  await page.getByText('Non-interlaced PNG and JPEG are supported.').waitFor()
-  await page.locator('.bt-board-upload input[type=file]').setInputFiles([{ name:'bad.txt',mimeType:'text/plain',buffer:Buffer.from('not an image') }])
-  await page.getByText('Choose non-interlaced PNG or JPEG: up to 20 per task, 10 per batch, 5 MiB each and 20 MiB per batch.').waitFor()
-  assert.equal(await page.locator('.bt-board-upload img').count(), 0, 'an unsupported type must not enter the upload queue')
-  await page.locator('.bt-board-upload input[type=file]').setInputFiles(Array.from({length:11}, (_, i) => ({ name:`image-${i}.png`, mimeType:'image/png', buffer:png })))
-  assert.equal(await page.locator('.bt-board-upload img').count(), 0, 'a batch of 11 must not enter the upload queue')
+  const attachments=namedCard.locator('.bt-card-attachments')
+  await attachments.getByText('PNG/JPEG, PDF, ZIP, text, Markdown and JSON are supported.').waitFor()
+  const fileInput=attachments.locator('input[type=file]')
+  await fileInput.setInputFiles([{ name:'bad.exe',mimeType:'application/x-msdownload',buffer:Buffer.from('not allowed') }])
+  await attachments.getByText('Choose PNG/JPEG, PDF, ZIP, plain text, Markdown or JSON: up to 20 per task, 10 per batch, 5 MiB each and 20 MiB per batch.').waitFor()
+  assert.equal(await attachments.locator('.bt-attachment-queue img').count(), 0, 'an unsupported type must not enter the upload queue')
+  await fileInput.setInputFiles(Array.from({length:11}, (_, i) => ({ name:'image-'+i+'.png', mimeType:'image/png', buffer:png })))
+  assert.equal(await attachments.locator('.bt-attachment-queue img').count(), 0, 'a batch of 11 must not enter the upload queue')
   await page.evaluate(() => { globalThis.fixture.mode='invalid-image' })
-  await page.locator('.bt-board-upload input[type=file]').setInputFiles([{ name:'rejected.png',mimeType:'image/png',buffer:png }])
-  await page.getByRole('button', {name:'Upload images'}).click()
+  await fileInput.setInputFiles([{ name:'rejected.png',mimeType:'image/png',buffer:png }])
+  await attachments.getByRole('button', {name:'Upload files'}).click()
   await namedCard.getByText('Interlaced PNG is not supported').waitFor()
   assert.equal(await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a')), null, 'a persisted rejected receipt settles the operation')
-  await page.locator('.bt-board-upload').getByRole('button', {name:'Remove image'}).click()
+  await attachments.locator('.bt-attachment-queue').getByRole('button', {name:'Remove attachment'}).click()
   await page.evaluate(() => { globalThis.fixture.mode='normal' })
-  await page.locator('.bt-board-upload input[type=file]').setInputFiles([{ name:'one.png',mimeType:'image/png',buffer:png },{ name:'two.png',mimeType:'image/png',buffer:png }])
-  assert.equal(await page.locator('.bt-board-upload img').count(), 2)
-  await page.locator('.bt-board-upload').getByRole('button', { name:'Remove image' }).first().click()
-  assert.equal(await page.locator('.bt-board-upload img').count(), 1)
-  await page.getByRole('button', { name:'Upload images' }).click()
+  await fileInput.setInputFiles([{ name:'one.png',mimeType:'image/png',buffer:png },{ name:'two.png',mimeType:'image/png',buffer:png }])
+  assert.equal(await attachments.locator('.bt-attachment-queue img').count(), 2)
+  await attachments.locator('.bt-attachment-queue').getByRole('button', {name:'Remove attachment'}).first().click()
+  assert.equal(await attachments.locator('.bt-attachment-queue img').count(), 1)
+  await attachments.getByRole('button', {name:'Upload files'}).click()
   await page.waitForFunction(() => globalThis.fixture.calls.some(x => x.endpoint === 'board-upload' && x.payload.images?.[0]?.name === 'two.png'))
   const upload = await page.evaluate(() => globalThis.fixture.calls.find(x => x.endpoint === 'board-upload' && x.payload.images?.[0]?.name === 'two.png'))
   assert.equal(upload.payload.images.length, 1)
   assert.equal(upload.payload.images[0].name, 'two.png')
+  assert.equal(upload.payload.images[0].mediaType, 'image/png')
   assert.ok(upload.payload.images[0].uploadId)
+  assert.ok(upload.payload.images[0].data.length > 0)
   await page.waitForFunction(id => globalThis.fixture.calls.some(x => x.endpoint === 'board-operation' && x.payload.operationId === id), upload.payload.operationId)
+  await attachments.getByText('two.png',{exact:true}).waitFor()
+  const coverTile=attachments.locator('.bt-attachment').filter({hasText:'existing.png'})
+  await coverTile.getByRole('button',{name:'Set as cover'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.coverImageId==='png'))
+  await coverTile.getByRole('button',{name:'Remove cover'}).waitFor()
+  await coverTile.getByRole('button',{name:'Remove cover'}).click()
+  await approveChange(page, namedCard)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-details'&&x.payload.value.coverImageId===null))
+  await coverTile.getByRole('button',{name:'Set as cover'}).waitFor()
 
-  await page.locator('.bt-board-actions').getByRole('button', { name:'Cancel' }).click()
+  const comments=namedCard.locator('.bt-card-comments')
+  await comments.getByLabel('Add a comment').fill('Personal board comment')
+  await comments.getByRole('button',{name:'Post comment'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment'&&x.payload.value.text==='Personal board comment'))
+  const personalComment=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment'))
+  assert.equal(personalComment.payload.value.text,'Personal board comment')
+  const commentItem=comments.locator('.bt-comment').first()
+  await commentItem.waitFor()
+  await commentItem.getByRole('button',{name:'Edit'}).click()
+  await commentItem.getByLabel('Edit comment').fill('Edited board comment')
+  await commentItem.getByRole('button',{name:'Save'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment-edit'))
+  const commentEdit=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment-edit'))
+  assert.equal(commentEdit.payload.value.text,'Edited board comment')
+  assert.ok(commentEdit.payload.value.commentId)
+  const editedComment=comments.locator('.bt-comment').filter({hasText:'Edited board comment'})
+  await editedComment.getByRole('button',{name:'Delete'}).click()
+  await editedComment.getByRole('button',{name:'Confirm delete'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment-delete'))
+  const commentDelete=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='card-comment-delete'))
+  assert.equal(commentDelete.payload.value.commentId,commentEdit.payload.value.commentId)
+  await page.waitForFunction(()=>globalThis.fixture.card.comments.length===0)
+  await comments.getByText('Edited board comment').waitFor({state:'detached'})
+
   await page.keyboard.press('Escape')
   await namedCard.waitFor({state:'detached'})
-  await page.evaluate(() => { globalThis.fixture.mode='lost' })
-  await page.locator('[aria-label="Preparing"]').getByRole('button', { name:'Create task' }).click()
-  await page.getByLabel('Title', { exact:true }).fill('Potentially sent')
-  await page.getByLabel('Owner ID', { exact:true }).selectOption('a')
-  await page.getByLabel('Independent reviewer ID', { exact:true }).selectOption('b')
-  await page.getByLabel('Acceptance criteria').fill('evidence')
-  await page.getByRole('button', { name:'Submit proposal' }).click()
+  await page.evaluate(() => { globalThis.fixture.mode='lost'; globalThis.fixture.calls=[]; globalThis.renderFixture({kind:'room',id:'g1'},'lost') })
+  await page.locator('[aria-label="Preparing"]').getByRole('button', { name:'Add card to Preparing' }).click()
+  const lostCreate=page.locator('.bt-create-modal')
+  await lostCreate.waitFor()
+  await lostCreate.getByLabel('Title').fill('Potentially sent')
+  await lostCreate.getByLabel('Owner').selectOption('a')
+  await lostCreate.getByLabel('Independent reviewer').selectOption('b')
+  await lostCreate.getByLabel('Acceptance criteria').fill('evidence')
+  await lostCreate.getByRole('button', { name:'Create card' }).click()
   await page.getByText('An action needs confirmation.').waitFor()
   const before = await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'board-command').length)
-  await page.getByRole('button', { name:'Check action' }).click()
+  assert.equal(await lostCreate.getByRole('button', { name:'Create card' }).isDisabled(), true, 'a pending action blocks another create')
+  await lostCreate.getByRole('button',{name:'Cancel'}).click()
+  await lostCreate.waitFor({state:'detached'})
+  await page.locator('.bt-board-pending').getByRole('button', { name:'Check action' }).click()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(x => x.endpoint === 'board-command').length), before, 'unknown outcome must not resend')
-  assert.equal(await page.getByRole('button', { name:'Submit proposal' }).isDisabled(), true)
 
-  const originalId = await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a'))
+  const originalId = await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:room:g1'))
   assert.ok(originalId)
   await page.reload()
   await page.addScriptTag({ path:react })
   await page.addScriptTag({ path:reactDom })
   await page.addScriptTag({ content:bundle.outputFiles[0].text })
-  await page.evaluate(() => globalThis.renderFixture({kind:'personal',id:'a'},'lost'))
+  await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'},'lost'))
   await page.getByText('An action needs confirmation.').waitFor()
-  assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(call => call.endpoint==='board-operation' && call.payload.operationId===sessionStorage.getItem('ds-bot:board-pending:personal:a'))), true, 'reopen checks the original operation ID')
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.some(call => call.endpoint==='board-operation' && call.payload.operationId===sessionStorage.getItem('ds-bot:board-pending:room:g1'))), true, 'reopen checks the original operation ID')
   await page.evaluate(() => { globalThis.fixture.mode='cancel-fails' })
   await page.getByRole('button', { name:'Safely cancel pending request' }).click()
   await page.getByText('Cancellation outcome is unknown. Check the original action again.').waitFor()
-  assert.equal(await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a')), originalId, 'failed cancel retains the original operation')
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:room:g1')), originalId, 'failed cancel retains the original operation')
   await page.evaluate(() => { globalThis.fixture.mode='lost' })
   await page.getByRole('button', { name:'Safely cancel pending request' }).click()
   await page.getByText('An action needs confirmation.').waitFor({state:'hidden'})
   assert.equal(await page.evaluate(id => globalThis.fixture.calls.some(call => call.endpoint==='board-operation-cancel' && call.payload.operationId===id), originalId), true)
 
-  await page.evaluate(() => { globalThis.fixture.mode='hang' })
-  await page.locator('[aria-label="Preparing"]').getByRole('button', { name:'Create task' }).click()
-  await page.getByLabel('Title', { exact:true }).fill('First pending')
-  await page.getByLabel('Owner ID', { exact:true }).selectOption('a')
-  await page.getByLabel('Independent reviewer ID', { exact:true }).selectOption('b')
-  await page.getByLabel('Acceptance criteria').fill('Evidence')
-  await page.getByRole('button', { name:'Submit proposal' }).click()
-  await page.getByText('Saving…').waitFor()
-  const firstId = await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a'))
-  await page.getByRole('button', { name:'Safely cancel pending request' }).click()
-  await page.getByText('Saving…').waitFor({state:'hidden'})
-  await page.getByLabel('Title', { exact:true }).fill('Second pending')
-  await page.getByRole('button', { name:'Submit proposal' }).click()
-  await page.getByText('Saving…').waitFor()
-  const secondId = await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a'))
-  assert.notEqual(firstId, secondId)
-  await page.evaluate(id => globalThis.fixture.resolvers[id](), firstId)
-  await page.waitForTimeout(100)
-  assert.equal(await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:personal:a')), secondId, 'late first request must not clear the next pending action')
-  await page.getByRole('button', { name:'Safely cancel pending request' }).click()
-  await page.getByText('Saving…').waitFor({state:'hidden'})
-  await page.evaluate(id => globalThis.fixture.resolvers[id](), secondId)
-
-  await page.evaluate(() => { sessionStorage.clear(); globalThis.fixture.revision=1; globalThis.fixture.progress='todo'; globalThis.renderFixture({kind:'personal',id:'user'},'manual') })
-  await page.locator('[aria-label="To do"] article').getByText('Personal task',{exact:true}).waitFor()
-  await page.getByText('Your own progress markers do not complete shared work or unblock dependencies.').waitFor()
-  const userWorkflow=page.locator('.bt-board-content section[aria-label="Workflow"]')
-  for(const lane of ['Preparing','Waiting','Ready','In progress','Awaiting review','Done'])
-    assert.equal(await userWorkflow.locator(`[aria-label="${lane}"]`).getByRole('button',{name:'Add follow-up'}).count(),1,`the personal board's ${lane} workflow lane can add a personal follow-up`)
-  await page.evaluate(()=>{globalThis.fixture.calls=[]})
-  const userDone=userWorkflow.locator('[aria-label="Done"]')
-  await userDone.getByRole('button',{name:'Add follow-up'}).click()
-  await userDone.getByLabel('Title',{exact:true}).fill('Personal follow-up')
-  await userDone.getByLabel('Independent reviewer ID',{exact:true}).selectOption('b')
-  await userDone.getByLabel('Acceptance criteria').fill('Review result')
-  await userDone.getByRole('button',{name:'Create follow-up'}).click()
-  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Personal follow-up'))
-  const personalFollowup=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Personal follow-up'))
-  assert.equal(personalFollowup.payload.value.personalProgress,'todo')
-  assert.equal(personalFollowup.payload.value.owner,'user')
-  assert.equal(personalFollowup.payload.value.schedule,undefined,'a personal follow-up does not dispatch shared work')
-  await page.getByText('Saving…').waitFor({state:'hidden'})
-  const doingLane = page.locator('.bt-board-columns-personal > [data-stage="doing"]')
-  await doingLane.getByRole('button', {name:'Add task'}).click()
-  await doingLane.getByLabel('Title', {exact:true}).fill('Created in doing')
-  await doingLane.getByLabel('Independent reviewer ID', {exact:true}).selectOption('b')
-  await doingLane.getByLabel('Acceptance criteria').fill('Review result')
-  await doingLane.getByRole('button', {name:'Submit proposal'}).click()
-  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created in doing'))
-  const laneCreate = await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='create'&&x.payload.value.title==='Created in doing'))
-  assert.equal(laneCreate.payload.value.personalProgress, 'doing')
-  assert.equal(laneCreate.payload.value.owner, 'user')
-  await doingLane.getByRole('button', {name:'Add task'}).waitFor()
-  if (process.env.BOARD_SCREENSHOT) { await page.locator('.bt-board-content').evaluate(el=>el.scrollTop=0); await page.screenshot({ path:process.env.BOARD_SCREENSHOT }) }
-  await page.locator('[aria-label="To do"] article .bt-board-card-summary').click()
-  await page.locator('.bt-card-modal').waitFor()
-  await page.getByLabel('Move personal task').focus()
-  await page.keyboard.press('ArrowDown')
-  await page.locator('[aria-label="Doing"] article').getByText('Personal task',{exact:true}).waitFor()
-  const move = await page.evaluate(() => globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='personal-progress'))
-  assert.equal(move.payload.value.progress,'doing')
-  assert.ok(move.payload.operationId)
-  assert.equal(await page.evaluate(id=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'&&x.payload.operationId===id),move.payload.operationId),true)
-  await page.keyboard.press('Escape')
-  await page.locator('.bt-card-modal').waitFor({state:'detached'})
-  const dragFrom=await page.locator('[aria-label="Doing"] article .bt-board-card-summary').boundingBox()
-  const dropAt=await page.locator('[aria-label="Personally finished"]').boundingBox()
-  assert.ok(dragFrom&&dropAt,'the draggable task and destination lane are visible')
-  await page.mouse.move(dragFrom.x+dragFrom.width/2,dragFrom.y+dragFrom.height/2)
-  await page.mouse.down()
-  await page.mouse.move(dropAt.x+dropAt.width/2,dropAt.y+dropAt.height/2,{steps:12})
-  await page.mouse.up()
-  await page.locator('[aria-label="Personally finished"] article').getByText('Personal task',{exact:true}).waitFor()
-  await page.getByLabel('Search tasks').fill('no matching title')
-  assert.equal(await page.getByText('Personal task',{exact:true}).count(),0)
-  await page.getByLabel('Search tasks').fill('')
-  await page.locator('[aria-label="Personally finished"] article').getByText('Personal task',{exact:true}).waitFor()
-
-  await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'},'legacy'))
+  await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'},'legacy',true))
   await page.getByText('Legacy task', {exact:true}).waitFor()
   await page.getByText('Goal card details can be corrected without changing the original task or acceptance record.').waitFor()
-  assert.equal(await page.locator('[aria-label="Not started"]').getByRole('button',{name:'Add follow-up'}).count(),1,'the legacy not-started list can add a follow-up without editing its goal task')
-  assert.equal(await page.locator('[aria-label="Goal marked done"]').getByRole('button',{name:'Add follow-up'}).count(),1,'the legacy completed list can add a follow-up without rewriting its history')
+  assert.equal(await page.locator('[aria-label="Not started"]').getByRole('button',{name:'Add card',exact:true}).count(),1,'the legacy not-started list can add a follow-up without editing its goal task')
+  assert.equal(await page.locator('[aria-label="Goal marked done"]').getByRole('button',{name:'Add card',exact:true}).count(),1,'the legacy completed list can add a follow-up without rewriting its history')
   await page.locator('article').filter({hasText:'Legacy task'}).locator('.bt-board-card-summary').click()
   const legacy = page.locator('.bt-card-modal')
   await legacy.waitFor()
   assert.match(await legacy.innerText(), /Current goal task/)
-  await legacy.getByRole('button',{name:'Edit card details'}).click()
-  await legacy.getByLabel('Description',{exact:true}).fill('Original goal notes')
-  await legacy.getByLabel('Labels, one per line').fill('UX')
-  await legacy.getByRole('button',{name:'Save changes'}).click()
+  const legacyDescription=legacy.locator('.bt-card-description')
+  await legacyDescription.getByRole('button',{name:/^(Add|Edit)$/}).click()
+  await legacyDescription.getByLabel('Description',{exact:true}).fill('Original goal notes')
+  await legacyDescription.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, legacy)
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='goal-card-details'))
   const goalDetails=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='goal-card-details'))
   assert.match(goalDetails.payload.operationId,/^goal:/)
   assert.equal(goalDetails.payload.value.description,'Original goal notes')
+  const legacyLabels=legacy.locator('.bt-card-labels')
+  await legacyLabels.getByRole('button',{name:'Edit'}).click()
+  await legacyLabels.getByLabel('Add a label').fill('UX')
+  await legacyLabels.getByRole('button',{name:'Add',exact:true}).click()
+  await legacyLabels.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, legacy)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='goal-card-details'&&Array.isArray(x.payload.value.labels)))
+  const legacyLabelsCommand=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='goal-card-details'&&Array.isArray(x.payload.value.labels)))
+  assert.deepEqual(legacyLabelsCommand.payload.value.labels,['UX'])
   await legacy.getByLabel('Add a comment').fill('Goal comment')
   await legacy.getByRole('button',{name:'Post comment'}).click()
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='goal-card-comment'))
   const goalComment=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='goal-card-comment'))
   assert.match(goalComment.payload.operationId,/^goal:/)
   assert.equal(goalComment.payload.value.text,'Goal comment')
+  await legacy.locator('.bt-card-more > summary').click()
   await legacy.getByRole('button', {name:'Edit goal task'}).click()
   await legacy.getByLabel('Task description').fill('Updated original work')
   await legacy.getByLabel('Goal task status').selectOption('working')
   await legacy.getByLabel('Goal task note').fill('Work started')
   assert.equal(await legacy.getByLabel('Goal task status').locator('option[value="done"]').count(),0, 'goal task cannot skip review')
   await legacy.getByRole('button',{name:'Save changes'}).click()
+  await approveChange(page, legacy)
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='goal-task-edit'))
   const goalEdit=await page.evaluate(()=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='goal-task-edit'))
   assert.match(goalEdit.payload.operationId,/^goal:/)
@@ -721,13 +900,15 @@ try {
     await page.evaluate(position => { globalThis.fixture.historyTitle=undefined;globalThis.fixture.historyRevision=0;globalThis.fixture.historyAudit=[];globalThis.renderFixture({kind:'room',id:'history-'+position},'history-'+position) }, position)
     await page.locator('article').filter({hasText:'Original historical task'}).locator('.bt-board-card-summary').click()
     const history=page.locator('.bt-card-modal')
-    await history.getByText(label,{exact:true}).waitFor()
+    await history.getByText(label,{exact:true}).first().waitFor()
     await history.getByText('Original task description',{exact:true}).waitFor()
+    await history.locator('.bt-card-more > summary').click()
     assert.equal(await history.getByRole('button',{name:'Edit goal task'}).count(),0,'historical card cannot alter original workflow')
     await history.getByRole('button',{name:'Correct card title'}).click()
     await history.getByLabel('Card display title').fill('Corrected '+position)
     await history.getByLabel('Reason for correction').fill('Clarify accepted work')
     await history.getByRole('button',{name:'Save changes'}).click()
+    await approveChange(page, history)
     await page.waitForFunction(position=>globalThis.fixture.calls.some(x=>x.endpoint==='board-command'&&x.payload.type==='goal-history-title'&&x.payload.expectedPosition===position),position)
     const correction=await page.evaluate(position=>globalThis.fixture.calls.find(x=>x.endpoint==='board-command'&&x.payload.type==='goal-history-title'&&x.payload.expectedPosition===position),position)
     assert.equal(correction.payload.expectedRevision,5)
@@ -752,15 +933,17 @@ try {
 
   // A committed receipt does not make the old board revision safe for another
   // command. A failed refresh must keep the original ID and file input fenced.
-  await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'after-commit-fails',mode:'fail'}]})
+  await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'after-commit-fails',mode:'fail'},{id:'after-commit-fails-retry',mode:'fail'}]})
   const openReceiptCard=async title=>{
     await page.locator('article').filter({hasText:title}).locator('.bt-board-card-summary').click()
     const modal=page.locator('.bt-card-modal');await modal.waitFor();return modal
   }
   let receiptModal=await openReceiptCard('Personal task')
-  await receiptModal.getByRole('button',{name:'Edit card details'}).click()
-  await receiptModal.getByLabel('Description',{exact:true}).fill('Committed but refresh failed')
-  await receiptModal.getByRole('button',{name:'Save changes'}).click()
+  let receiptDescription=receiptModal.locator('.bt-card-description')
+  await receiptDescription.getByRole('button',{name:/^(Add|Edit)$/}).click()
+  await receiptDescription.getByLabel('Description',{exact:true}).fill('Committed but refresh failed')
+  await receiptDescription.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, receiptModal)
   await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('after-commit-fails'))
   await receiptModal.getByText('An action needs confirmation.').waitFor()
   const committedId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
@@ -784,9 +967,11 @@ try {
   // older response cannot release the operation while the latest load is held.
   await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'older-load',mode:'hold'},{id:'newer-load',mode:'hold'}]})
   receiptModal=await openReceiptCard('Personal task')
-  await receiptModal.getByRole('button',{name:'Edit card details'}).click()
-  await receiptModal.getByLabel('Description',{exact:true}).fill('Receipt with competing refresh')
-  await receiptModal.getByRole('button',{name:'Save changes'}).click()
+  receiptDescription=receiptModal.locator('.bt-card-description')
+  await receiptDescription.getByRole('button',{name:/^(Add|Edit)$/}).click()
+  await receiptDescription.getByLabel('Description',{exact:true}).fill('Receipt with competing refresh')
+  await receiptDescription.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, receiptModal)
   await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('older-load'))
   const racingId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   assert.ok(racingId)
@@ -805,9 +990,11 @@ try {
   // or enable its controls, even if both scopes have unsettled receipts.
   await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardPlans['personal:a']=[{id:'scope-a-late',mode:'hold'}]})
   receiptModal=await openReceiptCard('Fresh snapshot task')
-  await receiptModal.getByRole('button',{name:'Edit card details'}).click()
-  await receiptModal.getByLabel('Description',{exact:true}).fill('Old scope late response')
-  await receiptModal.getByRole('button',{name:'Save changes'}).click()
+  receiptDescription=receiptModal.locator('.bt-card-description')
+  await receiptDescription.getByRole('button',{name:/^(Add|Edit)$/}).click()
+  await receiptDescription.getByLabel('Description',{exact:true}).fill('Old scope late response')
+  await receiptDescription.getByRole('button',{name:'Save'}).click()
+  await approveChange(page, receiptModal)
   await page.waitForFunction(()=>globalThis.fixture.boardStarted.includes('scope-a-late'))
   const oldScopeId=await page.evaluate(()=>sessionStorage.getItem('ds-bot:board-pending:personal:a'))
   assert.ok(oldScopeId)
@@ -853,10 +1040,12 @@ try {
     assert.equal(await mobileModal.evaluate(el=>el.contains(document.activeElement)),true,`${key} stays in the card dialog`)
   }
   const closeCard=mobileModal.locator('[data-close-card]')
+  assert.equal(await mobileModal.locator('.bt-card-more').evaluate(el=>el.open),false,'More actions stays closed for the focus-wrap check')
   await closeCard.focus()
   await page.keyboard.press('Shift+Tab')
   assert.equal(await mobileModal.evaluate(el=>el.contains(document.activeElement)),true,'Shift+Tab wraps inside the card dialog')
-  assert.equal(await closeCard.evaluate(el=>el===document.activeElement),false,'Shift+Tab wraps away from first control')
+  assert.equal(await closeCard.evaluate(el=>el===document.activeElement),false,'Shift+Tab leaves the close button with More actions closed')
+  assert.equal(await page.evaluate(()=>{const el=document.activeElement;return !!el&&el.tabIndex>=0&&el.getClientRects().length>0}),true,'Shift+Tab lands on a visible control')
   await page.keyboard.press('Tab')
   assert.equal(await closeCard.evaluate(el=>el===document.activeElement),true,'Tab wraps to the first control')
   await page.keyboard.press('Escape')
@@ -888,6 +1077,224 @@ try {
   await page.evaluate(()=>globalThis.clearFixture())
   await page.locator('.bt-board-backdrop').waitFor({state:'detached'})
   assert.equal(await page.evaluate(()=>globalThis.listenerCount()),0,'host unmount must remove keyboard listener')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(()=>{globalThis.clearFixture();globalThis.initPhase2();globalThis.renderFixture({kind:'room',id:'p2'},'phase2',true)})
+  await page.getByText('Phase task',{exact:true}).waitFor()
+
+  // Type: create with an explicit type, filter by it, then move it between type lanes.
+  const workflowSection=page.locator('.bt-board-section[aria-label="Workflow"]')
+  const preparingLane=workflowSection.locator('[aria-label="Preparing"]')
+  await preparingLane.getByRole('button',{name:'Add card to Preparing'}).click()
+  const typeCreateDialog=page.locator('.bt-create-modal')
+  await typeCreateDialog.waitFor()
+  await typeCreateDialog.getByLabel('Title').fill('Typed card')
+  await typeCreateDialog.getByLabel('Task type').selectOption('test')
+  await typeCreateDialog.getByLabel('Owner').selectOption('a')
+  await typeCreateDialog.getByLabel('Independent reviewer').selectOption('b')
+  await typeCreateDialog.getByLabel('Acceptance criteria').fill('Type evidence')
+  await typeCreateDialog.getByRole('button',{name:'Create card'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Typed card'))
+  const typedCreate=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Typed card'))
+  const typedId=typedCreate.payload.taskId
+  assert.equal(typedCreate.payload.value.type,'test','create sends the selected task type')
+  await typeCreateDialog.waitFor({state:'detached'})
+  const typedCard=page.locator('article.bt-board-card').filter({hasText:'Typed card'})
+  await typedCard.waitFor()
+  assert.equal(await typedCard.locator('.bt-board-type-test').innerText(),'Test','the card shows its type chip')
+
+  await page.getByLabel('Filter by type').selectOption('test')
+  await page.waitForFunction(()=>document.querySelectorAll('article.bt-board-card').length===1)
+  assert.equal(await page.getByText('Phase task',{exact:true}).count(),0,'the type filter hides other types')
+  await typedCard.waitFor()
+  await page.getByLabel('Filter by type').selectOption('')
+
+  await page.locator('.bt-board-views').getByRole('button',{name:'Type',exact:true}).click()
+  const typeSection=page.locator('.bt-board-section[aria-label="Task types"]')
+  await typeSection.waitFor()
+  const testLane=typeSection.locator('.bt-board-lane[aria-label="Test"]')
+  const featureLane=typeSection.locator('.bt-board-lane[aria-label="Feature"]')
+  await testLane.locator('[data-task-id="'+typedId+'"]').waitFor()
+  const typeCommandCount=async()=>page.evaluate(id=>globalThis.fixture.calls.filter(call=>call.endpoint==='board-command'&&call.payload.type==='card-details'&&call.payload.taskId===id).length,typedId)
+  assert.equal(await typeCommandCount(),0,'no type change is sent before the board confirmation')
+  await testLane.locator('[data-task-id="'+typedId+'"]').dragTo(featureLane)
+  const boardConfirm=page.locator('.bt-board-confirm')
+  await boardConfirm.waitFor()
+  assert.match(await boardConfirm.innerText(),/Type[\s\S]*Test[\s\S]*Feature/,'the board confirmation shows the before and after type')
+  await boardConfirm.getByRole('button',{name:'Cancel',exact:true}).click()
+  await boardConfirm.waitFor({state:'detached'})
+  assert.equal(await typeCommandCount(),0,'cancelling the board confirmation sends no command')
+  await testLane.locator('[data-task-id="'+typedId+'"]').waitFor()
+  assert.equal(await featureLane.locator('[data-task-id="'+typedId+'"]').count(),0,'cancelling leaves the card in its original type lane')
+
+  await testLane.locator('[data-task-id="'+typedId+'"]').dragTo(featureLane)
+  await boardConfirm.waitFor()
+  await boardConfirm.getByRole('button',{name:'Confirm',exact:true}).click()
+  await boardConfirm.waitFor({state:'detached'})
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='card-details'&&call.payload.taskId===id&&call.payload.value.type==='feature'),typedId)
+  const typeCommand=await page.evaluate(id=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='card-details'&&call.payload.taskId===id&&call.payload.value.type==='feature'),typedId)
+  assert.equal(typeCommand.payload.value.type,'feature')
+  await featureLane.locator('[data-task-id="'+typedId+'"]').waitFor()
+
+  // The card Type editor is the confirmation path for a type change.
+  await featureLane.locator('[data-task-id="'+typedId+'"] .bt-board-card-summary').click()
+  const typedModal=page.locator('.bt-card-modal')
+  await typedModal.waitFor()
+  await typedModal.getByLabel('Task type').selectOption('bugfix')
+  await approveChange(page,typedModal)
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='card-details'&&call.payload.taskId===id&&call.payload.value.type==='bugfix'),typedId)
+  assert.equal(await typedModal.getByLabel('Task type').inputValue(),'bugfix')
+  await page.keyboard.press('Escape')
+  await typedModal.waitFor({state:'detached'})
+  await typeSection.locator('.bt-board-lane[aria-label="Bugfix"] [data-task-id="'+typedId+'"]').waitFor()
+
+  await page.locator('.bt-board-views').getByRole('button',{name:'Status',exact:true}).click()
+  await page.locator('.bt-board-release-bar').waitFor()
+
+  // Draft: create into Draft, then submit, cancel and restore from the detail actions.
+  const draftLane=workflowSection.locator('[aria-label="Draft"]')
+  await draftLane.getByRole('button',{name:'Add card',exact:true}).click()
+  const draftQuick=draftLane.locator('.bt-board-quick-add')
+  await draftQuick.getByLabel('Card title').fill('Draft card')
+  await draftQuick.getByRole('button',{name:'Add card'}).click()
+  const draftDialog=page.locator('.bt-create-modal')
+  await draftDialog.waitFor()
+  assert.equal(await draftDialog.getByLabel('Save as draft').isChecked(),true,'the Draft lane defaults to Save as draft')
+  await draftDialog.getByLabel('Owner').selectOption('a')
+  await draftDialog.getByLabel('Independent reviewer').selectOption('b')
+  await draftDialog.getByLabel('Acceptance criteria').fill('Draft evidence')
+  await draftDialog.getByRole('button',{name:'Save as draft'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Draft card'))
+  const draftCreate=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Draft card'))
+  const draftId=draftCreate.payload.taskId
+  assert.equal(draftCreate.payload.value.draft,true,'Draft lane creation sends draft:true')
+  await draftDialog.waitFor({state:'detached'})
+  await draftLane.locator('[data-task-id="'+draftId+'"]').waitFor()
+
+  await draftLane.locator('[data-task-id="'+draftId+'"] .bt-board-card-summary').click()
+  const draftModal=page.locator('.bt-card-modal')
+  await draftModal.waitFor()
+  await draftModal.getByText('Draft cards are not scheduled.').waitFor()
+  await draftModal.getByRole('button',{name:'Submit card'}).click()
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='submit'&&call.payload.taskId===id),draftId)
+  await workflowSection.locator('[aria-label="Preparing"] [data-task-id="'+draftId+'"]').waitFor()
+  await draftModal.getByRole('button',{name:'Cancel card'}).click()
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='cancel'&&call.payload.taskId===id),draftId)
+  await workflowSection.locator('[aria-label="Cancelled"] [data-task-id="'+draftId+'"]').waitFor()
+  await draftModal.getByText('Cancelled cards are not scheduled and can be restored.').waitFor()
+  await draftModal.getByRole('button',{name:'Restore card'}).click()
+  await page.waitForFunction(id=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='restore'&&call.payload.taskId===id),draftId)
+  await workflowSection.locator('[aria-label="Preparing"] [data-task-id="'+draftId+'"]').waitFor()
+  await page.keyboard.press('Escape')
+  await draftModal.waitFor({state:'detached'})
+  await draftLane.getByRole('button',{name:'Add card',exact:true}).click()
+  const quickDraft=draftLane.locator('.bt-board-quick-add')
+  await quickDraft.getByLabel('Card title').fill('Quick draft')
+  await quickDraft.getByRole('button',{name:'Add card'}).click()
+  const quickDraftDialog=page.locator('.bt-create-modal')
+  await quickDraftDialog.waitFor()
+  await quickDraftDialog.getByRole('button',{name:'Save as draft'}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Quick draft'))
+  const quickDraftCreate=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Quick draft'))
+  assert.equal(quickDraftCreate.payload.value.owner,'a','a title-only draft gets an owner')
+  assert.equal(quickDraftCreate.payload.value.reviewer,'b','a title-only draft gets an independent reviewer')
+  assert.equal(quickDraftCreate.payload.value.acceptance,'To be defined.','a title-only draft gets placeholder acceptance')
+  await quickDraftDialog.waitFor({state:'detached'})
+
+  // Releases: two releases, assignment both ways, then queue, start and cancel.
+  const releaseBar=page.locator('.bt-board-release-bar')
+  await releaseBar.waitFor()
+  assert.equal(await releaseBar.locator('.bt-board-release-chip').count(),2,'the release bar shows both releases')
+  assert.match(await releaseBar.locator('.bt-board-release-chip').first().innerText(),/1\.0[\s\S]*0\/0/)
+  assert.match(await releaseBar.locator('.bt-board-release-chip').first().getAttribute('aria-label'),/Release one[\s\S]*Draft/)
+  assert.match(await releaseBar.locator('.bt-board-release-chip').nth(1).innerText(),/2\.0[\s\S]*0\/0/)
+  assert.match(await releaseBar.locator('.bt-board-release-chip').nth(1).getAttribute('aria-label'),/Release two[\s\S]*Queued/)
+  await releaseBar.locator('.bt-board-release-chip').first().click()
+  const releaseSection=page.locator('.bt-board-section[aria-label="Releases"]')
+  await releaseSection.waitFor()
+  assert.equal(await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).getAttribute('aria-pressed'),'true','the release chip opens the Release view')
+  await page.locator('.bt-board-views').getByRole('button',{name:'Status',exact:true}).click()
+  await releaseBar.waitFor()
+  await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
+  await releaseSection.waitFor()
+  const unassignedLane=releaseSection.locator('[data-kind="release"][data-stage="unassigned"]')
+  const releaseOneLane=releaseSection.locator('[data-release-id="rel-1"]')
+  const releaseTwoLane=releaseSection.locator('[data-release-id="rel-2"]')
+  assert.equal(await unassignedLane.count(),1,'the release view includes the Unassigned lane')
+  assert.equal(await releaseOneLane.count(),1,'the release view includes the first release lane')
+  assert.equal(await releaseTwoLane.count(),1,'the release view includes the second release lane')
+  await unassignedLane.locator('[data-task-id="T1"]').waitFor()
+  await unassignedLane.locator('[data-task-id="T1"]').dragTo(releaseOneLane)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-release-assign'))
+  const assign=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-release-assign'))
+  assert.equal(assign.payload.releaseId,'rel-1')
+  assert.equal(assign.payload.taskId,'T1')
+  assert.equal(assign.payload.afterId,null)
+  assert.equal(assign.payload.expectedReleaseRevision,1)
+  assert.equal(assign.payload.expectedTaskRevision,1)
+  await releaseOneLane.locator('[data-task-id="T1"]').waitFor()
+  assert.equal(await releaseOneLane.locator('.bt-board-lane-title .bt-board-count').innerText(),'1','the release lane count follows the assignment')
+  assert.match(await releaseOneLane.locator('.bt-board-release-progress').innerText(),/0\/1 done/)
+  await releaseOneLane.locator('[data-task-id="T1"]').dragTo(unassignedLane)
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-release-remove'))
+  const remove=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-release-remove'))
+  assert.equal(remove.payload.releaseId,'rel-1')
+  assert.equal(remove.payload.taskId,'T1')
+  assert.equal(remove.payload.expectedReleaseRevision,2)
+  assert.equal(remove.payload.expectedTaskRevision,2)
+  await unassignedLane.locator('[data-task-id="T1"]').waitFor()
+
+  const queueRevision=await page.evaluate(()=>globalThis.fixture.releases.find(release=>release.id==='rel-1').revision)
+  await releaseOneLane.getByRole('button',{name:'Queue',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-release-queue'))
+  const queue=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-release-queue'))
+  assert.equal(queue.payload.releaseId,'rel-1')
+  assert.equal(queue.payload.expectedRevision,queueRevision)
+  await releaseOneLane.getByRole('button',{name:'Start',exact:true}).waitFor()
+  const startRevision=await page.evaluate(()=>globalThis.fixture.releases.find(release=>release.id==='rel-1').revision)
+  await releaseOneLane.getByRole('button',{name:'Start',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-release-start'))
+  const start=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-release-start'))
+  assert.equal(start.payload.releaseId,'rel-1')
+  assert.equal(start.payload.expectedRevision,startRevision)
+  const cancelRevision=await page.evaluate(()=>globalThis.fixture.releases.find(release=>release.id==='rel-1').revision)
+  await releaseOneLane.locator('.bt-board-release-menu > summary').click()
+  await releaseOneLane.getByRole('button',{name:'Cancel release',exact:true}).click()
+  await page.locator('.bt-board-confirm').waitFor()
+  await page.locator('.bt-board-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-release-cancel'))
+  const cancelRelease=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-release-cancel'))
+  assert.equal(cancelRelease.payload.releaseId,'rel-1')
+  assert.equal(cancelRelease.payload.expectedRevision,cancelRevision)
+  assert.match(await releaseOneLane.innerText(),/Cancelled/)
+  await page.locator('.bt-board-views').getByRole('button',{name:'Status',exact:true}).click()
+  assert.match(await releaseBar.locator('.bt-board-release-chip').first().getAttribute('aria-label'),/Cancelled/)
+
+  // Proposals: pending changes show before/after rows and both decisions hit the endpoint.
+  const changesButton=page.locator('.bt-board-changes')
+  assert.match(await changesButton.innerText(),/Changes[\s\S]*1/)
+  await changesButton.click()
+  const proposalPanel=page.locator('.bt-board-proposals')
+  await proposalPanel.waitFor()
+  assert.equal(await proposalPanel.locator('.bt-board-proposal').count(),1)
+  const confirmProposal=proposalPanel.locator('.bt-board-proposal').filter({hasText:'Confirm change'})
+  assert.match(await confirmProposal.locator('.bt-board-proposal-diff').innerText(),/Title[\s\S]*Phase task[\s\S]*Phase task renamed/)
+  await confirmProposal.getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-proposal-decide'&&call.payload.proposalId==='p1'))
+  const confirmDecision=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-proposal-decide'&&call.payload.proposalId==='p1'))
+  assert.equal(confirmDecision.payload.decision,'confirm')
+  assert.equal(confirmDecision.payload.expectedRevision,1)
+  await confirmProposal.waitFor({state:'detached'})
+  const rejectProposal=proposalPanel.locator('.bt-board-proposal').filter({hasText:'Reject change'})
+  await rejectProposal.waitFor()
+  assert.match(await rejectProposal.locator('.bt-board-proposal-diff').innerText(),/Type[\s\S]*Bugfix[\s\S]*Test/)
+  await rejectProposal.getByRole('button',{name:'Reject',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-proposal-decide'&&call.payload.proposalId==='p2'))
+  const rejectDecision=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-proposal-decide'&&call.payload.proposalId==='p2'))
+  assert.equal(rejectDecision.payload.decision,'reject')
+  assert.equal(rejectDecision.payload.expectedRevision,1)
+  await rejectProposal.waitFor({state:'detached'})
+  assert.equal(await proposalPanel.locator('.bt-board-proposal').count(),0)
+
   assert.deepEqual(errors, [])
-  console.log('PASS board images, legacy cards, explicit cancellation, late response, reopen, scoped rendering and conflicts')
-} finally { await browser.close() }
+  console.log('PASS ' + assertions + ' assertions: board images, legacy cards, description/labels/due/checklist/comments, attachments and covers, quick add, personal progress, group scheduling, sharing, explicit cancellation, late response, reopen, scoped rendering and conflicts, task types, draft/cancelled, releases and proposals')
+} finally { console.log('ASSERTIONS executed=' + assertions + ' failed=' + assertionFailures); await browser.close() }

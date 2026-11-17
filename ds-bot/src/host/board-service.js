@@ -1,4 +1,4 @@
-import { mkdirSync, lstatSync } from 'node:fs'
+import { mkdirSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads'
 import { boardRegistrationReference, openTaskStore } from './task-store.mjs'
 import { createBoardApi } from './board-api.js'
 import { readBoardImage } from './board-images.js'
+import { buildReleaseReport, createReleaseGroup, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isDeepStrictEqual } from 'node:util'
 import { installHostWorkflow } from './host-workflow.mjs'
@@ -23,7 +24,7 @@ const principal = Object.freeze({ kind: 'user', id: 'user' })
 const fail = (message, code = 'bot/invalid') => ({ ok: false, error: { code, message, details: {} } })
 const ok = value => ({ ok: true, value })
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } })
-const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid card details', 'invalid card comment', 'card comment limit reached', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress', 'authority evidence unverified', 'task authority unavailable', 'task is not schedulable', 'task action unavailable'])
+const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid card details', 'invalid card comment', 'unknown card comment', 'card comment limit reached', 'invalid reorder', 'reorder target unavailable', 'cards must be in the same lane', 'invalid position', 'invalid position order', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress', 'authority evidence unverified', 'task authority unavailable', 'task is not schedulable', 'task is not scheduled', 'finish or cancel active work before archiving', 'remove the card from its release before archiving', 'task action unavailable', 'invalid state', 'invalid draft state', 'invalid cancellation reason', 'task action unresolved', 'invalid release', 'release id exists', 'invalid release position', 'invalid release update', 'empty release update', 'release revision conflict', 'release is not editable', 'release is not startable', 'release is not queueable', 'release is not cancellable', 'release has active work', 'invalid release queue', 'release has no items', 'release unavailable', 'release task unavailable', 'another release is running in this scope', 'invalid release assignment', 'invalid release removal', 'invalid proposal', 'invalid proposal kind', 'invalid proposal status', 'proposal id exists', 'proposal limit reached', 'proposal revision conflict', 'proposal decision is not authorized', 'Proposal is unavailable', 'Task changed after this proposal was made', 'Invalid proposal decision'])
 const rejected = error => error?.code === 'bot/invalid' || (!error?.code && typeof error?.message === 'string' && (rejectedMessages.has(error.message) || ['change proposal unavailable','change proposal already exists','change proposal is immutable'].includes(error.message) || /^invalid (task id|operation id|actor|owner|reviewer|scope|title|acceptance|attachment id|image id|revision)$/.test(error.message)))
 const requestKey = (endpoint, payload) => {
   if (endpoint !== 'board-upload' || !Array.isArray(payload?.images)) return { endpoint, payload }
@@ -46,7 +47,7 @@ export function install(rt) {
   const { ctx } = rt
   const active = new Set(), readers = new Set(), workers = new Set(), imageWaiters = [], uploadWaiters = []
   let imageReads = 0, uploads = 0
-  let closing = false, closePromise, instance
+  let closing = false, closePromise, instance, releaseTimer
   const writable = () => {
     if (closing || rt.stopping) throw new Error('Board service is closing')
     if (rt.readOnly() !== undefined) throw new Error('Board is read-only')
@@ -56,6 +57,83 @@ export function install(rt) {
     if (closing || rt.stopping) return Promise.reject(new Error('Board service is closing'))
     const pending = (async () => { await rt.load(); if (closing || rt.stopping) throw new Error('Board service is closing'); return fn() })()
     active.add(pending); return pending.finally(() => active.delete(pending))
+  }
+  const releaseReport = release => {
+    const items = service().store.list().filter(task => task.releaseId === release.id)
+    const { markdown, html } = buildReleaseReport(release, items, rt.state?.bots ?? {})
+    const directory = join(service().root, 'release-reports', release.id)
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const markdownPath = join(directory, 'summary.md'), htmlPath = join(directory, 'summary.html')
+    writeFileSync(markdownPath, markdown, { mode: 0o600 })
+    writeFileSync(htmlPath, html, { mode: 0o600 })
+    return { markdownPath, htmlPath, generatedAt: Date.now() }
+  }
+  const applyReleasePlan = (scope, release, requirement, principal, prefix = 'plan') => {
+    if (!['draft','queued'].includes(release.status)) throw new Error('Release is not editable')
+    if (!release.roles || !release.projectManagerId) throw new Error('Release team is not configured')
+    const text = typeof requirement === 'string' ? requirement.trim().slice(0, 2000) : ''
+    if (!text) throw new Error('Describe the requirement before planning')
+    const plan = lifecyclePlan({ release, requirement:text, roles:release.roles })
+    if (!plan.length) throw new Error('No lifecycle tasks could be planned for this team')
+    const ids = new Map(plan.map(item => [item.key, `${prefix}-${release.id}-${item.key}`]))
+    const created = []
+    for (const item of plan) {
+      const taskId = ids.get(item.key)
+      if (!service().store.get(taskId)) {
+        const value = { title:item.title, owner:item.owner, reviewer:item.reviewer, acceptance:item.acceptance, type:item.type,
+          dependencies:item.dependencies.map(key => ids.get(key)).filter(Boolean), description:`Release requirement: ${text}` }
+        created.push(service().api.create(scope, principal, { operationId:`${prefix}:${release.id}:${item.key}`, taskId, ...value }))
+      }
+      const current = service().store.get(taskId)
+      if (current && current.releaseId !== release.id) {
+        const latestRelease = service().store.getRelease(release.id)
+        service().store.assignRelease({ operationId:`${prefix}-assign:${release.id}:${item.key}`, actor:'user', releaseId:release.id,
+          expectedReleaseRevision:latestRelease.revision, taskId, expectedTaskRevision:current.revision })
+      }
+    }
+    return { releaseId:release.id, tasks:plan.map(item => ({ key:item.key, taskId:ids.get(item.key), title:item.title })) }
+  }
+  const notifyRelease = async (release, text, note = 'release status') => {
+    if (!release?.groupId) return
+    const room = rt.roomOf?.(release.groupId), pm = rt.botOf?.(release.projectManagerId)
+    try {
+      if (room && pm && typeof rt.postToRoom === 'function') await rt.postToRoom(room, pm, text, { quiet:true })
+      if (typeof rt.deliver === 'function' && typeof rt.chatOf === 'function' && pm) {
+        await rt.deliver({ toId:pm.id, fromName:'You', sessionId:rt.chatOf(pm.id), role:'request', note, text })
+      }
+    } catch (error) { rt.warn?.('ds-bot: release status not delivered: %s', error) }
+  }
+  const notifyBoardChange = async (taskId, change) => {
+    if (!taskId) return
+    const task = service().store.get(taskId)
+    if (!task?.releaseId) return
+    const release = service().store.getRelease(task.releaseId)
+    if (!release) return
+    const value = change?.value
+    const summary = value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.keys(value).map(key => `${key}=${JSON.stringify(value[key]).slice(0, 300)}`).join(', ')
+      : ''
+    await notifyRelease(release, `Board change on "${task.title}" (${task.id}): ${change?.type ?? 'update'}${summary ? ' · ' + summary : ''}. Current task revision ${task.revision}, status ${task.status}. Inspect the card and adjust the affected work or reassign it.`, 'board change')
+  }
+  const checkAndReportRelease = async (releaseId, operationId) => {
+    const release = service().store.getRelease(releaseId)
+    if (!release || release.status !== 'running') return release
+    const result = service().store.checkRelease({ operationId, actor:'user', releaseId, expectedRevision:release.revision })
+    if (result.status === 'published') {
+      const report = releaseReport(result)
+      service().store.setReleaseReport({ releaseId, report })
+      await notifyRelease(result, `Release ${result.name} ${result.version ?? ''} 已完成全部发布项和门禁检查，版本已发布。总结报告已生成：${report.markdownPath}`)
+      return service().store.getRelease(releaseId)
+    }
+    if (result.status === 'failed') await notifyRelease(result, `Release ${result.name} 失败：${result.failure ?? '发布条件无法满足'}`)
+    return result
+  }
+  const monitorReleases = async () => {
+    if (closing || rt.stopping) return
+    for (const release of service().store.listRunningReleases()) {
+      try { await checkAndReportRelease(release.id, `release-monitor:${release.id}:${release.revision}`) }
+      catch (error) { rt.warn?.('ds-bot: release monitor %s: %s', release.id, error?.message || error) }
+    }
   }
   const validBoardAuthority = task => {
     const reference = task?.authority?.reference
@@ -112,7 +190,8 @@ export function install(rt) {
       ...(task.dependencies?.length ? [`Dependencies: ${task.dependencies.join(', ')}`] : []),
     ]
     if (task.change) detail.push(`Requirement change from ${task.change.sourceTaskId} revision ${task.change.sourceRevision}. The original task remains unchanged.`,
-      `Before: ${JSON.stringify(task.change.before)}`, `After: ${JSON.stringify(task.change.after)}`)
+      `Before: ${JSON.stringify(task.change.before)}`, `After: ${JSON.stringify(task.change.after)}`,
+      'Compare the two revisions, inspect the current implementation and any queued or in-flight work, adjust what is needed or explicitly reassign it, then report evidence with board_task report. Do not silently rewrite the source task.')
     if (action.kind === 'review') detail.push(`Owner report: ${JSON.stringify(task.evidence)}`,
       'Independently compare the report with the acceptance criteria. Do not repeat the owner’s work. Use board_task review with evidence and pass or rework.')
     else detail.push('Use board_task show first. As the assigned owner, use board_task start, do only this task and its stated dependencies, then report evidence with board_task report. Respect this task’s scope, all authorization limits and the 30-step turn budget.')
@@ -158,8 +237,9 @@ export function install(rt) {
     const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable,
-      authorize: input => (input.actor === 'user' && ['create', 'edit', 'card-details', 'card-comment', 'attach', 'remove-image', 'cancel', 'share', 'unshare', 'personal-progress', 'schedule'].includes(input.type))
+      authorize: input => (input.actor === 'user' && ['create', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
+        || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
         || botWorkflow.authorize(input),
       verifyRegistration: (task, value, actor) => {
         if (actor !== 'user' || value?.kind !== 'personal' || !task || !currentBinding({ ...task, authority:value })) return false
@@ -185,8 +265,8 @@ export function install(rt) {
       verifyAdmission: (task, action, intent) => {
         if (!allowedAction(task, action) || typeof rt.prepareBoardTaskMessage !== 'function') return false
         try {
-          const source = intent?.payload?.source, roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
-          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId, roomId,
+          const source = intent?.payload?.source
+          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId,
             text:taskPrompt(task, action), messageId:intent.messageId, exchangeId:source?.exchangeId,
             actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
           return intent.targetBotId === action.actor && isDeepStrictEqual(expected, intent.payload)
@@ -216,24 +296,21 @@ export function install(rt) {
       },
       prepare: async (action, task) => {
         if (!allowedAction(task, action)) return undefined
-        const roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
-        const sessionId = roomId
-          ? await rt.ensureGroupTaskSession?.(roomId, action.actor)
-          : rt.chatOf(action.actor)
+        const sessionId = rt.chatOf(action.actor)
         if (typeof sessionId !== 'string' || !sessionId || busySession(sessionId, action.id)) return undefined
         if (!allowedAction(store.get(task.id), action)) return undefined
         const messageId = randomUUID(), exchangeId = randomUUID()
-        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, roomId, text:taskPrompt(task, action),
+        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, text:taskPrompt(task, action),
           messageId, exchangeId, actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
         return { admissionId:`board:${action.id}:${randomUUID()}`, messageId, targetBotId:action.actor, targetSessionId:sessionId, payload }
       },
       admit: async ({ action, task, intent, revalidateNow, commitReceipt }) => {
-        const source = intent.payload.source, roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
+        const source = intent.payload.source
         const receipt = `dsh-message:${intent.messageId}`
         let committed = false
         const sameMessage = (agent, message) => agent?.id === intent.targetSessionId && isDeepStrictEqual(message, intent.payload)
-        const result = await rt.deliver({ toId:action.actor, fromName:'You', sessionId:intent.targetSessionId, roomId,
-          role:roomId ? 'room' : 'request', note:roomId ? 'task from Trello' : 'new message', text:taskPrompt(task, action),
+        const result = await rt.deliver({ toId:action.actor, fromName:'You', sessionId:intent.targetSessionId,
+          role:'request', note:'task from Trello', text:taskPrompt(task, action),
           exchangeId:source.exchangeId, taskAction:source.taskAction }, {
           preparedMessage:intent.payload,
           beforeAdmission: (agent, message) => {
@@ -265,8 +342,13 @@ export function install(rt) {
       const driver = createTaskDriver({ store, admission,
         authorized: (action, task) => allowedAction(store.get(task.id), action),
         authorizedNow: (action, task) => allowedAction(store.get(task.id), action),
-        onError: error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error') })
+        onError: error => rt.warn?.('ds-bot: board scheduler: %s%s', error?.message || 'unknown error',
+          process.env.DSBOT_BOARD_DEBUG === '1' && error?.stack ? '\n' + error.stack : '') })
       instance = { store, api, root, imageDir, proofs, admissionProofs, shareAllowed, dependencyAllowed, driver, goalEditor }
+      if (!releaseTimer) {
+        releaseTimer = setInterval(() => { void monitorReleases().catch(error => rt.warn?.('ds-bot: release monitor: %s', error?.message || error)) }, Math.max(1000, Number(process.env.DS_BOT_RELEASE_MONITOR_MS ?? 30_000)))
+        releaseTimer.unref?.()
+      }
       queueMicrotask(notifyDriver)
       return instance
     } catch (error) { store.close(); throw error }
@@ -289,7 +371,9 @@ export function install(rt) {
       return api.command(scope, principal, payload)
     })
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
-    return outcome.value
+    const result = outcome.value
+    if (['edit','card-details','submit','cancel','restore','archive','unarchive','release-assign','schedule','unschedule'].includes(payload.type)) void notifyBoardChange(payload.taskId, payload).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+    return result
   }
   let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
@@ -302,8 +386,11 @@ export function install(rt) {
         return endpoint === 'board-redo-preview' ? redoPreparation.preview(payload) : redoPreparation.confirm(payload)
       case 'board-list': {
         // A concurrent DB writer may commit between projection and version
-        // reads; never label an older list as the current snapshot.
-        for (let i = 0; i < 3; i += 1) {
+        // reads; never label an older list as the current snapshot. The task
+        // scheduler can settle a dispatch in the same moment, so retry long
+        // enough for a stable window instead of failing the board refresh that
+        // follows a committed command.
+        for (let i = 0; i < 10; i += 1) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
           const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
@@ -311,12 +398,98 @@ export function install(rt) {
           if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
             recovery, ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
             revision: `${rosterRevision}:${before}` }
+          await new Promise(resolve => setTimeout(resolve, 20))
         }
         throw new Error('Board changed; refresh the board')
       }
       case 'board-operation':
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:')) {api.list(scope,principal);return goalEditor.operation(scope,payload.operationId)}
-        return api.operation(scope, principal, payload.operationId)
+        {
+          const result = api.operation(scope, principal, payload.operationId)
+          if (result.state !== 'unknown') return result
+          const record = store.operation(payload.operationId)
+          if (!record) return result
+          const boardScope = `${scope.kind}:${scope.id}`
+          const release = store.listReleases(boardScope).find(item => item.id === record.taskId)
+          const proposal = store.listProposals(boardScope).find(item => item.id === record.taskId)
+          if (!release && !proposal) return result
+          return record.status === 'rejected' ? { state:'rejected', message:record.message || 'Release action rejected' }
+            : { state:'committed', result:record.result }
+        }
+      case 'board-release-list':
+        api.list(scope, principal)
+        return store.listReleases(`${scope.kind}:${scope.id}`)
+      case 'board-release-create': {
+        api.list(scope, principal)
+        if (!payload.operationId || !payload.release) throw new Error('Invalid release request')
+        let release = { ...payload.release, scope:`${scope.kind}:${scope.id}` }
+        if (payload.team !== undefined) {
+          if (scope.kind !== 'room') throw new Error('A release group needs a group board')
+          const team = resolveReleaseTeam({ bots:rt.state.bots ?? {}, projectManagerId:payload.team.projectManagerId, roles:payload.team.roles ?? {} })
+          const room = await createReleaseGroup(rt, { release, team, boardRoomId: scope.id })
+          release = { ...release, groupId:room.id, projectManagerId:team.projectManagerId, roles:team.roles }
+        }
+        return store.createRelease({ operationId: payload.operationId, actor: 'user', release })
+      }
+      case 'board-release-plan': {
+        api.list(scope, principal)
+        if (scope.kind !== 'room') throw new Error('A release lifecycle plan needs a group board')
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        return applyReleasePlan(scope, release, payload.requirement, principal)
+      }
+      case 'board-release-update': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        return store.updateRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedRevision: payload.expectedRevision, value: payload.value })
+      }
+      case 'board-release-assign':
+        api.list(scope, principal)
+        return store.assignRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
+          taskId: payload.taskId, expectedTaskRevision: payload.expectedTaskRevision, afterId: payload.afterId ?? null })
+      case 'board-release-remove':
+        api.list(scope, principal)
+        return store.removeFromRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
+          taskId: payload.taskId, expectedTaskRevision: payload.expectedTaskRevision })
+      case 'board-release-start': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        const result = store.startRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedRevision: payload.expectedRevision })
+        notifyDriver()
+        return result
+      }
+      case 'board-release-queue': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        return store.queueRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedRevision: payload.expectedRevision })
+      }
+      case 'board-release-cancel': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        return store.cancelRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedRevision: payload.expectedRevision })
+      }
+      case 'board-release-gate': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        return store.setReleaseGate({ operationId: payload.operationId, actor:'user', releaseId:payload.releaseId, expectedRevision:payload.expectedRevision, gate:payload.gate, status:payload.status, evidence:payload.evidence })
+      }
+      case 'board-release-check': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
+        return checkAndReportRelease(payload.releaseId, payload.operationId ?? randomUUID())
+      }
+      case 'board-release-report': {
+        api.list(scope, principal)
+        const release = store.getRelease(payload.releaseId)
+        if (!release || release.scope !== `${scope.kind}:${scope.id}` || !release.report) throw new Error('Release report is unavailable')
+        return { markdown: readFileSync(release.report.markdownPath, 'utf8'), html: readFileSync(release.report.htmlPath, 'utf8'), generatedAt: release.report.generatedAt }
+      }
       case 'board-history':
         return api.history(scope, principal, payload.taskId)
       case 'board-held-decision':
@@ -331,6 +504,35 @@ export function install(rt) {
         api.list(scope, principal)
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))return goalEditor.cancel(scope,payload.operationId)
         return store.cancelRequest({ operationId: payload.operationId, actor: 'user' })
+      }
+      case 'board-proposal-list':
+        api.list(scope, principal)
+        return store.listProposals(`${scope.kind}:${scope.id}`).map(proposal => ({
+          ...proposal,
+          taskTitle: proposal.taskId ? store.get(proposal.taskId)?.title ?? proposal.after?.title : proposal.after?.title,
+        }))
+      case 'board-proposal-decide': {
+        api.list(scope, principal)
+        const proposal = store.listProposals(`${scope.kind}:${scope.id}`).find(item => item.id === payload.proposalId)
+        if (!proposal) throw new Error('Proposal is unavailable')
+        if (!payload.operationId || !Number.isSafeInteger(payload.expectedRevision) || !['confirm','reject'].includes(payload.decision)) throw new Error('Invalid proposal decision')
+        const result = store.decideProposal({ operationId: payload.operationId, actor:'user', proposalId:payload.proposalId, expectedRevision:payload.expectedRevision,
+          decision:payload.decision, note:payload.note, apply: current => {
+            if (current.kind === 'create') {
+              const value = current.command?.value
+              if (!value || typeof value !== 'object') throw new Error('Proposal target is unavailable')
+              return api.create(scope, { kind:'user' }, { operationId:`${payload.operationId}:apply`, taskId:current.taskId, ...value })
+            }
+            if (current.taskId) {
+              const task = store.get(current.taskId)
+              if (!task || task.revision !== current.baseRevision) throw new Error('Task changed after this proposal was made')
+              return api.command(scope, principal, { operationId:`${payload.operationId}:apply`, taskId:current.taskId,
+                expectedRevision:current.baseRevision, type:current.command.type, ...(current.command.value === undefined ? {} : { value:current.command.value }) })
+            }
+            throw new Error('Proposal target is unavailable')
+          } })
+        if (payload.decision === 'confirm') notifyDriver()
+        return result
       }
       case 'board-command': {
         if(['goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type)) {
@@ -518,6 +720,7 @@ export function install(rt) {
   })
   const stop = () => closePromise ??= (async () => {
     closing = true
+    if (releaseTimer) { clearInterval(releaseTimer); releaseTimer = undefined }
     for (const waiter of imageWaiters.splice(0)) waiter.reject(new Error('Board service is closing'))
     for (const waiter of uploadWaiters.splice(0)) waiter.reject(new Error('Board service is closing'))
     for (const reader of readers) void reader.cancel().catch(() => {})
@@ -527,6 +730,14 @@ export function install(rt) {
     botWorkflow.close(); instance?.store.close(); instance = undefined
   })()
   rt.boardCall = boardCall
+  rt.boardPlanRelease = async ({ caller, releaseId, requirement, operationId } = {}) => run(async () => {
+    if (!caller?.actor || !releaseId) throw new Error('Invalid release plan request')
+    const release = service().store.getRelease(releaseId)
+    if (!release || !release.scope.startsWith('room:')) throw new Error('Release is unavailable')
+    const roomId = release.scope.slice(5), room = rt.roomOf(roomId)
+    if (caller.actor !== release.projectManagerId && !(room && rt.isAdminOf?.(room, caller.actor))) throw new Error('Only the release project manager can plan this release')
+    return applyReleasePlan({ kind:'room', id:roomId }, release, requirement, { kind:'user' }, operationId ?? 'bot-plan')
+  })
   rt.onHomeDrain(stop)
   ctx.effect(() => ctx.connection.fetch.register({ path: BOARD_UPLOAD_PATH, methods: ['POST'], requestBody: 'streaming', fetch: upload }), 'ds-bot: board streaming upload')
   ctx.effect(() => stop, 'ds-bot: board service')
