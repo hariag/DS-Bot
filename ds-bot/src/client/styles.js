@@ -1127,6 +1127,12 @@ body[data-ds-dark-theme] .bt-theme-chip i{background:var(--da)}
 `
 
 export const CONVERSATION_CSS = `
+/* Chromium ignores WebKit scrollbar styles when the standard properties are non-auto. */
+body[data-bt-layout] [data-conversation-scroll]{--dsh-scrollbar-width:8px;scrollbar-width:auto;scrollbar-color:auto}
+body[data-bt-layout] [data-conversation-scroll]::-webkit-scrollbar{width:8px;height:8px}
+body[data-bt-layout] [data-conversation-scroll]::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--bt-ink) 40%,transparent);border-radius:999px}
+body[data-bt-layout] [data-conversation-scroll]::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--bt-ink) 60%,transparent)}
+@supports not selector(::-webkit-scrollbar){body[data-bt-layout] [data-conversation-scroll]{scrollbar-width:auto;scrollbar-color:color-mix(in srgb,var(--bt-ink) 40%,transparent) transparent}}
 .bt-think{font-size:13px;line-height:18px;color:var(--bt-ink-2);margin:2px 0 4px;max-width:calc(var(--bt-msg-w) * 100%)}
 body[data-bt-layout=flat] .bt-think{max-width:calc(var(--bt-flat-w) * 100%)}
 .bt-think summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
