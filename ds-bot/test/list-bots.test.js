@@ -13,12 +13,12 @@ const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 
 // Chief (Main) and Writer in Ops; Writer and Editor in Desk; Diary is a private Bot.
-const team = ({ questions = {}, views = {} } = {}) => ({
+const team = ({ questions = {}, views = {}, openPart = false } = {}) => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
     a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
-    b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
+    b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2, ...(openPart ? { openParts: [{ sessionId: 'b-bg', segments: [] }] } : {}) },
     c: { id: 'c', name: 'Editor', role: 'Edit', sessionId: 'c', createdAt: 3 },
     d: { id: 'd', name: 'Diary', role: 'Notes', sessionId: 'd', createdAt: 4, instructions: 'Keep the diary of the user.', private: true },
   },
@@ -51,8 +51,20 @@ async function start(cards) {
   const list = (args, sessionId) => rt.teamTools.find(d => d.name === 'list_bots').execute(args, { agent: { id: sessionId } })
   // Loading once fills the Session-owner indexes the tools look callers up in.
   await list({}, 'a')
-  return { list, stop: async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) } }
+  return { list, rt, stop: async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) } }
 }
+
+// #1501: a Bot's own chat may keep a part running in the background. A Bot working
+// there is not idle, and the line says it is another of its conversations.
+test('a Bot working in a background part is not idle', async (t) => {
+  const { list, rt, stop } = await start({ openPart: true })
+  t.after(stop)
+  rt.live.set('b-bg', { turn: 1, since: Date.now() })
+  assert.match(await list({}, 'a'), /- Writer \(Write\)\n {2}now: working in another of its conversations for less than a minute, for the user(?:; own chat pending inputs: unavailable)?\n/)
+  // The foreground part running reads as before, and both are named.
+  rt.live.set('b', { turn: 2, since: Date.now() })
+  assert.match(await list({}, 'a'), /now: working in its own chat for less than a minute, for the user; working in another of its conversations for less than a minute, for the user/)
+})
 
 test('a waiting card says how long it has waited', async (t) => {
   const now = Date.now()
@@ -62,8 +74,8 @@ test('a waiting card says how long it has waited', async (t) => {
   })
   t.after(stop)
   const out = await list({}, 'a')
-  assert.match(out, /- Writer \(Write\)\n {2}now: idle; a question card in its own chat has waited for the user's answer for 3 days; a view card in its own chat has waited for the user's answer for 2 hours\n/)
-  assert.match(out, /- Editor \(Edit\)\n {2}now: idle; a question card in its own chat has waited for the user's answer for 5 min\n/)
+  assert.match(out, /- Writer \(Write\)\n {2}now: idle; a question card in its own chat has waited for the user's answer for 3 days; a view card in its own chat has waited for the user's answer for 2 hours(?:; own chat pending inputs: unavailable)?\n/)
+  assert.match(out, /- Editor \(Edit\)\n {2}now: idle; a question card in its own chat has waited for the user's answer for 5 min(?:; own chat pending inputs: unavailable)?\n/)
 })
 
 test('one hour and one day read in the singular, and a new card in less than a minute', async (t) => {
@@ -71,8 +83,8 @@ test('one hour and one day read in the singular, and a new card in less than a m
   const { list, stop } = await start({ questions: { b: card(now - HOUR - MINUTE), c: card(now - DAY - MINUTE) }, views: { c: { id: 'v1', title: 'Pick', view: {}, askedAt: now } } })
   t.after(stop)
   const out = await list({}, 'a')
-  assert.match(out, /Writer[^\n]*\n {2}now: idle; a question card in its own chat has waited for the user's answer for 1 hour\n/)
-  assert.match(out, /Editor[^\n]*\n {2}now: idle; a question card in its own chat has waited for the user's answer for 1 day; a view card in its own chat has waited for the user's answer for less than a minute\n/)
+  assert.match(out, /Writer[^\n]*\n {2}now: idle; a question card in its own chat has waited for the user's answer for 1 hour(?:; own chat pending inputs: unavailable)?\n/)
+  assert.match(out, /Editor[^\n]*\n {2}now: idle; a question card in its own chat has waited for the user's answer for 1 day; a view card in its own chat has waited for the user's answer for less than a minute(?:; own chat pending inputs: unavailable)?\n/)
 })
 
 test('without a filter list_bots lists the whole team and every group the caller can see', async (t) => {
@@ -80,8 +92,8 @@ test('without a filter list_bots lists the whole team and every group the caller
   t.after(stop)
   assert.equal(await list({}, 'c'), [
     'Bots:',
-    '- Chief (Boss, Main Bot)\n  now: idle',
-    '- Writer (Write)\n  now: idle',
+    '- Chief (Boss, Main Bot)\n  now: idle; own chat pending inputs: unavailable',
+    '- Writer (Write)\n  now: idle; own chat pending inputs: unavailable',
     '- Editor (Edit, you)',
     '- Diary (Notes, private Bot, closed to other Bots)',
     '',
@@ -95,7 +107,7 @@ test('bot lists only that Bot and the groups it is in that the caller can see', 
   t.after(stop)
   assert.equal(await list({ bot: 'Writer' }, 'c'), [
     'Bots:',
-    '- Writer (Write)\n  now: idle',
+    '- Writer (Write)\n  now: idle; own chat pending inputs: unavailable',
     '',
     'Group chats:',
     '- "Desk" — members: Writer, Editor (you); every member replies in turn',
@@ -103,7 +115,7 @@ test('bot lists only that Bot and the groups it is in that the caller can see', 
   const chief = await list({ bot: '@writer' }, 'a')
   assert.match(chief, /- "Ops" — /)
   assert.match(chief, /- "Desk" — /)
-  assert.equal(await list({ bot: 'Chief' }, 'c'), 'Bots:\n- Chief (Boss, Main Bot)\n  now: idle\n\nGroup chats: Chief is in none you can see.')
+  assert.equal(await list({ bot: 'Chief' }, 'c'), 'Bots:\n- Chief (Boss, Main Bot)\n  now: idle; own chat pending inputs: unavailable\n\nGroup chats: Chief is in none you can see.')
 })
 
 test('group lists only its members and that group', async (t) => {
@@ -111,8 +123,8 @@ test('group lists only its members and that group', async (t) => {
   t.after(stop)
   assert.equal(await list({ group: 'Desk' }, 'a'), [
     'Bots:',
-    '- Writer (Write)\n  now: idle',
-    '- Editor (Edit)\n  now: idle',
+    '- Writer (Write)\n  now: idle; own chat pending inputs: unavailable',
+    '- Editor (Edit)\n  now: idle; own chat pending inputs: unavailable',
     '',
     'Group chats:',
     '- "Desk" — members: Writer, Editor; every member replies in turn',
@@ -124,7 +136,7 @@ test('bot and group together list that member and that group, and refuse a Bot o
   t.after(stop)
   assert.equal(await list({ bot: 'Writer', group: 'Ops' }, 'a'), [
     'Bots:',
-    '- Writer (Write)\n  now: idle',
+    '- Writer (Write)\n  now: idle; own chat pending inputs: unavailable',
     '',
     'Group chats:',
     '- "Ops" — members: Chief (admin) (you), Writer; plain messages go to the admin first',
