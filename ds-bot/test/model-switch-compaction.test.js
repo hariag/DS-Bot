@@ -27,7 +27,7 @@ const TEAM = {
   questions: {},
 }
 
-function start({ summarize = true, outlet = false, stream, modelInfo, route } = {}) {
+function start({ summarize = true, outlet = false, stream, modelInfo, route, messages = [], allMessages = [], tools = [] } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-compaction-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const bench = { regions: [], nows: [], summarised: 0, checkpoints: [] }
@@ -38,7 +38,7 @@ function start({ summarize = true, outlet = false, stream, modelInfo, route } = 
     // engine's summarize, which is the hook DS Bot wraps.
     async compactRegion(start, end, agent, signal) {
       bench.regions.push([start, end, agent?.session?.id])
-      if (outlet) bench.checkpoints.push(await this.summarize({ messages: [] }, agent, signal))
+      if (outlet) bench.checkpoints.push(await this.summarize({ messages, tools }, agent, signal))
     },
   }
   if (summarize) compaction.summarize = () => { bench.summarised += 1; return { summary: [] } }
@@ -73,7 +73,7 @@ function start({ summarize = true, outlet = false, stream, modelInfo, route } = 
       id: sessionId,
       seq: 2,
       requestHeader: () => ({ config: route ?? { provider: 'deepseek', model: 'v4' } }),
-      deriveMessages: () => [],
+      deriveMessages: () => allMessages,
       toolHistory: () => [],
     },
   })
@@ -144,6 +144,71 @@ test('a checkpoint the route cannot write does not fail the switch', async (t) =
   assert.equal(bench.checkpoints.length, 1)
   assert.match(bench.checkpoints[0].summary[0].text, /^\[Checkpoint 1\]/)
   assert.match(bench.checkpoints[0].summary[0].text, /No summary was written/)
+  assert.match(bench.checkpoints[0].summary[0].text, /earlier replies were not summarized/)
+  assert.doesNotMatch(bench.checkpoints[0].summary[0].text, /replies up to here are condensed/)
+})
+
+test('an oversized switch checkpoint retries with a bounded, explicitly partial text view', async (t) => {
+  const asked = []
+  const messages = Array.from({ length: 100 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: `item-${i}: ${'x'.repeat(3000)}` }] }))
+  const { bench, compaction, adoptFor, agentOf, stop } = start({
+    outlet: true, messages, allMessages: [...messages, { role: 'user', content: [{ type: 'text', text: 'later correction: already completed' }] }], tools: [{ name: 'huge-tool' }],
+    route: { provider: 'deepseek', model: 'v4', maxTokens: 256_000 },
+    stream: options => {
+      asked.push(options)
+      if (asked.length === 1) throw new Error("This model's maximum context length is 1048576 tokens")
+      return (async function* () {
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: 'recent progress' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'recent progress' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  })
+  t.after(stop)
+  adoptFor('b2')
+  await compaction.compactRegion(3, 9, agentOf('b2'), new AbortController().signal)
+  assert.equal(asked.length, 2)
+  const fallback = asked[1]
+  assert.equal(fallback.maxTokens, 4096)
+  assert.equal(fallback.tools, undefined)
+  assert.equal(fallback.toolHistory, undefined)
+  const text = fallback.messages[0].content[0].text
+  assert.ok(text.length < 20_000)
+  assert.match(text, /incomplete, bounded view/)
+  assert.match(text, /item-99/)
+  assert.match(text, /later correction: already completed/)
+  assert.match(text, /do not summarize or copy these later messages/)
+  assert.doesNotMatch(text, /item-0:/)
+  assert.match(bench.checkpoints[0].summary[0].text, /Partial summary of recent excerpts only/)
+  assert.match(bench.checkpoints[0].summary[0].text, /Only excerpts of your earlier replies are summarized/)
+  assert.match(bench.checkpoints[0].summary[0].text, /recent progress/)
+})
+
+test('cancelling an oversized switch checkpoint does not start the bounded retry', async (t) => {
+  const controller = new AbortController()
+  let calls = 0
+  const { compaction, adoptFor, agentOf, stop } = start({
+    outlet: true,
+    stream: () => { calls += 1; controller.abort(); throw new Error('maximum context length exceeded') },
+  })
+  t.after(stop)
+  adoptFor('b2')
+  await assert.rejects(() => compaction.compactRegion(3, 9, agentOf('b2'), controller.signal))
+  assert.equal(calls, 1)
+})
+
+test('if the bounded checkpoint also fails, the switch keeps the honest no-summary fallback', async (t) => {
+  let calls = 0
+  const { bench, compaction, adoptFor, agentOf, stop } = start({
+    outlet: true, messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+    stream: () => { calls += 1; throw new Error(calls === 1 ? 'maximum context length exceeded' : 'rate limited') },
+  })
+  t.after(stop)
+  adoptFor('b2')
+  await compaction.compactRegion(3, 9, agentOf('b2'), new AbortController().signal)
+  assert.equal(calls, 2)
+  assert.match(bench.checkpoints[0].summary[0].text, /earlier replies were not summarized/)
 })
 
 test('a switch checkpoint uses each model’s lowest effort and does not copy the old output limit to the fallback', async (t) => {
@@ -173,6 +238,32 @@ test('a switch checkpoint uses each model’s lowest effort and does not copy th
   assert.equal(bench.checkpoints[0].model, 'fallback')
   assert.equal(bench.checkpoints[0].maxTokens, undefined)
   assert.match(bench.checkpoints[0].summary[0].text, /the preserved checkpoint/)
+})
+
+test('a larger fallback model gets the full history before any bounded retry', async (t) => {
+  const asked = []
+  const messages = [{ role: 'user', content: [{ type: 'text', text: 'original work' }] }]
+  const { rt, bench, compaction, adoptFor, agentOf, stop } = start({
+    outlet: true, messages,
+    stream: options => {
+      asked.push(options)
+      if (options.model === 'v4') throw new Error('maximum context length exceeded')
+      return (async function* () {
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: 'complete summary' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'complete summary' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  })
+  t.after(stop)
+  rt.desiredModel = async () => 'deepseek/fallback'
+  adoptFor('b2')
+  await compaction.compactRegion(3, 9, agentOf('b2'), new AbortController().signal)
+  assert.deepEqual(asked.map(item => item.model), ['v4', 'fallback'])
+  assert.equal(asked[1].messages[0].content[0].text, 'original work')
+  assert.match(bench.checkpoints[0].summary[0].text, /complete summary/)
+  assert.doesNotMatch(bench.checkpoints[0].summary[0].text, /Partial summary/)
 })
 
 test('a transient checkpoint failure retries the same low-effort switch request', async (t) => {
