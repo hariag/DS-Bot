@@ -1910,5 +1910,11 @@ export function install(rt) {
     return true
   }
 
-  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, applySteps, followFolder, followEngine, heldBack, newPart, switchPart, sessionTokens: session => tokensOf(session), switchJobs: () => switches.values() })
+  function partsOfThread(botId, sessionId) {
+    const bot = botId === undefined ? undefined : rt.botOf(botId)
+    if (bot === undefined) return []
+    if (sessionId === undefined || sessionId === rt.chatOf(bot.id)) return partsOf(bot.id)
+    return partsOf(bot.id)
+  }
+  Object.assign(rt, { clock, partsOf, partsOfThread, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, applySteps, followFolder, followEngine, heldBack, newPart, switchPart, sessionTokens: session => tokensOf(session), switchJobs: () => switches.values() })
 }
