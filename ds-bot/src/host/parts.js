@@ -2046,10 +2046,10 @@ export function install(rt) {
     if (picked !== undefined) await selectRoute({ name: bot.name }, freshId, picked)
     await rt.applyPermission(bot, freshId, undefined)
       .catch(error => rt.warn('ds-bot: permission for the new part of %s not applied: %s', bot.name, error))
-    if (rt.botOf(bot.id) !== bot) {
+    if (rt.botOf(bot.id) !== bot || rt.chatOf(bot.id) !== agent.id) {
       await ctx.workspaceRegistry.archiveSession(freshId, { stopActivity: true })
         .catch(error => rt.warn('ds-bot: unused fresh part of %s not archived: %s', bot.name, error))
-      return
+      throw Object.assign(new Error('The current conversation changed while the new part was being created'), { code: 'bot/busy' })
     }
     startOpenPart(bot, freshId)
     rt.chatOwners.set(freshId, bot.id)
