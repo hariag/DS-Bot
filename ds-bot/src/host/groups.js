@@ -941,7 +941,7 @@ export function install(rt) {
   // the round's speakers, and one already waiting in the round is not called twice.
   const releaseParked = (room, round) => {
     const parked = room.paused ?? []
-    const due = parked.filter(entry => entry.idle !== true || round.userMessage === true)
+    const due = parked.filter(entry => entry.idle !== true || round.userMessage === true || round.scheduledMessage === true)
     if (due.length === 0) return
     const left = parked.filter(entry => !due.includes(entry))
     if (left.length > 0) room.paused = left
@@ -1322,7 +1322,8 @@ export function install(rt) {
       const text = [post.text, ...(post.files ?? []).map(fileLine)].filter(Boolean).join('\n')
       say(room, { who: 'User', text, ...(post.files === undefined ? {} : { files: post.files }), ...(post.via === undefined ? {} : { via: post.via }), session: true })
       unpauseRoomIdle(room)
-      if (!rt.isScheduledRoomPost(post)) {
+      if (rt.isScheduledRoomPost(post)) round.scheduledMessage = true
+      else {
         round.userMessage = true
         rt.goalUserMessage?.(room.id)
       }
@@ -1454,6 +1455,7 @@ export function install(rt) {
       startSeq,
       goalRevision: room.goal?.revision,
       ...(posts.some(userPost) ? { userMessage: true } : {}),
+      ...(posts.some(post => rt.isScheduledRoomPost(post)) ? { scheduledMessage: true } : {}),
       ...(opener.kickoff ? { kickoff: true } : {}),
       ...(opener.goal === 'nudge' ? { goalNudge: true } : {}),
       ...(opener.reviewId ? { goalReviewId: opener.reviewId } : {}),

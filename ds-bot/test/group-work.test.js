@@ -2836,6 +2836,18 @@ test('a scheduled message can still pass an urgent handoff through an idle-pause
   result.cancel()
 })
 
+test('a scheduled message still releases an already parked handoff', async t => {
+  const host = await start(t, {
+    idlePaused: { from: 'a', count: 2, noticed: true },
+    paused: [{ id: 'c', name: 'Tester', by: 'a', note: 'urgent follow-up', idle: true }],
+  })
+  const reminder = { content: [{ type: 'text', text: 'reminder_prompt_json: "@Writer inspect"' }], source: { kind: 'schedule' } }
+  const result = host.round('parked-schedule', reminder)
+  await until(() => host.agentOf('gc').calls.length > 0)
+  assert.equal(rt.roomOf('r1').paused, undefined)
+  result.cancel()
+})
+
 test('a user cannot disguise an instruction as a scheduled message by its text', async t => {
   const host = await start(t)
   let userMessages = 0
