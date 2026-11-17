@@ -10,10 +10,19 @@ const [name, port] = process.argv.slice(2)
 if (!/^[a-z0-9-]+$/.test(name ?? '') || !/^\d+$/.test(port ?? '') || port === '3080') throw new Error('use an isolated mock bench name and port')
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const home = join(root, `.dsh-test-${name}`)
+// The mock bench starts its web process with this dedicated DSH_HOME. Refuse a
+// different process even if a caller picked the same port or copied a log.
+if (process.platform === 'linux') {
+  const pid = Number(readFileSync(join(home, 'web.pid'), 'utf8').trim())
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error('invalid mock bench process')
+  const env = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0')
+  if (!env.includes(`DSH_HOME=${home}`)) throw new Error('mock bench home does not match')
+}
 const log = readFileSync(join(home, 'web.log'), 'utf8')
 const url = log.match(new RegExp(`http://127\\.0\\.0\\.1:${port}/\\?token=[^\\s]+`))?.[0]
 if (!url) throw new Error('mock bench is not running')
-const response = await fetch(url, { redirect: 'manual' })
+let response
+try { response = await fetch(url, { redirect: 'manual' }) } catch { throw new Error('could not connect to mock bench') }
 const cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
 async function api(endpoint, payload = {}) {
   const response = await fetch(`http://127.0.0.1:${port}/api/bot`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ endpoint, payload }) })
@@ -55,7 +64,7 @@ for (let i = 1; i <= 3; i++) {
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN || undefined, args: ['--no-sandbox'] })
 try {
   const page = await browser.newPage({ viewport: { width: 1709, height: 1000 }, reducedMotion: 'reduce' })
-  await page.goto(url, { waitUntil: 'domcontentloaded' })
+  try { await page.goto(url, { waitUntil: 'domcontentloaded' }) } catch { throw new Error('could not open mock bench') }
   const rail = page.locator('nav:has([class*="_marks"])').first()
   async function checkRail(label) {
     await rail.waitFor({ state: 'visible', timeout: 30000 })
@@ -63,6 +72,8 @@ try {
     const marks = rail.locator('button')
     assert.ok(await marks.count() >= 2, `${label}: multiple turn marks`)
     const scroll = page.locator('[data-conversation-scroll]').first()
+    await scroll.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await page.waitForFunction(() => (document.querySelector('[data-conversation-scroll]')?.scrollTop ?? 0) > 100)
     const before = await scroll.evaluate(el => el.scrollTop)
     await marks.first().hover()
     await page.waitForFunction(() => !!document.querySelector('nav [role="tooltip"]'))
@@ -74,9 +85,15 @@ try {
     await page.waitForFunction(() => document.querySelector('nav [class*="_marks"] button')?.getAttribute('aria-current') === 'true')
     console.log(`${label}: visible marks, hover preview and click navigation passed`)
   }
+  const privateButton = page.locator(`[data-bot-id="${chief.id}"]`).first()
+  await privateButton.click()
+  await page.waitForFunction(id => document.querySelector(`[data-bot-id="${id}"]`)?.getAttribute('aria-current') === 'page', chief.id)
+  await page.waitForFunction(() => document.querySelector('[data-conversation-scroll]')?.textContent.includes('Private turn'))
   await checkRail('private chat')
-  await page.locator(`[data-room-id="${room.id}"]`).first().click()
-  await page.waitForTimeout(1000)
+  const roomButton = page.locator(`[data-room-id="${room.id}"]`).first()
+  await roomButton.click()
+  await page.waitForFunction(id => document.querySelector(`[data-room-id="${id}"]`)?.getAttribute('aria-current') === 'page', room.id)
+  await page.waitForFunction(() => document.querySelector('[data-conversation-scroll]')?.textContent.includes('Group turn'))
   await checkRail('group chat')
   await page.setViewportSize({ width: 850, height: 1000 })
   await page.waitForTimeout(300)
