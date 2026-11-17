@@ -127,9 +127,12 @@ export function install(rt) {
     })
   }
 
-  const shadowed = new WeakSet()
+  // A failed registration must be retried without registering an already installed
+  // shadow again. Different shell tools can succeed or fail independently.
+  const shadowed = new WeakMap()
   const formatWarned = new Set()
   const shadowShell = (agent, name) => {
+    if (shadowed.get(agent)?.has(name)) return
     if (typeof ctx.tools?.get !== 'function') return
     const def = ctx.tools.get(name, agent)
     if (def === undefined) return
@@ -143,7 +146,6 @@ export function install(rt) {
       }
       return
     }
-    shadowed.add(agent)
     const lift = agent.ctx.tools.register({
       ...def,
       execute: async (args, exec) => {
@@ -205,13 +207,16 @@ export function install(rt) {
         return { kind: 'promoted', cwd, jobId, timeoutMs: Date.now() - startedAt, output: renderJobRead(read) }
       },
     })
+    const names = shadowed.get(agent) ?? new Set()
+    names.add(name)
+    shadowed.set(agent, names)
     // tools.js keeps this with the Session's scope; unmarking lets a later
     // scope register the shadow again.
-    return () => { shadowed.delete(agent); lift?.() }
+    return () => { names.delete(name); lift?.() }
   }
   rt.shadowShells = (agent) => {
     if (agent === undefined || !rt.isBotSession(agent.session?.id)) return
-    if (shadowed.has(agent) || typeof agent.ctx?.tools?.register !== 'function') return
+    if (typeof agent.ctx?.tools?.register !== 'function') return
     const disposers = []
     for (const name of SHELL_TOOLS) {
       try {
