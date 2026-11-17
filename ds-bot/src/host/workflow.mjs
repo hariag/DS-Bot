@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
 
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const refused = () => new Error('Task is unavailable or the action is not authorized')
 const actions = new Set(['start', 'report', 'review', 'block', 'unblock'])
+const proposalUpdateFields = ['description', 'type', 'labels', 'dueDate', 'dueComplete', 'checklist']
+const taskTypes = new Set(['requirement','design','feature','development','test','deployment','operations','bugfix','ui','ux','other'])
 
 // This service is private to the host. The caller supplies a trusted runtime
 // and store, never a Bot name or actor claimed by a model/tool argument.
@@ -63,7 +66,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   }
 
   const canMutate = (task, caller, action) => {
-    if (!direct(task, caller) || !actions.has(action)) return false
+    if (!direct(task, caller) || (!actions.has(action) && action !== 'propose')) return false
+    if (action === 'propose') return task.stale !== true && (caller.actor === task.owner || caller.actor === task.reviewer)
     if (!task.authority || task.stale === true) return false
     if (task.scope.startsWith('room:')) {
       const room = roomFor(task)
@@ -98,16 +102,60 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   // session and task permissions are re-read inside the write transaction.
   function authorize(input) {
     const pending = scope.getStore()
-    if (!pending || input?.actor !== pending.caller.actor || input?.type !== pending.action || input?.task?.id !== pending.taskId) return false
+    if (!pending || input?.actor !== pending.caller.actor || !(input?.type === pending.action || (pending.action === 'propose' && input?.type === 'proposal')) || input?.task?.id !== pending.taskId) return false
     let caller
     try { caller = identity(pending.exec) } catch { return false }
     if (!sameIdentity(caller, pending.caller)) return false
+    if (pending.create) {
+      const target = input.task
+      if (!target || target.id !== pending.taskId || target.scope !== pending.scope) return false
+      if (pending.scope.startsWith('room:')) return caller.roomId === pending.scope.slice(5)
+      return caller.roomId === undefined && pending.scope === `personal:${caller.actor}`
+    }
     const current = store.get(pending.taskId)
     return current?.revision === pending.revision && canMutate(current, caller, pending.action)
   }
 
   async function invoke(exec, args) {
     const caller = identity(exec)
+    if (args?.action === 'plan') {
+      if (!id(args.releaseId) || typeof args.requirement !== 'string' || typeof rt.boardPlanRelease !== 'function') throw refused()
+      return { plan: await rt.boardPlanRelease({ caller, releaseId:args.releaseId, requirement:args.requirement, operationId:args.operationId }) }
+    }
+    if (args?.action === 'propose' && args.change?.kind === 'create') {
+      const value = args.change.value
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw refused()
+      const fields = ['title','owner','reviewer','acceptance','type','description','dependencies','labels','dueDate','dueComplete','checklist','draft']
+      if (Object.keys(value).some(field => !fields.includes(field))) throw refused()
+      if (typeof value.title !== 'string' || !value.title.trim() || value.title.length > 200) throw refused()
+      if (!id(value.owner) || !id(value.reviewer) || value.owner === value.reviewer) throw refused()
+      if (typeof value.acceptance !== 'string' || value.acceptance.length > 8192) throw refused()
+      if (value.description !== undefined && (typeof value.description !== 'string' || Buffer.byteLength(value.description) > 8192)) throw refused()
+      if (value.type !== undefined && !taskTypes.has(value.type)) throw refused()
+      if (value.dependencies !== undefined && (!Array.isArray(value.dependencies) || value.dependencies.length > 100 || value.dependencies.some(item => !id(item)))) throw refused()
+      if (value.draft !== undefined && typeof value.draft !== 'boolean') throw refused()
+      if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) throw refused()
+      const targetScope = caller.roomId ? `room:${caller.roomId}` : `personal:${caller.actor}`
+      const taskId = `card-${randomUUID()}`
+      const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
+      const existing = store.listProposals(targetScope).find(item => item.id === proposalId)
+      if (existing) return { proposal: existing }
+      const proposal = {
+        id: proposalId, scope:targetScope, taskId, kind:'create', baseRevision:0,
+        command:{ type:'create', value:{ ...value, title:value.title.trim(), acceptance:value.acceptance.trim(), dependencies:value.dependencies ?? [] } },
+        before:null, after:{ ...value, title:value.title.trim(), acceptance:value.acceptance.trim(), dependencies:value.dependencies ?? [] },
+        ...(args.note ? { note:args.note } : {}),
+      }
+      const context = { exec, caller, taskId, revision:0, action:'propose', create:true, scope:targetScope }
+      const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor:caller.actor, proposal }))
+      return { proposal: saved }
+    }
+    if (args?.action === 'proposal' && !args.taskId && id(args.proposalId)) {
+      const targetScope = caller.roomId ? `room:${caller.roomId}` : `personal:${caller.actor}`
+      const proposal = store.listProposals(targetScope).find(item => item.id === args.proposalId)
+      if (!proposal || proposal.proposer !== caller.actor) throw refused()
+      return { proposal }
+    }
     if (!args || !id(args.taskId) || typeof args.action !== 'string') throw refused()
     const task = store.get(args.taskId)
     if (!task) throw refused()
@@ -123,6 +171,44 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!record || record.taskId !== task.id) return { state: 'unknown' }
       if (!['committed', 'rejected'].includes(record.status)) return { state: 'unknown' }
       return { state: record.status, ...(record.status === 'rejected' ? { message: record.message } : {}) }
+    }
+    if (args.action === 'proposal') {
+      if (!direct(task, caller) || !id(args.proposalId)) throw refused()
+      const proposal = store.listProposals(task.scope).find(item => item.id === args.proposalId)
+      if (!proposal || proposal.proposer !== caller.actor) throw refused()
+      return { proposal }
+    }
+    if (args.action === 'propose') {
+      if (!canMutate(task, caller, 'propose') || args.expectedRevision !== undefined && args.expectedRevision !== task.revision) throw refused()
+      const change = args.change
+      if (!change || typeof change !== 'object' || Array.isArray(change) || !['update','status','release'].includes(change.kind)) throw refused()
+      let command
+      if (change.kind === 'update') {
+        if (!change.value || typeof change.value !== 'object' || Array.isArray(change.value)) throw refused()
+        const fields = Object.keys(change.value)
+        if (!fields.length || fields.some(field => !proposalUpdateFields.includes(field))) throw refused()
+        command = { type:'card-details', value:change.value }
+      } else if (change.kind === 'status') {
+        if (!change.value || !['submit','cancel','restore'].includes(change.value.type)) throw refused()
+        if (change.value.type === 'cancel' && change.value.reason !== undefined && (typeof change.value.reason !== 'string' || change.value.reason.length > 500)) throw refused()
+        command = { type:change.value.type, ...(change.value.type === 'cancel' && change.value.reason ? { value:{ reason:change.value.reason } } : {}) }
+      } else {
+        if (!change.value || !id(change.value.releaseId)) throw refused()
+        command = { type:'release-assign', value:{ releaseId:change.value.releaseId } }
+      }
+      if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) throw refused()
+      const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
+      const existing = store.listProposals(task.scope).find(item => item.id === proposalId)
+      if (existing) return { proposal: existing }
+      const before = Object.fromEntries(proposalUpdateFields.filter(field => Object.hasOwn(task, field)).map(field => [field, task[field]]))
+      const proposal = {
+        id: proposalId, scope: task.scope, taskId: task.id, kind: change.kind, baseRevision: task.revision,
+        command, before, after: change.kind === 'update' ? { ...before, ...change.value } : change.value,
+        ...(args.note ? { note:args.note } : {}),
+      }
+      const context = { exec, caller, taskId: task.id, revision: task.revision, action: 'propose' }
+      const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor: caller.actor, proposal }))
+      return { proposal: saved }
     }
     if (!actions.has(args.action) || !id(args.operationId) || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1 || !canMutate(task, caller, args.action)) throw refused()
     const context = { exec, caller, taskId: task.id, revision: args.expectedRevision, action: args.action }
