@@ -2166,6 +2166,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         event.preventDefault(); buttons[next].focus(); return
       }
       if (createModal && event.key === 'Escape') return
+      if (event.key === 'Escape' && dialog.current?.querySelector('.bt-board-filters-open')) { event.preventDefault(); event.stopPropagation(); setFiltersOpen(false); return }
       const modal = dialog.current?.querySelector('.bt-card-modal')
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (modal) modal.querySelector('[data-close-card]')?.click(); else dismiss(); return }
       if (event.key !== 'Tab' || !dialog.current) return
@@ -2956,6 +2957,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
             h('button', { key: id, type: 'button', className: 'bt-board-view', 'aria-pressed': view === id, onClick: () => chooseView(id) }, t(label)))),
         h('label', { className: 'bt-board-search' }, h(SearchIcon), h('input', { ref:searchRef, type: 'search', 'aria-label': t('Search tasks'), placeholder: t('Search tasks'), value: search, onChange: event => setSearch(event.target.value) })),
         h('button', { type:'button', className:'bt-board-filter-toggle', 'aria-expanded':filtersOpen, onClick:() => setFiltersOpen(value => !value) }, t('Filters'), hasFilters ? h('span', { className:'bt-board-count' }, '•') : null),
+        filtersOpen ? h('div', { className:'bt-board-filter-scrim', 'aria-hidden':true, onClick:() => setFiltersOpen(false) }) : null,
         h('div', { className: 'bt-board-filters' + (filtersOpen ? ' bt-board-filters-open' : '') },
           h('select', { value: memberFilter, 'aria-label': t('Filter by member'), onChange: event => setMemberFilter(event.target.value) },
             h('option', { value: '' }, t('All members')), memberOptions.map(id => h('option', { key: id, value: id }, actorName(id, actors)))),
@@ -3100,6 +3102,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-search:focus-within{border-color:var(--bt-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
 .bt-board-search svg{width:15px;height:15px;flex:none}
 .bt-board-dialog .bt-board-search input{flex:1;min-width:0;height:100%;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;outline:none;font-size:13px;color:var(--bt-ink)}
+.bt-board-filter-scrim{display:none}
 .bt-board-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .bt-board-dialog .bt-board-filters select{height:32px;padding:0 26px 0 12px;border:0;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:12px;line-height:16px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 14px) 14px,calc(100% - 10px) 14px;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
 .bt-board-dialog .bt-board-filters select:hover{background-color:var(--bt-active);color:var(--bt-ink)}
@@ -3484,7 +3487,7 @@ export const TASK_BOARD_CSS = `
   .bt-card-mobile-bar .bt-card-mini{margin-left:auto;background:var(--bt-hover)}
 }
 @media(max-width:700px){.bt-board-header{padding:12px 16px}.bt-board-capacity{display:none}.bt-board-toolbar{padding:8px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:12px 16px 16px;gap:12px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,288px);max-width:none}.bt-card-modal-header{padding:14px 16px 12px}.bt-card-main{padding:16px}.bt-card-side{padding:16px}.bt-create-form{padding:16px}}
-@media(prefers-reduced-motion:reduce){.bt-board-backdrop,.bt-board-dialog,.bt-card-modal-backdrop,.bt-card-modal{animation:none!important}.bt-board-lane,.bt-board-card{transition:none}}
+@media(prefers-reduced-motion:reduce){.bt-board-backdrop,.bt-board-dialog,.bt-card-modal-backdrop,.bt-card-modal,.bt-board-filter-scrim{animation:none!important}.bt-board-lane,.bt-board-card{transition:none}}
 
 /* Phase 2: task types, lifecycle lanes, releases and confirmations. */
 .bt-board-views{display:inline-flex;align-items:center;gap:2px;flex:none;padding:2px;border-radius:10px;background:var(--bt-hover)}
@@ -3633,6 +3636,7 @@ export const TASK_BOARD_CSS = `
   .bt-board-bulk{padding:6px 16px;flex-wrap:nowrap;overflow-x:auto}
   .bt-board-filters{display:none}
   .bt-board-filters-open{display:grid;grid-template-columns:1fr;gap:8px;position:fixed;left:12px;right:12px;bottom:16px;z-index:10002;max-height:min(70vh,520px);overflow:auto;padding:14px;border:.5px solid var(--bt-line-2);border-radius:16px;background:var(--bt-main);box-shadow:0 24px 80px rgba(0,0,0,.22);mask-image:none}
+  .bt-board-filter-scrim{display:block;position:fixed;inset:0;z-index:10001;background:color-mix(in srgb,var(--bt-ink) 24%,transparent);animation:bt-veil-in .12s ease-out}
   .bt-board-filters-open>*{width:100%;min-height:36px}
   .bt-board-review-tools{display:none}
   .bt-board-review-tools-open{display:flex;flex-wrap:wrap;max-height:34vh;overflow:auto;mask-image:none}
