@@ -812,8 +812,11 @@ async function runBrowserCases() {
   const bulkOwnerUndo=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.value.owner==='user'))
   assert.equal(bulkOwnerUndo.payload.taskId,'T1','bulk owner undo restores the previous owner')
 
-  await page.evaluate(() => { globalThis.resetBoardState(); globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal') })
-  await page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary').click()
+  await page.evaluate(() => {
+    globalThis.resetBoardState()
+    globalThis.ReactDOM.flushSync(() => globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal', true))
+  })
+  await page.locator('article[data-task-id="T1"] .bt-board-card-summary').click()
   const namedCard = page.locator('.bt-card-modal')
   await namedCard.waitFor()
   const description=namedCard.locator('.bt-card-description')
