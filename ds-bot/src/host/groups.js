@@ -197,6 +197,25 @@ const ROOM_READ_MAX = 30
 const lostSession = error => error?.code === 'session/not-found' || /\bis corrupt\b|\bcorrupt session log\b/i.test(String(error?.message ?? ''))
 const fileLine = file => `[File "${file.name}" (${file.bytes} bytes) attached]`
 
+// Inspect only the current group sessions. A goal may stay active between rounds,
+// and the same Bot can work independently in a private chat or in another group.
+export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
+  if (rt.roomActive(room.id) || rt.roomInbox.get(room.id)?.length || rt.roomLaterCount(room.id)) return true
+  // An unanswered batch survives a restart, sometimes for hours. A live waiter
+  // protects an in-flight handoff; the historical batch alone cannot prove one.
+  for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return true
+  const agents = rt.ctx.get?.('agents')
+  const queued = message => ignoreMessageId === undefined || message.id !== ignoreMessageId
+  const sessions = [rt.sessionOfRoom(room), ...room.members.map(id => room.sessions?.[id])]
+  return sessions.some(id => {
+    if (!id) return false
+    const agent = agents?.get?.(id)
+    if (id !== openingSessionId && (rt.live.get(id)?.turn !== undefined || agent?.status === 'running')) return true
+    return rt.hasSubagents(id) || rt.waitsForApproval(id)
+      || agent?.inbox?.nextStep?.some(queued) || agent?.inbox?.nextTurn?.some(queued)
+  })
+}
+
 export function install(rt) {
   const { ctx } = rt
 
@@ -1283,6 +1302,8 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
   const roundRuns = new Map()
   rt.roomRounds = roomId => [...(roundRuns.get(roomId) ?? [])]
   const runningRound = roomId => [...rt.roomProgress.values()].find(round => round.roomId === roomId)
+  const periodicReviewPost = post => post.goal === 'nudge' && Boolean(post.reviewId)
+  rt.roomBusyForPatrol = (room, ignoreMessageId, openingSessionId) => roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId)
   const rowRun = randomUUID()
   rt.groupRowKey = roomId => {
     const book = rt.ledger.cursor(bookOf(roomId))
@@ -1608,15 +1629,28 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       const anchor = randomUUID()
       rt.ledger.append(bookOf(room.id), { event: 'anchor', id: anchor, from, time: Date.now() })
       const running = runningRound(room.id)
-      if (running !== undefined) await joinRound(room, running, queued, exec.agent)
-      else if (finalizing.has(room.id)) laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), ...queued])
-      else {
+      // A periodic check may have reached the root just before business arrived.
+      // Do not let it join that work or wait behind it as the next round's opener.
+      const checks = queued.filter(periodicReviewPost)
+      const skip = checks.length > 0 && (checks.length < queued.length || rt.roomBusyForPatrol(room, undefined, exec.agent.id))
+      const posts = skip ? queued.filter(post => !periodicReviewPost(post)) : queued
+      const retired = skip ? checks.map(post => {
+        const attempt = room.goal?.reviewAttempt
+        if (attempt?.id !== post.reviewId || attempt.state !== 'admitting' || attempt.adminCompleted || running?.goalReviewId === post.reviewId) return
+        return rt.goalReviewNotOpened(room, post.reviewId).catch(error => rt.warn('ds-bot: retiring a busy group review in %s failed: %s', room.name, error))
+      }) : []
+      if (running !== undefined) {
+        if (posts.length || !skip) await joinRound(room, running, posts, exec.agent)
+      } else if (finalizing.has(room.id)) {
+        if (posts.length) laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), ...posts])
+      } else {
         // What a stopped round left waiting goes first.
         const left = laterPosts.get(room.id) ?? []
         laterPosts.delete(room.id)
-        startRound(room, [...left, ...queued], exec.agent, exec.callId)
+        if (left.length || posts.length || !skip) startRound(room, [...left, ...posts], exec.agent, exec.callId)
       }
       exec.concludeTurn?.()
+      if (retired.length) await Promise.all(retired)
       return JSON.stringify({ from, anchor })
     },
   }))

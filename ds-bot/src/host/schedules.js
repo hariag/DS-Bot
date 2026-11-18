@@ -6,6 +6,8 @@
 // the group like a message from the user (see reminderText). DSH 0.2.0 mounts the service only with its Automation tasks bundle on, so
 // the service is optional and every endpoint reports whether it is there.
 
+import { installScheduledPatrol } from './scheduled-patrol.js'
+
 const MAX_TITLE = 120
 // A time input reports HH:mm, or HH:mm:ss when the browser's picker shows seconds.
 const TIME = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
@@ -90,11 +92,13 @@ function selectorOf(when) {
 export function install(rt) {
   const { ctx } = rt
   let service = null
+  const catalogChanged = installScheduledPatrol(rt, () => service)
 
   const attach = (sub) => {
     const own = sub.schedule
     service = own
-    sub.effect(() => () => { if (service === own) service = null }, 'ds-bot: schedule service')
+    catalogChanged()
+    sub.effect(() => () => { if (service === own) { service = null; catalogChanged() } }, 'ds-bot: schedule service')
   }
   if (typeof ctx.inject === 'function') ctx.inject(['schedule'], attach)
   else if (ctx.get?.('schedule') !== undefined) attach({ schedule: ctx.get('schedule'), effect: (execute, label) => ctx.effect(execute, label) })

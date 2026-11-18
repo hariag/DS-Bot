@@ -1242,21 +1242,24 @@ export function install(rt) {
     }
   }
 
-  // The root relay took this review into a batch but chose a different opener.
-  // No admin delivery exists for it, so it is safe to retire the intent and
-  // let the ordinary round-end driver or the next timer make a fresh check.
+  const skipReviewPeriod = (goal, now) => {
+    rt.requireHomeLock()
+    goal.ownerReviewAt = Math.max(now, Date.now()) + GOAL_REVIEW_INTERVAL_MS
+    if (automaticIdle(goal)) goal.reviewAt = goal.ownerReviewAt
+  }
+
+  // Another opener or a busy administrator consumed this opportunity. Only
+  // this unadmitted review is retired; the next scheduled cycle can try again.
   async function goalReviewNotOpened(room, id) {
     const goal = room?.goal
-    if (goal?.reviewAttempt?.id !== id || goal.reviewAttempt.terminalFailure) return
+    const attempt = goal?.reviewAttempt
+    if (attempt?.id !== id || attempt.terminalFailure) return
     const autoIdle = automaticIdle(goal)
     delete goal.reviewAttempt
     goal.revision += 1
     goal.updatedAt = Date.now()
-    if (autoIdle) {
-      goal.idleRevision = goal.revision
-      goal.reviewAt = goal.updatedAt + GOAL_REVIEW_POLL_MS
-    }
-    if (goal.idle !== true || inspectionOnlyIdle(goal)) goal.ownerReviewAt = goal.updatedAt + GOAL_REVIEW_POLL_MS
+    if (autoIdle) goal.idleRevision = goal.revision
+    if (reviewEligible(goal)) skipReviewPeriod(goal, attempt.at ?? goal.updatedAt)
     await rt.save({ required: true })
   }
 
@@ -1337,30 +1340,25 @@ export function install(rt) {
         || !Number.isFinite(due) || due > now) continue
       const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
       if (admin === undefined || !room.members.includes(admin.id)) continue
-      const adminBusy = () => {
-        const sessionId = room.sessions?.[admin.id]
-        return sessionId !== undefined && (rt.live.get(sessionId)?.turn !== undefined
-          || rt.hasSubagents?.(sessionId) === true || rt.waitsForApproval?.(sessionId) === true)
-      }
-      if (adminBusy()) {
-        const key = `busy:${room.id}`
-        if (now - due >= GOAL_REVIEW_POLL_MS && !reviewNotified.has(key)) {
-          reviewNotified.add(key)
-          rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_DELAYED', text: `Goal review in ${room.name} is overdue while its administrator is busy; it will be checked again.` })
-        }
-        continue
-      }
-      reviewNotified.delete(`busy:${room.id}`)
       reviewing.add(room.id)
       jobs.push((async () => {
       const id = randomUUID()
       try {
+        if (rt.roomBusyForPatrol(room)) {
+          skipReviewPeriod(goal, now)
+          await rt.save({ required: true })
+          return
+        }
         const root = await rt.resolveAgent(rt.sessionOfRoom(room))
-        // Appending to nextTurn preserves existing room work and arrival order.
-        const canQueue = () => Array.isArray(root.inbox?.nextStep) && Array.isArray(root.inbox?.nextTurn)
-          && root.session?.id === rt.sessionOfRoom(room) && !adminBusy()
         if (rt.roomOf(room.id) !== room || room.goal !== goal || !reviewEligible(goal) || goal.reviewAttempt !== undefined
-          || !canQueue()) return
+          || !Array.isArray(root.inbox?.nextStep) || !Array.isArray(root.inbox?.nextTurn)
+          || root.session?.id !== rt.sessionOfRoom(room)) return
+        const busy = () => rt.roomBusyForPatrol(room) || root.inbox.nextTurn.length > 0 || root.inbox.nextStep.length > 0
+        if (busy()) {
+          skipReviewPeriod(goal, now)
+          await rt.save({ required: true })
+          return
+        }
         rt.requireHomeLock()
         const current = () => rt.roomOf(room.id) === room && room.goal === goal && goalReviewAllowed(room, id)
           && room.admin === admin.id && room.members.includes(admin.id)
@@ -1374,7 +1372,9 @@ export function install(rt) {
         // Persist before admission: if the host dies after this point, never
         // guess whether the same check was sent or create another check.
         await rt.save({ required: true })
-        if (!current() || !canQueue() || (inspectionRequired(room) && goal.reviewAttempt.inspectOnly !== true)) {
+        const valid = current()
+        const skipBusy = valid && busy()
+        if (!valid || skipBusy || (inspectionRequired(room) && goal.reviewAttempt.inspectOnly !== true)) {
           // The check has not been admitted, so this particular intent can be
           // cancelled safely when other work appeared during the save.
           if (room.goal === goal && goal.reviewAttempt?.id === id) {
@@ -1382,6 +1382,7 @@ export function install(rt) {
             delete goal.reviewAttempt
             goal.revision += 1
             if (autoIdle) goal.idleRevision = goal.revision
+            if (skipBusy) skipReviewPeriod(goal, now)
             await rt.save({ required: true })
           }
           return

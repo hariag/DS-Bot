@@ -308,6 +308,22 @@ test('the failures that block a Bot are the ones only the user can fix', () => {
   assert.deepEqual([...BLOCKING_CODES], ['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'AUTH', 'QUOTA', 'ACCOUNT_QUOTA', 'ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_SIGNED_OUT', 'ACCOUNT_TOKEN_INVALID', 'LOCAL_AGENT_MISSING', 'LOCAL_AGENT_SIGNIN', 'LOCAL_AGENT_QUOTA', 'LOCAL_AGENT_EXIT'])
 })
 
+test('an empty skipped patrol turn does not settle a previous business failure', () => {
+  const { rt, emit } = turnsHost()
+  emit('b', 'turn/start', { turn: 1 })
+  emit('b', 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'QUOTA', status: 403 } } })
+  const blocked = rt.bots.b.blocked
+  const failure = rt.bots.b.failures.b
+  rt.consumeSkippedPatrolTurn = (id, turn) => id === 'b' && turn === 2
+  emit('b', 'turn/start', { turn: 2 })
+  emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  assert.equal(rt.bots.b.blocked, blocked)
+  assert.equal(rt.bots.b.failures.b, failure)
+  emit('b', 'turn/start', { turn: 3 })
+  emit('b', 'turn/end', { turn: 3, reason: { kind: 'completed' } })
+  assert.equal(rt.bots.b.blocked, undefined)
+})
+
 test('a failure only the user can fix blocks its Bot with the facts, never the message, until a turn completes', () => {
   const { rt, emit } = turnsHost()
   const fail = (turn, error, session) => {
