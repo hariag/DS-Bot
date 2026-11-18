@@ -1,4 +1,4 @@
-import { discoverWork } from './board-discovery.mjs'
+import { boardReleaseId, discoverWork } from './board-discovery.mjs'
 import { legacyGoalCards, linkGoalCards } from './legacy-goal.js'
 import { prepareBoardIntake, isManualBoardTask } from './board-intake.mjs'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -46,10 +46,10 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     if (!id(roomId) || (caller.roomId && caller.roomId !== roomId) || !member(rt.roomOf?.(roomId), caller.actor)) throw refused()
     return { ...caller, roomId }
   }
-  const goalCards = caller => linkGoalCards(legacyGoalCards({
+  const goalCards = (caller, tasks = store.list()) => linkGoalCards(legacyGoalCards({
     scope:caller.roomId ? {kind:'room', id:caller.roomId} : {kind:'personal', id:caller.actor},
     principal:{kind:'bot', id:caller.actor}, rooms:rt.state?.rooms, bots:rt.state?.bots, pendingCard:pendingGoalCard,
-  }), store.list().filter(task => direct(task, caller)))
+  }), tasks.filter(task => direct(task, caller)))
   const intakeAllowed = (caller, task) => {
     const room = rt.roomOf?.(caller.roomId)
     const participant = actor => actor === 'user' || (rt.botOf?.(actor) && member(room, actor))
@@ -127,9 +127,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   }
   const projectDirect = (task, caller) => {
     const parent = task.parentTaskId ? store.get(task.parentTaskId) : undefined
-    const releaseId = task.parentTaskId
-      ? (parent?.scope === task.scope && direct(parent, caller) ? parent.releaseId : undefined)
-      : task.releaseId
+    const releaseId = boardReleaseId(task, parent, caller, direct)
     const dependencies = (Array.isArray(task.dependencies) ? task.dependencies : []).filter(depId => visibleDependency(caller, depId))
     const change = changeView(task, caller)
     return {
@@ -190,7 +188,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   async function invoke(exec, args) {
     const caller = selectRoom(identity(exec), args?.roomId)
     if (args?.action === 'list') return discoverWork({
-      caller, args, store, direct, sharedProjection, goals:goalCards(caller),
+      caller, args, store, direct, sharedProjection, goalCards,
     })
     if (args?.action === 'register') {
       if (!caller.roomId || !id(args.taskId) || !id(args.operationId) || !args.change?.value) throw refused()

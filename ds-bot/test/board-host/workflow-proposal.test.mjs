@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { createBotWorkflow } from '../../src/host/workflow.mjs'
+import { installTaskTool } from '../../src/host/task-tool.mjs'
 import { privateTempDir } from '../private-temp.mjs'
 
 function fixture(t) {
@@ -31,6 +32,58 @@ function fixture(t) {
 
 const task = { id:'t1', title:'Proposal target', scope:'personal:one', owner:'one', reviewer:'two', acceptance:'review', dependencies:[] }
 const command = (store, type, value, operationId) => store.command({ operationId, taskId:'t1', expectedRevision:store.get('t1').revision, actor:'user', type, ...(value === undefined ? {} : { value }) })
+
+test('Bot discovery scopes minor releases and filters the authorized rows before pagination', async t => {
+  const {store, rt, workflow} = fixture(t)
+  const rooms = {g:{id:'g',members:['one','two']}, other:{id:'other',members:['one','two']}}
+  rt.state = {rooms,bots:{one:{},two:{}}}
+  rt.roomOf = id => rooms[id]
+  rt.groupOwners.set('g-one', {roomId:'g'})
+  rt.selfOf = id => id === 'g-one' || id === 'chat-one' ? 'one' : undefined
+  rt.teamTools = []
+  const tool = installTaskTool(rt, workflow, value => value)
+  const call = async (args, sid = 'g-one') => JSON.parse(await tool.execute(args, {agent:{id:sid}}))
+  const list = async args => (await call({action:'list', ...args})).items
+  const create = (id, scope, fields = {}) => store.create({actor:'user',operationId:'new-'+id,task:{...task,id,scope,...fields}})
+  for (const room of Object.keys(rooms)) {
+    store.createRelease({actor:'user',operationId:'release-'+room,release:{id:'r-'+room,scope:'room:'+room,name:'Minor '+room,version:'1.2'}})
+  }
+  const parent = create('feat', 'room:g', {type:'feature'})
+  store.assignRelease({actor:'user',operationId:'assign',releaseId:'r-g',expectedReleaseRevision:1,taskId:parent.id,expectedTaskRevision:1})
+  for (let i = 0; i < 22; i++) {
+    create('item-'+i, 'room:g', {parentTaskId:parent.id, owner:i%2 ? 'one' : 'two', reviewer:i%2 ? 'two' : 'one'})
+  }
+  create('other-work', 'room:g', {parentTaskId:parent.id, owner:'two', reviewer:'user'})
+  const shared = create('shared', 'room:other')
+  store.command({actor:'user',operationId:'share',taskId:shared.id,expectedRevision:1,type:'share',value:{targetRoomId:'g',fields:['status']}})
+
+  const reads = t.mock.method(store, 'list')
+  const [release] = await list({kind:'release',query:'1.2'})
+  assert.equal(reads.mock.callCount(), 0)
+  assert.deepEqual(release, {kind:'release',id:'r-g',title:'Minor g',version:'1.2',status:'draft'})
+  assert.deepEqual(await list({kind:'release',query:'minor g'}), [release])
+  assert.deepEqual(await list({kind:'release',release_id:'r-other'}), [])
+  assert.deepEqual(await list({release_id:'r-other'}), await list({release_id:'unknown'}))
+  assert.deepEqual((await call({action:'list',kind:'release'},'chat-one')).items, [])
+  await assert.rejects(call({action:'list',kind:'release',room_id:'other'}), /authorized/)
+  assert.deepEqual((await list({kind:'shared'})).map(row => row.id), [shared.id])
+  assert.deepEqual(await list({kind:'shared',mine:true}), [])
+  assert.deepEqual(await list({kind:'shared',release_id:'r-g'}), [])
+  const previousReads = reads.mock.callCount()
+  assert.equal((await list({})).some(row => row.kind === 'release'), false)
+  assert.equal(reads.mock.callCount() - previousReads, 1)
+  const page = {action:'list',kind:'item',release_id:'r-g',mine:true}
+  const first = await call(page), last = await call({...page,cursor:first.nextCursor})
+  const found = [...first.items, ...last.items]
+  assert.equal(first.items.length, 20)
+  assert.equal(last.nextCursor, undefined)
+  assert.deepEqual(found.map(row => row.id).sort(), Array.from({length:22}, (_,i) => 'item-'+i).sort())
+  assert.ok(found.every(row => row.releaseId === release.id))
+  for (const taskId of [parent.id, found[0].id]) {
+    const [row] = await list({release_id:'r-g',query:taskId,kind:taskId === parent.id ? 'card' : 'item'})
+    assert.equal((await call({action:'show',task_id:row.id})).task.releaseId, row.releaseId)
+  }
+})
 
 test('a Bot can propose content changes, query the proposal and cannot apply it itself', async t => {
   const { store, workflow } = fixture(t)
