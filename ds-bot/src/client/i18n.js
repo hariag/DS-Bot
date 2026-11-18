@@ -1485,6 +1485,8 @@ const ZH = {
   'Waiting for you': '等你处理',
   'Periodic review pending': '等待周期复核',
   'Periodic review pending · {title}': '等待周期复核 · {title}',
+  'Inspection failed before any administrator tool ran': '原巡检在管理员调用工具前已失败',
+  'The original inspection has been verified. Future inspections will wait until pending group work has cleared.': '原巡检结果已核实。群内待处理工作结束后，系统会继续后续巡检。',
   'Periodic review needs attention': '周期复核待核查',
   'This review has an unknown outcome. Check the original work before allowing future reviews.': '本次复核结果不明。允许后续复核前，请先核查原有工作。',
   'What did you verify?': '核查结果是什么？',
