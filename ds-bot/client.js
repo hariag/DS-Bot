@@ -12602,7 +12602,11 @@ var ZH = {
   "Goal cards": "目标卡片",
   "Group goal cards are not workflow tasks and do not count as acceptance.": "群目标卡片不是工作流任务，也不计入验收。",
   "Workflow status": "工作流状态",
-  "No cards": "暂无卡片",
+  "Cards in {lane}": "{lane}中的卡片",
+  "Previous card": "上一张卡片",
+  "Next card": "下一张卡片",
+  "Move card earlier": "卡片前移",
+  "Move card later": "卡片后移",
   "A previous review action is still unconfirmed. Check again before saving.": "之前的复核操作尚未确认，请再次核查后再保存。",
   "Review storage or verification is unavailable; saving is disabled.": "复核记录存储或核验不可用，暂时无法保存。",
   "Group status changed. Refresh and review the current attempt.": "群状态已变化，请刷新并核对当前巡检记录。",
@@ -41590,7 +41594,7 @@ function ColumnRail({ label, personal, children }) {
     }, children)
   );
 }
-function BoardLane({ kind, stage, label, count, meta, actions, releaseId, focus, createEnabled, onCreate, dropActive, empty, children, onDragOver, onDragLeave, onDrop, onRename, onMove, onArchiveAll }) {
+function BoardLane({ kind, stage, label, count, meta, actions, releaseId, focus, carousel, createEnabled, onCreate, dropActive, empty, children, onDragOver, onDragLeave, onDrop, onRename, onMove, onArchiveAll }) {
   const [adding, setAdding] = (0, import_react54.useState)(false);
   const [collapsed, setCollapsed] = (0, import_react54.useState)(false);
   const [renameValue, setRenameValue] = (0, import_react54.useState)(label);
@@ -41615,7 +41619,7 @@ function BoardLane({ kind, stage, label, count, meta, actions, releaseId, focus,
   return (0, import_react54.createElement)(
     "section",
     {
-      className: "bt-board-lane" + (dropActive ? " bt-board-lane-drop" : "") + (focus ? " bt-board-lane-focus" : "") + (collapsed ? " bt-board-lane-collapsed" : ""),
+      className: "bt-board-lane" + (dropActive ? " bt-board-lane-drop" : "") + (focus ? " bt-board-lane-focus" : "") + (collapsed ? " bt-board-lane-collapsed" : "") + (carousel ? " bt-board-lane-carousel" : ""),
       "aria-label": label,
       "data-stage": stage,
       "data-kind": kind,
@@ -42099,6 +42103,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const [typeFilter, setTypeFilter] = (0, import_react54.useState)("");
   const [sortMode, setSortMode] = (0, import_react54.useState)("");
   const [focusStatus, setFocusStatus] = (0, import_react54.useState)("");
+  const [cardFocusIndex, setCardFocusIndex] = (0, import_react54.useState)(0);
   const preferenceKey = `ds-bot:board-prefs:${scope.kind}:${scope.id}`;
   const [lanePrefs, setLanePrefs] = (0, import_react54.useState)(() => {
     try {
@@ -43162,7 +43167,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     actors,
     uncertain: !canAct,
     dragging: dragId === task.id,
-    dragEnabled: kind === "type" || kind === "release",
+    dragEnabled: kind === "type" || kind === "release" || kind === "focus",
     request,
     selectionMode,
     selected: selectedIds.has(task.id),
@@ -43341,11 +43346,14 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     const sorted = sortMode === "title" ? [...laneTasks].sort((a, b) => textValue(a.title).localeCompare(textValue(b.title))) : sortMode === "due" ? [...laneTasks].sort((a, b) => (textValue(a.dueDate) || "9999").localeCompare(textValue(b.dueDate) || "9999")) : sortMode === "type" ? [...laneTasks].sort((a, b) => taskType(a).localeCompare(taskType(b))) : laneTasks;
     const dropHere = drop && drop.kind === kind && drop.stage === stage;
     const children = [];
-    sorted.forEach((task, index) => {
-      if (dropHere && drop.index === index) children.push((0, import_react54.createElement)("span", { key: "drop-" + index, className: "bt-board-drop-line", "aria-hidden": true }));
-      children.push(card(task, index, laneTasks, kind, stage));
-    });
-    if (dropHere && drop.index >= sorted.length) children.push((0, import_react54.createElement)("span", { key: "drop-end", className: "bt-board-drop-line", "aria-hidden": true }));
+    if (config?.cardView) children.push(config.cardView(sorted));
+    else {
+      sorted.forEach((task, index) => {
+        if (dropHere && drop.index === index) children.push((0, import_react54.createElement)("span", { key: "drop-" + index, className: "bt-board-drop-line", "aria-hidden": true }));
+        children.push(card(task, index, laneTasks, kind, stage));
+      });
+      if (dropHere && drop.index >= sorted.length) children.push((0, import_react54.createElement)("span", { key: "drop-end", className: "bt-board-drop-line", "aria-hidden": true }));
+    }
     return (0, import_react54.createElement)(BoardLane, {
       key: stage,
       kind,
@@ -43356,6 +43364,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       actions: config?.actions,
       releaseId: config?.releaseId,
       focus: config?.focus,
+      carousel: !!config?.cardView,
       createEnabled: config?.noCreate ? false : createEnabled,
       onCreate: (title2) => openCreate({ ...config, laneLabel: shownLabel }, title2),
       dropActive: !!dropHere,
@@ -43531,39 +43540,66 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       (0, import_react54.createElement)("span", { className: "bt-status-chip-count" }, columns2.get(status).length)
     ))
   );
-  const statusCarousel = (0, import_react54.createElement)(
-    "div",
-    { className: "bt-status-carousel", "aria-hidden": true },
-    listed.map(([status, label], index) => {
-      const offset = index - activeIndex;
-      const laneTasks = columns2.get(status);
-      const preview = textValue(laneTasks[0]?.title);
-      return (0, import_react54.createElement)(
+  const [activeLaneStatus, activeLaneLabel] = activeEntry;
+  const focusTasks = columns2.get(activeLaneStatus) ?? [];
+  (0, import_react54.useEffect)(() => {
+    setCardFocusIndex(0);
+  }, [activeLaneStatus]);
+  const renderCardFocus = () => {
+    const total = focusTasks.length;
+    if (!total) return null;
+    const current3 = Math.min(cardFocusIndex, total - 1);
+    const moveCard = (direction) => {
+      const task = focusTasks[current3];
+      const target = current3 + direction;
+      if (!task || target < 0 || target >= total) return;
+      const afterId = direction < 0 ? current3 - 2 >= 0 ? focusTasks[current3 - 2].id : null : focusTasks[current3 + 1].id;
+      void run2(task, { type: "reorder" }, { afterId });
+      setCardFocusIndex(target);
+    };
+    const slots = [];
+    for (const offset of [-1, 0, 1]) {
+      const index = current3 + offset;
+      if (index < 0 || index >= total) continue;
+      const task = focusTasks[index];
+      slots.push((0, import_react54.createElement)(
         "div",
         {
-          key: status,
-          className: "bt-status-card" + (offset === 0 ? " bt-status-card-active" : ""),
-          "data-offset": Math.max(-2, Math.min(2, offset)),
-          "data-status": status,
-          onClick: () => {
-            if (offset !== 0) setFocusStatus(status);
+          key: task.id,
+          className: "bt-card-slot",
+          "data-offset": offset,
+          onClickCapture: offset === 0 ? void 0 : (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setCardFocusIndex(index);
           }
         },
-        (0, import_react54.createElement)("span", { className: "bt-status-card-dot bt-board-stage-dot bt-board-stage-dot-" + status }),
-        (0, import_react54.createElement)("strong", null, t(laneLabelFor("workflow", status, label))),
-        (0, import_react54.createElement)("small", null, laneTasks.length ? t("{count} cards", { count: laneTasks.length }) + (preview ? " · " + preview : "") : t("No cards"))
-      );
-    })
-  );
-  const [activeLaneStatus, activeLaneLabel] = activeEntry;
+        (0, import_react54.createElement)("div", { className: "bt-card-slot-body" }, card(task, index, focusTasks, "focus", activeLaneStatus))
+      ));
+    }
+    return (0, import_react54.createElement)(
+      "div",
+      { className: "bt-card-stage", role: "group", "aria-label": t("Cards in {lane}", { lane: t(activeLaneLabel) }) },
+      slots,
+      (0, import_react54.createElement)("button", { type: "button", className: "bt-card-stage-arrow bt-card-stage-arrow-left", "aria-label": t("Previous card"), disabled: current3 <= 0, onClick: () => setCardFocusIndex(Math.max(0, current3 - 1)) }, (0, import_react54.createElement)(ChevronLeftIcon)),
+      (0, import_react54.createElement)("button", { type: "button", className: "bt-card-stage-arrow bt-card-stage-arrow-right", "aria-label": t("Next card"), disabled: current3 >= total - 1, onClick: () => setCardFocusIndex(Math.min(total - 1, current3 + 1)) }, (0, import_react54.createElement)(ChevronRightIcon)),
+      (0, import_react54.createElement)(
+        "div",
+        { className: "bt-card-stage-controls" },
+        (0, import_react54.createElement)("button", { type: "button", "data-move": "earlier", "aria-label": t("Move card earlier"), title: t("Move card earlier"), disabled: current3 <= 0, onClick: () => moveCard(-1) }, "←"),
+        (0, import_react54.createElement)("span", { className: "bt-card-stage-count", role: "status", "aria-live": "polite" }, current3 + 1 + " / " + total),
+        (0, import_react54.createElement)("button", { type: "button", "data-move": "later", "aria-label": t("Move card later"), title: t("Move card later"), disabled: current3 >= total - 1, onClick: () => moveCard(1) }, "→")
+      )
+    );
+  };
   const workflowSection = view === "status" && (!personal || filtered.some((task) => !personalIds.has(task.id) && !task.legacy)) ? (0, import_react54.createElement)(
     "section",
     { className: "bt-board-section bt-board-workflow", "aria-label": t("Workflow") },
     personal ? (0, import_react54.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react54.createElement)("h3", null, t("Shared workflow")), (0, import_react54.createElement)("p", null, t("These statuses reflect the shared task workflow."))) : null,
     statusChips,
-    statusCarousel,
-    (0, import_react54.createElement)("div", { className: "bt-board-focus-lane" }, renderLane("workflow", activeLaneStatus, t(activeLaneLabel), columns2.get(activeLaneStatus), {
+    (0, import_react54.createElement)("div", { className: "bt-board-focus-lane" }, renderLane("workflow", activeLaneStatus, t(activeLaneLabel), focusTasks, {
       laneLabel: t(activeLaneLabel),
+      cardView: renderCardFocus,
       scheduleOnCreate: !personal && ["waiting", "ready", "working"].includes(activeLaneStatus),
       followup: personal || ["reported", "done", "unknown"].includes(activeLaneStatus),
       noCreate: activeLaneStatus === "cancelled",
@@ -43983,25 +44019,31 @@ var TASK_BOARD_CSS = `
 .bt-status-chip:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-status-chip-active{border-color:var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font-weight:500}
 .bt-status-chip-count{color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
-.bt-status-carousel{position:relative;flex:none;height:152px;margin:0 0 10px;perspective:1100px;overflow:hidden;border-radius:18px;background:linear-gradient(180deg,color-mix(in srgb,var(--bt-ink) 5%,var(--bt-main)),transparent 78%)}
-.bt-status-card{position:absolute;left:50%;top:16px;width:min(360px,48vw);height:120px;box-sizing:border-box;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px 16px;border:.5px solid var(--bt-line-2);border-radius:16px;background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;overflow:hidden;transition:transform .38s cubic-bezier(.2,.8,.2,1),opacity .3s ease,box-shadow .3s ease,border-color .2s ease;will-change:transform,opacity}
-.bt-status-card[data-offset="0"]{transform:translateX(-50%) translateZ(0);z-index:3;border-color:color-mix(in srgb,var(--bt-accent) 55%,var(--bt-line-2));box-shadow:0 0 0 1px color-mix(in srgb,var(--bt-accent) 45%,transparent),0 18px 44px -20px color-mix(in srgb,var(--bt-accent) 65%,transparent),0 10px 24px rgba(0,0,0,.12)}
-.bt-status-card[data-offset="-1"]{transform:translateX(calc(-50% - clamp(150px,23vw,270px))) rotateY(15deg) scale(.8);opacity:.62;z-index:2}
-.bt-status-card[data-offset="1"]{transform:translateX(calc(-50% + clamp(150px,23vw,270px))) rotateY(-15deg) scale(.8);opacity:.62;z-index:2;align-items:flex-end;text-align:right}
-.bt-status-card[data-offset="-2"],.bt-status-card[data-offset="2"]{opacity:0;pointer-events:none;z-index:1}
-.bt-status-card[data-offset="-2"]{transform:translateX(calc(-50% - clamp(300px,46vw,540px))) rotateY(18deg) scale(.6)}
-.bt-status-card[data-offset="2"]{transform:translateX(calc(-50% + clamp(300px,46vw,540px))) rotateY(-18deg) scale(.6)}
-.bt-status-card-dot{width:10px;height:10px;flex:none}
-.bt-status-card-active .bt-status-card-dot{box-shadow:0 0 0 4px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
-.bt-status-card strong{max-width:100%;font-size:17px;line-height:24px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bt-status-card small{max-width:100%;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-board-focus-lane{display:flex;flex:1;min-height:0;justify-content:center}
 .bt-board-focus-lane>.bt-board-lane{flex:1 1 auto;width:100%;max-width:1020px;min-height:0;max-height:100%}
 .bt-board-focus-lane .bt-board-lane-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));align-content:start}
 .bt-board-focus-lane .bt-board-drop-line{grid-column:1/-1}
 .bt-board-focus-lane .bt-board-lane-collapse{display:none}
-@media(max-width:700px){.bt-status-carousel{height:138px}.bt-status-card{width:min(320px,74vw);height:108px;padding:12px 14px}.bt-status-card[data-offset="-1"]{transform:translateX(calc(-50% - clamp(48px,16vw,110px))) rotateY(13deg) scale(.78)}.bt-status-card[data-offset="1"]{transform:translateX(calc(-50% + clamp(48px,16vw,110px))) rotateY(-13deg) scale(.78)}.bt-board-focus-lane .bt-board-lane-cards{grid-template-columns:1fr}}
-@media(prefers-reduced-motion:reduce){.bt-status-card{transition:none}}
+.bt-board-lane-carousel .bt-board-lane-cards{display:flex;flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;padding:0}
+.bt-card-stage{position:relative;display:flex;flex:1;justify-content:center;align-items:center;width:100%;min-height:260px;padding:20px 0 26px;perspective:1200px;overflow:hidden;border-radius:18px;background:linear-gradient(180deg,color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main)),transparent 72%)}
+.bt-card-slot{position:absolute;top:50%;left:50%;width:min(440px,64vw);transform-origin:center center;transition:transform .35s cubic-bezier(.2,.8,.2,1),opacity .3s ease;will-change:transform}
+.bt-card-slot[data-offset="0"]{position:relative;left:auto;top:auto;transform:translateZ(0);z-index:3}
+.bt-card-slot[data-offset="-1"]{transform:translate(calc(-50% - clamp(220px,30vw,380px)), -50%) rotateY(14deg) scale(.8);opacity:.62;z-index:2}
+.bt-card-slot[data-offset="1"]{transform:translate(calc(-50% + clamp(220px,30vw,380px)), -50%) rotateY(-14deg) scale(.8);opacity:.62;z-index:2}
+.bt-card-slot[data-offset="-1"] .bt-board-card,.bt-card-slot[data-offset="1"] .bt-board-card{box-shadow:0 16px 36px -22px rgba(0,0,0,.3)}
+.bt-card-slot-body{position:relative}
+.bt-card-slot[data-offset="0"] .bt-board-card{border-color:color-mix(in srgb,var(--bt-accent) 45%,var(--bt-line));box-shadow:0 0 0 1px color-mix(in srgb,var(--bt-accent) 35%,transparent),0 18px 44px -22px color-mix(in srgb,var(--bt-accent) 55%,transparent)}
+.bt-card-stage-arrow{position:absolute;top:50%;transform:translateY(-50%);z-index:5;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:50%;background:color-mix(in srgb,var(--bt-main) 80%,transparent);color:var(--bt-ink-2);cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.14)}
+.bt-card-stage-arrow-left{left:6px}.bt-card-stage-arrow-right{right:6px}
+.bt-card-stage-arrow:hover{color:var(--bt-ink);background:var(--bt-hover)}
+.bt-card-stage-arrow:disabled{opacity:.3;cursor:default}
+.bt-card-stage-controls{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);z-index:4;display:flex;align-items:center;gap:4px}
+.bt-card-stage-controls button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:50%;background:color-mix(in srgb,var(--bt-main) 80%,transparent);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
+.bt-card-stage-controls button:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-card-stage-controls button:disabled{opacity:.3;cursor:default}
+.bt-card-stage-count{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--bt-main) 80%,transparent);color:var(--bt-ink-3);font-size:11px;line-height:18px;font-variant-numeric:tabular-nums}
+@media(max-width:700px){.bt-card-slot{width:min(340px,86vw)}.bt-card-slot[data-offset="-1"]{transform:translate(calc(-50% - clamp(80px,22vw,140px)), -50%) rotateY(12deg) scale(.78)}.bt-card-slot[data-offset="1"]{transform:translate(calc(-50% + clamp(80px,22vw,140px)), -50%) rotateY(-12deg) scale(.78)}.bt-board-focus-lane .bt-board-lane-cards{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.bt-card-slot{transition:none}}
 .bt-board-rail{position:relative}
 .bt-board-rail::after{content:"";position:absolute;top:0;right:-1px;bottom:14px;width:26px;pointer-events:none;background:linear-gradient(to right,transparent,var(--dsw-alias-bg-base,var(--bt-main)))}
 .bt-board-columns{scroll-snap-type:x proximity}
