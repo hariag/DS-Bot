@@ -9,11 +9,13 @@
  * the same poll carries cards and approvals: a window that sits still should not pay 1.5 s
  * for them, but nothing may appear minutes late either.
  */
-export const POLL_MAX_MS = 5_000
+export const POLL_MAX_MS = 10_000
+export const VISIBLE_POLL_MS = 3_000
+export const HIDDEN_POLL_MS = 30_000
 
 /**
  * How long to wait before asking the host again.
- * @param {number} base the cadence while something is changing (1.5 s visible, 10 s hidden)
+ * @param {number} base the cadence while something is changing (3 s visible, 30 s hidden)
  * @param {number} unchanged how many answers in a row said nothing changed
  * @param {number} networkFailures consecutive requests that could not reach DSH
  * @returns {number} milliseconds to wait
