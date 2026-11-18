@@ -55,7 +55,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       if (targets.length) availableTargets[task.id] = targets
       const actions = source ? store.listActions?.(task.id) ?? [] : []
       const activeAction = actions.find(action => action.revision === source?.actionRevision && ['pending','claimed','accepted','uncertain'].includes(action.state))
-      const canSchedule = !source?.change && ['proposed','waiting'].includes(source?.status) && source.owner !== 'user' && source.reviewer !== 'user'
+      const canSchedule = !source?.change && !source?.archivedAt && ['proposed','waiting'].includes(source?.status) && source.owner !== 'user' && source.reviewer !== 'user'
         && !source.blocked && !source.stale && !activeAction && actors.some(actor => actor.id === source.owner) && actors.some(actor => actor.id === source.reviewer)
       const canUnschedule = !source?.change && !source?.blocked && !source?.stale
         && (source?.status === 'ready' || source?.status === 'waiting' && !!source?.authority)
