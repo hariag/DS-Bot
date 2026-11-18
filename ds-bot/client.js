@@ -12599,6 +12599,8 @@ var ZH = {
   "Clear filters": "清除筛选",
   "Earlier group goal task · read only": "历史群目标任务 · 仅可查看",
   "Group goal cards edit the original task. Earlier stages remain read only.": "群目标卡片直接编辑原任务；历史阶段仅可查看。",
+  "Goal cards": "目标卡片",
+  "Group goal cards are not workflow tasks and do not count as acceptance.": "群目标卡片不是工作流任务，也不计入验收。",
   "A previous review action is still unconfirmed. Check again before saving.": "之前的复核操作尚未确认，请再次核查后再保存。",
   "Review storage or verification is unavailable; saving is disabled.": "复核记录存储或核验不可用，暂时无法保存。",
   "Group status changed. Refresh and review the current attempt.": "群状态已变化，请刷新并核对当前巡检记录。",
@@ -38861,14 +38863,24 @@ var COLUMNS = [
   ["draft", "Draft"],
   ["proposed", "Preparing"],
   ["waiting", "Waiting"],
-  ["ready", "Ready"],
-  ["legacy-pending", "Not started"],
   ["working", "In progress"],
   ["reported", "Awaiting review"],
   ["done", "Done"],
-  ["legacy-done", "Goal marked done"],
   ["cancelled", "Cancelled"]
 ];
+var STATUS_LABELS = {
+  draft: "Draft",
+  proposed: "Preparing",
+  waiting: "Waiting",
+  ready: "Ready",
+  working: "In progress",
+  reported: "Awaiting review",
+  done: "Done",
+  "legacy-pending": "Not started",
+  "legacy-done": "Goal marked done",
+  cancelled: "Cancelled"
+};
+var LANE_OF_STATUS = { ready: "waiting" };
 var PERSONAL_COLUMNS = [["todo", "To do"], ["doing", "Doing"], ["finished", "Personally finished"]];
 var TASK_TYPES = [
   ["requirement", "Requirement"],
@@ -38971,7 +38983,8 @@ function boardColumns(tasks) {
   for (const task of Array.isArray(tasks) ? tasks : []) {
     if (!task || typeof task.id !== "string" || !task.id || seen.has(task.id)) throw new Error("Invalid or duplicate task ID");
     seen.add(task.id);
-    columns2.get(KNOWN.has(task.status) ? task.status : "unknown").push(task);
+    const lane = LANE_OF_STATUS[task.status] ?? task.status;
+    columns2.get(KNOWN.has(lane) ? lane : "unknown").push(task);
   }
   return columns2;
 }
@@ -39866,7 +39879,7 @@ var imagesOf = (task) => Array.isArray(task.images) ? task.images : [];
 var labelsOf = (task) => Array.isArray(task.labels) ? task.labels : [];
 var dependenciesOf = (task) => Array.isArray(task.dependencies) ? task.dependencies.map(asText2).filter(Boolean) : [];
 var commandOf = (commands, type) => Array.isArray(commands) && commands.some((command) => command?.type === type);
-var stageLabelOf = (task) => task?.legacy ? { current: "Current goal task", previous: "Earlier goal stage", future: "Upcoming goal stage", archived: "Archived goal task", closed: "Closed goal task" }[task.legacy.position] ?? t("Goal task") : t((COLUMNS.find(([status]) => status === task?.status) ?? [null, "Status unknown"])[1]);
+var stageLabelOf = (task) => task?.legacy ? { current: "Current goal task", previous: "Earlier goal stage", future: "Upcoming goal stage", archived: "Archived goal task", closed: "Closed goal task" }[task.legacy.position] ?? t("Goal task") : t(STATUS_LABELS[task?.status] ?? "Status unknown");
 var actorName = (value, actors) => actorLabel(value, actors) || t("Unknown");
 var hiddenInClosedDetails = (item) => {
   const closed = item.closest("details:not([open])");
@@ -40028,7 +40041,7 @@ function TaskCard({ scope, task, commands, actors, uncertain, dragging, dragEnab
   const canReorder = commandOf(commands, "reorder");
   const canMove = commandOf(commands, "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
   const canSchedule = commandOf(commands, "schedule") && ["proposed", "waiting"].includes(task.status);
-  const canDrag = !uncertain && !task.shared && (dragEnabled === true || canReorder || canMove || canSchedule);
+  const canDrag = !uncertain && !task.shared && (dragEnabled === true || task.status !== "ready" && (canReorder || canMove || canSchedule));
   const deliveryLabel = task.dispatchState === "uncertain" ? t("Delivery needs review") : task.dispatchState === "accepted" ? t("Sent to Bot") : task.dispatchState === "claimed" ? t("Preparing delivery") : task.dispatchState === "pending" ? t("Bot queued") : "";
   return (0, import_react54.createElement)(
     "article",
@@ -43030,8 +43043,9 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const activeFiltered = filtered.filter((task) => !task.archivedAt);
   const personalTasks = personal ? activeFiltered.filter((task) => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : [];
   const personalIds = new Set(personalTasks.map((task) => task.id));
-  const columns2 = boardColumns(activeFiltered.filter((task) => !personalIds.has(task.id)));
-  const listedBase = [...COLUMNS.filter(([status]) => !["legacy-pending", "legacy-done"].includes(status) || columns2.get(status).length), ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const legacyTasks = activeFiltered.filter((task) => task.legacy);
+  const columns2 = boardColumns(activeFiltered.filter((task) => !task.legacy && !personalIds.has(task.id)));
+  const listedBase = [...COLUMNS, ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
   const listed = lanePrefs.order.length ? [...listedBase].sort((left, right) => {
     const li = lanePrefs.order.indexOf(left[0]), ri = lanePrefs.order.indexOf(right[0]);
     return (li === -1 ? 999 : li) - (ri === -1 ? 999 : ri);
@@ -43130,7 +43144,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     if (selectedCard && (selectedCard.key !== key || data && !selected)) setSelectedCard(null);
   }, [key, data, selectedCard, selected]);
   const laneHandlers = (kind, stage, laneTasks) => {
-    const labelText = kind === "type" ? t(TASK_TYPE_LABELS[stage] ?? "Other") : kind === "release" ? stage === "unassigned" ? t("Unassigned") : textValue(releaseById.get(stage)?.name) || t("Untitled release") : t((COLUMNS.find(([status]) => status === stage) ?? PERSONAL_COLUMNS.find(([value]) => value === stage) ?? [null, stage])[1]);
+    const labelText = kind === "type" ? t(TASK_TYPE_LABELS[stage] ?? "Other") : kind === "release" ? stage === "unassigned" ? t("Unassigned") : textValue(releaseById.get(stage)?.name) || t("Untitled release") : t(STATUS_LABELS[stage] ?? PERSONAL_COLUMNS.find(([value]) => value === stage)?.[1] ?? stage);
     if (kind === "release") {
       const release = stage === "unassigned" ? null : releaseById.get(stage);
       return {
@@ -43629,7 +43643,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
         "div",
         { className: "bt-board-summary", role: "status", "aria-label": t("Board summary") },
         (0, import_react54.createElement)("span", null, (0, import_react54.createElement)("b", null, data.summary.statuses?.working ?? 0), " ", t("In progress")),
-        (0, import_react54.createElement)("span", null, (0, import_react54.createElement)("b", null, data.summary.statuses?.waiting ?? 0), " ", t("Waiting")),
+        (0, import_react54.createElement)("span", null, (0, import_react54.createElement)("b", null, (data.summary.statuses?.waiting ?? 0) + (data.summary.statuses?.ready ?? 0)), " ", t("Waiting")),
         (0, import_react54.createElement)("span", { className: data.summary.blocked ? "bt-board-summary-alert" : "" }, (0, import_react54.createElement)("b", null, data.summary.blocked ?? 0), " ", t("Blocked")),
         (0, import_react54.createElement)("span", { className: data.summary.overdue ? "bt-board-summary-alert" : "" }, (0, import_react54.createElement)("b", null, data.summary.overdue ?? 0), " ", t("Overdue")),
         (0, import_react54.createElement)("span", null, (0, import_react54.createElement)("b", null, data.summary.statuses?.done ?? 0), " ", t("Done"))
@@ -43664,13 +43678,19 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
             { laneLabel: t(label), personalProgress: progress, defaultOwner: "user", ownerOnly: true, scheduleOnCreate: false, followup: false }
           )))
         ) : null,
-        view === "status" && (!personal || filtered.some((task) => !personalIds.has(task.id))) ? (0, import_react54.createElement)(
+        view === "status" && legacyTasks.length ? (0, import_react54.createElement)(
+          "section",
+          { className: "bt-board-section bt-board-goal-cards", "aria-label": t("Goal cards") },
+          (0, import_react54.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react54.createElement)("h3", null, t("Goal cards")), (0, import_react54.createElement)("p", null, t("Group goal cards are not workflow tasks and do not count as acceptance."))),
+          (0, import_react54.createElement)("div", { className: "bt-board-goal-grid" }, legacyTasks.map((task, index) => card(task, index, legacyTasks, "legacy", "goal")))
+        ) : null,
+        view === "status" && (!personal || filtered.some((task) => !personalIds.has(task.id) && !task.legacy)) ? (0, import_react54.createElement)(
           "section",
           { className: "bt-board-section", "aria-label": t("Workflow") },
           personal ? (0, import_react54.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react54.createElement)("h3", null, t("Shared workflow")), (0, import_react54.createElement)("p", null, t("These statuses reflect the shared task workflow."))) : null,
           (0, import_react54.createElement)(ColumnRail, { label: t("Workflow") }, listed.map(([status, label]) => {
             const scheduleOnCreate = !personal && ["waiting", "ready", "working"].includes(status);
-            const followup = personal || ["reported", "done", "legacy-pending", "legacy-done", "unknown"].includes(status);
+            const followup = personal || ["reported", "done", "unknown"].includes(status);
             return renderLane("workflow", status, t(label), columns2.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
           }))
         ) : null,
@@ -44087,6 +44107,8 @@ var TASK_BOARD_CSS = `
 .bt-board-legacy-note{padding:7px 20px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-main));font-size:12px;line-height:18px}
 .bt-board-content{display:flex;flex-direction:column;gap:16px;flex:1;min-height:0;overflow:hidden;padding:16px 20px 18px;background:color-mix(in srgb,var(--bt-sidebar) 82%,var(--bt-main))}
 .bt-board-section{display:flex;flex-direction:column;flex:1;min-height:0}
+.bt-board-goal-cards{flex:none;min-height:0}
+.bt-board-goal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:10px;align-items:start;max-height:min(34vh,360px);overflow:auto;padding-bottom:2px}
 .bt-board-section+.bt-board-section{margin-top:0}
 .bt-board-section-heading{margin:0 0 8px}
 .bt-board-section-heading h3{font-size:13px;line-height:18px;font-weight:600}

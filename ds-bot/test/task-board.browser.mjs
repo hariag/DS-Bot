@@ -502,7 +502,7 @@ try {
 
   await page.evaluate(() => {globalThis.fixture.calls=[];globalThis.fixture.boardStatus='proposed';globalThis.renderFixture({kind:'room',id:'g1'},'schedule',true)})
   await page.locator('[aria-label="Preparing"] [data-task-id="T1"]').waitFor()
-  for(const lane of ['Preparing','Waiting','Ready','In progress','Awaiting review','Done']){
+  for(const lane of ['Preparing','Waiting','In progress','Awaiting review','Done']){
     assert.equal(await page.locator('[aria-label="'+lane+'"]').getByRole('button',{name:'Add card',exact:true}).count(),1,`${lane} has a quick-add entry`)
     assert.equal(await page.locator('[aria-label="'+lane+'"]').getByRole('button',{name:'Add card to '+lane}).count(),1,`${lane} has a card creation entry`)
   }
@@ -519,7 +519,8 @@ try {
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'))
   await page.getByText('Saving…').waitFor({state:'hidden'})
   const waitingLane=page.locator('[aria-label="Waiting"]')
-  await page.locator('[aria-label="Ready"] [data-task-id="T1"]').waitFor()
+  await page.locator('[aria-label="Waiting"] [data-task-id="T1"]').waitFor()
+  assert.equal(await page.locator('[aria-label="Ready"]').count(),0,'ready shares the Waiting lane instead of a column of its own')
   assert.equal(await page.locator('[aria-label="In progress"] [data-task-id="T1"]').count(),0,'a queued Bot action stays ready until the owner starts it')
   await page.evaluate(()=>{globalThis.fixture.calls=[];globalThis.fixture.boardStatus='waiting';globalThis.renderFixture({kind:'room',id:'g1'},'schedule')})
   await page.getByRole('button',{name:'Refresh',exact:true}).click()
@@ -531,7 +532,7 @@ try {
   assert.equal(waitingDrag.payload.scope.id,'g1')
   await page.waitForFunction(()=>globalThis.fixture.calls.some(x=>x.endpoint==='board-operation'))
   await page.getByText('Saving…').waitFor({state:'hidden'})
-  await page.locator('[aria-label="Ready"] [data-task-id="T1"]').waitFor()
+  await page.locator('[aria-label="Waiting"] [data-task-id="T1"]').waitFor()
   if(process.env.GROUP_BOARD_SCREENSHOT){await page.screenshot({path:process.env.GROUP_BOARD_SCREENSHOT})}
   await waitingLane.getByRole('button',{name:'Add card to Waiting'}).click()
   const createModal=page.locator('.bt-create-modal')
@@ -881,8 +882,12 @@ try {
   await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'},'legacy',true))
   await page.getByText('Legacy task', {exact:true}).waitFor()
   await page.getByText('Goal card details can be corrected without changing the original task or acceptance record.').waitFor()
-  assert.equal(await page.locator('[aria-label="Not started"]').getByRole('button',{name:'Add card',exact:true}).count(),1,'the legacy not-started list can add a follow-up without editing its goal task')
-  assert.equal(await page.locator('[aria-label="Goal marked done"]').getByRole('button',{name:'Add card',exact:true}).count(),1,'the legacy completed list can add a follow-up without rewriting its history')
+  assert.equal(await page.locator('[aria-label="Not started"]').count(),0,'goal cards do not occupy a workflow status column')
+  assert.equal(await page.locator('[aria-label="Goal marked done"]').count(),0,'completed goal cards do not occupy a workflow status column')
+  const goalSection=page.locator('.bt-board-section[aria-label="Goal cards"]')
+  assert.equal(await goalSection.count(),1,'goal cards have their own section')
+  assert.equal(await goalSection.locator('article').count(),2,'both goal cards are listed outside the workflow lanes')
+  assert.equal(await goalSection.getByRole('button',{name:'Add card',exact:true}).count(),0,'the goal section is not a workflow lane and offers no quick add')
   await page.locator('article').filter({hasText:'Legacy task'}).locator('.bt-board-card-summary').click()
   const legacy = page.locator('.bt-card-modal')
   await legacy.waitFor()
