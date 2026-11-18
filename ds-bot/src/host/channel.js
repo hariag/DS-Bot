@@ -432,6 +432,7 @@ const READS = new Set(['board-list', 'board-release-list', 'board-release-report
         case 'board-release-list':
         case 'board-release-create':
         case 'board-release-plan':
+        case 'board-release-configure-team':
         case 'board-release-update':
         case 'board-release-assign':
         case 'board-release-remove':

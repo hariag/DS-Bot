@@ -39,6 +39,22 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// src/shared/release-labels.js
+var RELEASE_ROLE_LABELS_ZH = {
+  "Project Manager": "项目经理",
+  "Product Manager": "产品经理",
+  "Architect": "架构师",
+  "UI Designer": "UI 设计师",
+  "UX Designer": "UX 设计师",
+  "Frontend Developer": "前端开发",
+  "Backend Developer": "后端开发",
+  "API Engineer": "API 中间件工程师",
+  "Database Administrator": "数据库管理员",
+  "Test Engineer": "测试工程师",
+  "Independent Reviewer": "独立验收人",
+  "Operations Engineer": "运维工程师"
+};
+
 // src/client/locales/zh-tw.js
 var PHRASES = [
   ["剪贴板", "剪貼簿"],
@@ -14551,6 +14567,8 @@ var ZH = {
   "Due date complete": "截止日期已完成",
   "Release name": "发布名称",
   "Create release": "创建发布",
+  "Configure release team": "配置发布团队",
+  "Save release team": "保存发布团队",
   "New release": "新建发布",
   "Destination card": "目标卡片",
   "Choose a feature or bugfix": "选择功能或缺陷卡",
@@ -14589,18 +14607,7 @@ var ZH = {
   "Drag cards between release lanes. Arrow controls reorder draft and queued releases.": "在发布列之间拖动卡片；用箭头按钮调整起草和排队发布的顺序。",
   "Release team": "发布团队",
   "This minor release uses the current major-version group and its existing admin and members.": "此小版本使用当前大版本群及其现任管理员与成员。",
-  "Project Manager": "项目经理",
-  "Product Manager": "产品经理",
-  "Architect": "架构师",
-  "UI Designer": "UI 设计师",
-  "UX Designer": "UX 设计师",
-  "Frontend Developer": "前端开发",
-  "Backend Developer": "后端开发",
-  "API Engineer": "API 中间件工程师",
-  "Database Administrator": "数据库管理员",
-  "Test Engineer": "测试工程师",
-  "Independent Reviewer": "独立验收人",
-  "Operations Engineer": "运维工程师",
+  ...RELEASE_ROLE_LABELS_ZH,
   "Required": "必填",
   "Choose a project manager and every required role.": "请选择项目经理和所有必填角色。",
   "Release details": "发布详情",
@@ -41987,12 +41994,15 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled })
     )))) : (0, import_react54.createElement)("p", { className: "bt-card-muted" }, t("No releases yet"))
   );
 }
-function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors, onClose, onCreate }) {
+function ReleaseDialog({ release, disabled, releaseRoles, releaseCandidates = {}, actors, pending, feedback, onCheck, onClose, onSave }) {
   const roles = Array.isArray(releaseRoles) ? releaseRoles.filter((role) => role && typeof role.key === "string" && role.key) : [];
   const teamSupported = roles.length > 0;
   const bots = (Array.isArray(actors) ? actors : []).filter((actor) => actor && typeof actor.id === "string" && actor.id !== "user");
   const candidates = releaseCandidates && typeof releaseCandidates === "object" && !Array.isArray(releaseCandidates) ? releaseCandidates : {};
-  const firstCandidate = (key) => candidates[key]?.[0]?.id ?? "";
+  const members = new Map(bots.map((bot) => [bot.id, bot]));
+  const recommended = (key) => Array.isArray(candidates[key]) ? candidates[key].filter((bot) => members.has(bot?.id)) : [];
+  const firstCandidate = (key) => recommended(key)[0]?.id ?? "";
+  const title = release ? t("Configure release team") : t("New release");
   const teamRoles = roles.filter((role) => role.key !== "projectManager");
   const [name, setName] = (0, import_react54.useState)("");
   const [version, setVersion] = (0, import_react54.useState)("");
@@ -42009,16 +42019,16 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onClose();
+        if (!saving) onClose();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-  const requiredMissing = teamRoles.filter((role) => role.required === true && !assignments[role.key]);
-  const missingCandidates = teamRoles.filter((role) => role.required === true && !(Array.isArray(candidates[role.key]) && candidates[role.key].length));
-  const teamReady = !!manager && requiredMissing.length === 0;
-  const valid = !!name.trim() && !!version.trim() && (!teamSupported || teamReady);
+  }, [onClose, saving]);
+  const requiredMissing = teamRoles.filter((role) => role.required === true && !members.has(assignments[role.key]));
+  const missingCandidates = teamRoles.filter((role) => role.required === true && !recommended(role.key).length);
+  const teamReady = members.has(manager) && requiredMissing.length === 0;
+  const valid = (release ? teamSupported : !!name.trim() && !!version.trim()) && (!teamSupported || teamReady);
   const assign = (key, value) => setAssignments((current2) => ({ ...current2, [key]: value }));
   const autoFill = () => {
     setManager(firstCandidate("projectManager"));
@@ -42029,13 +42039,13 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     if (!valid || disabled || saving) return;
     setSaving(true);
     setError("");
-    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => typeof id === "string" && id));
+    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => members.has(id)));
     const team = teamSupported ? { projectManagerId: manager, roles: { ...picked, projectManager: manager } } : void 0;
     try {
-      await onCreate({ name: name.trim(), version: version.trim(), ...team ? { team } : {} });
-      onClose();
+      const saved = await onSave(release ? { team } : { name: name.trim(), version: version.trim(), ...team ? { team } : {} });
+      if (saved !== false) onClose();
     } catch (caught) {
-      setError(hostText(caught?.message) || t("The release could not be created. Check the fields and try again."));
+      setError(hostText(caught?.message) || t(release ? "Unable to update release" : "The release could not be created. Check the fields and try again."));
     } finally {
       setSaving(false);
     }
@@ -42044,10 +42054,11 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     if (!saving) onClose();
   };
   const botSelect = (value, label, onPick, roleKey) => {
-    const choices = Array.isArray(candidates[roleKey]) && candidates[roleKey].length ? candidates[roleKey] : bots;
+    const preferred = new Map(recommended(roleKey).map((bot) => [bot.id, { ...members.get(bot.id), ...bot }]));
+    const choices = [...preferred.values(), ...bots.filter((bot) => !preferred.has(bot.id))];
     return (0, import_react54.createElement)(
       "select",
-      { value, "aria-label": label, disabled: disabled || saving, onChange: (event) => onPick(event.target.value) },
+      { ref: release && roleKey === "projectManager" ? first : void 0, value, "aria-label": label, disabled: disabled || saving, onChange: (event) => onPick(event.target.value) },
       (0, import_react54.createElement)("option", { value: "" }, t("Choose a Bot")),
       choices.map((bot) => (0, import_react54.createElement)("option", { key: bot.id, value: bot.id }, textValue(bot.name) || bot.id, bot.role ? " · " + bot.role : ""))
     );
@@ -42059,18 +42070,18 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     } },
     (0, import_react54.createElement)(
       "section",
-      { className: "bt-card-modal bt-create-modal bt-release-modal" + (teamSupported ? " bt-release-modal-team" : ""), role: "dialog", "aria-modal": "true", "aria-label": t("New release"), tabIndex: -1 },
+      { className: "bt-card-modal bt-create-modal bt-release-modal" + (teamSupported ? " bt-release-modal-team" : ""), role: "dialog", "aria-modal": "true", "aria-label": title, tabIndex: -1 },
       (0, import_react54.createElement)(
         "header",
         { className: "bt-card-modal-header" },
-        (0, import_react54.createElement)("div", null, (0, import_react54.createElement)("p", { className: "bt-card-eyebrow" }, t("Releases")), (0, import_react54.createElement)("h2", null, t("New release"))),
+        (0, import_react54.createElement)("div", null, (0, import_react54.createElement)("p", { className: "bt-card-eyebrow" }, release ? [release.name, release.version].filter(Boolean).join(" · ") : t("Releases")), (0, import_react54.createElement)("h2", null, title)),
         (0, import_react54.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), onClick: close }, (0, import_react54.createElement)(CloseIcon))
       ),
       (0, import_react54.createElement)(
         "form",
         { className: "bt-create-form", onSubmit: submit },
-        (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Release name")), (0, import_react54.createElement)("input", { ref: first, value: name, maxLength: 200, disabled: disabled || saving, "aria-label": t("Release name"), placeholder: t("Release name"), onChange: (event) => setName(event.target.value) })),
-        (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Version")), (0, import_react54.createElement)("input", { value: version, maxLength: 100, disabled: disabled || saving, "aria-label": t("Version"), placeholder: t("Version"), onChange: (event) => setVersion(event.target.value) })),
+        !release ? (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Release name")), (0, import_react54.createElement)("input", { ref: first, value: name, maxLength: 200, disabled: disabled || saving, "aria-label": t("Release name"), placeholder: t("Release name"), onChange: (event) => setName(event.target.value) })) : null,
+        !release ? (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Version")), (0, import_react54.createElement)("input", { value: version, maxLength: 100, disabled: disabled || saving, "aria-label": t("Version"), placeholder: t("Version"), onChange: (event) => setVersion(event.target.value) })) : null,
         teamSupported ? (0, import_react54.createElement)(
           "section",
           { className: "bt-release-team", "aria-label": t("Release team") },
@@ -42100,12 +42111,13 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
             missingCandidates.length ? t("No Bot is tagged for {roles}. Pick another Bot, or create one with that role in Bots settings.", { roles: missingCandidates.map(releaseRoleLabel).join(", ") }) : t("Choose a project manager and every required role.")
           )
         ) : null,
-        error ? (0, import_react54.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+        error || feedback ? (0, import_react54.createElement)("p", { className: "bt-form-error", role: "alert" }, error || feedback) : null,
+        pending && !saving ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => onCheck(pending) }, t("Check action")) : null,
         (0, import_react54.createElement)(
           "div",
           { className: "bt-create-actions" },
           (0, import_react54.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: saving, onClick: close }, t("Cancel")),
-          (0, import_react54.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !valid }, t("Create release"))
+          (0, import_react54.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !valid }, t(release ? "Save release team" : "Create release"))
         )
       )
     )
@@ -42153,7 +42165,7 @@ function ReleaseGateRow({ gateKey, label, gate, editable, disabled, onSave }) {
     needsEvidence ? (0, import_react54.createElement)("p", { className: "bt-release-gate-hint", role: "note" }, t("Evidence is required to pass a gate.")) : null
   );
 }
-function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onClose, onCheck, onSaveGate, onOpenReport }) {
+function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onConfigureTeam, onClose, onCheck, onSaveGate, onOpenReport }) {
   const modal = (0, import_react54.useRef)(null);
   (0, import_react54.useEffect)(() => {
     modal.current?.focus();
@@ -42222,6 +42234,7 @@ function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, err
             "div",
             { className: "bt-release-section-head" },
             (0, import_react54.createElement)("h3", null, t("Role assignments")),
+            onConfigureTeam ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", onClick: onConfigureTeam }, t("Configure release team")) : null,
             (0, import_react54.createElement)("span", { className: "bt-release-section-count" }, t("{count} assigned", { count: releaseRoleCount(release) }))
           ),
           roles.length ? (0, import_react54.createElement)("div", { className: "bt-release-role-list" }, roles.map((role) => {
@@ -43192,6 +43205,35 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     await request("board-release-create", { scope, operationId, release: { id: window.crypto.randomUUID(), ...release }, ...team ? { team } : {} });
     await load(generation.current, true);
   };
+  const configureReleaseTeam = async (release, expectedRevision, { team }) => {
+    if (!canAct || fetching.current || pendingRef.current || release.canConfigureTeam !== true) return false;
+    const epoch = generation.current, operationId = window.crypto.randomUUID();
+    store.current.put(operationId);
+    pendingRef.current = operationId;
+    fetching.current = operationId;
+    setPending(operationId);
+    setBusy(true);
+    setError("");
+    try {
+      let outcome;
+      try {
+        const saved = await request("board-release-configure-team", { scope, releaseId: release.id, expectedRevision, operationId, team });
+        if (saved?.id === release.id && saved.projectManagerId === team.projectManagerId) outcome = { state: "committed" };
+      } catch (cause) {
+        if (["bot/invalid", "bot/refused", "bot/stale", "bot/not-found", "bot/read-only"].includes(cause?.code)) {
+          outcome = { state: "rejected", message: cause.message };
+        }
+      }
+      if (!current2(epoch)) return false;
+      const result = outcome ? await settle(operationId, outcome, epoch) : await check(operationId, epoch);
+      return result === "committed";
+    } finally {
+      if (fetching.current === operationId) {
+        fetching.current = null;
+        if (current2(epoch)) setBusy(false);
+      }
+    }
+  };
   const releaseRequest = async (endpoint, payload) => {
     if (releaseBusy || !window.crypto?.randomUUID) return false;
     const operationId = window.crypto.randomUUID();
@@ -43465,6 +43507,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   });
   const selected = selectedCard?.key === key ? data?.tasks?.find((task) => task.id === selectedCard.id) : void 0;
   const panelRelease = releasePanel ? releaseById.get(releasePanel.id) : null;
+  const teamConfigurable = releaseTeamSupported && panelRelease?.canConfigureTeam === true && panelRelease.status === "draft" && !panelRelease.projectManagerId && releaseRoleCount(panelRelease) === 0;
   (0, import_react54.useEffect)(() => {
     if (releasePanel && data && !panelRelease) {
       setReleasePanel(null);
@@ -44073,9 +44116,21 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           releaseCandidates: data.releaseCandidates,
           actors,
           onClose: () => setNewRelease(false),
-          onCreate: createRelease
+          onSave: createRelease
         }) : null,
-        panelRelease && releasePanel?.mode === "report" ? (0, import_react54.createElement)(ReleaseReportDialog, {
+        releasePanel?.mode === "team" && teamConfigurable && panelRelease.revision === releasePanel.revision ? (0, import_react54.createElement)(ReleaseDialog, {
+          key: "team:" + panelRelease.id,
+          release: panelRelease,
+          disabled: !canAct,
+          releaseRoles,
+          releaseCandidates: data.releaseCandidates,
+          actors,
+          pending,
+          feedback: error,
+          onCheck: check,
+          onClose: () => openReleaseDetails(panelRelease.id),
+          onSave: (value) => configureReleaseTeam(panelRelease, releasePanel.revision, value)
+        }) : panelRelease && releasePanel?.mode === "report" ? (0, import_react54.createElement)(ReleaseReportDialog, {
           key: "report:" + panelRelease.id,
           release: panelRelease,
           report: releaseReport?.id === panelRelease.id ? releaseReport : null,
@@ -44089,6 +44144,10 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           canEdit: releaseEditable(panelRelease),
           busy: !!releaseBusy,
           error: releaseError,
+          onConfigureTeam: teamConfigurable && canAct ? () => {
+            setError("");
+            setReleasePanel({ id: panelRelease.id, mode: "team", revision: panelRelease.revision });
+          } : void 0,
           onClose: closeReleasePanel,
           onCheck: (release) => void checkRelease(release),
           onSaveGate: (gate, status, evidence) => void saveReleaseGate(panelRelease, gate, status, evidence),

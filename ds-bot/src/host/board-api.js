@@ -1,7 +1,7 @@
 import { isUnassignedItemDraft } from './board-intake.mjs'
 import { boardList } from './board-query.js'
 import { legacyGoalCards, linkGoalCards } from './legacy-goal.js'
-import { RELEASE_ROLES, roleForBot } from './release-team.mjs'
+import { canConfigureReleaseTeam, RELEASE_ROLES, roleForBot } from './release-team.mjs'
 
 const has = (obj, key) => obj != null && Object.hasOwn(obj, key)
 const nonempty = value => typeof value === 'string' && value.trim() !== '' && value.length <= 256
@@ -87,7 +87,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     board.capabilities = { commands, create: writable && !taskLimitReached, upload: writable && !!images, actors, shareTargets:availableTargets,
       ...(Number.isSafeInteger(taskLimit) ? { taskCount:tasks.length, taskLimit, taskLimitReached } : {}) }
     if (principal?.kind === 'user') {
-      board.releases = releases.map(({ items, ...release }) => ({ ...release, itemCount:items.length, doneCount:items.filter(item => item.status === 'done').length }))
+      board.releases = releases.map(({ items, ...release }) => ({ ...release, canConfigureTeam:writable && scope.kind === 'room' && canConfigureReleaseTeam(release, scope.id), itemCount:items.length, doneCount:items.filter(item => item.status === 'done').length }))
       board.proposals = (store.listProposals?.(`${scope.kind}:${scope.id}`) ?? []).filter(proposal => proposal.status === 'pending')
         .map(proposal => ({ ...proposal, taskTitle: byId.get(proposal.taskId)?.title ?? proposal.after?.title }))
       board.releaseRoles = RELEASE_ROLES
