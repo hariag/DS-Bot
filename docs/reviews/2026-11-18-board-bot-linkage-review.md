@@ -95,7 +95,7 @@
 - Board-host 全量（`test/board-host/*.test.mjs`）：**244 tests，242 passed，0 failed，2 skipped**（跳过项为本机无权限的符号链接用例）。
 - Board e2e：**22/22 passed**，run `20261118001901`。
 - Lifecycle e2e `--fresh`：**PASS**（Release 群与 10 个角色、11 个类型化任务、TDD 测试、HTTP health/GPA、四道门禁、publish、Markdown/HTML 总结报告）。
-- Leak scan（提交树）：PENDING。
+- Leak scan（提交树）：**0 must-fix**（1148 条既有 can-stay）。
 
 ## 5. 变更文件
 
