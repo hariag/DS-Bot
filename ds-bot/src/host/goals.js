@@ -36,11 +36,11 @@ const PAST_MAX = 5
 const reviewFingerprint = task => createHash('sha256').update(JSON.stringify(task)).digest('hex')
 // Bind a generated ledger to the exact goal and stage it describes. This is
 // not proof that the model read the result or that an owner was checked.
-const inspectionFingerprint = goal => {
+const inspectionFingerprint = (goal, includeRevision = true) => {
   if (!goal || typeof goal.id !== 'string') return undefined
   const stage = goal.stages?.[goal.current]
   return createHash('sha256').update(JSON.stringify({
-    id: goal.id, revision: goal.revision, status: goal.status, title: goal.title,
+    id: goal.id, ...(includeRevision ? { revision: goal.revision } : {}), status: goal.status, title: goal.title,
     objective: goal.objective, acceptance: goal.acceptance, constraints: goal.constraints,
     current: goal.current, stage: stage === undefined ? null : {
       id: stage.id, title: stage.title, acceptance: stage.acceptance, status: stage.status,
@@ -549,6 +549,10 @@ export function resumeGoal(room, by, now = Date.now()) {
   goal.status = 'active'
   delete goal.pausedBy
   clearIdle(goal)
+  if (goal.inspectionBackoff) {
+    delete goal.inspectionBackoff
+    goal.ownerReviewAt = Math.min(Number.isFinite(goal.ownerReviewAt) ? goal.ownerReviewAt : Infinity, now + GOAL_REVIEW_INTERVAL_MS)
+  }
   touchGoal(goal, { kind: 'resume', by }, now)
   return { goal, reply: { event: 'resume', title: goal.title, count: goal.stages.length } }
 }
@@ -832,6 +836,7 @@ export function install(rt) {
     })
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
     if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
+    if (goal.inspectionBackoff?.fingerprint === inspectionFingerprint(goal, false) && Number.isSafeInteger(goal.inspectionBackoff.count) && goal.inspectionBackoff.count > 0 && Number.isFinite(goal.ownerReviewAt)) lines.push(`Inspection incomplete ${goal.inspectionBackoff.count} consecutive time(s): no current goal ledger was generated. Next inspection is scheduled for ${new Date(goal.ownerReviewAt).toISOString()}; owner checks remain pending.`)
     if (goal.reviewAttempt?.terminalFailure) lines.push(`Periodic review ${goal.reviewAttempt.id} failed before administrator tools. Future reviews wait for the room's pending work to settle.`)
     else if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
     const observed = blockedReviewReads.get(goal.reviewAttempt)
@@ -1099,6 +1104,10 @@ export function install(rt) {
       if (goal.status === 'active' && goal.idle === true && !automaticIdle(goal)) {
         clearIdle(goal)
         delete goal.stoppedMembers
+        if (goal.inspectionBackoff) {
+          delete goal.inspectionBackoff
+          goal.ownerReviewAt = Math.min(Number.isFinite(goal.ownerReviewAt) ? goal.ownerReviewAt : Infinity, Date.now() + GOAL_REVIEW_INTERVAL_MS)
+        }
         goal.revision += 1
         goal.updatedAt = Date.now()
         goal.events = [...(goal.events ?? []), { kind: 'resume', by: 'user', at: goal.updatedAt }].slice(-EVENTS_MAX)
@@ -1191,6 +1200,13 @@ export function install(rt) {
       const current = generated && attempt.inspectionLedgerFingerprint === inspectionFingerprint(goal)
       const status = current ? 'ledger-generated' : generated ? 'stale-ledger' : 'not-generated'
       goal.lastInspection = { reviewId: attempt.id, at: now, status, ...(current ? { ledgerAt: attempt.inspectionLedgerAt, fingerprint: attempt.inspectionLedgerFingerprint } : {}) }
+      const fingerprint = inspectionFingerprint(goal, false)
+      if (current) delete goal.inspectionBackoff
+      else {
+        const previous = goal.inspectionBackoff
+        const count = previous?.fingerprint === fingerprint && Number.isSafeInteger(previous.count) && previous.count > 0 ? Math.min(previous.count + 1, Number.MAX_SAFE_INTEGER) : 1
+        goal.inspectionBackoff = { fingerprint, count }
+      }
       if (!current) rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_INSPECTION_INCOMPLETE', text: `Goal inspection ${attempt.id} did not produce a current goal ledger; owner checks remain pending.` })
       if (!inspectionOnlyIdle(goal)) parkAutomatically(goal, reason, now)
       else {
@@ -1198,6 +1214,11 @@ export function install(rt) {
         goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
         goal.updatedAt = now
         goal.revision += 1
+      }
+      if (!current) {
+        const delay = GOAL_REVIEW_INTERVAL_MS * (goal.inspectionBackoff.count === 1 ? 1 : goal.inspectionBackoff.count === 2 ? 2 : 4)
+        goal.ownerReviewAt = now + delay
+        if (automaticIdle(goal)) goal.reviewAt = goal.ownerReviewAt
       }
       return
     }
@@ -1271,6 +1292,12 @@ export function install(rt) {
     for (const room of Object.values(rt.state.rooms ?? {})) {
       if (pendingReviewRooms.has(room.id)) continue
       const goal = room.goal
+      if (goal?.inspectionBackoff && !goal.reviewAttempt && reviewEligible(goal) && goal.inspectionBackoff.fingerprint !== inspectionFingerprint(goal, false)) {
+        delete goal.inspectionBackoff
+        goal.ownerReviewAt = Math.min(Number.isFinite(goal.ownerReviewAt) ? goal.ownerReviewAt : Infinity, now + GOAL_REVIEW_INTERVAL_MS)
+        if (automaticIdle(goal)) goal.reviewAt = Math.min(Number.isFinite(goal.reviewAt) ? goal.reviewAt : Infinity, goal.ownerReviewAt)
+        try { await rt.save({ required: true }) } catch { continue }
+      }
       if (goal?.reviewResolutions !== undefined || goal?.reviewAttempt?.terminalFailure) { try { await durableReviewResolutions(room,goal) } catch { continue } }
       const attempt = goal?.reviewAttempt
       if (attempt && !attempt.terminalFailure && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
@@ -1512,7 +1539,16 @@ export function install(rt) {
   // out of its idle wait and resets the count of fruitless wakes.
   const goalUserMessage = (roomId) => {
     const goal = rt.roomOf(roomId)?.goal
-    if (goal === undefined || (goal.idle === undefined && goal.nudges === 0)) return
+    if (goal === undefined) return
+    // A new user message can contain a correction not yet reflected in the
+    // structured goal. Reset backoff without resuming a stopped goal.
+    if (goal.inspectionBackoff && reviewEligible(goal)) {
+      delete goal.inspectionBackoff
+      goal.ownerReviewAt = Math.min(Number.isFinite(goal.ownerReviewAt) ? goal.ownerReviewAt : Infinity, Date.now() + GOAL_REVIEW_INTERVAL_MS)
+      if (automaticIdle(goal)) goal.reviewAt = Math.min(Number.isFinite(goal.reviewAt) ? goal.reviewAt : Infinity, goal.ownerReviewAt)
+      void rt.save().catch(() => {})
+    }
+    if (goal.idle === undefined && goal.nudges === 0) return
     if (goal.idle === true && !automaticIdle(goal)) return
     clearIdle(goal)
     goal.nudges = 0

@@ -193,7 +193,7 @@ export function install(rt) {
   // written the message by now, so when it can stand as the answer to the turn's own
   // work it is kept as what the Bot said for that work (handoffs.js answerText). That
   // answer goes to whoever asked for the work, also when the target is further up.
-  const upstreamRefusal = (exec, sender, target, said, args) => {
+  const upstreamRefusal = (exec, sender, target, said, args, effectiveWhen) => {
     const plain = `Not sent: ${target.name} is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back.`
     const turn = rt.live.get(exec.agent?.id)
     const work = rt.workOf(turn?.info)
@@ -203,7 +203,7 @@ export function install(rt) {
       return `Not sent: ${target.name} is waiting on a separate request that arrived during this turn. Finish the current task for its original recipient. When the separate request opens in its own turn, put its result or question in that turn's final answer. DS Bot routes it through the original handoff.`
     }
     const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from) : undefined
-    const answers = asker !== undefined && args.reply_to !== 'user' && args.when !== 'queue'
+    const answers = asker !== undefined && args.reply_to !== 'user' && effectiveWhen === 'now'
     if (!answers) return `${plain} Finish the work and end your turn; to ask ${target.name} something, end your turn with the question.`
     const to = asker.id === target.id ? target.name : `${asker.name} as your answer, and reaches ${target.name} with ${asker.name}'s answer`
     // The turn's reply is all the text it wrote, so text from before this call goes up
@@ -233,7 +233,7 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'message_bot',
-    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course, then answers once that work is done; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead. Do not message a Bot that is waiting for the result of the work you are doing (the Bot that asked you for it, or one above that): your answer reaches it by itself once you end your turn and everything you handed on is back. In a group chat it reaches only members of that group, as writing "@Name" there does. With request_id you name the request yourself: a repeat of that name with the same message is not sent again, but gives the receipt of the first call back.',
+    description: 'Send a message to another Bot on the team. Private requests queue behind work in the receiving Bot’s private chat. An idle private chat starts immediately, even if that Bot is working in a group. Use when "now" for an urgent correction or information needed for its current step. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead. Do not message a Bot that is waiting for the result of the work you are doing (the Bot that asked you for it, or one above that): your answer reaches it by itself once you end your turn and everything you handed on is back. In a group chat it reaches only members of that group, as writing "@Name" there does. With request_id you name the request yourself: a repeat of that name with the same message is not sent again, but gives the receipt of the first call back.',
     parameters: {
       to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
       message: { type: 'string', required: true, description: 'Self-contained message; the other Bot cannot see this conversation' },
@@ -245,7 +245,7 @@ export function install(rt) {
       when: {
         type: 'string',
         enum: ['now', 'queue'],
-        description: '"now" (default): a working Bot reads your message at its next step, between its current actions, and answers once its current work is done; use it for questions, information it needs, corrections and warnings. "queue": it reads your message only after its current work is done, as a separate task; use it only for a new task unrelated to what it is doing now. With reply_to "user" the message always queues.',
+        description: '"queue" (default in private chats): deliver an ordinary assignment, review or follow-up as a separate task after current work. "now": steer the next step with an urgent correction or information the recipient needs for its current work. With reply_to "user" the message always queues.',
       },
       request_id: {
         type: 'string',
@@ -280,16 +280,18 @@ export function install(rt) {
       const text = absoluteLinks(String(args.message), rt.sessionFolder?.(exec.agent?.session ?? exec.agent))
       const room = rt.roomOf(rt.groupOwners.get(exec.agent?.id)?.roomId)
       // The request the caller named: it is admitted once, and a repeat of it is not sent again.
+      const defaultQueue = room === undefined && args.when === undefined
+      const payload = {
+        to: target.id,
+        message: String(args.message ?? '').replace(/\r\n?/g, '\n').trim(),
+        reply_to: args.reply_to === 'user' ? 'user' : 'me',
+        when: defaultQueue || args.when === 'queue' ? 'queue' : 'now',
+      }
       const request = name === '' ? undefined : rt.requestIdentity({
-        caller: sender.id,
-        context: room === undefined ? 'chat' : `room:${room.id}`,
-        name,
-        payload: {
-          to: target.id,
-          message: String(args.message ?? '').replace(/\r\n?/g, '\n').trim(),
-          reply_to: args.reply_to === 'user' ? 'user' : 'me',
-          when: args.when === 'queue' ? 'queue' : 'now',
-        },
+        caller: sender.id, context: room === undefined ? 'chat' : `room:${room.id}`, name, payload,
+        // Earlier private requests stored omitted timing as "now". A retry
+        // must recover that receipt without changing delivery or sending twice.
+        previousPayload: defaultQueue ? { ...payload, when: 'now' } : undefined,
       })
       // What the caller gets for a request that was admitted before.
       const answer = (outcome) => {
@@ -336,7 +338,7 @@ export function install(rt) {
       const turn = rt.live.get(exec.agent?.id)
       const openingWork = rt.workOf(turn?.info)
       const joinedWorks = (turn?.joined ?? []).map(joined => rt.workOf(joined.info))
-      if (rt.upstreamOf([openingWork, ...joinedWorks]).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args)
+      if (rt.upstreamOf([openingWork, ...joinedWorks]).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args, payload.when)
       const send = async () => {
         const toUser = args.reply_to === 'user'
         const work = toUser ? undefined : openingWork
@@ -353,7 +355,7 @@ export function install(rt) {
         // receipt: admitRequest drops the pending record instead, and a retry can send.
         if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
         const working = rt.live.get(chat)?.turn !== undefined
-        const steer = args.when !== 'queue' && !toUser
+        const steer = args.when === 'now' && !toUser
         const exchangeId = randomUUID()
         if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, ...(fromPart ? { fromPart } : {}) })
         try {

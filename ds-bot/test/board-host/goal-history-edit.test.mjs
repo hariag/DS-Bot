@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import pngjs from 'pngjs'
 import { install, BOARD_UPLOAD_PATH } from '../../src/host/board-service.js'
 import { legacyGoalCardId } from '../../src/host/legacy-goal.js'
+import { createBotWorkflow } from '../../src/host/workflow.mjs'
 import { archiveGoal } from '../../src/host/goals.js'
 import { privateTempDir } from '../private-temp.mjs'
 
@@ -128,6 +129,54 @@ test('current card data uses a separate revision without invalidating existing b
   const progress=command(after,group,'goal:current-progress','goal-task-edit',{status:'reported',note:'Ready for independent review'})
   assert.equal((await rt.boardCall('board-command',progress)).state,'committed')
   assert.equal(task.status,'reported');assert.notEqual(digest(task),reviewBefore.checks.t2.fingerprint,'real task progress must invalidate prior review')
+})
+
+test('the owner can read human goal-card details through the Bot workflow without granting outsiders access',async t=>{
+  const {rt}=setup(t)
+  const card=(await board(rt)).tasks.find(item=>item.legacy.taskId==='t2')
+  const value={description:'Inspect both layouts',dueDate:'2026-12-01',labels:['design'],checklist:[{id:'c1',text:'Check small view',checked:false}]}
+  assert.equal((await rt.boardCall('board-command',command(card,group,'goal:owner-details','goal-card-details',value))).state,'committed')
+  rt.selfOf=sid=>sid==='chat-one'?'one':sid==='chat-outsider'?'outsider':undefined
+  rt.botOf=id=>['one','outsider'].includes(id)?{id}:undefined
+  rt.chatOf=id=>`chat-${id}`
+  rt.groupOwners=new Map()
+  rt.state.bots.outsider={name:'Outsider'}
+  const workflow=createBotWorkflow({rt,store:{get:()=>undefined,list:()=>[]}})
+  const show=sid=>workflow.invoke({agent:{id:sid}},{action:'show',taskId:card.id,roomId:'group'})
+  const task=(await show('chat-one')).task
+  assert.equal(task.description,value.description)
+  assert.equal(task.dueDate,value.dueDate)
+  assert.deepEqual(task.labels,value.labels)
+  assert.deepEqual(task.checklist,[{text:'Check small view',checked:false}])
+  await assert.rejects(show('chat-outsider'),/unavailable|authorized/)
+})
+
+test('retained goal task events are visible on the same card without duplicating matching replies',async t=>{
+  const {rt}=setup(t), goal=rt.state.rooms.group.goal, task=goal.stages[1].tasks[0]
+  goal.events=[
+    {kind:'task',stage:'s2',taskId:'t2',botId:'one',by:'two',at:1000,fromStatus:'working',toStatus:'working',text:'Earlier evidence'},
+    {kind:'task',stage:'s2',taskId:'t2',botId:'one',by:'two',at:2000,fromStatus:'working',toStatus:'reported',text:'Current evidence'},
+    {kind:'task',stage:'s2',taskId:'t2',botId:'one',by:'two',at:2000,fromStatus:'working',toStatus:'reported',text:'Different evidence'},
+    {kind:'task',stage:'s1',taskId:'t2',botId:'one',by:'two',at:3000,fromStatus:'working',toStatus:'done',text:'Wrong stage'},
+    {kind:'task',stage:'s2',taskId:'t2',botId:'two',by:'two',at:4000,fromStatus:'working',toStatus:'done',text:'Wrong owner'},
+  ]
+  task.goalBoardReplies=[{id:'reply',author:'two',at:2000,workflowAction:'goal-update',text:'[group_goal reported] Current evidence'}]
+  const card=(await board(rt)).tasks.find(item=>item.legacy.taskId==='t2')
+  assert.equal(card.comments.length,3)
+  assert.match(card.comments[0].text,/Earlier evidence/)
+  assert.match(card.comments[0].text,/retained group_goal event/)
+  assert.equal(card.comments[1].id,'reply')
+  assert.match(card.comments[2].text,/Different evidence/)
+  assert.equal(card.comments.some(item=>item.text.includes('Wrong stage')),false)
+  assert.equal(card.comments.some(item=>item.text.includes('Wrong owner')),false)
+  rt.selfOf=sid=>sid==='chat-one'?'one':undefined
+  rt.botOf=id=>id==='one'?{id}:undefined
+  rt.chatOf=id=>`chat-${id}`
+  rt.groupOwners=new Map()
+  const workflow=createBotWorkflow({rt,store:{get:()=>undefined,list:()=>[]}})
+  const shown=(await workflow.invoke({agent:{id:'chat-one'}},{action:'show',taskId:card.id,roomId:'group'})).task
+  assert.deepEqual(shown.goalEvents,[card.comments[0],card.comments[2]])
+  assert.deepEqual(shown.replies,[card.comments[1]])
 })
 
 test('historical title corrections preserve the actual accepted title and include complete provenance',async t=>{

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { syncSharedRepository } from '../src/host/repository-sync.mjs'
@@ -126,4 +126,80 @@ test('fast-forward updates a real Git checkout to the fetched upstream commit', 
   assert.equal(result.head, target)
   assert.equal(git('rev-parse', 'HEAD'), target)
   assert.equal(readFileSync(join(root, 'version.txt'), 'utf8').replaceAll('\r\n', '\n'), 'two\n')
+})
+
+test('check_commit verifies the sole parent and exact NUL-safe path set without changing a detached checkout', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'repo-check-commit-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  git('init', '-b', 'main')
+  git('config', 'user.name', 'DS Bot tests')
+  git('config', 'user.email', 'ds-bot-tests@example.invalid')
+  writeFileSync(join(root, 'kept.txt'), 'one\n')
+  writeFileSync(join(root, 'old name.txt'), 'rename me\n')
+  git('add', 'kept.txt', 'old name.txt')
+  git('commit', '-m', 'base')
+  const base = git('rev-parse', 'HEAD')
+  writeFileSync(join(root, 'kept.txt'), 'two\n')
+  renameSync(join(root, 'old name.txt'), join(root, 'new\nname.txt'))
+  git('add', '-u')
+  git('add', 'new\nname.txt')
+  git('commit', '-m', 'candidate')
+  const candidate = git('rev-parse', 'HEAD')
+  git('checkout', '--detach')
+  writeFileSync(join(root, 'untracked.txt'), 'preserve me\n')
+  const input = { cwd: root, action: 'check_commit', baseSha: base, candidateSha: candidate }
+
+  const good = await syncSharedRepository({ ...input, paths: ['kept.txt', 'old name.txt', 'new\nname.txt'] })
+  assert.equal(good.status, 'commit-verified')
+  assert.equal(good.pathCount, 3)
+  assert.equal(good.remoteFreshness, 'not-checked')
+  const bad = await syncSharedRepository({ ...input, paths: ['kept.txt', 'new\nname.txt'] })
+  assert.equal(bad.status, 'path-mismatch')
+  assert.deepEqual(bad.unexpected, ['old name.txt'])
+  assert.equal(bad.unexpectedCount, 1)
+  assert.equal(git('rev-parse', 'HEAD'), candidate)
+  assert.equal(git('branch', '--show-current'), '')
+  assert.equal(readFileSync(join(root, 'untracked.txt'), 'utf8'), 'preserve me\n')
+
+  const tree = git('rev-parse', `${candidate}^{tree}`)
+  const merge = git('commit-tree', tree, '-p', base, '-p', candidate, '-m', 'merge')
+  assert.equal((await syncSharedRepository({ ...input, candidateSha: merge, paths: ['kept.txt'] })).status, 'parent-mismatch')
+  assert.equal((await syncSharedRepository({ ...input, baseSha: candidate, candidateSha: base, paths: ['kept.txt'] })).status, 'parent-mismatch')
+  assert.equal((await syncSharedRepository({ ...input, candidateSha: 'f'.repeat(40), paths: ['kept.txt'] })).status, 'commit-unavailable')
+  // A local replacement ref must not hide an extra parent from the validator.
+  git('replace', merge, candidate)
+  assert.equal((await syncSharedRepository({ ...input, candidateSha: merge, paths: ['kept.txt'] })).status, 'parent-mismatch')
+})
+
+test('check_commit rejects ambiguous IDs and invalid or duplicate path declarations before running Git', async () => {
+  const failIfCalled = async () => { throw new Error('invalid input must not invoke git') }
+  const valid = { cwd: '/work', action: 'check_commit', baseSha: headA, candidateSha: headB, paths: ['ok'] }
+  const cases = [
+    { baseSha: 'main' }, { candidateSha: headB.slice(0, 8) }, { baseSha: headB },
+    { paths: [] }, { paths: ['ok', 'ok'] }, { paths: ['/absolute'] },
+    { paths: ['../escape'] }, { paths: ['a/./b'] }, { paths: ['a//b'] },
+    { paths: ['a\0b'] }, { paths: ['a/'] }, { paths: ['x'.repeat(4097)] },
+    { paths: Array.from({ length: 257 }, (_, i) => `file-${i}`) },
+  ]
+  for (const item of cases) {
+    const result = await syncSharedRepository({ ...valid, ...item, runGit: failIfCalled })
+    assert.equal(result.status, 'invalid-commit-request')
+    assert.equal(result.remoteFreshness, 'not-checked')
+  }
+})
+
+test('check_commit fails closed on malformed or undecodable Git path output', async () => {
+  for (const output of [Buffer.from([0xff, 0]), Buffer.from('not-nul-terminated')]) {
+    const runGit = async (_cwd, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { code: 0, stdout: '/work\n' }
+      if (args[0] === 'rev-parse' && args[1] === '--show-object-format') return { code: 0, stdout: 'sha1\n' }
+      if (args[0] === 'cat-file' && args[1] === '-t') return { code: 0, stdout: 'commit\n' }
+      if (args[0] === 'cat-file' && args[1] === '-p') return { code: 0, stdout: `tree ${'c'.repeat(40)}\nparent ${headA}\n\nmessage\n` }
+      if (args[0] === 'diff-tree') return { code: 0, stdout: output }
+      throw new Error(`unexpected git call ${args}`)
+    }
+    const result = await syncSharedRepository({ cwd: '/work', action: 'check_commit', baseSha: headA, candidateSha: headB, paths: ['expected'], runGit })
+    assert.ok(['unrepresentable-path', 'diff-unavailable'].includes(result.status))
+  }
 })
