@@ -17,6 +17,14 @@ test('credential and account failures have short words, in both languages', () =
   }
 })
 
+test('a saved AUTH diagnosis does not identify an invalid key without supporting facts', () => {
+  const title = failureLabel('AUTH', '')
+  assert.equal(title, 'The model service denied access to this request')
+  assert.equal(failureLabel('AUTH', 'the model call failed'), title)
+  assert.equal(DICTIONARY.zh[title], '模型服务拒绝了这次请求')
+  assert.equal(failureLabel('QUOTA', ''), 'The account is out of quota')
+})
+
 test('an unknown code has no short words, and its label falls back to the message', () => {
   assert.equal(knownFailure('SOMETHING_NEW'), undefined)
   assert.equal(knownFailure(undefined), undefined)
