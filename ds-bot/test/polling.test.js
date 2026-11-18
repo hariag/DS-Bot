@@ -29,3 +29,12 @@ test('the OS idle time is read while a Bot has foreground control or waits for i
   assert.equal(needsIdleSample({ bots: { a: {}, b: { waitingFor: 'user-idle' } } }), true)
   assert.equal(needsIdleSample({ bots: {} }, { bots: { a: { level: 'background' }, b: { level: 'foreground' } } }), true)
 })
+
+test('a disconnected window retries progressively and resumes normal polling when reachable', () => {
+  const visible = 1500
+  assert.deepEqual([1, 2, 3, 4, 5, 2000].map(failures => pollDelay(visible, 0, failures)),
+    [3000, 6000, 12_000, 24_000, 30_000, 30_000])
+  assert.equal(pollDelay(10_000, 2, 1), 20_000)
+  assert.equal(pollDelay(visible, 0, 0), visible)
+  assert.equal(pollDelay(visible, 4, 0), POLL_MAX_MS)
+})

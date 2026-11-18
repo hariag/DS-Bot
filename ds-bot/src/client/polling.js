@@ -15,9 +15,11 @@ export const POLL_MAX_MS = 5_000
  * How long to wait before asking the host again.
  * @param {number} base the cadence while something is changing (1.5 s visible, 10 s hidden)
  * @param {number} unchanged how many answers in a row said nothing changed
+ * @param {number} networkFailures consecutive requests that could not reach DSH
  * @returns {number} milliseconds to wait
  */
-export function pollDelay(base, unchanged) {
+export function pollDelay(base, unchanged, networkFailures = 0) {
+  if (networkFailures > 0) return Math.min(base * 2 ** Math.min(networkFailures, 8), 30_000)
   const steps = Math.min(Math.max(unchanged, 0), 8)
   return Math.min(base * 2 ** steps, Math.max(base, POLL_MAX_MS))
 }

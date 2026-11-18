@@ -265,6 +265,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
     let running = false
     let timer
     let misses = 0
+    let networkFailures = 0
     // While the host keeps answering that nothing changed, asking every 1.5 s only makes
     // the renderer serialise requests and compare answers (#1462). The wait stretches to
     // POLL_MAX_MS and snaps back on the first change, a wake, or any action's own pull.
@@ -276,11 +277,13 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
       try {
         unchanged = await pull() ? 0 : unchanged + 1
         misses = 0
+        networkFailures = 0
         // A late-arriving API clears the failure the misses reported.
         ui.set(state => (state.bootFailed ? { ...state, bootFailed: false } : state))
       } catch (error) {
         if (!stopped) {
-          console.warn('[ds-bot] state', error)
+          if (error?.code !== 'NETWORK' || networkFailures === 0) console.warn('[ds-bot] state', error)
+          networkFailures = error?.code === 'NETWORK' ? networkFailures + 1 : 0
           // Only a missing Bot API counts toward a failed start: while the
           // host plugin stays unmounted the route answers 404. A network miss
           // is the host reconnecting, not a start-up failure (#516).
@@ -290,12 +293,18 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
           }
         }
       } finally { running = false }
-      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? 10000 : 1500, unchanged))
+      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? 10000 : 1500, unchanged, networkFailures))
     }
     const wake = () => { if (!document.hidden) { unchanged = 0; void loop() } }
     document.addEventListener('visibilitychange', wake)
+    window.addEventListener('online', wake)
     void loop()
-    return () => { stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', wake) }
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('online', wake)
+    }
   }, 'ds-bot: roster poll')
 
   // Plugin updates: every window that opens asks the host once (the host keeps its
