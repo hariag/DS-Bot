@@ -746,7 +746,7 @@ export function install(rt) {
           })
           if (recipient && outcome.state === 'committed') {
             const text = `Human board update for existing goal item ${card.id} (goal ${card.legacy.goalId}, stage ${card.legacy.stageId}, task ${card.legacy.taskId}). `
-              + 'Read this original item with board_task list or group_goal show before your next step. Use its latest instructions and status; stop if it no longer calls for work. Do not create or dispatch another task.'
+              + 'Read this original item with board_task show before your next step; group_goal show provides its stage context. Use its latest instructions and status; stop if it no longer calls for work. Do not create or dispatch another task.'
             void steerBoardUpdate(recipient, text, payload.operationId).catch(error => rt.warn?.('ds-bot: goal board update delivery: %s',error))
           }
           return outcome

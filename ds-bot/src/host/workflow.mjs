@@ -257,7 +257,10 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       }
       if (goal && args.action === 'show') return {task:{id:goal.id, revision:goal.revision, title:goal.title, owner:goal.owner, status:goal.legacy.originalStatus,
         scope:`room:${goal.originRoomId}`, acceptance:goal.acceptance, description:goal.description,
-        goalNote:goal.goalNote, parentTaskId:goal.parentTaskId, releaseId:goal.releaseId, legacy:goal.legacy, replies:goal.comments.slice(-12)}}
+        labels:goal.labels.filter(label => typeof label === 'string'), dueDate:goal.dueDate,
+        checklist:goal.checklist.filter(item => item && typeof item.text === 'string').map(item => ({text:item.text, checked:item.checked === true})),
+        goalNote:goal.goalNote, goalEvents:goal.goalEvents, parentTaskId:goal.parentTaskId, releaseId:goal.releaseId, legacy:goal.legacy,
+        replies:goal.comments.filter(comment=>comment.source!=='retained-goal-event').slice(-12)}}
     }
     if (!task) throw refused()
     if (args.action === 'show') {

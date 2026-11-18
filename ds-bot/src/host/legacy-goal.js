@@ -49,6 +49,27 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
       const images=[...(Array.isArray(task.boardImages)?task.boardImages:[]),...(Array.isArray(overlay?.images)?overlay.images:[])]
         .filter(image=>image && typeof image.id==='string' && !hidden.includes(image.id))
       const status = task.status==='pending' && stageIndex>goal.current ? 'waiting' : statuses.get(task.status) ?? 'legacy-unverified'
+      // The retained goal event buffer predates goalBoardReplies. Project only
+      // events bound to this unambiguous original identity; it is not an audit
+      // ledger and may already have evicted older events.
+      const events = ambiguous ? [] : (Array.isArray(goal.events) ? goal.events : []).filter(event =>
+        event?.kind === 'task' && event.stage === stage.id && event.taskId === task.id && event.botId === task.botId
+        && Number.isFinite(event.at) && typeof event.by === 'string' && typeof event.text === 'string'
+        && statuses.has(event.fromStatus) && statuses.has(event.toStatus))
+      const replies=Array.isArray(task.goalBoardReplies)?task.goalBoardReplies:[]
+      const usedReplies=new Set(), counts=new Map()
+      const historical=events.flatMap(event=>{
+        const prefix=`[group_goal ${event.toStatus}] `
+        const match=replies.findIndex((reply,index)=>!usedReplies.has(index) && reply?.workflowAction==='goal-update'
+          && reply.at===event.at && reply.author===event.by && (reply.text===prefix+event.text
+            || (event.text===event.toStatus && reply.text===prefix+'Status updated')
+            || (event.text==='' && reply.text===prefix+'Note cleared')))
+        if(match!==-1){usedReplies.add(match);return []}
+        const hash=keyOf([goal.id,stage.id,task.id,event]), n=counts.get(hash)??0
+        counts.set(hash,n+1)
+        return [{id:`goal-event:${hash}:${n}`,author:event.by,at:event.at,workflowAction:'goal-update',source:'retained-goal-event',
+          text:`[retained group_goal event ${event.fromStatus} → ${event.toStatus}] ${event.text}`}]
+      })
       cards.push({
         id: ambiguous ? `legacy-${keyOf([roomId,goal.id,stage.id,task.id,'ambiguous',taskIndex])}` : stableId,
         revision: goal.revision, title: typeof overlay?.title==='string'?overlay.title:task.task, owner: task.botId, status,
@@ -57,7 +78,8 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
         dueDate:typeof details.dueDate==='string'?details.dueDate:null,
         labels:Array.isArray(details.labels)?details.labels:[],
         checklist:Array.isArray(details.checklist)?details.checklist:[],
-        comments:[...(Array.isArray(task.boardComments)?task.boardComments:[]),...(Array.isArray(task.goalBoardReplies)?task.goalBoardReplies:[]),...(Array.isArray(overlay?.comments)?overlay.comments:[])].sort((a,b)=>(a.at??0)-(b.at??0)),
+        comments:[...(Array.isArray(task.boardComments)?task.boardComments:[]),...replies,...historical,...(Array.isArray(overlay?.comments)?overlay.comments:[])].sort((a,b)=>(a.at??0)-(b.at??0)),
+        goalEvents:historical,
         boardActivity:Array.isArray(task.boardActivity)?task.boardActivity:[],
         boardHistory:Array.isArray(overlay?.audit)?overlay.audit:[],
         ...(typeof task.note === 'string' ? { goalNote:task.note } : {}),
