@@ -7,9 +7,9 @@
 import { existsSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { execFileSync, spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { boardApi, loginToken, startBench, stopBench } from './bench.mjs'
+import { REPO, boardApi, loginToken, startBench, stopBench } from './bench.mjs'
 
-const HOME = 'D:/DS-Bot/.dsh-test-lifecycle-e2e'
+const HOME = process.env.BOARD_E2E_HOME || join(REPO, '.dsh-test-lifecycle-e2e')
 const WEB_PORT = Number(process.env.BOARD_E2E_WEB_PORT || 3098)
 const MOCK_PORT = Number(process.env.BOARD_E2E_MOCK_PORT || 8798)
 const FRESH = process.argv.includes('--fresh')
@@ -91,7 +91,7 @@ async function main() {
     const team = { projectManagerId:bots.pm.id, roles }
     const release = await api('board-release-create', { scope, operationId:'lifecycle-release', team,
       release:{ id:'student-grades-1', name:'Student Grades', version:'1.0.0' } })
-    if (!release.groupId) fail('release did not create a project group', { release })
+    if (release.groupId !== room.id) fail('release is outside the major-version group', { release })
     state = await api('state')
     const group = Object.values(state.rooms).find(item => item.id === release.groupId)
     if (!group) fail('release group is missing from state', { groupId:release.groupId })
@@ -101,15 +101,21 @@ async function main() {
 
     const requirementText = 'Build a student grade management system with students, courses, grades, GPA and reports, including tests, review, deployment and production checks.'
     await api('send', { sessionId:room.id, text:`调用 board_task ${JSON.stringify({ action:'plan', release_id:release.id, requirement:requirementText })}` })
+    const releaseTasks = tasks => {
+      const cardIds = new Set(tasks.filter(task => !task.parentTaskId && task.releaseId === release.id).map(task => task.id))
+      return tasks.filter(task => cardIds.has(task.id) || cardIds.has(task.parentTaskId))
+    }
     const planned = await waitFor('the DS-Bot project manager to import its decomposition as board tasks', async () => {
       const list = await api('board-list', { scope })
-      const current = list.tasks.filter(task => task.releaseId === release.id)
+      const current = releaseTasks(list.tasks)
       return current.length ? { tasks:current.map(task => ({ taskId:task.id, title:task.title })) } : undefined
     }, 45_000)
     if (planned.tasks.length < 8) fail('lifecycle plan is incomplete', { planned })
     let board = await api('board-list', { scope })
-    const items = board.tasks.filter(task => task.releaseId === release.id)
+    const items = releaseTasks(board.tasks)
     if (items.length !== planned.tasks.length) fail('planned tasks are not on the release board', { items:items.length, planned:planned.tasks.length })
+    const cards = items.filter(task => !task.parentTaskId)
+    if (cards.length !== 1 || cards[0].type !== 'feature' || items.some(task => task !== cards[0] && task.parentTaskId !== cards[0].id)) fail('lifecycle must use one feature card with deliverable items')
     const types = new Set(items.map(task => task.type))
     for (const type of ['requirement','design','test','development','deployment','operations']) if (!types.has(type)) fail('lifecycle type is missing', { type, types:[...types] })
     log('plan: ' + items.length + ' typed tasks')
@@ -128,11 +134,11 @@ async function main() {
     if (started.status !== 'running') fail('release did not start', { started })
     const finished = await waitFor('all lifecycle tasks to complete', async () => {
       const list = await api('board-list', { scope })
-      const active = list.tasks.filter(task => task.releaseId === release.id)
+      const active = releaseTasks(list.tasks)
       if (active.some(task => ['cancelled','blocked','failed'].includes(task.status))) fail('lifecycle task entered a terminal failure', { active })
       return active.length && active.every(task => task.status === 'done') ? list : undefined
     }, 240_000)
-    log('lifecycle: ' + finished.tasks.filter(task => task.releaseId === release.id).filter(task => task.status === 'done').length + ' done')
+    log('lifecycle: ' + releaseTasks(finished.tasks).filter(task => task.status === 'done').length + ' done')
 
     const projectDir = join(HOME, 'workspace', 'student-grades')
     const appDir = join(projectDir, 'app')
@@ -217,6 +223,7 @@ server.listen(0, '127.0.0.1', () => console.log('PORT:' + server.address().port)
     }, 20_000)
     const report = await waitFor('the periodic monitor to write the summary report', async () => api('board-release-report', { scope, releaseId:release.id }).catch(() => undefined), 15_000)
     if (!/Student Grades/.test(report.markdown) || !/Project summary meeting completed/.test(report.markdown)) fail('summary report is incomplete', { markdown:report.markdown.slice(0, 500) })
+    if (!report.markdown.includes(design.title)) fail('summary report omits work items from the feature card')
     if (!/<html>/.test(report.html)) fail('HTML summary report is missing', { html:report.html.slice(0, 200) })
     const reportPath = join(HOME, 'bot', 'board-v1', 'release-reports', release.id, 'summary.md')
     const htmlReportPath = join(HOME, 'bot', 'board-v1', 'release-reports', release.id, 'summary.html')

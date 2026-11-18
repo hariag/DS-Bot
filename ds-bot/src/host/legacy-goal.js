@@ -68,3 +68,17 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
   }
   return cards
 }
+
+// A group goal remains the source of its items. Organizing them under a feature
+// stores only their stable IDs; edits, evidence and status keep their original owner.
+export function linkGoalCards(goals, parents) {
+  const links = new Map()
+  for (const parent of parents) {
+    for (const id of parent.goalItemIds ?? []) links.set(id, parent)
+  }
+  return goals.map(goal => {
+    const parent = links.get(goal.id)
+    return parent?.scope === `room:${goal.originRoomId}`
+      ? { ...goal, parentTaskId:parent.id, ...(parent.releaseId ? {releaseId:parent.releaseId} : {}) } : goal
+  })
+}

@@ -16,7 +16,8 @@ function start(config = {}) {
   install({
     ctx,
     config,
-    selfOf: id => id === 'group-worker' ? 'worker' : id,
+    selfOf: id => id === 'worker-redo' ? undefined : id?.replace(/^group-/, ''),
+    userRedoOwner: id => id === 'worker-redo' ? { id: 'worker' } : undefined,
     botOf: id => bots.get(id),
     roomOf: id => id === 'room' ? {} : undefined,
     isMain: id => id === 'main',
@@ -24,6 +25,26 @@ function start(config = {}) {
   const prompt = id => ctx.sections.get('bot-identity').text({ agent: { id } })
   return { ctx, prompt }
 }
+
+test('existing Bot identities share the board workflow across their private and group sessions', async t => {
+  const { ctx, prompt } = start()
+  t.after(() => ctx.dispose())
+  for (const id of ['main', 'worker']) {
+    const own = prompt(id)
+    assert.equal(prompt(`group-${id}`), own)
+    assert.equal(own.split('## Coordinating work on the task board').length, 2)
+    for (const action of ['list', 'show', 'register', 'start', 'progress', 'report', 'review', 'block']) {
+      assert.ok(own.includes(`board_task ${action}`), action)
+    }
+    assert.match(own, /parent_task_id/)
+    assert.match(own, /expected_revision/)
+  }
+  assert.match(prompt('worker'), /Check files\./)
+  assert.match(prompt('main'), /If the board scheduler already dispatched it/)
+  assert.doesNotMatch(prompt('worker-redo'), /board_task/)
+  assert.doesNotMatch(prompt('room'), /board_task/)
+  assert.equal(prompt('outside'), '')
+})
 
 test('deployment instructions apply to all Bot sessions after restart', (t) => {
   const marker = 'A private deployment rule provided by the operator.'

@@ -1,5 +1,6 @@
+import { isUnassignedItemDraft } from './board-intake.mjs'
 import { boardList } from './board-query.js'
-import { legacyGoalCards } from './legacy-goal.js'
+import { legacyGoalCards, linkGoalCards } from './legacy-goal.js'
 import { RELEASE_ROLES, roleForBot } from './release-team.mjs'
 
 const has = (obj, key) => obj != null && Object.hasOwn(obj, key)
@@ -27,7 +28,9 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, verifyShare, verifyDependency })
     const addLegacy = () => {
       const ids = new Set(board.tasks.map(task => task.id))
-      for(const task of legacyGoalCards({ scope, principal, rooms: state.rooms, bots: state.bots, pendingCard:goalCardSnapshot })) {
+      const visibleParents = new Set(board.tasks.filter(task => !task.shared).map(task => task.id))
+      const goals = legacyGoalCards({ scope, principal, rooms:state.rooms, bots:state.bots, pendingCard:goalCardSnapshot })
+      for (const task of linkGoalCards(goals, tasks.filter(task => visibleParents.has(task.id)))) {
         if(!ids.has(task.id)){ids.add(task.id);board.tasks.push(task)}
       }
       return board
@@ -64,9 +67,9 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         && (!source?.releaseId || !archiveRelease || ['published','cancelled'].includes(archiveRelease.status))
       const editableReleases = releases.filter(release => ['draft','queued'].includes(release.status))
       return [task.id, [...(!source?.change ? [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }, {type:'reorder',label:'Reorder card'}] : []),
-        ...(source?.status === 'draft' ? [{type:'submit',label:'Submit'},{type:'cancel',label:'Cancel card'}] : source?.status === 'cancelled' ? [{type:'restore',label:'Restore card'}] : source?.status !== 'done' ? [{type:'cancel',label:'Cancel card'}] : []),
+        ...(source?.status === 'draft' ? [...(isUnassignedItemDraft(source) ? [] : [{type:'submit',label:'Submit'}]),{type:'cancel',label:'Cancel card'}] : source?.status === 'cancelled' ? [{type:'restore',label:'Restore card'}] : source?.status !== 'done' ? [{type:'cancel',label:'Cancel card'}] : []),
         ...(source?.archivedAt ? [{type:'unarchive',label:'Restore from archive'}] : canArchive ? [{type:'archive',label:'Archive card'}] : []),
-        ...(editableReleases.length && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
+        ...(editableReleases.length && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
         ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []),
         ...(canUnschedule ? [{type:'unschedule',label:'Unschedule'}] : []), {type:'card-comment',label:'Add comment'},
         ...(Array.isArray(source?.comments) && source.comments.length ? [{type:'card-comment-edit',label:'Edit comment'},{type:'card-comment-delete',label:'Delete comment'}] : []),
@@ -86,7 +89,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         .map(proposal => ({ ...proposal, taskTitle: proposal.taskId ? store.get(proposal.taskId)?.title ?? proposal.after?.title : proposal.after?.title }))
       board.releaseRoles = RELEASE_ROLES
       board.releaseCandidates = Object.fromEntries(RELEASE_ROLES.map(role => [role.key,
-        publicBots.map(id => state.bots[id]).filter(bot => roleForBot(bot)?.key === role.key)
+        (scope.kind === 'room' ? ids.filter(id => id !== 'user') : publicBots).map(id => state.bots[id]).filter(bot => roleForBot(bot)?.key === role.key)
           .map(bot => ({ id:bot.id, name:bot.name, role:bot.role ?? '' }))]))
       const now = Date.now()
       const activeTasks = board.tasks.filter(task => !task.archivedAt)
@@ -161,14 +164,17 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       if (!input || !nonempty(input.operationId) || !nonempty(input.taskId) || input.taskId.startsWith('legacy-') || !string(input.title, 200)) throw fail('Invalid task proposal')
       const request = { ...input }
       const draft = request.draft === true
+      const unassigned = scope.kind === 'room' && isUnassignedItemDraft(request)
       if (!draft) {
         if (!string(request.acceptance, 8192) || !nonempty(request.owner) || !nonempty(request.reviewer) || request.owner === request.reviewer) throw fail('Invalid task proposal')
-      } else {
+      } else if (!unassigned) {
         const actorIds = board.capabilities.actors.map(actor => actor.id)
         const bots = actorIds.filter(id => id !== 'user')
         if (!nonempty(request.owner)) request.owner = scope.kind === 'personal' ? scope.id : (bots[0] ?? 'user')
         if (!nonempty(request.reviewer) || request.reviewer === request.owner) request.reviewer = bots.find(id => id !== request.owner) ?? (request.owner === 'user' ? bots[0] : 'user')
         if (!nonempty(request.owner) || !nonempty(request.reviewer) || request.owner === request.reviewer) throw fail('A draft needs one available Bot reviewer')
+      }
+      if (draft) {
         if (!string(request.acceptance, 8192)) request.acceptance = 'To be defined.'
         if (!nonempty(request.type)) request.type = 'feature'
       }
@@ -176,11 +182,11 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       const visibleIds = new Set(board.tasks.filter(task => !task.legacy).map(task => task.id))
       if (request.dependencies.some(id => !visibleIds.has(id))) throw fail('Dependency is unavailable in this board')
       const actors = new Set(board.capabilities.actors.map(actor => actor.id))
-      if (!actors.has(request.owner) || !actors.has(request.reviewer)) throw fail('Unknown task participant')
+      if (!unassigned && (!actors.has(request.owner) || !actors.has(request.reviewer))) throw fail('Unknown task participant')
       if (scope.kind === 'room') {
         const room = state.rooms[scope.id]
         const allowed = id => id === 'user' || (room.members?.includes(id) && state.bots[id]?.private !== true)
-        if (!allowed(request.owner) || !allowed(request.reviewer)) throw fail('Task participant is not available in this group')
+        if (!unassigned && (!allowed(request.owner) || !allowed(request.reviewer))) throw fail('Task participant is not available in this group')
       } else if (scope.kind === 'personal' && request.owner !== scope.id) {
         throw fail('Personal task must belong to this board owner')
       }
@@ -189,6 +195,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       const dependencyGrants = bindingsFor(scope, principal, candidate, request.dependencies)
       return store.create({ operationId: request.operationId, actor: 'user', task: {
         id: request.taskId, title: request.title.trim(), owner: request.owner,
+        ...(request.parentTaskId !== undefined ? {parentTaskId:request.parentTaskId} : {}),
         reviewer: request.reviewer, scope: `${scope.kind}:${scope.id}`,
         acceptance: request.acceptance.trim(), dependencies: request.dependencies, dependencyGrants,
         ...(request.description !== undefined ? {description:request.description} : {}),
@@ -211,7 +218,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid task edit')
         const original = view(taskScope(task), principal)
         const allowed = new Set(original.capabilities.actors.map(actor => actor.id))
-        if (!allowed.has(value.owner) || !allowed.has(value.reviewer) || value.owner === value.reviewer) throw fail('Task participants are unavailable')
+        if (!isUnassignedItemDraft({...task, owner:value.owner, reviewer:value.reviewer}) && (!allowed.has(value.owner) || !allowed.has(value.reviewer) || value.owner === value.reviewer)) throw fail('Task participants are unavailable')
         if (task.scope.startsWith('personal:') && value.owner !== task.scope.slice(9)) throw fail('Personal task must belong to its board owner')
         if (!string(value.title, 200) || !string(value.acceptance, 8192) || !Array.isArray(value.dependencies)) throw fail('Invalid task edit')
         const visible = new Set(original.tasks.filter(item => !item.legacy).map(item => item.id))
@@ -265,6 +272,10 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
           || !value || !['todo', 'doing', 'finished'].includes(value.progress)) throw fail('Personal progress is unavailable')
         if (Object.hasOwn(value, 'afterId') && value.afterId !== null && !nonempty(value.afterId)) throw fail('Personal progress is unavailable')
         value = { progress:value.progress, ...(Object.hasOwn(value, 'afterId') ? {afterId:value.afterId} : {}) }
+      } else if (input.type === 'link-goal-items') {
+        if (scope.kind !== 'room' || task.scope !== `room:${scope.id}` || !Array.isArray(value?.itemIds) || !value.itemIds.length) throw fail('Invalid goal item links')
+        const visible = new Set(view(scope, principal).tasks.filter(row => row.legacy && row.originRoomId === scope.id && !row.legacy.ambiguous && !row.legacy.pending).map(row => row.id))
+        if (value.itemIds.some(id => !visible.has(id))) throw fail('Goal item unavailable')
       } else if (input.type === 'share') {
         if (!value || !nonempty(value.targetRoomId) || !Array.isArray(value.fields)) throw fail('Invalid share request')
         value = { targetRoomId:value.targetRoomId, fields:value.fields }
