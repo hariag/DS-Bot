@@ -1,6 +1,34 @@
 import { HISTORY_TIMEOUT_MS } from './constants.js'
 import { isForbiddenQuota } from '../shared/provider-quota.js'
 
+// Anchor subsequent pages to the same snapshot if newer turns arrive during the read.
+async function quotaTurnInHistory(controller, read, sessionId, turn) {
+  const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
+  const address = { kind: 'session', sessionId }
+  let throughSeq, beforeSeq, inspected = 0
+  for (let pageNumber = 0; pageNumber < 4; pageNumber++) {
+    const page = await read.call(controller, { address, maxMessages: 12,
+      ...(beforeSeq === undefined ? {} : { throughSeq, beforeSeq }) }, signal)
+    if (!Number.isSafeInteger(page?.cursor) || page.cursor < 0 || !Array.isArray(page.records)
+      || page.records.length === 0 || (throughSeq !== undefined && page.cursor !== throughSeq)) return false
+    throughSeq = page.cursor
+    let expected = (beforeSeq ?? throughSeq + 1) - 1
+    for (let i = page.records.length - 1; i >= 0; i--) {
+      const record = page.records[i]
+      if (record?.type !== 'event' || record.event?.seq !== expected || inspected >= 200) return false
+      inspected++
+      expected--
+      const { type, data } = record.event
+      if (type === 'turn/end' && data?.turn === turn) {
+        return data.reason?.kind === 'error' && isForbiddenQuota(data.reason.error)
+      }
+    }
+    if (!page.hasMore || expected < 0 || inspected >= 200) return false
+    beforeSeq = expected + 1
+  }
+  return false
+}
+
 // Older releases removed the upstream detail when storing AUTH. Only the owning
 // session's recorded turn can distinguish a quota rejection from a rejected key.
 export async function repairQuotaCards(rt) {
@@ -12,13 +40,8 @@ export async function repairQuotaCards(rt) {
   for (const bot of Object.values(rt.state.bots)) {
     for (const [sessionId, saved] of Object.entries(bot.failures ?? {})) {
       if (saved?.code !== 'AUTH' || !Number.isSafeInteger(saved.turn) || rt.selfOf(sessionId) !== bot.id) continue
-      // Only the recent page is needed for a current repair card. An archived or
-      // unavailable turn keeps its original diagnosis until there is evidence.
-      const page = await read.call(controller, { address: { kind: 'session', sessionId }, maxMessages: 12 },
-        AbortSignal.timeout(HISTORY_TIMEOUT_MS)).catch(() => undefined)
-      const end = page?.records?.findLast(row => row.type === 'event' && row.event?.type === 'turn/end'
-        && row.event.data?.turn === saved.turn)?.event
-      if (end?.data?.reason?.kind !== 'error' || !isForbiddenQuota(end.data.reason.error)) continue
+      const matched = await quotaTurnInHistory(controller, read, sessionId, saved.turn).catch(() => false)
+      if (!matched) continue
       if (rt.stopping || rt.readOnly() !== undefined) return
       if (rt.botOf(bot.id) !== bot || bot.failures?.[sessionId] !== saved) continue
       bot.failures[sessionId] = { ...saved, code: 'QUOTA', status: 403, message: '' }
