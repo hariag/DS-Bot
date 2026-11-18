@@ -1156,9 +1156,17 @@ test('organizing a goal item keeps the original editable task and its actual sta
   const tool = rt.teamTools.find(tool=>tool.name==='board_task')
   const list = async () => JSON.parse(await tool.execute({action:'list',room_id:'group',parent_task_id:parent.id},{agent:{id:'chat-one'}}))
   assert.deepEqual((await list()).items.map(r=>[r.kind,r.goalTaskId,r.parentTaskId,r.status]), [['group_goal','check',parent.id,'reported']])
+  const release = await rt.boardCall('board-release-create',{scope,operationId:'create-minor',release:{id:'minor',name:'Verify release',version:'1.1'}})
+  const latestParent = (await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===parent.id)
+  await rt.boardCall('board-release-assign',{scope,operationId:'assign',taskId:parent.id,expectedTaskRevision:latestParent.revision,releaseId:release.id,expectedReleaseRevision:release.revision})
+  const asOwner = async args => JSON.parse(await tool.execute({room_id:'group',...args},{agent:{id:'chat-two'}}))
+  const ownGoal = await asOwner({action:'list',kind:'group_goal',mine:true,release_id:release.id})
+  assert.deepEqual(ownGoal.items.map(task=>[task.id,task.releaseId]), [[row.id,release.id]])
+  assert.equal((await asOwner({action:'show',task_id:row.id})).task.releaseId, release.id)
   room.goal.stages[0].tasks[0].status='done'
   room.goal.revision++
   assert.equal((await list()).items[0].status,'done')
+  assert.equal((await asOwner({action:'list',kind:'group_goal',release_id:release.id})).items[0].status,'done')
   const other = await rt.boardCall('board-command',{...create,operationId:'new-feature',taskId:'other',value:{...create.value,type:'bugfix'}})
   await assert.rejects(rt.boardCall('board-command',{...attach,taskId:other.id,expectedRevision:other.revision,operationId:'link-twice'}), /already belongs/)
 })
