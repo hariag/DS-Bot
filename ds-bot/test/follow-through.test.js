@@ -1698,3 +1698,54 @@ test('sender identity remains stable if the Bot is deleted during the write barr
     syncBuiltinESMExports()
   }
 })
+
+test('a burst of queued deliveries coalesces recovery journal serialization', async t => {
+  const home = freshHome(t)
+  const host = await start(home)
+  const original = JSON.stringify
+  let journalSerializations = 0
+  JSON.stringify = function (value, ...args) {
+    if (value && typeof value === 'object' && Object.hasOwn(value, 'turns') && Object.hasOwn(value, 'queued')) journalSerializations++
+    return original.call(this, value, ...args)
+  }
+  try {
+    const deliveries = Array.from({length:20}, (_, index) => host.rt.deliver({
+      fromId:'a', toId:'b', role:'request', text:`queued ${index}`, exchangeId:`burst-${index}`,
+    }))
+    assert.equal(journalSerializations, 0, 'the full journal is encoded only when the pending write starts')
+    await Promise.all(deliveries)
+    await settle(() => notes(home).queued.b?.length === 20)
+    assert.ok(journalSerializations < 20)
+    assert.equal(new Set(notes(home).queued.b.map(item => item.args.exchangeId)).size, 20)
+  } finally {
+    JSON.stringify = original
+    await host.stop()
+  }
+})
+
+test('history-seen queue holds emit one summary and retain individual recovery diagnostics', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  const home = freshHome(t)
+  const records = Array.from({length:3}, (_, index) => ({
+    exchangeId:`held-burst-${index}`, toId:'b', fromId:'a', role:'request', text:'check',
+  }))
+  writeFileSync(join(home,'inflight.json'), JSON.stringify({queued:{
+    b:records.map(args => ({at:1,args})),
+  }}))
+  const logs = new Map([['b',records.map(source => ({type:'user/message',data:{source}}))]])
+  const host = await start(home, logs)
+  const warnings = [], notices = []
+  host.rt.warn = (...args) => warnings.push(args)
+  host.rt.noteFailure = entry => notices.push(entry)
+  let finished = false
+  host.rt.settleRoomBatches = () => { finished = true }
+  t.mock.timers.tick(3000)
+  await settle(() => finished)
+  assert.equal(host.agentOf('b').calls.length,0)
+  assert.equal(notes(home).queued.b.filter(item => item.recoveryHold === 'history-seen').length,3)
+  assert.equal(notices.filter(entry => entry.code === 'RESUME_DELIVERY_UNCERTAIN').length,3)
+  const summaries = warnings.filter(args => String(args[0]).includes('were not resent'))
+  assert.equal(summaries.length,1)
+  assert.deepEqual(summaries[0].slice(1),[3,'b',3,0])
+  await host.stop()
+})

@@ -197,6 +197,7 @@ const goalHasBoardDetails = goal => (goal?.stages ?? []).some(stage => (stage?.t
   const data=task?.boardDetails
   return !!(data?.description || data?.dueDate || data?.labels?.length || data?.checklist?.length || task?.boardComments?.length)
 }))
+const goalHasTaskAudit = goal => !!goal?.retiredGoalTasks?.length || (goal?.stages ?? []).some(stage => (stage?.tasks ?? []).some(task => task?.goalBoardReplies?.length))
 const goalHasCardRevisions = goal => goal?.boardCards !== undefined && (!goal.boardCards || typeof goal.boardCards!=='object'
   || Array.isArray(goal.boardCards) || Object.keys(goal.boardCards).length>0)
 
@@ -205,7 +206,7 @@ export function archiveGoal(room) {
   if (goal === undefined) return
   const all=[...(room.pastGoals ?? []),goal]
   // Keep the sole copy of board data when ordinary goal history rolls over.
-  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goal=>goalHasBoardImages(goal)||goalHasBoardDetails(goal)||goalHasCardRevisions(goal)||goal.reviewResolutions!==undefined),...all.slice(-PAST_MAX)]
+  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goal=>goalHasBoardImages(goal)||goalHasBoardDetails(goal)||goalHasTaskAudit(goal)||goalHasCardRevisions(goal)||goal.reviewResolutions!==undefined),...all.slice(-PAST_MAX)]
   delete room.goal
 }
 
@@ -293,14 +294,17 @@ function cleanFields(input, fields) {
 // A cleaned stage becomes a stored one: fresh ids, tasks pending unless the same
 // member had the same task in the stage this one replaces (a revise keeps it).
 function buildStage(goal, stage, position, previous, status) {
+  const retain = previous && previous.title === stage.title && previous.acceptance === stage.acceptance
   return {
-    id: `s${++goal.counter.stage}`,
+    id: retain ? previous.id : `s${++goal.counter.stage}`,
     title: stage.title,
     acceptance: stage.acceptance,
     status,
     tasks: stage.tasks.map((task) => {
-      const kept = previous?.tasks.find(old => old.botId === task.botId && old.task === task.task)
-      return { id: `t${++goal.counter.task}`, ...task, status: kept?.status ?? 'pending' }
+      const matches = previous?.tasks.filter(old => old.botId === task.botId && old.task === task.task) ?? []
+      const duplicates = stage.tasks.filter(item => item.botId === task.botId && item.task === task.task)
+      const kept = matches.length === 1 && duplicates.length === 1 ? matches[0] : undefined
+      return retain && kept ? { ...kept, ...task, id:kept.id } : { id: `t${++goal.counter.task}`, ...task, status:'pending' }
     }),
     reworks: 0,
   }
@@ -413,6 +417,13 @@ export function reviseGoal(room, input, by, memberOf, memberNames, now = Date.no
       const position = keep.length + index
       return buildStage(goal, stage, position, position === goal.current ? previous : undefined, position === goal.current ? 'active' : 'pending')
     })
+    const removed = goal.stages.slice(Math.max(0,goal.current)).flatMap(oldStage => {
+      const survivor = replacement.find(stage => stage.id === oldStage.id)
+      const retainedIds = new Set((survivor?.tasks ?? []).map(task => task.id))
+      return oldStage.tasks.filter(task => !retainedIds.has(task.id))
+        .map(task => ({stage:{id:oldStage.id,title:oldStage.title,acceptance:oldStage.acceptance},task,at:now}))
+    })
+    if (removed.length) goal.retiredGoalTasks = [...(goal.retiredGoalTasks ?? []), ...removed]
     goal.stages = [...keep, ...replacement]
   }
   touchGoal(goal, { kind: 'revise', by, text: headOf(reason, EVENT_TEXT_MAX) }, now)
@@ -443,6 +454,10 @@ export function taskGoal(room, input, by, memberOf, memberNames, now = Date.now(
     if (note === '') clearTaskNotes(task)
     else setTaskNote(task, note, now)
   }
+  task.goalBoardReplies = [...(Array.isArray(task.goalBoardReplies) ? task.goalBoardReplies : []), {
+    id:`goal-update:${goal.revision + 1}:${stage.id}:${task.id}`, author:by, at:now, workflowAction:'goal-update',
+    text:`[group_goal ${task.status}] ${note === undefined ? 'Status updated' : note || 'Note cleared'}`,
+  }]
   touchGoal(goal, { kind: 'task', by, stage: stage.id, taskId: task.id, botId: task.botId, fromStatus: before, toStatus: task.status, text: headOf(note ?? status, EVENT_TEXT_MAX) }, now, { keepNudges: true })
   return { goal }
 }
