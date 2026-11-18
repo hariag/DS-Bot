@@ -10,6 +10,7 @@ import { STEER_CUT } from './constants.js'
 
 const SHELL_TOOLS = ['pwsh', 'bash']
 const STEER_GRACE_MS = 1000
+const SHADOW_RETRY_MS = 60_000
 
 export function install(rt) {
   const ctx = rt.ctx
@@ -130,12 +131,9 @@ export function install(rt) {
   // A failed registration must be retried without registering an already installed
   // shadow again. Different shell tools can succeed or fail independently.
   const shadowed = new WeakMap()
+  const collisions = new WeakMap()
   const formatWarned = new Set()
-  const shadowShell = (agent, name) => {
-    if (shadowed.get(agent)?.has(name)) return
-    if (typeof ctx.tools?.get !== 'function') return
-    const def = ctx.tools.get(name, agent)
-    if (def === undefined) return
+  const shadowShell = (agent, name, def) => {
     const promoted = (def.output?.schema?.oneOf ?? []).find(variant => variant?.properties?.kind?.const === 'promoted')
     if (typeof def.output?.render !== 'function'
       || promoted?.properties?.cwd === undefined || promoted?.properties?.jobId === undefined
@@ -219,10 +217,25 @@ export function install(rt) {
     if (typeof agent.ctx?.tools?.register !== 'function') return
     const disposers = []
     for (const name of SHELL_TOOLS) {
+      if (shadowed.get(agent)?.has(name)) continue
+      const blocked = collisions.get(agent)?.get(name)
+      let def
       try {
-        const lift = shadowShell(agent, name)
+        def = ctx.tools?.get?.(name, agent)
+        if (blocked && blocked.def !== def) collisions.get(agent).delete(name)
+        if (!def || (blocked?.def === def && Date.now() < blocked.retryAt)) continue
+        const lift = shadowShell(agent, name, def)
+        collisions.get(agent)?.delete(name)
         if (typeof lift === 'function') disposers.push(lift)
       } catch (error) {
+        // Prompt assembly runs frequently. Keep using the scoped shell while
+        // it owns this name; the same definition may later become inherited.
+        if (def && error?.message === `tool "${name}" is already registered in this scope`) {
+          const byName = collisions.get(agent) ?? new Map()
+          byName.set(name, { def, retryAt: Date.now() + SHADOW_RETRY_MS })
+          collisions.set(agent, byName)
+          if (blocked?.def === def) continue
+        }
         rt.warn('ds-bot: shadowing %s failed: %s', name, error)
       }
     }
