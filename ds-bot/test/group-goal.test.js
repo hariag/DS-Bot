@@ -609,16 +609,22 @@ test('user stop and stale auto evidence do not trigger review; legacy idle only 
   assert.equal(g.idleReason, undefined)
 })
 
-test('an unresolved same-room batch does not prevent a read-only legacy inspection', async (t) => {
+test('a live group handoff skips its cycle; an old batch and delivery uncertainty only allow an idle inspection', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
   delete g.idleReason
   delete g.idleRevision
   host.rt.roomBatchPending = () => true
+  host.rt.roomWaiters.set('live-work', { roomId: 'r1' })
   const original = host.ctx.sessionController.resolveAgent
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('old delivery unknown'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'old assignment' }))
   host.ctx.sessionController.resolveAgent = original
+  const due = g.ownerReviewAt
+  await host.rt.goalReviewPoll(due)
+  assert.equal(host.takeGoal(), undefined)
+  assert.equal(g.ownerReviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  host.rt.roomWaiters.delete('live-work')
   await host.rt.goalReviewPoll(g.ownerReviewAt)
   const post = host.takeGoal()
   assert.equal(post.source.reviewInspect, true)
@@ -662,6 +668,15 @@ test('a member stop permits read-only review without restarting the stopped memb
   assert.deepEqual(g.stoppedMembers, ['b'])
   host.rt.goalUserMessage('r1')
   assert.equal(g.idleReason, 'member-stop')
+  const due = g.ownerReviewAt
+  await host.rt.goalReviewPoll(due)
+  assert.equal(host.takeGoal(), undefined)
+  assert.equal(g.ownerReviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'cancelled', cause: { kind: 'user' } } })
+  const notice = host.takePost()
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const result = host.round('member-stop-notice', notice)
+  await settle(() => result() !== undefined)
   await host.rt.goalReviewPoll(g.ownerReviewAt)
   const post = host.takeGoal()
   assert.equal(post.source.reviewInspect, true)
@@ -731,34 +746,58 @@ test('task progress does not postpone the review of every owner', async (t) => {
   assert.match(prompt, /assigned independent reviewer/)
 })
 
-test('a busy group queues one review behind existing root messages without steering', async (t) => {
+test('a busy group skips this review period durably and admits the next idle occurrence', async (t) => {
   const host = await start(t)
   await startGoal(host)
   const room = host.rt.roomOf('r1')
   const g = room.goal
+  const due = g.ownerReviewAt
   const root = host.agentOf('r1')
   const existing = { id: 'already-queued', source: { kind: 'user' } }
   root.inbox.nextTurn.push(existing)
-  host.rt.workingInRoom = () => [{ botId: 'b' }]
   host.rt.roomProgress.set('busy-round', { roomId: 'r1' })
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
-  assert.equal(root.inbox.nextTurn[0], existing)
-  assert.equal(root.inbox.nextTurn.length, 2)
-  assert.ok(root.inbox.nextTurn[1].source.reviewId)
-  await host.rt.goalReviewPoll(g.ownerReviewAt + 3_600_000)
-  assert.equal(root.inbox.nextTurn.length, 2)
+  await host.rt.goalReviewPoll(due)
+  assert.deepEqual(root.inbox.nextTurn, [existing])
   assert.equal(root.inbox.nextStep.length, 0)
+  assert.equal(g.reviewAttempt, undefined)
+  assert.equal(saved(host).rooms.r1.goal.ownerReviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  host.rt.roomProgress.delete('busy-round')
+  root.inbox.nextTurn.length = 0
+  await host.rt.goalReviewPoll(due + 60_000)
+  assert.equal(root.calls.length, 0)
+  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  assert.equal(root.calls.length, 1)
+  assert.ok(root.calls[0].source.reviewId)
 })
 
-test('a review merged behind another opener is retried on the next poll', async (t) => {
+test('when work begins during root resolution, skip the occurrence before writing an intent', async (t) => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  const due = g.reviewAt
+  const queued = { id: 'user', source: { kind: 'user' } }
+  const originalResolve = host.rt.resolveAgent
+  host.rt.resolveAgent = async id => {
+    const root = await originalResolve(id)
+    if (id === 'r1') root.inbox.nextTurn.push(queued)
+    return root
+  }
+  await host.rt.goalReviewPoll(due)
+  assert.equal(g.reviewAttempt, undefined)
+  assert.equal(g.reviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  assert.deepEqual(host.agentOf('r1').inbox.nextTurn, [queued])
+})
+
+test('a review merged behind another opener waits for the next normal period', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
   const room = host.rt.roomOf('r1')
   await host.rt.goalReviewPoll(g.reviewAt)
   const first = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
+  const retiredAt = Date.now()
   await host.rt.goalReviewNotOpened(room, first.source.reviewId)
   const next = g.reviewAt
+  assert.ok(next >= retiredAt + GOAL_REVIEW_INTERVAL_MS)
   await host.rt.goalReviewPoll(next - 1)
   assert.equal(host.agentOf('r1').calls.length, 0)
   await host.rt.goalReviewPoll(next)
@@ -1758,6 +1797,39 @@ test('a user stop during the administrator first session creation prevents revie
   assert.equal(g.idleReason, 'user-stop')
 })
 
+for (const phase of ['running', 'finalizing']) test(`a periodic check delivered to a ${phase} relay never opens a later round`, async (t) => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const post = host.takeGoal()
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  let release
+  const finishing = new Promise(resolve => { release = resolve })
+  const drive = host.rt.goalDrive
+  host.rt.goalDrive = async (...args) => { await finishing; return drive(...args) }
+  t.after(release)
+  const business = host.round('business', host.say('@Chief review the new feature'))
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  if (phase === 'finalizing') {
+    host.finish('ga', '[PASS]')
+    await settle(() => host.rt.roomActive('r1') && host.rt.roomProgress.size === 0)
+  }
+  const before = Date.now()
+  host.emit('r1', 'user/message', post)
+  await host.tool('group_relay', {}, 'r1', { callId: 'delayed-periodic' })
+  assert.equal(host.rt.roomLaterCount('r1'), 0)
+  assert.equal(g.reviewAttempt, undefined)
+  assert.ok(g.ownerReviewAt >= before + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(host.rt.roomActive('r1'), true)
+  if (phase === 'running') host.finish('ga', '[PASS]')
+  release()
+  await settle(() => business() !== undefined)
+  assert.equal(host.rt.ledger.records('group-r1').filter(row => row.event === 'round').length, 1)
+  assert.equal(host.agentOf('ga').calls.length, 1)
+  assert.equal(host.agentOf('ga').cancelled.length, 0)
+})
+
 test('a review mixed behind a user post is retired before the normal follow-up check', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
@@ -1767,15 +1839,53 @@ test('a review mixed behind a user post is retired before the normal follow-up c
   host.emit('r1', 'user/message', host.say('@Chief decide the new request'))
   const read = host.round('mixed-review', post)
   await settle(() => host.agentOf('ga').calls.length > 0)
+  assert.match(text(host.agentOf('ga').calls[0]), /decide the new request/)
+  assert.equal(host.agentOf('ga').calls[0].source.reviewId, undefined)
   host.begin('ga')
   host.finish('ga', '[PASS]')
   await settle(() => read() !== undefined)
   assert.equal(g.reviewAttempt, undefined)
   assert.equal(host.agentOf('r1').calls.length, 1)
   assert.equal(host.agentOf('r1').calls[0].source.goal, 'nudge')
+  assert.equal(host.agentOf('r1').calls[0].source.reviewId, undefined)
 })
 
-for (const change of ['admin', 'member', 'root', 'stop']) {
+test('a user post arriving during a skipped patrol save stays in the next relay inbox', async (t) => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const post = host.takeGoal()
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  let saving, release
+  const entered = new Promise(resolve => { saving = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  const save = host.rt.save
+  host.rt.save = async opts => {
+    if (opts?.required && !g.reviewAttempt) { saving(); await gate }
+    return save(opts)
+  }
+  t.after(release)
+  host.emit('r1', 'user/message', post)
+  host.emit('r1', 'user/message', host.say('@Chief handle the first request'))
+  const first = host.tool('group_relay', {}, 'r1', { callId: 'first-work' })
+  await entered
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.emit('r1', 'user/message', host.say('@Writer handle the second request'))
+  release()
+  await first
+  assert.deepEqual(host.rt.roomInbox.get('r1').map(item => item.text), ['@Writer handle the second request'])
+  await host.tool('group_relay', {}, 'r1', { callId: 'second-work' })
+  host.begin('ga')
+  host.finish('ga', '[PASS]')
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  assert.match(text(host.agentOf('gb').calls[0]), /handle the second request/)
+  host.begin('gb')
+  host.finish('gb', '[PASS]')
+  await settle(() => !host.rt.roomActive('r1'))
+  assert.equal(g.reviewAttempt, undefined)
+})
+
+for (const change of ['admin', 'member', 'root', 'stop', 'message']) {
   test(`a periodic review is not admitted if ${change} changes while its intent is saved`, async (t) => {
     const host = await start(t)
     const g = await parkForReview(host)
@@ -1788,7 +1898,8 @@ for (const change of ['admin', 'member', 'root', 'stop']) {
       if (g.reviewAttempt && !delayed) { delayed = true; entered(); await gate }
       return originalSave(...args)
     }
-    const poll = host.rt.goalReviewPoll(g.reviewAt)
+    const due = g.reviewAt
+    const poll = host.rt.goalReviewPoll(due)
     await saving
     if (change === 'admin') room.admin = 'b'
     if (change === 'member') room.members = ['b', 'c']
@@ -1800,6 +1911,10 @@ for (const change of ['admin', 'member', 'root', 'stop']) {
     assert.equal(host.agentOf('r1').calls.length, 0)
     assert.equal(g.reviewAttempt, undefined)
     if (change === 'stop') assert.equal(g.idleReason, 'user-stop')
+    if (change === 'message') {
+      assert.equal(g.reviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+      assert.deepEqual(host.rt.roomInbox.get('r1'), [{ text: 'new user request' }])
+    }
   })
 }
 

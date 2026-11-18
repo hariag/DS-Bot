@@ -1397,7 +1397,11 @@ export function install(rt) {
         entry.usage = undefined
         const later = entry.later ?? []
         entry.later = []
-        if (steerCut || suppressedSubagent) break
+        // A queued patrol filtered out at the first step can end in an empty
+        // DSH turn. It cannot settle a group task or clear an earlier failure.
+        const skippedPatrol = rt.consumeSkippedPatrolTurn?.(id, event.data?.turn)
+        if (steerCut || suppressedSubagent || (skippedPatrol && event.data?.reason?.kind === 'completed'
+          && info === undefined && !wroteText && !toolCount && !later.length && !joined.length)) break
         for (const result of later) {
           const targetSessionId = laterTarget(id)
           if (targetSessionId === undefined && (rt.groupOwners.has(id) || rt.pastOwners?.has(id))) continue
