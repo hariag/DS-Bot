@@ -57,7 +57,7 @@ const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').spli
 state.images=images;
 function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';const card=state.card;return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),description:card.description||'',labels:card.labels,checklist:card.checklist,dueDate:card.dueDate||'',dueComplete:card.dueComplete===true,...(card.coverImageId?{coverImageId:card.coverImageId}:{}),comments:card.comments,owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:state.shares,images:state.gallery}}
 globalThis.resetBoardState=()=>{state.calls=[];state.revision=1;state.progress='todo';state.boardStatus='proposed';state.card={description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null};state.shares=[{id:'grant-old',targetRoomId:'g2',fields:['status']}];state.gallery=[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}];state.created=[];state.commentSeq=0}
-function phase2Commands(task){const commands=[{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft')commands.push({type:'submit'},{type:'cancel'});else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
+function phase2Commands(task){const commands=[...(task.fixtureCommands??[]),{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft')commands.push({type:'submit'},{type:'cancel'});else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
 globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
@@ -130,6 +130,8 @@ async function request(endpoint,payload){
    }
    const task=state.phase2Tasks.find(item=>item.id===payload.taskId);
    if(!task)throw Error('unknown task');
+   if(type==='move-item')task.parentTaskId=value.parentTaskId;
+   if(type==='move-goal-item')state.phase2Tasks.find(item=>item.id===value.itemId).parentTaskId=value.parentTaskId;
    if(type==='card-details'){
     if(value.type)task.type=value.type;
     if('description' in value)task.description=value.description;
@@ -316,7 +318,8 @@ async function runBrowserCases() {
   await itemLink.waitFor()
   assert.equal(await parentCard.locator('[data-item-id]').count(),3)
   await itemLink.click()
-  const stageEditor = itemDialog.locator('.bt-card-stage')
+  const stageEditor = itemDialog.locator('.bt-card-work-stage')
+  assert.ok(await stageEditor.evaluate(el => getComputedStyle(el).overflow !== 'hidden' && parseInt(getComputedStyle(el).minHeight) !== 260))
   await stageEditor.getByRole('button',{name:'Set work stage'}).click()
   await stageEditor.getByLabel('Work stage').fill('Release verification')
   await stageEditor.getByRole('button',{name:'Save'}).click()
@@ -339,6 +342,57 @@ async function runBrowserCases() {
   await page.getByRole('dialog',{name:'Release details: Release two'}).waitFor()
   assert.equal(await boardReads(),beforeVersions)
 
+  await page.evaluate(() => {
+    globalThis.initPhase2()
+    const source = globalThis.fixture.phase2Tasks[0]
+    source.releaseId = 'rel-1'
+    globalThis.fixture.phase2Tasks.push(
+      {...source, id:'F2', title:'Account permissions'},
+      {...source, id:'B1', title:'Fix registration', type:'bugfix'},
+      {...source, id:'F3', title:'A later release', releaseId:'rel-2'},
+      {...source, id:'I3', title:'Check roles', type:'test', status:'draft', parentTaskId:source.id, fixtureCommands:[{type:'move-item'}]},
+      {...source, id:'legacy-proof', title:'Original proof', parentTaskId:source.id, status:'legacy-done',
+        legacy:{originalStatus:'done',position:'previous'}, fixtureCommands:[{type:'move-goal-item'}]})
+    globalThis.renderFixture({kind:'room',id:'hierarchy-move'},'phase2',true)
+  })
+  await focusStatus('proposed')
+  await page.locator('.bt-board-views').getByRole('button',{name:'Type',exact:true}).click()
+  for (const [id,title,commandType] of [['I3','Check roles','move-item'],['legacy-proof','Original proof','move-goal-item']]) {
+    await page.locator('article[data-task-id="T1"] [data-item-id="'+id+'"]').click()
+    const modal = page.getByRole('dialog',{name:title,exact:true})
+    const select = modal.getByLabel('Destination card')
+    assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(option=>option.value)),['','F2','B1'])
+    const move = modal.getByRole('button',{name:'Move to card',exact:true})
+    assert.equal(await move.isDisabled(),true)
+    await select.selectOption('B1')
+    await move.click()
+    await page.waitForFunction(type => globalThis.fixture.calls.some(c => c.endpoint==='board-command' && c.payload.type===type),commandType)
+    const sent = await page.evaluate(type => globalThis.fixture.calls.find(c => c.endpoint==='board-command' && c.payload.type===type).payload,commandType)
+    assert.equal(sent.taskId, commandType==='move-item' ? id : 'T1')
+    assert.equal(sent.expectedRevision,1)
+    assert.deepEqual(sent.value,commandType==='move-item' ? {parentTaskId:'B1'} : {itemId:id,parentTaskId:'B1'})
+    await modal.locator('[data-item-id="B1"]').waitFor()
+    await modal.getByRole('button',{name:'Close card'}).click()
+    await page.locator('article[data-task-id="B1"] [data-item-id="'+id+'"]').waitFor()
+    assert.equal(await page.locator('article[data-task-id="T1"] [data-item-id="'+id+'"]').count(),0)
+  }
+  // The largest reconciled parent had 170 registered items. Only its item
+  // list should scroll, leaving the title and the surrounding carousel operable.
+  await page.evaluate(() => {
+    globalThis.initPhase2()
+    const parent = globalThis.fixture.phase2Tasks[0]
+    for (let i=1; i<=170; i++) globalThis.fixture.phase2Tasks.push({...parent,id:'bulk-'+i,title:'Registered item '+i,type:'test',parentTaskId:parent.id})
+    globalThis.renderFixture({kind:'room',id:'large-register'},'phase2',true)
+  })
+  await focusStatus('proposed')
+  const denseRoot = page.locator('article[data-task-id="T1"]')
+  const denseList = denseRoot.locator('.bt-board-item-list')
+  assert.equal(await denseList.locator('button').count(),170)
+  assert.ok(await denseList.evaluate(el => el.scrollHeight > el.clientHeight * 5 && el.clientHeight <= 200))
+  await denseList.locator('[data-item-id="bulk-170"]').click()
+  await page.getByRole('dialog',{name:'Registered item 170'}).getByRole('button',{name:'Close card'}).click()
+  await denseRoot.locator('.bt-board-card-title').click()
+  await page.getByRole('dialog',{name:'Phase task'}).getByRole('button',{name:'Close card'}).click()
   assert.deepEqual(errors,[])
   if (process.argv.includes('--hierarchy')) return
   await page.evaluate(() => globalThis.clearFixture())
