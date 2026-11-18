@@ -1,3 +1,5 @@
+import { isManualBoardTask } from './board-intake.mjs'
+import { legacyGoalCards } from './legacy-goal.js'
 import { mkdirSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -7,7 +9,7 @@ import { Worker } from 'node:worker_threads'
 import { boardRegistrationReference, openTaskStore } from './task-store.mjs'
 import { createBoardApi } from './board-api.js'
 import { readBoardImage } from './board-images.js'
-import { buildReleaseReport, createReleaseGroup, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
+import { buildReleaseReport, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isDeepStrictEqual } from 'node:util'
 import { installHostWorkflow } from './host-workflow.mjs'
@@ -59,7 +61,9 @@ export function install(rt) {
     active.add(pending); return pending.finally(() => active.delete(pending))
   }
   const releaseReport = release => {
-    const items = service().store.list().filter(task => task.releaseId === release.id)
+    const tasks = service().store.list().filter(task => task.scope === release.scope)
+    const cards = new Set(tasks.filter(task => task.releaseId === release.id).map(task => task.id))
+    const items = tasks.filter(task => cards.has(task.id) || cards.has(task.parentTaskId))
     const { markdown, html } = buildReleaseReport(release, items, rt.state?.bots ?? {})
     const directory = join(service().root, 'release-reports', release.id)
     mkdirSync(directory, { recursive: true, mode: 0o700 })
@@ -68,37 +72,70 @@ export function install(rt) {
     writeFileSync(htmlPath, html, { mode: 0o600 })
     return { markdownPath, htmlPath, generatedAt: Date.now() }
   }
-  const applyReleasePlan = (scope, release, requirement, principal, prefix = 'plan') => {
-    if (!['draft','queued'].includes(release.status)) throw new Error('Release is not editable')
+  const applyReleasePlan = (scope, release, requirement, principal, cardType = 'feature', operationId) => {
+    const text = typeof requirement === 'string' ? requirement.trim() : ''
+    if (!text || text.length > 2000) throw new Error('Describe the requirement in 1 to 2000 characters before planning')
+    if (!['feature','bugfix'].includes(cardType)) throw new Error('The release card must be a feature or bugfix')
     if (!release.roles || !release.projectManagerId) throw new Error('Release team is not configured')
-    const text = typeof requirement === 'string' ? requirement.trim().slice(0, 2000) : ''
-    if (!text) throw new Error('Describe the requirement before planning')
-    const plan = lifecyclePlan({ release, requirement:text, roles:release.roles })
-    if (!plan.length) throw new Error('No lifecycle tasks could be planned for this team')
-    const ids = new Map(plan.map(item => [item.key, `${prefix}-${release.id}-${item.key}`]))
-    const created = []
-    for (const item of plan) {
-      const taskId = ids.get(item.key)
-      if (!service().store.get(taskId)) {
-        const value = { title:item.title, owner:item.owner, reviewer:item.reviewer, acceptance:item.acceptance, type:item.type,
-          dependencies:item.dependencies.map(key => ids.get(key)).filter(Boolean), description:`Release requirement: ${text}` }
-        created.push(service().api.create(scope, principal, { operationId:`${prefix}:${release.id}:${item.key}`, taskId, ...value }))
-      }
-      const current = service().store.get(taskId)
-      if (current && current.releaseId !== release.id) {
-        const latestRelease = service().store.getRelease(release.id)
-        service().store.assignRelease({ operationId:`${prefix}-assign:${release.id}:${item.key}`, actor:'user', releaseId:release.id,
-          expectedReleaseRevision:latestRelease.revision, taskId, expectedTaskRevision:current.revision })
-      }
+    const { store, api } = service()
+    const payload = { type:'release-plan', scope:release.scope, releaseId:release.id, requirement:text, cardType }
+    const key = 'plan-' + createHash('sha256').update(JSON.stringify([release.scope, release.id, text])).digest('hex')
+    const description = `Release requirement: ${text}`
+    const persist = (id, fn) => {
+      const result = store.request({ operationId:id, actor:'user', taskId:release.id, payload, isRejection:() => false }, fn)
+      if (result.state !== 'committed') throw new Error(result.message || 'Release plan is unavailable')
+      return result.value
     }
-    return { releaseId:release.id, tasks:plan.map(item => ({ key:item.key, taskId:ids.get(item.key), title:item.title })) }
+    const materialize = () => {
+      // Old releases stored each step as a release card. Reuse its original creation
+      // receipt even if someone later edited the visible title or description.
+      const legacySteps = ['requirement','design','test-plan','ui','backend','frontend','test-run','review','deploy','operations','summary']
+      const existing = store.list().filter(task => task.scope === release.scope)
+      for (const task of existing) {
+        const step = legacySteps.find(key => task.id.endsWith(`-${release.id}-${key}`))
+        if (!step) continue
+        const suffix = `-${release.id}-${step}`
+        const prefix = task.id.slice(0, -suffix.length)
+        const original = store.operation(`${prefix}:${release.id}:${step}`)?.result
+        if (original?.id !== task.id || original.description !== description) continue
+        const tasks = legacySteps.flatMap(key => {
+          const id = `${prefix}-${release.id}-${key}`
+          const receipt = store.operation(`${prefix}:${release.id}:${key}`)?.result
+          if (receipt?.id !== id || receipt.description !== description) return []
+          const current = store.get(id)
+          return current?.scope === release.scope && current.releaseId === release.id ? [{ key, taskId:id, title:current.title }] : []
+        })
+        if (!tasks.some(item => item.key === 'summary')) throw new Error('Existing release plan is incomplete. Reconcile its original cards before replanning.')
+        return { releaseId:release.id, tasks }
+      }
+      if (!['draft','queued'].includes(release.status)) throw new Error('Release is not editable')
+      const taskId = step => `${key}-${step}`
+      const plan = lifecyclePlan({ release, requirement:text, roles:release.roles, cardType })
+      const parent = plan.find(item => item.key === 'summary')
+      const create = (item, parentTaskId, dependencies) => api.create(scope, principal, {
+        operationId:`${key}:create:${item.key}`, taskId:taskId(item.key), ...(parentTaskId ? { parentTaskId } : {}),
+        title:item.title, owner:item.owner, reviewer:item.reviewer, acceptance:item.acceptance,
+        type:item.type, description, dependencies:dependencies.map(taskId),
+      })
+      const card = create(parent, undefined, [])
+      const assigned = store.assignRelease({ operationId:`${key}:assign`, actor:'user', releaseId:release.id,
+        expectedReleaseRevision:release.revision, taskId:card.id, expectedTaskRevision:card.revision })
+      for (const item of plan) if (item !== parent) create(item, card.id, item.dependencies)
+      store.command({ operationId:`${key}:dependencies`, taskId:card.id, expectedRevision:assigned.revision,
+        actor:'user', type:'edit', value:{ dependencies:parent.dependencies.map(taskId), dependencyGrants:[] } })
+      return { releaseId:release.id, cardId:card.id, tasks:plan.map(item => ({ key:item.key, taskId:taskId(item.key), title:item.title })) }
+    }
+    const apply = () => persist(key, materialize)
+    return operationId !== undefined && operationId !== key ? persist(operationId, apply) : apply()
   }
   const notifyRelease = async (release, text, note = 'release status') => {
     if (!release?.groupId) return
     const room = rt.roomOf?.(release.groupId), pm = rt.botOf?.(release.projectManagerId)
+    if (!room || !pm || pm.private === true || !room.members?.includes(pm.id)) return
+    if (release.scope.startsWith('room:') && !rt.roomOf?.(release.scope.slice(5))?.members?.includes(pm.id)) return
     try {
-      if (room && pm && typeof rt.postToRoom === 'function') await rt.postToRoom(room, pm, text, { quiet:true })
-      if (typeof rt.deliver === 'function' && typeof rt.chatOf === 'function' && pm) {
+      if (typeof rt.postToRoom === 'function') await rt.postToRoom(room, pm, text, { quiet:true })
+      if (typeof rt.deliver === 'function' && typeof rt.chatOf === 'function') {
         await rt.deliver({ toId:pm.id, fromName:'You', sessionId:rt.chatOf(pm.id), role:'request', note, text })
       }
     } catch (error) { rt.warn?.('ds-bot: release status not delivered: %s', error) }
@@ -135,7 +172,7 @@ export function install(rt) {
     if (!taskId) return
     const task = service().store.get(taskId)
     if (!task) return
-    const id = releaseId ?? task.releaseId
+    const id = releaseId ?? task.releaseId ?? (task.parentTaskId && service().store.get(task.parentTaskId)?.releaseId)
     if (!id) return
     const release = service().store.getRelease(id)
     if (!release) return
@@ -198,7 +235,7 @@ export function install(rt) {
     return Number.isSafeInteger(revision) && revision > 0 && revision <= task.revision && reference === boardRegistrationReference({ id:task.id, revision })
   }
   const currentBinding = task => {
-    if (!validBoardAuthority(task) || !task.scope || typeof task.scope !== 'string') return false
+    if ((!validBoardAuthority(task) && !isManualBoardTask(task)) || !task.scope || typeof task.scope !== 'string') return false
     const participants = [task.owner, task.reviewer]
     if (task.scope.startsWith('room:')) {
       const room = rt.roomOf(task.scope.slice(5))
@@ -230,7 +267,7 @@ export function install(rt) {
       && instance?.store && instance.dependencyAllowed?.(task, dependency, grant) === true
   })
   const allowedAction = (task, action) => {
-    if (!task || !action || action.actor === 'user' || !taskParticipant(task, action.actor) || !goalAllows(task, action.actor)
+    if (!validBoardAuthority(task) || !action || action.actor === 'user' || !taskParticipant(task, action.actor) || !goalAllows(task, action.actor)
       || task.blocked || task.stale || !dependenciesReady(task)) return false
     return action.kind === 'execute'
       ? task.owner === action.actor && task.status === 'ready' && task.actionRevision === action.revision
@@ -257,7 +294,8 @@ export function install(rt) {
       : (phase === 'review' || phase === 'revalidate') && actor === task.reviewer && actor !== task.owner
         && (actor === 'user' || taskParticipant(task, actor)) && value?.kind !== 'git')
   const botWorkflow = installHostWorkflow(rt, {
-    defineTool, run, getStore: () => service().store,
+    defineTool, run, getStore: () => service().store, pendingGoalCard:id => instance?.goalEditor.pendingCard(id),
+    goalReply:(...args) => service().goalEditor.botReply(...args),
     // A Bot command may be the review that publishes a release inside the journal
     // transaction; sweep its report before handing the scheduler the next action.
     wake: () => { void sweepReleaseReports().catch(error => rt.warn?.('ds-bot: release report sweep: %s', error?.message || error)); return instance?.driver.wake() },
@@ -294,10 +332,16 @@ export function install(rt) {
     const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable,
-      authorize: input => (input.actor === 'user' && ['create', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
+      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
         || botWorkflow.authorize(input),
+      verifyGoalItems: task => {
+        const goals = legacyGoalCards({scope:{kind:'room', id:task.scope.slice(5)}, principal, rooms:rt.state.rooms,
+          bots:rt.state.bots, pendingCard:id => instance?.goalEditor.pendingCard(id)})
+        const done = new Set(goals.filter(row => row.legacy.originalStatus === 'done' && !row.legacy.ambiguous && !row.legacy.pending).map(row => row.id))
+        return task.goalItemIds.every(id => done.has(id))
+      },
       verifyRegistration: (task, value, actor) => {
         if (actor !== 'user' || value?.kind !== 'personal' || !task || !currentBinding({ ...task, authority:value })) return false
         const prefix = `board:${task.id}:`
@@ -414,9 +458,59 @@ export function install(rt) {
     if (!instance || closing || rt.stopping) return
     void run(() => instance?.driver.wake()).catch(error => rt.warn?.('ds-bot: board scheduler: %s', error?.message || 'unknown error'))
   }
+  // A human edit can arrive between two working steps. Notify the current owner
+  // in the original session; the card and its revision remain the durable record.
+  // A card already holds the durable update. Only steer a turn that was actually
+  // running for this owner, including after async Session resolution.
+  const activeBoardRecipient = (owner, roomId, sessionId, groupOnly = false) => {
+    if (!sessionId || typeof rt.deliver !== 'function' || rt.selfOf?.(sessionId) !== owner) return
+    const bot = rt.botOf(owner)
+    if (!bot || bot.private === true) return
+    const room = roomId && rt.roomOf(roomId)
+    if (roomId && (!room?.members?.includes(owner) || rt.goalDispatchBlocked?.(room, owner) !== false)) return
+    const entry = rt.groupOwners?.get(sessionId)
+    if (entry) {
+      if (entry.roomId !== roomId || entry.botId !== owner || room?.sessions?.[owner] !== sessionId) return
+    } else if (groupOnly || rt.chatOf(owner) !== sessionId) return
+    const turn = rt.live?.get(sessionId)?.turn
+    if (turn !== undefined) return { owner, roomId, sessionId, turn, groupOnly, group:!!entry }
+  }
+  const steerBoardUpdate = async (recipient, text, operationId) => {
+    if (!recipient) return
+    const {owner, roomId, sessionId, turn, groupOnly, group} = recipient
+    const current = () => {
+      const active = activeBoardRecipient(owner, roomId, sessionId, groupOnly)
+      return active?.turn === turn && active.group === group
+    }
+    if (!current()) return
+    // A room invocation or a request expects another answer. This relay supplies
+    // context to the existing turn and carries no downstream work or reply route.
+    let changedTurn = false
+    try {
+      await rt.deliver({toId:owner, sessionId, ...(group ? {roomId} : {}), role:'board-update', fromName:'You',
+        text, steer:true, note:'board update', exchangeId:`board-edit:${operationId}`},
+        {beforeAdmission() {
+          if (current()) return
+          changedTurn = true
+          throw new Error('Board update recipient turn changed')
+        }})
+    } catch (error) { if (!changedTurn) throw error }
+  }
+  const notifyWorkingBot = async (taskId, change, operationId) => {
+    const task = service().store.get(taskId)
+    if (!task || !['working','reported','cancelled'].includes(task.status)) return
+    const roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
+    const recipient = activeBoardRecipient(task.owner, roomId, task.workSessionId)
+    const text = `Human board update for existing task ${task.id} (${change.type}, status ${task.status}, revision ${task.revision}). `
+      + (change.value?.changeTaskId ? `Read change request ${change.value.changeTaskId} as well. ` : '')
+      + 'Read this card with board_task show before the next work step. Reconcile the new scope, stage or user reply; stop work if cancelled. Do not create or dispatch a second task.'
+    await steerBoardUpdate(recipient, text, operationId)
+  }
   const mutate = (endpoint, payload) => {
     const { api, store } = service(), scope = payload.scope
+    let committedHere = false
     const outcome = store.request({ operationId: payload.operationId, actor: 'user', taskId: payload.taskId, payload: requestKey(endpoint, payload), isRejection: rejected }, () => {
+      committedHere = true
       if (payload.type === 'create') {
         if (!payload.value || typeof payload.value !== 'object' || Array.isArray(payload.value)) throw Object.assign(new Error('Invalid task proposal'), { code: 'bot/invalid' })
         const { schedule, ...value } = payload.value
@@ -434,7 +528,10 @@ export function install(rt) {
     const change = result?.change
       ? { type:'change-request', value:{ changeTaskId: result.id, sourceTaskId: result.change.sourceTaskId, fields: Object.keys(result.change.after ?? {}) } }
       : payload
-    if (releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+    if (committedHere && ['edit','card-details','card-comment','card-comment-edit','card-comment-delete','cancel','unschedule'].includes(payload.type)) {
+      void notifyWorkingBot(payload.taskId, change, payload.operationId).catch(error => rt.warn?.('ds-bot: board update delivery: %s', error))
+    }
+    if (committedHere && releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
   }
   let redoPreparation
@@ -484,12 +581,21 @@ export function install(rt) {
       case 'board-release-create': {
         api.list(scope, principal)
         if (!payload.operationId || !payload.release) throw new Error('Invalid release request')
-        let release = { ...payload.release, scope:`${scope.kind}:${scope.id}` }
+        if (['groupId','roles','projectManagerId'].some(key => Object.hasOwn(payload.release, key))) throw new Error('Choose release roles from this group')
+        const release = { ...payload.release, scope:`${scope.kind}:${scope.id}` }
+        // Replays of old releases retain the original coordination room from their receipt.
+        const original = store.operation(payload.operationId)?.result
+        if (scope.kind === 'room') {
+          const groupId = original?.scope === release.scope && original.id === release.id ? original.groupId : scope.id
+          if (groupId) release.groupId = groupId
+        }
         if (payload.team !== undefined) {
           if (scope.kind !== 'room') throw new Error('A release group needs a group board')
-          const team = resolveReleaseTeam({ bots:rt.state.bots ?? {}, projectManagerId:payload.team.projectManagerId, roles:payload.team.roles ?? {} })
-          const room = await createReleaseGroup(rt, { release, team, boardRoomId: scope.id })
-          release = { ...release, groupId:room.id, projectManagerId:team.projectManagerId, roles:team.roles }
+          const members = rt.roomOf(scope.id)?.members ?? []
+          const bots = Object.fromEntries(members.map(id => [id, rt.botOf(id)]).filter(([, bot]) => bot))
+          const team = resolveReleaseTeam({ bots, projectManagerId:payload.team.projectManagerId, roles:payload.team.roles ?? {} })
+          release.projectManagerId = team.projectManagerId
+          release.roles = team.roles
         }
         return store.createRelease({ operationId: payload.operationId, actor: 'user', release })
       }
@@ -498,7 +604,7 @@ export function install(rt) {
         if (scope.kind !== 'room') throw new Error('A release lifecycle plan needs a group board')
         const release = store.getRelease(payload.releaseId)
         if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
-        return applyReleasePlan(scope, release, payload.requirement, principal)
+        return applyReleasePlan(scope, release, payload.requirement, principal, payload.cardType, payload.operationId)
       }
       case 'board-release-update': {
         api.list(scope, principal)
@@ -617,9 +723,22 @@ export function install(rt) {
       }
       case 'board-command': {
         if(['goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type)) {
-          api.list(scope,principal)
+          const card = api.list(scope,principal).tasks.find(item => item.id === payload.taskId)
           const kind=payload.type==='goal-task-edit'?'edit':payload.type==='goal-history-title'?'title':payload.type==='goal-card-details'?'details':payload.type==='goal-card-comment'?'comment':'remove-image'
-          return goalEditor.execute(scope,payload.operationId,{endpoint,payload},()=>goalEditor.mutate(scope,payload,kind))
+          let recipient
+          const outcome = await goalEditor.execute(scope,payload.operationId,{endpoint,payload},() => {
+            if (card?.legacy?.current && !card.legacy.ambiguous && card.legacy.originalStatus === 'working') {
+              const room = rt.roomOf(card.originRoomId)
+              recipient = activeBoardRecipient(card.owner, card.originRoomId, room?.sessions?.[card.owner], true)
+            }
+            return goalEditor.mutate(scope,payload,kind)
+          })
+          if (recipient && outcome.state === 'committed') {
+            const text = `Human board update for existing goal item ${card.id} (goal ${card.legacy.goalId}, stage ${card.legacy.stageId}, task ${card.legacy.taskId}). `
+              + 'Read this original item with board_task list or group_goal show before your next step. Use its latest instructions and status; stop if it no longer calls for work. Do not create or dispatch another task.'
+            void steerBoardUpdate(recipient, text, payload.operationId).catch(error => rt.warn?.('ds-bot: goal board update delivery: %s',error))
+          }
+          return outcome
         }
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))throw new Error('Goal operation ID requires a goal task action')
         const result = mutate(endpoint, payload); notifyDriver(); return result
@@ -813,13 +932,15 @@ export function install(rt) {
     botWorkflow.close(); instance?.store.close(); instance = undefined
   })()
   rt.boardCall = boardCall
-  rt.boardPlanRelease = async ({ caller, releaseId, requirement, operationId } = {}) => run(async () => {
+  rt.boardPlanRelease = async ({ caller, releaseId, requirement, operationId, cardType } = {}) => run(async () => {
     if (!caller?.actor || !releaseId) throw new Error('Invalid release plan request')
     const release = service().store.getRelease(releaseId)
     if (!release || !release.scope.startsWith('room:')) throw new Error('Release is unavailable')
     const roomId = release.scope.slice(5), room = rt.roomOf(roomId)
-    if (caller.actor !== release.projectManagerId && !(room && rt.isAdminOf?.(room, caller.actor))) throw new Error('Only the release project manager can plan this release')
-    return applyReleasePlan({ kind:'room', id:roomId }, release, requirement, { kind:'user' }, operationId ?? 'bot-plan')
+    const actor = rt.botOf(caller.actor)
+    if (!actor || actor.private === true || !room?.members?.includes(caller.actor) || (caller.roomId && caller.roomId !== roomId)) throw new Error('Release is unavailable in this group')
+    if (caller.actor !== release.projectManagerId && !rt.isAdminOf?.(room, caller.actor)) throw new Error('Only the release project manager can plan this release')
+    return applyReleasePlan({ kind:'room', id:roomId }, release, requirement, { kind:'user' }, cardType, operationId)
   })
   rt.onHomeDrain(stop)
   ctx.effect(() => ctx.connection.fetch.register({ path: BOARD_UPLOAD_PATH, methods: ['POST'], requestBody: 'streaming', fetch: upload }), 'ds-bot: board streaming upload')

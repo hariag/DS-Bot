@@ -453,10 +453,9 @@ export class LocalAgentAdapter extends LlmAdapter {
         model: options.model,
         defaultEffort: live.defaultEffort,
         effort: live.effort,
-        // Codex carries the team instructions as developer config on a new
-        // thread; Claude gets them appended at spawn; ACP reads them in the
-        // first prompt below.
-        instructions: live.spec.kind === 'codex' && freshCli ? instructions : undefined,
+        // Codex also needs the current rules if resume falls back to a new thread.
+        instructions: live.spec.kind === 'codex' ? instructions : undefined,
+        refreshInstructions: live.promptHash !== promptHash,
         system: live.spec.kind === 'claude' ? instructions : undefined,
       }
       live.engineSession = await live.engine.open(sessionId, openArgs)

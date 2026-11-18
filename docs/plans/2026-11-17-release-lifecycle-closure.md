@@ -4,6 +4,7 @@
 - 阶段：Trello 看板第二阶段之后的任务闭环增强
 - 相关：`release-team.mjs`、`board-service.js`、`task-store.mjs`、`workflow.mjs`、`task-tool.mjs`、`task-board.js`
 - 状态：实现完成；student-grades 样例端到端通过
+- 2026-11-18 更新：下文“每次 Release 新建群并指定 PM 为管理员”记录的是历史设计。当前一个群负责一个大版本，同群可发布多个小版本，沿用该群的管理员与成员；历史 Release 保留原协调群。
 
 ## 目标
 

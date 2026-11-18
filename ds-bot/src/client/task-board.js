@@ -82,7 +82,7 @@ const formatMoment = value => {
 const confirmCommands = new Set(['edit', 'card-details', 'goal-task-edit', 'goal-history-title', 'goal-card-details'])
 const CONFIRM_FIELD_LABELS = {
   title:'Title', owner:'Owner', reviewer:'Reviewer', acceptance:'Acceptance criteria', dependencies:'Dependencies',
-  description:'Description', dueDate:'Due date', dueComplete:'Due date complete', labels:'Labels', checklist:'Checklist',
+  description:'Description', stage:'Work stage', dueDate:'Due date', dueComplete:'Due date complete', labels:'Labels', checklist:'Checklist',
   coverImageId:'Cover image', type:'Type', note:'Goal task note', status:'Goal task status', reason:'Reason for correction',
 }
 
@@ -841,7 +841,7 @@ function CardCover({ scope, task, request }) {
   return h('div', { className: 'bt-board-card-cover', 'aria-hidden': true }, h('img', { src: state.url, alt: '' }))
 }
 
-function TaskCard({ scope, task, commands, actors, uncertain, dragging, dragEnabled, request, onOpen, onDragStart, onDragEnd, onDragOverCard, selectionMode = false, selected = false, onSelect }) {
+function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, dragEnabled, request, onOpen, onDragStart, onDragEnd, onDragOverCard, selectionMode = false, selected = false, onSelect }) {
   const owner = actorLabel(task.owner, actors)
   const labels = labelsOf(task)
   const dependencies = dependenciesOf(task)
@@ -868,8 +868,12 @@ function TaskCard({ scope, task, commands, actors, uncertain, dragging, dragEnab
   h('button', { type: 'button', className: 'bt-board-card-summary', onClick: event => onOpen(task.id, event.currentTarget) },
     labels.length ? h('span', { className: 'bt-board-card-labels' }, labels.slice(0, 4).map(label => h(LabelChip, { key: label, label })), labels.length > 4 ? h('span', { className: 'bt-board-card-more-labels' }, '+' + (labels.length - 4)) : null) : null,
     h('strong', { className: 'bt-board-card-title' }, textValue(task.title) || task.id),
+    task.progress && task.status === 'working' ? h('span', { className: 'bt-board-card-milestone' },
+      h('span', { title: task.progress.summary }, task.progress.summary),
+      !task.blocked && !task.stale ? h('span', { title: task.progress.next }, t('Next action'), ' · ', task.progress.next) : null) : null,
     h('span', { className: 'bt-board-card-meta' },
       h(TypeChip, { type: taskType(task) }),
+      task.stage ? h('span', {className:'bt-board-chip',title:t('Work stage')}, task.stage) : null,
       info ? h(DueChip, { task }) : null,
       h(ChecklistProgress, { task, compact: true }),
       textValue(task.description) ? h('span', { className: 'bt-board-card-count', title: t('Description') }, h(TextIcon)) : null,
@@ -880,13 +884,16 @@ function TaskCard({ scope, task, commands, actors, uncertain, dragging, dragEnab
       dependencies.length ? h('span', { className: 'bt-board-chip' }, t('{count} dependencies', { count: dependencies.length })) : null,
       task.shared ? h('span', { className: 'bt-board-chip' }, t('Shared task · read only')) : null),
     h('span', { className: 'bt-board-card-foot' },
-      h('span', { className: 'bt-board-card-owner' }, h(MemberAvatar, { name: owner || t('You'), size: 22, muted: !owner || owner === t('You') }), h('span', null, owner || t('Unknown'))))))
+      h('span', { className: 'bt-board-card-owner' }, h(MemberAvatar, { name: owner || t('You'), size: 22, muted: !owner || owner === t('You') }), h('span', null, owner || t('Unknown'))))),
+  items?.length ? h('details', { className:'bt-board-items', open:true },
+    h('summary', null, t('Task items'), ' · ', items.filter(item => item.status === 'done' || item.legacy?.originalStatus === 'done').length, '/', items.length),
+    items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen }))) : null)
 }
 
 
 const byteLength = value => new TextEncoder().encode(textValue(value)).length
 
-function CreateCardDialog({ laneLabel, disabled, actors, tasks, defaultOwner = '', ownerOnly = false, personalProgress, scheduleOnCreate = false, followup = false, defaultDraft = false, initial, onClose, onCreate }) {
+function CreateCardDialog({ laneLabel, parentTaskId, group = false, disabled, actors, tasks, defaultOwner = '', ownerOnly = false, personalProgress, scheduleOnCreate = false, followup = false, defaultDraft = false, initial, onClose, onCreate }) {
   const seed = initial ?? {}
   const seedDetails = seed.details ?? {}
   const draftAllowed = !scheduleOnCreate && personalProgress === undefined && !followup
@@ -894,7 +901,8 @@ function CreateCardDialog({ laneLabel, disabled, actors, tasks, defaultOwner = '
   const [owner, setOwner] = useState(() => textValue(seed.owner) || defaultOwner)
   const [reviewer, setReviewer] = useState(() => textValue(seed.reviewer))
   const [acceptance, setAcceptance] = useState(() => textValue(seed.acceptance))
-  const [type, setType] = useState(() => TASK_TYPE_KEYS.has(seed.type) ? seed.type : 'feature')
+  const allowedTypes = group && !parentTaskId ? TASK_TYPES.filter(([id]) => ['feature','bugfix'].includes(id)) : TASK_TYPES
+  const [type, setType] = useState(() => allowedTypes.some(([id]) => id === seed.type) ? seed.type : parentTaskId ? 'development' : 'feature')
   const [draft, setDraft] = useState(() => draftAllowed && (seed.draft === true || defaultDraft === true))
   const [description, setDescription] = useState(() => textValue(seedDetails.description))
   const [dependencies, setDependencies] = useState(() => Array.isArray(seed.dependencies) ? seed.dependencies.map(asText).filter(Boolean) : [])
@@ -912,10 +920,11 @@ function CreateCardDialog({ laneLabel, disabled, actors, tasks, defaultOwner = '
   const reviewerCandidates = candidates.filter(actor => actor.id !== owner && (!scheduleOnCreate || actor.id !== 'user'))
   useEffect(() => { if (reviewer && reviewer === owner) setReviewer('') }, [owner, reviewer])
   const available = (Array.isArray(tasks) ? tasks : []).filter(task => task && !task.legacy && typeof task.id === 'string' && task.id !== seed.id)
+  const unassigned = Boolean(draft && group && parentTaskId && !owner && !reviewer)
   const draftOwner = owner || (ownerOnly ? defaultOwner : (candidates.find(actor => actor.id !== 'user')?.id ?? defaultOwner))
   const draftReviewer = reviewer || candidates.find(actor => actor.id !== draftOwner && actor.id !== 'user')?.id
   const valid = title.trim() && (draft
-    ? Boolean(draftOwner && draftReviewer && draftOwner !== draftReviewer)
+    ? unassigned || Boolean(draftOwner && draftReviewer && draftOwner !== draftReviewer)
     : Boolean(owner.trim() && reviewer.trim() && acceptance.trim() && owner.trim() !== reviewer.trim()))
     && byteLength(title.trim()) <= 200 && byteLength(acceptance.trim()) <= 8192
     && dependencies.length <= 100 && dependencies.every(id => available.some(task => task.id === id))
@@ -925,7 +934,7 @@ function CreateCardDialog({ laneLabel, disabled, actors, tasks, defaultOwner = '
     if (!valid || disabled || saving) return
     setSaving(true); setError('')
     try {
-      const value = { title: title.trim(), owner: draft ? draftOwner : owner.trim(), reviewer: draft ? draftReviewer : reviewer.trim(), acceptance: draft ? (acceptance.trim() || 'To be defined.') : acceptance.trim(), dependencies, type,
+      const value = { title: title.trim(), owner: draft ? (unassigned ? null : draftOwner) : owner.trim(), reviewer: draft ? (unassigned ? null : draftReviewer) : reviewer.trim(), acceptance: draft ? (acceptance.trim() || 'To be defined.') : acceptance.trim(), dependencies, type,
         ...(draft ? { draft: true } : {}),
         ...(personalProgress !== undefined ? { personalProgress } : {}),
         ...(scheduleOnCreate ? { schedule: true } : {}),
@@ -942,15 +951,16 @@ function CreateCardDialog({ laneLabel, disabled, actors, tasks, defaultOwner = '
     finally { setSaving(false) }
   }
   const close = () => { if (!saving) onClose() }
+  const heading = t(parentTaskId ? 'Create task item' : 'Create card')
   return h('div', { className: 'bt-card-modal-backdrop bt-create-backdrop', onMouseDown: event => { if (event.target === event.currentTarget) close() } },
-    h('section', { className: 'bt-card-modal bt-create-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('Create card'), tabIndex: -1 },
+    h('section', { className: 'bt-card-modal bt-create-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': heading, tabIndex: -1 },
       h('header', { className: 'bt-card-modal-header' },
-        h('div', null, h('p', null, laneLabel ? t('Add to {lane}', { lane: laneLabel }) : t('New card')), h('h2', null, t('Create card'))),
+        h('div', null, h('p', null, laneLabel ? t('Add to {lane}', { lane: laneLabel }) : t('New card')), h('h2', null, heading)),
         h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close'), onClick: close }, h(CloseIcon))),
       h('form', { className: 'bt-create-form', onSubmit: submit },
         h('label', { className: 'bt-field' }, h('span', null, t('Title')), h('input', { ref: first, value: title, disabled: disabled || saving, maxLength: 200, placeholder: t('Card title'), 'aria-label': t('Title'), onChange: event => setTitle(event.target.value) })),
         h('label', { className: 'bt-field' }, h('span', null, t('Type')), h('select', { value: type, disabled: disabled || saving, 'aria-label': t('Task type'), onChange: event => setType(event.target.value) },
-          TASK_TYPES.map(([id, label]) => h('option', { key: id, value: id }, t(label))))),
+          allowedTypes.map(([id, label]) => h('option', { key: id, value: id }, t(label))))),
         h('div', { className: 'bt-create-row' },
           h('label', { className: 'bt-field' }, h('span', null, t('Owner')), h('select', { value: owner, disabled: disabled || saving, 'aria-label': t('Owner'), onChange: event => setOwner(event.target.value) },
             h('option', { value: '' }, t('Choose a Bot')), ownerCandidates.map(actor => h('option', { key: actor.id, value: actor.id }, actor.name || actor.id)))),
@@ -982,32 +992,34 @@ function CardSection({ title, action, children, className = '' }) {
     children)
 }
 
-function DescriptionEditor({ task, editable, disabled, onSave }) {
+function CardTextEditor({ task, field = 'description', editable, disabled, onSave }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [base, setBase] = useState(null)
   const [error, setError] = useState('')
-  const description = textValue(task.description)
-  const start = () => { setBase(cardStamp(task)); setDraft(description); setError(''); setEditing(true) }
+  const stage = field === 'stage'
+  const label = t(stage ? 'Work stage' : 'Description')
+  const current = textValue(task[field])
+  const start = () => { setBase(cardStamp(task)); setDraft(current); setError(''); setEditing(true) }
   const save = async () => {
     if (!base || disabled) return
-    if (byteLength(draft) > 8192) { setError(t('Description is too long.')); return }
-    const result = await onSave(stampedTask(task, base), { description: draft })
+    if (byteLength(stage ? draft.trim() : draft) > (stage ? 120 : 8192)) { setError(t(stage ? 'Stage is too long.' : 'Description is too long.')); return }
+    const result = await onSave(stampedTask(task, base), { [field]:stage ? draft.trim() : draft })
     if (result === 'committed') setEditing(false)
-    else if (result !== 'cancelled') setError(t('The description could not be saved. Check the board and try again.'))
+    else if (result !== 'cancelled') setError(t(stage ? 'The stage could not be saved.' : 'The description could not be saved. Check the board and try again.'))
   }
   const changed = base && !sameCardStamp(task, base)
-  const dirty = base && draft !== description
-  if (!editable && !description) return null
-  return h(CardSection, { title: t('Description'), action: editable && !editing ? h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, h(PencilIcon), t(description ? 'Edit' : 'Add')) : null, className: 'bt-card-description' },
+  const dirty = base && draft !== current
+  if (!editable && !current) return null
+  return h(CardSection, { title: label, action: editable && !editing ? h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, h(PencilIcon), t(current ? 'Edit' : 'Add')) : null, className: 'bt-card-' + field },
     editing ? h('div', { className: 'bt-card-editor' },
       changed ? h('p', { className: 'bt-card-warning', role: 'alert' }, t('Task changed. Your draft was kept; reload the current values before saving.'), ' ', h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, t('Reload'))) : null,
-      h('textarea', { value: draft, rows: 6, disabled, 'aria-label': t('Description'), onChange: event => { setDraft(event.target.value); setError('') } }),
+      h(stage ? 'input' : 'textarea', { value: draft, rows: stage ? undefined : 6, disabled, 'aria-label': label, onChange: event => { setDraft(event.target.value); setError('') } }),
       error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
       h('div', { className: 'bt-card-editor-actions' },
         h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled, onClick: () => setEditing(false) }, t('Cancel')),
         h('button', { type: 'button', className: 'bt-btn bt-btn-primary', disabled: disabled || changed || !dirty, onClick: () => void save() }, t('Save'))))
-      : description ? h('p', { className: 'bt-card-rich-text' }, description) : h('button', { type: 'button', className: 'bt-card-ghost', onClick: start }, t('Add a more detailed description')))
+      : current ? h('p', { className: 'bt-card-rich-text' }, current) : h('button', { type: 'button', className: 'bt-card-ghost', onClick: start }, t(stage ? 'Set work stage' : 'Add a more detailed description')))
 }
 
 function DueEditor({ task, editable, disabled, legacy, onSave }) {
@@ -1211,6 +1223,20 @@ function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCove
     canUpload ? h(ImageUploader, { task, disabled, onUpload }) : null)
 }
 
+const WORK_REPLY_LABELS = { start:'Work claimed', progress:'Progress', report:'Submitted for independent review', block:'Blocked', unblock:'Blocker cleared' }
+function WorkReply({ comment, actors }) {
+  const label = comment.workflowAction === 'review'
+    ? (comment.result === 'pass' ? 'Independent review passed' : 'Rework requested')
+    : WORK_REPLY_LABELS[comment.workflowAction]
+  return h('div', { className:'bt-card-work-reply' },
+    label ? h('strong', null, t(label)) : null,
+    comment.text ? h('p', { className:'bt-comment-text' }, comment.text) : null,
+    h(Fact, { label:t('Next action'), value:comment.next }),
+    h(Fact, { label:t('Environment'), value:comment.environment }),
+    h(Fact, { label:t('Unblock condition'), value:comment.condition }),
+    comment.blockOwner ? h(Fact, { label:t('Owner'), value:actorName(comment.blockOwner, actors) }) : null)
+}
+
 function CommentItem({ comment, actors, canEdit, canDelete, disabled, onEdit, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(textValue(comment.text))
@@ -1229,7 +1255,7 @@ function CommentItem({ comment, actors, canEdit, canDelete, disabled, onEdit, on
       h('header', null, h('strong', null, author), h('time', { dateTime: Number.isFinite(comment.at) ? new Date(comment.at).toISOString() : undefined }, relativeTime(comment.at)),
         canEdit && !editing ? h('button', { type: 'button', className: 'bt-card-mini', disabled, onClick: () => { setDraft(textValue(comment.text)); setEditing(true); setError('') } }, t('Edit')) : null,
         canDelete && !editing ? (confirming ? h('span', { className: 'bt-comment-confirm' }, h('button', { type: 'button', className: 'bt-card-mini bt-card-icon-danger', disabled, onClick: () => void onDelete(comment.id) }, t('Confirm delete')), h('button', { type: 'button', className: 'bt-card-mini', onClick: () => setConfirming(false) }, t('Cancel'))) : h('button', { type: 'button', className: 'bt-card-mini', disabled, onClick: () => setConfirming(true) }, t('Delete'))) : null),
-      editing ? h('div', { className: 'bt-card-editor' }, h('textarea', { value: draft, rows: 3, disabled, 'aria-label': t('Edit comment'), onChange: event => setDraft(event.target.value) }),
+      comment.workflowAction ? h(WorkReply, { comment, actors }) : editing ? h('div', { className: 'bt-card-editor' }, h('textarea', { value: draft, rows: 3, disabled, 'aria-label': t('Edit comment'), onChange: event => setDraft(event.target.value) }),
         error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
         h('div', { className: 'bt-card-editor-actions' }, h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', onClick: () => setEditing(false) }, t('Cancel')), h('button', { type: 'button', className: 'bt-btn bt-btn-primary', disabled: disabled || !draft.trim() || byteLength(draft) > 2048, onClick: () => void save() }, t('Save')))) : h('p', { className: 'bt-comment-text' }, textValue(comment.text))))
 }
@@ -1251,7 +1277,7 @@ function CommentsEditor({ task, actors, canPost, canEdit, canDelete, disabled, p
   }
   if (!comments.length && !canPost) return null
   return h(CardSection, { title: t('Comments'), action: comments.length ? h('span', { className: 'bt-card-count' }, comments.length) : null, className: 'bt-card-comments' },
-    comments.length ? h('div', { className: 'bt-comment-list' }, comments.map(comment => h(CommentItem, { key: comment.id, comment, actors, canEdit, canDelete, disabled,
+    comments.length ? h('div', { className: 'bt-comment-list' }, comments.map(comment => h(CommentItem, { key: comment.id, comment, actors, canEdit:canEdit && !comment.workflowAction, canDelete:canDelete && !comment.workflowAction, disabled,
       onEdit: async (id, value) => onCommand(task, { type: 'card-comment-edit' }, { commentId: id, text: value }),
       onDelete: async id => { const result = await onCommand(task, { type: 'card-comment-delete' }, { commentId: id }); return result } }))) : h('p', { className: 'bt-card-muted' }, t('No comments yet.')),
     canPost ? h('div', { className: 'bt-comment-compose' },
@@ -1345,6 +1371,7 @@ function TypeBlock({ task, editable, disabled, onSave }) {
 
 function PeopleBlock({ task, actors }) {
   const rows = [['Owner', task.owner], ['Reviewer', task.reviewer]]
+  if (task.parentTaskId && !task.owner && !task.reviewer) return h(SideSection,{title:t('People')},t('Unassigned'))
   return h(SideSection, { title: t('People') }, h('div', { className: 'bt-card-people' },
     rows.filter(([, id]) => id).map(([role, id]) => h('div', { key: role, className: 'bt-card-person' },
       h(MemberAvatar, { name: actorName(id, actors), size: 28 }), h('span', null, h('strong', null, actorName(id, actors)), h('small', null, t(role)))))))
@@ -1357,6 +1384,25 @@ function DependenciesBlock({ task, tasks }) {
     const item = Array.isArray(tasks) ? tasks.find(task => task.id === id) : undefined
     return h('span', { key: id, className: 'bt-board-chip' }, textValue(item?.title) || id)
   })))
+}
+
+function TaskItemLink({ item, actors, onOpen }) {
+  return h('button', { type:'button', 'data-item-id':item.id, className:'bt-card-related-link', onClick:event => onOpen(item.id, event.currentTarget) },
+    h('span', null, textValue(item.title) || item.id),
+    h('small', null, [actorLabel(item.owner, actors), item.legacy ? t(stageLabelOf(item)) : stageLabelOf(item), item.legacy?.originalStatus ? t(STATUS_LABELS[item.legacy.originalStatus] ?? item.legacy.originalStatus) : '', item.stage, item.blocked ? t('Blocked') : ''].filter(Boolean).join(' · ')),
+    item.status === 'working' && item.progress ? h('span', { className:'bt-board-item-progress' },
+      item.progress.summary, !item.blocked && !item.stale ? ' · ' + t('Next action') + ' · ' + item.progress.next : '') : null)
+}
+
+function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem }) {
+  const parent = task.parentTaskId && tasks.find(item => item.id === task.parentTaskId)
+  const children = tasks.filter(item => item.parentTaskId === task.id)
+  if (!parent && !children.length && !onCreateItem) return null
+  const link = item => h(TaskItemLink, { key:item.id, item, actors, onOpen })
+  return h('div', { className:'bt-card-side-block' },
+    parent ? h('h3', null, t('Parent card')) : null, parent ? link(parent) : null,
+    children.length || onCreateItem ? h('h3', null, t('Task items')) : null, children.map(link),
+    onCreateItem ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', onClick:onCreateItem }, t('Create task item')) : null)
 }
 
 function FactsBlock({ task }) {
@@ -1469,7 +1515,7 @@ function TaskHistory({ scope, task, request }) {
     try { const result = await request('board-history', { scope, taskId: task.id }); if (sequence.current === id) setHistory(result) }
     catch (caught) { if (sequence.current === id) setError(caught?.message || t('Board unavailable')) }
   }
-  const fields = { title:'Title', owner:'Owner', reviewer:'Reviewer', acceptance:'Acceptance criteria', dependencies:'Dependencies', description:'Description', dueDate:'Due date', dueComplete:'Due date complete', labels:'Labels', checklist:'Checklist' }
+  const fields = { title:'Title', owner:'Owner', reviewer:'Reviewer', acceptance:'Acceptance criteria', dependencies:'Dependencies', description:'Description', stage:'Work stage', dueDate:'Due date', dueComplete:'Due date complete', labels:'Labels', checklist:'Checklist' }
   return h('details', { className: 'bt-card-history', onToggle: load }, h('summary', null, t('Card revision history')),
     error ? h('p', { role: 'alert', className: 'bt-form-error' }, error) : null,
     !history && !error ? h('p', { className: 'bt-card-muted' }, t('Loading…')) : null,
@@ -1530,7 +1576,7 @@ function EditHistoryTitle({ task, disabled, onEdit }) {
 }
 
 
-function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
+function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, onOpenRelated, onCreateItem, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
   const modal = useRef(null)
   const lightboxRef = useRef(null)
   const confirmationRef = useRef(null)
@@ -1626,7 +1672,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
   const saveTitle = async () => {
     if (!canRename || !titleDraft.trim() || byteLength(titleDraft.trim()) > 200) return
     setTitleError('')
-    const result = await confirmCommand(task, { type: 'edit' }, { title: titleDraft.trim(), owner: asText(task.owner), reviewer: asText(task.reviewer), acceptance: textValue(task.acceptance), dependencies: dependenciesOf(task) })
+    const result = await confirmCommand(task, { type: 'edit' }, { title: titleDraft.trim(), owner: task.owner, reviewer: task.reviewer, acceptance: textValue(task.acceptance), dependencies: dependenciesOf(task) })
     if (result === 'committed') setEditingTitle(false)
     else if (result !== 'cancelled') setTitleError(t('The title could not be saved.'))
   }
@@ -1677,7 +1723,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           task.legacy?.titleStale ? h('p', { className: 'bt-card-note', role: 'status' }, t('The original task changed after this display title was corrected. Review the title.')) : null,
           task.shared ? h('p', { className: 'bt-card-note' }, t('This shared card is read only in this board.')) : null,
           h(ChangeBlock, { task }),
-          h(DescriptionEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
+          h(CardTextEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(ChecklistEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: (target, value) => detailsSave(target, value) }),
           h(AttachmentsEditor, { scope, task, request, canUpload, canRemove: canRemoveImage, canCover: !legacy && canDetails, disabled: uncertain || busy, onUpload, onRemove: imageId => onCommand(task, { type: removeType }, { imageId }), onCover: imageId => detailsSave(task, { coverImageId: imageId }), onOpenImage: (image, url) => {
             if (!url) return
@@ -1689,10 +1735,12 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         h('aside', { className: 'bt-card-side' },
           h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
           h(PeopleBlock, { task, actors }),
+          !legacy ? h(CardTextEditor, { task, field:'stage', editable:canDetails, disabled:uncertain || busy, onSave:detailsSave }) : null,
           h(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
           h(LabelsEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DependenciesBlock, { task, tasks }),
+          h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem }),
           h(FactsBlock, { task }),
           h('div', { className: 'bt-card-side-block' }, h(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
           !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle
@@ -1805,6 +1853,23 @@ function ReleaseChip({ release, onOpen }) {
   h('span', { className: 'bt-board-release-progress' }, `${done}/${total}`))
 }
 
+function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled }) {
+  const features = tasks.filter(task => !task.shared && !task.legacy && !task.parentTaskId && ['feature','bugfix'].includes(task.type))
+  const parentIds = new Set(features.map(task => task.id))
+  const itemCount = tasks.filter(task => parentIds.has(task.parentTaskId)).length
+  return h('section', { className:'bt-major-version', 'aria-label':t('Major version') },
+    h('header', { className:'bt-board-section-heading bt-board-section-heading-row' },
+      h('div', null, h('h3', null, t('Major version'), ' · ', name),
+        h('p', null, t('{cards} feature or bugfix cards · {items} task items', {cards:features.length, items:itemCount}))),
+      h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled, onClick:onCreate }, h(PlusIcon), t('New release'))),
+    h('h4', null, t('Minor releases')),
+    releases.length ? h('ul', { className:'bt-minor-releases' }, releases.map(release =>
+      h('li', { key:release.id }, h('button', { type:'button', onClick:() => onOpen(release.id) },
+        h('span', null, textValue(release.name) || textValue(release.version) || t('Untitled release'),
+          release.version && release.name && release.name !== release.version ? h('small', null, release.version) : null),
+        h(ReleaseStatusChip, { status:release.status }))))) : h('p', { className:'bt-card-muted' }, t('No releases yet')))
+}
+
 function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors, onClose, onCreate }) {
   const roles = Array.isArray(releaseRoles) ? releaseRoles.filter(role => role && typeof role.key === 'string' && role.key) : []
   const teamSupported = roles.length > 0
@@ -1865,7 +1930,7 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
             h('h3', null, t('Release team')),
             h('span', { className: 'bt-release-team-count' }, t('{count} roles', { count: roles.length })),
             h('button', { type:'button', className:'bt-card-mini', disabled: disabled || saving, onClick: autoFill }, t('Auto-fill roles'))),
-          h('p', { className: 'bt-create-note' }, t('A release group is created with the project manager as admin.')),
+          h('p', { className: 'bt-create-note' }, t('This minor release uses the current major-version group and its existing admin and members.')),
           h('label', { className: 'bt-field bt-release-team-pm' },
             h('span', null, t('Project Manager'), h('span', { className: 'bt-release-required' }, ' *')),
             botSelect(manager, t('Project Manager'), setManager, 'projectManager')),
@@ -1938,7 +2003,7 @@ function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, err
         release.failure ? h('p', { className: 'bt-card-warning', role: 'status' }, t('Failure') + ': ' + textValue(release.failure)) : null,
         h('div', { className: 'bt-release-facts' },
           h(Fact, { label: t('Project manager'), value: release.projectManagerId ? actorName(release.projectManagerId, actors) : t('Unassigned') }),
-          h(Fact, { label: t('Release group'), value: groupId || t('Not created') }),
+          h(Fact, { label: t('Major-version group'), value: groupId || t('Unknown') }),
           h(Fact, { label: t('Items'), value: t('{done}/{total} done', { done, total }) }),
           h(Fact, { label: t('Gates'), value: `${passed}/${RELEASE_GATES.length}` }),
           release.startedAt ? h(Fact, { label: t('Started'), value: formatMoment(release.startedAt) }) : null,
@@ -2290,7 +2355,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   }, [selectedCard, createFor, createEnabled, visible])
   const createCard = value => {
     if (!window.crypto?.randomUUID) return Promise.resolve(undefined)
-    return run({ id: window.crypto.randomUUID() }, { type: 'create' }, value)
+    return run({ id: window.crypto.randomUUID() }, { type: 'create' }, createFor?.parentTaskId ? { ...value, parentTaskId:createFor.parentTaskId } : value)
   }
   const bulkArchive = async () => {
     const ids = [...selectedIds]
@@ -2692,7 +2757,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const labels = labelsOf(task)
     const comments = commentsOf(task)
     const type = taskType(task), typeText = TASK_TYPE_LABELS[type]
-    const matched = !needle || [task.title, task.id, task.description, task.acceptance, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels, ...comments.map(comment => comment.text)]
+    const matched = !needle || [task.title, task.id, task.description, task.stage, task.acceptance, task.progress?.summary, task.progress?.next, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels, ...comments.map(comment => comment.text)]
       .some(value => textOf(value).includes(needle))
     const memberOk = !memberFilter || asText(task.owner) === memberFilter || asText(task.reviewer) === memberFilter
     const labelOk = !labelFilter || labels.includes(labelFilter)
@@ -2701,8 +2766,25 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     return matched && memberOk && labelOk && dueOk && typeOk
   })
   const personal = scope.kind === 'personal' && scope.id === 'user'
-  const archivedTasks = filtered.filter(task => task.archivedAt)
-  const activeFiltered = filtered.filter(task => !task.archivedAt)
+  const taskById = new Map(allTasks.map(task => [task.id, task]))
+  // Keep a matching item with its parent through search, member filters and archive.
+  const matchedIds = new Set(filtered.map(task => task.id))
+  const activeRoots = new Set(), archivedRoots = new Set()
+  const activeItems = new Map(), archivedItems = new Map()
+  for (const task of allTasks) {
+    const parent = taskById.get(task.parentTaskId)
+    if (!matchedIds.has(task.id) && (!parent || !matchedIds.has(parent.id))) continue
+    const rootId = parent?.id ?? task.id
+    const archived = task.archivedAt || parent?.archivedAt
+    const roots = archived ? archivedRoots : activeRoots
+    roots.add(rootId)
+    if (!parent) continue
+    const items = archived ? archivedItems : activeItems
+    if (!items.has(rootId)) items.set(rootId, [])
+    items.get(rootId).push(task)
+  }
+  const archivedTasks = allTasks.filter(task => archivedRoots.has(task.id))
+  const activeFiltered = allTasks.filter(task => activeRoots.has(task.id))
   const personalTasks = personal ? activeFiltered.filter(task => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : []
   const personalIds = new Set(personalTasks.map(task => task.id))
   // Goal cards come from group goals, not from the task workflow; they stay readable
@@ -2750,7 +2832,6 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const labelOptions = [...new Set(allTasks.flatMap(labelsOf))].sort((a, b) => a.localeCompare(b))
   const hasFilters = !!(search || memberFilter || labelFilter || dueFilter || typeFilter)
   const laneOf = task => personal && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress) ? task.personalProgress : task.status
-  const taskById = new Map(filtered.map(task => [task.id, task]))
   const canDropOn = (task, kind, stage) => {
     if (!task || task.shared) return false
     const commands = commandsFor(task)
@@ -2798,7 +2879,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     },
   })
   const openCard = (id, opener) => { cardOpener.current = opener; setSelectedCard({ key, id }) }
-  const card = (task, index, laneTasks, kind, stage) => h(TaskCard, { key: task.id, scope, task, commands: commandsFor(task), actors, uncertain: !canAct, dragging: dragId === task.id,
+  const card = (task, index, laneTasks, kind, stage) => h(TaskCard, { key: task.id, scope, task, items:(kind === 'archive' ? archivedItems : activeItems).get(task.id), commands: commandsFor(task), actors, uncertain: !canAct, dragging: dragId === task.id,
     dragEnabled: kind === 'type' || kind === 'release' || kind === 'focus', request, selectionMode, selected: selectedIds.has(task.id),
     onSelect: (id, checked) => setSelectedIds(current => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next }),
     onOpen: openCard, onDragStart: (item, event) => { if (!canAct) return; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-ds-bot-card', item.id); setDragId(item.id); setDrop(null) },
@@ -2881,7 +2962,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   }
   const duplicate = task => {
     setSelectedCard(null)
-    setCreateFor({ laneLabel: stageLabelOf(task), defaultOwner: asText(task.owner), ownerOnly: false, scheduleOnCreate: false, followup: false,
+    setCreateFor({ ...(task.parentTaskId ? {parentTaskId:task.parentTaskId} : {}), laneLabel: stageLabelOf(task), defaultOwner: asText(task.owner), ownerOnly: false, scheduleOnCreate: false, followup: false,
       initial: { title: t('Copy of {title}', { title: textValue(task.title) }), owner: asText(task.owner), reviewer: asText(task.reviewer), acceptance: textValue(task.acceptance), type: taskType(task),
         dependencies: dependenciesOf(task), details: { description: textValue(task.description), dueDate: textValue(task.dueDate), dueComplete: task.dueComplete === true, labels: labelsOf(task), checklist: Array.isArray(task.checklist) ? task.checklist.map(item => ({ ...item })) : [] } } })
   }
@@ -2982,6 +3063,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Archive')), h('p', null, t('Archived cards are hidden from the workflow and release views. Restore a card to return it to the board.'))),
     h(ColumnRail, { label: t('Archive') }, renderLane('archive', 'archived', t('Archived cards'), archivedTasks, { noCreate: true, laneLabel: t('Archived cards'), emptyLabel:t('No archived cards') })))
   const releaseSection = releaseSupported ? h('section', { className: 'bt-board-section', 'aria-label': t('Releases') },
+    scope.kind === 'room' ? h(MajorVersionCard, {name:textValue(title) || textValue(goal?.title) || scope.id,
+      releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onCreate:() => setNewRelease(true), disabled:!canAct}) :
     h('div', { className: 'bt-board-section-heading bt-board-section-heading-row' },
       h('div', null, h('h3', null, t('Releases')), h('p', null, t('Drag cards between release lanes. Arrow controls reorder draft and queued releases.'))),
       h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: !canAct, onClick: () => setNewRelease(true) }, h(PlusIcon), t('New release'))),
@@ -3070,7 +3153,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('div', { className: 'bt-board-heading' },
           h('div', { className: 'bt-board-title-row' }, h('h2', null, title || t('Task board')),
             showCapacity ? h('span', { className: 'bt-board-capacity' }, t('{count} / {limit}', { count: capacity.taskCount, limit: capacity.taskLimit })) : null),
-          h('p', null, scope.kind === 'room' ? t('Group task board') : t('Personal task board'), data ? ' · ' + t('{count} cards', { count: filtered.length }) : '')),
+          h('p', null, scope.kind === 'room' ? t('DS-Bot project · Major version (group) · Minor releases') : t('Personal task board'), data ? ' · ' + t('{count} cards', { count: filtered.length }) : '')),
         h('div', { className: 'bt-board-head-actions' },
           h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Refresh'), title: t('Refresh'), onClick: () => void load() }, h(RefreshIcon)),
           h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close'), title: t('Close'), onClick: dismiss }, h(CloseIcon)))),
@@ -3156,10 +3239,13 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
           view === 'release' && releaseSupported ? releaseSection : null,
           view === 'archive' ? archiveSection : null,
           view === 'activity' ? activitySection : null,
-          selected ? h(TaskCardDialog, { key: selected.id, scope, task: selected, tasks: data.tasks, commands: commandsFor(selected), actors: data.capabilities?.actors,
+          selected && !createFor ? h(TaskCardDialog, { key: selected.id, scope, task: selected, tasks: data.tasks, commands: commandsFor(selected), actors: data.capabilities?.actors,
             targets: data.capabilities?.shareTargets?.[selected.id], uploadEnabled: data.capabilities?.upload === true, uncertain: !canAct, onCommand: run, onUpload: upload, request,
-            onClose: () => setSelectedCard(null), focusReturn: cardOpener, boardRef: dialog, pending, busy, error, onCheck: check, onCancel: cancel, cancelBusy, onDuplicate: createEnabled ? duplicate : undefined }) : null,
-          createFor ? h(CreateCardDialog, { key: 'create:' + (createFor.laneLabel || '') + ':' + (createFor.personalProgress || ''), ...createFor, disabled: !createEnabled, actors, tasks: data.tasks, onCreate: createCard, onClose: () => setCreateFor(null) }) : null,
+            onCreateItem: createEnabled && scope.kind === 'room' && !selected.shared && !selected.legacy && !selected.parentTaskId && !selected.archivedAt && !selected.blocked && !selected.stale
+              && ['feature','bugfix'].includes(selected.type) && !['cancelled','done','reported'].includes(selected.status)
+              ? () => setCreateFor({ parentTaskId:selected.id, laneLabel:textValue(selected.title) || selected.id }) : undefined,
+            onClose: () => setSelectedCard(null), onOpenRelated:id => setSelectedCard({ key, id }), focusReturn: cardOpener, boardRef: dialog, pending, busy, error, onCheck: check, onCancel: cancel, cancelBusy, onDuplicate: createEnabled ? duplicate : undefined }) : null,
+          createFor ? h(CreateCardDialog, { key: 'create:' + (createFor.laneLabel || '') + ':' + (createFor.personalProgress || ''), ...createFor, group:scope.kind === 'room', disabled: !createEnabled, actors, tasks: data.tasks, onCreate: createCard, onClose: () => setCreateFor(null) }) : null,
           newRelease ? h(ReleaseDialog, { disabled: !canAct, releaseRoles: releaseTeamSupported ? releaseRoles : null, releaseCandidates: data.releaseCandidates, actors,
             onClose: () => setNewRelease(false), onCreate: createRelease }) : null,
           panelRelease && releasePanel?.mode === 'report'
@@ -3357,6 +3443,11 @@ export const TASK_BOARD_CSS = `
 .bt-board-card-summary{display:flex;flex-direction:column;gap:6px;width:100%;padding:10px 12px;border:0;border-radius:0;background:transparent;color:inherit;text-align:left}
 .bt-board-card-summary:hover{background:transparent}
 .bt-board-card-title{font-size:13px;line-height:18px;font-weight:500;overflow-wrap:anywhere}
+.bt-board-card-milestone{display:grid;max-width:100%;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-board-card-milestone>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-card-work-reply{display:grid;gap:4px}
+.bt-card-related-link{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:8px;width:100%;text-align:start;border:0;background:none;padding:4px 0;font:inherit;color:var(--bt-ink);cursor:pointer}
+.bt-card-related-link>span{overflow-wrap:anywhere}.bt-card-related-link>small{flex:none;color:var(--bt-ink-2)}
 .bt-board-card-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-height:16px}
 .bt-board-card-labels{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 .bt-board-card-more-labels{font-size:11px;line-height:16px;color:var(--bt-ink-2)}
@@ -3380,6 +3471,8 @@ export const TASK_BOARD_CSS = `
 .bt-board-card-count{display:inline-flex;align-items:center;gap:3px;color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
 .bt-board-card-count svg{width:12px;height:12px}
 .bt-board-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;min-width:0}
+.bt-major-version{border:1px solid var(--bt-line);border-radius:10px;padding:12px;margin-bottom:12px}.bt-major-version h4{margin:10px 0 4px}.bt-minor-releases{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:4px 12px}.bt-minor-releases button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 0;background:none;border:0;border-top:1px solid var(--bt-line);color:var(--bt-ink);text-align:start;cursor:pointer}.bt-minor-releases small{margin-inline-start:6px;color:var(--bt-ink-2)}
+.bt-board-items{margin:0 9px 9px;border-top:1px solid var(--bt-line);padding:5px 0;font-size:11px}.bt-board-items>summary{cursor:pointer;font-weight:600}.bt-board-item-progress{grid-column:1/-1;color:var(--bt-ink-2);font-size:11px}
 .bt-board-card-owner{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--bt-ink-2);font-size:11px;line-height:16px}
 .bt-board-card-owner>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-board-open-hint{color:var(--bt-ink-3);font-size:11px;line-height:16px;white-space:nowrap}
