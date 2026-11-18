@@ -35,8 +35,8 @@
 ## 3. 验证（改动范围内）
 
 - `build-client --check`：通过。
-- Browser fixture：**288 assertions, 0 failed**（状态 chip、任务卡焦点/左右卡、卡片切换、拖动到 chip、移动前移/后移、窄屏布局、类型/个人/发布看板回归）。
-- Board e2e：**22/22 passed**，run `20261118082849`。
+- Browser fixture：**289 assertions, 0 failed**（合并后的 `main` 复跑；功能分支为 288/0）。
+- Board e2e：**22/22 passed**，run `20261118083242`（合并后的 `main` 复跑）。
 - `test/i18n.test.js` + `test/task-board-locales.test.js`：4/4 passed。
 - lint：0 errors。
 - 截图核对：1280×900 与 390×844，确认中间任务卡放大、左右真实任务卡局部可见、底部切换/排序控件可用。
