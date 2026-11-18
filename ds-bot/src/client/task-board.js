@@ -887,7 +887,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
       h('span', { className: 'bt-board-card-owner' }, h(MemberAvatar, { name: owner || t('You'), size: 22, muted: !owner || owner === t('You') }), h('span', null, owner || t('Unknown'))))),
   items?.length ? h('details', { className:'bt-board-items', open:true },
     h('summary', null, t('Task items'), ' · ', items.filter(item => item.status === 'done' || item.legacy?.originalStatus === 'done').length, '/', items.length),
-    items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen }))) : null)
+    h('div', {className:'bt-board-item-list'}, items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen })))) : null)
 }
 
 
@@ -1011,7 +1011,7 @@ function CardTextEditor({ task, field = 'description', editable, disabled, onSav
   const changed = base && !sameCardStamp(task, base)
   const dirty = base && draft !== current
   if (!editable && !current) return null
-  return h(CardSection, { title: label, action: editable && !editing ? h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, h(PencilIcon), t(current ? 'Edit' : 'Add')) : null, className: 'bt-card-' + field },
+  return h(CardSection, { title: label, action: editable && !editing ? h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, h(PencilIcon), t(current ? 'Edit' : 'Add')) : null, className: stage ? 'bt-card-work-stage' : 'bt-card-description' },
     editing ? h('div', { className: 'bt-card-editor' },
       changed ? h('p', { className: 'bt-card-warning', role: 'alert' }, t('Task changed. Your draft was kept; reload the current values before saving.'), ' ', h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, t('Reload'))) : null,
       h(stage ? 'input' : 'textarea', { value: draft, rows: stage ? undefined : 6, disabled, 'aria-label': label, onChange: event => { setDraft(event.target.value); setError('') } }),
@@ -1394,13 +1394,22 @@ function TaskItemLink({ item, actors, onOpen }) {
       item.progress.summary, !item.blocked && !item.stale ? ' · ' + t('Next action') + ' · ' + item.progress.next : '') : null)
 }
 
-function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem }) {
+function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem, onMove }) {
+  const [destination, setDestination] = useState('')
   const parent = task.parentTaskId && tasks.find(item => item.id === task.parentTaskId)
   const children = tasks.filter(item => item.parentTaskId === task.id)
+  const editable = card => card && ['draft','proposed'].includes(card.status) && !card.archivedAt && !card.stale && !card.blocked
+  const candidates = onMove && editable(parent) ? tasks.filter(card => editable(card) && !card.parentTaskId && !card.shared && !card.legacy
+    && ['feature','bugfix'].includes(card.type) && card.id !== parent.id && (card.releaseId ?? null) === (parent.releaseId ?? null)) : []
   if (!parent && !children.length && !onCreateItem) return null
   const link = item => h(TaskItemLink, { key:item.id, item, actors, onOpen })
   return h('div', { className:'bt-card-side-block' },
     parent ? h('h3', null, t('Parent card')) : null, parent ? link(parent) : null,
+    candidates.length ? h('div', {className:'bt-field'},
+      h('select', {value:destination,'aria-label':t('Destination card'),onChange:event => setDestination(event.target.value)},
+        h('option',{value:''},t('Choose a feature or bugfix')),candidates.map(card => h('option',{key:card.id,value:card.id},card.title))),
+      h('button',{type:'button',className:'bt-btn bt-btn-ghost',disabled:!candidates.some(card => card.id === destination),
+        onClick:() => onMove(parent,destination)},t('Move to card'))) : null,
     children.length || onCreateItem ? h('h3', null, t('Task items')) : null, children.map(link),
     onCreateItem ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', onClick:onCreateItem }, t('Create task item')) : null)
 }
@@ -1740,7 +1749,10 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
           h(LabelsEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DependenciesBlock, { task, tasks }),
-          h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem }),
+          h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
+            onMove: !uncertain && !busy && commandOf(commands,legacy ? 'move-goal-item' : 'move-item')
+              ? (parent,parentTaskId) => onCommand(legacy ? parent : task,{type:legacy ? 'move-goal-item' : 'move-item'},
+                legacy ? {itemId:task.id,parentTaskId} : {parentTaskId}) : undefined }),
           h(FactsBlock, { task }),
           h('div', { className: 'bt-card-side-block' }, h(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
           !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle
@@ -3472,7 +3484,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-card-count svg{width:12px;height:12px}
 .bt-board-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;min-width:0}
 .bt-major-version{border:1px solid var(--bt-line);border-radius:10px;padding:12px;margin-bottom:12px}.bt-major-version h4{margin:10px 0 4px}.bt-minor-releases{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:4px 12px}.bt-minor-releases button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 0;background:none;border:0;border-top:1px solid var(--bt-line);color:var(--bt-ink);text-align:start;cursor:pointer}.bt-minor-releases small{margin-inline-start:6px;color:var(--bt-ink-2)}
-.bt-board-items{margin:0 9px 9px;border-top:1px solid var(--bt-line);padding:5px 0;font-size:11px}.bt-board-items>summary{cursor:pointer;font-weight:600}.bt-board-item-progress{grid-column:1/-1;color:var(--bt-ink-2);font-size:11px}
+.bt-board-items{margin:0 9px 9px;border-top:1px solid var(--bt-line);padding:5px 0;font-size:11px}.bt-board-items>summary{cursor:pointer;font-weight:600}.bt-board-item-list{max-height:clamp(72px,24vh,200px);overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable}.bt-board-item-progress{grid-column:1/-1;color:var(--bt-ink-2);font-size:11px}
 .bt-board-card-owner{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--bt-ink-2);font-size:11px;line-height:16px}
 .bt-board-card-owner>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-board-open-hint{color:var(--bt-ink-3);font-size:11px;line-height:16px;white-space:nowrap}
