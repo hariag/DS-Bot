@@ -49,6 +49,7 @@ export function goalView(goal, { roster = {}, roomWork = [] } = {}) {
         : goal.status === 'complete' ? t('Goal reached')
           : goal.status === 'paused' ? (current ? t('Paused · {title}', { title: current.title }) : t('Paused'))
             : goal.idle === true && !automaticIdle ? (current ? t('Waiting for you · {title}', { title: current.title }) : t('Waiting for you'))
+              : goal.reviewAttempt?.terminalFailure ? t('Inspection failed before any administrator tool ran')
               : ['uncertain', 'cancelled-uncertain'].includes(goal.reviewAttempt?.state) ? t('Periodic review needs attention')
                 : automaticIdle ? (current ? t('Periodic review pending · {title}', { title: current.title }) : t('Periodic review pending'))
               : current === undefined ? t('Final check')
@@ -255,7 +256,7 @@ function GoalPanel({ goal, view, room, roster, actions, working, openReview }) {
       goal.constraints?.length > 0 ? sec('rules', t('Rules'), h('ul', { className: 'bt-goal-rules' },
         goal.constraints.map((rule, i) => h('li', { key: i }, rule)))) : null) : null),
     reviewIssue ? h('div', { className: 'bt-goal-sec' },
-      h('div', { className: 'bt-goal-text' }, t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
+      h('div', { className: 'bt-goal-text' }, goal.reviewAttempt.terminalFailure ? t('The original inspection has been verified. Future inspections will wait until pending group work has cleared.') : t('This review has an unknown outcome. Check the original work before allowing future reviews.')),
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: typeof openReview !== 'function', onClick: openReview }, t('Open review workspace'))) : null,
     h('div', { className: 'bt-goal-foot' },
       hasChecks ? h('button', {

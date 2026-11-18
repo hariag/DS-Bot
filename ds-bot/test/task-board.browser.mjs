@@ -204,7 +204,7 @@ async function request(endpoint,payload){
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));
 globalThis.renderFixture=(scope,mode='normal',fresh=false)=>{state.scope=scope;state.mode=mode;
- const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:mode==='periodic-paused'?'paused':'active',reviewAttempt:mode==='periodic-no-id'?{state:'uncertain',at:1}:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
+ const goal=mode.startsWith('periodic')?{id:'goal-1',revision:1,status:mode==='periodic-paused'?'paused':'active',reviewAttempt:mode==='periodic-confirmed'?{id:'attempt-1',state:'uncertain',at:1,terminalFailure:{at:2}}:mode==='periodic-no-id'?{state:'uncertain',at:1}:{id:'attempt-1',state:'uncertain',at:1}}:undefined;
  state.currentGoal=goal;
  const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline');const current=mode==='periodic-changed'?{...state.currentGoal,revision:2}:state.currentGoal;return {roomsById:{[scope.id]:{goal:current}}}};
  const currentRoomGoal=id=>id===scope.id?state.currentGoal:undefined;
@@ -470,6 +470,11 @@ try {
   await paused.getByText('g3', {exact:true}).waitFor()
   await paused.getByText('The group goal must be active before reviews can resume.').waitFor()
   assert.equal(await paused.getByRole('button', {name:'Allow future inspections'}).isDisabled(), true)
+
+  await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g5' }, 'periodic-confirmed'))
+  const confirmed = page.locator('.bt-periodic-review')
+  await confirmed.getByText('Inspection failed before any administrator tool ran').waitFor()
+  assert.equal(await confirmed.getByRole('button', { name:'Allow future inspections' }).count(), 0)
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g4' }, 'periodic-network'))
   const unknown = page.locator('.bt-periodic-review')

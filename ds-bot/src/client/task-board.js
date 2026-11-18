@@ -529,7 +529,7 @@ function LegacyWorkReview({ scope, request, actors }) {
             h(Fact, { label: t('Evidence references'), value: item.finding.evidenceRefs.join(', ') }), h(Fact, { label: t('Unfinished items'), value: item.finding.unfinished.join(', ') })))) : null))))
 }
 
-const periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at])
+const periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at, goal?.reviewAttempt?.terminalFailure?.at])
 
 // This action only clears a specific periodic inspection's uncertainty fence.
 // The host independently rechecks the current goal, attempt, scope and activity.
@@ -547,6 +547,13 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
   if (previousAttempt.current !== attemptKey) { previousAttempt.current = attemptKey; generation.current += 1 }
   useEffect(() => { scopeGeneration.current += 1; setNotice(''); return () => { scopeGeneration.current += 1; generation.current += 1 } }, [scopeId])
   if (!scopeId || (!attempt && !notice && !error)) return null
+  if (attempt?.terminalFailure) {
+    return h('details', { className: 'bt-recovery-panel bt-periodic-review', open: initiallyOpen || undefined },
+      h('summary', { className: 'bt-recovery-summary' }, t('Inspection failed before any administrator tool ran')),
+      h('div', { className: 'bt-recovery-body' },
+        h('p', null, t('The original inspection has been verified. Future inspections will wait until pending group work has cleared.')),
+        h('code', null, attemptId)))
+  }
   const automaticIdle = goal?.idle === true && ['admin-pass', 'nudge-limit'].includes(goal.idleReason)
     && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision
   const eligible = goal?.status === 'active' && goalId && attemptId
