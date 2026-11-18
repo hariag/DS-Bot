@@ -613,6 +613,9 @@ export function install(rt) {
   let reviewDisposed = false
   const reviewing = new Set()
   const reviewNotified = new Set()
+  // An unresolved admission blocks dispatch. The host can still inspect the
+  // current ledger without opening an agent, running tools, or changing the goal.
+  const blockedReviewReads = new WeakMap()
   const stopsPending = new Map()
   const goalStopBegin = roomId => stopsPending.set(roomId, (stopsPending.get(roomId) ?? 0) + 1)
   const goalStopEnd = roomId => {
@@ -709,7 +712,9 @@ export function install(rt) {
   // UI/API callers must see the effective result, not an earlier assertion
   // whose queue generation is no longer current.
   rt.goalView = room => {
-    const goal = room?.goal
+    const current = room?.goal
+    const observed = blockedReviewReads.get(current?.reviewAttempt)
+    const goal = observed ? { ...current, blockedReviewObservation: observed } : current
     if (!goal?.ownerReview?.checks) return goal
     const missing = new Set(missingFor(room).map(task => task.id))
     const stage = goal.stages?.[goal.current]
@@ -744,6 +749,8 @@ export function install(rt) {
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
     if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
     if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
+    const observed = blockedReviewReads.get(goal.reviewAttempt)
+    if (observed) lines.push(`Read-only host observation at ${new Date(observed.at).toISOString()} (revision ${observed.revision}): ${observed.open} unfinished task(s); current owner checks missing for ${observed.missing.join(', ') || 'none'}. The original review remains unresolved.`)
     if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(`Periodic owner review still needs: ${missingFor(room).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
     return lines
   }
@@ -899,18 +906,23 @@ export function install(rt) {
       if (!reviewEligible(goal) || attempt === undefined || attempt.id !== body.reviewId
         || !['uncertain', 'admitting', 'cancelled-uncertain'].includes(attempt.state)
         || (attempt.state === 'admitting' && (!Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS))) return { error: 'The review is not eligible for recovery, or the goal was paused or stopped.', code: 'bot/stale' }
-      if (room.admin !== attempt.adminId || !room.members.includes(attempt.adminId)
-        || rt.sessionOfRoom(room) !== attempt.rootSessionId || room.sessions?.[attempt.adminId] !== attempt.adminSessionId) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
-      const root = await rt.resolveAgent(attempt.rootSessionId)
-      const adminAgent = attempt.adminSessionId === undefined ? undefined : await rt.resolveAgent(attempt.adminSessionId)
+      const currentAdminSession = room.sessions?.[attempt.adminId]
+      // A verified inspection may have finished in an earlier part belonging
+      // to this same admin in this same room. Never infer ownership by name.
+      const sessionsMatch = () => room.admin === attempt.adminId && room.members.includes(attempt.adminId)
+        && rt.sessionOfRoom(room) === attempt.rootSessionId && room.sessions?.[attempt.adminId] === currentAdminSession
+        && (currentAdminSession === attempt.adminSessionId || (!allowFuture && attempt.inspectOnly === true && attempt.state === 'uncertain'
+          && typeof currentAdminSession === 'string' && typeof attempt.adminSessionId === 'string'
+          && room.segments?.[attempt.adminId]?.some(part => part.sessionId === attempt.adminSessionId)))
+      if (!sessionsMatch()) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
+      const ids = [...new Set([attempt.rootSessionId, attempt.adminSessionId, currentAdminSession].filter(id => id !== undefined))]
+      const agents = await Promise.all(ids.map(id => rt.resolveAgent(id)))
       const quietAgent = agent => Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
         && agent.inbox.nextStep.length === 0 && agent.inbox.nextTurn.length === 0
         && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
         && rt.waitsForApproval?.(agent.session.id) !== true
       if (rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt || !reviewEligible(goal)
-        || room.admin !== attempt.adminId || !room.members.includes(attempt.adminId)
-        || rt.sessionOfRoom(room) !== attempt.rootSessionId || room.sessions?.[attempt.adminId] !== attempt.adminSessionId
-        || !quietAgent(root) || (adminAgent !== undefined && !quietAgent(adminAgent)) || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
+        || !sessionsMatch() || !agents.every((agent, i) => agent?.session?.id === ids[i] && quietAgent(agent)) || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
         || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
         || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
       rt.requireHomeLock()
@@ -1117,6 +1129,14 @@ export function install(rt) {
       if (attempt && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
         reviewNotified.add(attempt.id)
         rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${attempt.id} for ${room.name} is still unresolved; inspect its original work before recovery.` })
+      }
+      if (attempt?.inspectOnly === true && attempt.state === 'uncertain' && reviewEligible(goal)
+        && !stopsPending.has(room.id) && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS) {
+        const previous = blockedReviewReads.get(attempt)
+        if (!previous || now - previous.at >= GOAL_REVIEW_INTERVAL_MS) {
+          blockedReviewReads.set(attempt, { at: now, reviewId: attempt.id, revision: goal.revision,
+            open: openReviewTasks(goal).length, missing: missingFor(room).map(task => task.id) })
+        }
       }
       if (attempt?.adminCompleted === true && goalReviewAllowed(room, attempt.id) && !reviewing.has(room.id)) {
         reviewing.add(room.id)
