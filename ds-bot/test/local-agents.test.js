@@ -350,6 +350,28 @@ test('codex app-server: thread per session, models from model/list', async (t) =
   assert.match(out.thinking, /▸/)
 })
 
+test('codex app-server: a host restart refreshes changed team rules on the existing thread', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsb-codex-instructions-'))
+  t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const record = join(dir, 'params.jsonl')
+  const records = {}
+  const first = makeAdapter({ records, codexArgs: ['--record', record] })
+  try {
+    await collect(first.stream(options('s1', [system('sys', 'Original rules'), user('m1', 'hello')], { provider: 'local-codex-cli' })))
+  } finally {
+    await first.dispose()
+  }
+  const resumed = makeAdapter({ records, codexArgs: ['--record', record] })
+  t.after(() => resumed.dispose())
+  const instruction = 'Register each deliverable before starting it.'
+  await collect(resumed.stream(options('s1', [system('sys', instruction), user('m1', 'hello'), user('m2', 'continue')], { provider: 'local-codex-cli' })))
+  const calls = readFileSync(record, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const request = calls.find(call => call.method === 'thread/resume')
+  assert.equal(request.params.threadId, records.s1.cliSessionId)
+  assert.equal(request.params.developerInstructions, instruction)
+  assert.equal(calls.filter(call => call.method === 'thread/start').length, 1)
+})
+
 // #1144: Codex 0.166 reads ThreadStartParams at the top level and the MCP servers from
 // `config`; keys it does not know are dropped silently. With the old snake_case shape
 // the team tools never registered and the permission preset never applied.
