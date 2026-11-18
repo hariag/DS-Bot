@@ -1810,6 +1810,27 @@ test('only the admin or a Main Bot changes a goal; any member can show it', asyn
     'Only a Main Bot changes the goal of "Lab".')
 })
 
+test('repeating current task status or evidence leaves the goal and its evidence timestamp intact', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const write = input => host.tool('group_goal', { action: 'task', bot: 'Writer', ...input }, 'ga')
+  const goal = host.rt.roomOf('r1').goal
+  const before = structuredClone(goal)
+  await write({ status: 'pending' })
+  await write({ note: ' ' })
+  assert.deepEqual(goal, before)
+  await write({ status: 'working', note: 'evidence' })
+  const after = structuredClone(goal)
+  const ledger = await host.tool('group_goal', { action: 'show' }, 'ga')
+  assert.equal(await write({ note: '  evidence  ', status: 'working' }), ledger)
+  assert.deepEqual(goal, after)
+  await write({ note: '' })
+  const cleared = structuredClone(goal)
+  assert.equal(cleared.revision, after.revision + 1)
+  await write({ note: '' })
+  assert.deepEqual(goal, cleared)
+})
+
 test('members see their own task note in show and prompt without another member note', async (t) => {
   const host = await start(t)
   await startGoal(host, { stages: [{ title: 'Draft', acceptance: 'reviewed', tasks: [{ bot: 'Writer', task: 'write' }, { bot: 'Tester', task: 'test' }] }] })

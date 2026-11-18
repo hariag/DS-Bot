@@ -693,33 +693,39 @@ export function install(rt) {
       if (counts.size === 0) retained.delete(sessionId)
     }
   }
-  rt.moveQueued = (target, messages) => {
-    const ids = new Set(messages.filter(message => message.source?.kind === SOURCE_KIND).map(message => message.source.exchangeId).filter(Boolean))
-    if (ids.size === 0) return
-    const next = { ...queued }
-    if (next[target] !== undefined && !Array.isArray(next[target])) return
-    const incoming = [...(next[target] ?? [])]
-    const present = new Set(incoming.map(item => item?.args?.exchangeId))
-    let changed = false
-    for (const [sessionId, list] of Object.entries(queued)) {
-      if (sessionId === target) continue
-      if (!Array.isArray(list)) continue
-      const rest = []
-      for (const item of list) {
-        if (!ids.has(item?.args?.exchangeId)) { rest.push(item); continue }
-        queueChanged(item.args,sessionId)
-        if (!present.has(item.args.exchangeId)) {
-          incoming.push({ ...item, resumeOrigins: [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), sessionId])] })
-          present.add(item.args.exchangeId)
-        }
-        changed = true
+  rt.moveQueued = (sourceSession, target, messages) => {
+    if (sourceSession === target || !Array.isArray(queued[sourceSession])) return
+    if (queued[target] !== undefined && !Array.isArray(queued[target])) return
+    const forwarded = new Set(messages.flatMap(({ source }) => source?.kind === SOURCE_KIND && source.exchangeId
+      ? [JSON.stringify([source.exchangeId, source.role, source.roomId, source.senderSessionId,
+        source.senderPart, source.senderRoomId, source.reviewId, source.replyTo])] : []))
+    if (forwarded.size === 0) return
+    const route = args => JSON.stringify([args?.exchangeId, args?.role, args?.roomId, args?.fromId,
+      args?.fromPart, args?.fromRoomId, args?.reviewId, args?.replyTo])
+    const incoming = [...(queued[target] ?? [])]
+    const present = new Map(incoming.map((item, index) => [JSON.stringify([item?.args?.toId, route(item?.args)]), index]))
+    const rest = []
+    for (const item of queued[sourceSession]) {
+      const args = item?.args
+      const messageRoute = route(args)
+      if (!args || !forwarded.has(messageRoute)) {
+        rest.push(item)
+        continue
       }
-      if (rest.length === 0) delete next[sessionId]
-      else if (rest.length !== list.length) next[sessionId] = rest
+      queueChanged(args, sourceSession)
+      const identity = JSON.stringify([args.toId, messageRoute])
+      const index = present.get(identity)
+      if (index === undefined) {
+        present.set(identity, incoming.length)
+        incoming.push({ ...item, resumeOrigins:[...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), sourceSession])] })
+      } else if (item.recoveryHold === 'history-seen' && incoming[index].recoveryHold !== 'history-seen') {
+        incoming[index] = { ...incoming[index], recoveryHold:'history-seen' }
+        queueChanged(incoming[index].args, target)
+      }
     }
-    if (!changed) return
-    next[target] = incoming
-    queued = next
+    if (rest.length === queued[sourceSession].length) return
+    queued = { ...queued, [target]:incoming, [sourceSession]:rest }
+    if (rest.length === 0) delete queued[sourceSession]
     persist()
   }
 
@@ -800,26 +806,23 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
   const sessionFor = (sessionId, args) => (rt.isBotSession(sessionId) ? sessionId
     : args?.roomId === undefined ? rt.chatOf(args?.toId) : rt.roomOf(args.roomId)?.sessions?.[args.toId])
 
-  const setQueuedRecoveryHold = async (sessionId, exchangeId, recoveryHold) => {
+  const setQueuedRecoveryHold = async (sessionId, args, recoveryHold) => {
+    // A part can move while its history is being read. Locate the original note
+    // by its shared args object rather than changing another delivery with the same ID.
+    const containsNote = id => Array.isArray(queued[id]) && queued[id].some(item => item?.args === args)
+    if (!containsNote(sessionId)) sessionId = Object.keys(queued).find(containsNote)
+    if (sessionId === undefined) return
     const list = queued[sessionId]
-    if (!Array.isArray(list)) return
-    const matches = list.flatMap((item, index) => item?.args?.exchangeId === exchangeId ? [index] : [])
-    if (matches.length === 0) return
-    if (recoveryHold !== undefined && matches.length > 1) throw new Error('Queued exchange is ambiguous')
-    const next = [...list]
-    let changed = false
-    for (const index of matches) {
-      const current = list[index]
-      if (current.recoveryHold === recoveryHold) continue
-      const updated = { ...current }
-      if (recoveryHold === undefined) delete updated.recoveryHold
-      else updated.recoveryHold = recoveryHold
-      next[index] = updated
-      changed = true
-    }
-    if (!changed) return
-    queued = { ...queued, [sessionId]:next }
-    queueChanged(next[matches[0]].args, sessionId)
+    const index = list.findIndex(item => item?.args === args)
+    const current = list[index]
+    // Positive evidence of receipt survives a later stop, inbox check, or
+    // truncated history. Only actual uptake or explicit withdrawal retires it.
+    if (current.recoveryHold === 'history-seen' || current.recoveryHold === recoveryHold) return
+    const updated = { ...current }
+    if (recoveryHold === undefined) delete updated.recoveryHold
+    else updated.recoveryHold = recoveryHold
+    queued = { ...queued, [sessionId]:list.toSpliced(index, 1, updated) }
+    queueChanged(args, sessionId)
     await persist({ required:true })
   }
 
@@ -827,7 +830,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
   // cancelled is sent again. The notes stay queued until a turn takes the messages
   // up, so a send that fails here, or a Session that cannot be opened, leaves them
   // for the next start instead of losing them.
-  async function resendQueued(sessionId, list, held) {
+  async function resendQueued(sessionId, list, held, seenBeforeRestart) {
     for (const item of list) if (taken?.has(item?.args?.exchangeId) === true) held.add(item.args.exchangeId)
     const fresh = list.filter(item => rt.botOf(item.args?.toId) !== undefined
       && sessionFor(sessionId, item.args) !== undefined && taken?.has(item.args.exchangeId) !== true)
@@ -843,6 +846,11 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
       const target = sessionFor(sessionId, args)
       const room = args.roomId && args.role === 'room' ? rt.roomOf(args.roomId) : undefined
       const blocked = () => room !== undefined && rt.goalRecoveryBlocked?.(room, args.toId) === true
+      const previouslySeen = recoveryHold === 'history-seen' || seenBeforeRestart.has(args)
+      if (previouslySeen) {
+        held.add(args.exchangeId)
+        if (!args.reviewId && !blocked()) continue
+      }
       if (!agents.has(target)) agents.set(target, await rt.resolveAgent(target))
       const agent = agents.get(target)
       if (args.reviewId && args.role === 'room') {
@@ -850,29 +858,34 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
         const stillAllowed = rt.goalReviewAllowed?.(room, args.reviewId) === true
         const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .filter(message => message.source?.exchangeId === args.exchangeId)
-        if (!stillAllowed) for (const message of waiting) agent.inbox?.remove?.(message.id)
+        if (!stillAllowed) {
+          const remove = () => { for (const message of waiting) agent.inbox?.remove?.(message.id) }
+          if (previouslySeen) rt.keepQueued(target, waiting, remove)
+          else remove()
+        }
         held.add(args.exchangeId)
         if (waiting.length === 0) {
-          await setQueuedRecoveryHold(sessionId, args.exchangeId, 'review-uncertain')
+          await setQueuedRecoveryHold(target, args, 'review-uncertain')
           await rt.goalReviewFailed?.(room, target, args.reviewId)
           rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Goal review ${args.reviewId} was not resent after restart; inspect the original delivery before recovery.` })
-        } else await setQueuedRecoveryHold(sessionId, args.exchangeId, undefined)
+        } else await setQueuedRecoveryHold(target, args, undefined)
         continue
       }
       if (blocked()) {
         held.add(args.exchangeId)
-        await setQueuedRecoveryHold(sessionId, args.exchangeId, 'work-stopped')
+        await setQueuedRecoveryHold(target, args, 'work-stopped')
         const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .filter(message => message.source?.exchangeId === args.exchangeId)
         rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
         rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_STOPPED_HOLD', text: `Queued group delivery ${args.exchangeId} is held because its work is stopped or its stop state is unknown.`, sessionId: target })
         continue
       }
+      if (previouslySeen) continue
       const waiting = () => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
         .some(message => message.source?.exchangeId === args.exchangeId)
       if (waiting()) {
         held.add(args.exchangeId)
-        if (recoveryHold !== undefined) await setQueuedRecoveryHold(sessionId, args.exchangeId, undefined)
+        if (recoveryHold !== undefined) await setQueuedRecoveryHold(target, args, undefined)
         continue
       }
       if (recoveryHold === 'prepared') {
@@ -894,7 +907,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
       const unreadable = histories.some(events => events === undefined)
       if (seen || unreadable) {
         held.add(args.exchangeId)
-        await setQueuedRecoveryHold(sessionId, args.exchangeId, seen ? 'history-seen' : 'history-unavailable')
+        await setQueuedRecoveryHold(target, args, seen ? 'history-seen' : 'history-unavailable')
         const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
         rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
         rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
@@ -910,7 +923,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
       await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true }, { beforeAdmission: () => {
         if (blocked()) throw new Error('Queued group work was stopped before recovery admission')
       } })
-        .then(() => setQueuedRecoveryHold(sessionId, args.exchangeId, undefined))
+        .then(() => setQueuedRecoveryHold(target, args, undefined))
         .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
     }
   }
@@ -1071,6 +1084,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
     // A Bot that is gone takes its notes with it; what a turn already read here
     // is done with.
     const pending = queued
+    const seenBeforeRestart = new WeakSet()
     for (const [sessionId,list] of Object.entries(pending)) if (Array.isArray(list)) for (const item of list) queueChanged(item?.args,sessionId)
     queued = {}
     for (const [oldId, list] of Object.entries(pending)) {
@@ -1083,6 +1097,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
           queued = { ...queued, [oldId]: [...(queued[oldId] ?? []), item] }
           continue
         }
+        if (item.recoveryHold === 'history-seen') seenBeforeRestart.add(item.args)
         const key = sessionFor(oldId, item.args) ?? oldId
         const resumeOrigins = [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), oldId])]
         queued = { ...queued, [key]: [...(queued[key] ?? []), { ...item, resumeOrigins }] }
@@ -1107,7 +1122,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
     const held = new Set()
     for (const [sessionId, list] of Object.entries(dropped)) {
       if (!Array.isArray(list)) continue
-      await resendQueued(sessionId, list, held).catch(error => {
+      await resendQueued(sessionId, list, held, seenBeforeRestart).catch(error => {
         for (const item of list) if (typeof item?.args?.exchangeId === 'string') held.add(item.args.exchangeId)
         rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error)
       })
