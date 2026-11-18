@@ -145,6 +145,31 @@ test('the same request id with other content is refused, and nothing goes out', 
   assert.equal(agents.get('a')?.calls.length ?? 0, 0)
 })
 
+test('implicit timing can replay an old steering receipt but cannot silently change a new request', async t => {
+  const home = tempHome()
+  let run = await boot(home, team())
+  t.after(async () => { await run.stop(); cleanup(home) })
+  const { rt, agentOf } = run
+  const payload = { to: 'b', message: 'review when ready', reply_to: 'me', when: 'now' }
+  const old = rt.requestIdentity({ caller: 'a', context: 'chat', name: 'before-upgrade', payload })
+  rt.state.requests[old.key] = { fingerprint: old.print, outcome: 'delivered', receipt: 'original delivery' }
+  const call = (id, timing = {}) => run.tool('message_bot', { to: 'Writer', message: payload.message, request_id: id, ...timing }, 'a')
+  assert.equal(await call('before-upgrade'), 'original delivery')
+  assert.equal(freshSends(agentOf('b')).length, 0)
+  const normal = await call('new')
+  assert.equal(await call('new', { when: 'queue' }), normal)
+  await assert.rejects(call('new', { when: 'now' }), /different request/)
+  await call('explicit', { when: 'now' })
+  await assert.rejects(call('explicit'), /different request/)
+  assert.deepEqual(freshSends(agentOf('b')).map(([kind]) => kind), ['followup', 'steer'])
+  await run.stop()
+  run = await boot(home)
+  assert.equal(await call('before-upgrade'), 'original delivery')
+  assert.equal(await call('new'), normal)
+  await assert.rejects(call('explicit'), /different request/)
+  assert.equal(freshSends(run.agentOf('b')).length, 0)
+})
+
 test('two callers with the same request id do not collide', async (t) => {
   const seed = team()
   seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
@@ -202,10 +227,10 @@ test('a request whose delivery failed is not sent again', async (t) => {
   t.after(async () => { await stop(); cleanup(home) })
 
   const writer = agentOf('b')
-  const steer = writer.steer
-  writer.steer = () => { throw new Error('dsh is down') }
+  const followup = writer.followup
+  writer.followup = () => { throw new Error('dsh is down') }
   await assert.rejects(tool('message_bot', { to: 'Writer', message: 'do the thing', request_id: 'r-1' }, 'a'), /dsh is down/)
-  writer.steer = steer
+  writer.followup = followup
   // The outcome of that admission is not known, so it is not sent again.
   await assert.rejects(tool('message_bot', { to: 'Writer', message: 'do the thing', request_id: 'r-1' }, 'a'), /outcome of request_id "r-1" is not known/)
   assert.equal(writer.calls.length, 0)
@@ -217,19 +242,19 @@ test('different request ids stay separate and a retry does not duplicate either'
   t.after(async () => { await stop(); cleanup(home) })
 
   const writer = agentOf('b')
-  writer.steer = (message) => { writer.calls.push(['steer', message]); writer.inbox.nextStep.push(message) }
+  writer.followup = (message) => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
   emit('b', 'turn/start', { turn: 1 })
 
   const first = await tool('message_bot', { to: 'Writer', message: 'task 1', request_id: 'r-1' }, 'a')
   const second = await tool('message_bot', { to: 'Writer', message: 'task 2', request_id: 'r-2' }, 'a')
   assert.doesNotMatch(second, /had not read your earlier message yet/)
-  assert.equal(writer.inbox.nextStep.length, 2)
+  assert.equal(writer.inbox.nextTurn.length, 2)
 
   const again = await tool('message_bot', { to: 'Writer', message: 'task 1', request_id: 'r-1' }, 'a')
   assert.equal(again, first)
-  assert.equal(writer.inbox.nextStep.length, 2)
-  assert.equal(writer.inbox.nextStep[0].source.exchangeId, writer.calls[0][1].source.exchangeId)
-  assert.notEqual(writer.inbox.nextStep[0].source.exchangeId, writer.inbox.nextStep[1].source.exchangeId)
+  assert.equal(writer.inbox.nextTurn.length, 2)
+  assert.equal(writer.inbox.nextTurn[0].source.exchangeId, writer.calls[0][1].source.exchangeId)
+  assert.notEqual(writer.inbox.nextTurn[0].source.exchangeId, writer.inbox.nextTurn[1].source.exchangeId)
 })
 
 test('a request with an id that queues, or that answers the user, goes out once', async (t) => {

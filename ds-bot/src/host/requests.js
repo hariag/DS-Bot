@@ -30,15 +30,17 @@ export function install(rt) {
   // The name of a request in the caller's own space: its Bot, the conversation the request
   // was made from, and the name the caller gave it. The Bot, not its Session: a Bot that
   // moves to a fresh part of its conversation keeps its name.
-  const identity = ({ caller, context, name, payload }) => ({
+  const identity = ({ caller, context, name, payload, previousPayload }) => ({
     key: `${caller}\u0000${context}\u0000${name}`,
     print: print(payload),
+    previousPrint: previousPayload === undefined ? undefined : print(previousPayload),
   })
 
   // What a request that was admitted before means for the caller now: its receipt, a
   // conflict, or an outcome that is not known. Undefined when it was never admitted.
   const verdict = (request, record) => {
-    if (record.fingerprint !== request.print) return { status: 'conflict' }
+    const previousDefault = record.identityVersion === undefined && request.previousPrint !== undefined && record.fingerprint === request.previousPrint
+    if (record.fingerprint !== request.print && !previousDefault) return { status: 'conflict' }
     if (record.outcome === 'delivered') {
       // The receipt is gone, but the name stays taken: it is not used again by accident.
       return record.receipt === undefined ? { status: 'expired' } : { status: 'replay', receipt: record.receipt }
@@ -87,7 +89,7 @@ export function install(rt) {
     }
     // A receipt that cannot be saved cannot stop a second delivery later.
     if (rt.readOnly() !== undefined) return { status: 'readonly' }
-    const fresh = { fingerprint: request.print, outcome: 'pending', at: Date.now(), run }
+    const fresh = { identityVersion: 2, fingerprint: request.print, outcome: 'pending', at: Date.now(), run }
     receipts()[request.key] = fresh
     const promise = (async () => {
       try {
