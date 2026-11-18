@@ -921,6 +921,72 @@ for (const scenario of ['clean failure', 'administrator tool', 'foreign inbox in
   })
 }
 
+test('recording an archived inspection verifies both native turns and keeps dispatch fenced across restart', async t => {
+  const host = await start(t), goal = await parkForReview(host), room = host.rt.roomOf('r1')
+  const id = 'original-archived-review', old = 'archived-admin'
+  room.segments = { a: [{ sessionId: old }] }
+  goal.reviewAttempt = { id, at: Date.now() - GOAL_REVIEW_INTERVAL_MS, state: 'uncertain', inspectOnly: true,
+    adminId: 'a', adminSessionId: old, rootSessionId: 'r1' }
+  const body = { roomId: room.id, goalId: goal.id, action: 'review-record-failure', reviewId: id, confirmed: true,
+    root: { sessionId: 'r1', seq: 41, end: 44, turn: 76 }, admin: { sessionId: old, seq: 41, end: 42, turn: 55 } }
+  host.rt.roomBatchPending = () => true
+  let adminTool = true
+  host.ctx.sessionController.events = async req => {
+    const root = req.address.sessionId === 'r1', turn = root ? 76 : 55
+    const source = { kind: 'bot', form: 'relay', reviewInspect: true, role: root ? 'goal' : 'room',
+      roomId: 'r1', reviewId: id, ...(root ? { goalId: goal.id } : {}) }
+    const events = [
+      ['turn/start', { turn }], ['user/message', { source }],
+      ...(root ? [['tool/call', { name: 'group_relay', callId: 'c' }],
+        ['tool/result', { message: { role: 'tool', toolCallId: 'c', isError: false } }]]
+        : adminTool ? [['tool/call', { name: 'message_bot' }]] : []),
+      ['turn/end', { turn, reason: { kind: root ? 'completed' : 'error' } }],
+    ]
+    return { cursor: req.throughSeq, records: events.map(([type, data], i) => ({ type: 'event', event: { seq: 40 + i, type, data } })) }
+  }
+  assert.ok((await host.call('goal-control', { ...body, admin: { ...body.admin, end: 43 } })).error)
+  assert.ok((await host.call('goal-control', { ...body, admin: { ...body.admin, sessionId: 'other' } })).error)
+  assert.ok((await host.call('goal-control', { ...body, confirmed: false })).error)
+  assert.equal(goal.reviewAttempt.terminalFailure, undefined)
+  adminTool = false
+  assert.equal((await host.call('goal-control', body)).ok, true)
+  const revision = goal.revision
+  assert.deepEqual(saved(host).rooms.r1.goal.reviewAttempt.terminalFailure.admin, body.admin)
+  assert.equal((await host.call('goal-control', body)).ok, true)
+  assert.equal(goal.revision, revision)
+  assert.ok((await host.call('goal-control', { ...body, admin: { ...body.admin, turn: 54 } })).error)
+  await host.ctx.dispose()
+  const reboot = await start(t, undefined, undefined, undefined, host.home)
+  const rt = reboot.rt, restored = rt.roomOf('r1'), g = restored.goal
+  rt.roomBatchPending = () => true
+  rt.live.set('ga', { info: { role: 'room', roomId: 'r1', reviewInspect: true, reviewId: id } })
+  assert.equal(rt.goalReviewAllowed(restored, id), false)
+  assert.equal(await rt.goalReviewBind(restored, id, 'ga'), false)
+  await rt.goalReviewFinished(restored, 'ga', id)
+  await rt.goalReviewFailed(restored, 'ga', id)
+  await rt.goalReviewNotOpened(restored, id)
+  await rt.goalDrive(restored, { goalReviewId: id, slots: [{ id: 'a', status: 'passed' }] })
+  await rt.goalReviewPoll(Date.now() + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(g.reviewAttempt.id, id)
+  assert.equal(g.reviewResolutions, undefined)
+  assert.equal(reboot.agentOf('r1').calls.length, 0)
+  assert.match(await reboot.tool('group_goal', { action: 'show' }, 'ga'), /failed before administrator tools/)
+  rt.roomBatchPending = () => false
+  reboot.agentOf(old).inbox.nextTurn.push({ id: 'older-work' })
+  await rt.goalReviewPoll()
+  assert.equal(g.reviewAttempt.id, id)
+  reboot.agentOf(old).inbox.nextTurn.length = 0
+  await rt.goalReviewPoll()
+  assert.equal(g.reviewAttempt, undefined)
+  const resolution = saved(reboot).rooms.r1.goal.reviewResolutions.at(-1)
+  assert.equal(resolution.decision, 'failed-before-tools')
+  assert.deepEqual(resolution.admin, body.admin)
+  assert.equal((await reboot.call('goal-control', body)).ok, true)
+  assert.ok((await reboot.call('goal-control', { ...body, admin: { ...body.admin, turn: 54 } })).error)
+  assert.equal(g.lastOwnerReview, undefined)
+  assert.equal(reboot.agentOf('r1').calls.length, 0)
+})
+
 test('only a verified inspection from this admin’s retained part can be resolved after rollover', async t => {
   const host = await start(t), g = await parkForReview(host), room = host.rt.roomOf('r1')
   const original = { id: 'rolled', at: Date.now() - GOAL_REVIEW_INTERVAL_MS, state: 'uncertain', inspectOnly: true,
