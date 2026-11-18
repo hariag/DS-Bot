@@ -2667,11 +2667,70 @@ test('read-only review asks for show and does not count silent pass as successfu
   const read = host.round('inspect-without-show', post); await settle(() => host.agentOf('ga').calls.length > 0)
   const input = host.begin('ga')
   assert.match(text(input), /first action must be group_goal show/)
+  assert.match(text(input), /Only after successfully reading the current goal may you reply \[PASS\]/)
+  assert.doesNotMatch(text(input), /Reply \[PASS\] to stay silent when you have nothing new/)
+  assert.doesNotMatch(text(input), /Nothing new in this round since your last message/)
   assert.doesNotMatch(text(input), /For each current unfinished task you actually checked, call group_goal review-check/)
   host.finish('ga', '[PASS]'); await settle(() => read() !== undefined)
   assert.equal(g.lastInspection?.status, 'not-generated'); assert.equal(g.lastOwnerReview, undefined)
   assert.deepEqual(g.ownerReview?.checks, {}); assert.equal(host.agentOf('gb').calls.length, 0)
   assert.ok(g.ownerReviewAt > g.lastInspection.at)
+})
+
+test('seven empty inspections back off persistently, recover on success and reset on a changed task', async (t) => {
+  let host = await start(t)
+  let g = await parkForReview(host)
+  delete g.idleReason
+  delete g.idleRevision
+  const run = async (success = false) => {
+    const due = g.ownerReviewAt
+    await host.rt.goalReviewPoll(due)
+    const post = host.takeGoal()
+    assert.equal(post?.source.reviewInspect, true)
+    host.agentOf('r1').inbox.nextTurn.length = 0
+    const before = host.agentOf('ga').calls.length
+    const read = host.round(`backoff-${due}`, post)
+    await settle(() => host.agentOf('ga').calls.length > before)
+    host.begin('ga')
+    if (success) assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), /Goal:/)
+    host.finish('ga', '[PASS]')
+    await settle(() => read() !== undefined)
+  }
+  for (let i = 1; i <= 7; i++) {
+    await run()
+    assert.equal(g.lastInspection.status, 'not-generated')
+    assert.equal(g.inspectionBackoff.count, i)
+    assert.equal(g.ownerReviewAt - g.lastInspection.at, GOAL_REVIEW_INTERVAL_MS * (i === 1 ? 1 : i === 2 ? 2 : 4))
+    assert.match(host.rt.goalLedger(host.rt.roomOf('r1'), host.rt.botOf('a')), new RegExp(`Inspection incomplete ${i} consecutive`))
+    if (i === 3) {
+      await host.ctx.dispose()
+      host = await start(t, undefined, undefined, undefined, host.home)
+      g = host.rt.roomOf('r1').goal
+      assert.equal(g.inspectionBackoff.count, 3)
+    }
+  }
+  await run(true)
+  assert.equal(g.lastInspection.status, 'ledger-generated')
+  assert.equal(g.inspectionBackoff, undefined)
+  assert.equal(g.ownerReviewAt - g.lastInspection.at, GOAL_REVIEW_INTERVAL_MS)
+  await run()
+  await run()
+  assert.equal(g.inspectionBackoff.count, 2)
+  const oldDue = g.ownerReviewAt
+  g.stages[0].tasks[0].task = 'a substantively changed task'
+  await host.rt.goalReviewPoll(oldDue - GOAL_REVIEW_INTERVAL_MS * 2)
+  assert.equal(g.inspectionBackoff, undefined)
+  assert.ok(g.ownerReviewAt <= oldDue - GOAL_REVIEW_INTERVAL_MS)
+  await run()
+  assert.equal(g.inspectionBackoff.count, 1)
+  await run()
+  assert.equal(g.inspectionBackoff.count, 2)
+  host.rt.goalUserMessage('r1')
+  assert.equal(g.inspectionBackoff, undefined)
+  assert.equal(g.idle, true, 'a user message must not resume an ambiguous stop')
+  assert.equal(g.idleReason, undefined)
+  await run()
+  assert.equal(g.inspectionBackoff.count, 1)
 })
 
 test('read-only review records only a successful show, never owner checks', async (t) => {
