@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
+import { harnessRequire, playwrightOf, reactDirOf } from './harness-root.mjs'
 
 let assertions = 0
 let assertionFailures = 0
@@ -15,18 +16,16 @@ for (const name of ['ok', 'equal', 'deepEqual', 'match', 'doesNotMatch']) {
 }
 
 const dsbot = createRequire(new URL('../package.json', import.meta.url))
-const harness = process.env.DSH_HARNESS
-if (!harness) throw new Error('Set DSH_HARNESS to a DeepSeek Harness checkout')
-const web = createRequire(join(harness, 'apps/web/package.json'))
+// The harness is optional here: the npm-installed dev/harness has no React, so
+// BOARD_REACT_DIR supplies React 18's UMD builds and playwright-core the browser.
+const web = harnessRequire()
 const boardEntry = fileURLToPath(new URL('../src/client/task-board.js', import.meta.url))
 const { build } = dsbot('esbuild')
-// The harness checkout normally owns React and Playwright. A source checkout without
-// node_modules can point this test at an installed fixture instead.
-const boardReact = process.env.BOARD_REACT_DIR || (() => { try { return dirname(web.resolve('react')) } catch { return '' } })()
-if (!boardReact) throw new Error('Set BOARD_REACT_DIR to a node_modules directory holding react and react-dom')
+const boardReact = reactDirOf(web)
+if (!boardReact) throw new Error('Set BOARD_REACT_DIR to a node_modules directory holding react and react-dom (React 18 with UMD builds), or point DSH_HARNESS at an official DeepSeek Harness source checkout')
 const react = join(boardReact, 'umd/react.development.js')
 const reactDom = join(boardReact, '../react-dom/umd/react-dom.development.js')
-const { chromium } = (() => { try { return web('playwright') } catch { return dsbot('playwright-core') } })()
+const { chromium } = playwrightOf(web)
 const chrome = process.env.CHROME_PATH || (existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe') ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : undefined)
 
 const shim = {

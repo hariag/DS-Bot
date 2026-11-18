@@ -1,17 +1,17 @@
 /** Isolated browser test for the actual ds-bot QueueDock bundle. No dsh server is contacted. */
 import { readFile, mkdtemp, rm } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import assert from 'node:assert/strict'
+import { harnessRequire, playwrightOf, reactDirOf } from './harness-root.mjs'
 
 const plugin = resolve(import.meta.dirname, '..')
-const harness = process.env.DSH_HARNESS
-if (!harness) throw new Error('Set DSH_HARNESS to a DeepSeek Harness checkout')
-const req = createRequire(join(harness, 'apps/web/package.json'))
-const { chromium } = req('playwright')
-const react = join(dirname(req.resolve('react')), 'umd/react.development.js')
-const reactDom = join(dirname(req.resolve('react-dom')), 'umd/react-dom.development.js')
+const req = harnessRequire()
+const reactDir = reactDirOf(req)
+if (!reactDir) throw new Error('Set BOARD_REACT_DIR to the react package directory (React 18 with UMD builds), or point DSH_HARNESS at an official DeepSeek Harness source checkout')
+const { chromium } = playwrightOf(req)
+const react = join(reactDir, 'umd/react.development.js')
+const reactDom = join(reactDir, '../react-dom/umd/react-dom.development.js')
 const bundlePath = process.argv[2] ?? join(plugin, 'client.js')
 const bundle = await readFile(bundlePath, 'utf8')
 const start = bundle.indexOf('var OWN_QUEUE_KINDS', bundle.indexOf('// src/client/queue-dock.js'))

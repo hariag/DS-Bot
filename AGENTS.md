@@ -27,7 +27,7 @@ The Bot team:
 
 ## Commands
 
-Run in `ds-bot/`. The unit tests and the linter load the `@deepseek-ai/*` packages from `dev/harness/`, which `npm run harness` installs from npm at the DSH version in `dev/harness/package.json`. `DSH_HARNESS` points them at another install or at a DeepSeek Harness checkout instead. The test bench needs a checkout at `../deepseek-harness` (or `DSH_HARNESS`), at the DSH version in the README.
+Run in `ds-bot/`. The unit tests and the linter load the `@deepseek-ai/*` packages from `dev/harness/`, which `npm run harness` installs from npm at the DSH version in `dev/harness/package.json` — the official DeepSeek Harness release. `DSH_HARNESS` may point them at an official source checkout instead. Only the official `deepseek-ai/deepseek-harness` is supported: a personal fork may carry patches the published release does not, and the plugin must run on the official packages. The board and lifecycle test benches start the npm-installed `dsh` under `dev/harness`, so they need no checkout; a checkout is only for the Linux dev scripts that build or launch DSH from source.
 
 ```sh
 npm ci                                 # build tool only (esbuild)
