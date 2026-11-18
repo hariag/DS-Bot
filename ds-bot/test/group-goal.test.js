@@ -854,6 +854,73 @@ test('an overdue uncertain inspection still observes the local ledger without re
   assert.equal(host.agentOf('ga').calls.length, 0)
 })
 
+for (const scenario of ['clean failure', 'administrator tool', 'foreign inbox insertion', 'missing sequence', 'second admission', 'busy inbox']) {
+  test(`original inspection turns permit bounded failure recovery: ${scenario}`, async t => {
+    const host = await start(t), goal = await parkForReview(host)
+    const id = 'native-failed-inspection'
+    const attempt = goal.reviewAttempt = { id, at: Date.now(), state: 'uncertain', inspectOnly: true,
+      adminId: 'a', adminSessionId: 'ga', rootSessionId: 'r1' }
+    const pages = new Map()
+    const emit = (sessionId, event) => {
+      for (const listener of host.ctx.listeners.get('session/event') ?? []) {
+        if (listener.length >= 2) listener({ id: sessionId }, event)
+      }
+    }
+    for (const [sessionId, role] of [['r1', 'goal'], ['ga', 'room']]) {
+      const root = role === 'goal'
+      const source = { kind: 'bot', form: 'relay', role, reviewInspect: true, roomId: 'r1', reviewId: id, exchangeId: id,
+        ...(root ? { goalId: goal.id } : {}) }
+      const data = [
+        ['turn/start', { turn: 13 }],
+        ['agent/inbox/spliced', { removedCount: 1, inserted: !root && scenario === 'foreign inbox insertion' ? [{ id: 'unrelated' }] : [] }],
+        ['user/message', { source, content: [] }],
+        ['user/message', { source: { kind: 'time-context', form: 'snapshot' }, content: [] }],
+        ...(root ? [['tool/call', { name: 'group_relay', callId: 'c', turn: 13 }], ['tool/result', { message: { role: 'tool', toolCallId: 'c', isError: false }, turn: 13 }]]
+          : scenario === 'administrator tool' ? [['tool/call', { name: 'message_bot', callId: 'out', turn: 13 }]] : []),
+        ['turn/end', { turn: 13, reason: { kind: root ? 'completed' : 'error' } }],
+      ]
+      const events = data.map(([type, data], i) => ({ type, data, seq: 40 + i }))
+      for (const event of events) emit(sessionId, event)
+      if (!root && scenario === 'second admission') emit(sessionId, { ...events[2], seq: 99 })
+      pages.set(sessionId, !root && scenario === 'missing sequence' ? events.filter((_, i) => i !== 2) : events)
+    }
+    const reads = []
+    host.ctx.sessionController.events = async req => {
+      reads.push(req)
+      return { cursor: req.throughSeq, records: pages.get(req.address.sessionId).map(event => ({ type: 'event', event })) }
+    }
+    // Native event playback also publishes the ordinary group failure note.
+    // Model the relay having drained it before the quiet-period check.
+    await new Promise(resolve => setImmediate(resolve))
+    host.rt.roomInbox.delete('r1')
+    host.agentOf('r1').inbox.nextTurn.length = 0
+    const previousRootCalls = host.agentOf('r1').calls.length
+    if (scenario === 'busy inbox') host.agentOf('ga').inbox.nextTurn.push({ id: 'other' })
+    await host.rt.goalReviewPoll()
+    if (scenario === 'busy inbox') {
+      assert.equal(goal.reviewAttempt, attempt)
+      host.agentOf('ga').inbox.nextTurn.length = 0
+      await host.rt.goalReviewPoll()
+    }
+    if (scenario === 'clean failure' || scenario === 'busy inbox') {
+      assert.equal(goal.reviewAttempt, undefined)
+      const record = saved(host).rooms.r1.goal.reviewResolutions.at(-1)
+      assert.equal(record.decision, 'failed-before-tools')
+      assert.equal(record.by, 'host')
+      assert.equal(record.root.sessionId, 'r1')
+      assert.equal(record.admin.sessionId, 'ga')
+      assert.equal(record.admin.turn, 13)
+      assert.ok(goal.ownerReviewAt >= Date.now() + GOAL_REVIEW_INTERVAL_MS - 1000)
+      assert.equal(goal.lastOwnerReview, undefined)
+      assert.equal(host.agentOf('r1').calls.length, previousRootCalls)
+      assert.deepEqual(reads.map(req => [req.address.sessionId,req.throughSeq,req.maxMessages]), [['r1', 46, 8], ['ga', 44, 8]])
+    } else {
+      assert.equal(goal.reviewAttempt, attempt)
+      assert.equal(goal.reviewResolutions, undefined)
+    }
+  })
+}
+
 test('only a verified inspection from this admin’s retained part can be resolved after rollover', async t => {
   const host = await start(t), g = await parkForReview(host), room = host.rt.roomOf('r1')
   const original = { id: 'rolled', at: Date.now() - GOAL_REVIEW_INTERVAL_MS, state: 'uncertain', inspectOnly: true,
