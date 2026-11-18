@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -165,6 +165,20 @@ test('redo source evidence is bound to its room and current membership', async t
   host.rt.state.rooms.r1.members = ['a']
   assert.equal(proof.isCurrent(), false)
   assert.equal(await host.rt.recoveryHeldOriginal({ kind:'room', id:'r1' }, id), undefined)
+})
+
+test('repeating unchanged recovery notes verifies ownership without replacing the durable file', async t => {
+  const home = freshHome(t), host = await start(home)
+  host.emit('gb', 'turn/start', { turn: 9 })
+  await settle(() => notes(home).turns?.gb?.turn === 9)
+  const file = join(home, 'inflight.json')
+  const before = statSync(file, { bigint: true })
+  host.rt.noteApproval('gb', undefined)
+  await host.stop()
+  const after = statSync(file, { bigint: true })
+  assert.equal(before.ino, after.ino)
+  assert.equal(before.mtimeNs, after.mtimeNs)
+  assert.equal(notes(home).turns.gb.turn, 9)
 })
 
 test('new interrupted records preserve the exact turn number', async t => {
@@ -1548,6 +1562,19 @@ test('external recovery-file changes are preserved and halt future Bot deliverie
   assert.ok(entries.some(row => /ECONFLICT/.test(row.text)))
   await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'Third' }, 'a'), /Recovery notes are unavailable/)
   assert.deepEqual(readFileSync(file), external)
+})
+
+test('an unchanged recovery snapshot still detects an outside edit', async t => {
+  const home = freshHome(t), host = await start(home)
+  host.emit('gb', 'turn/start', { turn: 9 })
+  await settle(() => notes(home).turns?.gb?.turn === 9)
+  const file = join(home, 'inflight.json')
+  const external = '{"turns":{},"queued":{"other":[]}}'
+  writeFileSync(file, external)
+  host.rt.noteApproval('gb', undefined)
+  await readDiagnostics(home, rows => rows.some(row => /noting running turns failed.*ECONFLICT/.test(row.text)))
+  await assert.rejects(host.tool('message_bot', { to: 'Writer', message: 'After edit' }, 'a'), /Recovery notes are unavailable/)
+  assert.equal(readFileSync(file, 'utf8'), external)
 })
 
 test('a lost team lock prevents recovery notes from overwriting the previous file', async (t) => {
