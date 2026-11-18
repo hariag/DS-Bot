@@ -7,11 +7,20 @@ import { SPRING_SHAPE } from './motion.js'
 
 // The server supplies already-authorized tasks; never infer membership or filter
 // another actor's private tasks in the browser.
+// Workflow lanes in the Status view. `ready` is the delivery step between scheduling
+// and the Bot starting, so it shares the Waiting lane; goal-card projections are shown
+// in their own section rather than as workflow statuses.
 const COLUMNS = [
-  ['draft', 'Draft'], ['proposed', 'Preparing'], ['waiting', 'Waiting'], ['ready', 'Ready'],
-  ['legacy-pending', 'Not started'], ['working', 'In progress'], ['reported', 'Awaiting review'], ['done', 'Done'], ['legacy-done','Goal marked done'],
-  ['cancelled', 'Cancelled'],
+  ['draft', 'Draft'], ['proposed', 'Preparing'], ['waiting', 'Waiting'],
+  ['working', 'In progress'], ['reported', 'Awaiting review'], ['done', 'Done'], ['cancelled', 'Cancelled'],
 ]
+// Every status a card can carry, including the delivery step and the goal-card
+// projections, for card chips and dialogs.
+const STATUS_LABELS = {
+  draft:'Draft', proposed:'Preparing', waiting:'Waiting', ready:'Ready', working:'In progress',
+  reported:'Awaiting review', done:'Done', 'legacy-pending':'Not started', 'legacy-done':'Goal marked done', cancelled:'Cancelled',
+}
+const LANE_OF_STATUS = { ready:'waiting' }
 const PERSONAL_COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['finished', 'Personally finished']]
 const TASK_TYPES = [
   ['requirement', 'Requirement'], ['design', 'Design'], ['feature', 'Feature'], ['development', 'Development'],
@@ -85,7 +94,8 @@ export function boardColumns(tasks) {
   for (const task of Array.isArray(tasks) ? tasks : []) {
     if (!task || typeof task.id !== 'string' || !task.id || seen.has(task.id)) throw new Error('Invalid or duplicate task ID')
     seen.add(task.id)
-    columns.get(KNOWN.has(task.status) ? task.status : 'unknown').push(task)
+    const lane = LANE_OF_STATUS[task.status] ?? task.status
+    columns.get(KNOWN.has(lane) ? lane : 'unknown').push(task)
   }
   return columns
 }
@@ -678,7 +688,7 @@ const imagesOf = task => Array.isArray(task.images) ? task.images : []
 const labelsOf = task => Array.isArray(task.labels) ? task.labels : []
 const dependenciesOf = task => Array.isArray(task.dependencies) ? task.dependencies.map(asText).filter(Boolean) : []
 const commandOf = (commands, type) => Array.isArray(commands) && commands.some(command => command?.type === type)
-const stageLabelOf = task => task?.legacy ? ({current:'Current goal task',previous:'Earlier goal stage',future:'Upcoming goal stage',archived:'Archived goal task',closed:'Closed goal task'})[task.legacy.position] ?? t('Goal task') : t((COLUMNS.find(([status]) => status === task?.status) ?? [null, 'Status unknown'])[1])
+const stageLabelOf = task => task?.legacy ? ({current:'Current goal task',previous:'Earlier goal stage',future:'Upcoming goal stage',archived:'Archived goal task',closed:'Closed goal task'})[task.legacy.position] ?? t('Goal task') : t(STATUS_LABELS[task?.status] ?? 'Status unknown')
 const actorName = (value, actors) => actorLabel(value, actors) || t('Unknown')
 // A closed <details> hides its body but keeps the direct <summary> visible.
 // Nested summaries (inside the hidden body) must not enter a focus trap.
@@ -834,7 +844,9 @@ function TaskCard({ scope, task, commands, actors, uncertain, dragging, dragEnab
   const canReorder = commandOf(commands, 'reorder')
   const canMove = commandOf(commands, 'personal-progress') && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)
   const canSchedule = commandOf(commands, 'schedule') && ['proposed', 'waiting'].includes(task.status)
-  const canDrag = !uncertain && !task.shared && (dragEnabled === true || canReorder || canMove || canSchedule)
+  // A ready card shares the Waiting lane; it has no drop target of its own there, so
+  // it is not a drag handle (the delivery chips still show its queue state).
+  const canDrag = !uncertain && !task.shared && (dragEnabled === true || (task.status !== 'ready' && (canReorder || canMove || canSchedule)))
   const deliveryLabel = task.dispatchState === 'uncertain' ? t('Delivery needs review')
     : task.dispatchState === 'accepted' ? t('Sent to Bot')
       : task.dispatchState === 'claimed' ? t('Preparing delivery')
@@ -2683,8 +2695,11 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const activeFiltered = filtered.filter(task => !task.archivedAt)
   const personalTasks = personal ? activeFiltered.filter(task => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : []
   const personalIds = new Set(personalTasks.map(task => task.id))
-  const columns = boardColumns(activeFiltered.filter(task => !personalIds.has(task.id)))
-  const listedBase = [...COLUMNS.filter(([status]) => !['legacy-pending', 'legacy-done'].includes(status) || columns.get(status).length), ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
+  // Goal cards come from group goals, not from the task workflow; they stay readable
+  // in their own section and never count as a workflow status.
+  const legacyTasks = activeFiltered.filter(task => task.legacy)
+  const columns = boardColumns(activeFiltered.filter(task => !task.legacy && !personalIds.has(task.id)))
+  const listedBase = [...COLUMNS, ...(columns.get('unknown').length ? [['unknown', 'Status unknown']] : [])]
   const listed = lanePrefs.order.length
     ? [...listedBase].sort((left, right) => {
         const li = lanePrefs.order.indexOf(left[0]), ri = lanePrefs.order.indexOf(right[0])
@@ -2751,7 +2766,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const laneHandlers = (kind, stage, laneTasks) => {
     const labelText = kind === 'type' ? t(TASK_TYPE_LABELS[stage] ?? 'Other')
       : kind === 'release' ? (stage === 'unassigned' ? t('Unassigned') : textValue(releaseById.get(stage)?.name) || t('Untitled release'))
-        : t((COLUMNS.find(([status]) => status === stage) ?? PERSONAL_COLUMNS.find(([value]) => value === stage) ?? [null, stage])[1])
+        : t(STATUS_LABELS[stage] ?? PERSONAL_COLUMNS.find(([value]) => value === stage)?.[1] ?? stage)
     if (kind === 'release') {
       const release = stage === 'unassigned' ? null : releaseById.get(stage)
       return {
@@ -2992,7 +3007,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('button', { type:'button', className:'bt-card-mini', disabled:bulkBusy, onClick:() => { setSelectedIds(new Set()); setSelectionMode(false) } }, t('Clear selection'))) : null,
       view === 'status' && data?.summary ? h('div', { className:'bt-board-summary', role:'status', 'aria-label':t('Board summary') },
         h('span', null, h('b', null, data.summary.statuses?.working ?? 0), ' ', t('In progress')),
-        h('span', null, h('b', null, data.summary.statuses?.waiting ?? 0), ' ', t('Waiting')),
+        h('span', null, h('b', null, (data.summary.statuses?.waiting ?? 0) + (data.summary.statuses?.ready ?? 0)), ' ', t('Waiting')),
         h('span', { className: data.summary.blocked ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.blocked ?? 0), ' ', t('Blocked')),
         h('span', { className: data.summary.overdue ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.overdue ?? 0), ' ', t('Overdue')),
         h('span', null, h('b', null, data.summary.statuses?.done ?? 0), ' ', t('Done'))) : null,
@@ -3008,11 +3023,14 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
             h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Personal progress')), h('p', null, t('Drag a card or use its progress menu.'), ' ', t('Your own progress markers do not complete shared work or unblock dependencies.'))),
             h(ColumnRail, { label: t('Personal progress'), personal: true }, PERSONAL_COLUMNS.map(([progress, label]) => renderLane('personal', progress, t(label), personalTasks.filter(task => task.personalProgress === progress),
               { laneLabel: t(label), personalProgress: progress, defaultOwner: 'user', ownerOnly: true, scheduleOnCreate: false, followup: false })))) : null,
-          view === 'status' && (!personal || filtered.some(task => !personalIds.has(task.id))) ? h('section', { className: 'bt-board-section', 'aria-label': t('Workflow') },
+          view === 'status' && legacyTasks.length ? h('section', { className: 'bt-board-section bt-board-goal-cards', 'aria-label': t('Goal cards') },
+            h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Goal cards')), h('p', null, t('Group goal cards are not workflow tasks and do not count as acceptance.'))),
+            h('div', { className: 'bt-board-goal-grid' }, legacyTasks.map((task, index) => card(task, index, legacyTasks, 'legacy', 'goal')))) : null,
+          view === 'status' && (!personal || filtered.some(task => !personalIds.has(task.id) && !task.legacy)) ? h('section', { className: 'bt-board-section', 'aria-label': t('Workflow') },
             personal ? h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Shared workflow')), h('p', null, t('These statuses reflect the shared task workflow.'))) : null,
             h(ColumnRail, { label: t('Workflow') }, listed.map(([status, label]) => {
               const scheduleOnCreate = !personal && ['waiting', 'ready', 'working'].includes(status)
-              const followup = personal || ['reported', 'done', 'legacy-pending', 'legacy-done', 'unknown'].includes(status)
+              const followup = personal || ['reported', 'done', 'unknown'].includes(status)
               return renderLane('workflow', status, t(label), columns.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === 'cancelled', defaultDraft: status === 'draft', defaultOwner: personal ? 'user' : scope.kind === 'personal' ? scope.id : '', ownerOnly: scope.kind === 'personal' })
             }))) : null,
           view === 'type' ? typeSection : null,
@@ -3387,6 +3405,8 @@ export const TASK_BOARD_CSS = `
 .bt-board-legacy-note{padding:7px 20px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-main));font-size:12px;line-height:18px}
 .bt-board-content{display:flex;flex-direction:column;gap:16px;flex:1;min-height:0;overflow:hidden;padding:16px 20px 18px;background:color-mix(in srgb,var(--bt-sidebar) 82%,var(--bt-main))}
 .bt-board-section{display:flex;flex-direction:column;flex:1;min-height:0}
+.bt-board-goal-cards{flex:none;min-height:0}
+.bt-board-goal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:10px;align-items:start;max-height:min(34vh,360px);overflow:auto;padding-bottom:2px}
 .bt-board-section+.bt-board-section{margin-top:0}
 .bt-board-section-heading{margin:0 0 8px}
 .bt-board-section-heading h3{font-size:13px;line-height:18px;font-weight:600}
