@@ -14507,6 +14507,7 @@ var ZH = {
   "Sent": "已发送",
   "Failed": "失败",
   "Requirement": "需求",
+  "Test": "测试",
   "Feature": "功能拆分",
   "Development": "开发",
   "Deployment": "部署",
