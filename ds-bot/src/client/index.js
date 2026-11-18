@@ -68,7 +68,7 @@ import { PASTE_CSS, PasteDock, PasteGuard } from './paste-card.js'
 import { OPENING_CSS, bindOpeningWait } from './opening.js'
 import { noticeApprovals } from './approval-notices.js'
 import { listedOpener } from './open-listed.js'
-import { needsIdleSample, pollDelay } from './polling.js'
+import { HIDDEN_POLL_MS, VISIBLE_POLL_MS, needsIdleSample, pollDelay } from './polling.js'
 import { installMotionRest } from './motion-rest.js'
 import { agentSessionToReuse, singleFlight } from './agent-new.js'
 import { TextSelectionAction, ANNOTATION_CSS } from './text-annotation.js'
@@ -268,7 +268,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
     let timer
     let misses = 0
     let networkFailures = 0
-    // While the host keeps answering that nothing changed, asking every 1.5 s only makes
+    // While the host keeps answering that nothing changed, frequent reads only make
     // the renderer serialise requests and compare answers (#1462). The wait stretches to
     // POLL_MAX_MS and snaps back on the first change, a wake, or any action's own pull.
     let unchanged = 0
@@ -295,7 +295,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
           }
         }
       } finally { running = false }
-      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? 10000 : 1500, unchanged, networkFailures))
+      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS, unchanged, networkFailures))
     }
     const wake = () => { if (!document.hidden) { unchanged = 0; void loop() } }
     document.addEventListener('visibilitychange', wake)
