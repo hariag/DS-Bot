@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 
 const own = (value, key) => value != null && Object.hasOwn(value, key) ? value[key] : undefined
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
@@ -68,7 +69,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
 
   const canMutate = (task, caller, action) => {
     if (!direct(task, caller) || (!actions.has(action) && action !== 'propose')) return false
-    if (action === 'propose') return task.stale !== true && (caller.actor === task.owner || caller.actor === task.reviewer)
+    if (action === 'propose') return task.stale !== true && !task.archivedAt && (caller.actor === task.owner || caller.actor === task.reviewer)
     if (!task.authority || task.stale === true) return false
     if (task.scope.startsWith('room:')) {
       const room = roomFor(task)
@@ -83,18 +84,44 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return false
   }
 
+  const visibleDependency = (caller, id) => {
+    const dependency = store.get(id)
+    return !!dependency && (direct(dependency, caller) || !!sharedProjection(dependency, caller))
+  }
+  // A change task carries the before/after values the user asked to reconcile; Bots see
+  // the same visible-dependency filter as the user projection.
+  const changeView = (task, caller) => {
+    if (!task.change) return undefined
+    const filter = value => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+      const copy = { ...value }
+      if (Array.isArray(copy.dependencies)) copy.dependencies = copy.dependencies.filter(id => visibleDependency(caller, id))
+      return copy
+    }
+    return { sourceTaskId: task.change.sourceTaskId, sourceRevision: task.change.sourceRevision,
+      before: filter(task.change.before), after: filter(task.change.after) }
+  }
   const projectDirect = (task, caller) => {
-    const dependencies = (Array.isArray(task.dependencies) ? task.dependencies : []).filter(depId => {
-      const dependency = store.get(depId)
-      return dependency && (direct(dependency, caller) || sharedProjection(dependency, caller))
-    })
+    const dependencies = (Array.isArray(task.dependencies) ? task.dependencies : []).filter(depId => visibleDependency(caller, depId))
+    const change = changeView(task, caller)
     return {
       id: task.id, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer, acceptance: task.acceptance, dependencies,
+      // Card content the owner works with, so a show after a handoff or a part switch
+      // does not lose what the dispatch prompt carried once.
+      description: typeof task.description === 'string' ? task.description : '',
+      type: typeof task.type === 'string' ? task.type : 'other',
+      labels: Array.isArray(task.labels) ? task.labels.filter(label => typeof label === 'string') : [],
+      dueDate: typeof task.dueDate === 'string' ? task.dueDate : null,
+      dueComplete: task.dueComplete === true,
+      checklist: Array.isArray(task.checklist)
+        ? task.checklist.filter(item => item && typeof item.text === 'string').map(item => ({ text:item.text, checked:item.checked === true }))
+        : [],
       ...(task.authority ? { authority: task.authority } : {}),
       ...(task.blocked ? { blocked: task.blocked } : {}),
       ...(task.evidence ? { evidence: task.evidence } : {}),
       ...(task.stale ? { stale: true } : {}),
+      ...(change ? { change } : {}),
     }
   }
 
@@ -139,13 +166,20 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       const targetScope = caller.roomId ? `room:${caller.roomId}` : `personal:${caller.actor}`
       const taskId = `card-${randomUUID()}`
       const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
-      const existing = store.listProposals(targetScope).find(item => item.id === proposalId)
-      if (existing) return { proposal: existing }
       const proposal = {
         id: proposalId, scope:targetScope, taskId, kind:'create', baseRevision:0,
         command:{ type:'create', value:{ ...value, title:value.title.trim(), acceptance:value.acceptance.trim(), dependencies:value.dependencies ?? [] } },
         before:null, after:{ ...value, title:value.title.trim(), acceptance:value.acceptance.trim(), dependencies:value.dependencies ?? [] },
         ...(args.note ? { note:args.note } : {}),
+      }
+      const existing = store.listProposals(targetScope).find(item => item.id === proposalId)
+      if (existing) {
+        // One operation id means one exact logical request. An identical retry receives the
+        // recorded proposal; a changed request must not silently receive it.
+        const same = existing.kind === 'create' && existing.scope === targetScope
+          && isDeepStrictEqual(existing.command, proposal.command) && (existing.note ?? '') === (proposal.note ?? '')
+        if (!same) throw Object.assign(new Error('operation id conflict'), { code: 'bot/invalid' })
+        return { proposal: existing }
       }
       const context = { exec, caller, taskId, revision:0, action:'propose', create:true, scope:targetScope }
       const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor:caller.actor, proposal }))
@@ -199,13 +233,20 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       }
       if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) throw refused()
       const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
-      const existing = store.listProposals(task.scope).find(item => item.id === proposalId)
-      if (existing) return { proposal: existing }
       const before = Object.fromEntries(proposalUpdateFields.filter(field => Object.hasOwn(task, field)).map(field => [field, task[field]]))
       const proposal = {
         id: proposalId, scope: task.scope, taskId: task.id, kind: change.kind, baseRevision: task.revision,
         command, before, after: change.kind === 'update' ? { ...before, ...change.value } : change.value,
         ...(args.note ? { note:args.note } : {}),
+      }
+      const existing = store.listProposals(task.scope).find(item => item.id === proposalId)
+      if (existing) {
+        const same = existing.kind === change.kind && existing.taskId === task.id && existing.scope === task.scope
+          && isDeepStrictEqual(existing.command, command)
+          && isDeepStrictEqual(existing.before, before) && isDeepStrictEqual(existing.after, proposal.after)
+          && (existing.note ?? '') === (proposal.note ?? '')
+        if (!same) throw Object.assign(new Error('operation id conflict'), { code: 'bot/invalid' })
+        return { proposal: existing }
       }
       const context = { exec, caller, taskId: task.id, revision: task.revision, action: 'propose' }
       const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor: caller.actor, proposal }))
