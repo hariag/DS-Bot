@@ -5,6 +5,7 @@ import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, stripToolCallTags, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel, clockLabel, messageClock } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, GoalIcon, MemoryIcon } from './icons.js'
 import { ChangesCard } from './changes-card.js'
+import { groupReads } from './group-reads.js'
 import { goalEventText } from './goal.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { CellEmpty } from './cell-empty.js'
@@ -1065,58 +1066,68 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
   return null
 }
 
-// Rows a later call closed do not change: each is read from the group's book once per page.
-const settledRows = new Map()
+const groupReadDelay = failures => failures > 0 ? Math.min(30_000, 1500 * 2 ** Math.min(failures, 5)) : document.hidden ? 5000 : 1000
 
 function GroupReplies({ sessionId, turn, callId, done, content, roster, actions, useUi, useWork }) {
+  const room = roster.roomsById[sessionId]
+  const roomId = room?.id ?? sessionId
+  const reads = groupReads(actions)
+  const cursor = roster.groupRowKeys?.[roomId]
+  const hasCursor = typeof cursor === 'string'
+  const epoch = hasCursor ? cursor.split('|', 1)[0] : null
   const [live, setLive] = useState({ replies: [], speaking: [] })
   useEffect(() => {
     if (done) return undefined
     let stop = false
     let timer
-    let seen = ''
+    let failures = 0
+    let seen
     const tick = async () => {
-      const result = await actions.roomProgress(sessionId)
+      const result = await reads.read(JSON.stringify(['progress', roomId]), cursor, () => actions.roomProgress(roomId))
       if (stop) return
-      const entry = (result ?? []).find(item => item.callId === callId) ?? (result ?? [])[0]
-      const key = entry ? JSON.stringify([entry.replies, entry.speaking]) : ''
-      if (entry && key !== seen) { seen = key; setLive({ replies: entry.replies ?? [], speaking: [entry.speaking ?? []].flat() }) }
-      timer = setTimeout(tick, document.hidden ? 5000 : 1000)
+      if (Array.isArray(result)) {
+        const entry = result.find(item => item.callId === callId) ?? result[0]
+        const next = { replies: entry?.replies ?? [], speaking: [entry?.speaking ?? []].flat() }
+        const key = hasCursor ? cursor : JSON.stringify(next)
+        if (key !== seen) { seen = key; setLive(next) }
+        if (hasCursor) return
+        failures = 0
+      } else failures++
+      timer = setTimeout(tick, groupReadDelay(failures))
     }
     void tick()
     return () => { stop = true; clearTimeout(timer) }
-  }, [done, sessionId, callId])
-  // A settled round names where its rows are in the group's book; one from before
-  // the ledger carries them in its result.
+  }, [done, roomId, callId, reads, actions, cursor])
   const resultText = done ? contentText(content) : ''
   const range = done ? relayRange(resultText) : undefined
-  const rowsKey = range === undefined ? undefined : `${sessionId}:${range.from}:${range.to ?? ''}:${range.anchor ?? ''}`
-  const [view, setView] = useState(() => (rowsKey === undefined ? null : settledRows.get(rowsKey) ?? null))
-  // An open cell that is quiet is read again when the team changes, not on a clock.
-  const quietKey = view?.open === true && view.active !== true ? roster.revision : undefined
+  const rowsKey = range && JSON.stringify(['rows', roomId, range.from, range.to, range.anchor])
+  const cacheKey = range && JSON.stringify([epoch, rowsKey])
+  const [snapshot, setSnapshot] = useState(null)
+  const view = (snapshot?.key === cacheKey ? snapshot?.view : null) ?? reads.closed(cacheKey)
+  // Once another anchor closes a cell it does not depend on later appends.
+  // A rollback, replaced book or new host gives even closed cells a new epoch.
+  const refresh = view?.open === false ? null : hasCursor ? cursor : view?.open && !view.active ? roster.revision : undefined
   useEffect(() => {
-    if (rowsKey === undefined) return undefined
-    const known = settledRows.get(rowsKey)
-    if (known !== undefined) { setView(known); return undefined }
-    // The newest call's rows grow while the group works: they are read every second then,
-    // and once when the group is quiet, until the next call closes them.
+    if (!range || view?.open === false) return undefined
     let stop = false
     let timer
-    let seen = ''
+    let failures = 0
+    let seen
     const tick = async () => {
-      const next = await actions.groupRows(sessionId, range.from, range.to, range.anchor)
+      const next = await reads.read(rowsKey, cursor, () => actions.groupRows(roomId, range.from, range.to, range.anchor))
       if (stop) return
-      if (next !== null && Array.isArray(next?.rows)) {
-        if (!next.open) settledRows.set(rowsKey, next)
-        const key = JSON.stringify(next)
-        if (key !== seen) { seen = key; setView(next) }
-        if (!next.open || next.active !== true) return
-      }
-      timer = setTimeout(tick, document.hidden ? 5000 : 1000)
+      if (Array.isArray(next?.rows)) {
+        if (!next.open) reads.settle(cacheKey, next)
+        const key = hasCursor ? cursor : JSON.stringify(next)
+        if (key !== seen) { seen = key; setSnapshot({ key: cacheKey, view: next }) }
+        if (hasCursor || !next.open || !next.active) return
+        failures = 0
+      } else failures++
+      timer = setTimeout(tick, groupReadDelay(failures))
     }
     void tick()
     return () => { stop = true; clearTimeout(timer) }
-  }, [rowsKey, quietKey])
+  }, [reads, actions, cacheKey, refresh])
   let replies = live.replies
   let broken = false
   if (range !== undefined) {
@@ -1141,7 +1152,6 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
     // empty turn, which reads as a blank gap on a narrow first paint.
     return broken ? h('div', { className: 'bt-group-replies' }, h('div', { className: 'bt-event' }, t('The group replies could not be shown'))) : h(CellEmpty)
   }
-  const room = roster.roomsById[sessionId]
   return h('div', { className: 'bt-group-replies' },
     stackReplies(replies).map(({ reply, index, texts, time, duration, claims, changes }) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? 'gray' }
@@ -1229,7 +1239,7 @@ function renderCall(call, { sessionId, turn, roster, actions, useUi, useWork, fi
       return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : h(CellEmpty)
     }
     case 'group_relay':
-      return h(GroupReplies, { sessionId, turn, callId: call.callId, done, content: call.content, roster, actions, useUi, useWork })
+      return h(GroupReplies, { key: JSON.stringify([sessionId, call.callId]), sessionId, turn, callId: call.callId, done, content: call.content, roster, actions, useUi, useWork })
     case 'create_group':
     case 'update_group':
     case 'delete_group':

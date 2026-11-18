@@ -1293,3 +1293,35 @@ test('settled and answered views summarize every outcome cleanly and derive fall
   const fallbackPrompt = expandCard(SettledView, { title: '', view: { type: 'stack', children: [] }, closed: 'dismissed' })
   assert.equal(text(find(fallbackPrompt, node => node.props?.className === 'bt-q-title')), 'View')
 })
+
+test('room cursors refresh an active range without a timer and discard a switched-away answer', async () => {
+  const waiting = Promise.withResolvers()
+  const asked = []
+  const actions = {
+    groupRows: async (id, from) => {
+      asked.push([id, from])
+      return id === 'room' ? waiting.promise : { rows: [{ kind: 'user', text: 'new room' }], open: true, active: true }
+    },
+  }
+  const mountRange = (sessionId, roomId, version) => {
+    const roster = team({ roomsById: { [sessionId]: { id: roomId } }, groupRowKeys: { [roomId]: version } })
+    const relay = find(ToolCell(props(call('group_relay', 'same-call', { content: { from: 1, anchor: 'same' } }), { sessionId, actions, roster })), node => node.type?.name === 'GroupReplies')
+    effects = []
+    relay.type(relay.props)
+    return mount()
+  }
+  timers.clear()
+  sets.length = 0
+  const left = mountRange('part-a', 'room', 'epoch|a')
+  await Promise.resolve()
+  left()
+  const right = mountRange('part-b', 'second', 'epoch|b')
+  const duplicate = mountRange('other-part', 'second', 'epoch|b')
+  await new Promise(resolve => setImmediate(resolve))
+  waiting.resolve({ rows: [{ kind: 'user', text: 'stale' }], open: true, active: true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(asked, [['room', 1], ['second', 1]])
+  assert.deepEqual(sets.map(value => value.view?.rows[0]?.text), ['new room', 'new room'])
+  assert.equal(timers.size, 0)
+  right(); duplicate()
+})
