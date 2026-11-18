@@ -16,8 +16,8 @@ export function installTaskTool(rt, workflow, defineTool) {
       note: { type:'string', description:'Short explanation shown to the user with a proposal' },
       change: { type:'object', additionalProperties:false, properties: {
         kind: { type:'string', enum:['create','update','status','release'] },
-        value: { type:'object', additionalProperties:true, description:'Fields to change, status command, or release id' },
-      }, description:'A proposed content, status or release change; it is not applied until the user confirms it' },
+        value: { type:'object', additionalProperties:true, description:'create: card fields (title, owner, reviewer, acceptance, description, type, labels, dueDate, dueComplete, checklist, dependencies, draft). update: description, type, labels, dueDate, dueComplete, checklist. status: {type: submit|cancel|restore, reason?}. release: {releaseId}.' },
+      }, description:'A proposed content, status or release change; the user confirms or rejects it in the board Changes panel before it applies. Query it with action proposal.' },
       value: { type:'object', additionalProperties:false, properties: {
         kind: { type:'string', enum:['git','personal'] }, evidence: { type:'string' },
         targetCommit: { type:'string' }, targetBlob: { type:'string' }, acceptanceBlob: { type:'string' }, environment: { type:'string' },

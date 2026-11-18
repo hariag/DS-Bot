@@ -738,6 +738,9 @@ test('archived cards leave the scheduler and active work cannot be archived', t 
   create(store, 'archived-card')
   command(store, 'archived-card', 'archive', 'user')
   assert.equal(store.listSchedule().some(task => task.id === 'archived-card'), false)
+  // Scheduling a card outside the workflow would create an action the scheduler never
+  // lists, leaving it ready but undeliverable.
+  assert.throws(() => command(store, 'archived-card', 'schedule', 'user', { kind:'personal', reference:'owner approval' }), /not schedulable/)
 })
 
 test('a release item cannot be archived while the release is active', t => {

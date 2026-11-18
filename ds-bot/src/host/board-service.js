@@ -103,6 +103,31 @@ export function install(rt) {
       }
     } catch (error) { rt.warn?.('ds-bot: release status not delivered: %s', error) }
   }
+  // A Bot's proposal may only be confirmed while the proposing Bot still holds the
+  // owner/reviewer role it proposed from. The task revision check catches a reassigned
+  // card, but not a Bot deleted or made private, or a member removed from its group.
+  const proposerStillAuthorized = proposal => {
+    const proposer = proposal?.proposer
+    if (typeof proposer !== 'string' || !proposer || proposer === 'user') return true
+    const bot = rt.botOf?.(proposer)
+    if (!bot || bot.private === true) return false
+    const scope = typeof proposal.scope === 'string' ? proposal.scope : ''
+    if (proposal.kind === 'create') {
+      if (scope.startsWith('room:')) {
+        const room = rt.roomOf?.(scope.slice(5))
+        return !!room && Array.isArray(room.members) && room.members.includes(proposer)
+      }
+      return scope === `personal:${proposer}`
+    }
+    const task = proposal.taskId ? service().store.get(proposal.taskId) : undefined
+    if (!task || (proposer !== task.owner && proposer !== task.reviewer)) return false
+    const taskScope = typeof task.scope === 'string' ? task.scope : ''
+    if (taskScope.startsWith('room:')) {
+      const room = rt.roomOf?.(taskScope.slice(5))
+      return !!room && Array.isArray(room.members) && room.members.includes(proposer)
+    }
+    return taskScope.startsWith('personal:')
+  }
   // Content, status, responsibility and release membership all belong to the item a
   // release is delivering, so the release group and project manager hear about them.
   const releaseSyncTypes = new Set(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','attach','remove-image','submit','cancel','restore','archive','unarchive','release-assign','schedule','unschedule'])
@@ -120,14 +145,38 @@ export function install(rt) {
       : ''
     await notifyRelease(release, `Board change on "${task.title}" (${task.id}): ${change?.type ?? 'update'}${summary ? ' · ' + summary : ''}. Current task revision ${task.revision}, status ${task.status}. Inspect the card and adjust the affected work or reassign it.`, 'board change')
   }
+  // A release can be published from the task journal itself when its last review passes
+  // (task-store auto-advance). That path bypasses checkRelease, so generate the report and
+  // tell the release group for every published release that is still missing one.
+  const reporting = new Set()
+  const ensureReleaseReport = async releaseId => {
+    if (reporting.has(releaseId)) return undefined
+    reporting.add(releaseId)
+    try {
+      const release = service().store.getRelease(releaseId)
+      if (!release || release.status !== 'published' || release.report) return undefined
+      const report = releaseReport(release)
+      const saved = service().store.setReleaseReport({ releaseId, report })
+      await notifyRelease(saved, `Release ${saved.name} ${saved.version ?? ''} 已完成全部发布项和门禁检查，版本已发布。总结报告已生成：${report.markdownPath}`)
+      return service().store.getRelease(releaseId)
+    } finally { reporting.delete(releaseId) }
+  }
+  const sweepReleaseReports = async () => {
+    let reported = false
+    for (const release of service().store.listPublishedWithoutReport?.() ?? []) {
+      try { if (await ensureReleaseReport(release.id)) reported = true }
+      catch (error) { rt.warn?.('ds-bot: release report for %s: %s', release.id, error?.message || error) }
+    }
+    if (reported) notifyDriver()
+  }
   const checkAndReportRelease = async (releaseId, operationId) => {
     const release = service().store.getRelease(releaseId)
     if (!release || release.status !== 'running') return release
     const result = service().store.checkRelease({ operationId, actor:'user', releaseId, expectedRevision:release.revision })
     if (result.status === 'published') {
-      const report = releaseReport(result)
-      service().store.setReleaseReport({ releaseId, report })
-      await notifyRelease(result, `Release ${result.name} ${result.version ?? ''} 已完成全部发布项和门禁检查，版本已发布。总结报告已生成：${report.markdownPath}`)
+      await ensureReleaseReport(releaseId)
+      // Publishing starts the next queued release; its items need the scheduler now.
+      notifyDriver()
       return service().store.getRelease(releaseId)
     }
     if (result.status === 'failed') await notifyRelease(result, `Release ${result.name} 失败：${result.failure ?? '发布条件无法满足'}`)
@@ -139,6 +188,7 @@ export function install(rt) {
       try { await checkAndReportRelease(release.id, `release-monitor:${release.id}:${release.revision}`) }
       catch (error) { rt.warn?.('ds-bot: release monitor %s: %s', release.id, error?.message || error) }
     }
+    await sweepReleaseReports()
   }
   const validBoardAuthority = task => {
     const reference = task?.authority?.reference
@@ -208,7 +258,9 @@ export function install(rt) {
         && (actor === 'user' || taskParticipant(task, actor)) && value?.kind !== 'git')
   const botWorkflow = installHostWorkflow(rt, {
     defineTool, run, getStore: () => service().store,
-    wake: () => instance?.driver.wake(),
+    // A Bot command may be the review that publishes a release inside the journal
+    // transaction; sweep its report before handing the scheduler the next action.
+    wake: () => { void sweepReleaseReports().catch(error => rt.warn?.('ds-bot: release report sweep: %s', error?.message || error)); return instance?.driver.wake() },
     verifyBinding: (task, room) => {
       const current = instance?.store.get(task.id)
       return !!current && current.revision === task.revision && currentBinding(current) && current.scope === `room:${room?.id}`
@@ -377,7 +429,12 @@ export function install(rt) {
     })
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
     const result = outcome.value
-    if (releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, payload).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
+    // An edit of active work creates a change-request task instead of rewriting the card;
+    // tell the release group that, rather than claiming the source card changed.
+    const change = result?.change
+      ? { type:'change-request', value:{ changeTaskId: result.id, sourceTaskId: result.change.sourceTaskId, fields: Object.keys(result.change.after ?? {}) } }
+      : payload
+    if (releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
   }
   let redoPreparation
@@ -529,6 +586,9 @@ export function install(rt) {
         const proposal = store.listProposals(`${scope.kind}:${scope.id}`).find(item => item.id === payload.proposalId)
         if (!proposal) throw new Error('Proposal is unavailable')
         if (!payload.operationId || !Number.isSafeInteger(payload.expectedRevision) || !['confirm','reject'].includes(payload.decision)) throw new Error('Invalid proposal decision')
+        // Rechecked before the decision transaction: a deleted, private or removed
+        // proposing Bot must not gain a change through the user's confirmation.
+        if (payload.decision === 'confirm' && !proposerStillAuthorized(proposal)) throw new Error('The proposing Bot is no longer authorized to change this task')
         const result = store.decideProposal({ operationId: payload.operationId, actor:'user', proposalId:payload.proposalId, expectedRevision:payload.expectedRevision,
           decision:payload.decision, note:payload.note, apply: current => {
             if (current.kind === 'create') {
@@ -545,7 +605,11 @@ export function install(rt) {
             throw new Error('Proposal target is unavailable')
           } })
         if (payload.decision === 'confirm' && proposal.taskId) {
-          void notifyBoardChange(proposal.taskId, { type:'proposal-confirm', value:{ proposalId: proposal.id, change: proposal.command?.type ?? proposal.kind } })
+          const applied = result?.applied
+          const change = applied?.change
+            ? { type:'change-request', value:{ changeTaskId: applied.id, sourceTaskId: applied.change.sourceTaskId, fields: Object.keys(applied.change.after ?? {}) } }
+            : { type:'proposal-confirm', value:{ proposalId: proposal.id, change: proposal.command?.type ?? proposal.kind } }
+          void notifyBoardChange(proposal.taskId, change)
             .catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
         }
         if (payload.decision === 'confirm') notifyDriver()

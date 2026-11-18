@@ -27,7 +27,7 @@ function fixture(t) {
     return agents.get(id)
   }
   const rt = {
-    home, teamTools: [], groupOwners:new Map(), state: { revision: 1, exchanges:[], works:{}, rooms: { group: { name:'Group', members: ['one','two'], sessions:{}, seen:{} } }, bots: { one: { name:'One' }, two: { name:'Two' } } },
+    home, teamTools: [], groupOwners:new Map(), state: { revision: 1, exchanges:[], works:{}, rooms: { group: { id:'group', name:'Group', members: ['one','two'], sessions:{}, seen:{} } }, bots: { one: { name:'One' }, two: { name:'Two' } } },
     ctx: { sessionController:{ resolveAgent:async id=>({agent:agentFor(id)}) }, sessions:{flush:async()=>{}},
       effect(fn) { const dispose = fn(); effects.push(dispose) }, connection: { fetch: { register(route) { routes.push(route); return () => {} } } } },
     onHomeDrain(fn) { drains.push(fn) }, async load() {}, readOnly() {}, requireHomeLock() {}, warn(...args) { console.log(...args) },
@@ -808,4 +808,139 @@ test('a release lifecycle plan creates a typed dependency chain assigned to the 
   const requirement = items.find(task => task.title.startsWith('Requirement'))
   const design = items.find(task => task.title.startsWith('Technical'))
   assert.ok(design.dependencies.includes(requirement.id))
+})
+
+test('only the release project manager may import a lifecycle plan', async t => {
+  const { rt } = fixture(t)
+  const selfOf = rt.selfOf
+  rt.selfOf = id => id === 'chat-pm' ? 'pm' : selfOf(id)
+  const roles = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }
+  for (const [id, bot] of Object.entries(roles)) rt.state.bots[id] = bot
+  const team = { projectManagerId:'pm', roles:{ projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'review', ops:'ops' } }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'plan-permission', team, release:{ id:'r-permission', name:'Permission', version:'1.0.0' } })
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  await assert.rejects(tool.execute({ action:'plan', release_id:release.id, requirement:'Build it', operation_id:'plan-not-pm' },
+    { agent:{ id:'chat-two' }, callId:'c-plan-denied' }), /project manager/)
+  const planned = JSON.parse(await tool.execute({ action:'plan', release_id:release.id, requirement:'Build it', operation_id:'plan-by-pm' },
+    { agent:{ id:'chat-pm' }, callId:'c-plan-pm' }))
+  assert.ok(planned.plan.tasks.length >= 9)
+})
+
+const settle = async (fn, timeout = 5000) => {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const value = await fn().catch(() => undefined)
+    if (value) return value
+    if (Date.now() > deadline) throw new Error('timed out waiting for the board')
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
+test('confirming a Bot proposal rechecks that the proposing Bot still holds its role', async t => {
+  const { rt } = fixture(t)
+  await rt.boardCall('board-command', create)
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const task = (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === 't1')
+  const proposed = JSON.parse(await tool.execute({ action:'propose', task_id:'t1', expected_revision:task.revision, operation_id:'role-check',
+    change:{ kind:'update', value:{ description:'Proposed while a member' } }, note:'Role check' }, { agent:{ id:'chat-one' }, callId:'c-role' }))
+  const proposal = (await rt.boardCall('board-proposal-list', { scope })).find(item => item.id === proposed.proposal.id)
+  assert.ok(proposal)
+  const decide = (operationId) => rt.boardCall('board-proposal-decide', { scope, operationId, proposalId:proposal.id, expectedRevision:proposal.revision, decision:'confirm' })
+  rt.state.rooms.group.members = ['two']
+  await assert.rejects(decide('role-check-removed'), /no longer authorized/)
+  rt.state.rooms.group.members = ['one', 'two']
+  rt.state.bots.one.private = true
+  await assert.rejects(decide('role-check-private'), /no longer authorized/)
+  rt.state.bots.one.private = false
+  const confirmed = await decide('role-check-confirmed')
+  assert.equal(confirmed.proposal.status, 'confirmed')
+  assert.equal((await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === 't1').description, 'Proposed while a member')
+})
+
+test('confirming a new-card proposal rechecks that the proposing Bot can still see the board', async t => {
+  const { rt } = fixture(t)
+  rt.groupOwners.set('group-one', { roomId:'group', botId:'one' })
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const proposed = JSON.parse(await tool.execute({ action:'propose', operation_id:'create-role-check',
+    change:{ kind:'create', value:{ title:'Bot card', owner:'one', reviewer:'two', acceptance:'Independent proof' } }, note:'Add this card' }, { agent:{ id:'group-one' }, callId:'c-create-role' }))
+  const proposal = (await rt.boardCall('board-proposal-list', { scope })).find(item => item.id === proposed.proposal.id)
+  assert.ok(proposal)
+  assert.equal(proposal.scope, 'room:group')
+  const decide = (operationId) => rt.boardCall('board-proposal-decide', { scope, operationId, proposalId:proposal.id, expectedRevision:proposal.revision, decision:'confirm' })
+  rt.state.rooms.group.members = ['two']
+  await assert.rejects(decide('create-role-removed'), /no longer authorized/)
+  rt.state.rooms.group.members = ['one', 'two']
+  const confirmed = await decide('create-role-confirmed')
+  assert.equal(confirmed.proposal.status, 'confirmed')
+  assert.equal((await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === proposed.proposal.taskId).title, 'Bot card')
+})
+
+test('an archived card is not offered for scheduling and cannot be scheduled', async t => {
+  const { rt } = fixture(t)
+  await rt.boardCall('board-command', create)
+  let board = await rt.boardCall('board-list', { scope })
+  const task = board.tasks.find(item => item.id === 't1')
+  assert.ok((board.capabilities.commands.t1 ?? []).some(command => command.type === 'schedule'), 'a waiting Bot card offers Schedule first')
+  const archived = await rt.boardCall('board-command', { scope, operationId:'archive-before-schedule', taskId:'t1', expectedRevision:task.revision, type:'archive' })
+  assert.ok(archived.archivedAt)
+  board = await rt.boardCall('board-list', { scope })
+  assert.equal((board.capabilities.commands.t1 ?? []).some(command => command.type === 'schedule'), false, 'the archive view does not offer Schedule')
+  await assert.rejects(rt.boardCall('board-command', { scope, operationId:'archive-schedule', taskId:'t1', expectedRevision:archived.revision, type:'schedule' }), /not schedulable/)
+})
+
+test('a release published by its last review still writes the report and tells the project manager', async t => {
+  process.env.DS_BOT_RELEASE_MONITOR_MS = '1000'
+  t.after(() => { delete process.env.DS_BOT_RELEASE_MONITOR_MS })
+  const { rt, deliveries } = fixture(t)
+  const roles = { pm:{ name:'PM', role:'Project Manager' }, product:{ name:'Product', role:'Product Manager' }, arch:{ name:'Architect', role:'Architect' }, fe:{ name:'Frontend', role:'Frontend Developer' }, be:{ name:'Backend', role:'Backend Developer' }, test:{ name:'Tester', role:'Test Engineer' }, review:{ name:'Reviewer', role:'Independent Reviewer' }, ops:{ name:'Ops', role:'Operations Engineer' } }
+  for (const [id, bot] of Object.entries(roles)) rt.state.bots[id] = bot
+  const team = { projectManagerId:'pm', roles:{ projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'review', ops:'ops' } }
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'auto-release', team, release:{ id:'r-auto', name:'Auto release', version:'2.0.0' } })
+  await rt.boardCall('board-command', create)
+  let board = await rt.boardCall('board-list', { scope })
+  const task = board.tasks.find(item => item.id === 't1')
+  await rt.boardCall('board-release-assign', { scope, operationId:'auto-assign', releaseId:release.id, expectedReleaseRevision:release.revision, taskId:'t1', expectedTaskRevision:task.revision })
+  for (const [gate, evidence] of [['docs','README'], ['artifacts','build.zip'], ['environment','health 200'], ['summary','meeting done']]) {
+    const current = (await rt.boardCall('board-list', { scope })).releases.find(item => item.id === release.id)
+    await rt.boardCall('board-release-gate', { scope, operationId:`auto-gate-${gate}`, releaseId:release.id, expectedRevision:current.revision, gate, status:'passed', evidence })
+  }
+  const ready = (await rt.boardCall('board-list', { scope })).releases.find(item => item.id === release.id)
+  await rt.boardCall('board-release-start', { scope, operationId:'auto-start-release', releaseId:release.id, expectedRevision:ready.revision })
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const dispatched = () => settle(async () => {
+    const list = await rt.boardCall('board-list', { scope })
+    const item = list.tasks.find(entry => entry.id === 't1')
+    return item && item.dispatchState === 'accepted' ? item : undefined
+  })
+  let current = await dispatched()
+  current = JSON.parse(await tool.execute({ action:'start', task_id:'t1', operation_id:'auto-start-work', expected_revision:current.revision },
+    { agent:{ id:'chat-one' }, callId:'c-auto-start' })).task
+  const working = (await rt.boardCall('board-list', { scope })).tasks.find(entry => entry.id === 't1')
+  const changeTask = await rt.boardCall('board-command', { scope, operationId:'auto-active-edit', taskId:'t1', expectedRevision:working.revision,
+    type:'card-details', value:{ description:'Edited while the card is being worked' } })
+  assert.match(changeTask.id, /^change-/, 'editing active work creates a change-request task')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const changeNotes = deliveries.filter(entry => entry.sessionId === 'chat-pm').map(entry => entry.message?.content?.[0]?.text ?? '')
+  assert.ok(changeNotes.some(text => /change-request/.test(text) && text.includes(changeTask.id)), 'the PM hears that a change request was created, not that the source card changed')
+  current = JSON.parse(await tool.execute({ action:'report', task_id:'t1', operation_id:'auto-report', expected_revision:current.revision,
+    value:{ kind:'personal', evidence:'Delivered the card', environment:'test' } }, { agent:{ id:'chat-one' }, callId:'c-auto-report' })).task
+  current = await settle(async () => {
+    const list = await rt.boardCall('board-list', { scope })
+    const item = list.tasks.find(entry => entry.id === 't1')
+    return item && item.status === 'reported' && item.dispatchState === 'accepted' ? item : undefined
+  })
+  await tool.execute({ action:'review', task_id:'t1', operation_id:'auto-review', expected_revision:current.revision,
+    value:{ evidence:'Accepted', result:'pass' } }, { agent:{ id:'chat-two' }, callId:'c-auto-review' })
+  assert.equal((await rt.boardCall('board-list', { scope })).tasks.find(entry => entry.id === 't1').status, 'done')
+  const published = await settle(async () => {
+    const list = await rt.boardCall('board-list', { scope })
+    const item = list.releases.find(entry => entry.id === release.id)
+    return item?.status === 'published' && item.report ? item : undefined
+  }, 8000)
+  assert.ok(published.report.markdownPath)
+  assert.equal(existsSync(published.report.markdownPath), true)
+  const report = await rt.boardCall('board-release-report', { scope, releaseId:release.id })
+  assert.match(report.markdown, /Auto release/)
+  const texts = deliveries.filter(entry => entry.sessionId === 'chat-pm').map(entry => entry.message?.content?.[0]?.text ?? '')
+  assert.ok(texts.some(text => /已发布/.test(text) && /summary\.md/.test(text)), 'the report notification reaches the release project manager')
 })

@@ -644,6 +644,11 @@ const releaseIsDone = release => {
     listRunningReleases() {
       return getAllReleases().filter(release => release.status === 'running')
     },
+    // Publishing can happen inside a task transaction (the last review), outside the
+    // release monitor; the service sweeps these to write the report and notify the group.
+    listPublishedWithoutReport() {
+      return getAllReleases().filter(release => release.status === 'published' && !release.report)
+    },
     setReleaseReport({ releaseId, report }) {
       requireId(releaseId, 'release id')
       if (!report || typeof report !== 'object' || Array.isArray(report) || typeof report.markdownPath !== 'string' || typeof report.htmlPath !== 'string' || !Number.isSafeInteger(report.generatedAt)) throw new Error('invalid release report')
@@ -963,7 +968,9 @@ const releaseIsDone = release => {
             if (verifyRegistration(old, value, actor) !== true) throw new Error('authority evidence unverified')
             next.authority = JSON.parse(JSON.stringify(value)); next.status = 'waiting'; break
           case 'schedule':
-            if (actor !== 'user' || old.blocked || old.stale || old.evidence || unresolved(old.id)) throw new Error('task is not schedulable')
+            // An archived card is outside the workflow: scheduling it would create an
+            // action the scheduler never lists, leaving the card ready but undeliverable.
+            if (actor !== 'user' || old.archivedAt || old.blocked || old.stale || old.evidence || unresolved(old.id)) throw new Error('task is not schedulable')
             if (old.status === 'proposed') {
               keysOnly(value, ['kind','reference'])
               if (value.kind !== 'personal' || verifyRegistration(old, value, actor) !== true) throw new Error('authority evidence unverified')
