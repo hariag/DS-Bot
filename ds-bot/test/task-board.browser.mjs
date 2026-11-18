@@ -262,7 +262,13 @@ async function runBrowserCases() {
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
 
-// A room board renders an execution item in its feature and opens the same
+  const openCardItems = async card => {
+    const details = card.locator('.bt-board-items')
+    if (!(await details.count())) return
+    if (await details.getAttribute('open') === null) await details.locator('summary').click()
+  }
+
+  // A room board renders an execution item in its feature and opens the same
   // full card for the owner or human. Reading the hierarchy needs no extra fetch.
   await page.evaluate(() => {
     globalThis.initPhase2()
@@ -279,6 +285,7 @@ async function runBrowserCases() {
     globalThis.renderFixture({kind:'room',id:'hierarchy'},'phase2',true)
   })
   const parentCard = page.locator('article[data-task-id="T1"]')
+  await openCardItems(parentCard)
   const itemLink = parentCard.locator('[data-item-id="I1"]')
   await itemLink.waitFor()
   assert.equal(await page.locator('article[data-task-id="I1"]').count(),0)
@@ -353,6 +360,7 @@ async function runBrowserCases() {
   })
   await page.locator('.bt-board-views').getByRole('button',{name:'Type',exact:true}).click()
   for (const [id,title,commandType] of [['I3','Check roles','move-item'],['legacy-proof','Original proof','move-goal-item']]) {
+    await openCardItems(page.locator('article[data-task-id="T1"]'))
     await page.locator('article[data-task-id="T1"] [data-item-id="'+id+'"]').click()
     const modal = page.getByRole('dialog',{name:title,exact:true})
     const select = modal.getByLabel('Destination card')
@@ -368,11 +376,13 @@ async function runBrowserCases() {
     assert.deepEqual(sent.value,commandType==='move-item' ? {parentTaskId:'B1'} : {itemId:id,parentTaskId:'B1'})
     await modal.locator('[data-item-id="B1"]').waitFor()
     await modal.getByRole('button',{name:'Close card'}).click()
-    await page.locator('article[data-task-id="B1"] [data-item-id="'+id+'"]').waitFor()
+    const targetCard = page.locator('article[data-task-id="B1"]')
+    await openCardItems(targetCard)
+    await targetCard.locator('[data-item-id="'+id+'"]').waitFor()
     assert.equal(await page.locator('article[data-task-id="T1"] [data-item-id="'+id+'"]').count(),0)
   }
   // The largest reconciled parent had 170 registered items. Only its item
-  // list should scroll, leaving the title and the surrounding carousel operable.
+  // list should scroll, leaving the title and the surrounding board operable.
   await page.evaluate(() => {
     globalThis.initPhase2()
     const parent = globalThis.fixture.phase2Tasks[0]
@@ -383,6 +393,7 @@ async function runBrowserCases() {
   const denseRoot = page.locator('article[data-task-id="T1"]')
   const denseList = denseRoot.locator('.bt-board-item-list')
   await denseRoot.waitFor()
+  await openCardItems(denseRoot)
   assert.equal(await denseList.locator('button').count(),170)
   assert.ok(await denseList.evaluate(el => el.scrollHeight > el.clientHeight * 5 && el.clientHeight <= 200))
   await denseList.locator('[data-item-id="bulk-170"]').click()

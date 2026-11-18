@@ -158,7 +158,7 @@ function RemoteChanges({ monitor }) {
 
 const snapshotTime = value => Number.isSafeInteger(value) && value >= 0 && value <= 8_640_000_000_000_000
   ? new Date(value).toISOString() : t('Unknown')
-const shortIdentity = value => typeof value !== 'string' ? t('Unknown') : value.length > 32 ? `${value.slice(0, 20)}…{value.slice(-8)}` : value
+const shortIdentity = value => typeof value !== 'string' ? t('Unknown') : value.length > 32 ? `${value.slice(0, 20)}…${value.slice(-8)}` : value
 const matchesRecovery = (needle, values) => !needle || values.some(value => textValue(value).toLocaleLowerCase().includes(needle))
 
 function recoveryGroups(rows, idOf, nameOf) {
@@ -281,8 +281,8 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const renderDeliveries = list => h('div', { className:'bt-recovery-deliveries' }, recoveryGroups(list, item => item.recipientId, item => item.recipientName).map(group => h('section', { key:group.id, className:'bt-recovery-group' },
     h('div', { className:'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:decideDelivery })))))
-  const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
-    h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
+  const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('details', { key: group.id, className: 'bt-recovery-group', open: group.rows.length <= 4 ? true : undefined },
+    h('summary', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(HeldRecord, { key:`${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide })))))
   return h('details', { className: 'bt-recovery-panel', onToggle:event => { if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch(value => value + 1) } },
     h('summary', { className: 'bt-recovery-summary' },
@@ -885,7 +885,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
       task.shared ? h('span', { className: 'bt-board-chip' }, t('Shared task · read only')) : null),
     h('span', { className: 'bt-board-card-foot' },
       h('span', { className: 'bt-board-card-owner' }, h(MemberAvatar, { name: owner || t('You'), size: 22, muted: !owner || owner === t('You') }), h('span', null, owner || t('Unknown'))))),
-  items?.length ? h('details', { className:'bt-board-items', open:true },
+  items?.length ? h('details', { className:'bt-board-items' },
     h('summary', null, t('Task items'), ' · ', items.filter(item => item.status === 'done' || item.legacy?.originalStatus === 'done').length, '/', items.length),
     h('div', {className:'bt-board-item-list'}, items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen })))) : null)
 }
@@ -1403,7 +1403,7 @@ function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem, onMove }) {
     && ['feature','bugfix'].includes(card.type) && card.id !== parent.id && (card.releaseId ?? null) === (parent.releaseId ?? null)) : []
   if (!parent && !children.length && !onCreateItem) return null
   const link = item => h(TaskItemLink, { key:item.id, item, actors, onOpen })
-  return h('div', { className:'bt-card-side-block' },
+  return h('div', { className:'bt-card-related bt-card-side-block' },
     parent ? h('h3', null, t('Parent card')) : null, parent ? link(parent) : null,
     candidates.length ? h('div', {className:'bt-field'},
       h('select', {value:destination,'aria-label':t('Destination card'),onChange:event => setDestination(event.target.value)},
@@ -1686,6 +1686,10 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
     else if (result !== 'cancelled') setTitleError(t('The title could not be saved.'))
   }
   const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value)
+  const relatedTasks = h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
+    onMove: !uncertain && !busy && commandOf(commands, legacy ? 'move-goal-item' : 'move-item')
+      ? (parent, parentTaskId) => onCommand(legacy ? parent : task, { type: legacy ? 'move-goal-item' : 'move-item' },
+        legacy ? { itemId: task.id, parentTaskId } : { parentTaskId }) : undefined })
   return h('div', { className: 'bt-card-modal-backdrop', onMouseDown: event => { if (event.target === event.currentTarget) onClose() } },
     h('section', { ref: modal, className: 'bt-card-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': textValue(task.title) || task.id, tabIndex: -1, onWheel: event => event.stopPropagation() },
       h('header', { className: 'bt-card-modal-header' },
@@ -1734,6 +1738,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(ChangeBlock, { task }),
           h(CardTextEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(ChecklistEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: (target, value) => detailsSave(target, value) }),
+          relatedTasks,
           h(AttachmentsEditor, { scope, task, request, canUpload, canRemove: canRemoveImage, canCover: !legacy && canDetails, disabled: uncertain || busy, onUpload, onRemove: imageId => onCommand(task, { type: removeType }, { imageId }), onCover: imageId => detailsSave(task, { coverImageId: imageId }), onOpenImage: (image, url) => {
             if (!url) return
             if (typeof image.mediaType === 'string' && image.mediaType.startsWith('image/')) setLightbox({ url, name: textValue(image.name) })
@@ -1749,10 +1754,6 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
           h(LabelsEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DependenciesBlock, { task, tasks }),
-          h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
-            onMove: !uncertain && !busy && commandOf(commands,legacy ? 'move-goal-item' : 'move-item')
-              ? (parent,parentTaskId) => onCommand(legacy ? parent : task,{type:legacy ? 'move-goal-item' : 'move-item'},
-                legacy ? {itemId:task.id,parentTaskId} : {parentTaskId}) : undefined }),
           h(FactsBlock, { task }),
           h('div', { className: 'bt-card-side-block' }, h(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
           !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle
@@ -3175,7 +3176,7 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:8px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
 .bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
 .bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
-.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
+.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group>summary{list-style:none;cursor:pointer}.bt-recovery-group>summary::-webkit-details-marker{display:none}.bt-recovery-group>summary::before{content:'▸';display:inline-block;width:12px;color:var(--bt-ink-3)}.bt-recovery-group[open]>summary::before{content:'▾'}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
 .bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:8px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
 .bt-recovery-delivery-section{display:grid;gap:8px;min-width:0;padding-top:12px;border-top:1px solid var(--bt-line)}.bt-recovery-deliveries{display:flex;flex-direction:column;gap:8px;max-height:250px;overflow:auto;min-width:0}.bt-recovery-delivery{display:grid;gap:8px;min-width:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-main)}.bt-recovery-delivery-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.bt-recovery-delivery-heading strong{min-width:0;overflow-wrap:anywhere;font-size:12px}
 .bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:8px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
@@ -3354,7 +3355,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-toast[hidden]{display:none}
 .bt-board-toast-action{margin-left:10px;padding:2px 8px;border:1px solid color-mix(in srgb,var(--bt-card) 35%,transparent);border-radius:999px;background:transparent;color:inherit;font:inherit;font-weight:600}
 .bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.32));overscroll-behavior:contain}
-.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(920px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-size:13px;line-height:18px}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(1080px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-size:13px;line-height:18px}
 .bt-create-modal{width:min(680px,100%)}
 .bt-card-modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex:none;padding:20px 24px 16px;border-bottom:1px solid var(--bt-line)}
 .bt-card-modal-heading{min-width:0;flex:1}
@@ -3368,7 +3369,7 @@ export const TASK_BOARD_CSS = `
 .bt-card-title-form input{min-width:240px;flex:1;font-size:15px;line-height:20px;font-weight:600;padding:6px 8px}
 .bt-card-banner{padding:8px 24px;background:var(--bt-hover);font-size:12px;line-height:18px;border-bottom:1px solid var(--bt-line)}
 .bt-card-banner-error{background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-card));color:var(--bt-ink)}
-.bt-card-modal-body{display:grid;grid-template-columns:minmax(0,1fr) 272px;min-height:0;overflow-y:auto}
+.bt-card-modal-body{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-height:0;overflow-y:auto}
 .bt-card-main{display:flex;flex-direction:column;gap:20px;min-width:0;padding:20px 24px 28px}
 .bt-card-side{display:flex;flex-direction:column;gap:18px;min-width:0;padding:20px;border-left:1px solid var(--bt-line);background:var(--dsw-alias-bg-module-platform,var(--bt-sidebar))}
 .bt-card-section{display:flex;flex-direction:column;gap:8px;min-width:0}
@@ -3419,6 +3420,9 @@ export const TASK_BOARD_CSS = `
 .bt-comment-compose{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea{width:100%;min-height:64px;resize:vertical}
 .bt-card-side-block{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-card-related{padding-top:12px;border-top:1px solid var(--bt-line)}
+.bt-card-related h3{margin:8px 0 2px;font-size:12px;line-height:18px;font-weight:600;color:var(--bt-ink-2)}
+.bt-card-related .bt-card-related-link{padding:5px 0}
 .bt-card-side-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .bt-card-side-head h4{margin:0;font-size:11px;line-height:16px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--bt-ink-2)}
 .bt-card-status{display:flex;align-items:center;gap:8px;font-size:13px;line-height:18px}
@@ -3512,6 +3516,9 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-panel[open]{flex:1 0 100%;border-radius:12px;background:var(--bt-card)}
 .bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
 .bt-recovery-body{padding:12px;max-height:none;overflow:visible}
+/* Recovery diagnostics scroll inside their own panel so the task lanes stay visible. */
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:min(52vh,520px);overflow:auto}
+.bt-recovery-body{max-height:min(42vh,440px);overflow:auto;overscroll-behavior:contain}
 .bt-recovery-groups,.bt-recovery-work-groups,.bt-recovery-deliveries{max-height:none;overflow:visible}
 .bt-board-error,.bt-board-pending{padding:8px 20px;background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-main));font-size:12px;line-height:18px}
 .bt-board-legacy-note{padding:7px 20px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-main));font-size:12px;line-height:18px}
@@ -3528,6 +3535,8 @@ export const TASK_BOARD_CSS = `
 .bt-board-columns{flex:1;min-height:0;height:auto;align-items:stretch;gap:12px;padding:0 0 2px;overflow-x:auto;overflow-y:hidden}
 .bt-board-columns-personal .bt-board-lane{flex:1 0 260px;max-width:420px;min-height:180px}
 .bt-board-lane{flex:0 0 clamp(220px,18vw,288px);min-height:220px;max-height:100%;padding:8px;border:.5px solid var(--bt-line);border-radius:12px;background:var(--bt-card);transition:background-color .12s,border-color .12s}
+.bt-board-lane[data-kind="workflow"]{flex:1 1 0;min-width:200px;max-width:380px}
+.bt-board-lane[data-kind="workflow"]:not(:has(.bt-board-card)){flex:0 1 200px;min-width:180px}
 .bt-board-lane-drop{border-color:color-mix(in srgb,var(--bt-accent) 46%,transparent);background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-card))}
 .bt-board-lane-head{padding:1px 4px 6px}
 .bt-board-lane-title h3{font-size:13px;line-height:18px;font-weight:600}
@@ -3558,7 +3567,7 @@ export const TASK_BOARD_CSS = `
 .bt-card-modal-header h2{font-size:17px;line-height:24px;font-weight:500}
 .bt-card-eyebrow{font-size:11px;line-height:16px;margin-bottom:2px}
 .bt-card-submeta{margin-top:4px}
-.bt-card-modal-body{grid-template-columns:minmax(0,1fr) 280px}
+.bt-card-modal-body{grid-template-columns:minmax(0,1fr) 320px}
 .bt-card-main{gap:18px;padding:18px 22px 26px}
 .bt-card-side{gap:16px;padding:18px;border-left:.5px solid var(--bt-line);background:var(--bt-sidebar)}
 .bt-card-section{gap:8px}
@@ -3618,7 +3627,7 @@ export const TASK_BOARD_CSS = `
   .bt-card-mobile-bar .bt-board-card-owner{font-size:12px;line-height:16px;min-width:0;flex:1}
   .bt-card-mobile-bar .bt-card-mini{margin-left:auto;background:var(--bt-hover)}
 }
-@media(max-width:700px){.bt-board-header{padding:12px 16px}.bt-board-capacity{display:none}.bt-board-toolbar{padding:8px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:12px 16px 16px;gap:12px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,288px);max-width:none}.bt-card-modal-header{padding:14px 16px 12px}.bt-card-main{padding:16px}.bt-card-side{padding:16px}.bt-create-form{padding:16px}}
+@media(max-width:700px){.bt-board-header{padding:12px 16px}.bt-board-capacity{display:none}.bt-board-toolbar{padding:8px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:12px 16px 16px;gap:12px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,288px);max-width:none}.bt-board-lane[data-kind="workflow"],.bt-board-lane[data-kind="workflow"]:not(:has(.bt-board-card)){flex:0 0 min(84vw,288px);min-width:0;max-width:none}.bt-card-modal-header{padding:14px 16px 12px}.bt-card-main{padding:16px}.bt-card-side{padding:16px}.bt-create-form{padding:16px}}
 @media(prefers-reduced-motion:reduce){.bt-board-backdrop,.bt-board-dialog,.bt-card-modal-backdrop,.bt-card-modal,.bt-board-filter-scrim{animation:none!important}.bt-board-lane,.bt-board-card{transition:none}}
 
 /* Phase 2: task types, lifecycle lanes, releases and confirmations. */
