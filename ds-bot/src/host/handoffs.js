@@ -439,16 +439,27 @@ export function install(rt) {
         ? `working ${place(sessionId)} ${minutes(entry.since ?? Date.now())}${forWhom(sessionId, entry.info)}${doing(entry)}`
         : 'working in another conversation')
     }
+    // Keep the full wait ledger for drill-down. Every message receipt includes this
+    // status, so group matching visible labels and bound how many it repeats.
+    const waits = new Map()
+    const countWait = label => waits.set(label, (waits.get(label) ?? 0) + 1)
     for (const { work, out } of held(busyWith(running))) {
       if (work.to !== botId) continue
       if ((work.room && !canSeeRoom(rt.roomOf(work.room))) || (work.fromRoom && !canSeeRoom(rt.roomOf(work.fromRoom)))) {
-        lines.push('waiting for work in another conversation')
+        countWait('waiting for work in another conversation')
         continue
       }
       const forName = nameOf(work.from) ? `, for ${nameOf(work.from)}` : ''
       const on = [...new Set(out.map(({ work: child }) => ((child.fromRoom && !canSeeRoom(rt.roomOf(child.fromRoom))) ? 'another conversation' : child.room ? (canSeeRoom(rt.roomOf(child.room)) ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : 'another conversation') : child.name ?? nameOf(child.to) ?? 'a teammate')))]
-      lines.push(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
+      countWait(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
     }
+    let shown = 0, remaining = 0
+    for (const [label, count] of waits) {
+      if (shown === 4) { remaining += count; continue }
+      lines.push(count > 1 ? `${label} (${count} hand-offs)` : label)
+      shown++
+    }
+    if (remaining > 0) lines.push(`${remaining} other hand-off(s)`)
     if (lines.length === 0) lines.push('idle')
     for (const [kind, card] of [['question', state.questions?.[chat]], ['view', state.views?.[chat]]]) {
       if (card !== undefined) lines.push(`a ${kind} card in its own chat has waited for the user's answer ${forHowLong(card.askedAt)}`)
