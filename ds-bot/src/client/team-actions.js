@@ -1,4 +1,5 @@
 import { countCards, heldCardKey } from './sources.js'
+import { createGroupRowsReader } from './group-reads.js'
 import { noteClientError } from './diagnostics.js'
 
 // The actions every window that draws the Bot views shares: dialogs and panels (the `ui`
@@ -259,7 +260,7 @@ goalReviewResolve: (roomId, goalId, reviewId) => after(call('goal-control', { ro
     exchangeText: (id, a, b) => call('exchange-text', { id, ...(a !== undefined && b !== undefined ? { a, b } : {}) }).catch(() => undefined),
     fileText: file => call('file-text', { file }).catch(() => undefined),
     roomProgress: roomId => call('room-progress', { roomId }).catch(() => null),
-    groupRows: (roomId, from, to, anchor) => call('group-rows', { roomId, from, ...(to === undefined ? {} : { to }), ...(anchor === undefined ? {} : { anchor }) }).catch(() => null),
+    groupRows: createGroupRowsReader(call, () => roster.getSnapshot().groupRowsBatchSize),
     earlier: (sessionId, cursor) => call('earlier', { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
     usage: () => call('usage', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
