@@ -61,6 +61,37 @@ function runtime(t, saved) {
   return { rt, home, statePath, warnings, dispose }
 }
 
+test('concurrent saves share an atomic write until its snapshot has been taken', async t => {
+  const { rt, statePath } = runtime(t)
+  await rt.load()
+  let enter, release
+  const entered = new Promise(resolve => { enter = resolve })
+  const released = new Promise(resolve => { release = resolve })
+  const snapshots = []
+  const restore = patch('writeFile', write => async (path, data, ...args) => {
+    if (path === `${statePath}.${process.pid}.tmp`) {
+      snapshots.push(JSON.parse(data).prefs.marker)
+      if (snapshots.length === 1) { enter(); await released }
+    }
+    return write(path, data, ...args)
+  })
+  try {
+    rt.state.prefs.marker = 'initial'
+    const first = rt.save({ required: true })
+    rt.state.prefs.marker = 'same snapshot'
+    const second = rt.save({ required: true })
+    await entered
+    rt.state.prefs.marker = 'during write'
+    const third = rt.save({ required: true })
+    rt.state.prefs.marker = 'latest'
+    const fourth = rt.save({ required: true })
+    release()
+    await Promise.all([first, second, third, fourth])
+    assert.deepEqual(snapshots, ['same snapshot', 'latest'])
+    assert.equal(JSON.parse(fs.readFileSync(statePath)).prefs.marker, 'latest')
+  } finally { release(); restore() }
+})
+
 test('a failed state write rejects and leaves the saved file unchanged', async (t) => {
   const { rt, statePath } = runtime(t)
   await rt.load()
