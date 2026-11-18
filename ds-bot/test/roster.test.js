@@ -343,6 +343,25 @@ test('an opt-in web roster reuses bot instructions across team saves and refresh
   assert.equal(indexRoster(changed, first).byId[id].instructions, '')
 })
 
+test('web roster cursor survives private saves but invalidates on a visible change', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  const { id } = (await call('create-bot', { name: 'Writer' })).value
+  await until(() => Object.keys(rt.state.bots).every(botId => rt.chatTail(rt.chatOf(botId))))
+  const first = (await call('state', { instructionsKey: '', rosterKey: '' })).value
+  const query = { since: first.revision, live: first.liveKey, models: first.modelsKey, instructionsKey: first.instructionsKey, rosterKey: first.rosterKey }
+  await rt.save()
+  const quiet = (await call('state', query)).value
+  assert.equal(quiet.unchanged, true)
+  assert.ok(quiet.revision > query.since)
+  assert.equal(quiet.bots, undefined)
+  rt.state.bots[id].name = 'Editor'
+  await rt.save()
+  const edit = (await call('state', { ...query, since: quiet.revision })).value
+  assert.notEqual(edit.rosterKey, first.rosterKey)
+  assert.equal(edit.bots.find(bot => bot.id === id).name, 'Editor')
+})
+
 test('an unchanged state answer skips the live fields a window already holds', async (t) => {
   const { call, stop, ctx } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)

@@ -192,12 +192,14 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
   // Pulls can overlap (the poll and a navigation); an older answer never wins.
   let pulls = 0
   let applied = 0
+  let since = -1
   const pull = async () => {
     const order = ++pulls
     const known = roster.getSnapshot()
-    const value = await call('state', { since: known.revision, models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language() })
+    const value = await call('state', { since, rosterKey: known.rosterKey ?? '', models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language() })
     if (order < applied) return
     applied = order
+    since = value.revision
     const prevLiveKey = liveKey
     if (value.liveKey !== undefined) liveKey = value.liveKey
     if (value.activity !== undefined) {
