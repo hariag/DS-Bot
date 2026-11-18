@@ -49,7 +49,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const releases = store.listReleases?.(`${scope.kind}:${scope.id}`) ?? []
     const commands = Object.fromEntries(board.tasks.map(task => {
       if (!writable || task.shared) return [task.id, []]
-      if (task.legacy) return [task.id, !task.legacy.ambiguous && !task.legacy.pending && Number.isSafeInteger(task.revision)
+      if (task.legacy) return [task.id, !task.legacy.retired && !task.legacy.ambiguous && !task.legacy.pending && Number.isSafeInteger(task.revision)
         ? [...(task.legacy.current?[{type:'goal-task-edit',label:'Edit goal task'}]:[]),
           ...(scope.kind === 'room' && task.parentTaskId ? [{type:'move-goal-item',label:'Move to card'}] : []),
           ...(task.legacy.useOverlay?[{type:'goal-history-title',label:'Correct card title'}]:[]),

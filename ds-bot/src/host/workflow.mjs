@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from 'node:util'
 
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const refused = () => new Error('Task is unavailable or the action is not authorized')
-const actions = new Set(['start', 'progress', 'report', 'review', 'block', 'unblock'])
+const actions = new Set(['reply', 'start', 'progress', 'report', 'review', 'block', 'unblock'])
 const proposalUpdateFields = ['description', 'type', 'stage', 'labels', 'dueDate', 'dueComplete', 'checklist']
 const taskTypes = new Set(['requirement','design','feature','development','test','deployment','operations','bugfix','ui','ux','other'])
 
@@ -88,6 +88,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   const canMutate = (task, caller, action) => {
     if (!direct(task, caller) || (!actions.has(action) && action !== 'propose')) return false
     if (action === 'propose') return task.stale !== true && !task.archivedAt && (caller.actor === task.owner || caller.actor === task.reviewer)
+    if (action === 'reply') {
+      const room = roomFor(task)
+      return task.status === 'draft' && !task.authority && !task.stale && !task.archivedAt
+        && !!room && member(room, caller.actor) && rt.goalDispatchBlocked?.(room, caller.actor) === false
+        && (caller.actor === task.owner || caller.actor === task.reviewer)
+    }
     if ((!task.authority && !isManualBoardTask(task)) || task.stale === true || task.archivedAt) return false
     if (task.scope.startsWith('room:')) {
       const room = roomFor(task)
@@ -320,11 +326,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     if (!actions.has(args.action) || !id(args.operationId) || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1 || !canMutate(task, caller, args.action)) throw refused()
     const context = { exec, caller, roomId:args.roomId, taskId: task.id, revision: args.expectedRevision, action: args.action }
     const command = { operationId: args.operationId, taskId: task.id, expectedRevision: args.expectedRevision,
-      actor: caller.actor, type: args.action, ...(args.action === 'start' ? {sessionId:caller.sid} : {}), ...(args.value === undefined ? {} : { value: args.value }) }
+      actor: caller.actor, type: args.action, ...(args.action === 'start' ? {sessionId:caller.sid} : {}),
+      ...(args.action === 'reply' ? {value:{text:args.note}} : args.value === undefined ? {} : {value:args.value}) }
     const result = scope.run(context, () => store.command(command))
     // The transaction creates the durable next action. A lost notification
     // is recovered by scanning that journal; never replay a claimed input.
-    if (args.action !== 'progress' && !isManualBoardTask(result)) {
+    if (!['progress','reply'].includes(args.action) && !isManualBoardTask(result)) {
       try { await wake() } catch (error) { onError(error) }
     }
     return { task: projectDirect(result, caller) }
