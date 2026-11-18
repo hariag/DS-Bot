@@ -440,13 +440,16 @@ export function install(rt) {
       due = false
       if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}).`)
       const snapshot = latest
-      await mkdir(home, { recursive: true })
       const check = () => {
         rt.requireHomeLock()
         let actual
         try { actual = readFileSync(file, 'utf8') } catch (error) { if (error?.code !== 'ENOENT') throw error }
         if (actual !== expected) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
       }
+      // An already committed snapshot still needs its ownership and disk proof:
+      // a retry must observe an outside edit even when its desired bytes match.
+      if (snapshot === expected) { check(); return }
+      await mkdir(home, { recursive: true })
       await writeNotesAtomically(file, snapshot, check)
       expected = snapshot
     })
