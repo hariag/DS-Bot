@@ -1,9 +1,9 @@
 // An infinite animation keeps the window drawing a frame every vsync for as long as it
 // runs, whether anyone sees it or not. A single small loop costs a good part of a core
 // between the renderer and the GPU, and a working Bot's mark scrolled out of the sidebar
-// costs as much as one in view (#1462). So a loop runs only while it can be seen moving:
-// the page is shown, someone touched the window within REST_MS, and its element is in
-// view. Finite animations (a dialog rising, a mark settling) always play out.
+// costs as much as one in view (#1462). Pause hidden and offscreen loops. While the
+// user watches without interacting, only the normal-mode work indicators keep moving.
+// Finite animations (a dialog rising, a mark settling) always play out.
 
 /** How long the window may go untouched before its loops hold still. */
 export const REST_MS = 30_000
@@ -12,6 +12,7 @@ const INPUTS = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']
 const CHANGES = ['animationstart', 'animationcancel', 'animationend']
 
 const isLoop = animation => animation?.effect?.getTiming?.().iterations === Infinity
+const isWorkIndicator = ({ animationName }) => animationName === 'bt-activity-mark' || animationName === 'bt-activity-pulse'
 // A part of an SVG drawing (a mark's eyes inside its mask) may have no box of its own; the
 // drawing it belongs to is what scrolls in and out of view.
 const boxOf = (target) => {
@@ -39,7 +40,7 @@ export function installMotionRest({ doc = document, win = window, restMs = REST_
   let queued = false
   let stopped = false
 
-  const runs = animation => !resting && inView.get(loops.get(animation)) !== false
+  const runs = animation => !doc.hidden && inView.get(loops.get(animation)) !== false && (!resting || isWorkIndicator(animation))
   const apply = () => {
     for (const animation of loops.keys()) {
       if (runs(animation)) {
