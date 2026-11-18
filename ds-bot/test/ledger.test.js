@@ -207,3 +207,61 @@ test('an unreadable book is not replaced by an importer', async (t) => {
   await assert.rejects(rt.ledger.written('pair-a-b'))
   assert.equal(existsSync(join(home, 'ledger', bookFile('pair-a-b'))), true)
 })
+
+test('range and next-anchor indexes preserve file order, equal seqs and decreasing anchor starts', async t => {
+  const { rt } = host(t)
+  const book = 'group-index'
+  const records = [
+    { event: 'anchor', id: 'a', from: 7 }, { seq: 7, text: 'first' },
+    { event: 'anchor', id: 'b', from: 7 }, { seq: 2 }, { seq: 7, text: 'later' },
+    { event: 'anchor', id: 'a', from: 3 }, { seq: 3 }, { seq: 9 },
+  ]
+  for (const record of records) rt.ledger.append(book, record)
+  await rt.ledger.flush(book)
+  assert.deepEqual(rt.ledger.range(book, 3, 7), [records[1], records[4], records[6]])
+  assert.deepEqual(rt.ledger.after(book, 6), [records[1], records[4], records[7]])
+  assert.deepEqual(rt.ledger.range(book, 7, 3), [])
+  assert.deepEqual(rt.ledger.range(book, undefined), [])
+  assert.equal(rt.ledger.record(book, 7), records[4])
+  assert.equal(rt.ledger.lastSeq(book), 9)
+  assert.equal(rt.ledger.nextAnchor(book, 7, 'a'), 7)
+  assert.equal(rt.ledger.nextAnchor(book, 7, 'b'), 3)
+  assert.equal(rt.ledger.nextAnchor(book, 2, 'unknown'), 3)
+  assert.equal(rt.ledger.nextAnchor(book, 7), undefined)
+})
+
+test('cursor lookup never imports and failed appends invalidate closed ranges and both indexes', async t => {
+  const { rt, home } = host(t)
+  const book = 'group-failure'
+  let imports = 0
+  rt.ledger.importer('group-', () => { imports++; return [] })
+  const initial = rt.ledger.cursor(book)
+  assert.equal(imports, 0)
+  rt.ledger.open(book)
+  writeFileSync(join(home, 'ledger'), 'not a directory')
+  rt.ledger.append(book, { event: 'anchor', id: 'a', from: 1 })
+  rt.ledger.append(book, { event: 'anchor', id: 'b', from: 2 })
+  rt.ledger.append(book, { seq: 2 })
+  assert.equal(rt.ledger.nextAnchor(book, 1, 'a'), 2)
+  const pending = rt.ledger.cursor(book)
+  assert.notDeepEqual(pending, initial)
+  await assert.rejects(rt.ledger.flush(book))
+  assert.notEqual(rt.ledger.cursor(book).epoch, pending.epoch)
+  assert.deepEqual(rt.ledger.range(book, 1), [])
+  assert.equal(rt.ledger.nextAnchor(book, 1, 'a'), undefined)
+})
+
+test('a read-only window follows same-sized ledger replacements', async t => {
+  const { rt, home, file } = host(t, { readOnly: () => 'reader' })
+  const book = 'group-external'
+  mkdirSync(join(home, 'ledger'))
+  writeFileSync(file(book), '{"seq":1}\n')
+  const initial = rt.ledger.cursor(book)
+  assert.equal(rt.ledger.lastSeq(book), 1)
+  const temp = file(book) + '.replacement'
+  writeFileSync(temp, '{"seq":2}\n')
+  const { rename } = await import('node:fs/promises')
+  await rename(temp, file(book))
+  assert.notEqual(rt.ledger.cursor(book).epoch, initial.epoch)
+  assert.equal(rt.ledger.lastSeq(book), 2)
+})
