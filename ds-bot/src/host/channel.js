@@ -307,6 +307,22 @@ export function install(rt) {
     }
     return { ...out, instructionsKey }
   }
+  // The storage revision includes private bookkeeping. Compare only the public
+  // roster, leaving volatile fields and already-versioned instructions to their own cursors.
+  let rosterJson
+  let rosterSeq = 0
+  const publicRosterKey = (out, liveFields) => {
+    const fields = { ...out, bots: out.bots.map(({ instructions, ...bot }) => bot) }
+    delete fields.revision
+    delete fields.liveKey
+    for (const field of Object.keys(liveFields)) delete fields[field]
+    const json = JSON.stringify(fields)
+    if (json !== rosterJson) {
+      rosterJson = json
+      rosterSeq++
+    }
+    return `${liveRun}:roster:${rosterSeq}`
+  }
   let liveSeq = 0
   let liveCache = null
   const liveHistory = new Map()
@@ -443,15 +459,23 @@ const READS = new Set(['board-list', 'board-release-list', 'board-release-report
           await rt.catalog()
           await rt.loadSecrets()
           const answer = liveAnswer()
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())
-            && (body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope))) {
+          const reusable = body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope)
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey()) && reusable) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }
           // A phone asks for photos by reference and fetches each once (`avatar`).
           const out = { ...view(), liveKey: answer.key, ...answer.value }
           if (body.avatars === 'ref') return ok(rt.slimAvatars(out))
-          return ok(typeof body.instructionsKey === 'string' ? withInstructionsKey(out, body.instructionsKey) : out)
+          if (typeof body.instructionsKey !== 'string') return ok(out)
+          const web = withInstructionsKey(out, body.instructionsKey)
+          if (typeof body.rosterKey !== 'string') return ok(web)
+          const rosterKey = publicRosterKey(web, answer.value)
+          if (reusable && body.rosterKey === rosterKey && body.instructionsKey === web.instructionsKey) {
+            return ok({ revision: state.revision, unchanged: true, liveKey: answer.key,
+              ...(body.live === answer.key ? {} : answer.value) })
+          }
+          return ok({ ...web, rosterKey })
         }
         case 'models':
           await rt.catalog({ fresh: true })
