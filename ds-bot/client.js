@@ -14556,6 +14556,9 @@ var ZH = {
   "Release name": "发布名称",
   "Create release": "创建发布",
   "New release": "新建发布",
+  "Destination card": "目标卡片",
+  "Choose a feature or bugfix": "选择功能或缺陷卡",
+  "Move to card": "移入卡片",
   "Unassigned": "未分配",
   "No releases yet": "暂无发布",
   "Untitled release": "未命名发布",
@@ -40256,7 +40259,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
       "details",
       { className: "bt-board-items", open: true },
       (0, import_react54.createElement)("summary", null, t("Task items"), " · ", items.filter((item) => item.status === "done" || item.legacy?.originalStatus === "done").length, "/", items.length),
-      items.map((item) => (0, import_react54.createElement)(TaskItemLink, { key: item.id, item, actors, onOpen }))
+      (0, import_react54.createElement)("div", { className: "bt-board-item-list" }, items.map((item) => (0, import_react54.createElement)(TaskItemLink, { key: item.id, item, actors, onOpen })))
     ) : null
   );
 }
@@ -40447,7 +40450,7 @@ function CardTextEditor({ task, field = "description", editable, disabled, onSav
   if (!editable && !current2) return null;
   return (0, import_react54.createElement)(
     CardSection,
-    { title: label, action: editable && !editing ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", onClick: start }, (0, import_react54.createElement)(PencilIcon), t(current2 ? "Edit" : "Add")) : null, className: "bt-card-" + field },
+    { title: label, action: editable && !editing ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", onClick: start }, (0, import_react54.createElement)(PencilIcon), t(current2 ? "Edit" : "Add")) : null, className: stage ? "bt-card-work-stage" : "bt-card-description" },
     editing ? (0, import_react54.createElement)(
       "div",
       { className: "bt-card-editor" },
@@ -41097,9 +41100,12 @@ function TaskItemLink({ item, actors, onOpen }) {
     ) : null
   );
 }
-function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem }) {
+function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem, onMove }) {
+  const [destination, setDestination] = (0, import_react54.useState)("");
   const parent = task.parentTaskId && tasks.find((item) => item.id === task.parentTaskId);
   const children = tasks.filter((item) => item.parentTaskId === task.id);
+  const editable = (card) => card && ["draft", "proposed"].includes(card.status) && !card.archivedAt && !card.stale && !card.blocked;
+  const candidates = onMove && editable(parent) ? tasks.filter((card) => editable(card) && !card.parentTaskId && !card.shared && !card.legacy && ["feature", "bugfix"].includes(card.type) && card.id !== parent.id && (card.releaseId ?? null) === (parent.releaseId ?? null)) : [];
   if (!parent && !children.length && !onCreateItem) return null;
   const link = (item) => (0, import_react54.createElement)(TaskItemLink, { key: item.id, item, actors, onOpen });
   return (0, import_react54.createElement)(
@@ -41107,6 +41113,22 @@ function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem }) {
     { className: "bt-card-side-block" },
     parent ? (0, import_react54.createElement)("h3", null, t("Parent card")) : null,
     parent ? link(parent) : null,
+    candidates.length ? (0, import_react54.createElement)(
+      "div",
+      { className: "bt-field" },
+      (0, import_react54.createElement)(
+        "select",
+        { value: destination, "aria-label": t("Destination card"), onChange: (event) => setDestination(event.target.value) },
+        (0, import_react54.createElement)("option", { value: "" }, t("Choose a feature or bugfix")),
+        candidates.map((card) => (0, import_react54.createElement)("option", { key: card.id, value: card.id }, card.title))
+      ),
+      (0, import_react54.createElement)("button", {
+        type: "button",
+        className: "bt-btn bt-btn-ghost",
+        disabled: !candidates.some((card) => card.id === destination),
+        onClick: () => onMove(parent, destination)
+      }, t("Move to card"))
+    ) : null,
     children.length || onCreateItem ? (0, import_react54.createElement)("h3", null, t("Task items")) : null,
     children.map(link),
     onCreateItem ? (0, import_react54.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: onCreateItem }, t("Create task item")) : null
@@ -41694,7 +41716,18 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           (0, import_react54.createElement)(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
           (0, import_react54.createElement)(LabelsEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           (0, import_react54.createElement)(DependenciesBlock, { task, tasks }),
-          (0, import_react54.createElement)(RelatedTasks, { task, tasks, actors, onOpen: onOpenRelated, onCreateItem }),
+          (0, import_react54.createElement)(RelatedTasks, {
+            task,
+            tasks,
+            actors,
+            onOpen: onOpenRelated,
+            onCreateItem,
+            onMove: !uncertain && !busy && commandOf(commands, legacy ? "move-goal-item" : "move-item") ? (parent, parentTaskId) => onCommand(
+              legacy ? parent : task,
+              { type: legacy ? "move-goal-item" : "move-item" },
+              legacy ? { itemId: task.id, parentTaskId } : { parentTaskId }
+            ) : void 0
+          }),
           (0, import_react54.createElement)(FactsBlock, { task }),
           (0, import_react54.createElement)("div", { className: "bt-card-side-block" }, (0, import_react54.createElement)(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
           !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle ? (0, import_react54.createElement)("p", { className: "bt-card-note" }, t("Read only")) : null,
@@ -44412,7 +44445,7 @@ var TASK_BOARD_CSS = `
 .bt-board-card-count svg{width:12px;height:12px}
 .bt-board-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;min-width:0}
 .bt-major-version{border:1px solid var(--bt-line);border-radius:10px;padding:12px;margin-bottom:12px}.bt-major-version h4{margin:10px 0 4px}.bt-minor-releases{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:4px 12px}.bt-minor-releases button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 0;background:none;border:0;border-top:1px solid var(--bt-line);color:var(--bt-ink);text-align:start;cursor:pointer}.bt-minor-releases small{margin-inline-start:6px;color:var(--bt-ink-2)}
-.bt-board-items{margin:0 9px 9px;border-top:1px solid var(--bt-line);padding:5px 0;font-size:11px}.bt-board-items>summary{cursor:pointer;font-weight:600}.bt-board-item-progress{grid-column:1/-1;color:var(--bt-ink-2);font-size:11px}
+.bt-board-items{margin:0 9px 9px;border-top:1px solid var(--bt-line);padding:5px 0;font-size:11px}.bt-board-items>summary{cursor:pointer;font-weight:600}.bt-board-item-list{max-height:clamp(72px,24vh,200px);overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable}.bt-board-item-progress{grid-column:1/-1;color:var(--bt-ink-2);font-size:11px}
 .bt-board-card-owner{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--bt-ink-2);font-size:11px;line-height:16px}
 .bt-board-card-owner>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-board-open-hint{color:var(--bt-ink-3);font-size:11px;line-height:16px;white-space:nowrap}
