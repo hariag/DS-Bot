@@ -706,7 +706,7 @@ test('a greeting that fails on a key is held again and goes out once the key is 
   await settle()
   const main = await botIn(call, chief)
   assert.equal(main.waiting, true)
-  assert.deepEqual(Object.keys(main.blocked).sort(), ['at', 'code', 'provider'])
+  assert.deepEqual(Object.keys(main.blocked).sort(), ['at', 'code', 'provider', 'sessionId', 'turn'])
   assert.equal(main.blocked.provider, 'deepseek')
   // Setting the same model again (or only a thinking level) fixes nothing, so the
   // greeting stays held.
@@ -733,7 +733,7 @@ test('a Bot is blocked by the facts of a failure only the user can fix, until it
   runTurn(ctx, chief, 1, typed('hi'), failed('QUOTA', { status: 402, requestId: 'req-1' }))
   await settle()
   const { blocked } = await botIn(call, chief)
-  assert.deepEqual({ ...blocked, at: typeof blocked.at }, { code: 'QUOTA', status: 402, requestId: 'req-1', provider: 'deepseek', at: 'number' })
+  assert.deepEqual({ ...blocked, at: typeof blocked.at }, { code: 'QUOTA', sessionId: chief, turn: 1, status: 402, requestId: 'req-1', provider: 'deepseek', at: 'number' })
   // A failure a retry can fix leaves it as it is.
   runTurn(ctx, chief, 2, typed('again'), failed('SERVER', { status: 503 }))
   await settle()

@@ -7,6 +7,7 @@ import * as store from './src/host/store.js'
 import * as boardService from './src/host/board-service.js'
 import * as legacyReview from './src/host/legacy-review-service.js'
 import * as models from './src/host/models.js'
+import * as fanttecQuotaRetry from './src/host/fanttec-quota-retry.js'
 import * as providers from './src/host/providers.js'
 import * as permissions from './src/host/permissions.js'
 import * as turns from './src/host/turns.js'
@@ -30,6 +31,7 @@ import * as agentCommands from './src/host/agent-commands.js'
 import * as tasks from './src/host/tasks.js'
 import * as approvals from './src/host/approvals.js'
 import * as resume from './src/host/resume.js'
+import { repairQuotaCards } from './src/host/repair-quota-cards.js'
 import * as memory from './src/host/memory.js'
 import * as parts from './src/host/parts.js'
 import * as changes from './src/host/changes.js'
@@ -68,7 +70,7 @@ export { name, inject } from './src/host/entry.js'
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, changes, images, avatarLibrary, secrets, connectors, remoteChangeWatch, repositorySync, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, remote, officeSkills, goalSkills, localAgents]
+const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, fanttecQuotaRetry, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, changes, images, avatarLibrary, secrets, connectors, remoteChangeWatch, repositorySync, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, remote, officeSkills, goalSkills, localAgents]
 
 export function apply(ctx, config = {}) {
   createRuntime(ctx, config)
@@ -101,5 +103,6 @@ export function createRuntime(ctx, config = {}) {
   // maps. Adopt them now, so Stop, the group view and a late child settle still see
   // the work. A fresh start has nothing to adopt.
   void rt.adoptLiveWork?.().catch(error => rt.warn?.('ds-bot: adopting the work still running failed: %s', error))
+  void repairQuotaCards(rt).catch(() => rt.warn?.('ds-bot: checking earlier quota failures could not finish'))
   return rt
 }
