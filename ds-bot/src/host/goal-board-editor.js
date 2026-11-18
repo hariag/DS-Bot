@@ -3,7 +3,7 @@ import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { legacyGoalCards } from './legacy-goal.js'
-import { taskGoal, touchGoal } from './goals.js'
+import { taskGoal, taskNoteUnchanged, touchGoal } from './goals.js'
 import { syncDirectory } from './directory-sync.mjs'
 
 const invalid = message => Object.assign(new Error(message), { code:'bot/invalid' })
@@ -217,9 +217,10 @@ export function createGoalBoardEditor(rt) {
     if(kind==='edit') {
       const value=payload.value
       if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['title','note','status'].includes(k)))throw invalid('Invalid goal task edit')
-      const title=own(value,'title')?value.title:task.task,note=own(value,'note')?value.note:undefined,status=own(value,'status')?value.status:undefined
+      const title=own(value,'title')?value.title:task.task,rawNote=own(value,'note')?value.note:undefined,status=own(value,'status')?value.status:undefined
       if(typeof title!=='string'||!title.trim()||title.trim().length>500)throw invalid('Task description must be 1–500 characters')
-      if(note!==undefined&&(typeof note!=='string'||note.length>300))throw invalid('Note must be at most 300 characters')
+      if(rawNote!==undefined&&(typeof rawNote!=='string'||rawNote.length>300))throw invalid('Note must be at most 300 characters')
+      const note=rawNote?.trim()
       const changedTitle=title.trim()!==task.task
       if(changedTitle&&['reported','done'].includes(task.status))throw invalid('This task was reported or completed. Reconcile or reopen it before changing its description.')
       if(status!==undefined&&status!==task.status) {
@@ -233,7 +234,7 @@ export function createGoalBoardEditor(rt) {
       }
       next.task=title.trim()
       const taskChanged=status!==undefined&&status!==task.status
-      const noteChanged=note!==undefined&&(note!==(task.note??'')||taskChanged||changedTitle)
+      const noteChanged=note!==undefined&&(taskChanged||changedTitle||(note===''?Boolean(task.note):!taskNoteUnchanged(task,note,now)))
       if(!changedTitle&&!taskChanged&&!noteChanged)throw invalid('No changes to save')
       if(taskChanged||noteChanged) {
         if(goal.status!=='active')throw invalid('A paused goal cannot change task progress or notes')
