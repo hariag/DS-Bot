@@ -11,6 +11,7 @@ import { absoluteLinks } from './links.js'
 import { splitRef, textOf } from './text.js'
 import { threadCurrentOfPart } from './threads.js'
 import { viaOf } from '../shared/im-platforms.js'
+import { isForbiddenQuota } from '../shared/provider-quota.js'
 import { reminderText } from './schedules.js'
 import { usageChunk } from './usage.js'
 
@@ -38,6 +39,10 @@ const requestIdOf = (message) => {
 export function turnFailure(error) {
   const rawCode = typeof error?.code === 'string' && error.code !== '' ? error.code : 'UNKNOWN'
   const raw = typeof error?.message === 'string' ? error.message.trim() : ''
+  if (isForbiddenQuota(error)) {
+    return { code: 'QUOTA', status: 403, message: '',
+      ...(typeof error.requestId === 'string' && error.requestId !== '' ? { requestId: error.requestId } : {}) }
+  }
   const contentPolicy = rawCode === 'AUTH' && error?.status === 403 && CONTENT_POLICY.test(raw)
   const code = contentPolicy ? 'CONTENT_POLICY' : rawCode
   const message = code === 'AUTH' || raw === '' ? '' : cleanText(raw).slice(0, 500)
@@ -748,12 +753,13 @@ export function install(rt) {
   // (roster.js). Never the message: a provider may echo part of the key. The provider
   // is the failing route's, which is the Session's last request, else the model the
   // Bot runs on.
-  const blockBot = (id, session, failure) => {
+  const blockBot = (id, session, turn, failure) => {
     const bot = rt.botOf(rt.selfOf(id))
     if (bot === undefined || !BLOCKING_CODES.has(failure.code)) return false
     const provider = session?.requestHeader?.()?.config?.provider ?? splitRef(bot.appliedModel)?.provider
     bot.blocked = {
       code: failure.code,
+      ...(Number.isSafeInteger(turn) ? { sessionId: id, turn } : {}),
       ...(failure.status === undefined ? {} : { status: failure.status }),
       ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
       ...(provider ? { provider } : {}),
@@ -1458,7 +1464,7 @@ export function install(rt) {
         if (cutOff) noteCutOffTurn(id, { session, wroteNothing, ...(premature ? { outputTokens } : {}) })
         if (failure !== undefined) {
           if (watched) rememberFailure(id, turn, failure, session)
-          if (blockBot(id, session, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
+          if (blockBot(id, session, event.data.turn ?? turn, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
         } else if (reason?.kind === 'completed') {
           forgetFailure(id)
           unblockBot(rt.selfOf(id))
