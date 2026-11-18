@@ -270,6 +270,8 @@ const ZH = {
   'Clear filters': '清除筛选',
   'Earlier group goal task · read only': '历史群目标任务 · 仅可查看',
   'Group goal cards edit the original task. Earlier stages remain read only.': '群目标卡片直接编辑原任务；历史阶段仅可查看。',
+  'Goal cards': '目标卡片',
+  'Group goal cards are not workflow tasks and do not count as acceptance.': '群目标卡片不是工作流任务，也不计入验收。',
   'A previous review action is still unconfirmed. Check again before saving.': '之前的复核操作尚未确认，请再次核查后再保存。',
   'Review storage or verification is unavailable; saving is disabled.': '复核记录存储或核验不可用，暂时无法保存。',
   'Group status changed. Refresh and review the current attempt.': '群状态已变化，请刷新并核对当前巡检记录。',
