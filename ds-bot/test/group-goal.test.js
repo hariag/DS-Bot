@@ -1566,7 +1566,7 @@ test('rework sends the current stage back; revise keeps passed stages and a matc
     ],
   }, 'ga')
   const revised = goal(host)
-  assert.deepEqual(revised.stages.map(stage => [stage.id, stage.status]), [['s1', 'passed'], ['s3', 'active'], ['s4', 'pending']])
+  assert.deepEqual(revised.stages.map(stage => [stage.id, stage.status]), [['s1', 'passed'], ['s2', 'active'], ['s3', 'pending']])
   assert.equal(revised.current, 1)
   // The same member's same task in the replaced current stage kept its status.
   assert.equal(revised.stages[1].tasks[0].status, 'working')
@@ -1658,7 +1658,7 @@ test('group goal tool shows status-change time even when the task has no note', 
   assert.match(writer, /status changed \d{4}-\d\d-\d\dT/)
 })
 
-test('events keep the newest 50 and pastGoals keep 5', async (t) => {
+test('events keep the newest 50 while goal replies remain in older pastGoals', async (t) => {
   const host = await start(t)
   await startGoal(host)
   for (let i = 0; i < 60; i++) {
@@ -1672,7 +1672,8 @@ test('events keep the newest 50 and pastGoals keep 5', async (t) => {
     await startGoal(host, { title: `g${i}` })
   }
   const room = saved(host).rooms.r1
-  assert.equal(room.pastGoals.length, 5)
+  assert.equal(room.pastGoals.length, 6)
+  assert.equal(room.pastGoals[0].stages[0].tasks[0].goalBoardReplies.length,60)
   assert.equal(room.pastGoals.at(-1).status, 'stopped')
 })
 

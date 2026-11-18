@@ -177,7 +177,7 @@ export function createGoalBoardEditor(rt) {
       next.details={...(next.details??{}),...after}
     } else if(kind==='comment') {
       if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>key!=='text')||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw invalid('Invalid card comment')
-      if(card.comments.length>=100)throw invalid('Card comment limit reached')
+      if(card.comments.filter(comment=>!comment.workflowAction).length>=100)throw invalid('Card comment limit reached')
       const comment={id:payload.operationId,author:actor,text:value.text.trim(),at:now}
       next.comments=[...(next.comments??[]),comment];before=null;after=comment
     } else if(kind==='attach') {

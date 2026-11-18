@@ -50,12 +50,13 @@ const inspectionFingerprint = goal => {
 }
 
 const openReviewTasks = goal => (goal?.stages?.[goal.current]?.tasks ?? []).filter(task => task.status !== 'done')
-const reviewMissing = goal => {
+const reviewMissing = (goal, checkCurrent = () => false) => {
   const stage = goal?.stages?.[goal.current]
   const review = goal?.ownerReview
   return openReviewTasks(goal).filter(task => review?.stageId !== stage?.id
     || review?.checks?.[task.id]?.fingerprint !== reviewFingerprint(task)
-    || review?.checks?.[task.id]?.unresolved === true)
+    || review?.checks?.[task.id]?.unresolved === true
+    || !checkCurrent(task, review.checks[task.id]))
 }
 // Short immediate checks are still bounded by GOAL_IDLE_NUDGES. Once that
 // budget is exhausted, review an unfinished automatic idle at most twice an hour.
@@ -124,8 +125,16 @@ function setTaskNote(task, note, now) {
   task.noteAt = now
 }
 
+const TASK_NOTE_FIELDS = ['note', 'noteStatus', 'noteStatusVersion', 'noteAt', 'noteHistory']
+
 function clearTaskNotes(task) {
-  for (const field of ['note', 'noteStatus', 'noteStatusVersion', 'noteAt', 'noteHistory']) delete task[field]
+  for (const field of TASK_NOTE_FIELDS) delete task[field]
+}
+
+export function taskNoteUnchanged(task, note, now) {
+  if (note === undefined) return true
+  if (note === '') return TASK_NOTE_FIELDS.every(field => !Object.hasOwn(task, field))
+  return task.note === note && goalNoteContext(task, now).kind === 'current'
 }
 
 // An automatic failure/stop explanation replaces the current note. Keep a
@@ -188,6 +197,7 @@ const goalHasBoardDetails = goal => (goal?.stages ?? []).some(stage => (stage?.t
   const data=task?.boardDetails
   return !!(data?.description || data?.dueDate || data?.labels?.length || data?.checklist?.length || task?.boardComments?.length)
 }))
+const goalHasTaskAudit = goal => !!goal?.retiredGoalTasks?.length || (goal?.stages ?? []).some(stage => (stage?.tasks ?? []).some(task => task?.goalBoardReplies?.length))
 const goalHasCardRevisions = goal => goal?.boardCards !== undefined && (!goal.boardCards || typeof goal.boardCards!=='object'
   || Array.isArray(goal.boardCards) || Object.keys(goal.boardCards).length>0)
 
@@ -196,7 +206,7 @@ export function archiveGoal(room) {
   if (goal === undefined) return
   const all=[...(room.pastGoals ?? []),goal]
   // Keep the sole copy of board data when ordinary goal history rolls over.
-  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goal=>goalHasBoardImages(goal)||goalHasBoardDetails(goal)||goalHasCardRevisions(goal)),...all.slice(-PAST_MAX)]
+  room.pastGoals = [...all.slice(0,-PAST_MAX).filter(goal=>goalHasBoardImages(goal)||goalHasBoardDetails(goal)||goalHasTaskAudit(goal)||goalHasCardRevisions(goal)||goal.reviewResolutions!==undefined),...all.slice(-PAST_MAX)]
   delete room.goal
 }
 
@@ -284,14 +294,17 @@ function cleanFields(input, fields) {
 // A cleaned stage becomes a stored one: fresh ids, tasks pending unless the same
 // member had the same task in the stage this one replaces (a revise keeps it).
 function buildStage(goal, stage, position, previous, status) {
+  const retain = previous && previous.title === stage.title && previous.acceptance === stage.acceptance
   return {
-    id: `s${++goal.counter.stage}`,
+    id: retain ? previous.id : `s${++goal.counter.stage}`,
     title: stage.title,
     acceptance: stage.acceptance,
     status,
     tasks: stage.tasks.map((task) => {
-      const kept = previous?.tasks.find(old => old.botId === task.botId && old.task === task.task)
-      return { id: `t${++goal.counter.task}`, ...task, status: kept?.status ?? 'pending' }
+      const matches = previous?.tasks.filter(old => old.botId === task.botId && old.task === task.task) ?? []
+      const duplicates = stage.tasks.filter(item => item.botId === task.botId && item.task === task.task)
+      const kept = matches.length === 1 && duplicates.length === 1 ? matches[0] : undefined
+      return retain && kept ? { ...kept, ...task, id:kept.id } : { id: `t${++goal.counter.task}`, ...task, status:'pending' }
     }),
     reworks: 0,
   }
@@ -404,6 +417,13 @@ export function reviseGoal(room, input, by, memberOf, memberNames, now = Date.no
       const position = keep.length + index
       return buildStage(goal, stage, position, position === goal.current ? previous : undefined, position === goal.current ? 'active' : 'pending')
     })
+    const removed = goal.stages.slice(Math.max(0,goal.current)).flatMap(oldStage => {
+      const survivor = replacement.find(stage => stage.id === oldStage.id)
+      const retainedIds = new Set((survivor?.tasks ?? []).map(task => task.id))
+      return oldStage.tasks.filter(task => !retainedIds.has(task.id))
+        .map(task => ({stage:{id:oldStage.id,title:oldStage.title,acceptance:oldStage.acceptance},task,at:now}))
+    })
+    if (removed.length) goal.retiredGoalTasks = [...(goal.retiredGoalTasks ?? []), ...removed]
     goal.stages = [...keep, ...replacement]
   }
   touchGoal(goal, { kind: 'revise', by, text: headOf(reason, EVENT_TEXT_MAX) }, now)
@@ -428,11 +448,16 @@ export function taskGoal(room, input, by, memberOf, memberNames, now = Date.now(
   if (status === undefined && note === undefined) return { error: required('status or note', 'task') }
   if (note !== undefined && note.length > NOTE_MAX) return { error: tooLong('note', NOTE_MAX) }
   const before = task.status
+  if ((status === undefined || status === before) && taskNoteUnchanged(task, note, now)) return { goal, unchanged: true }
   if (status !== undefined) setTaskStatus(task, status, now, 'manual')
   if (note !== undefined) {
     if (note === '') clearTaskNotes(task)
     else setTaskNote(task, note, now)
   }
+  task.goalBoardReplies = [...(Array.isArray(task.goalBoardReplies) ? task.goalBoardReplies : []), {
+    id:`goal-update:${goal.revision + 1}:${stage.id}:${task.id}`, author:by, at:now, workflowAction:'goal-update',
+    text:`[group_goal ${task.status}] ${note === undefined ? 'Status updated' : note || 'Note cleared'}`,
+  }]
   touchGoal(goal, { kind: 'task', by, stage: stage.id, taskId: task.id, botId: task.botId, fromStatus: before, toStatus: task.status, text: headOf(note ?? status, EVENT_TEXT_MAX) }, now, { keepNudges: true })
   return { goal }
 }
@@ -584,15 +609,17 @@ const DUTY_DRAFT = [
 ].join('\n')
 const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. ${OWNER_REVIEW} Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. If no authorized step can progress while waiting, record the unblock condition and reply [PASS].`
 const INSPECTION_DUTY = 'This is a read-only goal inspection because earlier work or a stop is unresolved. Your first action must be group_goal show for the current group; read the result and identify the current stage, unfinished owners and evidence gaps. If needed, use read_group_chat for the current group only to inspect existing handoffs and evidence. Do not call review-check, assign, dispatch, send reminders, change task state, or take external actions. The shown goal is not proof that an owner accepted or completed work. If show fails, report the failure; otherwise give a short factual inspection or reply [PASS] if nothing changed. Full owner checks and follow-up remain pending.'
+const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group. Earlier deliveries have unresolved outcomes for specific owners; do not repeat or dispatch their work. For other owners, inspect status, evidence, dependencies and capacity and record review-check for the exact task and current fingerprint. You may read evidence for independently reviewable reported work. You may assign one uniquely owned pending task only when it is ready, with message_bot when="queue", the task ID and full task text, and request_id "goal-review:<reviewId>:<taskId>:assign". For a reported task, first record an unresolved review-check with a concrete evidence gap; then you may ask its unblocked owner only for the exact missing item in review_next, with request_id "goal-review:<reviewId>:<taskId>:evidence" and when="now". These are separate requests and must use separate IDs. Never message blocked or unknown owners, repeat working or completed work, or use a new request ID to retry an uncertain request. Do not change task status or pass a stage from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
 
-export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined) => exec => {
+export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined, scoped = () => false) => exec => {
   const info = live?.get(exec.agent?.id)?.info
   if (info?.reviewInspect !== true || !info.reviewId) return undefined
   if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
   const room = roomOf(info.roomId)
   if (exec.name === 'read_group_chat' && room && typeof exec.arguments?.group === 'string'
     && exec.arguments.group.trim() === room.name && pickRoom(exec.arguments.group, exec.agent?.id)?.room?.id === room.id) return undefined
+  if (room && scoped(room, info, exec) === true) return undefined
   return 'This goal review is inspection only because a stop or earlier group delivery is unresolved. Report evidence and do not assign or change work.'
 }
 
@@ -601,6 +628,78 @@ export function install(rt) {
   let reviewDisposed = false
   const reviewing = new Set()
   const reviewNotified = new Set()
+  // An unresolved admission blocks dispatch. The host can still inspect the
+  // current ledger without opening an agent, running tools, or changing the goal.
+  const blockedReviewReads = new WeakMap()
+  // Remember only native record coordinates. Resolve a failed inspection from
+  // two bounded original turns, without scanning either session's full log.
+  const reviewInputs = new WeakMap()
+  const reviewTurnEnds = new Map()
+  ctx.on('session/event', (session, event) => {
+    if (event.type === 'turn/end') {
+      const input = reviewTurnEnds.get(session.id)
+      if (input) {
+        reviewTurnEnds.delete(session.id)
+        input.end = event.seq
+        input.turn = event.data?.turn
+      }
+      return
+    }
+    if (event.type !== 'user/message') return
+    const source = event.data?.source
+    if (source?.kind !== SOURCE_KIND || source.form !== 'relay' || source.reviewInspect !== true) return
+    const room = rt.roomOf(source.roomId), attempt = room?.goal?.reviewAttempt
+    if (attempt?.id !== source.reviewId || attempt?.inspectOnly !== true || !Number.isSafeInteger(event.seq)) return
+    const root = source.role === 'goal' && source.goalId === room.goal.id && session.id === attempt.rootSessionId
+    const admin = source.role === 'room' && session.id === attempt.adminSessionId
+    if (!root && !admin) return
+    const inputs = reviewInputs.get(attempt) ?? {}
+    reviewInputs.set(attempt, inputs)
+    const side = root ? 'root' : 'admin'
+    if (inputs[side]) { inputs.ambiguous = true; return }
+    inputs[side] = { sessionId: session.id, seq: event.seq }
+    reviewTurnEnds.set(session.id, inputs[side])
+  })
+  const passiveEvents = new Set(['step/start', 'step/end', 'request/header', 'assistant/attempt'])
+  async function verifyInspectionTurn(room, attempt, side, input) {
+    const root = side === 'root'
+    const { seq, end, sessionId, turn } = input
+    if (!Number.isSafeInteger(turn) || !Number.isSafeInteger(end) || end <= seq || end - seq > 48) return false
+    const page = await ctx.sessionController.events({ address: { kind: 'session', sessionId }, throughSeq: end,
+      maxMessages: 8, turnWindow: { minMessages: 1, minTurns: 1 } }, AbortSignal.timeout(5000))
+    if (page?.cursor !== end || !Array.isArray(page.records) || page.records.length > 64) return false
+    const events = page.records.map(row => row?.type === 'event' && row.event)
+    const start = events[0], terminal = events.at(-1)
+    if (start?.type !== 'turn/start' || start.data?.turn !== turn || terminal?.type !== 'turn/end'
+      || terminal.seq !== end || terminal.data?.turn !== turn || terminal.data.reason?.kind !== (root ? 'completed' : 'error')) return false
+    let received = false, relayId, relayEnded = false
+    for (const [index, event] of events.entries()) {
+      if (!event || event.seq !== start.seq + index || (event.data?.turn !== undefined && event.data.turn !== turn)) return false
+      if (index === 0 || index === events.length - 1 || passiveEvents.has(event.type)) continue
+      if (event.type === 'agent/inbox/spliced') {
+        // Consuming this one input is expected. Insertion, batching, and an
+        // unknown splice might carry independent work into the observed turn.
+        if (!Array.isArray(event.data?.inserted) || event.data.inserted.length || event.data.removedCount !== 1) return false
+        continue
+      }
+      if (event.type === 'user/message') {
+        const source = event.data?.source
+        if (source?.kind === 'time-context' && source.form === 'snapshot') continue
+        if (received || event.seq !== seq || source?.kind !== SOURCE_KIND || source.form !== 'relay' || source.reviewInspect !== true
+          || source.roomId !== room.id || source.reviewId !== attempt.id || source.role !== (root ? 'goal' : 'room')
+          || (root && source.goalId !== room.goal.id)) return false
+        received = true
+      } else if (root && received && event.type === 'assistant/message') {
+        continue
+      } else if (root && received && event.type === 'tool/call' && relayId === undefined && event.data?.name === 'group_relay' && typeof event.data.callId === 'string') {
+        relayId = event.data.callId
+      } else if (root && relayId !== undefined && !relayEnded && event.type === 'tool/result'
+        && event.data?.message?.role === 'tool' && event.data.message.toolCallId === relayId && event.data.message.isError === false) {
+        relayEnded = true
+      } else return false
+    }
+    return received && (!root || relayEnded)
+  }
   const stopsPending = new Map()
   const goalStopBegin = roomId => stopsPending.set(roomId, (stopsPending.get(roomId) ?? 0) + 1)
   const goalStopEnd = roomId => {
@@ -621,9 +720,94 @@ export function install(rt) {
   // Old recovery notes can also include private or other-room messages. Only
   // a delivery addressed to this room can block this room's review. A legacy
   // same-room note without a review id remains ambiguous and must be inspected.
-  const hasUnreadRoomDeliveries = room => [rt.sessionOfRoom(room), ...Object.values(room.sessions ?? {})]
-    .some(sessionId => sessionId && (rt.unreadOf?.(sessionId) ?? []).some(args => args.role === 'room' && args.roomId === room.id))
+  const hasUnreadRoomDeliveries = room => {
+    const notes = rt.unreadRoomOf?.(room.id)
+    return !Array.isArray(notes) || notes.length > 0
+  }
   const inspectionRequired = room => inspectionOnlyIdle(room.goal) || hasUnreadRoomDeliveries(room)
+
+  // Old delivery notes do not reliably identify a task, but their recipient
+  // can bound the uncertainty to that owner. Never infer an owner from text.
+  const recoveryOwners = room => {
+    const blocked=new Set();let unknown=false,has=false
+    const notes=rt.unreadRoomOf?.(room.id)
+    if(!Array.isArray(notes))return {has:true,unknown:true,blocked}
+    for(const args of notes) {
+        has=true
+        const bot=typeof args.toId==='string' ? rt.botOf(args.toId) : undefined
+        if(args.roomId!==room.id || !bot || !room.members.includes(bot.id))unknown=true
+        else blocked.add(bot.id)
+    }
+    return {has,unknown,blocked}
+  }
+  const scopedReviewTask = (room, id, scope = recoveryOwners(room)) => {
+    if(!room || inspectionOnlyIdle(room.goal) || stopsPending.has(room.id) || room.goal?.status!=='active')return undefined
+    const stage=room.goal.stages?.[room.goal.current],tasks=stage?.tasks ?? []
+    const matching=tasks.filter(item=>item.id===id && item.status!=='done'),task=matching[0]
+    if(!scope.has || scope.unknown || matching.length!==1 || !task || tasks.filter(item=>item.botId===task.botId).length!==1
+      || !room.members.includes(task.botId) || scope.blocked.has(task.botId))return undefined
+    return task
+  }
+  const scopedReviewMessage = (room, info, exec) => {
+    const args=exec.arguments
+    if(exec.name!=='message_bot' || !args || typeof args!=='object' || Array.isArray(args)
+      || args.reply_to==='user' || typeof args.to!=='string' || typeof args.message!=='string')return false
+    const scope=recoveryOwners(room)
+    if(!scope.has || scope.unknown)return false
+    const target=rt.findBot(args.to)
+    if(!target || !room.members.includes(target.id) || scope.blocked.has(target.id))return false
+    const stage=room.goal?.stages?.[room.goal.current],tasks=stage?.tasks ?? []
+    const owned=tasks.filter(task=>task.botId===target.id && task.status!=='done')
+    if(owned.length!==1)return false
+    const task=owned[0],message=args.message.trim()
+    if(typeof task.id!=='string' || task.id.length>64 || !message.includes(task.id))return false
+    if(task.status==='pending')return args.when==='queue' && args.request_id===`goal-review:${info.reviewId}:${task.id}:assign` && message.includes(task.task)
+    if(task.status!=='reported' || args.when!==undefined && args.when!=='now')return false
+    const check=room.goal.ownerReview?.stageId===stage.id ? room.goal.ownerReview.checks?.[task.id] : undefined
+    const queueVersion=rt.reviewQueueVersion?.(room.id,target.id)
+    return args.request_id===`goal-review:${info.reviewId}:${task.id}:evidence`
+      && check?.owner===target.id && check.fingerprint===reviewFingerprint(task) && check.unresolved===true
+      && check.scopedQueueVersion!==undefined && check.scopedQueueVersion===queueVersion
+      && typeof check.review_next==='string' && check.review_next.trim()!=='' && message.includes(check.review_next.trim())
+  }
+  const scopedReviewAction = (room, info, exec) => {
+    if(info?.reviewInspect!==true || !goalReviewAllowed(room,info.reviewId))return false
+    if(exec.name==='group_goal' && exec.arguments?.action==='review-check')return scopedReviewTask(room,exec.arguments.review_task)!==undefined
+    if(exec.name==='message_bot')return scopedReviewMessage(room,info,exec)
+    if(['read','glob','grep'].includes(exec.name)) {
+      const stage=room.goal?.stages?.[room.goal.current]
+      return (stage?.tasks ?? []).some(task=>task.status==='reported' && task.botId!==room.admin && scopedReviewTask(room,task.id)!==undefined)
+    }
+    return false
+  }
+  // Every consumer treats a scoped assertion as unresolved if its original
+  // queue generation is unavailable, changed, or its owner is now blocked.
+  const missingFor = room => {
+    const scope = recoveryOwners(room)
+    return reviewMissing(room.goal, (task, check) => {
+      if(scope.unknown || scope.blocked.has(task.botId)) return false
+      const current = rt.reviewQueueVersion?.(room.id, task.botId)
+      if(current === undefined) return false
+      // Existing records predate queue versions. Their historical contents are
+      // retained, but cannot count while their owner or provenance is unresolved.
+      return check.scopedQueueVersion === undefined || current === check.scopedQueueVersion
+    })
+  }
+  // UI/API callers must see the effective result, not an earlier assertion
+  // whose queue generation is no longer current.
+  rt.goalView = room => {
+    const current = room?.goal
+    const observed = blockedReviewReads.get(current?.reviewAttempt)
+    const goal = observed ? { ...current, blockedReviewObservation: observed } : current
+    if (!goal?.ownerReview?.checks) return goal
+    const missing = new Set(missingFor(room).map(task => task.id))
+    const stage = goal.stages?.[goal.current]
+    const checks = Object.fromEntries(Object.entries(goal.ownerReview.checks).map(([id, check]) => [id,
+      check && (missing.has(id) || (check.scopedQueueVersion !== undefined && (goal.ownerReview.stageId !== stage?.id
+        || !stage?.tasks?.some(task => task.id === id && task.status !== 'done'))))
+        ? { ...check, unresolved: true } : check]))
+    return { ...goal, ownerReview: { ...goal.ownerReview, checks } }
+  }
 
   const memberOf = room => (ref) => {
     const bot = rt.findBot(ref)
@@ -633,7 +817,7 @@ export function install(rt) {
   const nameOf = id => rt.botOf(id)?.name ?? 'a member'
 
   // The admin's ledger: the whole goal, for the prompt block and the tool's answer.
-  function ledgerLines(goal) {
+  function ledgerLines(room, goal) {
     const lines = [`Goal: ${goal.title}`, `Objective: ${goal.objective}`, `Done when: ${goal.acceptance}`]
     if (goal.constraints.length > 0) lines.push('Rules:', ...goal.constraints.map(rule => `- ${rule}`))
     lines.push('Stages:')
@@ -648,8 +832,11 @@ export function install(rt) {
     })
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
     if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
-    if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
-    if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(`Periodic owner review still needs: ${reviewMissing(goal).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
+    if (goal.reviewAttempt?.terminalFailure) lines.push(`Periodic review ${goal.reviewAttempt.id} failed before administrator tools. Future reviews wait for the room's pending work to settle.`)
+    else if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
+    const observed = blockedReviewReads.get(goal.reviewAttempt)
+    if (observed) lines.push(`Read-only host observation at ${new Date(observed.at).toISOString()} (revision ${observed.revision}): ${observed.open} unfinished task(s); current owner checks missing for ${observed.missing.join(', ') || 'none'}. The original review remains unresolved.`)
+    if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(`Periodic owner review still needs: ${missingFor(room).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
     return lines
   }
 
@@ -685,7 +872,8 @@ export function install(rt) {
         ? ['<group_goal status="drafting">', `The user wants this group to reach a goal: ${goal.brief ?? ''}`, DUTY_DRAFT, '</group_goal>'].join('\n')
         : ['<group_goal status="drafting">', `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`, '</group_goal>'].join('\n')
     } else if (isAdmin) {
-      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(goal), inspectOnly ? INSPECTION_DUTY : dutyOf(goal), '</group_goal>'].join('\n')
+      const scoped=inspectOnly && (goal.stages?.[goal.current]?.tasks ?? []).some(task=>scopedReviewTask(room,task.id)!==undefined)
+      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal), inspectOnly ? (scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY) : dutyOf(goal), '</group_goal>'].join('\n')
     } else {
       const view = memberLines(room, goal, member)
       block = [`<group_goal status="${goal.status}" stage="${view.stage}">`, ...view.lines, '</group_goal>'].join('\n')
@@ -709,7 +897,7 @@ export function install(rt) {
     }
     // A Main Bot may audit a group it belongs to as the admin's backup, but
     // only when it explicitly asks to show the goal; its routine prompt stays scoped.
-    if (rt.isAdminOf(room, member.id) || (showBackup && rt.isMain(member.id) && room.members.includes(member.id))) return ledgerLines(goal).join('\n')
+    if (rt.isAdminOf(room, member.id) || (showBackup && rt.isMain(member.id) && room.members.includes(member.id))) return ledgerLines(room, goal).join('\n')
     return memberLines(room, goal, member).lines.join('\n')
   }
 
@@ -759,17 +947,20 @@ export function install(rt) {
   const confirmedReviewResolutions = new WeakMap()
   const durableReviewResolutions = async (room,goal) => {
     const entries = goal.reviewResolutions
-    if (entries === undefined) return
-    if (!Array.isArray(entries)) throw new Error('Review decision history is unavailable')
+    const failure = goal.reviewAttempt?.terminalFailure
+    if (entries === undefined && failure === undefined) return
+    if (entries !== undefined && !Array.isArray(entries)) throw new Error('Review decision history is unavailable')
     rt.requireHomeLock()
     const lease = rt.homeLockVersion(), confirmed = confirmedReviewResolutions.get(goal)
-    if (confirmed?.entries === entries && confirmed.lease === lease) return
-    const file = await open(rt.statePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    if (confirmed?.lease === lease && confirmed.entries === entries && confirmed.failure === failure) return
+    const file = await open(rt.statePath, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await file.stat()
       if (!before.isFile()) throw new Error('Review decision journal is unavailable')
       const saved = JSON.parse(await file.readFile('utf8'))?.rooms?.[room.id]?.goal
-      if (saved?.id !== goal.id || JSON.stringify(saved.reviewResolutions) !== JSON.stringify(entries)) throw new Error('Review decision was not saved')
+      if (saved?.id !== goal.id || JSON.stringify(saved.reviewResolutions) !== JSON.stringify(entries)
+        || JSON.stringify(saved.reviewAttempt?.terminalFailure) !== JSON.stringify(failure)
+        || (failure && saved.reviewAttempt?.id !== goal.reviewAttempt?.id)) throw new Error('Review decision was not saved')
       await file.sync()
       await syncDirectory(dirname(rt.statePath))
       const afterFile = await file.stat(), after = await lstat(rt.statePath)
@@ -777,58 +968,119 @@ export function install(rt) {
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
         || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterFile.size || before.mtimeMs !== afterFile.mtimeMs
         || rt.homeLockVersion() !== lease || rt.roomOf(room.id) !== room || room.goal !== goal
-        || goal.reviewResolutions !== entries) throw new Error('Review decision changed during confirmation')
-      confirmedReviewResolutions.set(goal,{entries,lease})
+        || goal.reviewResolutions !== entries || goal.reviewAttempt?.terminalFailure !== failure) throw new Error('Review decision changed during confirmation')
+      confirmedReviewResolutions.set(goal,{entries,lease,failure})
     } finally { await file.close() }
   }
-  async function goalControl(roomId, body = {}) {
+  async function goalControl(roomId, body = {}, provenFailure) {
     const room = rt.roomOf(roomId)
     if (room === undefined) return { error: 'Unknown group chat' }
     const goal = room.goal
     if (goal === undefined || goal.id !== String(body.goalId ?? '')) return { error: 'The goal has changed. Look again.', code: 'bot/stale' }
     const action = String(body.action ?? '')
-    if (action === 'review-resolve') {
+    if (action === 'review-resolve' || action === 'review-record-failure') {
+      const recordOnly = action === 'review-record-failure'
       const attempt = goal.reviewAttempt
       const allowFuture = body.decision === 'allow-future'
-      const evidence = allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
+      const originalFailureEvidence = 'The original root turn only relayed this inspection. The administrator failed before any tool call. Owner checks remain unverified.'
+      const evidence = recordOnly || provenFailure ? originalFailureEvidence : allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
       if (body.confirmed !== true || (!allowFuture && (evidence.length < 8 || evidence.length > TEXT_MAX))) return { error: 'Confirm the decision before continuing.', code: 'bot/invalid' }
       const resolutions = goal.reviewResolutions ?? []
       if (!Array.isArray(resolutions) || resolutions.length >= 10000) return { error:'Review decision history is unavailable or full.', code:'bot/refused' }
       const resolutionKey = JSON.stringify([room.id,goal.id,body.reviewId])
       if (pendingReviewResolutions.has(resolutionKey)) return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' }
-      if (resolutions.some(item => item?.id === body.reviewId)) {
+      const settled = resolutions.find(item => item?.id === body.reviewId)
+      if (settled) {
+        if (recordOnly && !['root', 'admin'].every(side => {
+          const saved = settled.attempt?.terminalFailure?.[side] ?? settled[side], supplied = body[side]
+          return saved && supplied && ['sessionId', 'seq', 'end', 'turn'].every(key => supplied[key] === saved[key])
+        })) return { error: 'The recorded native coordinates differ.', code: 'bot/stale' }
         if (attempt?.id === body.reviewId) return { error:'Review identity was reused; inspect it before continuing.', code:'bot/stale' }
         try { await durableReviewResolutions(room,goal); return {} } catch { return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' } }
       }
       if (!reviewEligible(goal) || attempt === undefined || attempt.id !== body.reviewId
         || !['uncertain', 'admitting', 'cancelled-uncertain'].includes(attempt.state)
         || (attempt.state === 'admitting' && (!Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS))) return { error: 'The review is not eligible for recovery, or the goal was paused or stopped.', code: 'bot/stale' }
-      if (room.admin !== attempt.adminId || !room.members.includes(attempt.adminId)
-        || rt.sessionOfRoom(room) !== attempt.rootSessionId || room.sessions?.[attempt.adminId] !== attempt.adminSessionId) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
-      const root = await rt.resolveAgent(attempt.rootSessionId)
-      const adminAgent = attempt.adminSessionId === undefined ? undefined : await rt.resolveAgent(attempt.adminSessionId)
+      const currentAdminSession = room.sessions?.[attempt.adminId]
+      // A verified inspection may have finished in an earlier part belonging
+      // to this same admin in this same room. Never infer ownership by name.
+      const sessionsMatch = () => room.admin === attempt.adminId && room.members.includes(attempt.adminId)
+        && rt.sessionOfRoom(room) === attempt.rootSessionId && room.sessions?.[attempt.adminId] === currentAdminSession
+        && (currentAdminSession === attempt.adminSessionId || (!allowFuture && attempt.inspectOnly === true && (attempt.state === 'uncertain' || attempt.terminalFailure)
+          && typeof currentAdminSession === 'string' && typeof attempt.adminSessionId === 'string'
+          && room.segments?.[attempt.adminId]?.some(part => part.sessionId === attempt.adminSessionId)))
+      if (!sessionsMatch()) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
+      if (recordOnly) {
+        if (allowFuture || attempt.inspectOnly !== true || attempt.state !== 'uncertain' || attempt.saveOutcomeUnknown === true
+          || stopsPending.has(room.id) || reviewInputs.get(attempt)?.ambiguous) return { error: 'Only an active, uncertain inspection can record its original failure.', code: 'bot/stale' }
+        const inputs = {}
+        for (const [side, sessionId] of [['root', attempt.rootSessionId], ['admin', attempt.adminSessionId]]) {
+          const input = body[side]
+          if (!input || typeof sessionId !== 'string' || input.sessionId !== sessionId || ![input.seq,input.end,input.turn].every(Number.isSafeInteger)
+            || input.seq < 0 || input.turn < 0 || input.end <= input.seq || input.end - input.seq > 48) {
+            return { error: 'Original inspection session and turn coordinates are required.', code: 'bot/invalid' }
+          }
+          inputs[side] = { sessionId, seq: input.seq, end: input.end, turn: input.turn }
+        }
+        const recorded = attempt.terminalFailure
+        if (recorded) {
+          if (!['root','admin'].every(side => JSON.stringify(recorded[side]) === JSON.stringify(inputs[side]))) return { error: 'The recorded native coordinates differ.', code: 'bot/stale' }
+          await durableReviewResolutions(room,goal)
+          return {}
+        }
+        const verified = (await Promise.all(['root', 'admin'].map(side => verifyInspectionTurn(room, attempt, side, inputs[side])))).every(Boolean)
+        if (provenFailure && reviewInputs.get(attempt) === provenFailure) provenFailure.proven = verified
+        if (!verified || reviewInputs.get(attempt)?.ambiguous || rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt
+          || !sessionsMatch() || !reviewEligible(goal) || stopsPending.has(room.id) || attempt.state !== 'uncertain'
+          || attempt.saveOutcomeUnknown === true || attempt.terminalFailure || (provenFailure && reviewInputs.get(attempt) !== provenFailure)
+          || pendingReviewResolutions.has(resolutionKey)) {
+          return { error: 'The original inspection failure could not be verified.', code: 'bot/stale' }
+        }
+        rt.requireHomeLock()
+        const now = Date.now(), wasAutomatic = automaticIdle(goal)
+        // Keep the original admission fence intact. Only the ordinary quiet-room
+        // resolver can retire it, after existing deliveries have settled.
+        attempt.terminalFailure = { ...inputs, at: now }
+        goal.revision += 1
+        if (wasAutomatic) goal.idleRevision = goal.revision
+        goal.updatedAt = now
+        goal.events = [...(goal.events ?? []), { kind: 'review-failure-recorded', by: provenFailure ? 'host' : 'user', at: now, reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
+        await rt.save({ required: true })
+        await durableReviewResolutions(room,goal)
+        return {}
+      }
+      if (allowFuture && attempt.terminalFailure) return { error: 'The original inspection already has a verified outcome.', code: 'bot/stale' }
+      const previousFailure = attempt.terminalFailure
+      const roomBusy = () => [...rt.roomProgress.values()].some(round => round.roomId === room.id)
+        || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
+        || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0
+      const busy = { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
+      if (roomBusy()) return busy
+      const ids = [...new Set([attempt.rootSessionId, attempt.adminSessionId, currentAdminSession].filter(id => id !== undefined))]
+      const agents = await Promise.all(ids.map(id => rt.resolveAgent(id)))
       const quietAgent = agent => Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
         && agent.inbox.nextStep.length === 0 && agent.inbox.nextTurn.length === 0
         && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
         && rt.waitsForApproval?.(agent.session.id) !== true
       if (rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt || !reviewEligible(goal)
-        || room.admin !== attempt.adminId || !room.members.includes(attempt.adminId)
-        || rt.sessionOfRoom(room) !== attempt.rootSessionId || room.sessions?.[attempt.adminId] !== attempt.adminSessionId
-        || !quietAgent(root) || (adminAgent !== undefined && !quietAgent(adminAgent)) || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
-        || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
-        || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
+        || stopsPending.has(room.id) || attempt.terminalFailure !== previousFailure || (provenFailure && attempt.terminalFailure !== provenFailure
+          && (reviewInputs.get(attempt) !== provenFailure || provenFailure.proven !== true || provenFailure.ambiguous))
+        || !sessionsMatch() || !agents.every((agent, i) => agent?.session?.id === ids[i] && quietAgent(agent)) || roomBusy()) return busy
       rt.requireHomeLock()
       const wasAutomatic = automaticIdle(goal)
       const now = Date.now()
       pendingReviewResolutions.add(resolutionKey)
       pendingReviewRooms.add(room.id)
-      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:allowFuture?'allow-future':'verified', by:'user', at:now }
+      const by = provenFailure ? 'host' : 'user'
+      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:provenFailure?'failed-before-tools':allowFuture?'allow-future':'verified', by, at:now,
+        ...(provenFailure ? { root: { ...provenFailure.root }, admin: { ...provenFailure.admin } } : {}) }
       goal.reviewResolutions = [...resolutions, resolution]
       delete goal.reviewAttempt
       goal.revision += 1
       goal.updatedAt = now
       if (wasAutomatic) { goal.idleRevision = goal.revision; goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS }
-      goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by: 'user', reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
+      if (provenFailure) goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+      goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by, reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
       await rt.save({ required: true })
       await durableReviewResolutions(room,goal)
       pendingReviewResolutions.delete(resolutionKey)
@@ -898,7 +1150,7 @@ export function install(rt) {
   const reviewEligible = goal => goal?.status === 'active' && (goal.idle !== true || automaticIdle(goal) || inspectionOnlyIdle(goal))
   const goalReviewAllowed = (room, id) => reviewEligible(room?.goal)
     && !stopsPending.has(room.id)
-    && room.goal.reviewAttempt?.saveOutcomeUnknown !== true
+    && !room.goal.reviewAttempt?.terminalFailure && room.goal.reviewAttempt?.saveOutcomeUnknown !== true
     && room.goal.reviewAttempt?.id === id && ['admitting', 'uncertain'].includes(room.goal.reviewAttempt.state)
     && (!inspectionOnlyIdle(room.goal) || room.goal.reviewAttempt.inspectOnly === true)
     && room.goal.reviewAttempt.adminId === room.admin && room.members.includes(room.admin)
@@ -913,12 +1165,12 @@ export function install(rt) {
       if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
       return 'The goal review was stopped or its identity changed; no further action is allowed.'
     }
-    return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)))(exec)
+    return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)), scopedReviewAction)(exec)
   })
 
   async function goalReviewBind(room, id, sessionId) {
     const attempt = room?.goal?.reviewAttempt
-    if (!reviewEligible(room?.goal) || attempt?.id !== id || !['admitting', 'uncertain'].includes(attempt.state)
+    if (!reviewEligible(room?.goal) || attempt?.id !== id || attempt.terminalFailure || !['admitting', 'uncertain'].includes(attempt.state)
       || attempt.adminId !== room.admin || !room.members.includes(room.admin)
       || attempt.rootSessionId !== rt.sessionOfRoom(room) || room.sessions?.[room.admin] !== sessionId) return false
     if (attempt.adminSessionId !== undefined) return attempt.adminSessionId === sessionId
@@ -927,8 +1179,9 @@ export function install(rt) {
     return goalReviewAllowed(room, id)
   }
 
-  const finishReview = (goal, reason, now = Date.now()) => {
-    const remaining = reviewMissing(goal)
+  const finishReview = (room, reason, now = Date.now()) => {
+    const goal = room.goal
+    const remaining = missingFor(room)
     const inspectOnly = goal.reviewAttempt?.inspectOnly === true
     const checkedBefore = goal.reviewAttempt?.checkedBefore ?? 0
     const checkedNow = openReviewTasks(goal).length - remaining.length
@@ -977,7 +1230,7 @@ export function install(rt) {
       await rt.save({ required: true })
       return
     }
-    finishReview(room.goal, 'admin-pass')
+    finishReview(room, 'admin-pass')
     await rt.save({ required: true })
   }
 
@@ -994,7 +1247,7 @@ export function install(rt) {
   // let the ordinary round-end driver or the next timer make a fresh check.
   async function goalReviewNotOpened(room, id) {
     const goal = room?.goal
-    if (goal?.reviewAttempt?.id !== id) return
+    if (goal?.reviewAttempt?.id !== id || goal.reviewAttempt.terminalFailure) return
     const autoIdle = automaticIdle(goal)
     delete goal.reviewAttempt
     goal.revision += 1
@@ -1015,11 +1268,40 @@ export function install(rt) {
     for (const room of Object.values(rt.state.rooms ?? {})) {
       if (pendingReviewRooms.has(room.id)) continue
       const goal = room.goal
-      if (goal?.reviewResolutions !== undefined) { try { await durableReviewResolutions(room,goal) } catch { continue } }
+      if (goal?.reviewResolutions !== undefined || goal?.reviewAttempt?.terminalFailure) { try { await durableReviewResolutions(room,goal) } catch { continue } }
       const attempt = goal?.reviewAttempt
-      if (attempt && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
+      if (attempt && !attempt.terminalFailure && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
         reviewNotified.add(attempt.id)
         rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${attempt.id} for ${room.name} is still unresolved; inspect its original work before recovery.` })
+      }
+      if (attempt?.inspectOnly === true && attempt.state === 'uncertain' && reviewEligible(goal)
+        && !stopsPending.has(room.id) && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS) {
+        const previous = blockedReviewReads.get(attempt)
+        if (!previous || now - previous.at >= GOAL_REVIEW_INTERVAL_MS) {
+          blockedReviewReads.set(attempt, { at: now, reviewId: attempt.id, revision: goal.revision,
+            open: openReviewTasks(goal).length, missing: missingFor(room).map(task => task.id) })
+        }
+      }
+      const recorded = attempt?.terminalFailure
+      const inputs = recorded ?? reviewInputs.get(attempt)
+      if (attempt?.state === 'uncertain' && attempt.inspectOnly === true && reviewEligible(goal) && !stopsPending.has(room.id)
+        && inputs?.proven !== false && !(inputs?.retryAt > now) && inputs?.root?.end !== undefined && inputs.admin?.end !== undefined && !inputs.ambiguous && !reviewing.has(room.id)) {
+        reviewing.add(room.id)
+        jobs.push((async () => {
+          try {
+            const request = { goalId: goal.id, reviewId: attempt.id, confirmed: true }
+            if (!recorded) {
+              const result = await goalControl(room.id, { ...request, action: 'review-record-failure', root: inputs.root, admin: inputs.admin }, inputs)
+              if (result.error) return
+            }
+            if (inputs.ambiguous || room.goal !== goal || goal.reviewAttempt !== attempt || !attempt.terminalFailure) return
+            await goalControl(room.id, { ...request, action: 'review-resolve' }, attempt.terminalFailure)
+          } catch (error) {
+            if (!recorded) inputs.retryAt = now + GOAL_REVIEW_INTERVAL_MS
+            rt.warn('ds-bot: original inspection evidence for %s could not be confirmed: %s', attempt.id, error)
+          } finally { reviewing.delete(room.id) }
+        })())
+        continue
       }
       if (attempt?.adminCompleted === true && goalReviewAllowed(room, attempt.id) && !reviewing.has(room.id)) {
         reviewing.add(room.id)
@@ -1035,7 +1317,7 @@ export function install(rt) {
               || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
               || (!attempt.inspectOnly && hasUnreadRoomDeliveries(room)) || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
               || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return
-            finishReview(goal, 'admin-pass', now)
+            finishReview(room, 'admin-pass', now)
             await rt.save({ required: true })
           } catch (error) {
             rt.warn('ds-bot: completed goal review recovery in %s failed: %s', room.name, error)
@@ -1085,7 +1367,7 @@ export function install(rt) {
           && root.session?.id === rt.sessionOfRoom(room)
         const stageId = goal.stages[goal.current]?.id
         if (goal.ownerReview?.stageId !== stageId) goal.ownerReview = { stageId, checks: {} }
-        goal.reviewAttempt = { id, at: now, state: 'admitting', adminId: admin.id, rootSessionId: root.session.id, adminSessionId: room.sessions?.[admin.id], checkedBefore: openReviewTasks(goal).length - reviewMissing(goal).length, ...(inspectionRequired(room) ? { inspectOnly: true } : {}) }
+        goal.reviewAttempt = { id, at: now, state: 'admitting', adminId: admin.id, rootSessionId: root.session.id, adminSessionId: room.sessions?.[admin.id], checkedBefore: openReviewTasks(goal).length - missingFor(room).length, ...(inspectionRequired(room) ? { inspectOnly: true } : {}) }
         goal.revision += 1
         if (goal.idle === true) goal.idleRevision = goal.revision
         goal.updatedAt = now
@@ -1138,12 +1420,12 @@ export function install(rt) {
   async function goalDrive(room, round) {
     if (pendingReviewRooms.has(room.id)) return
     const goal = room.goal
-    if (goal?.reviewResolutions !== undefined) { try { await durableReviewResolutions(room,goal) } catch { return } }
+    if (goal?.reviewResolutions !== undefined || goal?.reviewAttempt?.terminalFailure) { try { await durableReviewResolutions(room,goal) } catch { return } }
     const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
     if (round.goalReviewId && goalReviewAllowed(room, round.goalReviewId)) {
       const slot = round.slots.find(item => item.id === admin?.id)
       if ((slot !== undefined && ['passed', 'posted'].includes(slot.status)) || goal.reviewAttempt?.adminCompleted === true) {
-        finishReview(goal, slot?.status === 'passed' ? 'admin-pass' : 'nudge-limit')
+        finishReview(room, slot?.status === 'passed' ? 'admin-pass' : 'nudge-limit')
         await rt.save({ required: true })
       }
       return
@@ -1335,7 +1617,7 @@ export function install(rt) {
             if (!fingerprint || fingerprint !== inspectionFingerprint(room.goal)) return 'Goal changed while producing its ledger; do not dispatch or claim it complete.'
             attempt.inspectionLedgerAt = Date.now()
             attempt.inspectionLedgerFingerprint = fingerprint
-            try { await rt.save({ required: true }) } catch (error) {
+            try { await rt.save({ required: true }) } catch {
               delete attempt.inspectionLedgerAt
               delete attempt.inspectionLedgerFingerprint
               attempt.state = 'uncertain'
@@ -1352,7 +1634,8 @@ export function install(rt) {
           const goal = room.goal
           const stage = goal?.stages?.[goal.current]
           const reviewId = info?.reviewId
-          if (!reviewId || info.reviewInspect === true || !rt.isAdminOf(room, self) || !goalReviewAllowed(room, reviewId)) return 'Only the active, write-capable periodic review by this group administrator may record a check.'
+          if (!reviewId || !rt.isAdminOf(room, self) || !goalReviewAllowed(room, reviewId)
+            || (info.reviewInspect === true && scopedReviewTask(room,args.review_task)===undefined)) return 'Only an active review with an unrelated, unblocked task may record a check.'
           const task = stage?.tasks?.find(item => item.id === args.review_task && item.status !== 'done')
           if (!task || args.review_fingerprint !== reviewFingerprint(task)) return 'Task changed or is not an unfinished task in the current stage; show the goal again.'
           const fields = ['review_assignment', 'review_progress', 'review_dependencies', 'review_next', 'review_deadline', 'evidence']
@@ -1360,7 +1643,9 @@ export function install(rt) {
           if (args.review_complete === true && fields.some(key => /\b(?:unknown|unverified|not verified|not checked|pending verification)\b|未知|未核|待核|不确定|待确认|无法确认/i.test(args[key]))) return 'Unknown or unverified facts require review_complete false; retain the task for a later check.'
           const previous = goal.ownerReview
           const checks = previous?.stageId === stage.id ? { ...previous.checks } : {}
-          checks[task.id] = { fingerprint: args.review_fingerprint, owner: task.botId, at: Date.now(), by: self, unresolved: args.review_complete !== true, ...Object.fromEntries(fields.map(key => [key, args[key].trim()])) }
+          const scopedQueueVersion = rt.reviewQueueVersion?.(room.id, task.botId)
+          if (scopedQueueVersion === undefined) return 'Recovery queue version is unavailable; this check remains unresolved.'
+          checks[task.id] = { fingerprint: args.review_fingerprint, owner: task.botId, at: Date.now(), by: self, unresolved: args.review_complete !== true, ...(scopedQueueVersion === undefined ? {} : { scopedQueueVersion }), ...Object.fromEntries(fields.map(key => [key, args[key].trim()])) }
           const updated = { stageId: stage.id, checks }
           goal.ownerReview = updated
           try { await rt.save({ required: true }) } catch (error) {
@@ -1376,7 +1661,15 @@ export function install(rt) {
             throw error
           }
           if (!goalReviewAllowed(room, reviewId)) return 'The review stopped while saving. Its record must be inspected before further action.'
-          return `Recorded the administrator's check for ${task.id}; ${reviewMissing(goal).length} current task(s) remain unchecked or changed.`
+          const savedCheck = goal.ownerReview?.stageId === stage.id ? goal.ownerReview.checks?.[task.id] : undefined
+          if (scopedQueueVersion !== undefined && (goal.ownerReview !== updated
+            || reviewFingerprint(task) !== args.review_fingerprint
+            || rt.reviewQueueVersion?.(room.id, task.botId) !== scopedQueueVersion
+            || savedCheck !== updated.checks[task.id]
+            || savedCheck?.scopedQueueVersion !== scopedQueueVersion)) {
+            return 'The queue or task changed while saving; the recorded check is unresolved and must be inspected again.'
+          }
+          return `Recorded the administrator's check for ${task.id}; ${missingFor(room).length} current task(s) remain unchecked or changed.`
         }
         case 'draft':
           result = draftGoal(room, { brief: args.brief, title: args.title, by: self })
@@ -1428,6 +1721,7 @@ export function install(rt) {
           return `Unknown action ${action}.`
       }
       if (result.error !== undefined) return result.error
+      if (result.unchanged) return goalLedger(room, member)
       if (result.reply !== undefined) announce(room, result.reply)
       await rt.save()
       if (post !== undefined) await post()

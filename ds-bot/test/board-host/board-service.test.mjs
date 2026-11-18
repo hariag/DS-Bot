@@ -483,7 +483,9 @@ test('real image worker edits the original goal and preserves two authorized ima
   const comment={scope:personal,operationId:'goal:comment',taskId:card.id,expectedRevision:5,type:'goal-card-comment',value:{text:'Ready for the reviewer'}}
   assert.equal((await rt.boardCall('board-command',comment)).state,'committed')
   assert.equal((await rt.boardCall('board-command',comment)).state,'committed')
-  assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id).comments.length,1)
+  const savedComments = (await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id).comments
+  assert.equal(savedComments.filter(comment=>!comment.workflowAction).length,1)
+  assert.equal(savedComments.filter(comment=>comment.workflowAction==='goal-update').length,2)
   assert.equal(rt.state.rooms.group.goal.stages[0].tasks[0].status,'reported')
   const invalidDetails={...details,operationId:'goal:invalid-details',expectedRevision:6,value:{dueDate:'2026-02-30'}}
   assert.equal((await rt.boardCall('board-command',invalidDetails)).state,'rejected')
@@ -501,7 +503,7 @@ test('real image worker edits the original goal and preserves two authorized ima
   const archived=(await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===card.id)
   assert.equal(archived.legacy.archived,true)
   assert.equal(archived.description,'Read before review')
-  assert.equal(archived.comments[0].text,'Ready for the reviewer')
+  assert.equal(archived.comments.find(comment=>!comment.workflowAction && comment.author==='user').text,'Ready for the reviewer')
   assert.equal((await rt.boardCall('board-image',{scope,taskId:card.id,imageId:'img1'})).data,image.data)
   rt.state.rooms.group.members=[]
   await assert.rejects(rt.boardCall('board-image',{scope:{kind:'personal',id:'one'},taskId:card.id,imageId:'img1'}),/not available|unavailable/i)
@@ -1198,4 +1200,16 @@ test('organizing existing items moves their original records atomically inside o
   await rt.boardCall('board-release-assign',{scope,operationId:'assign-source',taskId:source.id,expectedTaskRevision:(await row(source.id)).revision,releaseId:rel.id,expectedReleaseRevision:rel.revision})
   await assert.rejects(call({...move,operationId:'no-cross-release',expectedRevision:(await row(item.id)).revision,value:{parentTaskId:source.id}}),/cannot move/)
   assert.equal((await row(item.id)).parentTaskId,target.id)
+})
+
+test('human goal comments remain available when the task has many workflow replies', async t => {
+  const {rt} = goalFixture(t)
+  const task = rt.state.rooms.group.goal.stages[0].tasks[0]
+  task.goalBoardReplies = Array.from({length:100},(_,i)=>({id:`reply-${i}`,at:i+1,author:'one',workflowAction:'goal-update',text:'Working'}))
+  const card=(await rt.boardCall('board-list',{scope})).tasks.find(row=>row.legacy)
+  const payload={scope,operationId:'goal:human-after-work',taskId:card.id,expectedRevision:card.revision,expectedBoardRevision:card.legacy.boardRevision,expectedPosition:'current',type:'goal-card-comment',value:{text:'Human feedback'}}
+  assert.equal((await rt.boardCall('board-command',payload)).state,'committed')
+  const comments=(await rt.boardCall('board-list',{scope})).tasks.find(row=>row.id===card.id).comments
+  assert.equal(comments.length,101)
+  assert.equal(comments.filter(comment=>comment.author==='user').length,1)
 })
