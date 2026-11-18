@@ -1,14 +1,14 @@
 import { build } from 'esbuild'
-import { createRequire } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import assert from 'node:assert/strict'
+import { harnessRequire, playwrightOf, reactDirOf } from './harness-root.mjs'
 
-const harness = process.env.DSH_HARNESS
-if (!harness) throw new Error('Set DSH_HARNESS to a DeepSeek Harness checkout')
-const req = createRequire(join(harness, 'apps/web/package.json'))
-const { chromium } = req('playwright')
-const react = join(dirname(req.resolve('react')), 'umd/react.development.js')
-const reactDom = join(dirname(req.resolve('react-dom')), 'umd/react-dom.development.js')
+const req = harnessRequire()
+const reactDir = reactDirOf(req)
+if (!reactDir) throw new Error('Set BOARD_REACT_DIR to the react package directory (React 18 with UMD builds), or point DSH_HARNESS at an official DeepSeek Harness source checkout')
+const { chromium } = playwrightOf(req)
+const react = join(reactDir, 'umd/react.development.js')
+const reactDom = join(reactDir, '../react-dom/umd/react-dom.development.js')
 const base = resolve(import.meta.dirname, '..')
 const shim = {
   name: 'browser-fixture-shim',
