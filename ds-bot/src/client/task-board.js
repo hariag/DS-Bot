@@ -243,10 +243,9 @@ function QueuedDelivery({ item, busy, decide }) {
 }
 
 // The host provides scoped metadata only. This view never replays or closes work.
-function HeldTurns({ recovery, scope, request, onRefresh }) {
+function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(''), [error, setError] = useState('')
-  const [panelEpoch, setPanelEpoch] = useState(0)
   const inFlight = useRef(false)
   const decide = async (item, choice) => {
     if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return
@@ -266,7 +265,14 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
     finally { inFlight.current = false; setBusy('') }
   }
-  if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
+  const panel = { className:'bt-recovery-panel', open, onToggle:event => {
+    if (event.target === event.currentTarget && event.currentTarget.open !== open) onOpen(event.currentTarget.open)
+  } }
+  const icon = h('span', { className:'bt-recovery-icon', 'aria-hidden':true }, '↻')
+  const title = h('strong', null, t('Interrupted work'))
+  if (!open || recovery?.available !== true) return h('details', panel,
+    h('summary', { className:'bt-recovery-summary' }, icon, h('span', { className:'bt-recovery-summary-text' }, title)),
+    open ? h('p', { className:'bt-board-pending', role:'status' }, t(recovery === undefined ? 'Loading…' : 'Recovery records are unavailable or incomplete.')) : null)
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
   const filtered = rows.filter(item => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]))
@@ -277,17 +283,15 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const filteredDeliveries = deliveries.filter(item => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]))
   const pendingDeliveries = filteredDeliveries.filter(item => item.decision !== 'ignored')
   const ignoredDeliveries = filteredDeliveries.filter(item => item.decision === 'ignored')
-  if (!recovery.incomplete && !rows.length && !deliveries.length) return null
   const renderDeliveries = list => h('div', { className:'bt-recovery-deliveries' }, recoveryGroups(list, item => item.recipientId, item => item.recipientName).map(group => h('section', { key:group.id, className:'bt-recovery-group' },
     h('div', { className:'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:decideDelivery })))))
   const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
     h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
-    group.rows.map(item => h(HeldRecord, { key:`${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide })))))
-  return h('details', { className: 'bt-recovery-panel', onToggle:event => { if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch(value => value + 1) } },
-    h('summary', { className: 'bt-recovery-summary' },
-      h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
-      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted work')),
+    group.rows.map(item => h(HeldRecord, { key:item.recoveryId, item, scope, request, busy, decide })))))
+  return h('details', panel,
+    h('summary', { className: 'bt-recovery-summary' }, icon,
+      h('span', { className: 'bt-recovery-summary-text' }, title,
         h('small', null, pendingDeliveries.length ? t('{turns} interrupted turns · {messages} queued messages', { turns:pendingRows.length, messages:pendingDeliveries.length })
           : t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
       h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? '—' : String(pendingRows.length + pendingDeliveries.length))),
@@ -2110,7 +2114,9 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [toolsOpen, setToolsOpen] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(initialReview)
+  const [recoveryOpen, setRecoveryOpen] = useState(false)
+  const recoveryScope = useRef(null)
   const [memberFilter, setMemberFilter] = useState('')
   const [labelFilter, setLabelFilter] = useState('')
   const [dueFilter, setDueFilter] = useState('')
@@ -2155,6 +2161,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const active = useRef(false)
   const generation = useRef(0)
   const loadSequence = useRef(0)
+  const reading = useRef(null)
   const dialog = useRef(null)
   const searchRef = useRef(null)
   const dispose = useRef(null)
@@ -2185,24 +2192,43 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const current = epoch => active.current && generation.current === epoch
   const load = async (epoch = generation.current, preserveError = false) => {
     const sequence = ++loadSequence.current
+    reading.current = sequence
     try {
-      const next = await request('board-list', { scope })
+      const includeRecovery = recoveryScope.current === key
+      const next = await request('board-list', { scope, includeRecovery })
       if (!current(epoch) || sequence !== loadSequence.current) return
       if (!next || !Array.isArray(next.tasks)) throw new Error(t('Invalid board response'))
       boardColumns(next.tasks)
-      setData({ key, value: next })
+      const recovery = includeRecovery && recoveryScope.current === key ? next.recovery ?? null : undefined
+      setData({ key, value:{ ...next, recovery } })
       const nextProposals = Array.isArray(next.proposals) ? next.proposals.length : 0
       if (!changesOpen && nextProposals > knownProposals.current) setProposalUnread(value => value + (nextProposals - knownProposals.current))
       knownProposals.current = nextProposals
       if (!pendingRef.current && !preserveError) setError('')
       return true
-    } catch (caught) { if (current(epoch) && sequence === loadSequence.current) setError(caught?.message || t('Unable to load board')) }
+    } catch (caught) {
+      if (current(epoch) && sequence === loadSequence.current) {
+        if (recoveryScope.current === key) setData(existing => existing?.key === key ? { key, value:{ ...existing.value, recovery:null } } : existing)
+        setError(caught?.message || t('Unable to load board'))
+      }
+    } finally {
+      if (reading.current === sequence) reading.current = null
+    }
     return false
   }
   loadRef.current = load
+  const inspectRecovery = open => {
+    recoveryScope.current = open ? key : null
+    setRecoveryOpen(open)
+    setData(existing => existing?.key === key ? { key, value:{ ...existing.value, recovery:undefined } } : existing)
+    if (open) {
+      setToolsOpen(true)
+      void load()
+    }
+  }
   useEffect(() => {
     if (!visible) return
-    const refresh = () => { if (!document.hidden && !selectedCard && !createFor) void loadRef.current?.() }
+    const refresh = () => { if (!document.hidden && !selectedCard && !createFor && reading.current === null) void loadRef.current?.() }
     const timer = setInterval(refresh, 15_000)
     window.addEventListener('focus', refresh)
     return () => { clearInterval(timer); window.removeEventListener('focus', refresh) }
@@ -2241,6 +2267,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   useEffect(() => {
     if (!visible) return undefined
     active.current = true
+    recoveryScope.current = null
+    setRecoveryOpen(false); setToolsOpen(initialReview)
     const epoch = ++generation.current
     const previousFocus = document.activeElement
     store.current = pendingStore(scope)
@@ -2295,7 +2323,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       const inverse = { cancel:'restore', submit:'cancel', archive:'unarchive', schedule:'unschedule' }[command.type]
       if (state === 'committed' && inverse) {
         notify(t('Card updated'), async () => {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const currentTask = (latest?.tasks ?? []).find(item => item.id === task.id)
           if (!currentTask) return
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:currentTask.revision, type:inverse })
@@ -2309,7 +2337,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     } finally { if (fetching.current === operationId) { fetching.current = null; if (current(epoch)) setBusy(false) } }
   }
   const undoReorder = afterId => async taskId => {
-    const latest = await request('board-list', { scope })
+    const latest = await request('board-list', { scope, includeRecovery:false })
     const current = (latest?.tasks ?? []).find(item => item.id === taskId)
     if (!current) return
     await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId, expectedRevision:current.revision, type:'reorder', value:{ afterId } })
@@ -2379,7 +2407,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load()
       notify(t('Archived {count} cards', { count:ids.length }), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         const current = (latest?.tasks ?? []).filter(task => ids.includes(task.id) && task.archivedAt)
         for (const task of current) await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:task.revision, type:'unarchive' })
         await load()
@@ -2405,7 +2433,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load()
       if (changed) notify(t('Cancelled {count} cards', { count:changed }), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         const current = (latest?.tasks ?? []).filter(task => ids.includes(task.id) && task.status === 'cancelled')
         for (const task of current) await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:task.revision, type:'restore' })
         await load()
@@ -2433,7 +2461,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       await load(); notify(t('Updated {count} cards', { count:changed.length }), changed.length ? async () => {
         let failed = 0
         for (const id of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === id)
           if (!current) continue
           try { await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:current.revision, type:spec.inverse }) }
@@ -2459,7 +2487,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }
       await load()
       notify(t('Archived {count} cards', { count:ids.length }), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         for (const task of (latest?.tasks ?? []).filter(task => ids.includes(task.id) && task.archivedAt)) {
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:task.revision, type:'unarchive' })
         }
@@ -2485,7 +2513,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Updated the type of {count} cards', { count:ids.length }), changed.length ? async () => {
         for (const [id, previous] of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === id)
           if (!current) continue
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:current.revision, type:'card-details', value:{ type:previous } })
@@ -2513,7 +2541,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Updated the owner of {count} cards', { count:changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
           if (!current) continue
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:entry.id, expectedRevision:current.revision, type:'edit',
@@ -2544,7 +2572,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       await load(); notify(t('Added {count} cards to {release}', { count:changed.length, release:textValue(release.name) || release.id }), changed.length ? async () => {
         let failed = 0
         for (const entry of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
           const currentRelease = (latest?.releases ?? []).find(item => item.id === release.id)
           if (!current || !currentRelease || current.releaseId !== release.id) continue
@@ -2590,7 +2618,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Duplicated {count} cards', { count:created.length }), created.length ? async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         for (const id of created) {
           const current = (latest?.tasks ?? []).find(item => item.id === id)
           if (!current || current.archivedAt) continue
@@ -2618,7 +2646,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Moved {count} cards', { count:changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
           if (!current) continue
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:entry.id, expectedRevision:current.revision, type:'personal-progress', value:{ progress:entry.progress } })
@@ -2639,8 +2667,6 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const releaseTeamSupported = scope.kind === 'room' && !!releaseRoles?.length
   const proposals = Array.isArray(data?.proposals) ? data.proposals : []
   const proposalSupported = Array.isArray(data?.proposals)
-  const hasBoardTools = Boolean(data?.recovery?.items?.length || data?.recovery?.deliveries?.length || data?.recovery?.incomplete
-    || data?.remoteChanges?.items?.length || data?.remoteChanges?.incomplete || initialReview)
   const chooseView = next => { setView(next); setReleaseFocus('') }
   const openRelease = id => { setView('release'); setReleaseFocus(id) }
   const createRelease = async value => {
@@ -2725,7 +2751,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }
       await load(generation.current, true)
       notify(t('Card moved'), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         const currentTask = (latest?.tasks ?? []).find(item => item.id === task.id)
         if (!currentTask) return
         if (previousReleaseId) {
@@ -3113,8 +3139,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('span', { className: data.summary.blocked ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.blocked ?? 0), ' ', t('Blocked')),
         h('span', { className: data.summary.overdue ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.overdue ?? 0), ' ', t('Overdue')),
         h('span', null, h('b', null, data.summary.statuses?.done ?? 0), ' ', t('Done'))) : null,
-      hasBoardTools ? h('button', { type:'button', className:'bt-board-tools-toggle', 'aria-expanded':toolsOpen, onClick:() => setToolsOpen(value => !value) }, t('Board tools')) : null,
-      data ? h('div', { className: 'bt-board-review-tools' + (toolsOpen ? ' bt-board-review-tools-open' : '') }, h(HeldTurns, { key: 'held:' + key, recovery: data.recovery, scope, request, onRefresh: () => load() }), h(WorkDecisions, { key: 'decisions:' + key, scope, request, actors: data.capabilities?.actors }), h(LegacyWorkReview, { key: 'legacy-review:' + key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key: 'periodic:' + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges, { key: 'remote:' + key, monitor: data.remoteChanges })) : null,
+      data ? h('button', { type:'button', className:'bt-board-tools-toggle', 'aria-expanded':toolsOpen, onClick:() => { if (toolsOpen && recoveryOpen) inspectRecovery(false); setToolsOpen(value => !value) } }, t('Board tools')) : null,
+      data ? h('div', { className: 'bt-board-review-tools' + (toolsOpen ? ' bt-board-review-tools-open' : '') }, h(HeldTurns, { key: 'held:' + key, recovery:data.recovery, open:recoveryOpen && recoveryScope.current === key, onOpen:inspectRecovery, scope, request, onRefresh:() => recoveryScope.current === key && loadRef.current?.() }), h(WorkDecisions, { key: 'decisions:' + key, scope, request, actors: data.capabilities?.actors }), h(LegacyWorkReview, { key: 'legacy-review:' + key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key: 'periodic:' + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges, { key: 'remote:' + key, monitor: data.remoteChanges })) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'), error ? h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className: 'bt-board-content' },
           changesOpen && proposalSupported ? h(ProposalPanel, { proposals, actors, tasks: data.tasks, releases, disabled: !canAct || !!proposalBusy,

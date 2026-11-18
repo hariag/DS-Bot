@@ -67,9 +67,16 @@ test('authenticated board view returns only the scoped read-only recovery projec
   rt.recoveryHeldView = requested => { seen.push(requested); return { available:true, incomplete:false, items:[] } }
   const result = await rt.boardCall('board-list', { scope })
   assert.deepEqual(result.recovery, { available:true, incomplete:false, items:[] })
-  assert.deepEqual(seen, [scope])
-  await assert.rejects(rt.boardCall('board-list', { scope:{ kind:'room', id:'unknown' } }), /available/)
-  assert.equal(seen.length, 1, 'invalid scope must not reach recovery projection')
+  const brief = await rt.boardCall('board-list', { scope, includeRecovery:false })
+  assert.equal(Object.hasOwn(brief, 'recovery'), false)
+  assert.deepEqual(brief.tasks, result.tasks)
+  assert.deepEqual(seen, [scope], 'ordinary board reads skip the recovery journal')
+  const full = await rt.boardCall('board-list', { scope, includeRecovery:true })
+  assert.deepEqual(full.recovery, result.recovery)
+  for (const includeRecovery of [true, false]) {
+    await assert.rejects(rt.boardCall('board-list', { scope:{ kind:'room', id:'unknown' }, includeRecovery }), /available/)
+  }
+  assert.deepEqual(seen, [scope, scope], 'invalid scopes never reach the recovery projection')
 })
 
 test('the owner sees only a scope-matched uncertain redo, never unverified result data', async t => {

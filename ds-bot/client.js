@@ -39318,10 +39318,9 @@ function QueuedDelivery({ item, busy, decide }) {
     )
   );
 }
-function HeldTurns({ recovery, scope, request, onRefresh }) {
+function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   const [query, setQuery] = (0, import_react54.useState)("");
   const [busy, setBusy] = (0, import_react54.useState)(""), [error, setError] = (0, import_react54.useState)("");
-  const [panelEpoch, setPanelEpoch] = (0, import_react54.useState)(0);
   const inFlight = (0, import_react54.useRef)(false);
   const decide = async (item, choice) => {
     if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return;
@@ -39353,7 +39352,17 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
       setBusy("");
     }
   };
-  if (!recovery || recovery.available !== true) return (0, import_react54.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
+  const panel = { className: "bt-recovery-panel", open, onToggle: (event) => {
+    if (event.target === event.currentTarget && event.currentTarget.open !== open) onOpen(event.currentTarget.open);
+  } };
+  const icon2 = (0, import_react54.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "↻");
+  const title = (0, import_react54.createElement)("strong", null, t("Interrupted work"));
+  if (!open || recovery?.available !== true) return (0, import_react54.createElement)(
+    "details",
+    panel,
+    (0, import_react54.createElement)("summary", { className: "bt-recovery-summary" }, icon2, (0, import_react54.createElement)("span", { className: "bt-recovery-summary-text" }, title)),
+    open ? (0, import_react54.createElement)("p", { className: "bt-board-pending", role: "status" }, t(recovery === void 0 ? "Loading…" : "Recovery records are unavailable or incomplete.")) : null
+  );
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
   const needle = query.trim().toLocaleLowerCase();
   const filtered = rows2.filter((item) => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]));
@@ -39364,7 +39373,6 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const filteredDeliveries = deliveries.filter((item) => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]));
   const pendingDeliveries = filteredDeliveries.filter((item) => item.decision !== "ignored");
   const ignoredDeliveries = filteredDeliveries.filter((item) => item.decision === "ignored");
-  if (!recovery.incomplete && !rows2.length && !deliveries.length) return null;
   const renderDeliveries = (list) => (0, import_react54.createElement)("div", { className: "bt-recovery-deliveries" }, recoveryGroups(list, (item) => item.recipientId, (item) => item.recipientName).map((group) => (0, import_react54.createElement)(
     "section",
     { key: group.id, className: "bt-recovery-group" },
@@ -39375,21 +39383,19 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     "section",
     { key: group.id, className: "bt-recovery-group" },
     (0, import_react54.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react54.createElement)("strong", null, group.name), (0, import_react54.createElement)("span", null, group.rows.length)),
-    group.rows.map((item) => (0, import_react54.createElement)(HeldRecord, { key: `${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide }))
+    group.rows.map((item) => (0, import_react54.createElement)(HeldRecord, { key: item.recoveryId, item, scope, request, busy, decide }))
   )));
   return (0, import_react54.createElement)(
     "details",
-    { className: "bt-recovery-panel", onToggle: (event) => {
-      if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch((value) => value + 1);
-    } },
+    panel,
     (0, import_react54.createElement)(
       "summary",
       { className: "bt-recovery-summary" },
-      (0, import_react54.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "↻"),
+      icon2,
       (0, import_react54.createElement)(
         "span",
         { className: "bt-recovery-summary-text" },
-        (0, import_react54.createElement)("strong", null, t("Interrupted work")),
+        title,
         (0, import_react54.createElement)("small", null, pendingDeliveries.length ? t("{turns} interrupted turns · {messages} queued messages", { turns: pendingRows.length, messages: pendingDeliveries.length }) : t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
       ),
       (0, import_react54.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? "—" : String(pendingRows.length + pendingDeliveries.length))
@@ -42376,7 +42382,9 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const [error, setError] = (0, import_react54.useState)("");
   const [search, setSearch] = (0, import_react54.useState)("");
   const [filtersOpen, setFiltersOpen] = (0, import_react54.useState)(false);
-  const [toolsOpen, setToolsOpen] = (0, import_react54.useState)(false);
+  const [toolsOpen, setToolsOpen] = (0, import_react54.useState)(initialReview);
+  const [recoveryOpen, setRecoveryOpen] = (0, import_react54.useState)(false);
+  const recoveryScope = (0, import_react54.useRef)(null);
   const [memberFilter, setMemberFilter] = (0, import_react54.useState)("");
   const [labelFilter, setLabelFilter] = (0, import_react54.useState)("");
   const [dueFilter, setDueFilter] = (0, import_react54.useState)("");
@@ -42430,6 +42438,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const active = (0, import_react54.useRef)(false);
   const generation = (0, import_react54.useRef)(0);
   const loadSequence = (0, import_react54.useRef)(0);
+  const reading = (0, import_react54.useRef)(null);
   const dialog = (0, import_react54.useRef)(null);
   const searchRef = (0, import_react54.useRef)(null);
   const dispose = (0, import_react54.useRef)(null);
@@ -42482,27 +42491,44 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const current2 = (epoch) => active.current && generation.current === epoch;
   const load = async (epoch = generation.current, preserveError = false) => {
     const sequence = ++loadSequence.current;
+    reading.current = sequence;
     try {
-      const next = await request("board-list", { scope });
+      const includeRecovery = recoveryScope.current === key;
+      const next = await request("board-list", { scope, includeRecovery });
       if (!current2(epoch) || sequence !== loadSequence.current) return;
       if (!next || !Array.isArray(next.tasks)) throw new Error(t("Invalid board response"));
       boardColumns(next.tasks);
-      setData({ key, value: next });
+      const recovery = includeRecovery && recoveryScope.current === key ? next.recovery ?? null : void 0;
+      setData({ key, value: { ...next, recovery } });
       const nextProposals = Array.isArray(next.proposals) ? next.proposals.length : 0;
       if (!changesOpen && nextProposals > knownProposals.current) setProposalUnread((value) => value + (nextProposals - knownProposals.current));
       knownProposals.current = nextProposals;
       if (!pendingRef.current && !preserveError) setError("");
       return true;
     } catch (caught) {
-      if (current2(epoch) && sequence === loadSequence.current) setError(caught?.message || t("Unable to load board"));
+      if (current2(epoch) && sequence === loadSequence.current) {
+        if (recoveryScope.current === key) setData((existing) => existing?.key === key ? { key, value: { ...existing.value, recovery: null } } : existing);
+        setError(caught?.message || t("Unable to load board"));
+      }
+    } finally {
+      if (reading.current === sequence) reading.current = null;
     }
     return false;
   };
   loadRef.current = load;
+  const inspectRecovery = (open) => {
+    recoveryScope.current = open ? key : null;
+    setRecoveryOpen(open);
+    setData((existing) => existing?.key === key ? { key, value: { ...existing.value, recovery: void 0 } } : existing);
+    if (open) {
+      setToolsOpen(true);
+      void load();
+    }
+  };
   (0, import_react54.useEffect)(() => {
     if (!visible) return;
     const refresh = () => {
-      if (!document.hidden && !selectedCard && !createFor) void loadRef.current?.();
+      if (!document.hidden && !selectedCard && !createFor && reading.current === null) void loadRef.current?.();
     };
     const timer = setInterval(refresh, 15e3);
     window.addEventListener("focus", refresh);
@@ -42564,6 +42590,9 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   (0, import_react54.useEffect)(() => {
     if (!visible) return void 0;
     active.current = true;
+    recoveryScope.current = null;
+    setRecoveryOpen(false);
+    setToolsOpen(initialReview);
     const epoch = ++generation.current;
     const previousFocus = document.activeElement;
     store.current = pendingStore(scope);
@@ -42688,7 +42717,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       const inverse = { cancel: "restore", submit: "cancel", archive: "unarchive", schedule: "unschedule" }[command.type];
       if (state === "committed" && inverse) {
         notify(t("Card updated"), async () => {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const currentTask = (latest?.tasks ?? []).find((item) => item.id === task.id);
           if (!currentTask) return;
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: currentTask.revision, type: inverse });
@@ -42708,7 +42737,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     }
   };
   const undoReorder = (afterId) => async (taskId) => {
-    const latest = await request("board-list", { scope });
+    const latest = await request("board-list", { scope, includeRecovery: false });
     const current3 = (latest?.tasks ?? []).find((item) => item.id === taskId);
     if (!current3) return;
     await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId, expectedRevision: current3.revision, type: "reorder", value: { afterId } });
@@ -42795,7 +42824,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setSelectionMode(false);
       await load();
       notify(t("Archived {count} cards", { count: ids.length }), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         const current3 = (latest?.tasks ?? []).filter((task) => ids.includes(task.id) && task.archivedAt);
         for (const task of current3) await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "unarchive" });
         await load();
@@ -42825,7 +42854,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setSelectionMode(false);
       await load();
       if (changed) notify(t("Cancelled {count} cards", { count: changed }), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         const current3 = (latest?.tasks ?? []).filter((task) => ids.includes(task.id) && task.status === "cancelled");
         for (const task of current3) await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "restore" });
         await load();
@@ -42858,7 +42887,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       notify(t("Updated {count} cards", { count: changed.length }), changed.length ? async () => {
         let failed = 0;
         for (const id of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === id);
           if (!current3) continue;
           try {
@@ -42890,7 +42919,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       }
       await load();
       notify(t("Archived {count} cards", { count: ids.length }), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         for (const task of (latest?.tasks ?? []).filter((task2) => ids.includes(task2.id) && task2.archivedAt)) {
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "unarchive" });
         }
@@ -42922,7 +42951,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       await load();
       notify(t("Updated the type of {count} cards", { count: ids.length }), changed.length ? async () => {
         for (const [id, previous] of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === id);
           if (!current3) continue;
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: current3.revision, type: "card-details", value: { type: previous } });
@@ -42962,7 +42991,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       await load();
       notify(t("Updated the owner of {count} cards", { count: changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === entry.id);
           if (!current3) continue;
           await request("board-command", {
@@ -43012,7 +43041,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       notify(t("Added {count} cards to {release}", { count: changed.length, release: textValue(release.name) || release.id }), changed.length ? async () => {
         let failed = 0;
         for (const entry of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === entry.id);
           const currentRelease = (latest?.releases ?? []).find((item) => item.id === release.id);
           if (!current3 || !currentRelease || current3.releaseId !== release.id) continue;
@@ -43088,7 +43117,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setSelectionMode(false);
       await load();
       notify(t("Duplicated {count} cards", { count: created.length }), created.length ? async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         for (const id of created) {
           const current3 = (latest?.tasks ?? []).find((item) => item.id === id);
           if (!current3 || current3.archivedAt) continue;
@@ -43122,7 +43151,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       await load();
       notify(t("Moved {count} cards", { count: changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === entry.id);
           if (!current3) continue;
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: entry.id, expectedRevision: current3.revision, type: "personal-progress", value: { progress: entry.progress } });
@@ -43147,7 +43176,6 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const releaseTeamSupported = scope.kind === "room" && !!releaseRoles?.length;
   const proposals = Array.isArray(data?.proposals) ? data.proposals : [];
   const proposalSupported = Array.isArray(data?.proposals);
-  const hasBoardTools = Boolean(data?.recovery?.items?.length || data?.recovery?.deliveries?.length || data?.recovery?.incomplete || data?.remoteChanges?.items?.length || data?.remoteChanges?.incomplete || initialReview);
   const chooseView = (next) => {
     setView(next);
     setReleaseFocus("");
@@ -43258,7 +43286,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       }
       await load(generation.current, true);
       notify(t("Card moved"), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         const currentTask = (latest?.tasks ?? []).find((item) => item.id === task.id);
         if (!currentTask) return;
         if (previousReleaseId) {
@@ -43958,8 +43986,11 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
         (0, import_react54.createElement)("span", { className: data.summary.overdue ? "bt-board-summary-alert" : "" }, (0, import_react54.createElement)("b", null, data.summary.overdue ?? 0), " ", t("Overdue")),
         (0, import_react54.createElement)("span", null, (0, import_react54.createElement)("b", null, data.summary.statuses?.done ?? 0), " ", t("Done"))
       ) : null,
-      hasBoardTools ? (0, import_react54.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => setToolsOpen((value) => !value) }, t("Board tools")) : null,
-      data ? (0, import_react54.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react54.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react54.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react54.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
+      data ? (0, import_react54.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => {
+        if (toolsOpen && recoveryOpen) inspectRecovery(false);
+        setToolsOpen((value) => !value);
+      } }, t("Board tools")) : null,
+      data ? (0, import_react54.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react54.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, open: recoveryOpen && recoveryScope.current === key, onOpen: inspectRecovery, scope, request, onRefresh: () => recoveryScope.current === key && loadRef.current?.() }), (0, import_react54.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react54.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
       !data ? (0, import_react54.createElement)("div", { className: "bt-board-empty" }, error ? t("Board unavailable") : t("Loading…"), error ? (0, import_react54.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => load() }, t("Retry")) : null) : (0, import_react54.createElement)(
         "div",
         { className: "bt-board-content" },

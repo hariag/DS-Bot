@@ -552,10 +552,13 @@ export function install(rt) {
         for (let i = 0; i < 10; i += 1) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
-          const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
-          const recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
+          let recovery
+          if (payload.includeRecovery !== false) {
+            const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
+            recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
+          }
           if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
-            recovery, ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
+            ...(recovery === undefined ? {} : { recovery }), ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
             revision: `${rosterRevision}:${before}` }
           await new Promise(resolve => setTimeout(resolve, 20))
         }
