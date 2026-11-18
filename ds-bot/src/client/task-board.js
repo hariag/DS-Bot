@@ -243,10 +243,9 @@ function QueuedDelivery({ item, busy, decide }) {
 }
 
 // The host provides scoped metadata only. This view never replays or closes work.
-function HeldTurns({ recovery, scope, request, onRefresh }) {
+function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(''), [error, setError] = useState('')
-  const [panelEpoch, setPanelEpoch] = useState(0)
   const inFlight = useRef(false)
   const decide = async (item, choice) => {
     if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return
@@ -266,7 +265,14 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     } catch { setError(t('Decision outcome is unknown. Refresh before trying again.')) }
     finally { inFlight.current = false; setBusy('') }
   }
-  if (!recovery || recovery.available !== true) return h('p', { className: 'bt-board-pending', role: 'status' }, t('Recovery records are unavailable or incomplete.'))
+  const panel = { className:'bt-recovery-panel', open, onToggle:event => {
+    if (event.target === event.currentTarget && event.currentTarget.open !== open) onOpen(event.currentTarget.open)
+  } }
+  const icon = h('span', { className:'bt-recovery-icon', 'aria-hidden':true }, '↻')
+  const title = h('strong', null, t('Interrupted work'))
+  if (!open || recovery?.available !== true) return h('details', panel,
+    h('summary', { className:'bt-recovery-summary' }, icon, h('span', { className:'bt-recovery-summary-text' }, title)),
+    open ? h('p', { className:'bt-board-pending', role:'status' }, t(recovery === undefined ? 'Loading…' : 'Recovery records are unavailable or incomplete.')) : null)
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
   const filtered = rows.filter(item => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]))
@@ -277,17 +283,15 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const filteredDeliveries = deliveries.filter(item => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]))
   const pendingDeliveries = filteredDeliveries.filter(item => item.decision !== 'ignored')
   const ignoredDeliveries = filteredDeliveries.filter(item => item.decision === 'ignored')
-  if (!recovery.incomplete && !rows.length && !deliveries.length) return null
   const renderDeliveries = list => h('div', { className:'bt-recovery-deliveries' }, recoveryGroups(list, item => item.recipientId, item => item.recipientName).map(group => h('section', { key:group.id, className:'bt-recovery-group' },
     h('div', { className:'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:decideDelivery })))))
   const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('details', { key: group.id, className: 'bt-recovery-group', open: group.rows.length <= 4 ? true : undefined },
     h('summary', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
-    group.rows.map(item => h(HeldRecord, { key:`${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide })))))
-  return h('details', { className: 'bt-recovery-panel', onToggle:event => { if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch(value => value + 1) } },
-    h('summary', { className: 'bt-recovery-summary' },
-      h('span', { className: 'bt-recovery-icon', 'aria-hidden': true }, '↻'),
-      h('span', { className: 'bt-recovery-summary-text' }, h('strong', null, t('Interrupted work')),
+    group.rows.map(item => h(HeldRecord, { key:item.recoveryId, item, scope, request, busy, decide })))))
+  return h('details', panel,
+    h('summary', { className: 'bt-recovery-summary' }, icon,
+      h('span', { className: 'bt-recovery-summary-text' }, title,
         h('small', null, pendingDeliveries.length ? t('{turns} interrupted turns · {messages} queued messages', { turns:pendingRows.length, messages:pendingDeliveries.length })
           : t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
       h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? '—' : String(pendingRows.length + pendingDeliveries.length))),
@@ -1883,12 +1887,15 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled })
         h(ReleaseStatusChip, { status:release.status }))))) : h('p', { className:'bt-card-muted' }, t('No releases yet')))
 }
 
-function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors, onClose, onCreate }) {
+function ReleaseDialog({ release, disabled, releaseRoles, releaseCandidates = {}, actors, pending, feedback, onCheck, onClose, onSave }) {
   const roles = Array.isArray(releaseRoles) ? releaseRoles.filter(role => role && typeof role.key === 'string' && role.key) : []
   const teamSupported = roles.length > 0
   const bots = (Array.isArray(actors) ? actors : []).filter(actor => actor && typeof actor.id === 'string' && actor.id !== 'user')
   const candidates = releaseCandidates && typeof releaseCandidates === 'object' && !Array.isArray(releaseCandidates) ? releaseCandidates : {}
-  const firstCandidate = key => candidates[key]?.[0]?.id ?? ''
+  const members = new Map(bots.map(bot => [bot.id, bot]))
+  const recommended = key => Array.isArray(candidates[key]) ? candidates[key].filter(bot => members.has(bot?.id)) : []
+  const firstCandidate = key => recommended(key)[0]?.id ?? ''
+  const title = release ? t('Configure release team') : t('New release')
   const teamRoles = roles.filter(role => role.key !== 'projectManager')
   const [name, setName] = useState('')
   const [version, setVersion] = useState('')
@@ -1899,16 +1906,16 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
   const first = useRef(null)
   useEffect(() => { first.current?.focus() }, [])
   useEffect(() => {
-    const onKey = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); onClose() } }
+    const onKey = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); if (!saving) onClose() } }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, saving])
   // The project manager select answers the projectManager role; the other roles
   // keep their own select. Optional roles may stay unassigned.
-  const requiredMissing = teamRoles.filter(role => role.required === true && !assignments[role.key])
-  const missingCandidates = teamRoles.filter(role => role.required === true && !(Array.isArray(candidates[role.key]) && candidates[role.key].length))
-  const teamReady = !!manager && requiredMissing.length === 0
-  const valid = !!name.trim() && !!version.trim() && (!teamSupported || teamReady)
+  const requiredMissing = teamRoles.filter(role => role.required === true && !members.has(assignments[role.key]))
+  const missingCandidates = teamRoles.filter(role => role.required === true && !recommended(role.key).length)
+  const teamReady = members.has(manager) && requiredMissing.length === 0
+  const valid = (release ? teamSupported : !!name.trim() && !!version.trim()) && (!teamSupported || teamReady)
   const assign = (key, value) => setAssignments(current => ({ ...current, [key]: value }))
   const autoFill = () => {
     setManager(firstCandidate('projectManager'))
@@ -1918,26 +1925,30 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     event.preventDefault()
     if (!valid || disabled || saving) return
     setSaving(true); setError('')
-    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => typeof id === 'string' && id))
+    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => members.has(id)))
     const team = teamSupported ? { projectManagerId: manager, roles: { ...picked, projectManager: manager } } : undefined
-    try { await onCreate({ name: name.trim(), version: version.trim(), ...(team ? { team } : {}) }); onClose() }
-    catch (caught) { setError(hostText(caught?.message) || t('The release could not be created. Check the fields and try again.')) }
+    try {
+      const saved = await onSave(release ? { team } : { name:name.trim(), version:version.trim(), ...(team ? { team } : {}) })
+      if (saved !== false) onClose()
+    }
+    catch (caught) { setError(hostText(caught?.message) || t(release ? 'Unable to update release' : 'The release could not be created. Check the fields and try again.')) }
     finally { setSaving(false) }
   }
   const close = () => { if (!saving) onClose() }
   const botSelect = (value, label, onPick, roleKey) => {
-    const choices = Array.isArray(candidates[roleKey]) && candidates[roleKey].length ? candidates[roleKey] : bots
-    return h('select', { value, 'aria-label': label, disabled: disabled || saving, onChange: event => onPick(event.target.value) },
+    const preferred = new Map(recommended(roleKey).map(bot => [bot.id, { ...members.get(bot.id), ...bot }]))
+    const choices = [...preferred.values(), ...bots.filter(bot => !preferred.has(bot.id))]
+    return h('select', { ref:release && roleKey === 'projectManager' ? first : undefined, value, 'aria-label': label, disabled: disabled || saving, onChange: event => onPick(event.target.value) },
       h('option', { value: '' }, t('Choose a Bot')), choices.map(bot => h('option', { key: bot.id, value: bot.id }, textValue(bot.name) || bot.id, bot.role ? ' · ' + bot.role : '')))
   }
   return h('div', { className: 'bt-card-modal-backdrop bt-create-backdrop', onMouseDown: event => { if (event.target === event.currentTarget) close() } },
-    h('section', { className: 'bt-card-modal bt-create-modal bt-release-modal' + (teamSupported ? ' bt-release-modal-team' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': t('New release'), tabIndex: -1 },
+    h('section', { className: 'bt-card-modal bt-create-modal bt-release-modal' + (teamSupported ? ' bt-release-modal-team' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabIndex: -1 },
       h('header', { className: 'bt-card-modal-header' },
-        h('div', null, h('p', { className: 'bt-card-eyebrow' }, t('Releases')), h('h2', null, t('New release'))),
+        h('div', null, h('p', { className: 'bt-card-eyebrow' }, release ? [release.name, release.version].filter(Boolean).join(' · ') : t('Releases')), h('h2', null, title)),
         h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close'), onClick: close }, h(CloseIcon))),
       h('form', { className: 'bt-create-form', onSubmit: submit },
-        h('label', { className: 'bt-field' }, h('span', null, t('Release name')), h('input', { ref: first, value: name, maxLength: 200, disabled: disabled || saving, 'aria-label': t('Release name'), placeholder: t('Release name'), onChange: event => setName(event.target.value) })),
-        h('label', { className: 'bt-field' }, h('span', null, t('Version')), h('input', { value: version, maxLength: 100, disabled: disabled || saving, 'aria-label': t('Version'), placeholder: t('Version'), onChange: event => setVersion(event.target.value) })),
+        !release ? h('label', { className: 'bt-field' }, h('span', null, t('Release name')), h('input', { ref: first, value: name, maxLength: 200, disabled: disabled || saving, 'aria-label': t('Release name'), placeholder: t('Release name'), onChange: event => setName(event.target.value) })) : null,
+        !release ? h('label', { className: 'bt-field' }, h('span', null, t('Version')), h('input', { value: version, maxLength: 100, disabled: disabled || saving, 'aria-label': t('Version'), placeholder: t('Version'), onChange: event => setVersion(event.target.value) })) : null,
         teamSupported ? h('section', { className: 'bt-release-team', 'aria-label': t('Release team') },
           h('div', { className: 'bt-release-team-head' },
             h('h3', null, t('Release team')),
@@ -1954,10 +1965,11 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
             missingCandidates.length
               ? t('No Bot is tagged for {roles}. Pick another Bot, or create one with that role in Bots settings.', { roles: missingCandidates.map(releaseRoleLabel).join(', ') })
               : t('Choose a project manager and every required role.'))) : null,
-        error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
+        error || feedback ? h('p', { className:'bt-form-error', role:'alert' }, error || feedback) : null,
+        pending && !saving ? h('button', { type:'button', className:'bt-card-mini', onClick:() => onCheck(pending) }, t('Check action')) : null,
         h('div', { className: 'bt-create-actions' },
           h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: saving, onClick: close }, t('Cancel')),
-          h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || saving || !valid }, t('Create release'))))))
+          h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || saving || !valid }, t(release ? 'Save release team' : 'Create release'))))))
 }
 
 // One release gate: status, evidence, and its own small edit surface. The host
@@ -1985,7 +1997,7 @@ function ReleaseGateRow({ gateKey, label, gate, editable, disabled, onSave }) {
     needsEvidence ? h('p', { className: 'bt-release-gate-hint', role: 'note' }, t('Evidence is required to pass a gate.')) : null)
 }
 
-function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onClose, onCheck, onSaveGate, onOpenReport }) {
+function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onConfigureTeam, onClose, onCheck, onSaveGate, onOpenReport }) {
   const modal = useRef(null)
   useEffect(() => { modal.current?.focus() }, [])
   useEffect(() => {
@@ -2024,6 +2036,7 @@ function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, err
         h('section', { className: 'bt-release-section' },
           h('div', { className: 'bt-release-section-head' },
             h('h3', null, t('Role assignments')),
+            onConfigureTeam ? h('button', { type:'button', className:'bt-card-mini', onClick:onConfigureTeam }, t('Configure release team')) : null,
             h('span', { className: 'bt-release-section-count' }, t('{count} assigned', { count: releaseRoleCount(release) }))),
           roles.length
             ? h('div', { className: 'bt-release-role-list' }, roles.map(role => {
@@ -2111,7 +2124,9 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [toolsOpen, setToolsOpen] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(initialReview)
+  const [recoveryOpen, setRecoveryOpen] = useState(false)
+  const recoveryScope = useRef(null)
   const [memberFilter, setMemberFilter] = useState('')
   const [labelFilter, setLabelFilter] = useState('')
   const [dueFilter, setDueFilter] = useState('')
@@ -2156,6 +2171,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const active = useRef(false)
   const generation = useRef(0)
   const loadSequence = useRef(0)
+  const reading = useRef(null)
   const dialog = useRef(null)
   const searchRef = useRef(null)
   const dispose = useRef(null)
@@ -2186,24 +2202,43 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const current = epoch => active.current && generation.current === epoch
   const load = async (epoch = generation.current, preserveError = false) => {
     const sequence = ++loadSequence.current
+    reading.current = sequence
     try {
-      const next = await request('board-list', { scope })
+      const includeRecovery = recoveryScope.current === key
+      const next = await request('board-list', { scope, includeRecovery })
       if (!current(epoch) || sequence !== loadSequence.current) return
       if (!next || !Array.isArray(next.tasks)) throw new Error(t('Invalid board response'))
       boardColumns(next.tasks)
-      setData({ key, value: next })
+      const recovery = includeRecovery && recoveryScope.current === key ? next.recovery ?? null : undefined
+      setData({ key, value:{ ...next, recovery } })
       const nextProposals = Array.isArray(next.proposals) ? next.proposals.length : 0
       if (!changesOpen && nextProposals > knownProposals.current) setProposalUnread(value => value + (nextProposals - knownProposals.current))
       knownProposals.current = nextProposals
       if (!pendingRef.current && !preserveError) setError('')
       return true
-    } catch (caught) { if (current(epoch) && sequence === loadSequence.current) setError(caught?.message || t('Unable to load board')) }
+    } catch (caught) {
+      if (current(epoch) && sequence === loadSequence.current) {
+        if (recoveryScope.current === key) setData(existing => existing?.key === key ? { key, value:{ ...existing.value, recovery:null } } : existing)
+        setError(caught?.message || t('Unable to load board'))
+      }
+    } finally {
+      if (reading.current === sequence) reading.current = null
+    }
     return false
   }
   loadRef.current = load
+  const inspectRecovery = open => {
+    recoveryScope.current = open ? key : null
+    setRecoveryOpen(open)
+    setData(existing => existing?.key === key ? { key, value:{ ...existing.value, recovery:undefined } } : existing)
+    if (open) {
+      setToolsOpen(true)
+      void load()
+    }
+  }
   useEffect(() => {
     if (!visible) return
-    const refresh = () => { if (!document.hidden && !selectedCard && !createFor) void loadRef.current?.() }
+    const refresh = () => { if (!document.hidden && !selectedCard && !createFor && reading.current === null) void loadRef.current?.() }
     const timer = setInterval(refresh, 15_000)
     window.addEventListener('focus', refresh)
     return () => { clearInterval(timer); window.removeEventListener('focus', refresh) }
@@ -2242,6 +2277,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   useEffect(() => {
     if (!visible) return undefined
     active.current = true
+    recoveryScope.current = null
+    setRecoveryOpen(false); setToolsOpen(initialReview)
     const epoch = ++generation.current
     const previousFocus = document.activeElement
     store.current = pendingStore(scope)
@@ -2296,7 +2333,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       const inverse = { cancel:'restore', submit:'cancel', archive:'unarchive', schedule:'unschedule' }[command.type]
       if (state === 'committed' && inverse) {
         notify(t('Card updated'), async () => {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const currentTask = (latest?.tasks ?? []).find(item => item.id === task.id)
           if (!currentTask) return
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:currentTask.revision, type:inverse })
@@ -2310,7 +2347,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     } finally { if (fetching.current === operationId) { fetching.current = null; if (current(epoch)) setBusy(false) } }
   }
   const undoReorder = afterId => async taskId => {
-    const latest = await request('board-list', { scope })
+    const latest = await request('board-list', { scope, includeRecovery:false })
     const current = (latest?.tasks ?? []).find(item => item.id === taskId)
     if (!current) return
     await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId, expectedRevision:current.revision, type:'reorder', value:{ afterId } })
@@ -2380,7 +2417,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load()
       notify(t('Archived {count} cards', { count:ids.length }), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         const current = (latest?.tasks ?? []).filter(task => ids.includes(task.id) && task.archivedAt)
         for (const task of current) await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:task.revision, type:'unarchive' })
         await load()
@@ -2406,7 +2443,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load()
       if (changed) notify(t('Cancelled {count} cards', { count:changed }), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         const current = (latest?.tasks ?? []).filter(task => ids.includes(task.id) && task.status === 'cancelled')
         for (const task of current) await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:task.revision, type:'restore' })
         await load()
@@ -2434,7 +2471,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       await load(); notify(t('Updated {count} cards', { count:changed.length }), changed.length ? async () => {
         let failed = 0
         for (const id of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === id)
           if (!current) continue
           try { await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:current.revision, type:spec.inverse }) }
@@ -2460,7 +2497,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }
       await load()
       notify(t('Archived {count} cards', { count:ids.length }), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         for (const task of (latest?.tasks ?? []).filter(task => ids.includes(task.id) && task.archivedAt)) {
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:task.id, expectedRevision:task.revision, type:'unarchive' })
         }
@@ -2486,7 +2523,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Updated the type of {count} cards', { count:ids.length }), changed.length ? async () => {
         for (const [id, previous] of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === id)
           if (!current) continue
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:current.revision, type:'card-details', value:{ type:previous } })
@@ -2514,7 +2551,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Updated the owner of {count} cards', { count:changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
           if (!current) continue
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:entry.id, expectedRevision:current.revision, type:'edit',
@@ -2545,7 +2582,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       await load(); notify(t('Added {count} cards to {release}', { count:changed.length, release:textValue(release.name) || release.id }), changed.length ? async () => {
         let failed = 0
         for (const entry of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
           const currentRelease = (latest?.releases ?? []).find(item => item.id === release.id)
           if (!current || !currentRelease || current.releaseId !== release.id) continue
@@ -2591,7 +2628,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Duplicated {count} cards', { count:created.length }), created.length ? async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         for (const id of created) {
           const current = (latest?.tasks ?? []).find(item => item.id === id)
           if (!current || current.archivedAt) continue
@@ -2619,7 +2656,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       setSelectedIds(new Set()); setSelectionMode(false)
       await load(); notify(t('Moved {count} cards', { count:changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request('board-list', { scope })
+          const latest = await request('board-list', { scope, includeRecovery:false })
           const current = (latest?.tasks ?? []).find(item => item.id === entry.id)
           if (!current) continue
           await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:entry.id, expectedRevision:current.revision, type:'personal-progress', value:{ progress:entry.progress } })
@@ -2640,8 +2677,6 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const releaseTeamSupported = scope.kind === 'room' && !!releaseRoles?.length
   const proposals = Array.isArray(data?.proposals) ? data.proposals : []
   const proposalSupported = Array.isArray(data?.proposals)
-  const hasBoardTools = Boolean(data?.recovery?.items?.length || data?.recovery?.deliveries?.length || data?.recovery?.incomplete
-    || data?.remoteChanges?.items?.length || data?.remoteChanges?.incomplete || initialReview)
   const chooseView = next => { setView(next); setReleaseFocus('') }
   const openRelease = id => { setView('release'); setReleaseFocus(id) }
   const createRelease = async value => {
@@ -2652,6 +2687,29 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const { team, ...release } = value
     await request('board-release-create', { scope, operationId, release: { id: window.crypto.randomUUID(), ...release }, ...(team ? { team } : {}) })
     await load(generation.current, true)
+  }
+  const configureReleaseTeam = async (release, expectedRevision, { team }) => {
+    if (!canAct || fetching.current || pendingRef.current || release.canConfigureTeam !== true) return false
+    const epoch = generation.current, operationId = window.crypto.randomUUID()
+    store.current.put(operationId)
+    pendingRef.current = operationId; fetching.current = operationId
+    setPending(operationId); setBusy(true); setError('')
+    try {
+      let outcome
+      try {
+        const saved = await request('board-release-configure-team', { scope, releaseId:release.id, expectedRevision, operationId, team })
+        if (saved?.id === release.id && saved.projectManagerId === team.projectManagerId) outcome = { state:'committed' }
+      } catch (cause) {
+        if (['bot/invalid','bot/refused','bot/stale','bot/not-found','bot/read-only'].includes(cause?.code)) {
+          outcome = { state:'rejected', message:cause.message }
+        }
+      }
+      if (!current(epoch)) return false
+      const result = outcome ? await settle(operationId, outcome, epoch) : await check(operationId, epoch)
+      return result === 'committed'
+    } finally {
+      if (fetching.current === operationId) { fetching.current = null; if (current(epoch)) setBusy(false) }
+    }
   }
   const releaseRequest = async (endpoint, payload) => {
     if (releaseBusy || !window.crypto?.randomUUID) return false
@@ -2726,7 +2784,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }
       await load(generation.current, true)
       notify(t('Card moved'), async () => {
-        const latest = await request('board-list', { scope })
+        const latest = await request('board-list', { scope, includeRecovery:false })
         const currentTask = (latest?.tasks ?? []).find(item => item.id === task.id)
         if (!currentTask) return
         if (previousReleaseId) {
@@ -2860,6 +2918,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     } })
   const selected = selectedCard?.key === key ? data?.tasks?.find(task => task.id === selectedCard.id) : undefined
   const panelRelease = releasePanel ? releaseById.get(releasePanel.id) : null
+  const teamConfigurable = releaseTeamSupported && panelRelease?.canConfigureTeam === true && panelRelease.status === 'draft'
+    && !panelRelease.projectManagerId && releaseRoleCount(panelRelease) === 0
   useEffect(() => {
     if (releasePanel && data && !panelRelease) { setReleasePanel(null); setReleaseReport(null) }
   }, [releasePanel, data, panelRelease])
@@ -3114,8 +3174,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('span', { className: data.summary.blocked ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.blocked ?? 0), ' ', t('Blocked')),
         h('span', { className: data.summary.overdue ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.overdue ?? 0), ' ', t('Overdue')),
         h('span', null, h('b', null, data.summary.statuses?.done ?? 0), ' ', t('Done'))) : null,
-      hasBoardTools ? h('button', { type:'button', className:'bt-board-tools-toggle', 'aria-expanded':toolsOpen, onClick:() => setToolsOpen(value => !value) }, t('Board tools')) : null,
-      data ? h('div', { className: 'bt-board-review-tools' + (toolsOpen ? ' bt-board-review-tools-open' : '') }, h(HeldTurns, { key: 'held:' + key, recovery: data.recovery, scope, request, onRefresh: () => load() }), h(WorkDecisions, { key: 'decisions:' + key, scope, request, actors: data.capabilities?.actors }), h(LegacyWorkReview, { key: 'legacy-review:' + key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key: 'periodic:' + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges, { key: 'remote:' + key, monitor: data.remoteChanges })) : null,
+      data ? h('button', { type:'button', className:'bt-board-tools-toggle', 'aria-expanded':toolsOpen, onClick:() => { if (toolsOpen && recoveryOpen) inspectRecovery(false); setToolsOpen(value => !value) } }, t('Board tools')) : null,
+      data ? h('div', { className: 'bt-board-review-tools' + (toolsOpen ? ' bt-board-review-tools-open' : '') }, h(HeldTurns, { key: 'held:' + key, recovery:data.recovery, open:recoveryOpen && recoveryScope.current === key, onOpen:inspectRecovery, scope, request, onRefresh:() => recoveryScope.current === key && loadRef.current?.() }), h(WorkDecisions, { key: 'decisions:' + key, scope, request, actors: data.capabilities?.actors }), h(LegacyWorkReview, { key: 'legacy-review:' + key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key: 'periodic:' + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges, { key: 'remote:' + key, monitor: data.remoteChanges })) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'), error ? h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className: 'bt-board-content' },
           changesOpen && proposalSupported ? h(ProposalPanel, { proposals, actors, tasks: data.tasks, releases, disabled: !canAct || !!proposalBusy,
@@ -3148,14 +3208,19 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
             onClose: () => setSelectedCard(null), onOpenRelated:id => setSelectedCard({ key, id }), focusReturn: cardOpener, boardRef: dialog, pending, busy, error, onCheck: check, onCancel: cancel, cancelBusy, onDuplicate: createEnabled ? duplicate : undefined }) : null,
           createFor ? h(CreateCardDialog, { key: 'create:' + (createFor.laneLabel || '') + ':' + (createFor.personalProgress || ''), ...createFor, group:scope.kind === 'room', disabled: !createEnabled, actors, tasks: data.tasks, onCreate: createCard, onClose: () => setCreateFor(null) }) : null,
           newRelease ? h(ReleaseDialog, { disabled: !canAct, releaseRoles: releaseTeamSupported ? releaseRoles : null, releaseCandidates: data.releaseCandidates, actors,
-            onClose: () => setNewRelease(false), onCreate: createRelease }) : null,
-          panelRelease && releasePanel?.mode === 'report'
+            onClose: () => setNewRelease(false), onSave: createRelease }) : null,
+          releasePanel?.mode === 'team' && teamConfigurable && panelRelease.revision === releasePanel.revision
+            ? h(ReleaseDialog, { key:'team:' + panelRelease.id, release:panelRelease, disabled:!canAct,
+              releaseRoles, releaseCandidates:data.releaseCandidates, actors, pending, feedback:error, onCheck:check,
+              onClose:() => openReleaseDetails(panelRelease.id), onSave:value => configureReleaseTeam(panelRelease, releasePanel.revision, value) })
+            : panelRelease && releasePanel?.mode === 'report'
             ? h(ReleaseReportDialog, { key: 'report:' + panelRelease.id, release: panelRelease,
               report: releaseReport?.id === panelRelease.id ? releaseReport : null,
               onClose: closeReleasePanel, onBack: () => setReleasePanel({ id: panelRelease.id, mode: 'detail' }) })
             : panelRelease
               ? h(ReleaseDetailDialog, { key: 'release:' + panelRelease.id, release: panelRelease, actors, releaseRoles,
                 canEdit: releaseEditable(panelRelease), busy: !!releaseBusy, error: releaseError,
+                onConfigureTeam:teamConfigurable && canAct ? () => { setError(''); setReleasePanel({id:panelRelease.id, mode:'team', revision:panelRelease.revision}) } : undefined,
                 onClose: closeReleasePanel, onCheck: release => void checkRelease(release),
                 onSaveGate: (gate, status, evidence) => void saveReleaseGate(panelRelease, gate, status, evidence),
                 onOpenReport: release => void openReleaseReport(release) }) : null),

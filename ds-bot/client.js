@@ -39,6 +39,22 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// src/shared/release-labels.js
+var RELEASE_ROLE_LABELS_ZH = {
+  "Project Manager": "项目经理",
+  "Product Manager": "产品经理",
+  "Architect": "架构师",
+  "UI Designer": "UI 设计师",
+  "UX Designer": "UX 设计师",
+  "Frontend Developer": "前端开发",
+  "Backend Developer": "后端开发",
+  "API Engineer": "API 中间件工程师",
+  "Database Administrator": "数据库管理员",
+  "Test Engineer": "测试工程师",
+  "Independent Reviewer": "独立验收人",
+  "Operations Engineer": "运维工程师"
+};
+
 // src/client/locales/zh-tw.js
 var PHRASES = [
   ["剪贴板", "剪貼簿"],
@@ -14551,6 +14567,8 @@ var ZH = {
   "Due date complete": "截止日期已完成",
   "Release name": "发布名称",
   "Create release": "创建发布",
+  "Configure release team": "配置发布团队",
+  "Save release team": "保存发布团队",
   "New release": "新建发布",
   "Destination card": "目标卡片",
   "Choose a feature or bugfix": "选择功能或缺陷卡",
@@ -14589,18 +14607,7 @@ var ZH = {
   "Drag cards between release lanes. Arrow controls reorder draft and queued releases.": "在发布列之间拖动卡片；用箭头按钮调整起草和排队发布的顺序。",
   "Release team": "发布团队",
   "This minor release uses the current major-version group and its existing admin and members.": "此小版本使用当前大版本群及其现任管理员与成员。",
-  "Project Manager": "项目经理",
-  "Product Manager": "产品经理",
-  "Architect": "架构师",
-  "UI Designer": "UI 设计师",
-  "UX Designer": "UX 设计师",
-  "Frontend Developer": "前端开发",
-  "Backend Developer": "后端开发",
-  "API Engineer": "API 中间件工程师",
-  "Database Administrator": "数据库管理员",
-  "Test Engineer": "测试工程师",
-  "Independent Reviewer": "独立验收人",
-  "Operations Engineer": "运维工程师",
+  ...RELEASE_ROLE_LABELS_ZH,
   "Required": "必填",
   "Choose a project manager and every required role.": "请选择项目经理和所有必填角色。",
   "Release details": "发布详情",
@@ -39318,10 +39325,9 @@ function QueuedDelivery({ item, busy, decide }) {
     )
   );
 }
-function HeldTurns({ recovery, scope, request, onRefresh }) {
+function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   const [query, setQuery] = (0, import_react54.useState)("");
   const [busy, setBusy] = (0, import_react54.useState)(""), [error, setError] = (0, import_react54.useState)("");
-  const [panelEpoch, setPanelEpoch] = (0, import_react54.useState)(0);
   const inFlight = (0, import_react54.useRef)(false);
   const decide = async (item, choice) => {
     if (inFlight.current || !Number.isSafeInteger(item.decisionRevision)) return;
@@ -39353,7 +39359,17 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
       setBusy("");
     }
   };
-  if (!recovery || recovery.available !== true) return (0, import_react54.createElement)("p", { className: "bt-board-pending", role: "status" }, t("Recovery records are unavailable or incomplete."));
+  const panel = { className: "bt-recovery-panel", open, onToggle: (event) => {
+    if (event.target === event.currentTarget && event.currentTarget.open !== open) onOpen(event.currentTarget.open);
+  } };
+  const icon2 = (0, import_react54.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "↻");
+  const title = (0, import_react54.createElement)("strong", null, t("Interrupted work"));
+  if (!open || recovery?.available !== true) return (0, import_react54.createElement)(
+    "details",
+    panel,
+    (0, import_react54.createElement)("summary", { className: "bt-recovery-summary" }, icon2, (0, import_react54.createElement)("span", { className: "bt-recovery-summary-text" }, title)),
+    open ? (0, import_react54.createElement)("p", { className: "bt-board-pending", role: "status" }, t(recovery === void 0 ? "Loading…" : "Recovery records are unavailable or incomplete.")) : null
+  );
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
   const needle = query.trim().toLocaleLowerCase();
   const filtered = rows2.filter((item) => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]));
@@ -39364,7 +39380,6 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
   const filteredDeliveries = deliveries.filter((item) => matchesRecovery(needle, [item.recipientName, item.recipientId, item.sessionId, item.exchangeId]));
   const pendingDeliveries = filteredDeliveries.filter((item) => item.decision !== "ignored");
   const ignoredDeliveries = filteredDeliveries.filter((item) => item.decision === "ignored");
-  if (!recovery.incomplete && !rows2.length && !deliveries.length) return null;
   const renderDeliveries = (list) => (0, import_react54.createElement)("div", { className: "bt-recovery-deliveries" }, recoveryGroups(list, (item) => item.recipientId, (item) => item.recipientName).map((group) => (0, import_react54.createElement)(
     "section",
     { key: group.id, className: "bt-recovery-group" },
@@ -39375,21 +39390,19 @@ function HeldTurns({ recovery, scope, request, onRefresh }) {
     "details",
     { key: group.id, className: "bt-recovery-group", open: group.rows.length <= 4 ? true : void 0 },
     (0, import_react54.createElement)("summary", { className: "bt-recovery-group-title" }, (0, import_react54.createElement)("strong", null, group.name), (0, import_react54.createElement)("span", null, group.rows.length)),
-    group.rows.map((item) => (0, import_react54.createElement)(HeldRecord, { key: `${item.recoveryId}:${panelEpoch}`, item, scope, request, busy, decide }))
+    group.rows.map((item) => (0, import_react54.createElement)(HeldRecord, { key: item.recoveryId, item, scope, request, busy, decide }))
   )));
   return (0, import_react54.createElement)(
     "details",
-    { className: "bt-recovery-panel", onToggle: (event) => {
-      if (event.target === event.currentTarget && !event.currentTarget.open) setPanelEpoch((value) => value + 1);
-    } },
+    panel,
     (0, import_react54.createElement)(
       "summary",
       { className: "bt-recovery-summary" },
-      (0, import_react54.createElement)("span", { className: "bt-recovery-icon", "aria-hidden": true }, "↻"),
+      icon2,
       (0, import_react54.createElement)(
         "span",
         { className: "bt-recovery-summary-text" },
-        (0, import_react54.createElement)("strong", null, t("Interrupted work")),
+        title,
         (0, import_react54.createElement)("small", null, pendingDeliveries.length ? t("{turns} interrupted turns · {messages} queued messages", { turns: pendingRows.length, messages: pendingDeliveries.length }) : t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
       ),
       (0, import_react54.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? "—" : String(pendingRows.length + pendingDeliveries.length))
@@ -41981,12 +41994,15 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled })
     )))) : (0, import_react54.createElement)("p", { className: "bt-card-muted" }, t("No releases yet"))
   );
 }
-function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors, onClose, onCreate }) {
+function ReleaseDialog({ release, disabled, releaseRoles, releaseCandidates = {}, actors, pending, feedback, onCheck, onClose, onSave }) {
   const roles = Array.isArray(releaseRoles) ? releaseRoles.filter((role) => role && typeof role.key === "string" && role.key) : [];
   const teamSupported = roles.length > 0;
   const bots = (Array.isArray(actors) ? actors : []).filter((actor) => actor && typeof actor.id === "string" && actor.id !== "user");
   const candidates = releaseCandidates && typeof releaseCandidates === "object" && !Array.isArray(releaseCandidates) ? releaseCandidates : {};
-  const firstCandidate = (key) => candidates[key]?.[0]?.id ?? "";
+  const members = new Map(bots.map((bot) => [bot.id, bot]));
+  const recommended = (key) => Array.isArray(candidates[key]) ? candidates[key].filter((bot) => members.has(bot?.id)) : [];
+  const firstCandidate = (key) => recommended(key)[0]?.id ?? "";
+  const title = release ? t("Configure release team") : t("New release");
   const teamRoles = roles.filter((role) => role.key !== "projectManager");
   const [name, setName] = (0, import_react54.useState)("");
   const [version, setVersion] = (0, import_react54.useState)("");
@@ -42003,16 +42019,16 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onClose();
+        if (!saving) onClose();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-  const requiredMissing = teamRoles.filter((role) => role.required === true && !assignments[role.key]);
-  const missingCandidates = teamRoles.filter((role) => role.required === true && !(Array.isArray(candidates[role.key]) && candidates[role.key].length));
-  const teamReady = !!manager && requiredMissing.length === 0;
-  const valid = !!name.trim() && !!version.trim() && (!teamSupported || teamReady);
+  }, [onClose, saving]);
+  const requiredMissing = teamRoles.filter((role) => role.required === true && !members.has(assignments[role.key]));
+  const missingCandidates = teamRoles.filter((role) => role.required === true && !recommended(role.key).length);
+  const teamReady = members.has(manager) && requiredMissing.length === 0;
+  const valid = (release ? teamSupported : !!name.trim() && !!version.trim()) && (!teamSupported || teamReady);
   const assign = (key, value) => setAssignments((current2) => ({ ...current2, [key]: value }));
   const autoFill = () => {
     setManager(firstCandidate("projectManager"));
@@ -42023,13 +42039,13 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     if (!valid || disabled || saving) return;
     setSaving(true);
     setError("");
-    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => typeof id === "string" && id));
+    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => members.has(id)));
     const team = teamSupported ? { projectManagerId: manager, roles: { ...picked, projectManager: manager } } : void 0;
     try {
-      await onCreate({ name: name.trim(), version: version.trim(), ...team ? { team } : {} });
-      onClose();
+      const saved = await onSave(release ? { team } : { name: name.trim(), version: version.trim(), ...team ? { team } : {} });
+      if (saved !== false) onClose();
     } catch (caught) {
-      setError(hostText(caught?.message) || t("The release could not be created. Check the fields and try again."));
+      setError(hostText(caught?.message) || t(release ? "Unable to update release" : "The release could not be created. Check the fields and try again."));
     } finally {
       setSaving(false);
     }
@@ -42038,10 +42054,11 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     if (!saving) onClose();
   };
   const botSelect = (value, label, onPick, roleKey) => {
-    const choices = Array.isArray(candidates[roleKey]) && candidates[roleKey].length ? candidates[roleKey] : bots;
+    const preferred = new Map(recommended(roleKey).map((bot) => [bot.id, { ...members.get(bot.id), ...bot }]));
+    const choices = [...preferred.values(), ...bots.filter((bot) => !preferred.has(bot.id))];
     return (0, import_react54.createElement)(
       "select",
-      { value, "aria-label": label, disabled: disabled || saving, onChange: (event) => onPick(event.target.value) },
+      { ref: release && roleKey === "projectManager" ? first : void 0, value, "aria-label": label, disabled: disabled || saving, onChange: (event) => onPick(event.target.value) },
       (0, import_react54.createElement)("option", { value: "" }, t("Choose a Bot")),
       choices.map((bot) => (0, import_react54.createElement)("option", { key: bot.id, value: bot.id }, textValue(bot.name) || bot.id, bot.role ? " · " + bot.role : ""))
     );
@@ -42053,18 +42070,18 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     } },
     (0, import_react54.createElement)(
       "section",
-      { className: "bt-card-modal bt-create-modal bt-release-modal" + (teamSupported ? " bt-release-modal-team" : ""), role: "dialog", "aria-modal": "true", "aria-label": t("New release"), tabIndex: -1 },
+      { className: "bt-card-modal bt-create-modal bt-release-modal" + (teamSupported ? " bt-release-modal-team" : ""), role: "dialog", "aria-modal": "true", "aria-label": title, tabIndex: -1 },
       (0, import_react54.createElement)(
         "header",
         { className: "bt-card-modal-header" },
-        (0, import_react54.createElement)("div", null, (0, import_react54.createElement)("p", { className: "bt-card-eyebrow" }, t("Releases")), (0, import_react54.createElement)("h2", null, t("New release"))),
+        (0, import_react54.createElement)("div", null, (0, import_react54.createElement)("p", { className: "bt-card-eyebrow" }, release ? [release.name, release.version].filter(Boolean).join(" · ") : t("Releases")), (0, import_react54.createElement)("h2", null, title)),
         (0, import_react54.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), onClick: close }, (0, import_react54.createElement)(CloseIcon))
       ),
       (0, import_react54.createElement)(
         "form",
         { className: "bt-create-form", onSubmit: submit },
-        (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Release name")), (0, import_react54.createElement)("input", { ref: first, value: name, maxLength: 200, disabled: disabled || saving, "aria-label": t("Release name"), placeholder: t("Release name"), onChange: (event) => setName(event.target.value) })),
-        (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Version")), (0, import_react54.createElement)("input", { value: version, maxLength: 100, disabled: disabled || saving, "aria-label": t("Version"), placeholder: t("Version"), onChange: (event) => setVersion(event.target.value) })),
+        !release ? (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Release name")), (0, import_react54.createElement)("input", { ref: first, value: name, maxLength: 200, disabled: disabled || saving, "aria-label": t("Release name"), placeholder: t("Release name"), onChange: (event) => setName(event.target.value) })) : null,
+        !release ? (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Version")), (0, import_react54.createElement)("input", { value: version, maxLength: 100, disabled: disabled || saving, "aria-label": t("Version"), placeholder: t("Version"), onChange: (event) => setVersion(event.target.value) })) : null,
         teamSupported ? (0, import_react54.createElement)(
           "section",
           { className: "bt-release-team", "aria-label": t("Release team") },
@@ -42094,12 +42111,13 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
             missingCandidates.length ? t("No Bot is tagged for {roles}. Pick another Bot, or create one with that role in Bots settings.", { roles: missingCandidates.map(releaseRoleLabel).join(", ") }) : t("Choose a project manager and every required role.")
           )
         ) : null,
-        error ? (0, import_react54.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+        error || feedback ? (0, import_react54.createElement)("p", { className: "bt-form-error", role: "alert" }, error || feedback) : null,
+        pending && !saving ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => onCheck(pending) }, t("Check action")) : null,
         (0, import_react54.createElement)(
           "div",
           { className: "bt-create-actions" },
           (0, import_react54.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: saving, onClick: close }, t("Cancel")),
-          (0, import_react54.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !valid }, t("Create release"))
+          (0, import_react54.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !valid }, t(release ? "Save release team" : "Create release"))
         )
       )
     )
@@ -42147,7 +42165,7 @@ function ReleaseGateRow({ gateKey, label, gate, editable, disabled, onSave }) {
     needsEvidence ? (0, import_react54.createElement)("p", { className: "bt-release-gate-hint", role: "note" }, t("Evidence is required to pass a gate.")) : null
   );
 }
-function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onClose, onCheck, onSaveGate, onOpenReport }) {
+function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onConfigureTeam, onClose, onCheck, onSaveGate, onOpenReport }) {
   const modal = (0, import_react54.useRef)(null);
   (0, import_react54.useEffect)(() => {
     modal.current?.focus();
@@ -42216,6 +42234,7 @@ function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, err
             "div",
             { className: "bt-release-section-head" },
             (0, import_react54.createElement)("h3", null, t("Role assignments")),
+            onConfigureTeam ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", onClick: onConfigureTeam }, t("Configure release team")) : null,
             (0, import_react54.createElement)("span", { className: "bt-release-section-count" }, t("{count} assigned", { count: releaseRoleCount(release) }))
           ),
           roles.length ? (0, import_react54.createElement)("div", { className: "bt-release-role-list" }, roles.map((role) => {
@@ -42377,7 +42396,9 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const [error, setError] = (0, import_react54.useState)("");
   const [search, setSearch] = (0, import_react54.useState)("");
   const [filtersOpen, setFiltersOpen] = (0, import_react54.useState)(false);
-  const [toolsOpen, setToolsOpen] = (0, import_react54.useState)(false);
+  const [toolsOpen, setToolsOpen] = (0, import_react54.useState)(initialReview);
+  const [recoveryOpen, setRecoveryOpen] = (0, import_react54.useState)(false);
+  const recoveryScope = (0, import_react54.useRef)(null);
   const [memberFilter, setMemberFilter] = (0, import_react54.useState)("");
   const [labelFilter, setLabelFilter] = (0, import_react54.useState)("");
   const [dueFilter, setDueFilter] = (0, import_react54.useState)("");
@@ -42431,6 +42452,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const active = (0, import_react54.useRef)(false);
   const generation = (0, import_react54.useRef)(0);
   const loadSequence = (0, import_react54.useRef)(0);
+  const reading = (0, import_react54.useRef)(null);
   const dialog = (0, import_react54.useRef)(null);
   const searchRef = (0, import_react54.useRef)(null);
   const dispose = (0, import_react54.useRef)(null);
@@ -42483,27 +42505,44 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const current2 = (epoch) => active.current && generation.current === epoch;
   const load = async (epoch = generation.current, preserveError = false) => {
     const sequence = ++loadSequence.current;
+    reading.current = sequence;
     try {
-      const next = await request("board-list", { scope });
+      const includeRecovery = recoveryScope.current === key;
+      const next = await request("board-list", { scope, includeRecovery });
       if (!current2(epoch) || sequence !== loadSequence.current) return;
       if (!next || !Array.isArray(next.tasks)) throw new Error(t("Invalid board response"));
       boardColumns(next.tasks);
-      setData({ key, value: next });
+      const recovery = includeRecovery && recoveryScope.current === key ? next.recovery ?? null : void 0;
+      setData({ key, value: { ...next, recovery } });
       const nextProposals = Array.isArray(next.proposals) ? next.proposals.length : 0;
       if (!changesOpen && nextProposals > knownProposals.current) setProposalUnread((value) => value + (nextProposals - knownProposals.current));
       knownProposals.current = nextProposals;
       if (!pendingRef.current && !preserveError) setError("");
       return true;
     } catch (caught) {
-      if (current2(epoch) && sequence === loadSequence.current) setError(caught?.message || t("Unable to load board"));
+      if (current2(epoch) && sequence === loadSequence.current) {
+        if (recoveryScope.current === key) setData((existing) => existing?.key === key ? { key, value: { ...existing.value, recovery: null } } : existing);
+        setError(caught?.message || t("Unable to load board"));
+      }
+    } finally {
+      if (reading.current === sequence) reading.current = null;
     }
     return false;
   };
   loadRef.current = load;
+  const inspectRecovery = (open) => {
+    recoveryScope.current = open ? key : null;
+    setRecoveryOpen(open);
+    setData((existing) => existing?.key === key ? { key, value: { ...existing.value, recovery: void 0 } } : existing);
+    if (open) {
+      setToolsOpen(true);
+      void load();
+    }
+  };
   (0, import_react54.useEffect)(() => {
     if (!visible) return;
     const refresh = () => {
-      if (!document.hidden && !selectedCard && !createFor) void loadRef.current?.();
+      if (!document.hidden && !selectedCard && !createFor && reading.current === null) void loadRef.current?.();
     };
     const timer = setInterval(refresh, 15e3);
     window.addEventListener("focus", refresh);
@@ -42565,6 +42604,9 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   (0, import_react54.useEffect)(() => {
     if (!visible) return void 0;
     active.current = true;
+    recoveryScope.current = null;
+    setRecoveryOpen(false);
+    setToolsOpen(initialReview);
     const epoch = ++generation.current;
     const previousFocus = document.activeElement;
     store.current = pendingStore(scope);
@@ -42689,7 +42731,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       const inverse = { cancel: "restore", submit: "cancel", archive: "unarchive", schedule: "unschedule" }[command.type];
       if (state === "committed" && inverse) {
         notify(t("Card updated"), async () => {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const currentTask = (latest?.tasks ?? []).find((item) => item.id === task.id);
           if (!currentTask) return;
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: currentTask.revision, type: inverse });
@@ -42709,7 +42751,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     }
   };
   const undoReorder = (afterId) => async (taskId) => {
-    const latest = await request("board-list", { scope });
+    const latest = await request("board-list", { scope, includeRecovery: false });
     const current3 = (latest?.tasks ?? []).find((item) => item.id === taskId);
     if (!current3) return;
     await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId, expectedRevision: current3.revision, type: "reorder", value: { afterId } });
@@ -42796,7 +42838,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setSelectionMode(false);
       await load();
       notify(t("Archived {count} cards", { count: ids.length }), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         const current3 = (latest?.tasks ?? []).filter((task) => ids.includes(task.id) && task.archivedAt);
         for (const task of current3) await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "unarchive" });
         await load();
@@ -42826,7 +42868,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setSelectionMode(false);
       await load();
       if (changed) notify(t("Cancelled {count} cards", { count: changed }), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         const current3 = (latest?.tasks ?? []).filter((task) => ids.includes(task.id) && task.status === "cancelled");
         for (const task of current3) await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "restore" });
         await load();
@@ -42859,7 +42901,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       notify(t("Updated {count} cards", { count: changed.length }), changed.length ? async () => {
         let failed = 0;
         for (const id of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === id);
           if (!current3) continue;
           try {
@@ -42891,7 +42933,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       }
       await load();
       notify(t("Archived {count} cards", { count: ids.length }), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         for (const task of (latest?.tasks ?? []).filter((task2) => ids.includes(task2.id) && task2.archivedAt)) {
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: task.id, expectedRevision: task.revision, type: "unarchive" });
         }
@@ -42923,7 +42965,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       await load();
       notify(t("Updated the type of {count} cards", { count: ids.length }), changed.length ? async () => {
         for (const [id, previous] of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === id);
           if (!current3) continue;
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: id, expectedRevision: current3.revision, type: "card-details", value: { type: previous } });
@@ -42963,7 +43005,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       await load();
       notify(t("Updated the owner of {count} cards", { count: changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === entry.id);
           if (!current3) continue;
           await request("board-command", {
@@ -43013,7 +43055,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       notify(t("Added {count} cards to {release}", { count: changed.length, release: textValue(release.name) || release.id }), changed.length ? async () => {
         let failed = 0;
         for (const entry of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === entry.id);
           const currentRelease = (latest?.releases ?? []).find((item) => item.id === release.id);
           if (!current3 || !currentRelease || current3.releaseId !== release.id) continue;
@@ -43089,7 +43131,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       setSelectionMode(false);
       await load();
       notify(t("Duplicated {count} cards", { count: created.length }), created.length ? async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         for (const id of created) {
           const current3 = (latest?.tasks ?? []).find((item) => item.id === id);
           if (!current3 || current3.archivedAt) continue;
@@ -43123,7 +43165,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       await load();
       notify(t("Moved {count} cards", { count: changed.length }), changed.length ? async () => {
         for (const entry of changed) {
-          const latest = await request("board-list", { scope });
+          const latest = await request("board-list", { scope, includeRecovery: false });
           const current3 = (latest?.tasks ?? []).find((item) => item.id === entry.id);
           if (!current3) continue;
           await request("board-command", { scope, operationId: window.crypto.randomUUID(), taskId: entry.id, expectedRevision: current3.revision, type: "personal-progress", value: { progress: entry.progress } });
@@ -43148,7 +43190,6 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   const releaseTeamSupported = scope.kind === "room" && !!releaseRoles?.length;
   const proposals = Array.isArray(data?.proposals) ? data.proposals : [];
   const proposalSupported = Array.isArray(data?.proposals);
-  const hasBoardTools = Boolean(data?.recovery?.items?.length || data?.recovery?.deliveries?.length || data?.recovery?.incomplete || data?.remoteChanges?.items?.length || data?.remoteChanges?.incomplete || initialReview);
   const chooseView = (next) => {
     setView(next);
     setReleaseFocus("");
@@ -43163,6 +43204,35 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
     const { team, ...release } = value;
     await request("board-release-create", { scope, operationId, release: { id: window.crypto.randomUUID(), ...release }, ...team ? { team } : {} });
     await load(generation.current, true);
+  };
+  const configureReleaseTeam = async (release, expectedRevision, { team }) => {
+    if (!canAct || fetching.current || pendingRef.current || release.canConfigureTeam !== true) return false;
+    const epoch = generation.current, operationId = window.crypto.randomUUID();
+    store.current.put(operationId);
+    pendingRef.current = operationId;
+    fetching.current = operationId;
+    setPending(operationId);
+    setBusy(true);
+    setError("");
+    try {
+      let outcome;
+      try {
+        const saved = await request("board-release-configure-team", { scope, releaseId: release.id, expectedRevision, operationId, team });
+        if (saved?.id === release.id && saved.projectManagerId === team.projectManagerId) outcome = { state: "committed" };
+      } catch (cause) {
+        if (["bot/invalid", "bot/refused", "bot/stale", "bot/not-found", "bot/read-only"].includes(cause?.code)) {
+          outcome = { state: "rejected", message: cause.message };
+        }
+      }
+      if (!current2(epoch)) return false;
+      const result = outcome ? await settle(operationId, outcome, epoch) : await check(operationId, epoch);
+      return result === "committed";
+    } finally {
+      if (fetching.current === operationId) {
+        fetching.current = null;
+        if (current2(epoch)) setBusy(false);
+      }
+    }
   };
   const releaseRequest = async (endpoint, payload) => {
     if (releaseBusy || !window.crypto?.randomUUID) return false;
@@ -43259,7 +43329,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
       }
       await load(generation.current, true);
       notify(t("Card moved"), async () => {
-        const latest = await request("board-list", { scope });
+        const latest = await request("board-list", { scope, includeRecovery: false });
         const currentTask = (latest?.tasks ?? []).find((item) => item.id === task.id);
         if (!currentTask) return;
         if (previousReleaseId) {
@@ -43437,6 +43507,7 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
   });
   const selected = selectedCard?.key === key ? data?.tasks?.find((task) => task.id === selectedCard.id) : void 0;
   const panelRelease = releasePanel ? releaseById.get(releasePanel.id) : null;
+  const teamConfigurable = releaseTeamSupported && panelRelease?.canConfigureTeam === true && panelRelease.status === "draft" && !panelRelease.projectManagerId && releaseRoleCount(panelRelease) === 0;
   (0, import_react54.useEffect)(() => {
     if (releasePanel && data && !panelRelease) {
       setReleasePanel(null);
@@ -43959,8 +44030,11 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
         (0, import_react54.createElement)("span", { className: data.summary.overdue ? "bt-board-summary-alert" : "" }, (0, import_react54.createElement)("b", null, data.summary.overdue ?? 0), " ", t("Overdue")),
         (0, import_react54.createElement)("span", null, (0, import_react54.createElement)("b", null, data.summary.statuses?.done ?? 0), " ", t("Done"))
       ) : null,
-      hasBoardTools ? (0, import_react54.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => setToolsOpen((value) => !value) }, t("Board tools")) : null,
-      data ? (0, import_react54.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react54.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, scope, request, onRefresh: () => load() }), (0, import_react54.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react54.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
+      data ? (0, import_react54.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => {
+        if (toolsOpen && recoveryOpen) inspectRecovery(false);
+        setToolsOpen((value) => !value);
+      } }, t("Board tools")) : null,
+      data ? (0, import_react54.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react54.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, open: recoveryOpen && recoveryScope.current === key, onOpen: inspectRecovery, scope, request, onRefresh: () => recoveryScope.current === key && loadRef.current?.() }), (0, import_react54.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react54.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react54.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
       !data ? (0, import_react54.createElement)("div", { className: "bt-board-empty" }, error ? t("Board unavailable") : t("Loading…"), error ? (0, import_react54.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => load() }, t("Retry")) : null) : (0, import_react54.createElement)(
         "div",
         { className: "bt-board-content" },
@@ -44042,9 +44116,21 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           releaseCandidates: data.releaseCandidates,
           actors,
           onClose: () => setNewRelease(false),
-          onCreate: createRelease
+          onSave: createRelease
         }) : null,
-        panelRelease && releasePanel?.mode === "report" ? (0, import_react54.createElement)(ReleaseReportDialog, {
+        releasePanel?.mode === "team" && teamConfigurable && panelRelease.revision === releasePanel.revision ? (0, import_react54.createElement)(ReleaseDialog, {
+          key: "team:" + panelRelease.id,
+          release: panelRelease,
+          disabled: !canAct,
+          releaseRoles,
+          releaseCandidates: data.releaseCandidates,
+          actors,
+          pending,
+          feedback: error,
+          onCheck: check,
+          onClose: () => openReleaseDetails(panelRelease.id),
+          onSave: (value) => configureReleaseTeam(panelRelease, releasePanel.revision, value)
+        }) : panelRelease && releasePanel?.mode === "report" ? (0, import_react54.createElement)(ReleaseReportDialog, {
           key: "report:" + panelRelease.id,
           release: panelRelease,
           report: releaseReport?.id === panelRelease.id ? releaseReport : null,
@@ -44058,6 +44144,10 @@ function TaskBoard({ scope, title, close, request = call, goal, resolveReview, r
           canEdit: releaseEditable(panelRelease),
           busy: !!releaseBusy,
           error: releaseError,
+          onConfigureTeam: teamConfigurable && canAct ? () => {
+            setError("");
+            setReleasePanel({ id: panelRelease.id, mode: "team", revision: panelRelease.revision });
+          } : void 0,
           onClose: closeReleasePanel,
           onCheck: (release) => void checkRelease(release),
           onSaveGate: (gate, status, evidence) => void saveReleaseGate(panelRelease, gate, status, evidence),

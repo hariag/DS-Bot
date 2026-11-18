@@ -1,12 +1,13 @@
 import { isUnassignedItemDraft } from './board-intake.mjs'
 import { boardList } from './board-query.js'
 import { legacyGoalCards, linkGoalCards } from './legacy-goal.js'
-import { RELEASE_ROLES, roleForBot } from './release-team.mjs'
+import { canConfigureReleaseTeam, RELEASE_ROLES, roleForBot } from './release-team.mjs'
 
 const has = (obj, key) => obj != null && Object.hasOwn(obj, key)
 const nonempty = value => typeof value === 'string' && value.trim() !== '' && value.length <= 256
 const string = (value, max) => typeof value === 'string' && value.trim() !== '' && value.length <= max
 const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' })
+const liveAction = action => ['pending','claimed','accepted','uncertain'].includes(action.state)
 
 // `principal` comes from the authenticated route, never from a request body.
 // The current browser principal represents the instance owner, not a Bot.
@@ -18,13 +19,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
   }
   const view = (scope, principal) => {
     const state = current()
-    const tasks = store.list().map(task => {
-      const kind = task.status === 'reported' ? 'review' : 'execute'
-      const action = ['ready','working','reported'].includes(task.status)
-        ? (store.listActions?.(task.id) ?? []).find(item => item.kind === kind && item.revision === task.actionRevision) : undefined
-      return action && ['pending','claimed','accepted','uncertain'].includes(action.state)
-        ? { ...task, dispatchState:action.state } : task
-    })
+    const tasks = store.list()
     const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, verifyShare, verifyDependency })
     const addLegacy = () => {
       const ids = new Set(board.tasks.map(task => task.id))
@@ -37,6 +32,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     }
     addLegacy()
     if (principal?.kind !== 'user') return board
+    const byId = new Map(tasks.map(task => [task.id, task]))
     const isPublic = id => has(state.bots, id) && state.bots[id]?.private !== true
     const publicBots = Object.keys(state.bots).filter(isPublic)
     const ids = scope.kind === 'room'
@@ -48,19 +44,24 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const availableTargets = Object.create(null)
     const releases = store.listReleases?.(`${scope.kind}:${scope.id}`) ?? []
     const commands = Object.fromEntries(board.tasks.map(task => {
+      const source = byId.get(task.id)
+      if (!task.shared && !task.legacy && ['ready','working','reported'].includes(source?.status)) {
+        const kind = source.status === 'reported' ? 'review' : 'execute'
+        const action = (store.listActions?.(source.id) ?? []).find(item => item.kind === kind && item.revision === source.actionRevision)
+        if (action && liveAction(action)) task.dispatchState = action.state
+      }
       if (!writable || task.shared) return [task.id, []]
       if (task.legacy) return [task.id, !task.legacy.retired && !task.legacy.ambiguous && !task.legacy.pending && Number.isSafeInteger(task.revision)
         ? [...(task.legacy.current?[{type:'goal-task-edit',label:'Edit goal task'}]:[]),
           ...(scope.kind === 'room' && task.parentTaskId ? [{type:'move-goal-item',label:'Move to card'}] : []),
           ...(task.legacy.useOverlay?[{type:'goal-history-title',label:'Correct card title'}]:[]),
           {type:'goal-card-details',label:'Edit card details'},{type:'goal-card-comment',label:'Add comment'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
-      const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
+      const grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
-      const actions = source ? store.listActions?.(task.id) ?? [] : []
-      const activeAction = actions.find(action => action.revision === source?.actionRevision && ['pending','claimed','accepted','uncertain'].includes(action.state))
       const canSchedule = !source?.change && !source?.archivedAt && ['proposed','waiting'].includes(source?.status) && source.owner !== 'user' && source.reviewer !== 'user'
-        && !source.blocked && !source.stale && !activeAction && actors.some(actor => actor.id === source.owner) && actors.some(actor => actor.id === source.reviewer)
+        && !source.blocked && !source.stale && actors.some(actor => actor.id === source.owner) && actors.some(actor => actor.id === source.reviewer)
+        && !(store.listActions?.(source.id) ?? []).some(action => action.revision === source.actionRevision && liveAction(action))
       const canUnschedule = !source?.change && !source?.blocked && !source?.stale
         && (source?.status === 'ready' || source?.status === 'waiting' && !!source?.authority)
       const archiveRelease = source?.releaseId ? releases.find(release => release.id === source.releaseId) : undefined
@@ -86,9 +87,9 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     board.capabilities = { commands, create: writable && !taskLimitReached, upload: writable && !!images, actors, shareTargets:availableTargets,
       ...(Number.isSafeInteger(taskLimit) ? { taskCount:tasks.length, taskLimit, taskLimitReached } : {}) }
     if (principal?.kind === 'user') {
-      board.releases = releases.map(({ items, ...release }) => ({ ...release, itemCount:items.length, doneCount:items.filter(item => item.status === 'done').length }))
+      board.releases = releases.map(({ items, ...release }) => ({ ...release, canConfigureTeam:writable && scope.kind === 'room' && canConfigureReleaseTeam(release, scope.id), itemCount:items.length, doneCount:items.filter(item => item.status === 'done').length }))
       board.proposals = (store.listProposals?.(`${scope.kind}:${scope.id}`) ?? []).filter(proposal => proposal.status === 'pending')
-        .map(proposal => ({ ...proposal, taskTitle: proposal.taskId ? store.get(proposal.taskId)?.title ?? proposal.after?.title : proposal.after?.title }))
+        .map(proposal => ({ ...proposal, taskTitle: byId.get(proposal.taskId)?.title ?? proposal.after?.title }))
       board.releaseRoles = RELEASE_ROLES
       board.releaseCandidates = Object.fromEntries(RELEASE_ROLES.map(role => [role.key,
         (scope.kind === 'room' ? ids.filter(id => id !== 'user') : publicBots).map(id => state.bots[id]).filter(bot => roleForBot(bot)?.key === role.key)

@@ -67,7 +67,11 @@ async function request(endpoint,payload){
    const releases=state.releases.map(release=>({...release,itemCount:tasks.filter(task=>task.releaseId===release.id).length,doneCount:tasks.filter(task=>task.releaseId===release.id&&task.status==='done').length}));
    const proposals=state.proposals.map(proposal=>({...proposal,taskTitle:tasks.find(task=>task.id===proposal.taskId)?.title}));
    const commands=Object.fromEntries(tasks.map(task=>[task.id,phase2Commands(task)]));
-   return {tasks,releases,proposals,capabilities:{create:true,upload:false,actors,commands,shareTargets:{}}};
+   const team = state.teamMode ? {
+     releaseRoles:[{key:'projectManager',label:'Project Manager',required:true},{key:'reviewer',label:'Independent Reviewer',required:true}],
+     releaseCandidates:{projectManager:[{id:'a',name:'Alice'},{id:'outside',name:'Outside'}],reviewer:[{id:'b',name:'Bob'}]},
+   } : {};
+   return {tasks,releases,proposals,...team,capabilities:{create:true,upload:false,actors,commands,shareTargets:{}}};
   }
   // Capture the snapshot before blocking so a stale response is observably old.
   const task=record(payload.scope);
@@ -84,6 +88,14 @@ async function request(endpoint,payload){
   const shared=[{id:'T2',title:'Shared dependency',revision:1,status:'working',shared:true}];
   const created=state.created.filter(item=>item.scope===payload.scope.kind+':'+payload.scope.id).map(item=>item.task);
   return {tasks:[task,...created,...legacy,...shared],remoteChanges:state.mode.startsWith('monitor')&&payload.scope.kind==='personal'&&payload.scope.id==='user'?{status:state.mode==='monitor-denied'?'authorization unavailable':'ok',repository:'example/project',branch:'main',totalEvents:31,earlierUnknown:true,checkedAt:'2026-11-14T00:00:00.000Z',events:state.mode==='monitor-denied'?[]:[{sha:'a'.repeat(40),title:'Update service',author:'Developer',committed_at:'2026-11-14T00:00:00Z',kind:'relevant',paths:['src/index.js']}]}:undefined,recovery:state.mode==='recovery'?{available:true,incomplete:false,deliveriesIncomplete:false,sampledAt:1700000000000,items:state.recoveryEmpty?[]:[{recoveryId:'rec-1',botId:'a',botName:'Alice',sessionId:'session-original',exchangeId:'exchange-1',status:'uncertain',decision:state.heldDecisions['rec-1']?.choice??'open',decisionRevision:state.heldDecisions['rec-1']?.revision??0,redo:{operationId:'attempt-1',status:'unknown'},evidence:'inflight.json'},{recoveryId:'rec-2',botId:'b',botName:'Bob',sessionId:'session-other',exchangeId:'exchange-2',status:'uncertain',decision:'open',decisionRevision:0,redo:{available:false,state:'source-unavailable'},evidence:'inflight.json',secret:'SECRET-HIDDEN'}],deliveries:state.recoveryEmpty?[]:[{recoveryId:'d'.repeat(64),exchangeId:'queued-exchange-1',sessionId:'session-queued',recipientId:'b',recipientName:'Bob',status:'history-unavailable',decision:state.queuedDecisions['d'.repeat(64)]?.choice??'open',decisionRevision:state.queuedDecisions['d'.repeat(64)]?.revision??0,secret:'SECRET-QUEUED'}]}:{available:true,incomplete:false,sampledAt:1700000000000,items:[]},capabilities:state.mode==='readonly'?{}:state.mode==='capacity'?{create:true,actors,taskCount:1000,taskLimit:1000,taskLimitReached:true}:{create:true,upload:true,actors,shareTargets:{T1:[{id:'g2',name:'Design group'}]},commands:{T1:[{type:'edit'},{type:'card-details'},{type:'card-comment'},{type:'card-comment-edit'},{type:'card-comment-delete'},{type:'upload'},{type:'remove-image'},{type:'share'},{type:'unshare'},...(state.mode==='manual'?[{type:'personal-progress'},{type:'reorder'}]:[]),...(state.mode==='schedule'?[{type:'schedule'},{type:'reorder'}]:[])],old:[{type:'goal-task-edit'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],history:[{type:'goal-history-title'},{type:'goal-card-details'},{type:'goal-card-comment'},{type:'upload'}],T2:[{type:'edit'},{type:'share'},{type:'upload'}]}}}
+ }
+ if(endpoint==='board-release-configure-team'){
+  if(state.teamMode==='refused')throw Object.assign(Error('Invalid release team'),{code:'bot/invalid'});
+  state.teamRequest=payload;
+  if(state.teamMode==='lost')throw Error('Connection lost');
+  const release=state.releases.find(row=>row.id===payload.releaseId);
+  Object.assign(release, payload.team, {canConfigureTeam:false, revision:release.revision+1});
+  return {...release};
  }
  if(endpoint==='board-held-decision'){state.heldDecisions[payload.recoveryId]={choice:payload.choice,revision:payload.expectedRevision+1};return {decision:payload.choice,revision:payload.expectedRevision+1}}
  if(endpoint==='board-queued-delivery-decision'){state.queuedDecisions[payload.recoveryId]={choice:payload.choice,revision:payload.expectedRevision+1};return {decision:payload.choice,revision:payload.expectedRevision+1}}
@@ -199,6 +211,7 @@ async function request(endpoint,payload){
   state.sealed.add(payload.operationId);return {state:'rejected',message:'safely cancelled'};
  }
  if(endpoint==='board-operation'){
+  if(state.teamMode==='lost' && state.teamRequest?.operationId===payload.operationId)return {state:'unknown'};
   const plan=state.receiptPlans[payload.operationId];
   if(plan){delete state.receiptPlans[payload.operationId];state.receiptStarted.push(plan.id);await new Promise(resolve=>{state.resolvers['receipt:'+plan.id]=resolve})}
   return {state:state.sealed.has(payload.operationId)?'rejected':state.mode==='lost'||state.mode==='cancel-fails'?'unknown':state.mode==='conflict'||state.mode==='invalid-image'?'rejected':'committed',message:state.mode==='invalid-image'?'Interlaced PNG is not supported':'stale revision'};
@@ -264,9 +277,80 @@ async function runBrowserCases() {
 
   const openCardItems = async card => {
     const details = card.locator('.bt-board-items')
-    if (!(await details.count())) return
+    await details.waitFor()
     if (await details.getAttribute('open') === null) await details.locator('summary').click()
   }
+
+  await page.evaluate(() => {
+    globalThis.initPhase2()
+    globalThis.fixture.teamMode = 'refused'
+    globalThis.fixture.releases[0].canConfigureTeam = true
+    globalThis.fixture.releases[1].status = 'draft'
+    globalThis.fixture.releases.push({id:'rel-3',name:'Published version',version:'1.1',status:'published',revision:2,position:2,canConfigureTeam:true})
+    globalThis.renderFixture({kind:'room', id:'team-config'}, 'phase2', true)
+  })
+  await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
+  const teamReleases = page.getByRole('region',{name:'Major version',exact:true}).getByRole('listitem')
+  await teamReleases.nth(1).getByRole('button').click()
+  const oldRelease = page.getByRole('dialog',{name:'Release details: Release two'})
+  assert.equal(await oldRelease.getByRole('button',{name:'Configure release team'}).count(),0)
+  await oldRelease.getByRole('button',{name:'Close',exact:true}).click()
+  await teamReleases.nth(2).getByRole('button').click()
+  const published = page.getByRole('dialog',{name:'Release details: Published version'})
+  assert.equal(await published.getByRole('button',{name:'Configure release team'}).count(),0)
+  await published.getByRole('button',{name:'Close',exact:true}).click()
+  await teamReleases.first().getByRole('button').click()
+  const teamDetail = page.getByRole('dialog',{name:'Release details: Release one'})
+  await teamDetail.getByRole('button',{name:'Configure release team'}).click()
+  const teamForm = page.getByRole('dialog',{name:'Configure release team',exact:true})
+  const manager = teamForm.getByRole('combobox',{name:'Project Manager',exact:true})
+  const reviewer = teamForm.getByRole('combobox',{name:'Independent Reviewer',exact:true})
+  const values = select => select.locator('option').evaluateAll(options => options.map(option => option.value))
+  assert.deepEqual(await values(manager),['','a','b'])
+  assert.deepEqual(await values(reviewer),['','b','a'])
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-release-configure-team').length),0)
+  await manager.selectOption('b')
+  await reviewer.selectOption('a')
+  await teamForm.getByRole('button',{name:'Save release team'}).click()
+  await teamForm.getByRole('alert').filter({hasText:'Invalid release team'}).waitFor()
+  assert.equal(await teamForm.getByRole('button',{name:'Save release team'}).isEnabled(),true,'an explicit refusal unlocks correction')
+  await page.evaluate(() => { globalThis.fixture.teamMode = 'lost' })
+  await teamForm.getByRole('button',{name:'Save release team'}).click()
+  await teamForm.getByRole('button',{name:'Check action'}).waitFor()
+  assert.equal(await teamForm.getByRole('button',{name:'Save release team'}).isDisabled(),true)
+  const teamWrite = await page.evaluate(() => globalThis.fixture.teamRequest)
+  assert.deepEqual(teamWrite.team,{projectManagerId:'b',roles:{projectManager:'b',reviewer:'a'}})
+  assert.equal(teamWrite.releaseId,'rel-1')
+  assert.equal(teamWrite.expectedRevision,1)
+  assert.deepEqual(teamWrite.scope,{kind:'room',id:'team-config'})
+  await teamForm.getByRole('button',{name:'Check action'}).click()
+  assert.deepEqual(await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint==='board-operation').map(call=>call.payload.operationId)),[teamWrite.operationId,teamWrite.operationId])
+  await page.evaluate(() => {
+    const s=globalThis.fixture
+    Object.assign(s.releases[0],s.teamRequest.team,{canConfigureTeam:false,revision:2})
+    s.teamMode='committed'
+    globalThis.clearFixture()
+    globalThis.renderFixture({kind:'room',id:'team-config'},'phase2',true)
+  })
+  await page.waitForFunction(() => !sessionStorage.getItem('ds-bot:board-pending:room:team-config'))
+  await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
+  await teamReleases.first().getByRole('button').click()
+  await teamDetail.getByText('2 assigned').waitFor()
+  assert.equal(await teamDetail.getByRole('button',{name:'Configure release team'}).count(),0)
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-release-configure-team').length),2,'receipt checks never resend the lost write')
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-operation').at(-1).payload.operationId),teamWrite.operationId)
+  await teamDetail.getByRole('button',{name:'Close',exact:true}).click()
+  await page.evaluate(() => { globalThis.fixture.releases[1].canConfigureTeam=true })
+  await page.getByRole('button',{name:'Refresh',exact:true}).click()
+  await teamReleases.nth(1).getByRole('button').click()
+  await oldRelease.getByRole('button',{name:'Configure release team'}).click()
+  await teamForm.getByRole('button',{name:'Save release team'}).click()
+  await oldRelease.getByText('2 assigned').waitFor()
+  assert.equal(await page.evaluate(() => globalThis.fixture.teamRequest.releaseId),'rel-2')
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('ds-bot:board-pending:room:team-config')),null,'a successful write is confirmed even without a receipt read')
+  assert.deepEqual(errors,[])
+  if (process.argv.includes('--release-team')) return
+  await page.evaluate(() => { globalThis.clearFixture(); globalThis.fixture.teamMode = undefined })
 
   // A room board renders an execution item in its feature and opens the same
   // full card for the owner or human. Reading the hierarchy needs no extra fetch.
@@ -415,9 +499,32 @@ async function runBrowserCases() {
   assert.equal(await page.getByText('Update service').count(),0)
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'room', id:'g1' }, 'recovery'))
-  await page.getByText('Interrupted work').click()
+  await page.getByText('Group task', {exact:true}).waitFor()
   const recovery = page.locator('.bt-recovery-panel').filter({hasText:'Interrupted work'})
+  await recovery.waitFor()
+  const lastGroupRead = () => page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list' && call.payload.scope.id === 'g1').at(-1)?.payload.includeRecovery)
+  assert.equal(await lastGroupRead(), false, 'ordinary board reads skip recovery')
+  assert.equal(await recovery.locator('.bt-recovery-record, .bt-recovery-delivery').count(), 0, 'collapsed records are not mounted even with an older host')
+  assert.equal(await recovery.locator('.bt-recovery-count').count(), 0, 'unsampled recovery has no count')
+  const desktop = page.viewportSize()
+  await page.setViewportSize({width:650, height:850})
+  const toolsToggle = page.getByRole('button', {name:'Board tools'})
+  await toolsToggle.click()
+  await page.evaluate(() => { globalThis.fixture.boardPlans['room:g1'] = [{id:'held-sample', mode:'hold'}] })
+  await recovery.locator('summary').first().click()
+  await page.waitForFunction(() => globalThis.fixture.boardStarted.includes('held-sample'))
+  const readsInFlight = await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length), readsInFlight, 'focus coalesces with the active board read')
+  await toolsToggle.click()
+  await page.evaluate(() => globalThis.fixture.resolvers['board:held-sample'](true))
+  await page.waitForFunction(() => globalThis.fixture.boardFinished.includes('held-sample'))
+  await page.setViewportSize(desktop)
+  assert.equal(await recovery.evaluate(el => el.open), false, 'closing mobile tools collapses recovery')
+  assert.equal(await recovery.locator('.bt-recovery-body').count(), 0, 'a late sample cannot reopen a collapsed panel')
+  await recovery.locator('summary').first().click()
   await recovery.getByText('Alice', {exact:true}).waitFor()
+  assert.equal(await lastGroupRead(), true, 'opening the panel requests a verified sample')
   await recovery.getByText('Bob', {exact:true}).first().waitFor()
   const recoverySearch = recovery.getByPlaceholder('Filter by Bot or ID')
   await recoverySearch.fill('exchange-2')
@@ -468,13 +575,17 @@ async function runBrowserCases() {
   const beforeRefresh = await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)
   await page.evaluate(() => { globalThis.fixture.recoveryEmpty = true })
   await page.getByRole('button', { name:'Refresh', exact:true }).click()
-  await page.waitForFunction(() => ![...document.querySelectorAll('.bt-recovery-panel')].some(el => el.textContent.includes('Interrupted work')), null, { timeout:5000 })
-  assert.equal(await page.getByText('No interrupted turns in this snapshot.').count(),0,'an empty recovery panel is not left on the board')
+  await recovery.getByText('No interrupted turns in this snapshot.').waitFor()
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length), beforeRefresh + 1)
+  await recovery.locator('summary').first().click()
+  await page.getByRole('button', { name:'Refresh', exact:true }).click()
+  assert.equal(await lastGroupRead(), false, 'closing stops recovery reads on refresh')
+  assert.equal(await recovery.locator('.bt-recovery-body').count(), 0)
   await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal'))
   await page.getByText('Personal task', {exact:true}).waitFor()
   assert.equal(await page.locator('.bt-board-held-record').count(), 0, 'scope change must not retain old recovery rows')
   await page.evaluate(() => { globalThis.fixture.recoveryEmpty = false; globalThis.fixture.candidateHold = true; globalThis.renderFixture({ kind:'room', id:'g1' }, 'recovery') })
+  await page.getByText('Group task', {exact:true}).waitFor()
   const delayedRecovery = page.locator('.bt-recovery-panel').filter({hasText:'Interrupted work'})
   await delayedRecovery.locator('summary').first().click()
   const delayedRecord = delayedRecovery.locator('.bt-recovery-record').filter({hasText:'session-original'})
@@ -785,8 +896,11 @@ async function runBrowserCases() {
   const bulkOwnerUndo=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.value.owner==='user'))
   assert.equal(bulkOwnerUndo.payload.taskId,'T1','bulk owner undo restores the previous owner')
 
-  await page.evaluate(() => { globalThis.resetBoardState(); globalThis.renderFixture({ kind: 'personal', id: 'a' }, 'normal') })
-  await page.locator('article').filter({hasText:'Personal task'}).locator('.bt-board-card-summary').click()
+  await page.evaluate(() => {
+    globalThis.resetBoardState()
+    globalThis.ReactDOM.flushSync(() => globalThis.renderFixture({ kind:'personal', id:'a' }, 'normal', true))
+  })
+  await page.locator('article[data-task-id="T1"] .bt-board-card-summary').click()
   const namedCard = page.locator('.bt-card-modal')
   await namedCard.waitFor()
   const description=namedCard.locator('.bt-card-description')

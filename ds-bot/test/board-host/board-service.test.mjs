@@ -67,9 +67,16 @@ test('authenticated board view returns only the scoped read-only recovery projec
   rt.recoveryHeldView = requested => { seen.push(requested); return { available:true, incomplete:false, items:[] } }
   const result = await rt.boardCall('board-list', { scope })
   assert.deepEqual(result.recovery, { available:true, incomplete:false, items:[] })
-  assert.deepEqual(seen, [scope])
-  await assert.rejects(rt.boardCall('board-list', { scope:{ kind:'room', id:'unknown' } }), /available/)
-  assert.equal(seen.length, 1, 'invalid scope must not reach recovery projection')
+  const brief = await rt.boardCall('board-list', { scope, includeRecovery:false })
+  assert.equal(Object.hasOwn(brief, 'recovery'), false)
+  assert.deepEqual(brief.tasks, result.tasks)
+  assert.deepEqual(seen, [scope], 'ordinary board reads skip the recovery journal')
+  const full = await rt.boardCall('board-list', { scope, includeRecovery:true })
+  assert.deepEqual(full.recovery, result.recovery)
+  for (const includeRecovery of [true, false]) {
+    await assert.rejects(rt.boardCall('board-list', { scope:{ kind:'room', id:'unknown' }, includeRecovery }), /available/)
+  }
+  assert.deepEqual(seen, [scope, scope], 'invalid scopes never reach the recovery projection')
 })
 
 test('the owner sees only a scope-matched uncertain redo, never unverified result data', async t => {
@@ -731,6 +738,66 @@ function addReleaseMembers(rt, bots) {
   rt.state.rooms.group.members.push(...Object.keys(bots))
 }
 
+test('a user explicitly configures a draft release team in its original group exactly once', async t => {
+  const { rt, deliveries } = fixture(t)
+  const roles = { projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'two', ops:'ops' }
+  const labels = { pm:'项目经理', product:'产品经理', arch:'架构师', fe:'前端开发', be:'后端开发', test:'测试工程师', ops:'运维工程师' }
+  addReleaseMembers(rt, Object.fromEntries(Object.entries(labels).map(([id, name]) => [id, { id, name, role:'成员' }])))
+  const create = id => rt.boardCall('board-release-create', { scope, operationId:'create-'+id, release:{ id, name:id, version:'1.1' } })
+  const draft = await create('draft')
+  const board = () => rt.boardCall('board-list', { scope })
+  const before = await board()
+  assert.equal(before.releases[0].canConfigureTeam,true)
+  assert.equal(before.releaseCandidates.projectManager[0].id, 'pm')
+  assert.equal(before.releaseCandidates.reviewer.length, 0)
+  const request = { scope, operationId:'set-team', releaseId:draft.id, expectedRevision:draft.revision, team:{projectManagerId:'pm', roles} }
+  const configure = (changes = {}) => rt.boardCall('board-release-configure-team', { ...request, ...changes })
+
+  await assert.rejects(configure({ operationId:'stale-version', expectedRevision:42 }), /revision conflict/)
+  const partial = { ...roles }; delete partial.reviewer
+  await assert.rejects(configure({ operationId:'missing-reviewer', team:{roles:partial} }), /Missing release roles.*Independent Reviewer/)
+  await assert.rejects(configure({ operationId:'same-reviewer', team:{roles:{...roles, reviewer:'pm'}} }), /independent reviewer/)
+  await assert.rejects(configure({ operationId:'missing-bot', team:{roles:{...roles, reviewer:'missing'}} }), /available Bot/)
+  addReleaseMembers(rt, { privateActor:{ name:'Private Bot', private:true } })
+  await assert.rejects(configure({ operationId:'private-bot', team:{roles:{...roles, reviewer:'privateActor'}} }), /available Bot/)
+  rt.state.bots.outside = { id:'outside', name:'Outside' }
+  await assert.rejects(configure({ operationId:'outside-bot', team:{roles:{...roles, reviewer:'outside'}} }), /available Bot/)
+  rt.state.rooms.other = {id:'other', name:'Other', members:Object.values(roles), sessions:{}}
+  await assert.rejects(configure({ operationId:'outside-room', scope:{kind:'room',id:'other'} }), /in this group/)
+  await assert.rejects(configure({ operationId:'personal-scope', scope:{kind:'personal',id:'user'} }), /needs a group board/)
+
+  const invalid = await rt.boardCall('board-operation', {scope, operationId:'missing-reviewer'})
+  assert.equal(invalid.state, 'rejected')
+  assert.match(invalid.message, /Missing release roles/)
+  const cancelled = await rt.boardCall('board-operation-cancel', {scope, operationId:'cancel-late'})
+  assert.equal(cancelled.state, 'rejected')
+  await assert.rejects(configure({operationId:'cancel-late'}), /cancelled before commit/)
+  assert.deepEqual(await rt.boardCall('board-operation', {scope, operationId:'cancel-late'}), cancelled)
+  assert.equal((await board()).releases[0].canConfigureTeam, true)
+
+  const competing = await Promise.allSettled([configure(), configure({operationId:'competing'})])
+  const [winner] = competing.filter(result => result.status === 'fulfilled')
+  assert.equal(competing.filter(result => result.status === 'rejected').length, 1)
+  assert.equal(winner.value.status, 'draft')
+  assert.equal(winner.value.revision, draft.revision + 1)
+  assert.deepEqual(winner.value.roles, roles)
+  const confirmedId = competing[0].status === 'fulfilled' ? 'set-team' : 'competing'
+  const configured = await configure({operationId:confirmedId})
+  assert.deepEqual(configured, winner.value)
+  assert.equal((await rt.boardCall('board-operation', {scope,operationId:confirmedId})).state, 'committed')
+  await assert.rejects(configure({operationId:confirmedId, team:{roles:{ ...roles, reviewer:'one' }}}), /operation id conflict/)
+  await assert.rejects(configure({operationId:'replace-configured', expectedRevision:configured.revision}), /unconfigured draft/)
+  const after = await board()
+  assert.equal(after.releases[0].canConfigureTeam, false)
+  assert.deepEqual(after.tasks, before.tasks)
+  assert.equal(deliveries.length, 0)
+
+  const second = await create('queued')
+  const queued = await rt.boardCall('board-release-queue', { scope, releaseId:second.id, expectedRevision:second.revision, operationId:'queue-later' })
+  assert.equal((await board()).releases.find(r=>r.id===queued.id).canConfigureTeam, false)
+  await assert.rejects(configure({releaseId:queued.id,expectedRevision:queued.revision,operationId:'too-late'}), /unconfigured draft/)
+})
+
 test('minor releases reuse their board group and preserve the membership and admin', async t => {
   const { rt } = fixture(t)
   const roles = {
@@ -1149,9 +1216,17 @@ test('organizing a goal item keeps the original editable task and its actual sta
   const tool = rt.teamTools.find(tool=>tool.name==='board_task')
   const list = async () => JSON.parse(await tool.execute({action:'list',room_id:'group',parent_task_id:parent.id},{agent:{id:'chat-one'}}))
   assert.deepEqual((await list()).items.map(r=>[r.kind,r.goalTaskId,r.parentTaskId,r.status]), [['group_goal','check',parent.id,'reported']])
+  const release = await rt.boardCall('board-release-create',{scope,operationId:'create-minor',release:{id:'minor',name:'Verify release',version:'1.1'}})
+  const latestParent = (await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===parent.id)
+  await rt.boardCall('board-release-assign',{scope,operationId:'assign',taskId:parent.id,expectedTaskRevision:latestParent.revision,releaseId:release.id,expectedReleaseRevision:release.revision})
+  const asOwner = async args => JSON.parse(await tool.execute({room_id:'group',...args},{agent:{id:'chat-two'}}))
+  const ownGoal = await asOwner({action:'list',kind:'group_goal',mine:true,release_id:release.id})
+  assert.deepEqual(ownGoal.items.map(task=>[task.id,task.releaseId]), [[row.id,release.id]])
+  assert.equal((await asOwner({action:'show',task_id:row.id})).task.releaseId, release.id)
   room.goal.stages[0].tasks[0].status='done'
   room.goal.revision++
   assert.equal((await list()).items[0].status,'done')
+  assert.equal((await asOwner({action:'list',kind:'group_goal',release_id:release.id})).items[0].status,'done')
   const other = await rt.boardCall('board-command',{...create,operationId:'new-feature',taskId:'other',value:{...create.value,type:'bugfix'}})
   await assert.rejects(rt.boardCall('board-command',{...attach,taskId:other.id,expectedRevision:other.revision,operationId:'link-twice'}), /already belongs/)
 })

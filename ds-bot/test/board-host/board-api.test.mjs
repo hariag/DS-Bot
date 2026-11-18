@@ -44,11 +44,51 @@ function fixture() {
     },
   }
   const api = createBoardApi({ store, roster: () => state, assertWritable: () => { if (!writable) throw new Error('locked') } })
-  return { api, state, rows, setWritable: v => { writable = v }, setLimit: v => { limit = v } }
+  return { api, state, store, rows, setWritable: v => { writable = v }, setLimit: v => { limit = v } }
 }
 const room = { kind: 'room', id: 'room' }
 const user = { kind: 'user' }
 const proposal = { operationId: 'op1', taskId: 'task1', title: 'Build', acceptance: 'Independent check', owner: 'one', reviewer: 'two', dependencies: [] }
+
+test('listing a board uses its task snapshot and only checks actions needed by the visible rows', () => {
+  const f = fixture()
+  const row = {scope:'room:room', title:'Work', owner:'one', reviewer:'two', actionRevision:2}
+  for (const status of ['draft','proposed','waiting','ready','working','reported','done','cancelled']) {
+    f.rows.push({...row, id:status, status})
+  }
+  f.rows.push({...row, id:'other', scope:'room:other', status:'working'})
+  let lists = 0
+  const actionReads = []
+  f.store.list = () => { lists++; return f.rows }
+  f.store.get = () => assert.fail('board view re-read an individual task')
+  f.store.listActions = id => {
+    actionReads.push(id)
+    if (id === 'waiting') return [{revision:1, kind:'execute', state:'pending'}]
+    if (id === 'reported') return [{revision:2, kind:'execute', state:'accepted'}, {revision:2, kind:'review', state:'uncertain'}]
+    return [{revision:2, kind:'execute', state:'claimed'}]
+  }
+  f.store.listProposals = () => [{id:'p', taskId:'draft', status:'pending'}]
+  const view = f.api.list(room, user)
+  assert.equal(lists, 1)
+  assert.deepEqual(actionReads.sort(), ['proposed','ready','reported','waiting','working'])
+  assert.equal(view.proposals[0].taskTitle, row.title)
+  assert.equal(view.tasks.find(task => task.id === 'reported').dispatchState, 'uncertain')
+  assert.equal(view.tasks.find(task => task.id === 'ready').dispatchState, 'claimed')
+  assert.equal(view.capabilities.commands.proposed.some(item => item.type === 'schedule'), false)
+  assert.equal(view.capabilities.commands.waiting.some(item => item.type === 'schedule'), true)
+
+  actionReads.length = 0
+  f.setWritable(false)
+  const locked = f.api.list(room, user)
+  assert.deepEqual(actionReads.sort(), ['ready','reported','working'])
+  assert.equal(locked.tasks.find(task => task.id === 'working').dispatchState, 'claimed')
+  assert.deepEqual(locked.capabilities.commands.working, [])
+
+  actionReads.length = 0
+  const bot = f.api.list(room, {kind:'bot', id:'one'})
+  assert.deepEqual(actionReads, [])
+  assert.equal(bot.tasks.find(task => task.id === 'working').dispatchState, undefined)
+})
 
 test('task history requires the owner principal and the same board scope', () => {
   const f = fixture(); f.api.create(room, user, proposal)

@@ -60,6 +60,7 @@ export function install(rt) {
     const pending = (async () => { await rt.load(); if (closing || rt.stopping) throw new Error('Board service is closing'); return fn() })()
     active.add(pending); return pending.finally(() => active.delete(pending))
   }
+  const releaseBots = roomId => Object.fromEntries((rt.roomOf(roomId)?.members ?? []).map(id => [id, rt.botOf(id)]).filter(([, bot]) => bot))
   const releaseReport = release => {
     const tasks = service().store.list().filter(task => task.scope === release.scope)
     const cards = new Set(tasks.filter(task => task.releaseId === release.id).map(task => task.id))
@@ -552,10 +553,13 @@ export function install(rt) {
         for (let i = 0; i < 10; i += 1) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
-          const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
-          const recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
+          let recovery
+          if (payload.includeRecovery !== false) {
+            const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
+            recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
+          }
           if (before === store.version() && rosterRevision === rt.state.revision) return { ...view,
-            recovery, ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
+            ...(recovery === undefined ? {} : { recovery }), ...(scope?.kind==='personal' && scope.id==='user' && rt.remoteChangeView ? { remoteChanges:rt.remoteChangeView() } : {}),
             revision: `${rosterRevision}:${before}` }
           await new Promise(resolve => setTimeout(resolve, 20))
         }
@@ -591,9 +595,7 @@ export function install(rt) {
         }
         if (payload.team !== undefined) {
           if (scope.kind !== 'room') throw new Error('A release group needs a group board')
-          const members = rt.roomOf(scope.id)?.members ?? []
-          const bots = Object.fromEntries(members.map(id => [id, rt.botOf(id)]).filter(([, bot]) => bot))
-          const team = resolveReleaseTeam({ bots, projectManagerId:payload.team.projectManagerId, roles:payload.team.roles ?? {} })
+          const team = resolveReleaseTeam({ bots:releaseBots(scope.id), projectManagerId:payload.team.projectManagerId, roles:payload.team.roles ?? {} })
           release.projectManagerId = team.projectManagerId
           release.roles = team.roles
         }
@@ -605,6 +607,15 @@ export function install(rt) {
         const release = store.getRelease(payload.releaseId)
         if (!release || release.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
         return applyReleasePlan(scope, release, payload.requirement, principal, payload.cardType, payload.operationId)
+      }
+      case 'board-release-configure-team': {
+        api.list(scope, principal)
+        if (scope.kind !== 'room') throw new Error('A release team needs a group board')
+        const outcome = store.request({ operationId:payload.operationId, actor:'user', taskId:payload.releaseId, payload:requestKey(endpoint, payload), isRejection:rejected },
+          () => store.configureReleaseTeam({ operationId:payload.operationId, actor:'user', releaseId:payload.releaseId, roomId:scope.id,
+            expectedRevision:payload.expectedRevision, team:payload.team, bots:releaseBots(scope.id) }))
+        if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code:'bot/invalid' })
+        return outcome.value
       }
       case 'board-release-update': {
         api.list(scope, principal)

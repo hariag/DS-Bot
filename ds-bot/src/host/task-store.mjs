@@ -4,6 +4,7 @@ import { lstatSync, openSync, closeSync, readSync, fsyncSync, constants } from '
 import { dirname, isAbsolute } from 'node:path'
 import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectorySync } from './directory-sync.mjs'
+import { canConfigureReleaseTeam, invalidReleaseTeam, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { isFeatureCard, isManualBoardTask, isUnassignedItemDraft } from './board-intake.mjs'
 
 // The caller must authenticate actors and authorize every command and query.
@@ -491,9 +492,11 @@ const releaseIsDone = release => {
         return compareCards(left, right)
       })
     },
-    listReleases(scope) {
+    listReleases(scope, {summary = false} = {}) {
       if (typeof scope !== 'string' || !scope) throw new Error('invalid release scope')
-      return releaseOrder(scope).map(release => ({ ...release, items: releaseItems(release.id).map(task => ({ id:task.id, title:task.title, status:task.status, owner:task.owner, revision:task.revision })) }))
+      const releases = releaseOrder(scope)
+      if (summary) return releases.map(({id, name, version, status}) => ({id, name, version, status}))
+      return releases.map(release => ({ ...release, items: releaseItems(release.id).map(task => ({ id:task.id, title:task.title, status:task.status, owner:task.owner, revision:task.revision })) }))
     },
     getRelease(id) { return getRelease(requireId(id, 'release id')) },
     createRelease({ operationId, actor, release }) {
@@ -529,6 +532,24 @@ const releaseIsDone = release => {
           ...(release.roles ? { roles:release.roles } : {}), ...(release.note ? { note:release.note } : {}) }
         saveRelease(null, record)
         return record
+      })
+    },
+    configureReleaseTeam({ operationId, actor, roomId, releaseId, expectedRevision, team, bots }) {
+      requireId(roomId, 'room id'); requireId(releaseId, 'release id')
+      if (actor !== 'user') throw new Error('release team configuration is not authorized')
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !team || typeof team !== 'object' || Array.isArray(team)) throw invalidReleaseTeam('Invalid release team request')
+      keysOnly(team, ['projectManagerId','roles'])
+      const payload = { type:'release-configure-team', actor, roomId, releaseId, expectedRevision, team }
+      return transactSubject(operationId, actor, payload, () => ({ type:'release', actor }), () => {
+        const release = getRelease(releaseId)
+        if (!canConfigureReleaseTeam(release, roomId)) throw invalidReleaseTeam('Only an unconfigured draft release in this group can receive a team')
+        if (release.revision !== expectedRevision) throw new Error('release revision conflict')
+        const { projectManagerId, roles } = resolveReleaseTeam({ bots, projectManagerId:team.projectManagerId, roles:team.roles, explicitOnly:true })
+        // Configuration is one-time. Check every planned owner/reviewer pair before saving it.
+        lifecyclePlan({ release, requirement:release.name, roles })
+        const next = { ...release, projectManagerId, roles, revision:release.revision + 1, updatedAt:Date.now() }
+        saveRelease(release, next)
+        return next
       })
     },
     updateRelease({ operationId, actor, releaseId, expectedRevision, value }) {
