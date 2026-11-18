@@ -1051,8 +1051,7 @@ export function install(rt) {
 
   // Input for an earlier part goes on in the current one: a browser may still show the
   // old part, and a turn stopped for a switch hands on what it claimed.
-  async function forward(owner, messages, ...targets) {
-    const target = targets.length > 0 ? targets[0] : currentOf(owner)
+  async function forward(sourceSession, messages, target) {
     if (target === undefined) throw new Error('the destination thread is unknown; input remains in its original part')
     if (messages.length === 0) return
     await rt.ensureCapabilities(target)
@@ -1072,7 +1071,7 @@ export function install(rt) {
       pending.push(copy)
     }
     if (await ctx.sessions.flush(agent.session) === false) throw new Error('forwarded input was not persisted')
-    rt.moveQueued?.(target, messages)
+    rt.moveQueued?.(sourceSession, target, messages)
   }
 
   // The plugin's own fiber is disposed (a reload, or DSH closing): every service
@@ -1131,7 +1130,7 @@ export function install(rt) {
         const held = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
         const target = threadTargetOf(sessionId, owner)
         if (target !== sessionId) {
-          await forward(owner, held, target)
+          await forward(sessionId, held, target)
           for (const message of held) agent.inbox.remove(message.id)
           // An interrupted switch may not have finished moving the tasks over; stop
           // the earlier part only after they sit on the part that replaced it.
@@ -1198,7 +1197,7 @@ export function install(rt) {
               : { kind: SOURCE_KIND, form: 'relay', role: 'resume', exchangeId: randomUUID(), senderName: 'DS Bot', ...carried }),
           }))
         }
-        await forward(job, back, threadTargetOf(agent.id, job)).then(() => {
+        await forward(agent.id, back, threadTargetOf(agent.id, job)).then(() => {
           delete state.switching[agent.id]
         }).catch((error) => {
           job.kept = true
@@ -1439,7 +1438,7 @@ export function install(rt) {
       fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
       await ctx.sessions.flush(fresh.session)
       carry.push(...job.carry.splice(0))
-      await forward(job, [...carry, ...held], freshId)
+      await forward(agent.id, [...carry, ...held], freshId)
     } catch (error) {
       job.kept = true
       try { restore(agent, [...carry, ...job.carry.splice(0)]) } catch {}
@@ -1448,7 +1447,7 @@ export function install(rt) {
     for (const message of held) agent.inbox.remove(message.id)
     // Input the old part claimed while the rest moved goes on after it.
     for (let late = job.carry.splice(0); late.length > 0; late = job.carry.splice(0)) {
-      await forward(job, late, threadTargetOf(agent.id, job)).catch((error) => {
+      await forward(agent.id, late, threadTargetOf(agent.id, job)).catch((error) => {
         job.kept = true
         try { restore(agent, late) } catch {}
         throw error
@@ -1488,7 +1487,7 @@ export function install(rt) {
         rt.warn('ds-bot: input for %s was held because its destination thread is unknown', agent.id)
         return { kind: 'reject' }
       }
-      await forward(past, payload.messages, target).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))
+      await forward(agent.id, payload.messages, target).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))
       return takeOverStep(agent, payload)
     }
     const place = placeOf(agent.id)
