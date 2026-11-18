@@ -40,7 +40,6 @@ export function install(rt) {
   const pathOf = book => join(dir, bookFile(book))
   const writes = () => rt.readOnly?.() === undefined
 
-  /** @type {Map<string, { records: object[], bySeq: Map<number, object>, size: number }>} */
   const books = new Map()
   /** @type {Map<string, Promise<unknown>>} */
   const writing = new Map()
@@ -55,13 +54,59 @@ export function install(rt) {
   /** @type {Map<string, (book: string) => object[] | undefined>} */
   const importers = new Map()
 
-  const index = (records) => {
-    const bySeq = new Map()
-    for (const record of records) if (Number.isInteger(record.seq)) bySeq.set(record.seq, record)
-    return bySeq
+  const seqOf = record => record.seq
+  const identity = value => value
+  const bound = (items, value, key, after = false) => {
+    let lo = 0, hi = items.length
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      const item = key(items[mid])
+      if (item < value || (after && item === value)) lo = mid + 1
+      else hi = mid
+    }
+    return lo
   }
-  const sizeOf = (book) => {
-    try { return statSync(pathOf(book)).size } catch { return -1 }
+  const addToIndex = (entry, record) => {
+    if (Number.isInteger(record.seq)) {
+      entry.bySeq.set(record.seq, record)
+      const at = entry.sequenced.length
+      // Ordinary books need no second sequence index. For an out-of-order
+      // import retain physical positions so duplicate seqs still read in file order.
+      if (!entry.positions && at && entry.sequenced[at - 1].seq > record.seq) {
+        entry.positions = Array.from({ length: at }, (_, index) => index)
+      }
+      entry.sequenced.push(record)
+      if (entry.positions) {
+        const pos = bound(entry.positions, record.seq, index => entry.sequenced[index].seq, true)
+        entry.positions.splice(pos, 0, at)
+      }
+      entry.lastSeq = Math.max(entry.lastSeq, record.seq)
+    }
+    if (record.event !== 'anchor') return
+    if (!entry.byAnchor.has(record.id)) entry.byAnchor.set(record.id, entry.anchors.length)
+    entry.anchors.push(record)
+    const from = Number(record.from)
+    if (Number.isNaN(from)) return
+    const starts = entry.anchorStarts
+    if (!starts.length || starts.at(-1) <= from) starts.push(from)
+    else starts.splice(bound(starts, from, identity), 0, from)
+  }
+  const reindex = entry => {
+    Object.assign(entry, { bySeq: new Map(), sequenced: [], positions: null, lastSeq: 0, anchors: [], byAnchor: new Map(), anchorStarts: [] })
+    for (const record of entry.records) addToIndex(entry, record)
+  }
+  const diskKey = book => {
+    try {
+      const info = statSync(pathOf(book), { bigint: true })
+      return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':')
+    } catch { return '-' }
+  }
+  const versions = new Map()
+  let serial = 0
+  const changed = (book, reset = false) => {
+    const current = versions.get(book)
+    const version = ++serial
+    versions.set(book, { epoch: reset ? version : current?.epoch ?? 0, version })
   }
 
   // The first use of a book reads it. A book that does not exist yet starts from what
@@ -69,19 +114,20 @@ export function install(rt) {
   function open(book) {
     const known = books.get(book)
     // A copy read while another host wrote is stale once this host writes.
-    if (known !== undefined && (writes() ? !known.readOnly : sizeOf(book) === known.size)) return known
+    const reading = !writes()
+    const disk = reading ? diskKey(book) : undefined
+    if (known !== undefined && known.readOnly === reading && (!reading || disk === known.disk)) return known
     let text
-    let size = -1
     let readFailed = false
     try {
       text = readFileSync(pathOf(book), 'utf8')
-      size = Buffer.byteLength(text)
     } catch (error) {
       if (error?.code !== 'ENOENT') {
         readFailed = true
         noteWriteFailure(book, error)
       }
     }
+    let size = text === undefined ? -1 : Buffer.byteLength(text)
     let records = text === undefined ? [] : parseBook(text)
     if (text === undefined && !readFailed) {
       const prefix = book.slice(0, book.indexOf('-') + 1)
@@ -94,7 +140,7 @@ export function install(rt) {
             const temp = `${pathOf(book)}.${process.pid}.tmp`
             writeFileSync(temp, records.map(record => `${JSON.stringify(record)}\n`).join(''), 'utf8')
             renameSync(temp, pathOf(book))
-            size = sizeOf(book)
+            size = statSync(pathOf(book)).size
           } catch (error) {
             noteWriteFailure(book, error)
           }
@@ -103,7 +149,8 @@ export function install(rt) {
     }
     // An interruption can leave the last line without its end; the next record starts on a
     // line of its own, or it would join the cut one and be lost with it.
-    const entry = { records, bySeq: index(records), size, readOnly: !writes(), torn: text !== undefined && text !== '' && !text.endsWith('\n') }
+    const entry = { records, size, disk, readOnly: reading, torn: text !== undefined && text !== '' && !text.endsWith('\n') }
+    reindex(entry)
     books.set(book, entry)
     return entry
   }
@@ -112,11 +159,12 @@ export function install(rt) {
   function append(book, record) {
     const entry = open(book)
     entry.records.push(record)
-    if (Number.isInteger(record.seq)) entry.bySeq.set(record.seq, record)
+    addToIndex(entry, record)
+    changed(book)
     if (!writes()) { skippedWrites.add(book); return record }
     const line = `${entry.torn ? '\n' : ''}${JSON.stringify(record)}\n`
     entry.torn = false
-    entry.size += Buffer.byteLength(line)
+    entry.size = Math.max(entry.size, 0) + Buffer.byteLength(line)
     const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
       if (writeFailures.has(book)) throw writeFailures.get(book)
       if (skippedWrites.has(book)) throw new Error('The ledger has writes that were not persisted')
@@ -130,7 +178,8 @@ export function install(rt) {
       if (books.get(book) !== entry) return
       const at = entry.records.indexOf(record)
       if (at !== -1) entry.records.splice(at, 1)
-      entry.bySeq = index(entry.records)
+      reindex(entry)
+      changed(book, true)
       entry.torn = true
     }))
     return record
@@ -159,6 +208,7 @@ export function install(rt) {
 
   function drop(book) {
     books.delete(book)
+    changed(book, true)
     if (!writes()) { skippedWrites.add(book); return }
     const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
       await rm(pathOf(book), { force: true })
@@ -166,6 +216,20 @@ export function install(rt) {
       skippedWrites.delete(book)
     })
     writing.set(book, run.catch(error => noteWriteFailure(book, error)))
+  }
+
+  function range(book, from, to, after = false) {
+    const { sequenced, positions } = open(book)
+    from = Number(from)
+    if (to !== undefined) to = Number(to)
+    if (Number.isNaN(from) || Number.isNaN(to)) return []
+    const items = positions ?? sequenced
+    const key = positions ? index => sequenced[index].seq : seqOf
+    const start = bound(items, from, key, after)
+    const end = to === undefined ? items.length : bound(items, to, key, true)
+    if (!positions) return items.slice(start, end)
+    if (end - start === items.length) return sequenced.slice()
+    return items.slice(start, end).sort((a, b) => a - b).map(index => sequenced[index])
   }
 
   const ledger = {
@@ -178,12 +242,21 @@ export function install(rt) {
     drop,
     records: book => open(book).records,
     record: (book, seq) => open(book).bySeq.get(seq),
-    after: (book, since) => open(book).records.filter(record => since === undefined || (Number.isInteger(record.seq) && record.seq > since)),
-    range: (book, from, to) => open(book).records.filter(record => Number.isInteger(record.seq) && record.seq >= from && (to === undefined || record.seq <= to)),
-    lastSeq: (book) => {
-      let last = 0
-      for (const record of open(book).records) if (Number.isInteger(record.seq) && record.seq > last) last = record.seq
-      return last
+    after: (book, since) => since === undefined ? open(book).records.slice() : range(book, since, undefined, true),
+    range,
+    lastSeq: book => open(book).lastSeq,
+    nextAnchor: (book, from, id) => {
+      const { byAnchor, anchors, anchorStarts } = open(book)
+      const at = id === undefined ? undefined : byAnchor.get(id)
+      if (at !== undefined) return anchors[at + 1]?.from
+      return anchorStarts[bound(anchorStarts, from, identity, true)]
+    },
+    // Reading a roster never opens or imports a book. A read-only window
+    // observes the actual writer's file, including same-size replacements.
+    cursor: book => {
+      const value = versions.get(book)
+      const source = writes() ? 'w' : diskKey(book)
+      return { epoch: source + ':' + (value?.epoch ?? 0), version: value?.version ?? 0 }
     },
     // Newest first: every word has to be in the record's text.
     search: (book, query, pick = record => record.text) => {
