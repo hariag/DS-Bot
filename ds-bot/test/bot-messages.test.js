@@ -123,22 +123,24 @@ async function start(seed) {
 const textOf = content => content.map(block => block.text ?? '').join('\n')
 const chiefRequestHeader = "[Message from Chief · this request's turn returns your final reply]"
 
-test('message_bot steers by default; on an idle Bot it opens the next turn', async (t) => {
+test('message_bot queues ordinary requests by default and can steer an urgent correction', async (t) => {
   const { agents, emit, tool, stop } = await start(team())
   t.after(stop)
 
   // Idle: the message goes to the Bot's own chat and starts its next turn.
   const idle = await tool('message_bot', { to: 'Writer', message: 'how are you' }, 'a')
   assert.equal(idle, 'Delivered to Writer. Its reply will arrive later as a new message; do not wait for it. Writer now: idle; own chat pending inputs: unavailable.')
-  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['steer'])
+  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['followup'])
   assert.equal(textOf(agents.get('b').calls[0][1].content), chiefRequestHeader + '\nhow are you')
   assert.equal(agents.get('b').calls[0][1].source.role, 'request')
 
-  // Running: the message cuts into that turn instead of queuing.
+  // Running: routine work waits, while an explicit correction can steer.
   emit('b', 'turn/start', { turn: 1 })
-  const busy = await tool('message_bot', { to: 'Writer', message: 'watch out' }, 'a')
+  const routine = await tool('message_bot', { to: 'Writer', message: 'next assignment' }, 'a')
+  assert.match(routine, /^Queued for Writer/)
+  const busy = await tool('message_bot', { to: 'Writer', message: 'watch out', when: 'now' }, 'a')
   assert.equal(busy, 'Delivered to Writer while it is working: it reads your message at its next step and answers once that work is done. Its reply will arrive later as a new message; do not wait for it. Writer now: working in its own chat for less than a minute, for the user; own chat pending inputs: unavailable.')
-  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['steer', 'steer'])
+  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['followup', 'followup', 'steer'])
 })
 
 test('message_bot when "queue" waits for the current work, and reply_to "user" always queues', async (t) => {
@@ -165,7 +167,7 @@ test('a Bot busy in a group gets the message in its own chat, and the sender is 
   emit('gb', 'turn/start', { turn: 1 })
   const out = await tool('message_bot', { to: 'Writer', message: 'status?' }, 'a')
   assert.equal(out, 'Delivered to Writer. Its reply will arrive later as a new message; do not wait for it. Writer now: working in group "Ops" for less than a minute; own chat pending inputs: unavailable; group pending inputs: 0 in 0 available session(s); 1 group session(s) unavailable. Your message does not reach its work in group "Ops". If it must not go on there, use stop_bot.')
-  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['steer'])
+  assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['followup'])
   assert.equal(agents.get('gb'), undefined)
 
   // A non-Main sender gets no stop_bot hint.
@@ -180,7 +182,7 @@ test('a request steered into a running turn is recorded once and answered in a t
 
   emit('b', 'turn/start', { turn: 1 })
   emit('b', 'user/message', { content: textBlock('write the letter'), source: { kind: 'user' } })
-  await tool('message_bot', { to: 'Writer', message: 'which year is the data?' }, 'a')
+  await tool('message_bot', { to: 'Writer', message: 'which year is the data?', when: 'now' }, 'a')
   const steered = agents.get('b').calls[0][1]
   emit('b', 'user/message', { content: steered.content, source: steered.source })
   const refused = await tool('message_bot', { to: 'Chief', message: 'This is a question about the data.' }, 'b')
@@ -271,11 +273,11 @@ test('requests from two parts of one Bot are answered apart, not merged', async 
   t.after(stop)
   // What Writer is sent waits unread in its inbox.
   const writer = agentOf('b')
-  writer.steer = (message) => { writer.calls.push(['steer', message]); writer.inbox.nextStep.push(message) }
+  writer.followup = (message) => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
   emit('b', 'turn/start', { turn: 1 })
   assert.doesNotMatch(await tool('message_bot', { to: 'Writer', message: 'check the data' }, 'a'), /added to it/)
   assert.doesNotMatch(await tool('message_bot', { to: 'Writer', message: 'check the docs' }, 'a-bg'), /added to it/)
-  const waiting = [...writer.inbox.nextStep]
+  const waiting = [...writer.inbox.nextTurn]
   assert.equal(waiting.length, 2)
   assert.deepEqual(waiting.map(message => message.source.senderPart), ['a', 'a-bg'])
   assert.notEqual(waiting[0].source.exchangeId, waiting[1].source.exchangeId)
@@ -466,7 +468,7 @@ test('requests from two Bots, or for different work, stay apart', async (t) => {
   const { agentOf, emit, tool, stop } = await start(seed)
   t.after(stop)
   const writer = agentOf('b')
-  writer.steer = (message) => { writer.calls.push(['steer', message]); writer.inbox.nextStep.push(message) }
+  writer.followup = (message) => { writer.calls.push(['followup', message]); writer.inbox.nextTurn.push(message) }
   emit('b', 'turn/start', { turn: 1 })
 
   await tool('message_bot', { to: 'Writer', message: 'from Chief' }, 'a')
@@ -477,14 +479,14 @@ test('requests from two Bots, or for different work, stay apart', async (t) => {
   emit('c', 'turn/start', { turn: 1 })
   emit('c', 'user/message', { content: ask.content, source: ask.source })
   assert.doesNotMatch(await tool('message_bot', { to: 'Writer', message: 'for that check' }, 'c'), /added to it/)
-  assert.equal(writer.inbox.nextStep.length, 3)
+  assert.equal(writer.inbox.nextTurn.length, 3)
 })
 
 test('a non-Main Bot can steer a message to a Main Bot', async (t) => {
   const { agents, tool, stop } = await start(team())
   t.after(stop)
 
-  const out = await tool('message_bot', { to: 'Chief', message: 'heads up' }, 'b')
+  const out = await tool('message_bot', { to: 'Chief', message: 'heads up', when: 'now' }, 'b')
   assert.equal(out, 'Delivered to Chief. Its reply will arrive later as a new message; do not wait for it. Chief now: idle; own chat pending inputs: unavailable.')
   assert.deepEqual(agents.get('a').calls.map(([kind]) => kind), ['steer'])
   assert.equal(agents.get('a').calls[0][1].source.senderSessionId, 'b')
@@ -894,7 +896,7 @@ async function refusedUp({ agents, emit, tool }) {
   await tool('message_bot', { to: 'Writer', message: 'write the summary' }, 'a')
   turns.end('a', 'asked Writer')
   turns.take('b')
-  const refused = await tool('message_bot', { to: 'Chief', message: 'Here is the summary: all three parts are done.' }, 'b')
+  const refused = await tool('message_bot', { to: 'Chief', message: 'Here is the summary: all three parts are done.', when: 'now' }, 'b')
   return { ...turns, refused }
 }
 
@@ -927,7 +929,7 @@ test('messages refused in one turn add up to the answer, and the refusal says so
   t.after(team.stop)
   const { agents, tool } = team
   const { end } = await refusedUp(team)
-  assert.equal(await tool('message_bot', { to: 'Chief', message: 'One more thing: part two needs a review.' }, 'b'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was kept as your answer, after what was kept before in this turn. If you end your turn without writing any text, it goes up to Chief; any text you write for this work from now on goes up instead.')
+  assert.equal(await tool('message_bot', { to: 'Chief', message: 'One more thing: part two needs a review.', when: 'now' }, 'b'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was kept as your answer, after what was kept before in this turn. If you end your turn without writing any text, it goes up to Chief; any text you write for this work from now on goes up instead.')
   end('b')
   await settled(() => callsOf(agents, 'a').length === 1)
   assert.equal(textOf(callsOf(agents, 'a')[0][1].content), '[Reply from Writer]\nHere is the summary: all three parts are done.\n\nOne more thing: part two needs a review.')
@@ -938,13 +940,13 @@ test('a message refused in a later turn replaces what an earlier turn kept, and 
   t.after(team.stop)
   const { agents, tool } = team
   const { take, end } = await handedOn(team)
-  assert.match(await tool('message_bot', { to: 'Chief', message: 'Built it; Tester is reviewing.' }, 'b'), /^Not sent: Chief is waiting/)
+  assert.match(await tool('message_bot', { to: 'Chief', message: 'Built it; Tester is reviewing.', when: 'now' }, 'b'), /^Not sent: Chief is waiting/)
   end('b')
   take('c')
   end('c', 'looks good')
   await settled(() => callsOf(agents, 'b').length === 2)
   take('b')
-  assert.equal(await tool('message_bot', { to: 'Chief', message: 'Built and reviewed.' }, 'b'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was kept as your answer, in place of what was kept for this work before this turn. If you end your turn without writing any text, it goes up to Chief; any text you write for this work from now on goes up instead.')
+  assert.equal(await tool('message_bot', { to: 'Chief', message: 'Built and reviewed.', when: 'now' }, 'b'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was kept as your answer, in place of what was kept for this work before this turn. If you end your turn without writing any text, it goes up to Chief; any text you write for this work from now on goes up instead.')
   end('b')
   await settled(() => callsOf(agents, 'a').length === 1)
   assert.equal(textOf(callsOf(agents, 'a')[0][1].content), '[Reply from Writer]\nBuilt and reviewed.\n\n[Handed back to Writer for this work]\n\nTester:\nlooks good')
@@ -955,7 +957,7 @@ test('a refused message stays the answer while the work waits for what was hande
   t.after(team.stop)
   const { agents, tool } = team
   const { take, end } = await handedOn(team)
-  assert.match(await tool('message_bot', { to: 'Chief', message: 'Built it; Tester is reviewing.' }, 'b'), /^Not sent: Chief is waiting/)
+  assert.match(await tool('message_bot', { to: 'Chief', message: 'Built it; Tester is reviewing.', when: 'now' }, 'b'), /^Not sent: Chief is waiting/)
   end('b')
   assert.equal(Object.values(await worksIn(team)).find(work => work.to === 'b').held, 'Built it; Tester is reviewing.')
   take('c')
@@ -977,7 +979,7 @@ test('a long refused message keeps its start as the answer, and the refusal says
   turns.end('a')
   turns.take('b')
   const report = 'x'.repeat(2500)
-  const refused = await tool('message_bot', { to: 'Chief', message: report }, 'b')
+  const refused = await tool('message_bot', { to: 'Chief', message: report, when: 'now' }, 'b')
   assert.match(refused, /Only its first 2000 characters were kept as your answer\. To send all of it, write it in full as your answer\. If you end your turn without writing any text, that part goes up to Chief;/)
   turns.end('b')
   await settled(() => callsOf(agents, 'a').length === 1)
@@ -994,8 +996,8 @@ test('a message refused after a long one in the same turn keeps the start of bot
   turns.end('a')
   turns.take('b')
   const report = `${'x'.repeat(1990)}${'y'.repeat(510)}`
-  await tool('message_bot', { to: 'Chief', message: report }, 'b')
-  const refused = await tool('message_bot', { to: 'Chief', message: 'One more thing.' }, 'b')
+  await tool('message_bot', { to: 'Chief', message: report, when: 'now' }, 'b')
+  const refused = await tool('message_bot', { to: 'Chief', message: 'One more thing.', when: 'now' }, 'b')
   assert.match(refused, /Your message was kept as your answer, after what was kept before in this turn, but only the first 2000 characters of all of it\. To send all of it, write it in full as your answer\./)
   turns.end('b')
   await settled(() => callsOf(agents, 'a').length === 1)
@@ -1009,7 +1011,7 @@ test('a message refused because a Bot further up waits goes to the direct asker,
   const { take, end } = await handedOn(team)
   end('b')
   take('c')
-  assert.equal(await tool('message_bot', { to: 'Chief', message: 'Chief, it passes.' }, 'c'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was kept as your answer. If you end your turn without writing any text, it goes up to Writer as your answer, and reaches Chief with Writer\'s answer; any text you write for this work from now on goes up instead.')
+  assert.equal(await tool('message_bot', { to: 'Chief', message: 'Chief, it passes.', when: 'now' }, 'c'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was kept as your answer. If you end your turn without writing any text, it goes up to Writer as your answer, and reaches Chief with Writer\'s answer; any text you write for this work from now on goes up instead.')
   end('c')
   await settled(() => callsOf(agents, 'b').length === 2)
   assert.equal(textOf(take('b').content), '[Reply from Tester · for the work Chief asked you for; your answer goes to Chief once everything you handed on is back]\nChief, it passes.')
@@ -1026,7 +1028,7 @@ test('a message refused after the turn wrote text is not kept, and the refusal s
   turns.end('a')
   turns.take('b')
   emit('b', 'assistant/message', assistantText('Let me send Chief the summary.'))
-  assert.equal(await tool('message_bot', { to: 'Chief', message: 'The summary.' }, 'b'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was not kept: this turn already wrote text, and that goes up to Chief. Write the message in your final answer.')
+  assert.equal(await tool('message_bot', { to: 'Chief', message: 'The summary.', when: 'now' }, 'b'), 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Your message was not kept: this turn already wrote text, and that goes up to Chief. Write the message in your final answer.')
   assert.equal(Object.values(await worksIn(team)).find(work => work.to === 'b').held, undefined)
   turns.end('b')
   await settled(() => callsOf(agents, 'a').length === 1)
@@ -1043,7 +1045,7 @@ for (const route of ['private chat', 'group report']) {
     const { agents, emit, tool } = host
     emit('a', 'turn/start', { turn: 1 })
     emit('a', 'user/message', { content: textBlock('scheduled work'), source: { kind: 'schedule' } })
-    await tool('message_bot', { to: 'Chief', message: 'separate question' }, 'b')
+    await tool('message_bot', { to: 'Chief', message: 'separate question', when: 'now' }, 'b')
     const incoming = callsOf(agents, 'a')[0][1]
     emit('a', 'user/message', { content: incoming.content, source: incoming.source })
 
@@ -1071,7 +1073,7 @@ test('overlapping requests from two Bots keep their own final answers', async (t
   const { take, end } = turnTaker(agents, emit)
   await tool('message_bot', { to: 'Writer', message: 'write the summary' }, 'a')
   take('b')
-  await tool('message_bot', { to: 'Writer', message: 'which data was used?' }, 'c')
+  await tool('message_bot', { to: 'Writer', message: 'which data was used?', when: 'now' }, 'c')
   const joined = callsOf(agents, 'b')[1][1]
   emit('b', 'user/message', { content: joined.content, source: joined.source })
 
@@ -1104,6 +1106,7 @@ test('a queued or user-facing message to a Bot that waits for the result is not 
   turns.end('a')
   turns.take('b')
   const plain = 'Not sent: Chief is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back. Finish the work and end your turn; to ask Chief something, end your turn with the question.'
+  assert.equal(await tool('message_bot', { to: 'Chief', message: 'Unrelated: review doc Z later?' }, 'b'), plain)
   assert.equal(await tool('message_bot', { to: 'Chief', message: 'Unrelated: review doc Z later?', when: 'queue' }, 'b'), plain)
   assert.equal(await tool('message_bot', { to: 'Chief', message: 'Tell the user hi', reply_to: 'user' }, 'b'), plain)
   assert.equal(Object.values(await worksIn(team)).find(work => work.to === 'b').held, undefined)
@@ -1463,6 +1466,21 @@ test('a failed turn past the hard line keeps the real error instead of switching
   assert.equal(agent.session.eventAt(1).data.reason.error, error)
 })
 
+// fakeContext records registrations but does not dispatch middleware. Rebuild
+// their registration order (including prepend) in Cordis' real waterfall.
+async function preStepWaterfall(ctx, payload) {
+  const listeners = ctx.listeners.get('agent/pre-step') ?? []
+  const registrations = ctx.calls.filter(call => call === 'on agent/pre-step' || call === 'on agent/pre-step (prepend)')
+  assert.equal(registrations.length, listeners.length)
+  const events = new Context()
+  try {
+    listeners.forEach((listener, index) => events.on('agent/pre-step', listener, { prepend: registrations[index].endsWith('(prepend)') }))
+    return await events.waterfall('agent/pre-step', payload, async () => ({ kind: 'enter', messages: payload.messages }))
+  } finally {
+    await events.fiber.dispose()
+  }
+}
+
 for (const id of ['b', 'gb']) {
   test(`model-priced images after a handoff can make room by switching (${id})`, async (t) => {
     const seed = team({ group: true })
@@ -1547,7 +1565,7 @@ for (const id of ['b', 'gb']) {
     ctx.llm.resolveModelInfo = async () => ({ context: { contextWindow: 192_000 } })
     const preStep = async (agent) => {
       agent.session.requestHeader = () => ({ config: { provider: 'custom', model: 'model' } })
-      return ctx.listeners.get('agent/pre-step').at(-1)({ agent, messages: [], step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
+      return preStepWaterfall(ctx, { agent, messages: [], step: 1, signal: AbortSignal.timeout(60_000) })
     }
     const overflow = agent => fire('agent/request-error', { agent, failure: { code: 'CONTEXT_WINDOW_EXCEEDED', message: 'Tools exceed the context window' }, signal: AbortSignal.timeout(60_000) })
     const waitForHandoff = async (sessionId) => {
@@ -1561,10 +1579,10 @@ for (const id of ['b', 'gb']) {
     emit(id, 'assistant/message', assistantText('Earlier work'))
     await overflow(agentOf(id))
     await waitForHandoff('s1')
-    assert.equal(await preStep(agentOf('s1')), 'next')
+    assert.equal((await preStep(agentOf('s1'))).kind, 'enter')
     // A larger tool set can cross the growth line without adding any conversation.
     tokens += 192_000
-    assert.equal(await preStep(agentOf('s1')), 'next')
+    assert.equal((await preStep(agentOf('s1'))).kind, 'enter')
     await overflow(agentOf('s1'))
     await delay(30)
     assert.equal(made, 1, 'replacing an unchanged handoff cannot make room')
@@ -1627,8 +1645,9 @@ for (const id of ['b', 'gb']) {
       assert.ok(ctx.get('tokenMeter').measure(agent.session).totalTokens + estimateTokens(textOf(input.content)) > 50_000, 'it overflows together with the handoff')
 
       if (pending) {
-        const decision = await ctx.listeners.get('agent/pre-step').at(-1)({ agent, messages: [input], step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
-        assert.deepEqual(decision, { kind: 'enter', messages: [] })
+        const decision = await preStepWaterfall(ctx, { agent, messages: [input], step: 1, signal: AbortSignal.timeout(60_000) })
+        assert.equal(decision.kind, 'enter')
+        assert.ok(decision.messages.every(message => message.source?.kind === 'ds-bot-time-context' && message.source?.form === 'snapshot'), 'only a synthetic clock snapshot may remain; the pending request is handed on')
       } else {
         record('user/message', input)
         await fire('agent/request-error', { agent, failure: { code: 'CONTEXT_WINDOW_EXCEEDED' }, signal: AbortSignal.timeout(60_000) })
