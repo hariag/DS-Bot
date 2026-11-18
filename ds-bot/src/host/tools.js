@@ -166,12 +166,6 @@ export function install(rt) {
   // A tool that throws shows as failed in the chat, instead of as sent or stopped.
   const refuse = (message) => { throw new Error(message) }
 
-  // The works (handoffs.js) the calling turn does: what it answers, and the requests
-  // that joined it.
-  const worksOf = (exec) => {
-    const turn = rt.live.get(exec.agent?.id)
-    return [rt.workOf(turn?.info), ...(turn?.joined ?? []).map(joined => rt.workOf(joined.info))].filter(Boolean)
-  }
   const tooLong = text => `Not sent: the message has ${text.length} characters, more than ${MESSAGE_INLINE_MAX}, and this DeepSeek Harness cannot send it as a file. Write it to a file in your working folder and send its path instead.`
 
   // Work for a group stays in it: from a group Session, message_bot calls a member there
@@ -203,10 +197,13 @@ export function install(rt) {
     const plain = `Not sent: ${target.name} is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back.`
     const turn = rt.live.get(exec.agent?.id)
     const work = rt.workOf(turn?.info)
+    // The guard includes requests that joined this turn. Its final answer belongs
+    // to the opening work and cannot be used to answer one of those other requests.
+    if (!rt.upstreamOf([work]).has(target.id)) {
+      return `Not sent: ${target.name} is waiting on a separate request that arrived during this turn. Finish the current task for its original recipient. When the separate request opens in its own turn, put its result or question in that turn's final answer. DS Bot routes it through the original handoff.`
+    }
     const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from) : undefined
-    // A request that joined the turn is answered in a later turn, and a queued or
-    // user-facing message is not an answer to this work.
-    const answers = asker !== undefined && args.reply_to !== 'user' && args.when !== 'queue' && rt.upstreamOf([work]).has(target.id)
+    const answers = asker !== undefined && args.reply_to !== 'user' && args.when !== 'queue'
     if (!answers) return `${plain} Finish the work and end your turn; to ask ${target.name} something, end your turn with the question.`
     const to = asker.id === target.id ? target.name : `${asker.name} as your answer, and reaches ${target.name} with ${asker.name}'s answer`
     // The turn's reply is all the text it wrote, so text from before this call goes up
@@ -336,11 +333,13 @@ export function install(rt) {
       // sends the work round in a circle. Not a failed call: the turn goes on with
       // the work, and the result says where its answer goes instead of showing a
       // bare error the Bot cannot act on.
-      const works = worksOf(exec)
-      if (rt.upstreamOf(works).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args)
+      const turn = rt.live.get(exec.agent?.id)
+      const openingWork = rt.workOf(turn?.info)
+      const joinedWorks = (turn?.joined ?? []).map(joined => rt.workOf(joined.info))
+      if (rt.upstreamOf([openingWork, ...joinedWorks]).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args)
       const send = async () => {
         const toUser = args.reply_to === 'user'
-        const work = toUser ? undefined : works[0]
+        const work = toUser ? undefined : openingWork
         // The part of the sender's own chat this request comes from: its answer goes back
         // to that part's thread.
         const fromPart = callerPart(exec).fromPart
@@ -817,8 +816,8 @@ export function install(rt) {
       if (long === undefined) return tooLong(text)
       // Replies the poster waits for, while it works on what a Bot asked it for, are
       // work handed on for that request (handoffs.js).
-      const work = reportBack ? worksOf(exec).find(id => rt.ownsWork(self, id)) : undefined
-      const sub = work === undefined ? undefined : randomUUID()
+      const work = rt.workOf(info)
+      const sub = reportBack && rt.ownsWork(self, work) ? randomUUID() : undefined
       if (sub !== undefined) rt.openWork(sub, { from: self, room: room.id, parent: work })
       const missingFiles = folder === undefined ? [] : missingFileRefs(text, folder)
       const claims = missingFiles.length > 0 ? { missingFiles } : undefined
