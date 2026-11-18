@@ -13829,6 +13829,8 @@ var ZH = {
   "Waiting for you": "等你处理",
   "Periodic review pending": "等待周期复核",
   "Periodic review pending · {title}": "等待周期复核 · {title}",
+  "Inspection failed before any administrator tool ran": "原巡检在管理员调用工具前已失败",
+  "The original inspection has been verified. Future inspections will wait until pending group work has cleared.": "原巡检结果已核实。群内待处理工作结束后，系统会继续后续巡检。",
   "Periodic review needs attention": "周期复核待核查",
   "This review has an unknown outcome. Check the original work before allowing future reviews.": "本次复核结果不明。允许后续复核前，请先核查原有工作。",
   "What did you verify?": "核查结果是什么？",
@@ -15395,6 +15397,77 @@ function countCards(state, sessionId, callIds, delta) {
   return { ...state, [sessionId]: own };
 }
 
+// src/client/group-reads.js
+var clients = /* @__PURE__ */ new WeakMap();
+function groupReads(actions) {
+  if (clients.has(actions)) return clients.get(actions);
+  const pending = /* @__PURE__ */ new Map();
+  const closed = /* @__PURE__ */ new Map();
+  const latest = /* @__PURE__ */ new Map();
+  function read(key, cursor, fetch2) {
+    const current2 = pending.get(key);
+    if (current2) {
+      if (current2.cursor === cursor && !current2.next) return current2.task;
+      if (!current2.next) {
+        current2.next = current2.task.then(() => read(key, current2.latest, fetch2));
+      }
+      current2.latest = cursor;
+      return current2.next;
+    }
+    if (typeof cursor === "string" && latest.get(key)?.cursor === cursor) return Promise.resolve(latest.get(key).value);
+    const entry = { cursor };
+    entry.task = Promise.resolve().then(fetch2).catch(() => null).then((value) => {
+      if (typeof cursor === "string" && value != null) {
+        latest.set(key, { cursor, value });
+        if (latest.size > 16) latest.delete(latest.keys().next().value);
+      }
+      return value;
+    }).finally(() => pending.delete(key));
+    pending.set(key, entry);
+    return entry.task;
+  }
+  const client = {
+    read,
+    closed: (key) => closed.get(key),
+    settle(key, view) {
+      closed.set(key, view);
+      if (closed.size > 128) closed.delete(closed.keys().next().value);
+    }
+  };
+  clients.set(actions, client);
+  return client;
+}
+function createGroupRowsReader(call2, maxRanges) {
+  const rooms = /* @__PURE__ */ new Map();
+  async function flush(roomId, batch) {
+    rooms.delete(roomId);
+    clearTimeout(batch.timer);
+    const entries2 = batch.entries;
+    let result;
+    try {
+      result = await call2("group-rows", { roomId, ranges: entries2.map((entry) => entry.range) });
+    } catch {
+    }
+    const valid = Array.isArray(result) && result.length === entries2.length;
+    entries2.forEach((entry, index) => entry.resolve(valid ? result[index] : null));
+  }
+  return (roomId, from, to, anchor) => {
+    const limit = maxRanges();
+    const range = { from, ...to === void 0 ? {} : { to }, ...anchor === void 0 ? {} : { anchor } };
+    if (!Number.isSafeInteger(limit) || limit < 2) return call2("group-rows", { roomId, ...range }).catch(() => null);
+    let batch = rooms.get(roomId);
+    if (!batch) {
+      batch = { entries: [] };
+      rooms.set(roomId, batch);
+      batch.timer = setTimeout(() => void flush(roomId, batch), 8);
+    }
+    return new Promise((resolve2) => {
+      batch.entries.push({ range, resolve: resolve2 });
+      if (batch.entries.length >= limit) void flush(roomId, batch);
+    });
+  };
+}
+
 // src/client/team-actions.js
 function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards, heldCards, turnClock, panelFolded }) {
   const memoryOf = (id) => roster.getSnapshot().roomsById[id] ? { roomId: id } : { botId: id };
@@ -15678,7 +15751,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     exchangeText: (id, a, b) => call2("exchange-text", { id, ...a !== void 0 && b !== void 0 ? { a, b } : {} }).catch(() => void 0),
     fileText: (file) => call2("file-text", { file }).catch(() => void 0),
     roomProgress: (roomId) => call2("room-progress", { roomId }).catch(() => null),
-    groupRows: (roomId, from, to, anchor) => call2("group-rows", { roomId, from, ...to === void 0 ? {} : { to }, ...anchor === void 0 ? {} : { anchor } }).catch(() => null),
+    groupRows: createGroupRowsReader(call2, () => roster.getSnapshot().groupRowsBatchSize),
     earlier: (sessionId, cursor) => call2("earlier", { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
     usage: () => call2("usage", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
@@ -16728,6 +16801,9 @@ body[data-bt-motion=quiet] .bt-mark[data-gaze] .bt-gaze,body[data-bt-effects=red
 .bt-mark[data-shape=image]:not([data-state=idle]) .bt-mark-img{animation:bt-bob 1.6s ease-in-out infinite}
 .bt-mark[data-shape=image][data-state=alert] .bt-mark-img{animation:bt-hop 1.3s cubic-bezier(.3,.7,.4,1) 2}
 body[data-bt-motion=lively] .bt-mark[data-state=alert] :is(.bt-b,.bt-mark-img){animation-iteration-count:infinite}
+/* Animate the transition into a work state once. Its status text and badge stay
+   visible. Lively mode keeps the character moving throughout the activity. */
+body:not([data-bt-motion=lively]) .bt-mark:is([data-state=thinking],[data-state=searching],[data-state=working],[data-state=sending],[data-state=orbit],[data-state=waiting]) :is(.bt-b,.bt-eye,.bt-eyes,.bt-mark-img){animation-iteration-count:1}
 .bt-mark[data-state=done] .bt-b{animation:bt-done 1.8s linear 1}
 .bt-mark[data-shape=image][data-state=done] .bt-mark-img{animation:bt-done 1.8s linear 1;transform-origin:50% 100%}
 @keyframes bt-done{0%{transform:none;animation-timing-function:cubic-bezier(.4,0,.2,1)}13.3%{transform:scale(1.12,.88);animation-timing-function:cubic-bezier(.4,0,.2,1)}25.6%{transform:scale(.93,1.09);animation-timing-function:cubic-bezier(.4,0,.2,1)}37.8%{transform:scale(1.04,.97);animation-timing-function:cubic-bezier(.4,0,.2,1)}51.1%,100%{transform:none}}
@@ -17927,6 +18003,7 @@ body[data-bt-goal] [class*="_scroll"]:has(> [class*="_column"]){padding-top:calc
 @keyframes bt-typing-label{from{opacity:0;filter:var(--bt-fx-blur-5,blur(5px));transform:translateY(3px)}}
 /* Shimmer: a stepped sweep clipped to the text. */
 .bt-shimmer{color:transparent;background:linear-gradient(90deg,var(--bt-shimmer-base) 0%,var(--bt-shimmer-base) 25%,var(--bt-ink) 60%,var(--bt-shimmer-base) 75%,var(--bt-shimmer-base) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:bt-shimmer 2.2s steps(60) infinite;--bt-shimmer-base:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
+body:not([data-bt-motion=lively]) .bt-shimmer{animation-iteration-count:1}
 @keyframes bt-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 /* New rows slide up; a reply that replaces the activity row grows out of its corner. */
 [data-bt-enter="new"]{animation:bt-row-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
@@ -18850,47 +18927,6 @@ var CHANGES_CSS = `
 @media (max-width:640px){.bt-changes{margin-left:0}}
 `;
 
-// src/client/group-reads.js
-var clients = /* @__PURE__ */ new WeakMap();
-function groupReads(actions) {
-  if (clients.has(actions)) return clients.get(actions);
-  const pending = /* @__PURE__ */ new Map();
-  const closed = /* @__PURE__ */ new Map();
-  const latest = /* @__PURE__ */ new Map();
-  function read(key, cursor, fetch2) {
-    const current2 = pending.get(key);
-    if (current2) {
-      if (current2.cursor === cursor && !current2.next) return current2.task;
-      if (!current2.next) {
-        current2.next = current2.task.then(() => read(key, current2.latest, fetch2));
-      }
-      current2.latest = cursor;
-      return current2.next;
-    }
-    if (typeof cursor === "string" && latest.get(key)?.cursor === cursor) return Promise.resolve(latest.get(key).value);
-    const entry = { cursor };
-    entry.task = Promise.resolve().then(fetch2).catch(() => null).then((value) => {
-      if (typeof cursor === "string" && value != null) {
-        latest.set(key, { cursor, value });
-        if (latest.size > 16) latest.delete(latest.keys().next().value);
-      }
-      return value;
-    }).finally(() => pending.delete(key));
-    pending.set(key, entry);
-    return entry.task;
-  }
-  const client = {
-    read,
-    closed: (key) => closed.get(key),
-    settle(key, view) {
-      closed.set(key, view);
-      if (closed.size > 128) closed.delete(closed.keys().next().value);
-    }
-  };
-  clients.set(actions, client);
-  return client;
-}
-
 // src/client/overlay-hooks.js
 var import_react6 = require("react");
 var escapeLayers = [];
@@ -18944,7 +18980,7 @@ function goalView(goal, { roster = {}, roomWork = [] } = {}) {
   const checking = currentTasks.length > 0 && currentTasks.every((task) => REPORTED.has(task.status));
   const automaticIdle = goal.idle === true && ["admin-pass", "nudge-limit"].includes(goal.idleReason) && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision;
   const number = goal.status === "drafting" ? void 0 : goal.status === "stopped" ? stages.filter((stage) => stage.status === "passed").length : current2 !== void 0 ? at + 1 : count;
-  const barLabel = goal.status === "drafting" ? t("Aligning the goal with you") : goal.status === "stopped" ? t("Stopped") : goal.status === "complete" ? t("Goal reached") : goal.status === "paused" ? current2 ? t("Paused · {title}", { title: current2.title }) : t("Paused") : goal.idle === true && !automaticIdle ? current2 ? t("Waiting for you · {title}", { title: current2.title }) : t("Waiting for you") : ["uncertain", "cancelled-uncertain"].includes(goal.reviewAttempt?.state) ? t("Periodic review needs attention") : automaticIdle ? current2 ? t("Periodic review pending · {title}", { title: current2.title }) : t("Periodic review pending") : current2 === void 0 ? t("Final check") : checking ? t("Results reported · stage review pending: {title}", { title: current2.title }) : current2.title;
+  const barLabel = goal.status === "drafting" ? t("Aligning the goal with you") : goal.status === "stopped" ? t("Stopped") : goal.status === "complete" ? t("Goal reached") : goal.status === "paused" ? current2 ? t("Paused · {title}", { title: current2.title }) : t("Paused") : goal.idle === true && !automaticIdle ? current2 ? t("Waiting for you · {title}", { title: current2.title }) : t("Waiting for you") : goal.reviewAttempt?.terminalFailure ? t("Inspection failed before any administrator tool ran") : ["uncertain", "cancelled-uncertain"].includes(goal.reviewAttempt?.state) ? t("Periodic review needs attention") : automaticIdle ? current2 ? t("Periodic review pending · {title}", { title: current2.title }) : t("Periodic review pending") : current2 === void 0 ? t("Final check") : checking ? t("Results reported · stage review pending: {title}", { title: current2.title }) : current2.title;
   const segments = stages.map((stage, i) => stage.status === "passed" ? "done" : i === at && goal.status === "paused" ? "paused" : i === at && goal.status === "active" ? checking ? "checking" : "current" : "todo");
   const working = new Set((roomWork ?? []).map((entry) => entry.botId));
   const seen = /* @__PURE__ */ new Set();
@@ -19190,7 +19226,7 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working, openRevi
     reviewIssue ? (0, import_react7.createElement)(
       "div",
       { className: "bt-goal-sec" },
-      (0, import_react7.createElement)("div", { className: "bt-goal-text" }, t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
+      (0, import_react7.createElement)("div", { className: "bt-goal-text" }, goal.reviewAttempt.terminalFailure ? t("The original inspection has been verified. Future inspections will wait until pending group work has cleared.") : t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
       (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: typeof openReview !== "function", onClick: openReview }, t("Open review workspace"))
     ) : null,
     (0, import_react7.createElement)(
@@ -39740,7 +39776,7 @@ function LegacyWorkReview({ scope, request, actors }) {
     )
   );
 }
-var periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at]);
+var periodicReviewIdentity = (scopeId, goal) => JSON.stringify([scopeId, goal?.id, goal?.reviewAttempt?.id, goal?.revision, goal?.status, goal?.idle, goal?.idleReason, goal?.idleRevision, goal?.reviewAttempt?.state, goal?.reviewAttempt?.at, goal?.reviewAttempt?.terminalFailure?.at]);
 function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen }) {
   const [checking, setChecking] = (0, import_react54.useState)(false), [saving, setSaving] = (0, import_react54.useState)(false);
   const [checkedKey, setCheckedKey] = (0, import_react54.useState)(""), [error, setError] = (0, import_react54.useState)(""), [notice, setNotice] = (0, import_react54.useState)("");
@@ -39765,6 +39801,19 @@ function PeriodicReviewRecovery({ scope, goal, resolveReview, refreshGoal, curre
     };
   }, [scopeId]);
   if (!scopeId || !attempt && !notice && !error) return null;
+  if (attempt?.terminalFailure) {
+    return (0, import_react54.createElement)(
+      "details",
+      { className: "bt-recovery-panel bt-periodic-review", open: initiallyOpen || void 0 },
+      (0, import_react54.createElement)("summary", { className: "bt-recovery-summary" }, t("Inspection failed before any administrator tool ran")),
+      (0, import_react54.createElement)(
+        "div",
+        { className: "bt-recovery-body" },
+        (0, import_react54.createElement)("p", null, t("The original inspection has been verified. Future inspections will wait until pending group work has cleared.")),
+        (0, import_react54.createElement)("code", null, attemptId)
+      )
+    );
+  }
   const automaticIdle = goal?.idle === true && ["admin-pass", "nudge-limit"].includes(goal.idleReason) && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision;
   const eligible = goal?.status === "active" && goalId && attemptId && (["uncertain", "cancelled-uncertain"].includes(attempt?.state) || attempt?.state === "admitting" && Number.isFinite(attempt.at) && Date.now() - attempt.at >= 30 * 60 * 1e3) && (goal.idle !== true || automaticIdle);
   const refresh = async () => {
