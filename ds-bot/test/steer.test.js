@@ -338,6 +338,32 @@ test('shell shadows retry only registrations that failed and dispose independent
   await stop()
 })
 
+test('a persistent scoped collision is retried when the shell changes or the cooldown expires', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 })
+  const { ctx, rt, agent, stop } = await start({ def: shellDef('bash') })
+  t.after(stop)
+  let visible = shellDef('bash')
+  ctx.tools.get = name => name === 'bash' ? visible : undefined
+  let attempts = 0, warnings = 0, occupied = true
+  rt.warn = () => { warnings++ }
+  agent.ctx.tools.register = () => {
+    attempts++
+    if (occupied) throw new Error('tool "bash" is already registered in this scope')
+    return () => {}
+  }
+  for (let i = 0; i < 100; i++) rt.shadowShells(agent)
+  assert.equal(attempts, 1)
+  assert.equal(warnings, 1)
+  t.mock.timers.tick(60_000)
+  rt.shadowShells(agent)
+  assert.equal(attempts, 2)
+  assert.equal(warnings, 1)
+  visible = shellDef('bash')
+  occupied = false
+  assert.equal(rt.shadowShells(agent).length, 1)
+  assert.equal(attempts, 3)
+})
+
 test('shell shadow retries when the first registration fails before any shell is installed', async () => {
   const { stop, rt, agent } = await start({ def: shellDef('bash') })
   let attempts = 0
