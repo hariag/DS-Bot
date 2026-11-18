@@ -1,3 +1,4 @@
+import { indexRoster } from '../src/client/sources.js'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -318,6 +319,28 @@ test('the state reports a changed model list without a new revision', async (t) 
   assert.equal(withoutLiveKey.unchanged, undefined)
   assert.ok(Array.isArray(withoutLiveKey.rooms), 'without a known live key the client must refresh scoped goal projections')
   assert.equal((await call('state', { since: first.revision, models: 'stale' })).value.unchanged, undefined)
+})
+
+test('an opt-in web roster reuses bot instructions across team saves and refreshes edits', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  const { id } = (await call('create-bot', { name: 'Writer', instructions: 'long instructions '.repeat(800) })).value
+  const first = indexRoster((await call('state', { instructionsKey: '' })).value)
+  assert.equal(typeof first.instructionsKey, 'string')
+  const text = first.byId[id].instructions
+  assert.ok(text.length > 10000)
+  await rt.save()
+  const query = { since: first.revision, live: first.liveKey, models: first.modelsKey, instructionsKey: first.instructionsKey }
+  const next = (await call('state', query)).value
+  assert.equal(next.instructionsKey, first.instructionsKey)
+  assert.equal(Object.hasOwn(next.bots.find(bot => bot.id === id), 'instructions'), false)
+  assert.equal(indexRoster(next, first).byId[id].instructions, text)
+  assert.equal((await call('state', {})).value.bots.find(bot => bot.id === id).instructions, text)
+  rt.state.bots[id].instructions = ''
+  await rt.save()
+  const changed = (await call('state', query)).value
+  assert.notEqual(changed.instructionsKey, first.instructionsKey)
+  assert.equal(indexRoster(changed, first).byId[id].instructions, '')
 })
 
 test('an unchanged state answer skips the live fields a window already holds', async (t) => {

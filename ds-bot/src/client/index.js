@@ -195,7 +195,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
   const pull = async () => {
     const order = ++pulls
     const known = roster.getSnapshot()
-    const value = await call('state', { since: known.revision, models: known.modelsKey ?? '', live: liveKey, locale: language() })
+    const value = await call('state', { since: known.revision, models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language() })
     if (order < applied) return
     applied = order
     const prevLiveKey = liveKey
@@ -216,6 +216,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
     const current = roster.getSnapshot()
     // Connector, capability and phone states change without a new revision.
     const live = {}
+    if (value.groupRowKeys !== undefined && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current.groupRowKeys ?? {})) live.groupRowKeys = value.groupRowKeys
     if (value.partsRunning !== undefined && JSON.stringify(value.partsRunning) !== JSON.stringify(current.partsRunning ?? {})) live.partsRunning = value.partsRunning
     if (value.secretStore !== undefined && JSON.stringify(value.secretStore) !== JSON.stringify(current.secretStore ?? {})) live.secretStore = value.secretStore
     if (value.secrets !== undefined && JSON.stringify(value.secrets) !== JSON.stringify(current.secrets ?? [])) live.secrets = value.secrets
@@ -232,12 +233,12 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
     // closed, without a reload: the window holds the answer's live fields until then.
     if (value.readOnly !== undefined && (value.readOnly ?? null) !== (current.readOnly ?? null)) live.readOnly = value.readOnly
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
-    if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) {
+    if (value.unchanged) {
       return value.liveKey !== undefined && value.liveKey !== prevLiveKey
     }
     // On a browser with no visit record yet, everything already there counts as seen.
     if (Object.keys(seenAt).length === 0) leaveVisits([...value.bots, ...value.rooms].map(entry => entry.id))
-    roster.set(indexRoster(value))
+    roster.set(indexRoster(value, known))
     try {
       const ids = (value.agents ?? []).flatMap(agent => agent.sessions ?? [])
       localStorage.setItem(STORAGE.agentSessions, JSON.stringify(ids))

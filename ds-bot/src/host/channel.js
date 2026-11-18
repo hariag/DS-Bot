@@ -255,6 +255,7 @@ export function install(rt) {
     secretStore: rt.secretStoreStatus(),
     secrets: rt.secretsView(),
     activity: rt.activityView(),
+    groupRowKeys: Object.fromEntries(Object.keys(state.rooms).map(id => [id, rt.groupRowKey?.(id) ?? null])),
 // Which of a Bot's own chat parts has a turn right now, current or background:
     // the session list's Running mark reads this, not a guess from the transcript.
     partsRunning: Object.fromEntries(Object.values(state.bots)
@@ -290,6 +291,22 @@ export function install(rt) {
   // a per-run prefix: a window can outlive the host, and a counter that restarts
   // at 1 would let its stale key name a different answer.
   const liveRun = randomUUID()
+  // Bot instructions dominate large rosters and often outlive thousands of team saves.
+  // Only a client that echoes the exact current set can reuse its cached strings.
+  let instructions = new Map()
+  let instructionsSeq = 0
+  const withInstructionsKey = (out, previousKey) => {
+    if (instructionsSeq === 0 || out.bots.length !== instructions.size || out.bots.some(bot =>
+      !instructions.has(bot.id) || instructions.get(bot.id) !== bot.instructions)) {
+      instructions = new Map(out.bots.map(bot => [bot.id, bot.instructions]))
+      instructionsSeq++
+    }
+    const instructionsKey = `${liveRun}:instructions:${instructionsSeq}`
+    if (previousKey === instructionsKey) {
+      for (const bot of out.bots) delete bot.instructions // view() made a new object for each Bot
+    }
+    return { ...out, instructionsKey }
+  }
   let liveSeq = 0
   let liveCache = null
   const liveHistory = new Map()
@@ -433,7 +450,8 @@ const READS = new Set(['board-list', 'board-release-list', 'board-release-report
           }
           // A phone asks for photos by reference and fetches each once (`avatar`).
           const out = { ...view(), liveKey: answer.key, ...answer.value }
-          return ok(body.avatars === 'ref' ? rt.slimAvatars(out) : out)
+          if (body.avatars === 'ref') return ok(rt.slimAvatars(out))
+          return ok(typeof body.instructionsKey === 'string' ? withInstructionsKey(out, body.instructionsKey) : out)
         }
         case 'models':
           await rt.catalog({ fresh: true })
