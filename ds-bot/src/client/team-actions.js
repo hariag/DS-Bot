@@ -258,7 +258,7 @@ goalReviewResolve: (roomId, goalId, reviewId) => after(call('goal-control', { ro
     exchange: (a, b) => call('exchange', { a, b }).catch(() => []),
     exchangeText: (id, a, b) => call('exchange-text', { id, ...(a !== undefined && b !== undefined ? { a, b } : {}) }).catch(() => undefined),
     fileText: file => call('file-text', { file }).catch(() => undefined),
-    roomProgress: roomId => call('room-progress', { roomId }).catch(() => []),
+    roomProgress: roomId => call('room-progress', { roomId }).catch(() => null),
     groupRows: (roomId, from, to, anchor) => call('group-rows', { roomId, from, ...(to === undefined ? {} : { to }), ...(anchor === undefined ? {} : { anchor }) }).catch(() => null),
     earlier: (sessionId, cursor) => call('earlier', { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.

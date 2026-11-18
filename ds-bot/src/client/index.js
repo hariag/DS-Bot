@@ -68,7 +68,7 @@ import { PASTE_CSS, PasteDock, PasteGuard } from './paste-card.js'
 import { OPENING_CSS, bindOpeningWait } from './opening.js'
 import { noticeApprovals } from './approval-notices.js'
 import { listedOpener } from './open-listed.js'
-import { needsIdleSample, pollDelay } from './polling.js'
+import { HIDDEN_POLL_MS, VISIBLE_POLL_MS, needsIdleSample, pollDelay } from './polling.js'
 import { installMotionRest } from './motion-rest.js'
 import { agentSessionToReuse, singleFlight } from './agent-new.js'
 import { TextSelectionAction, ANNOTATION_CSS } from './text-annotation.js'
@@ -192,12 +192,14 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
   // Pulls can overlap (the poll and a navigation); an older answer never wins.
   let pulls = 0
   let applied = 0
+  let since = -1
   const pull = async () => {
     const order = ++pulls
     const known = roster.getSnapshot()
-    const value = await call('state', { since: known.revision, models: known.modelsKey ?? '', live: liveKey, locale: language() })
+    const value = await call('state', { since, rosterKey: known.rosterKey ?? '', models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language() })
     if (order < applied) return
     applied = order
+    since = value.revision
     const prevLiveKey = liveKey
     if (value.liveKey !== undefined) liveKey = value.liveKey
     if (value.activity !== undefined) {
@@ -213,31 +215,32 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
       if (nextComputer !== computerKey) { computerKey = nextComputer; computer.set(value.computerLive) }
     }
     if (value.memoryNews !== undefined) noteMemoryNews(value.memoryNews)
-    const current = roster.getSnapshot()
-    // Connector, capability and phone states change without a new revision.
-    const live = {}
-    if (value.partsRunning !== undefined && JSON.stringify(value.partsRunning) !== JSON.stringify(current.partsRunning ?? {})) live.partsRunning = value.partsRunning
-    if (value.secretStore !== undefined && JSON.stringify(value.secretStore) !== JSON.stringify(current.secretStore ?? {})) live.secretStore = value.secretStore
-    if (value.secrets !== undefined && JSON.stringify(value.secrets) !== JSON.stringify(current.secrets ?? [])) live.secrets = value.secrets
-    if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
-    if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
-    if (value.phone !== undefined && JSON.stringify(value.phone) !== JSON.stringify(current.phone ?? null)) live.phone = value.phone
-    if (value.learning !== undefined && JSON.stringify(value.learning) !== JSON.stringify(current.learning ?? {})) live.learning = value.learning
-    if (value.learningSettled !== undefined && JSON.stringify(value.learningSettled) !== JSON.stringify(current.learningSettled ?? {})) live.learningSettled = value.learningSettled
-    if (value.btwCards !== undefined && JSON.stringify(value.btwCards) !== JSON.stringify(current.btwCards ?? {})) live.btwCards = value.btwCards
-    if (value.sideChats !== undefined && JSON.stringify(value.sideChats) !== JSON.stringify(current.sideChats ?? {})) live.sideChats = value.sideChats
-    if (value.imStatus !== undefined && JSON.stringify(value.imStatus) !== JSON.stringify(current.imStatus ?? {})) live.imStatus = value.imStatus
-    if (value.imVia !== undefined && JSON.stringify(value.imVia) !== JSON.stringify(current.imVia ?? {})) live.imVia = value.imVia
-    // The read-only notice goes once this host takes the team over from a dsh that
-    // closed, without a reload: the window holds the answer's live fields until then.
-    if (value.readOnly !== undefined && (value.readOnly ?? null) !== (current.readOnly ?? null)) live.readOnly = value.readOnly
-    if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
-    if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) {
+    if (value.unchanged) {
+      const current = roster.getSnapshot()
+      // Connector, capability and phone states change without a new revision.
+      const live = {}
+      if (value.groupRowKeys !== undefined && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current.groupRowKeys ?? {})) live.groupRowKeys = value.groupRowKeys
+      if (value.partsRunning !== undefined && JSON.stringify(value.partsRunning) !== JSON.stringify(current.partsRunning ?? {})) live.partsRunning = value.partsRunning
+      if (value.secretStore !== undefined && JSON.stringify(value.secretStore) !== JSON.stringify(current.secretStore ?? {})) live.secretStore = value.secretStore
+      if (value.secrets !== undefined && JSON.stringify(value.secrets) !== JSON.stringify(current.secrets ?? [])) live.secrets = value.secrets
+      if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
+      if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
+      if (value.phone !== undefined && JSON.stringify(value.phone) !== JSON.stringify(current.phone ?? null)) live.phone = value.phone
+      if (value.learning !== undefined && JSON.stringify(value.learning) !== JSON.stringify(current.learning ?? {})) live.learning = value.learning
+      if (value.learningSettled !== undefined && JSON.stringify(value.learningSettled) !== JSON.stringify(current.learningSettled ?? {})) live.learningSettled = value.learningSettled
+      if (value.btwCards !== undefined && JSON.stringify(value.btwCards) !== JSON.stringify(current.btwCards ?? {})) live.btwCards = value.btwCards
+      if (value.sideChats !== undefined && JSON.stringify(value.sideChats) !== JSON.stringify(current.sideChats ?? {})) live.sideChats = value.sideChats
+      if (value.imStatus !== undefined && JSON.stringify(value.imStatus) !== JSON.stringify(current.imStatus ?? {})) live.imStatus = value.imStatus
+      if (value.imVia !== undefined && JSON.stringify(value.imVia) !== JSON.stringify(current.imVia ?? {})) live.imVia = value.imVia
+      // The read-only notice goes once this host takes the team over from a dsh that
+      // closed, without a reload: the window holds the answer's live fields until then.
+      if (value.readOnly !== undefined && (value.readOnly ?? null) !== (current.readOnly ?? null)) live.readOnly = value.readOnly
+      if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
       return value.liveKey !== undefined && value.liveKey !== prevLiveKey
     }
     // On a browser with no visit record yet, everything already there counts as seen.
     if (Object.keys(seenAt).length === 0) leaveVisits([...value.bots, ...value.rooms].map(entry => entry.id))
-    roster.set(indexRoster(value))
+    roster.set(indexRoster(value, known))
     try {
       const ids = (value.agents ?? []).flatMap(agent => agent.sessions ?? [])
       localStorage.setItem(STORAGE.agentSessions, JSON.stringify(ids))
@@ -264,7 +267,8 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
     let running = false
     let timer
     let misses = 0
-    // While the host keeps answering that nothing changed, asking every 1.5 s only makes
+    let networkFailures = 0
+    // While the host keeps answering that nothing changed, frequent reads only make
     // the renderer serialise requests and compare answers (#1462). The wait stretches to
     // POLL_MAX_MS and snaps back on the first change, a wake, or any action's own pull.
     let unchanged = 0
@@ -275,11 +279,13 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
       try {
         unchanged = await pull() ? 0 : unchanged + 1
         misses = 0
+        networkFailures = 0
         // A late-arriving API clears the failure the misses reported.
         ui.set(state => (state.bootFailed ? { ...state, bootFailed: false } : state))
       } catch (error) {
         if (!stopped) {
-          console.warn('[ds-bot] state', error)
+          if (error?.code !== 'NETWORK' || networkFailures === 0) console.warn('[ds-bot] state', error)
+          networkFailures = error?.code === 'NETWORK' ? networkFailures + 1 : 0
           // Only a missing Bot API counts toward a failed start: while the
           // host plugin stays unmounted the route answers 404. A network miss
           // is the host reconnecting, not a start-up failure (#516).
@@ -289,12 +295,18 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
           }
         }
       } finally { running = false }
-      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? 10000 : 1500, unchanged))
+      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS, unchanged, networkFailures))
     }
     const wake = () => { if (!document.hidden) { unchanged = 0; void loop() } }
     document.addEventListener('visibilitychange', wake)
+    window.addEventListener('online', wake)
     void loop()
-    return () => { stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', wake) }
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('online', wake)
+    }
   }, 'ds-bot: roster poll')
 
   // Plugin updates: every window that opens asks the host once (the host keeps its

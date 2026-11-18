@@ -345,12 +345,8 @@ export function install(rt) {
     if (room !== undefined) ensureRoomLog(room)
     let end = to
     if (end === undefined) {
-      const records = rt.ledger.records(bookOf(roomId))
-      const at = anchor === undefined ? -1 : records.findIndex(record => record.event === 'anchor' && record.id === anchor)
-      const next = at === -1
-        ? records.filter(record => record.event === 'anchor' && record.from > from).map(record => record.from)
-        : [records.slice(at + 1).find(record => record.event === 'anchor')?.from].filter(seq => seq !== undefined)
-      if (next.length > 0) end = Math.min(...next) - 1
+      const next = rt.ledger.nextAnchor(bookOf(roomId), from, anchor)
+      if (next !== undefined) end = next - 1
     }
     // Not the messages the group's own Session shows itself.
     const rows = rt.ledger.range(bookOf(roomId), from, end).filter(record => record.session !== true).map(rowOf).filter(Boolean)
@@ -1287,6 +1283,15 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
   const roundRuns = new Map()
   rt.roomRounds = roomId => [...(roundRuns.get(roomId) ?? [])]
   const runningRound = roomId => [...rt.roomProgress.values()].find(round => round.roomId === roomId)
+  const rowRun = randomUUID()
+  rt.groupRowKey = roomId => {
+    const book = rt.ledger.cursor(bookOf(roomId))
+    const rounds = [...rt.roomProgress].filter(([, round]) => round.roomId === roomId)
+      .map(([id, round]) => [id, round.from, round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)])
+    // The first part invalidates even a closed range after rollback, drop,
+    // an external file replacement, or host restart.
+    return `${rowRun}:${book.epoch}|${JSON.stringify([book.version, rt.roomOf(roomId)?.seq, finalizing.has(roomId), rounds])}`
+  }
   // Stops the round running in a group, with the member turns it started.
   // A round still finishing is stopped too: what waits on it then waits for the group's
   // next message instead of starting.

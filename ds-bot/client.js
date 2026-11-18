@@ -15355,7 +15355,13 @@ function createSource(initial) {
 }
 var EMPTY_ROSTER = { revision: -1, mainBotId: null, mainBotIds: [], bots: [], rooms: [], agents: [], sections: [], exchangeTurns: {}, questions: {}, btwCards: {}, sideChats: {}, learning: {}, secrets: [], capabilities: [], capabilityStatuses: {}, phone: null, secretRequests: {}, models: [], defaultModel: null, modelsKey: null, prefs: {}, byId: {}, roomsById: {}, agentsById: {}, agentOf: {}, ready: false };
 var isMainOf = (roster, id) => id !== void 0 && (roster.mainBotIds ?? []).includes(id);
-function indexRoster(value) {
+function indexRoster(value, previous) {
+  if (value.instructionsKey !== void 0 && value.instructionsKey === previous?.instructionsKey) {
+    value = { ...value, bots: value.bots.map((bot) => {
+      const prior = previous.byId[bot.id];
+      return prior?.instructions === void 0 ? bot : { ...bot, instructions: prior.instructions };
+    }) };
+  }
   const byId = {};
   for (const bot of value.bots) {
     const open = (bot.openParts ?? []).flatMap((part) => [part.sessionId, ...part.parts ?? []]);
@@ -15671,7 +15677,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     exchange: (a, b) => call2("exchange", { a, b }).catch(() => []),
     exchangeText: (id, a, b) => call2("exchange-text", { id, ...a !== void 0 && b !== void 0 ? { a, b } : {} }).catch(() => void 0),
     fileText: (file) => call2("file-text", { file }).catch(() => void 0),
-    roomProgress: (roomId) => call2("room-progress", { roomId }).catch(() => []),
+    roomProgress: (roomId) => call2("room-progress", { roomId }).catch(() => null),
     groupRows: (roomId, from, to, anchor) => call2("group-rows", { roomId, from, ...to === void 0 ? {} : { to }, ...anchor === void 0 ? {} : { anchor } }).catch(() => null),
     earlier: (sessionId, cursor) => call2("earlier", { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
@@ -18843,6 +18849,47 @@ var CHANGES_CSS = `
 [data-bt-layout=flat] .bt-changes{margin-left:0}
 @media (max-width:640px){.bt-changes{margin-left:0}}
 `;
+
+// src/client/group-reads.js
+var clients = /* @__PURE__ */ new WeakMap();
+function groupReads(actions) {
+  if (clients.has(actions)) return clients.get(actions);
+  const pending = /* @__PURE__ */ new Map();
+  const closed = /* @__PURE__ */ new Map();
+  const latest = /* @__PURE__ */ new Map();
+  function read(key, cursor, fetch2) {
+    const current2 = pending.get(key);
+    if (current2) {
+      if (current2.cursor === cursor && !current2.next) return current2.task;
+      if (!current2.next) {
+        current2.next = current2.task.then(() => read(key, current2.latest, fetch2));
+      }
+      current2.latest = cursor;
+      return current2.next;
+    }
+    if (typeof cursor === "string" && latest.get(key)?.cursor === cursor) return Promise.resolve(latest.get(key).value);
+    const entry = { cursor };
+    entry.task = Promise.resolve().then(fetch2).catch(() => null).then((value) => {
+      if (typeof cursor === "string" && value != null) {
+        latest.set(key, { cursor, value });
+        if (latest.size > 16) latest.delete(latest.keys().next().value);
+      }
+      return value;
+    }).finally(() => pending.delete(key));
+    pending.set(key, entry);
+    return entry.task;
+  }
+  const client = {
+    read,
+    closed: (key) => closed.get(key),
+    settle(key, view) {
+      closed.set(key, view);
+      if (closed.size > 128) closed.delete(closed.keys().next().value);
+    }
+  };
+  clients.set(actions, client);
+  return client;
+}
 
 // src/client/overlay-hooks.js
 var import_react6 = require("react");
@@ -29924,66 +29971,77 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
   }
   return null;
 }
-var settledRows = /* @__PURE__ */ new Map();
+var groupReadDelay = (failures) => failures > 0 ? Math.min(3e4, 1500 * 2 ** Math.min(failures, 5)) : document.hidden ? 5e3 : 1e3;
 function GroupReplies({ sessionId, turn, callId, done, content, roster, actions, useUi, useWork }) {
+  const room2 = roster.roomsById[sessionId];
+  const roomId = room2?.id ?? sessionId;
+  const reads = groupReads(actions);
+  const cursor = roster.groupRowKeys?.[roomId];
+  const hasCursor = typeof cursor === "string";
+  const epoch = hasCursor ? cursor.split("|", 1)[0] : null;
   const [live, setLive] = (0, import_react34.useState)({ replies: [], speaking: [] });
   (0, import_react34.useEffect)(() => {
     if (done) return void 0;
     let stop = false;
     let timer;
-    let seen = "";
+    let failures = 0;
+    let seen;
     const tick = async () => {
-      const result = await actions.roomProgress(sessionId);
+      const result = await reads.read(JSON.stringify(["progress", roomId]), cursor, () => actions.roomProgress(roomId));
       if (stop) return;
-      const entry = (result ?? []).find((item) => item.callId === callId) ?? (result ?? [])[0];
-      const key = entry ? JSON.stringify([entry.replies, entry.speaking]) : "";
-      if (entry && key !== seen) {
-        seen = key;
-        setLive({ replies: entry.replies ?? [], speaking: [entry.speaking ?? []].flat() });
-      }
-      timer = setTimeout(tick, document.hidden ? 5e3 : 1e3);
-    };
-    void tick();
-    return () => {
-      stop = true;
-      clearTimeout(timer);
-    };
-  }, [done, sessionId, callId]);
-  const resultText = done ? contentText(content) : "";
-  const range = done ? relayRange(resultText) : void 0;
-  const rowsKey = range === void 0 ? void 0 : `${sessionId}:${range.from}:${range.to ?? ""}:${range.anchor ?? ""}`;
-  const [view, setView] = (0, import_react34.useState)(() => rowsKey === void 0 ? null : settledRows.get(rowsKey) ?? null);
-  const quietKey = view?.open === true && view.active !== true ? roster.revision : void 0;
-  (0, import_react34.useEffect)(() => {
-    if (rowsKey === void 0) return void 0;
-    const known = settledRows.get(rowsKey);
-    if (known !== void 0) {
-      setView(known);
-      return void 0;
-    }
-    let stop = false;
-    let timer;
-    let seen = "";
-    const tick = async () => {
-      const next = await actions.groupRows(sessionId, range.from, range.to, range.anchor);
-      if (stop) return;
-      if (next !== null && Array.isArray(next?.rows)) {
-        if (!next.open) settledRows.set(rowsKey, next);
-        const key = JSON.stringify(next);
+      if (Array.isArray(result)) {
+        const entry = result.find((item) => item.callId === callId) ?? result[0];
+        const next = { replies: entry?.replies ?? [], speaking: [entry?.speaking ?? []].flat() };
+        const key = hasCursor ? cursor : JSON.stringify(next);
         if (key !== seen) {
           seen = key;
-          setView(next);
+          setLive(next);
         }
-        if (!next.open || next.active !== true) return;
-      }
-      timer = setTimeout(tick, document.hidden ? 5e3 : 1e3);
+        if (hasCursor) return;
+        failures = 0;
+      } else failures++;
+      timer = setTimeout(tick, groupReadDelay(failures));
     };
     void tick();
     return () => {
       stop = true;
       clearTimeout(timer);
     };
-  }, [rowsKey, quietKey]);
+  }, [done, roomId, callId, reads, actions, cursor]);
+  const resultText = done ? contentText(content) : "";
+  const range = done ? relayRange(resultText) : void 0;
+  const rowsKey = range && JSON.stringify(["rows", roomId, range.from, range.to, range.anchor]);
+  const cacheKey = range && JSON.stringify([epoch, rowsKey]);
+  const [snapshot, setSnapshot] = (0, import_react34.useState)(null);
+  const view = (snapshot?.key === cacheKey ? snapshot?.view : null) ?? reads.closed(cacheKey);
+  const refresh = view?.open === false ? null : hasCursor ? cursor : view?.open && !view.active ? roster.revision : void 0;
+  (0, import_react34.useEffect)(() => {
+    if (!range || view?.open === false) return void 0;
+    let stop = false;
+    let timer;
+    let failures = 0;
+    let seen;
+    const tick = async () => {
+      const next = await reads.read(rowsKey, cursor, () => actions.groupRows(roomId, range.from, range.to, range.anchor));
+      if (stop) return;
+      if (Array.isArray(next?.rows)) {
+        if (!next.open) reads.settle(cacheKey, next);
+        const key = hasCursor ? cursor : JSON.stringify(next);
+        if (key !== seen) {
+          seen = key;
+          setSnapshot({ key: cacheKey, view: next });
+        }
+        if (hasCursor || !next.open || !next.active) return;
+        failures = 0;
+      } else failures++;
+      timer = setTimeout(tick, groupReadDelay(failures));
+    };
+    void tick();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [reads, actions, cacheKey, refresh]);
   let replies = live.replies;
   let broken = false;
   if (range !== void 0) {
@@ -30004,7 +30062,6 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
   if (replies.length === 0 && pending.length === 0) {
     return broken ? (0, import_react34.createElement)("div", { className: "bt-group-replies" }, (0, import_react34.createElement)("div", { className: "bt-event" }, t("The group replies could not be shown"))) : (0, import_react34.createElement)(CellEmpty);
   }
-  const room2 = roster.roomsById[sessionId];
   return (0, import_react34.createElement)(
     "div",
     { className: "bt-group-replies" },
@@ -30018,9 +30075,6 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
           reply.via !== void 0 || Number.isFinite(time) ? (0, import_react34.createElement)("div", { className: "bt-utime", title: clockLabel(time) }, ...reply.via !== void 0 ? [(0, import_react34.createElement)(ViaTag, { key: "via", via: reply.via })] : [], Number.isFinite(time) ? messageClock(time) : null) : null
         );
       }
-      if (reply.kind !== void 0) {
-        return (0, import_react34.createElement)(RelayEvent, { key: `${reply.botId ?? reply.kind}-${index}`, reply, bot, sessionId, actions });
-      }
       if (reply.kind === "goal") {
         return (0, import_react34.createElement)(
           "div",
@@ -30028,6 +30082,9 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
           (0, import_react34.createElement)("span", { className: "bt-event-ico", "aria-hidden": true }, (0, import_react34.createElement)(GoalIcon)),
           goalEventText(reply)
         );
+      }
+      if (reply.kind !== void 0) {
+        return (0, import_react34.createElement)(RelayEvent, { key: `${reply.botId ?? reply.kind}-${index}`, reply, bot, sessionId, actions });
       }
       return (0, import_react34.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration, claims, changes });
     }),
@@ -30095,7 +30152,7 @@ function renderCall(call2, { sessionId, turn, roster, actions, useUi, useWork, f
       return done && target ? (0, import_react34.createElement)(EventLine, { prefix: t("Updated"), bots: [target], onOpen: (bot) => actions.openSession(bot.id) }) : (0, import_react34.createElement)(CellEmpty);
     }
     case "group_relay":
-      return (0, import_react34.createElement)(GroupReplies, { sessionId, turn, callId: call2.callId, done, content: call2.content, roster, actions, useUi, useWork });
+      return (0, import_react34.createElement)(GroupReplies, { key: JSON.stringify([sessionId, call2.callId]), sessionId, turn, callId: call2.callId, done, content: call2.content, roster, actions, useUi, useWork });
     case "create_group":
     case "update_group":
     case "delete_group":
@@ -30436,29 +30493,29 @@ var chatRoom = {
 function installFrameWatch(frame) {
   let collapsedWidth = collapsedTrackWidth();
   let raf = 0;
-  const watched = /* @__PURE__ */ new Set();
+  const selector = '[class*="_sidebarCol"],[class*="_centerCol"]';
+  let sidebar = null;
+  let columns2 = [];
+  let rescan = true;
   const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => schedule()) : null;
-  const read = () => {
-    const column = document.querySelector('[class*="_sidebarCol"]');
-    const animating = column?.closest("[data-animating]") != null;
-    const width = animating ? null : sidebarTrackWidth();
-    const collapsed = dshCollapsed();
-    collapsedWidth = nextCollapsedWidth({ measured: width, collapsed, animating, last: collapsedWidth });
-    frame.set((state) => {
-      const next = { ...state, viewport: window.innerWidth, collapsedWidth, collapsed: collapsed === true };
-      return state.viewport === next.viewport && state.collapsedWidth === next.collapsedWidth && state.collapsed === next.collapsed ? state : next;
-    });
-  };
   const measure = () => {
-    for (const selector of ['[class*="_sidebarCol"]', '[class*="_centerCol"]']) {
-      for (const column of document.querySelectorAll(selector)) {
-        if (!watched.has(column)) {
-          watched.add(column);
-          observer?.observe(column);
-        }
-      }
+    if (rescan) {
+      rescan = false;
+      const next = [...document.querySelectorAll(selector)];
+      for (const column of columns2) if (!next.includes(column)) observer?.unobserve(column);
+      for (const column of next) if (!columns2.includes(column)) observer?.observe(column);
+      columns2 = next;
+      sidebar = columns2.find((column) => column.matches('[class*="_sidebarCol"]')) ?? null;
     }
-    read();
+    const animating = sidebar?.closest("[data-animating]") != null;
+    const width = !sidebar || animating ? null : trackRoom(sidebar.getBoundingClientRect());
+    const collapsed = sidebar?.closest("[data-sidebar-collapsed]") != null;
+    collapsedWidth = nextCollapsedWidth({ measured: width, collapsed: sidebar ? collapsed : null, animating, last: collapsedWidth });
+    frame.set((state) => {
+      const viewport = window.innerWidth;
+      if (state.viewport === viewport && state.collapsedWidth === collapsedWidth && state.collapsed === collapsed) return state;
+      return { ...state, viewport, collapsedWidth, collapsed };
+    });
   };
   const schedule = () => {
     if (raf === 0) raf = requestAnimationFrame(() => {
@@ -30467,7 +30524,21 @@ function installFrameWatch(frame) {
     });
   };
   measure();
-  const mutations = new MutationObserver(schedule);
+  const mutations = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === "attributes") {
+        if (sidebar && record.target.contains(sidebar)) schedule();
+        continue;
+      }
+      if (columns2.some((column) => !column.isConnected)) rescan = true;
+      else if (columns2.some((column) => column.contains(record.target))) continue;
+      else if ([...record.addedNodes].some((node) => node.nodeType === 1 && (node.matches(selector) || node.querySelector(selector)))) rescan = true;
+      if (rescan) {
+        schedule();
+        break;
+      }
+    }
+  });
   mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-animating"] });
   window.addEventListener("resize", schedule);
   return () => {
@@ -51855,8 +51926,11 @@ function listedOpener({ list, open, refresh, current: current2, begin, done }) {
 }
 
 // src/client/polling.js
-var POLL_MAX_MS = 5e3;
-function pollDelay(base, unchanged) {
+var POLL_MAX_MS = 1e4;
+var VISIBLE_POLL_MS = 3e3;
+var HIDDEN_POLL_MS = 3e4;
+function pollDelay(base, unchanged, networkFailures = 0) {
+  if (networkFailures > 0) return Math.min(base * 2 ** Math.min(networkFailures, 8), 3e4);
   const steps = Math.min(Math.max(unchanged, 0), 8);
   return Math.min(base * 2 ** steps, Math.max(base, POLL_MAX_MS));
 }
@@ -52273,12 +52347,14 @@ function apply(ctx) {
   const refreshed = /* @__PURE__ */ new Set();
   let pulls = 0;
   let applied = 0;
+  let since = -1;
   const pull = async () => {
     const order = ++pulls;
     const known = roster.getSnapshot();
-    const value = await call("state", { since: known.revision, models: known.modelsKey ?? "", live: liveKey, locale: language() });
+    const value = await call("state", { since, rosterKey: known.rosterKey ?? "", models: known.modelsKey ?? "", live: liveKey, instructionsKey: known.instructionsKey ?? "", locale: language() });
     if (order < applied) return;
     applied = order;
+    since = value.revision;
     const prevLiveKey = liveKey;
     if (value.liveKey !== void 0) liveKey = value.liveKey;
     if (value.activity !== void 0) {
@@ -52303,27 +52379,28 @@ function apply(ctx) {
       }
     }
     if (value.memoryNews !== void 0) noteMemoryNews(value.memoryNews);
-    const current2 = roster.getSnapshot();
-    const live2 = {};
-    if (value.partsRunning !== void 0 && JSON.stringify(value.partsRunning) !== JSON.stringify(current2.partsRunning ?? {})) live2.partsRunning = value.partsRunning;
-    if (value.secretStore !== void 0 && JSON.stringify(value.secretStore) !== JSON.stringify(current2.secretStore ?? {})) live2.secretStore = value.secretStore;
-    if (value.secrets !== void 0 && JSON.stringify(value.secrets) !== JSON.stringify(current2.secrets ?? [])) live2.secrets = value.secrets;
-    if (value.connectors !== void 0 && JSON.stringify(value.connectors) !== JSON.stringify(current2.connectors ?? [])) live2.connectors = value.connectors;
-    if (value.capabilityStatuses !== void 0 && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current2.capabilityStatuses ?? {})) live2.capabilityStatuses = value.capabilityStatuses;
-    if (value.phone !== void 0 && JSON.stringify(value.phone) !== JSON.stringify(current2.phone ?? null)) live2.phone = value.phone;
-    if (value.learning !== void 0 && JSON.stringify(value.learning) !== JSON.stringify(current2.learning ?? {})) live2.learning = value.learning;
-    if (value.learningSettled !== void 0 && JSON.stringify(value.learningSettled) !== JSON.stringify(current2.learningSettled ?? {})) live2.learningSettled = value.learningSettled;
-    if (value.btwCards !== void 0 && JSON.stringify(value.btwCards) !== JSON.stringify(current2.btwCards ?? {})) live2.btwCards = value.btwCards;
-    if (value.sideChats !== void 0 && JSON.stringify(value.sideChats) !== JSON.stringify(current2.sideChats ?? {})) live2.sideChats = value.sideChats;
-    if (value.imStatus !== void 0 && JSON.stringify(value.imStatus) !== JSON.stringify(current2.imStatus ?? {})) live2.imStatus = value.imStatus;
-    if (value.imVia !== void 0 && JSON.stringify(value.imVia) !== JSON.stringify(current2.imVia ?? {})) live2.imVia = value.imVia;
-    if (value.readOnly !== void 0 && (value.readOnly ?? null) !== (current2.readOnly ?? null)) live2.readOnly = value.readOnly;
-    if (Object.keys(live2).length > 0 && current2.ready) roster.set({ ...current2, ...live2 });
-    if (value.unchanged || value.revision === current2.revision && value.modelsKey === current2.modelsKey) {
+    if (value.unchanged) {
+      const current2 = roster.getSnapshot();
+      const live2 = {};
+      if (value.groupRowKeys !== void 0 && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current2.groupRowKeys ?? {})) live2.groupRowKeys = value.groupRowKeys;
+      if (value.partsRunning !== void 0 && JSON.stringify(value.partsRunning) !== JSON.stringify(current2.partsRunning ?? {})) live2.partsRunning = value.partsRunning;
+      if (value.secretStore !== void 0 && JSON.stringify(value.secretStore) !== JSON.stringify(current2.secretStore ?? {})) live2.secretStore = value.secretStore;
+      if (value.secrets !== void 0 && JSON.stringify(value.secrets) !== JSON.stringify(current2.secrets ?? [])) live2.secrets = value.secrets;
+      if (value.connectors !== void 0 && JSON.stringify(value.connectors) !== JSON.stringify(current2.connectors ?? [])) live2.connectors = value.connectors;
+      if (value.capabilityStatuses !== void 0 && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current2.capabilityStatuses ?? {})) live2.capabilityStatuses = value.capabilityStatuses;
+      if (value.phone !== void 0 && JSON.stringify(value.phone) !== JSON.stringify(current2.phone ?? null)) live2.phone = value.phone;
+      if (value.learning !== void 0 && JSON.stringify(value.learning) !== JSON.stringify(current2.learning ?? {})) live2.learning = value.learning;
+      if (value.learningSettled !== void 0 && JSON.stringify(value.learningSettled) !== JSON.stringify(current2.learningSettled ?? {})) live2.learningSettled = value.learningSettled;
+      if (value.btwCards !== void 0 && JSON.stringify(value.btwCards) !== JSON.stringify(current2.btwCards ?? {})) live2.btwCards = value.btwCards;
+      if (value.sideChats !== void 0 && JSON.stringify(value.sideChats) !== JSON.stringify(current2.sideChats ?? {})) live2.sideChats = value.sideChats;
+      if (value.imStatus !== void 0 && JSON.stringify(value.imStatus) !== JSON.stringify(current2.imStatus ?? {})) live2.imStatus = value.imStatus;
+      if (value.imVia !== void 0 && JSON.stringify(value.imVia) !== JSON.stringify(current2.imVia ?? {})) live2.imVia = value.imVia;
+      if (value.readOnly !== void 0 && (value.readOnly ?? null) !== (current2.readOnly ?? null)) live2.readOnly = value.readOnly;
+      if (Object.keys(live2).length > 0 && current2.ready) roster.set({ ...current2, ...live2 });
       return value.liveKey !== void 0 && value.liveKey !== prevLiveKey;
     }
     if (Object.keys(seenAt).length === 0) leaveVisits([...value.bots, ...value.rooms].map((entry) => entry.id));
-    roster.set(indexRoster(value));
+    roster.set(indexRoster(value, known));
     try {
       const ids = (value.agents ?? []).flatMap((agent) => agent.sessions ?? []);
       localStorage.setItem(STORAGE.agentSessions, JSON.stringify(ids));
@@ -52349,6 +52426,7 @@ function apply(ctx) {
     let running = false;
     let timer;
     let misses = 0;
+    let networkFailures = 0;
     let unchanged = 0;
     const loop = async () => {
       clearTimeout(timer);
@@ -52357,10 +52435,12 @@ function apply(ctx) {
       try {
         unchanged = await pull() ? 0 : unchanged + 1;
         misses = 0;
+        networkFailures = 0;
         ui2.set((state) => state.bootFailed ? { ...state, bootFailed: false } : state);
       } catch (error) {
         if (!stopped) {
-          console.warn("[ds-bot] state", error);
+          if (error?.code !== "NETWORK" || networkFailures === 0) console.warn("[ds-bot] state", error);
+          networkFailures = error?.code === "NETWORK" ? networkFailures + 1 : 0;
           if (error?.code === "HTTP_404") {
             misses += 1;
             if (misses >= 10 && !roster.getSnapshot().ready) ui2.set((state) => state.bootFailed ? state : { ...state, bootFailed: true });
@@ -52369,7 +52449,7 @@ function apply(ctx) {
       } finally {
         running = false;
       }
-      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? 1e4 : 1500, unchanged));
+      if (!stopped) timer = setTimeout(loop, pollDelay(document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS, unchanged, networkFailures));
     };
     const wake = () => {
       if (!document.hidden) {
@@ -52378,11 +52458,13 @@ function apply(ctx) {
       }
     };
     document.addEventListener("visibilitychange", wake);
+    window.addEventListener("online", wake);
     void loop();
     return () => {
       stopped = true;
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("online", wake);
     };
   }, "ds-bot: roster poll");
   const update = createSource({ available: false, phase: "idle" });

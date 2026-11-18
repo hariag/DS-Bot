@@ -442,6 +442,20 @@ test('held work does not reveal names from an inaccessible parent or child group
   assert.match(member, /hidden-child-name/)
 })
 
+test('status groups duplicate visible waits and bounds distinct hand-off labels', async (t) => {
+  const { rt, stop } = await start(team())
+  t.after(stop)
+  for (let i = 0; i < 8; ++i) {
+    rt.openWork(`parent-${i}`, { from: 'a', to: 'b' })
+    rt.openWork(`child-${i}`, { from: 'b', to: 'a', parent: `parent-${i}`, name: i < 3 ? 'same child' : `child ${i}` })
+  }
+  const line = rt.statusOf('b', 'a')
+  assert.equal(line.match(/waiting for /g)?.length, 4)
+  assert.match(line, /same child to hand back work, for Chief \(3 hand-offs\)/)
+  assert.match(line, /2 other hand-off/)
+  assert.match(line, /own chat pending inputs/)
+})
+
 test('requests from two Bots, or for different work, stay apart', async (t) => {
   const seed = team()
   seed.bots.c = { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 }
