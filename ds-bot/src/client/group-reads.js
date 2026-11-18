@@ -42,3 +42,35 @@ export function groupReads(actions) {
   clients.set(actions, client)
   return client
 }
+
+// Collect distinct ranges rendered by one feed pass and keep each room independent.
+// Older hosts expose only the single-range request.
+export function createGroupRowsReader(call, maxRanges) {
+  const rooms = new Map()
+  async function flush(roomId, batch) {
+    rooms.delete(roomId)
+    clearTimeout(batch.timer)
+    const entries = batch.entries
+    let result
+    try {
+      result = await call('group-rows', { roomId, ranges: entries.map(entry => entry.range) })
+    } catch { /* the cell retries an unavailable range */ }
+    const valid = Array.isArray(result) && result.length === entries.length
+    entries.forEach((entry, index) => entry.resolve(valid ? result[index] : null))
+  }
+  return (roomId, from, to, anchor) => {
+    const limit = maxRanges()
+    const range = { from, ...(to === undefined ? {} : { to }), ...(anchor === undefined ? {} : { anchor }) }
+    if (!Number.isSafeInteger(limit) || limit < 2) return call('group-rows', { roomId, ...range }).catch(() => null)
+    let batch = rooms.get(roomId)
+    if (!batch) {
+      batch = { entries: [] }
+      rooms.set(roomId, batch)
+      batch.timer = setTimeout(() => void flush(roomId, batch), 8)
+    }
+    return new Promise(resolve => {
+      batch.entries.push({ range, resolve })
+      if (batch.entries.length >= limit) void flush(roomId, batch)
+    })
+  }
+}

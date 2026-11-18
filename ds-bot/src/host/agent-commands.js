@@ -32,14 +32,17 @@ export function install(rt) {
   const botChat = sessionId => Object.values(rt.state?.bots ?? {}).some(bot => rt.chatOf?.(bot.id) === sessionId)
   const roomChat = sessionId => rt.roomOf?.(sessionId) !== undefined
     || Object.values(rt.state?.rooms ?? {}).some(room => rt.sessionOfRoom?.(room) === sessionId)
-  const covered = sessionId => rt.chatOwners?.has?.(sessionId) === true || roomChat(sessionId) || botChat(sessionId)
-  const isGroup = sessionId => roomChat(sessionId)
-  const refusal = (sessionId, name) => {
-    const where = isGroup(sessionId) ? 'a group chat' : "a Bot's chat"
-    const goal = name === 'goal' && isGroup(sessionId) ? ' Use the group Goal in the group details panel instead.' : ''
+  const coverage = (sessionId) => {
+    if (roomChat(sessionId)) return 'group'
+    if (rt.chatOwners?.has?.(sessionId) === true || botChat(sessionId)) return 'bot'
+    return undefined
+  }
+  const refusal = (kind, name) => {
+    const where = kind === 'group' ? 'a group chat' : "a Bot's chat"
+    const goal = name === 'goal' && kind === 'group' ? ' Use the group Goal in the group details panel instead.' : ''
     return `The DSH /${name} command does not run in ${where}.${goal}`
   }
-  const rowCopy = sessionId => isGroup(sessionId)
+  const rowCopy = kind => kind === 'group'
     ? 'Not available in a group chat — use the group’s own controls'
     : 'Not available in a Bot chat — use the Bot’s own controls'
   // Session id → the shield mounted under that Session's agent.
@@ -47,41 +50,91 @@ export function install(rt) {
   // Our own registrations notify `commands/change` too; skip the echo while applying.
   let applying = false
 
-  const sync = (shield) => {
-    const commands = shield.commands
-    if (commands === undefined) return
-    for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
-    shield.lifts = []
-    // The agent can arrive before its Bot or group is in the state (a Bot created a
-    // moment ago); the shield mounts for every agent and waits for that Session to
-    // become known, then registers its shadows on the next sync.
-    if (!covered(shield.sessionId)) return
-    // Lift first: `list(agent)` is the merged view, so only after our shadows are gone
-    // does it answer what the host currently serves this agent.
-    const definitions = commands.list(shield.agent)
-    for (const definition of definitions) {
-      try {
-        // Keep the host descriptor's identity and input hint: the client uses them to
-        // claim a typed line with arguments and to keep the row's first-party face.
-        // Dropping them would leave `/name args` as a plain prompt.
-        const lift = commands.register({
-          name: definition.name,
-          description: rowCopy(shield.sessionId),
-          ...(definition.definitionId === undefined ? {} : { definitionId: definition.definitionId }),
-          ...(definition.input === undefined ? {} : { input: definition.input }),
-          handler: () => ({ kind: 'error', text: refusal(shield.sessionId, definition.name) }),
-        })
-        if (typeof lift === 'function') shield.lifts.push(lift)
-      } catch (error) {
-        // A same-name command already in this exact agent scope keeps its own handler.
-        rt.warn?.('ds-bot: the DSH /%s command could not be shadowed for %s: %s', definition.name, shield.sessionId, error?.message ?? error)
-      }
+  let notifications = 0
+  let retryTimer
+  const legacyInterval = 30_000
+
+  const lift = (shield, name) => {
+    const shadow = shield.shadows.get(name)
+    if (!shadow) return
+    shield.shadows.delete(name)
+    shadow.dispose()
+  }
+  const add = (shield, row) => {
+    if (shield.shadows.has(row.name)) return false
+    // An exact-scope plugin may already own this name. Retry only after its
+    // definition changes or disappears, keeping that plugin's handler intact.
+    const current = shield.commands.find(shield.agent, row.name)
+    if (current && shield.conflicts.get(row.name) === current) return false
+    shield.conflicts.delete(row.name)
+    const kind = shield.kind
+    try {
+      const dispose = shield.commands.register({
+        name: row.name, description: rowCopy(kind),
+        ...(row.definitionId === undefined ? {} : { definitionId: row.definitionId }),
+        ...(row.input === undefined ? {} : { input: row.input }),
+        handler: () => ({ kind: 'error', text: refusal(kind, row.name) }),
+      })
+      shield.shadows.set(row.name, { kind, row, dispose })
+      return true
+    } catch (error) {
+      if (current) shield.conflicts.set(row.name, current)
+      rt.warn?.('ds-bot: the DSH /%s command could not be shadowed for %s: %s', row.name, shield.sessionId, error?.message ?? error)
+      return false
     }
   }
-  const resync = () => {
+  const sameRow = (left, right) => left.definitionId === right.definitionId
+    && left.input?.hint === right.input?.hint && left.input?.attachments === right.input?.attachments
+
+  const sync = (shield, reason) => {
+    const commands = shield.commands
+    if (!commands) return
+    const kind = coverage(shield.sessionId)
+    if (reason === 'saved' && kind === shield.kind) return
+    const changedKind = kind !== shield.kind
+    shield.kind = kind
+    if (!kind) {
+      for (const name of shield.shadows.keys()) lift(shield, name)
+      shield.conflicts.clear()
+      return
+    }
+
+    if (typeof commands.listInherited === 'function') {
+      const wanted = new Map(commands.listInherited(shield.agent).map(row => [row.name, row]))
+      for (const [name, shadow] of shield.shadows) {
+        const row = wanted.get(name)
+        if (!row || kind !== shadow.kind || !sameRow(row, shadow.row)) lift(shield, name)
+      }
+      for (const name of shield.conflicts.keys()) if (!wanted.has(name)) shield.conflicts.delete(name)
+      for (const row of wanted.values()) add(shield, row)
+      return
+    }
+
+    // Earlier stock hosts only expose the merged view and notify synchronously.
+    // An intermediate host may defer our own writes into a later event. On
+    // those hosts pick up visible additions now, and bound expensive audits
+    // of deletions/metadata hidden beneath a shadow to one per interval.
+    if (!changedKind && Date.now() < shield.legacyNext) {
+      for (const row of commands.list(shield.agent)) add(shield, row)
+      if (retryTimer === undefined) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined
+          resync('catalog')
+        }, shield.legacyNext - Date.now())
+        retryTimer.unref?.()
+      }
+      return
+    }
+    const before = notifications
+    let writes = shield.shadows.size
+    for (const name of shield.shadows.keys()) lift(shield, name)
+    for (const row of commands.list(shield.agent)) if (add(shield, row)) writes++
+    shield.legacyNext = writes > notifications - before ? Date.now() + legacyInterval : 0
+  }
+  const resync = (reason) => {
     if (applying) return
     applying = true
-    try { for (const shield of shields.values()) sync(shield) } finally { applying = false }
+    try { for (const shield of shields.values()) sync(shield, reason) } finally { applying = false }
   }
 
   const mount = (agent) => {
@@ -90,7 +143,7 @@ export function install(rt) {
     // Test doubles and non-interactive hosts have no plugin seam; a Bot without it simply
     // keeps the DSH commands.
     if (typeof agent.ctx?.plugin !== 'function') return undefined
-    const shield = { sessionId, agent, child: undefined, lifts: [] }
+    const shield = { sessionId, agent, shadows: new Map(), conflicts: new Map(), legacyNext: 0 }
     shield.ready = new Promise((resolve) => { shield.resolveReady = resolve })
     shields.set(sessionId, shield)
     try {
@@ -105,7 +158,6 @@ export function install(rt) {
         name: 'ds-bot-command-shield',
         inject: [],
         apply(child) {
-          shield.child = child
           shield.commands = child.get?.('commands')
           applying = true
           try { if (shield.commands !== undefined) sync(shield) } finally {
@@ -138,17 +190,18 @@ export function install(rt) {
     const shield = shields.get(sessionId)
     if (shield === undefined) return
     shields.delete(sessionId)
-    for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
-    shield.lifts = []
+    for (const name of shield.shadows.keys()) lift(shield, name)
     try { shield.fiber?.dispose?.() } catch { /* already gone */ }
   }
 
   ctx.on('agent/created', ({ agent }) => mountReady(agent))
   ctx.on('agent/disposed', ({ agent }) => { unmount(agent?.session?.id) })
-  ctx.on('commands/change', resync)
-  const offSaved = rt.onSaved?.(() => resync())
+  ctx.on('commands/change', () => { notifications++; resync('catalog') })
+  ctx.on('agent-preset/selected', () => resync('catalog'))
+  const offSaved = rt.onSaved?.(() => resync('saved'))
   ctx.effect(() => () => {
     applying = true
+    clearTimeout(retryTimer)
     offSaved?.()
     for (const sessionId of [...shields.keys()]) unmount(sessionId)
   }, 'ds-bot: command shield cleanup')

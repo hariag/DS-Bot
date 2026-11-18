@@ -5,21 +5,32 @@ import { install } from '../src/host/agent-commands.js'
 // A small host `commands` registry with the same contract the real one gives the
 // shield: global definitions, per-agent scoped definitions that shadow them, a merged
 // list(agent), find/execute, and a `commands/change` event on every registration.
-function world({ config = {} } = {}) {
+function world({ config = {}, inherited = false, deferred = false } = {}) {
   let dshRuns = 0
   const global = new Map()
   const scoped = new Map()
   const listeners = new Map()
   const agents = []
   const emit = (event, payload) => { for (const listener of listeners.get(event) ?? []) listener(payload) }
-  const notify = () => emit('commands/change', {})
+  let notifications = 0, pending = false
+  const notify = () => {
+    notifications++
+    if (deferred) pending = true
+    else emit('commands/change', {})
+  }
+  const flush = () => {
+    if (!pending) return false
+    pending = false
+    emit('commands/change', {})
+    return true
+  }
   const effective = (sessionId) => {
     const map = new Map(global)
     for (const [name, definition] of scoped.get(sessionId) ?? []) map.set(name, definition)
     return map
   }
-  const registerGlobal = (name) => {
-    global.set(name, { name, description: `global ${name}`, handler: () => { dshRuns += 1; return { kind: 'success', text: 'DSH ran' } } })
+  const registerGlobal = (name, metadata = {}) => {
+    global.set(name, { name, description: `global ${name}`, ...metadata, handler: () => { dshRuns += 1; return { kind: 'success', text: 'DSH ran' } } })
     notify()
   }
   const service = {
@@ -39,6 +50,7 @@ function world({ config = {} } = {}) {
   const childOf = (sessionId) => {
     const commands = {
       list: agent => service.list(agent),
+      ...(inherited ? { listInherited: () => [...global.values()] } : {}),
       find: (agent, name) => service.find(agent, name),
       register(definition) {
         const map = scoped.get(sessionId) ?? new Map()
@@ -85,7 +97,9 @@ function world({ config = {} } = {}) {
     agents.push(entry)
     return entry
   }
-  return { cleanups, ctx, rt, service, registerGlobal, emit, agent, agents, runs: () => dshRuns }
+  return { cleanups, ctx, rt, service, registerGlobal, emit, agent, agents, runs: () => dshRuns,
+    notifications: () => notifications, flush, removeGlobal: name => { global.delete(name); notify() },
+    registerLocal: (id, row) => childOf(id).commands.register(row) }
 }
 
 test('the shield shadows every command a Bot sees and refuses a typed command with its arguments', () => {
@@ -224,4 +238,76 @@ test('unloading the plugin lifts commands from agents that stay alive', async ()
   assert.equal(w.service.find(a, 'plan').description, 'global plan')
   for (const saved of w.rt.saved) saved()
   assert.equal((await w.service.execute(a, '/plan')).result.kind, 'success')
+})
+
+test('deferred notifications settle after an inherited shadow changes, and ordinary saves keep it in place', async t => {
+  const w = world({ inherited: true, deferred: true })
+  install(w.rt)
+  t.after(() => w.cleanups.forEach(dispose => dispose?.()))
+  w.registerGlobal('plan', { definitionId: 'plan-v1', input: { hint: 'one' } })
+  w.rt.chatOwners.set('a', 'a')
+  const a = w.agent('a')
+  w.emit('agent/created', { agent: a })
+  const first = w.service.find(a, 'plan')
+  const initial = w.notifications()
+  assert.equal(w.flush(), true)
+  assert.equal(w.flush(), false)
+  for (let i = 0; i < 100; i++) w.rt.saved.forEach(save => save())
+  assert.equal(w.notifications(), initial)
+  assert.equal(w.service.find(a, 'plan'), first)
+  w.registerGlobal('new')
+  w.flush()
+  assert.equal((await w.service.execute(a, '/new')).result.kind, 'error')
+  assert.equal(w.service.find(a, 'plan'), first)
+  w.registerGlobal('plan', { definitionId: 'plan-v2', input: { hint: 'two', attachments: true } })
+  w.flush()
+  const next = w.service.find(a, 'plan')
+  assert.notEqual(next, first)
+  assert.equal(next.definitionId, 'plan-v2')
+  assert.deepEqual(next.input, { hint: 'two', attachments: true })
+  w.removeGlobal('new')
+  w.flush()
+  assert.equal(w.service.find(a, 'new'), undefined)
+  w.rt.rooms.set('a', { id:'a' })
+  w.rt.saved.forEach(save => save())
+  assert.match((await w.service.execute(a, '/plan')).result.text, /group chat/)
+  w.rt.rooms.clear()
+  w.rt.chatOwners.clear()
+  w.rt.saved.forEach(save => save())
+  assert.equal((await w.service.execute(a, '/plan')).result.kind, 'success')
+})
+
+test('an exact-scope command is preserved and its inherited replacement is shielded when it unloads', async t => {
+  const w = world({ inherited: true, deferred: true })
+  install(w.rt)
+  t.after(() => w.cleanups.forEach(dispose => dispose?.()))
+  w.registerGlobal('plan')
+  const removeLocal = w.registerLocal('a', {name:'plan', handler: () => ({kind:'success', text:'local'})})
+  w.rt.chatOwners.set('a', 'a')
+  const a = w.agent('a')
+  w.emit('agent/created', { agent: a })
+  assert.equal((await w.service.execute(a, '/plan')).result.text, 'local')
+  const warns = w.rt.warnings.length
+  w.flush()
+  assert.equal(w.rt.warnings.length, warns)
+  removeLocal()
+  w.flush()
+  assert.equal((await w.service.execute(a, '/plan')).result.kind, 'error')
+})
+
+test('a legacy host deferring notifications keeps additions prompt and bounds self-notifications', async t => {
+  const w = world({ deferred: true })
+  install(w.rt)
+  t.after(() => w.cleanups.forEach(dispose => dispose?.()))
+  w.registerGlobal('plan')
+  w.rt.chatOwners.set('a', 'a')
+  const a = w.agent('a')
+  w.emit('agent/created', { agent: a })
+  assert.equal(w.flush(), true)
+  assert.equal(w.flush(), false)
+  w.registerGlobal('model')
+  w.flush()
+  assert.equal((await w.service.execute(a, '/model')).result.kind, 'error')
+  w.flush()
+  assert.equal(w.flush(), false)
 })

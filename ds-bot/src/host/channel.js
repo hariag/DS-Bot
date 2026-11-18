@@ -163,7 +163,9 @@ export function install(rt) {
   // Models come from DSH, not state.json, so a provider added on the Models pages of Settings
   // changes the view without a new revision.
   const modelsKey = () => `${rt.cachedCatalog().map(entry => `${entry.ref}${entry.needsKey ? '!' : ''}${entry.reasoning ? `:${JSON.stringify(entry.reasoning)}` : ''}`).join(',')}|${rt.cachedDefault() ?? ''}`
+  const groupRowsBatchSize = 16
   const view = () => ({
+    groupRowsBatchSize,
     revision: state.revision,
     workspaceId: state.workspaceId ?? null,
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
@@ -576,14 +578,18 @@ const READS = new Set(['board-list', 'board-release-list', 'board-release-report
         case 'group-rows': {
           await rt.load()
           const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
-          const from = Number(body.from)
-          const to = body.to === undefined ? undefined : Number(body.to)
-          if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return ok({ rows: [], open: false, speaking: [] })
-          const view = rt.groupRowsView(room.id, from, to, typeof body.anchor === 'string' ? body.anchor : undefined)
-          // The newest call's rows grow while the group works; who is answering shows under them.
-          const active = view.open && rt.roomActive(room.id)
-          const speaking = active ? [...rt.roomProgress.values()].filter(round => round.roomId === room.id).flatMap(round => round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)) : []
-          return ok({ ...view, active, speaking })
+          const readRange = range => {
+            const from = Number(range?.from)
+            const to = range?.to === undefined ? undefined : Number(range.to)
+            if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return { rows: [], open: false, speaking: [] }
+            const view = rt.groupRowsView(room.id, from, to, typeof range.anchor === 'string' ? range.anchor : undefined)
+            const active = view.open && rt.roomActive(room.id)
+            const speaking = active ? [...rt.roomProgress.values()].filter(round => round.roomId === room.id).flatMap(round => round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)) : []
+            return { ...view, active, speaking }
+          }
+          if (body.ranges === undefined) return ok(readRange(body))
+          if (!Array.isArray(body.ranges) || body.ranges.length > groupRowsBatchSize) return fail('Invalid group range batch', 'bot/invalid')
+          return ok(body.ranges.map(readRange))
         }
         case 'create-bot': {
           await rt.bootstrap()

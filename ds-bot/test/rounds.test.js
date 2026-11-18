@@ -1688,6 +1688,12 @@ test('roster room cursor follows same-seq anchors and speaking changes before th
     rt.roomProgress.get('run').slots.push({ id: room.members[0], status: 'speaking' })
     assert.notEqual(await cursor(), active)
     assert.deepEqual((await call('group-rows', { roomId: room.id, from: 7, anchor: 'new' })).value.speaking, [room.members[0]])
+    const ranges = [{ from: 7, anchor: 'old' }, { from: 7, anchor: 'new' }]
+    const batch = await call('group-rows', { roomId: room.id, ranges })
+    assert.deepEqual(batch.value, await Promise.all(ranges.map(async range => (await call('group-rows', { roomId: room.id, ...range })).value)))
+    const oversized = Array(before.groupRowsBatchSize + 1).fill(ranges[0])
+    assert.equal((await call('group-rows', { roomId: room.id, ranges: oversized })).error.code, 'bot/invalid')
+
   } finally { rt.roomProgress.delete('run') }
   await rt.ledger.flush(book)
 })
