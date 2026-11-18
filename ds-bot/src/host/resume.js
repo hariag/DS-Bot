@@ -422,7 +422,6 @@ export function install(rt) {
     void sample.finally(()=>{if(recoverySample===sample)recoverySample=undefined}).catch(()=>{})
     return boundedRecoveryView(sample)
   }
-  let latest
   let due = false
   let pending
   rt.onHomeDrain(() => writing)
@@ -431,15 +430,14 @@ export function install(rt) {
     if (stopped || blocked !== undefined || rt.readOnly() !== undefined) {
       return required ? Promise.reject(new Error('Recovery notes cannot be saved by this host.')) : writing
     }
-    latest = JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) })
-    // One write waits at a time and takes the latest notes, so a busy round does not
-    // write the file once per change.
+    // Serialize after coalescing so a burst of deliveries does not repeatedly
+    // encode the entire recovery journal before the pending write starts.
     if (due) return pending
     due = true
     const run = writing.then(async () => {
       due = false
       if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}).`)
-      const snapshot = latest
+      const snapshot = JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) })
       const check = () => {
         rt.requireHomeLock()
         let actual
@@ -844,6 +842,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
       if (!logs.has(id)) logs.set(id, logOf(id))
       return logs.get(id)
     }
+    const heldCounts = { seen:0, unreadable:0 }
     for (const { args, resumeOrigins, recoveryHold, decisions } of fresh) {
       if (decisions?.at(-1)?.choice === 'ignored') { held.add(args.exchangeId); continue }
       const target = sessionFor(sessionId, args)
@@ -912,7 +911,7 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
         held.add(args.exchangeId)
         await setQueuedRecoveryHold(target, args, seen ? 'history-seen' : 'history-unavailable')
         const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
-        rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
+        heldCounts[seen ? 'seen' : 'unreadable']++
         rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
         continue
       }
@@ -928,6 +927,10 @@ rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD',
       } })
         .then(() => setQueuedRecoveryHold(target, args, undefined))
         .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
+    }
+    if (heldCounts.seen || heldCounts.unreadable) {
+      rt.warn('ds-bot: %d queued exchange(s) for %s were not resent: %d appeared in history and %d whose history could not be read; individual recovery notes are retained for review',
+        heldCounts.seen + heldCounts.unreadable, sessionId, heldCounts.seen, heldCounts.unreadable)
     }
   }
 
