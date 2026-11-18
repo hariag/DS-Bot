@@ -62,6 +62,19 @@ function command(card,scope,operationId,type,value){return {scope,taskId:card.id
 function auditOf(goal,cardId){return goal.boardCards?.[cardId]?.audit ?? []}
 async function rejected(run){try{const result=await run();assert.equal(result.state,'rejected');return result}catch(error){assert.match(String(error?.message),/stale|conflict|changed|invalid|unavailable|not available|authorized|permission|history|revision/i)}}
 
+test('a whitespace-only difference in a current evidence note does not commit a board edit', async t => {
+  const {rt}=setup(t), goal=rt.state.rooms.group.goal
+  const task=goal.stages[goal.current].tasks[0]
+  task.noteStatusVersion=task.statusVersion
+  const before=structuredClone(goal)
+  const card=(await board(rt)).tasks.find(item=>item.legacy.taskId===task.id)
+  const input=command(card,group,'goal:unchanged-note','goal-task-edit',{note:'  '+task.note+'  '})
+  const result=await rt.boardCall('board-command',input)
+  assert.equal(result.state,'rejected')
+  assert.match(result.message,/No changes to save/)
+  assert.deepEqual(goal,before)
+})
+
 test('all original stage positions and archived goals support annotated metadata without changing accepted facts',async t=>{
   const {rt}=setup(t), before=facts(rt.state), initial=await board(rt)
   for(const which of ['earlier','future','archived']) {

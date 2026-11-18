@@ -125,8 +125,16 @@ function setTaskNote(task, note, now) {
   task.noteAt = now
 }
 
+const TASK_NOTE_FIELDS = ['note', 'noteStatus', 'noteStatusVersion', 'noteAt', 'noteHistory']
+
 function clearTaskNotes(task) {
-  for (const field of ['note', 'noteStatus', 'noteStatusVersion', 'noteAt', 'noteHistory']) delete task[field]
+  for (const field of TASK_NOTE_FIELDS) delete task[field]
+}
+
+export function taskNoteUnchanged(task, note, now) {
+  if (note === undefined) return true
+  if (note === '') return TASK_NOTE_FIELDS.every(field => !Object.hasOwn(task, field))
+  return task.note === note && goalNoteContext(task, now).kind === 'current'
 }
 
 // An automatic failure/stop explanation replaces the current note. Keep a
@@ -429,6 +437,7 @@ export function taskGoal(room, input, by, memberOf, memberNames, now = Date.now(
   if (status === undefined && note === undefined) return { error: required('status or note', 'task') }
   if (note !== undefined && note.length > NOTE_MAX) return { error: tooLong('note', NOTE_MAX) }
   const before = task.status
+  if ((status === undefined || status === before) && taskNoteUnchanged(task, note, now)) return { goal, unchanged: true }
   if (status !== undefined) setTaskStatus(task, status, now, 'manual')
   if (note !== undefined) {
     if (note === '') clearTaskNotes(task)
@@ -1527,6 +1536,7 @@ export function install(rt) {
           return `Unknown action ${action}.`
       }
       if (result.error !== undefined) return result.error
+      if (result.unchanged) return goalLedger(room, member)
       if (result.reply !== undefined) announce(room, result.reply)
       await rt.save()
       if (post !== undefined) await post()
