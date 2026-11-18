@@ -616,6 +616,75 @@ export function install(rt) {
   // An unresolved admission blocks dispatch. The host can still inspect the
   // current ledger without opening an agent, running tools, or changing the goal.
   const blockedReviewReads = new WeakMap()
+  // Remember only native record coordinates. Resolve a failed inspection from
+  // two bounded original turns, without scanning either session's full log.
+  const reviewInputs = new WeakMap()
+  const reviewTurnEnds = new Map()
+  ctx.on('session/event', (session, event) => {
+    if (event.type === 'turn/end') {
+      const input = reviewTurnEnds.get(session.id)
+      if (input) {
+        reviewTurnEnds.delete(session.id)
+        input.end = event.seq
+        input.turn = event.data?.turn
+      }
+      return
+    }
+    if (event.type !== 'user/message') return
+    const source = event.data?.source
+    if (source?.kind !== SOURCE_KIND || source.form !== 'relay' || source.reviewInspect !== true) return
+    const room = rt.roomOf(source.roomId), attempt = room?.goal?.reviewAttempt
+    if (attempt?.id !== source.reviewId || attempt?.inspectOnly !== true || !Number.isSafeInteger(event.seq)) return
+    const root = source.role === 'goal' && source.goalId === room.goal.id && session.id === attempt.rootSessionId
+    const admin = source.role === 'room' && session.id === attempt.adminSessionId
+    if (!root && !admin) return
+    const inputs = reviewInputs.get(attempt) ?? {}
+    reviewInputs.set(attempt, inputs)
+    const side = root ? 'root' : 'admin'
+    if (inputs[side]) { inputs.ambiguous = true; return }
+    inputs[side] = { sessionId: session.id, seq: event.seq }
+    reviewTurnEnds.set(session.id, inputs[side])
+  })
+  const passiveEvents = new Set(['step/start', 'step/end', 'request/header', 'assistant/attempt'])
+  async function verifyInspectionTurn(room, attempt, side, input) {
+    const root = side === 'root'
+    const { seq, end, sessionId, turn } = input
+    if (!Number.isSafeInteger(turn) || !Number.isSafeInteger(end) || end <= seq || end - seq > 48) return false
+    const page = await ctx.sessionController.events({ address: { kind: 'session', sessionId }, throughSeq: end,
+      maxMessages: 8, turnWindow: { minMessages: 1, minTurns: 1 } }, AbortSignal.timeout(5000))
+    if (page?.cursor !== end || !Array.isArray(page.records) || page.records.length > 64) return false
+    const events = page.records.map(row => row?.type === 'event' && row.event)
+    const start = events[0], terminal = events.at(-1)
+    if (start?.type !== 'turn/start' || start.data?.turn !== turn || terminal?.type !== 'turn/end'
+      || terminal.seq !== end || terminal.data?.turn !== turn || terminal.data.reason?.kind !== (root ? 'completed' : 'error')) return false
+    let received = false, relayId, relayEnded = false
+    for (const [index, event] of events.entries()) {
+      if (!event || event.seq !== start.seq + index || (event.data?.turn !== undefined && event.data.turn !== turn)) return false
+      if (index === 0 || index === events.length - 1 || passiveEvents.has(event.type)) continue
+      if (event.type === 'agent/inbox/spliced') {
+        // Consuming this one input is expected. Insertion, batching, and an
+        // unknown splice might carry independent work into the observed turn.
+        if (!Array.isArray(event.data?.inserted) || event.data.inserted.length || event.data.removedCount !== 1) return false
+        continue
+      }
+      if (event.type === 'user/message') {
+        const source = event.data?.source
+        if (source?.kind === 'time-context' && source.form === 'snapshot') continue
+        if (received || event.seq !== seq || source?.kind !== SOURCE_KIND || source.form !== 'relay' || source.reviewInspect !== true
+          || source.roomId !== room.id || source.reviewId !== attempt.id || source.role !== (root ? 'goal' : 'room')
+          || (root && source.goalId !== room.goal.id)) return false
+        received = true
+      } else if (root && received && event.type === 'assistant/message') {
+        continue
+      } else if (root && received && event.type === 'tool/call' && relayId === undefined && event.data?.name === 'group_relay' && typeof event.data.callId === 'string') {
+        relayId = event.data.callId
+      } else if (root && relayId !== undefined && !relayEnded && event.type === 'tool/result'
+        && event.data?.message?.role === 'tool' && event.data.message.toolCallId === relayId && event.data.message.isError === false) {
+        relayEnded = true
+      } else return false
+    }
+    return received && (!root || relayEnded)
+  }
   const stopsPending = new Map()
   const goalStopBegin = roomId => stopsPending.set(roomId, (stopsPending.get(roomId) ?? 0) + 1)
   const goalStopEnd = roomId => {
@@ -884,7 +953,7 @@ export function install(rt) {
       confirmedReviewResolutions.set(goal,{entries,lease})
     } finally { await file.close() }
   }
-  async function goalControl(roomId, body = {}) {
+  async function goalControl(roomId, body = {}, provenFailure) {
     const room = rt.roomOf(roomId)
     if (room === undefined) return { error: 'Unknown group chat' }
     const goal = room.goal
@@ -922,6 +991,7 @@ export function install(rt) {
         && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
         && rt.waitsForApproval?.(agent.session.id) !== true
       if (rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt || !reviewEligible(goal)
+        || stopsPending.has(room.id) || (provenFailure && (reviewInputs.get(attempt) !== provenFailure || provenFailure.proven !== true || provenFailure.ambiguous))
         || !sessionsMatch() || !agents.every((agent, i) => agent?.session?.id === ids[i] && quietAgent(agent)) || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
         || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
         || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
@@ -930,13 +1000,16 @@ export function install(rt) {
       const now = Date.now()
       pendingReviewResolutions.add(resolutionKey)
       pendingReviewRooms.add(room.id)
-      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:allowFuture?'allow-future':'verified', by:'user', at:now }
+      const by = provenFailure ? 'host' : 'user'
+      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:provenFailure?'failed-before-tools':allowFuture?'allow-future':'verified', by, at:now,
+        ...(provenFailure ? { root: { ...provenFailure.root }, admin: { ...provenFailure.admin } } : {}) }
       goal.reviewResolutions = [...resolutions, resolution]
       delete goal.reviewAttempt
       goal.revision += 1
       goal.updatedAt = now
       if (wasAutomatic) { goal.idleRevision = goal.revision; goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS }
-      goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by: 'user', reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
+      if (provenFailure) goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+      goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by, reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
       await rt.save({ required: true })
       await durableReviewResolutions(room,goal)
       pendingReviewResolutions.delete(resolutionKey)
@@ -1137,6 +1210,26 @@ export function install(rt) {
           blockedReviewReads.set(attempt, { at: now, reviewId: attempt.id, revision: goal.revision,
             open: openReviewTasks(goal).length, missing: missingFor(room).map(task => task.id) })
         }
+      }
+      const inputs = reviewInputs.get(attempt)
+      if (attempt?.state === 'uncertain' && attempt.inspectOnly === true && reviewEligible(goal) && !stopsPending.has(room.id)
+        && inputs?.proven !== false && !(inputs?.retryAt > now) && inputs?.root?.end !== undefined && inputs.admin?.end !== undefined && !inputs.ambiguous && !reviewing.has(room.id)) {
+        reviewing.add(room.id)
+        jobs.push((async () => {
+          try {
+            if (inputs.proven === undefined) {
+              const results = await Promise.all(['root', 'admin'].map(side => verifyInspectionTurn(room, attempt, side, inputs[side])))
+              inputs.proven = results.every(Boolean)
+            }
+            if (!inputs.proven || inputs.ambiguous || room.goal !== goal || goal.reviewAttempt !== attempt) return
+            await goalControl(room.id, { goalId: goal.id, action: 'review-resolve', reviewId: attempt.id, confirmed: true,
+              evidence: 'The original root turn only relayed this inspection. The original administrator turn ended in error before any tool call. Owner checks remain unverified.' }, inputs)
+          } catch (error) {
+            inputs.retryAt = now + GOAL_REVIEW_INTERVAL_MS
+            rt.warn('ds-bot: original inspection evidence for %s could not be confirmed: %s', attempt.id, error)
+          } finally { reviewing.delete(room.id) }
+        })())
+        continue
       }
       if (attempt?.adminCompleted === true && goalReviewAllowed(room, attempt.id) && !reviewing.has(room.id)) {
         reviewing.add(room.id)
