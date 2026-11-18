@@ -76,9 +76,22 @@ body[data-bt-motion=quiet] .bt-mark[data-gaze] .bt-gaze,body[data-bt-effects=red
 .bt-mark[data-shape=image]:not([data-state=idle]) .bt-mark-img{animation:bt-bob 1.6s ease-in-out infinite}
 .bt-mark[data-shape=image][data-state=alert] .bt-mark-img{animation:bt-hop 1.3s cubic-bezier(.3,.7,.4,1) 2}
 body[data-bt-motion=lively] .bt-mark[data-state=alert] :is(.bt-b,.bt-mark-img){animation-iteration-count:infinite}
-/* Animate the transition into a work state once. Its status text and badge stay
-   visible. Lively mode keeps the character moving throughout the activity. */
+/* Outside lively mode, the SVG body and eyes play their state entrance once. */
 body:not([data-bt-motion=lively]) .bt-mark:is([data-state=thinking],[data-state=searching],[data-state=working],[data-state=sending],[data-state=orbit],[data-state=waiting]) :is(.bt-b,.bt-eye,.bt-eyes,.bt-mark-img){animation-iteration-count:1}
+/* The work state also covers the member dock and pending group replies, whose
+   marks have no pointer interactions. Move the HTML box so its painted artwork
+   can be reused between poses. Idle marks in the transcript have no such loop. */
+@media (prefers-reduced-motion:no-preference){
+body[data-bt-motion=normal][data-bt-effects=full] .bt-mark:is([data-state=thinking],[data-state=searching],[data-state=working],[data-state=sending],[data-state=orbit],[data-state=waiting]){
+  transform-origin:50% 75%;
+  animation:bt-activity-mark var(--bt-beat,1s) steps(16,end) var(--bt-delay,0s) infinite alternate;
+}
+.bt-mark[data-state=thinking]{--bt-pose:translateY(-4%) rotate(7deg);--bt-beat:1.3s}
+.bt-mark[data-state=searching]{--bt-pose:translateX(7%) rotate(-6deg);--bt-beat:.95s}
+.bt-mark[data-state=sending]{--bt-pose:translateX(9%) rotate(6deg);--bt-beat:.85s}
+.bt-mark:is([data-state=orbit],[data-state=waiting]){--bt-start-pose:rotate(-6deg);--bt-pose:rotate(6deg);--bt-beat:1.4s}
+}
+@keyframes bt-activity-mark{from{transform:var(--bt-start-pose,none)}to{transform:var(--bt-pose,translateY(-7%) rotate(-4deg))}}
 .bt-mark[data-state=done] .bt-b{animation:bt-done 1.8s linear 1}
 .bt-mark[data-shape=image][data-state=done] .bt-mark-img{animation:bt-done 1.8s linear 1;transform-origin:50% 100%}
 @keyframes bt-done{0%{transform:none;animation-timing-function:cubic-bezier(.4,0,.2,1)}13.3%{transform:scale(1.12,.88);animation-timing-function:cubic-bezier(.4,0,.2,1)}25.6%{transform:scale(.93,1.09);animation-timing-function:cubic-bezier(.4,0,.2,1)}37.8%{transform:scale(1.04,.97);animation-timing-function:cubic-bezier(.4,0,.2,1)}51.1%,100%{transform:none}}
@@ -1280,6 +1293,10 @@ body[data-bt-goal] [class*="_scroll"]:has(> [class*="_column"]){padding-top:calc
 /* Shimmer: a stepped sweep clipped to the text. */
 .bt-shimmer{color:transparent;background:linear-gradient(90deg,var(--bt-shimmer-base) 0%,var(--bt-shimmer-base) 25%,var(--bt-ink) 60%,var(--bt-shimmer-base) 75%,var(--bt-shimmer-base) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:bt-shimmer 2.2s steps(60) infinite;--bt-shimmer-base:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
 body:not([data-bt-motion=lively]) .bt-shimmer{animation-iteration-count:1}
+@media (prefers-reduced-motion:no-preference){
+body[data-bt-motion=normal][data-bt-effects=full] .bt-shimmer{color:var(--bt-ink);background:none;animation:bt-activity-pulse 1.2s steps(16,end) infinite alternate}
+}
+@keyframes bt-activity-pulse{from{opacity:.72}to{opacity:1}}
 @keyframes bt-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 /* New rows slide up; a reply that replaces the activity row grows out of its corner. */
 [data-bt-enter="new"]{animation:bt-row-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}

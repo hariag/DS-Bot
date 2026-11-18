@@ -19,9 +19,10 @@ const { outputFiles } = await build({
   stdin: {
     contents: [
       "export { effectsTier, reducedEffects, reducedMotion } from './src/client/motion.js'",
-      "export { SHELL_CSS, botOwnCss } from './src/client/styles.js'",
+      "export { SHELL_CSS, CONVERSATION_CSS, botOwnCss } from './src/client/styles.js'",
       "export { SettingsDialog } from './src/client/settings.js'",
       "export { BotMark } from './src/client/mark.js'",
+      "export { GroupTaskBoard } from './src/client/group-task-board.js'",
     ].join('\n'),
     resolveDir: PLUGIN,
   },
@@ -183,6 +184,43 @@ test('effectsTier, reducedEffects and reducedMotion handle Node without globals 
   assert.equal(client.effectsTier(), 'full')
   assert.equal(client.reducedEffects(), true)
   assert.equal(client.reducedMotion(), true)
+})
+
+test('the group task list shows a working avatar for an active task and idle avatars for review and blocked tasks', () => {
+  const { GroupTaskBoard } = loadClient().exports
+  const statuses = ['active', 'review', 'blocked']
+  const tasks = statuses.map((status, i) => ({ status, id: status, botId: 'a', startedAt: i }))
+  const tree = expand(GroupTaskBoard({ room: { tasks }, roster: { byId: { a: { id: 'a', name: 'A' } } }, actions: {} }))
+  const states = []
+  walk(tree, node => { if (node.props.className === 'bt-mark') states.push(node.props['data-state']) })
+  assert.deepEqual(states, ['working', 'idle', 'idle'])
+})
+
+test('normal motion loops on working marks and status text, including a pending reply without pointer interactions', () => {
+  const { SHELL_CSS, CONVERSATION_CSS } = loadClient().exports
+  const { window } = new JSDOM('<body data-bt-motion="normal" data-bt-effects="full"><span class="bt-mark"></span><span class="bt-shimmer"></span></body>')
+  const sheet = new window.CSSStyleSheet()
+  sheet.replaceSync(SHELL_CSS + CONVERSATION_CSS)
+  const normalRules = [...sheet.cssRules]
+    .filter(rule => rule.conditionText?.replaceAll(' ', '') === '(prefers-reduced-motion:no-preference)')
+    .flatMap(rule => [...rule.cssRules])
+  const workRule = name => normalRules.find(rule => rule.style?.animation.includes(name) && rule.style.animation.includes('infinite'))
+  const mark = window.document.querySelector('.bt-mark')
+  const label = window.document.querySelector('.bt-shimmer')
+  const markSelector = workRule('bt-activity-mark').selectorText
+  const labelSelector = workRule('bt-activity-pulse').selectorText
+  for (const state of ['thinking', 'searching', 'working', 'sending', 'orbit', 'waiting', 'idle', 'alert', 'done']) {
+    mark.dataset.state = state
+    assert.equal(mark.matches(markSelector), !['idle', 'alert', 'done'].includes(state), state)
+  }
+  mark.dataset.state = 'working'
+  assert.ok(label.matches(labelSelector))
+  for (const [motion, effects] of [['quiet', 'full'], ['lively', 'full'], ['normal', 'reduced'], ['normal', 'off']]) {
+    Object.assign(window.document.body.dataset, { btMotion: motion, btEffects: effects })
+    assert.equal(mark.matches(markSelector), false)
+    assert.equal(label.matches(labelSelector), false)
+  }
+  window.close()
 })
 
 test('botOwnCss preserves effects tokens, backdrop relief and off-tier rules while stripping shell selectors', () => {

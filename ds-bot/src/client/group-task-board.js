@@ -42,7 +42,7 @@ function TaskRow({ task, bot, room, actions }) {
   }
   return h('div', { className: 'bt-task', 'data-status': task.status, 'data-busy': busy || undefined },
     h('div', { className: 'bt-task-head' },
-      bot ? h(BotMark, { bot, size: 22, state: open ? 'work' : 'idle' }) : null,
+      bot ? h(BotMark, { bot, size: 22, state: task.status === 'active' ? 'working' : 'idle' }) : null,
       h('span', { className: 'bt-task-name' }, bot?.name ?? t('a Bot')),
       h('span', { className: 'bt-task-status' }, t(STATUS_KEY[task.status] ?? task.status)),
       h('span', { className: 'bt-task-time' }, clockLabel(task.startedAt))),

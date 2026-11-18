@@ -68,6 +68,29 @@ function page() {
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const states = list => list.map(animation => animation.playState)
 
+test('visible work stays animated while reading, and pauses offscreen or in a hidden tab', () => {
+  const p = page()
+  const row = {}
+  const indicators = ['bt-activity-mark', 'bt-activity-pulse'].map(animationName =>
+    Object.assign(new FakeAnimation(row), { animationName }))
+  const decorative = new FakeAnimation({})
+  p.animations.push(...indicators, decorative)
+  installMotionRest({ doc: p.doc, win: p.win, now: p.now })
+  p.advance(REST_MS)
+  assert.deepEqual(states(p.animations), ['running', 'running', 'paused'])
+  p.see(row, false)
+  assert.deepEqual(states(indicators), ['paused', 'paused'])
+  p.see(row, true)
+  assert.deepEqual(states(indicators), ['running', 'running'])
+  p.doc.hidden = true
+  p.changed('visibilitychange')
+  p.touch()
+  assert.deepEqual(states(indicators), ['paused', 'paused'])
+  p.doc.hidden = false
+  p.changed('visibilitychange')
+  assert.deepEqual(states(indicators), ['running', 'running'])
+})
+
 test('loops hold still once nobody has touched the window for a while and move on the next touch', () => {
   const p = page()
   const body = new FakeAnimation({})
