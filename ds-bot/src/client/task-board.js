@@ -3062,7 +3062,7 @@ export const TASK_BOARD_CSS = `
 
 
 
-.bt-board-launch{position:absolute;right:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:999px;padding:4px 10px;cursor:pointer}
+.bt-board-launch{position:absolute;left:8px;top:7px;pointer-events:auto;-webkit-app-region:no-drag;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px;background:var(--bt-card);border:1px solid var(--bt-line-2);border-radius:999px;padding:4px 10px;cursor:pointer}
 .bt-board-launch:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-board-backdrop{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.32))}
 .bt-board-dialog{box-sizing:border-box;display:flex;flex-direction:column;width:min(1680px,100%);height:min(920px,calc(100vh - 48px));max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-family:var(--bt-font,inherit);font-size:13px;line-height:18px}
