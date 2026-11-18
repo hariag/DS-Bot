@@ -1,6 +1,8 @@
 // Release teams: the roles a release needs, which existing Bot fills each role,
 // and the group the release uses for coordination. The board remains the task
 // authority; the release group is where the roles coordinate and report.
+import { RELEASE_ROLE_LABELS_ZH } from '../shared/release-labels.js'
+
 const ROLE = (key, label, required, instructions) => ({ key, label, required, instructions })
 
 export const RELEASE_ROLES = [
@@ -20,37 +22,48 @@ export const RELEASE_ROLES = [
 
 export const RELEASE_ROLE_KEYS = RELEASE_ROLES.map(role => role.key)
 const roleByKey = new Map(RELEASE_ROLES.map(role => [role.key, role]))
-const roleByLabel = new Map(RELEASE_ROLES.map(role => [role.label.toLocaleLowerCase(), role]))
+const labelKey = value => typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/gu, ' ').replace(/([a-z]) (?=\p{Script=Han})/gu, '$1') : ''
+const roleByLabel = new Map(RELEASE_ROLES.flatMap(role => [role.label, RELEASE_ROLE_LABELS_ZH[role.label]].map(label => [labelKey(label), role])))
+
+export const invalidReleaseTeam = message => Object.assign(new Error(message), { code:'bot/invalid' })
 
 export function releaseRole(key) { return roleByKey.get(key) }
 
 export function roleForBot(bot) {
   if (!bot) return undefined
-  const label = typeof bot.role === 'string' ? bot.role.trim().toLocaleLowerCase() : ''
-  if (label && roleByLabel.has(label)) return roleByLabel.get(label)
-  const name = typeof bot.name === 'string' ? bot.name.trim().toLocaleLowerCase() : ''
-  return RELEASE_ROLES.find(role => role.label.toLocaleLowerCase() === name)
+  return roleByLabel.get(labelKey(bot.role)) ?? roleByLabel.get(labelKey(bot.name))
 }
 
-export function resolveReleaseTeam({ bots = {}, projectManagerId, roles = {} }) {
+export function canConfigureReleaseTeam(release, roomId) {
+  return typeof roomId === 'string' && release?.groupId === roomId && release.scope === `room:${roomId}`
+    && release.status === 'draft' && release.projectManagerId === undefined && Object.keys(release.roles ?? {}).length === 0
+}
+
+export function resolveReleaseTeam({ bots = {}, projectManagerId, roles = {}, explicitOnly = false }) {
+  if (explicitOnly && (!roles || typeof roles !== 'object' || Array.isArray(roles)
+    || Object.keys(roles).some(key => !roleByKey.has(key))
+    || (projectManagerId !== undefined && roles.projectManager !== undefined && roles.projectManager !== projectManagerId))) {
+    throw invalidReleaseTeam('Invalid release role selection')
+  }
   const live = id => typeof id === 'string' && Object.hasOwn(bots, id) && bots[id]?.private !== true
   const byRole = new Map()
   for (const role of RELEASE_ROLES) {
     const chosen = roles?.[role.key]
     if (chosen !== undefined) {
-      if (!live(chosen)) throw new Error(`Release role ${role.label} is not an available Bot`)
+      if (!live(chosen)) throw invalidReleaseTeam(`Release role ${role.label} is not an available Bot`)
       byRole.set(role.key, chosen)
       continue
     }
+    if (explicitOnly) continue
     const found = Object.values(bots).find(bot => live(bot.id) && roleForBot(bot)?.key === role.key)
     if (found) byRole.set(role.key, found.id)
   }
   let pm = projectManagerId ?? byRole.get('projectManager')
-  if (!pm) throw new Error('Missing release roles: Project Manager')
-  if (!live(pm)) throw new Error('The project manager is not an available Bot')
+  if (!pm) throw invalidReleaseTeam('Missing release roles: Project Manager')
+  if (!live(pm)) throw invalidReleaseTeam('The project manager is not an available Bot')
   byRole.set('projectManager', pm)
   const missing = RELEASE_ROLES.filter(role => role.required && !byRole.has(role.key)).map(role => role.label)
-  if (missing.length) throw new Error(`Missing release roles: ${missing.join(', ')}`)
+  if (missing.length) throw invalidReleaseTeam(`Missing release roles: ${missing.join(', ')}`)
   const members = [...new Set([pm, ...byRole.values()])]
   return { projectManagerId: pm, roles: Object.fromEntries(byRole), members }
 }
@@ -77,7 +90,7 @@ export function lifecyclePlan({ release, requirement, roles = {}, cardType = 'fe
   const add = (key, type, title, ownerRole, reviewerRole, dependencies = []) => {
     const ownerId = owner(ownerRole)
     const reviewerId = reviewerRole === 'projectManager' ? pm : owner(reviewerRole)
-    if (!ownerId || !reviewerId || ownerId === reviewerId) throw new Error(`Release task ${key} needs an owner and independent reviewer`)
+    if (!ownerId || !reviewerId || ownerId === reviewerId) throw invalidReleaseTeam(`Release task ${key} needs an owner and independent reviewer`)
     items.push({ key, type, title, owner: ownerId, reviewer: reviewerId, dependencies })
   }
   add('requirement', 'requirement', `Requirement and acceptance criteria: ${requirement}`, 'productManager', 'projectManager')
