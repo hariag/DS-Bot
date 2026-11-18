@@ -426,12 +426,18 @@ export function install(rt) {
     return warnReadOnly()
   }
 
+  let queuedSave
   const save = ({ required = false } = {}) => {
     if (stopped) return required ? Promise.reject(new Error('The Bot team cannot be saved after this host stopped.')) : writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
     if (!writable()) return required ? Promise.reject(new Error(`This host cannot save the Bot team: ${readOnly()}`)) : writing
+    // Calls waiting on the same not-yet-sampled write see the same snapshot.
+    // Stop sharing once a write starts or a reclaim/adoption enters the queue.
+    if (queuedSave?.tail === writing && queuedSave.required === required) return queuedSave.receipt
+    const batch = { required }
     const run = writing.then(async () => {
+      if (queuedSave === batch) queuedSave = undefined
       // Re-check writability once the queued write runs: an adopt queued before
       // it may have made this host read-only (e.g. a file a newer DS Bot wrote).
       if (stuck !== undefined || holder !== undefined) {
@@ -478,10 +484,13 @@ export function install(rt) {
       }
     })
     writing = run.catch(() => {})
-    return run.catch(error => {
+    batch.tail = writing
+    batch.receipt = run.catch(error => {
       warn('ds-bot: state write failed: %s', error)
       throw error
     })
+    queuedSave = batch
+    return batch.receipt
   }
 
   ctx.effect(() => () => {
