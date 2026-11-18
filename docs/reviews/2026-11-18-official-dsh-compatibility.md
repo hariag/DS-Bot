@@ -1,7 +1,7 @@
 # 官方 DeepSeek Harness 兼容性复核
 
 - 日期：2026-11-18
-- 基准：`main` HEAD `cc063207` 加本轮改动
+- 基准：`main` @ `6302fa54`（已并入本分支）加本轮改动
 - 目标：DS-Bot 必须运行在官方 `deepseek-ai/deepseek-harness` 发布的包上；此前使用的 `hariag/deepseek-harness`（官方源码加一个补丁）不再需要，也不作为受支持的环境。
 
 ## 1. 结论
@@ -51,18 +51,18 @@ DS-Bot 与官方 DSH 兼容：
 
 ### 官方 0.2.2-rc.1（npm `latest`，`dev/harness`）
 
-- 完整 `npm test`：**3429 tests，3411 passed，3 failed，15 skipped**。3 个失败中：
+- 完整 `npm test`（合并 `6302fa54` 之后的树）：**3437 tests，3418 passed，4 failed，15 skipped**。4 个失败中：
   - 2 个是既有的 Node 24.14 + Windows + `--test-force-exit` 退出期 libuv 断言（`connectors-gateway.test.js`、`local-agents-mcp-races.test.js` 的子用例全部通过，去掉 force-exit 重跑退出码 0）；
-  - 1 个是 `connectors-gateway-egress` 的计时用例（dispatcher 超时）在整套并发负载下偶发；单独重跑 `browser-downloads`、`connectors-gateway-egress`、`roster` 三个计时相关文件为 **101/101 passed**。
+  - 2 个是并发负载下的计时/时序用例（`connectors-gateway-egress` 的 dispatcher 超时、`roster` 的出队重试）偶发；单独重跑 `browser-downloads`、`connectors-gateway-egress`、`roster` 三个文件为 **101/101 passed**。
 - Browser fixture（不设 `DSH_HARNESS`，只给 `BOARD_REACT_DIR`）：**289 assertions, 0 failed**。
 - `local-queue.browser.mjs`、`review-timeline.browser.mjs`：PASS，退出码 0。
 - `npm run lint`：0 errors（99 条既有 warning）。
 
 ### 官方 0.2.2-rc.4（npm `next`，临时安装到工作区外）
 
-- 完整 `npm test`：**3429 tests，3410 passed，4 failed，15 skipped**。4 个失败中：
+- 完整 `npm test`（同一棵合并后的树）：**3437 tests，3419 passed，3 failed，15 skipped**。3 个失败中：
   - 2 个是上面同一组 `--test-force-exit` 退出期断言；
-  - 2 个是并发负载下的计时用例（`browser-downloads` 的下载宽限窗口、`connectors-gateway-egress` 的 dispatcher 超时），单独重跑这两个文件 **38/38 passed**。
+  - 1 个是 `connectors-gateway-egress` 的 dispatcher 计时用例在并发负载下偶发；单独重跑 `browser-downloads`、`connectors-gateway-egress`、`roster` 为 **101/101 passed**。
 - 真实 `dsh web` + 插件冒烟：用 `0.2.2-rc.4` 启动测试台，插件正常加载，`state` 请求成功，创建群聊与看板任务（`board-command`/`board-list`）成功。
 
 ### 其余
