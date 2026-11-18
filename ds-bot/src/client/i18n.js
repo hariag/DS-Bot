@@ -1,6 +1,7 @@
 // Interface copy follows the DSH language. Keys are the English text; `zh`, `zh-TW`,
 // `ja`, `ko`, `es`, `fr` and `de` map them. Copy is looked up at render time and every
 // slot outlet re-renders on a language switch, so nothing caches a translated string.
+import { RELEASE_ROLE_LABELS_ZH } from '../shared/release-labels.js'
 import { convertDict, convertHostErrors, toTraditional } from './locales/zh-tw.js'
 import { DSH_JA, HOST_ERRORS_JA, JA } from './locales/ja.js'
 import { DSH_KO, HOST_ERRORS_KO, KO } from './locales/ko.js'
@@ -2124,6 +2125,8 @@ const ZH = {
   'Due date complete': '截止日期已完成',
   'Release name': '发布名称',
   'Create release': '创建发布',
+  'Configure release team': '配置发布团队',
+  'Save release team': '保存发布团队',
   'New release': '新建发布',
   'Destination card': '目标卡片',
   'Choose a feature or bugfix': '选择功能或缺陷卡',
@@ -2162,18 +2165,7 @@ const ZH = {
   'Drag cards between release lanes. Arrow controls reorder draft and queued releases.': '在发布列之间拖动卡片；用箭头按钮调整草稿和排队发布的顺序。',
   'Release team': '发布团队',
   'This minor release uses the current major-version group and its existing admin and members.': '此小版本使用当前大版本群及其现任管理员与成员。',
-  'Project Manager': '项目经理',
-  'Product Manager': '产品经理',
-  'Architect': '架构师',
-  'UI Designer': 'UI 设计师',
-  'UX Designer': 'UX 设计师',
-  'Frontend Developer': '前端开发',
-  'Backend Developer': '后端开发',
-  'API Engineer': 'API 中间件工程师',
-  'Database Administrator': '数据库管理员',
-  'Test Engineer': '测试工程师',
-  'Independent Reviewer': '独立验收人',
-  'Operations Engineer': '运维工程师',
+  ...RELEASE_ROLE_LABELS_ZH,
   'Required': '必填',
   'Choose a project manager and every required role.': '请选择项目经理和所有必填角色。',
   'Release details': '发布详情',

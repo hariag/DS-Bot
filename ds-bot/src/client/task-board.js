@@ -1886,12 +1886,15 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled })
         h(ReleaseStatusChip, { status:release.status }))))) : h('p', { className:'bt-card-muted' }, t('No releases yet')))
 }
 
-function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors, onClose, onCreate }) {
+function ReleaseDialog({ release, disabled, releaseRoles, releaseCandidates = {}, actors, pending, feedback, onCheck, onClose, onSave }) {
   const roles = Array.isArray(releaseRoles) ? releaseRoles.filter(role => role && typeof role.key === 'string' && role.key) : []
   const teamSupported = roles.length > 0
   const bots = (Array.isArray(actors) ? actors : []).filter(actor => actor && typeof actor.id === 'string' && actor.id !== 'user')
   const candidates = releaseCandidates && typeof releaseCandidates === 'object' && !Array.isArray(releaseCandidates) ? releaseCandidates : {}
-  const firstCandidate = key => candidates[key]?.[0]?.id ?? ''
+  const members = new Map(bots.map(bot => [bot.id, bot]))
+  const recommended = key => Array.isArray(candidates[key]) ? candidates[key].filter(bot => members.has(bot?.id)) : []
+  const firstCandidate = key => recommended(key)[0]?.id ?? ''
+  const title = release ? t('Configure release team') : t('New release')
   const teamRoles = roles.filter(role => role.key !== 'projectManager')
   const [name, setName] = useState('')
   const [version, setVersion] = useState('')
@@ -1902,16 +1905,16 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
   const first = useRef(null)
   useEffect(() => { first.current?.focus() }, [])
   useEffect(() => {
-    const onKey = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); onClose() } }
+    const onKey = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); if (!saving) onClose() } }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, saving])
   // The project manager select answers the projectManager role; the other roles
   // keep their own select. Optional roles may stay unassigned.
-  const requiredMissing = teamRoles.filter(role => role.required === true && !assignments[role.key])
-  const missingCandidates = teamRoles.filter(role => role.required === true && !(Array.isArray(candidates[role.key]) && candidates[role.key].length))
-  const teamReady = !!manager && requiredMissing.length === 0
-  const valid = !!name.trim() && !!version.trim() && (!teamSupported || teamReady)
+  const requiredMissing = teamRoles.filter(role => role.required === true && !members.has(assignments[role.key]))
+  const missingCandidates = teamRoles.filter(role => role.required === true && !recommended(role.key).length)
+  const teamReady = members.has(manager) && requiredMissing.length === 0
+  const valid = (release ? teamSupported : !!name.trim() && !!version.trim()) && (!teamSupported || teamReady)
   const assign = (key, value) => setAssignments(current => ({ ...current, [key]: value }))
   const autoFill = () => {
     setManager(firstCandidate('projectManager'))
@@ -1921,26 +1924,30 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
     event.preventDefault()
     if (!valid || disabled || saving) return
     setSaving(true); setError('')
-    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => typeof id === 'string' && id))
+    const picked = Object.fromEntries(Object.entries(assignments).filter(([, id]) => members.has(id)))
     const team = teamSupported ? { projectManagerId: manager, roles: { ...picked, projectManager: manager } } : undefined
-    try { await onCreate({ name: name.trim(), version: version.trim(), ...(team ? { team } : {}) }); onClose() }
-    catch (caught) { setError(hostText(caught?.message) || t('The release could not be created. Check the fields and try again.')) }
+    try {
+      const saved = await onSave(release ? { team } : { name:name.trim(), version:version.trim(), ...(team ? { team } : {}) })
+      if (saved !== false) onClose()
+    }
+    catch (caught) { setError(hostText(caught?.message) || t(release ? 'Unable to update release' : 'The release could not be created. Check the fields and try again.')) }
     finally { setSaving(false) }
   }
   const close = () => { if (!saving) onClose() }
   const botSelect = (value, label, onPick, roleKey) => {
-    const choices = Array.isArray(candidates[roleKey]) && candidates[roleKey].length ? candidates[roleKey] : bots
-    return h('select', { value, 'aria-label': label, disabled: disabled || saving, onChange: event => onPick(event.target.value) },
+    const preferred = new Map(recommended(roleKey).map(bot => [bot.id, { ...members.get(bot.id), ...bot }]))
+    const choices = [...preferred.values(), ...bots.filter(bot => !preferred.has(bot.id))]
+    return h('select', { ref:release && roleKey === 'projectManager' ? first : undefined, value, 'aria-label': label, disabled: disabled || saving, onChange: event => onPick(event.target.value) },
       h('option', { value: '' }, t('Choose a Bot')), choices.map(bot => h('option', { key: bot.id, value: bot.id }, textValue(bot.name) || bot.id, bot.role ? ' · ' + bot.role : '')))
   }
   return h('div', { className: 'bt-card-modal-backdrop bt-create-backdrop', onMouseDown: event => { if (event.target === event.currentTarget) close() } },
-    h('section', { className: 'bt-card-modal bt-create-modal bt-release-modal' + (teamSupported ? ' bt-release-modal-team' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': t('New release'), tabIndex: -1 },
+    h('section', { className: 'bt-card-modal bt-create-modal bt-release-modal' + (teamSupported ? ' bt-release-modal-team' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabIndex: -1 },
       h('header', { className: 'bt-card-modal-header' },
-        h('div', null, h('p', { className: 'bt-card-eyebrow' }, t('Releases')), h('h2', null, t('New release'))),
+        h('div', null, h('p', { className: 'bt-card-eyebrow' }, release ? [release.name, release.version].filter(Boolean).join(' · ') : t('Releases')), h('h2', null, title)),
         h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close'), onClick: close }, h(CloseIcon))),
       h('form', { className: 'bt-create-form', onSubmit: submit },
-        h('label', { className: 'bt-field' }, h('span', null, t('Release name')), h('input', { ref: first, value: name, maxLength: 200, disabled: disabled || saving, 'aria-label': t('Release name'), placeholder: t('Release name'), onChange: event => setName(event.target.value) })),
-        h('label', { className: 'bt-field' }, h('span', null, t('Version')), h('input', { value: version, maxLength: 100, disabled: disabled || saving, 'aria-label': t('Version'), placeholder: t('Version'), onChange: event => setVersion(event.target.value) })),
+        !release ? h('label', { className: 'bt-field' }, h('span', null, t('Release name')), h('input', { ref: first, value: name, maxLength: 200, disabled: disabled || saving, 'aria-label': t('Release name'), placeholder: t('Release name'), onChange: event => setName(event.target.value) })) : null,
+        !release ? h('label', { className: 'bt-field' }, h('span', null, t('Version')), h('input', { value: version, maxLength: 100, disabled: disabled || saving, 'aria-label': t('Version'), placeholder: t('Version'), onChange: event => setVersion(event.target.value) })) : null,
         teamSupported ? h('section', { className: 'bt-release-team', 'aria-label': t('Release team') },
           h('div', { className: 'bt-release-team-head' },
             h('h3', null, t('Release team')),
@@ -1957,10 +1964,11 @@ function ReleaseDialog({ disabled, releaseRoles, releaseCandidates = {}, actors,
             missingCandidates.length
               ? t('No Bot is tagged for {roles}. Pick another Bot, or create one with that role in Bots settings.', { roles: missingCandidates.map(releaseRoleLabel).join(', ') })
               : t('Choose a project manager and every required role.'))) : null,
-        error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
+        error || feedback ? h('p', { className:'bt-form-error', role:'alert' }, error || feedback) : null,
+        pending && !saving ? h('button', { type:'button', className:'bt-card-mini', onClick:() => onCheck(pending) }, t('Check action')) : null,
         h('div', { className: 'bt-create-actions' },
           h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: saving, onClick: close }, t('Cancel')),
-          h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || saving || !valid }, t('Create release'))))))
+          h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || saving || !valid }, t(release ? 'Save release team' : 'Create release'))))))
 }
 
 // One release gate: status, evidence, and its own small edit surface. The host
@@ -1988,7 +1996,7 @@ function ReleaseGateRow({ gateKey, label, gate, editable, disabled, onSave }) {
     needsEvidence ? h('p', { className: 'bt-release-gate-hint', role: 'note' }, t('Evidence is required to pass a gate.')) : null)
 }
 
-function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onClose, onCheck, onSaveGate, onOpenReport }) {
+function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, error, onConfigureTeam, onClose, onCheck, onSaveGate, onOpenReport }) {
   const modal = useRef(null)
   useEffect(() => { modal.current?.focus() }, [])
   useEffect(() => {
@@ -2027,6 +2035,7 @@ function ReleaseDetailDialog({ release, actors, releaseRoles, canEdit, busy, err
         h('section', { className: 'bt-release-section' },
           h('div', { className: 'bt-release-section-head' },
             h('h3', null, t('Role assignments')),
+            onConfigureTeam ? h('button', { type:'button', className:'bt-card-mini', onClick:onConfigureTeam }, t('Configure release team')) : null,
             h('span', { className: 'bt-release-section-count' }, t('{count} assigned', { count: releaseRoleCount(release) }))),
           roles.length
             ? h('div', { className: 'bt-release-role-list' }, roles.map(role => {
@@ -2681,6 +2690,29 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     await request('board-release-create', { scope, operationId, release: { id: window.crypto.randomUUID(), ...release }, ...(team ? { team } : {}) })
     await load(generation.current, true)
   }
+  const configureReleaseTeam = async (release, expectedRevision, { team }) => {
+    if (!canAct || fetching.current || pendingRef.current || release.canConfigureTeam !== true) return false
+    const epoch = generation.current, operationId = window.crypto.randomUUID()
+    store.current.put(operationId)
+    pendingRef.current = operationId; fetching.current = operationId
+    setPending(operationId); setBusy(true); setError('')
+    try {
+      let outcome
+      try {
+        const saved = await request('board-release-configure-team', { scope, releaseId:release.id, expectedRevision, operationId, team })
+        if (saved?.id === release.id && saved.projectManagerId === team.projectManagerId) outcome = { state:'committed' }
+      } catch (cause) {
+        if (['bot/invalid','bot/refused','bot/stale','bot/not-found','bot/read-only'].includes(cause?.code)) {
+          outcome = { state:'rejected', message:cause.message }
+        }
+      }
+      if (!current(epoch)) return false
+      const result = outcome ? await settle(operationId, outcome, epoch) : await check(operationId, epoch)
+      return result === 'committed'
+    } finally {
+      if (fetching.current === operationId) { fetching.current = null; if (current(epoch)) setBusy(false) }
+    }
+  }
   const releaseRequest = async (endpoint, payload) => {
     if (releaseBusy || !window.crypto?.randomUUID) return false
     const operationId = window.crypto.randomUUID()
@@ -2932,6 +2964,8 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     } })
   const selected = selectedCard?.key === key ? data?.tasks?.find(task => task.id === selectedCard.id) : undefined
   const panelRelease = releasePanel ? releaseById.get(releasePanel.id) : null
+  const teamConfigurable = releaseTeamSupported && panelRelease?.canConfigureTeam === true && panelRelease.status === 'draft'
+    && !panelRelease.projectManagerId && releaseRoleCount(panelRelease) === 0
   useEffect(() => {
     if (releasePanel && data && !panelRelease) { setReleasePanel(null); setReleaseReport(null) }
   }, [releasePanel, data, panelRelease])
@@ -3285,14 +3319,19 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
             onClose: () => setSelectedCard(null), onOpenRelated:id => setSelectedCard({ key, id }), focusReturn: cardOpener, boardRef: dialog, pending, busy, error, onCheck: check, onCancel: cancel, cancelBusy, onDuplicate: createEnabled ? duplicate : undefined }) : null,
           createFor ? h(CreateCardDialog, { key: 'create:' + (createFor.laneLabel || '') + ':' + (createFor.personalProgress || ''), ...createFor, group:scope.kind === 'room', disabled: !createEnabled, actors, tasks: data.tasks, onCreate: createCard, onClose: () => setCreateFor(null) }) : null,
           newRelease ? h(ReleaseDialog, { disabled: !canAct, releaseRoles: releaseTeamSupported ? releaseRoles : null, releaseCandidates: data.releaseCandidates, actors,
-            onClose: () => setNewRelease(false), onCreate: createRelease }) : null,
-          panelRelease && releasePanel?.mode === 'report'
+            onClose: () => setNewRelease(false), onSave: createRelease }) : null,
+          releasePanel?.mode === 'team' && teamConfigurable && panelRelease.revision === releasePanel.revision
+            ? h(ReleaseDialog, { key:'team:' + panelRelease.id, release:panelRelease, disabled:!canAct,
+              releaseRoles, releaseCandidates:data.releaseCandidates, actors, pending, feedback:error, onCheck:check,
+              onClose:() => openReleaseDetails(panelRelease.id), onSave:value => configureReleaseTeam(panelRelease, releasePanel.revision, value) })
+            : panelRelease && releasePanel?.mode === 'report'
             ? h(ReleaseReportDialog, { key: 'report:' + panelRelease.id, release: panelRelease,
               report: releaseReport?.id === panelRelease.id ? releaseReport : null,
               onClose: closeReleasePanel, onBack: () => setReleasePanel({ id: panelRelease.id, mode: 'detail' }) })
             : panelRelease
               ? h(ReleaseDetailDialog, { key: 'release:' + panelRelease.id, release: panelRelease, actors, releaseRoles,
                 canEdit: releaseEditable(panelRelease), busy: !!releaseBusy, error: releaseError,
+                onConfigureTeam:teamConfigurable && canAct ? () => { setError(''); setReleasePanel({id:panelRelease.id, mode:'team', revision:panelRelease.revision}) } : undefined,
                 onClose: closeReleasePanel, onCheck: release => void checkRelease(release),
                 onSaveGate: (gate, status, evidence) => void saveReleaseGate(panelRelease, gate, status, evidence),
                 onOpenReport: release => void openReleaseReport(release) }) : null),

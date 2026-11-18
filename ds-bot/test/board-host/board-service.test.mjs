@@ -725,6 +725,66 @@ function addReleaseMembers(rt, bots) {
   rt.state.rooms.group.members.push(...Object.keys(bots))
 }
 
+test('a user explicitly configures a draft release team in its original group exactly once', async t => {
+  const { rt, deliveries } = fixture(t)
+  const roles = { projectManager:'pm', productManager:'product', architect:'arch', frontend:'fe', backend:'be', tester:'test', reviewer:'two', ops:'ops' }
+  const labels = { pm:'项目经理', product:'产品经理', arch:'架构师', fe:'前端开发', be:'后端开发', test:'测试工程师', ops:'运维工程师' }
+  addReleaseMembers(rt, Object.fromEntries(Object.entries(labels).map(([id, name]) => [id, { id, name, role:'成员' }])))
+  const create = id => rt.boardCall('board-release-create', { scope, operationId:'create-'+id, release:{ id, name:id, version:'1.1' } })
+  const draft = await create('draft')
+  const board = () => rt.boardCall('board-list', { scope })
+  const before = await board()
+  assert.equal(before.releases[0].canConfigureTeam,true)
+  assert.equal(before.releaseCandidates.projectManager[0].id, 'pm')
+  assert.equal(before.releaseCandidates.reviewer.length, 0)
+  const request = { scope, operationId:'set-team', releaseId:draft.id, expectedRevision:draft.revision, team:{projectManagerId:'pm', roles} }
+  const configure = (changes = {}) => rt.boardCall('board-release-configure-team', { ...request, ...changes })
+
+  await assert.rejects(configure({ operationId:'stale-version', expectedRevision:42 }), /revision conflict/)
+  const partial = { ...roles }; delete partial.reviewer
+  await assert.rejects(configure({ operationId:'missing-reviewer', team:{roles:partial} }), /Missing release roles.*Independent Reviewer/)
+  await assert.rejects(configure({ operationId:'same-reviewer', team:{roles:{...roles, reviewer:'pm'}} }), /independent reviewer/)
+  await assert.rejects(configure({ operationId:'missing-bot', team:{roles:{...roles, reviewer:'missing'}} }), /available Bot/)
+  addReleaseMembers(rt, { privateActor:{ name:'Private Bot', private:true } })
+  await assert.rejects(configure({ operationId:'private-bot', team:{roles:{...roles, reviewer:'privateActor'}} }), /available Bot/)
+  rt.state.bots.outside = { id:'outside', name:'Outside' }
+  await assert.rejects(configure({ operationId:'outside-bot', team:{roles:{...roles, reviewer:'outside'}} }), /available Bot/)
+  rt.state.rooms.other = {id:'other', name:'Other', members:Object.values(roles), sessions:{}}
+  await assert.rejects(configure({ operationId:'outside-room', scope:{kind:'room',id:'other'} }), /in this group/)
+  await assert.rejects(configure({ operationId:'personal-scope', scope:{kind:'personal',id:'user'} }), /needs a group board/)
+
+  const invalid = await rt.boardCall('board-operation', {scope, operationId:'missing-reviewer'})
+  assert.equal(invalid.state, 'rejected')
+  assert.match(invalid.message, /Missing release roles/)
+  const cancelled = await rt.boardCall('board-operation-cancel', {scope, operationId:'cancel-late'})
+  assert.equal(cancelled.state, 'rejected')
+  await assert.rejects(configure({operationId:'cancel-late'}), /cancelled before commit/)
+  assert.deepEqual(await rt.boardCall('board-operation', {scope, operationId:'cancel-late'}), cancelled)
+  assert.equal((await board()).releases[0].canConfigureTeam, true)
+
+  const competing = await Promise.allSettled([configure(), configure({operationId:'competing'})])
+  const [winner] = competing.filter(result => result.status === 'fulfilled')
+  assert.equal(competing.filter(result => result.status === 'rejected').length, 1)
+  assert.equal(winner.value.status, 'draft')
+  assert.equal(winner.value.revision, draft.revision + 1)
+  assert.deepEqual(winner.value.roles, roles)
+  const confirmedId = competing[0].status === 'fulfilled' ? 'set-team' : 'competing'
+  const configured = await configure({operationId:confirmedId})
+  assert.deepEqual(configured, winner.value)
+  assert.equal((await rt.boardCall('board-operation', {scope,operationId:confirmedId})).state, 'committed')
+  await assert.rejects(configure({operationId:confirmedId, team:{roles:{ ...roles, reviewer:'one' }}}), /operation id conflict/)
+  await assert.rejects(configure({operationId:'replace-configured', expectedRevision:configured.revision}), /unconfigured draft/)
+  const after = await board()
+  assert.equal(after.releases[0].canConfigureTeam, false)
+  assert.deepEqual(after.tasks, before.tasks)
+  assert.equal(deliveries.length, 0)
+
+  const second = await create('queued')
+  const queued = await rt.boardCall('board-release-queue', { scope, releaseId:second.id, expectedRevision:second.revision, operationId:'queue-later' })
+  assert.equal((await board()).releases.find(r=>r.id===queued.id).canConfigureTeam, false)
+  await assert.rejects(configure({releaseId:queued.id,expectedRevision:queued.revision,operationId:'too-late'}), /unconfigured draft/)
+})
+
 test('minor releases reuse their board group and preserve the membership and admin', async t => {
   const { rt } = fixture(t)
   const roles = {
