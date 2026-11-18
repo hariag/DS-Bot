@@ -1775,7 +1775,7 @@ function BoardLane({ kind, stage, label, count, meta, actions, releaseId, focus,
             onMove ? h('button', { type:'button', className:'bt-board-lane-menu-item', onClick:() => { onMove(-1); menu.current?.removeAttribute('open') } }, t('Move lane left')) : null,
             onMove ? h('button', { type:'button', className:'bt-board-lane-menu-item', onClick:() => { onMove(1); menu.current?.removeAttribute('open') } }, t('Move lane right')) : null,
             onArchiveAll ? h('button', { type:'button', className:'bt-board-lane-menu-item bt-card-cancel', onClick:() => { onArchiveAll(); menu.current?.removeAttribute('open') } }, t('Archive all cards')) : null)) : null,
-        h('button', { type:'button', className:'bt-icon-btn', 'aria-label': t(collapsed ? 'Expand lane' : 'Collapse lane'), title:t(collapsed ? 'Expand lane' : 'Collapse lane'), 'aria-expanded':!collapsed, onClick:() => setCollapsed(value => !value) }, h(ChevronRightIcon, { className:'bt-lane-chevron' + (collapsed ? ' bt-lane-chevron-collapsed' : '') })),
+        h('button', { type:'button', className:'bt-icon-btn bt-board-lane-collapse', 'aria-label': t(collapsed ? 'Expand lane' : 'Collapse lane'), title:t(collapsed ? 'Expand lane' : 'Collapse lane'), 'aria-expanded':!collapsed, onClick:() => setCollapsed(value => !value) }, h(ChevronRightIcon, { className:'bt-lane-chevron' + (collapsed ? ' bt-lane-chevron-collapsed' : '') })),
         actions ?? (createEnabled ? h('button', { type: 'button', className: 'bt-icon-btn bt-board-lane-add-icon', 'aria-label': t('Add card to {lane}', { lane: label }), title: t('Add card'), onClick: () => { closeComposer(); onCreate() } }, h(PlusIcon)) : null))),
     collapsed ? null : h('div', { className: 'bt-board-lane-cards' }, children),
     !collapsed && empty ? h('p', { className: 'bt-board-lane-empty' }, typeof empty === 'string' ? empty : t('Drop cards here')) : null,
@@ -2032,6 +2032,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const [dueFilter, setDueFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [sortMode, setSortMode] = useState('')
+  const [focusStatus, setFocusStatus] = useState('')
   const preferenceKey = `ds-bot:board-prefs:${scope.kind}:${scope.id}`
   const [lanePrefs, setLanePrefs] = useState(() => {
     try { const value = JSON.parse(globalThis.localStorage?.getItem(preferenceKey) ?? '{}'); return { names:value.names ?? {}, order:Array.isArray(value.order) ? value.order : [] } }
@@ -2073,6 +2074,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
   const loadSequence = useRef(0)
   const dialog = useRef(null)
   const searchRef = useRef(null)
+  const chipStrip = useRef(null)
   const dispose = useRef(null)
   const dismissed = useRef(false)
   const pendingRef = useRef(pending)
@@ -2161,7 +2163,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const previousFocus = document.activeElement
     store.current = pendingStore(scope)
     fetching.current = null; cancelling.current = null
-    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView('status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
+    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView('status'); setFocusStatus(''); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
     const operation = store.current?.current ?? ''
     pendingRef.current = operation; setPending(operation)
     void load(epoch)
@@ -2718,6 +2720,24 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     setLanePrefs(current => ({ ...current, order:keys }))
   }
   const commandsFor = task => !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : []
+  // The Status view keeps one lane in focus and shows its neighbours as 3D previews.
+  // The first status with work wins, so opening the board lands where the work is.
+  const laneStatuses = listed.map(([status]) => status)
+  const firstLaneWithCards = listed.find(([status]) => columns.get(status).length > 0)?.[0]
+  const defaultFocusStatus = laneStatuses.includes('working') && columns.get('working').length > 0
+    ? 'working'
+    : firstLaneWithCards ?? (laneStatuses.includes('proposed') ? 'proposed' : laneStatuses[0])
+  const activeStatus = laneStatuses.includes(focusStatus) ? focusStatus : defaultFocusStatus
+  const activeIndex = Math.max(0, laneStatuses.indexOf(activeStatus))
+  const activeEntry = listed[activeIndex] ?? listed[0]
+  // Keep the active status chip inside the horizontal strip on narrow boards.
+  useEffect(() => {
+    const strip = chipStrip.current, active = strip?.querySelector('.bt-status-chip-active')
+    if (!strip || !active) return
+    const left = active.offsetLeft, right = left + active.offsetWidth
+    if (left < strip.scrollLeft) strip.scrollLeft = Math.max(0, left - 8)
+    else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth + 8
+  }, [activeStatus])
   const memberOptions = [...new Set((Array.isArray(actors) ? actors : []).map(actor => actor.id).filter(Boolean))]
   const labelOptions = [...new Set(allTasks.flatMap(labelsOf))].sort((a, b) => a.localeCompare(b))
   const hasFilters = !!(search || memberFilter || labelFilter || dueFilter || typeFilter)
@@ -2743,6 +2763,32 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     if (task.status === 'cancelled' && stage === 'proposed') return commandOf(commands, 'restore')
     return ['waiting', 'ready', 'working'].includes(stage) && commandOf(commands, 'schedule')
   }
+  const focusStatusAt = index => { const entry = listed[index]; if (entry) setFocusStatus(entry[0]) }
+  // The focused card is 3D, so a card is moved between statuses by dropping it on the
+  // status chip (or card) rather than on a neighbouring column that is only a preview.
+  const moveCardToStatus = (task, status, label) => {
+    if (!task || task.status === status) return
+    const commands = commandsFor(task)
+    if (status === 'cancelled' && commandOf(commands, 'cancel')) { void run(task, { type: 'cancel' }); return }
+    if (task.status === 'draft' && status === 'proposed' && commandOf(commands, 'submit')) { void run(task, { type: 'submit' }); return }
+    if (task.status === 'cancelled' && status === 'proposed' && commandOf(commands, 'restore')) { void run(task, { type: 'restore' }); return }
+    if (['waiting', 'ready', 'working'].includes(status) && commandOf(commands, 'schedule')) { void run(task, { type: 'schedule' }); return }
+    notify(t('This card cannot be moved to {lane}.', { lane: t(laneLabelFor('workflow', status, label)) }))
+  }
+  const statusDropHandlers = (status, label) => ({
+    onDragOver: event => {
+      const dragged = taskById.get(dragId)
+      if (!dragged || dragged.status === status || !canDropOn(dragged, 'workflow', status)) return
+      event.preventDefault(); event.dataTransfer.dropEffect = 'move'
+    },
+    onDrop: event => {
+      const id = event.dataTransfer.getData('application/x-ds-bot-card') || dragId
+      const task = taskById.get(id)
+      if (!task || task.status === status || !canDropOn(task, 'workflow', status)) { setDragId(''); return }
+      event.preventDefault(); setDragId(''); setDrop(null)
+      moveCardToStatus(task, status, label)
+    },
+  })
   const openCard = (id, opener) => { cardOpener.current = opener; setSelectedCard({ key, id }) }
   const card = (task, index, laneTasks, kind, stage) => h(TaskCard, { key: task.id, scope, task, commands: commandsFor(task), actors, uncertain: !canAct, dragging: dragId === task.id,
     dragEnabled: kind === 'type' || kind === 'release', request, selectionMode, selected: selectedIds.has(task.id),
@@ -2938,6 +2984,53 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
       }),
       renderLane('release', 'unassigned', t('Unassigned'), activeFiltered.filter(task => !task.releaseId), { noCreate: true, laneLabel: t('Unassigned') }),
     ])) : null
+  const statusChips = h('div', { className: 'bt-status-chips', role: 'tablist', 'aria-label': t('Workflow status') },
+    listed.map(([status, label], index) => h('button', {
+      key: status, type: 'button', role: 'tab', 'aria-selected': index === activeIndex, 'data-status': status,
+      className: 'bt-status-chip' + (index === activeIndex ? ' bt-status-chip-active' : ''),
+      onClick: () => setFocusStatus(status),
+      onKeyDown: event => {
+        if (event.key === 'ArrowLeft' && activeIndex > 0) { event.preventDefault(); focusStatusAt(activeIndex - 1) }
+        else if (event.key === 'ArrowRight' && activeIndex < listed.length - 1) { event.preventDefault(); focusStatusAt(activeIndex + 1) }
+        else if (event.key === 'Home') { event.preventDefault(); focusStatusAt(0) }
+        else if (event.key === 'End') { event.preventDefault(); focusStatusAt(listed.length - 1) }
+      },
+      ...statusDropHandlers(status, label),
+    },
+    h('span', { className: 'bt-board-stage-dot bt-board-stage-dot-' + status, 'aria-hidden': true }),
+    h('span', null, t(laneLabelFor('workflow', status, label))),
+    h('span', { className: 'bt-status-chip-count' }, columns.get(status).length))))
+  // A quiet 3D preview of the focused status and its neighbours. The chips above stay
+  // the accessible, scroll-free way to jump anywhere; clicking a side card also focuses it.
+  const statusCarousel = h('div', { className: 'bt-status-carousel', 'aria-hidden': true },
+    listed.map(([status, label], index) => {
+      const offset = index - activeIndex
+      const laneTasks = columns.get(status)
+      const preview = textValue(laneTasks[0]?.title)
+      return h('div', {
+        key: status, className: 'bt-status-card' + (offset === 0 ? ' bt-status-card-active' : ''),
+        'data-offset': Math.max(-2, Math.min(2, offset)), 'data-status': status,
+        onClick: () => { if (offset !== 0) setFocusStatus(status) },
+      },
+      h('span', { className: 'bt-status-card-dot bt-board-stage-dot bt-board-stage-dot-' + status }),
+      h('strong', null, t(laneLabelFor('workflow', status, label))),
+      h('small', null, laneTasks.length ? t('{count} cards', { count: laneTasks.length }) + (preview ? ' · ' + preview : '') : t('No cards')))
+    }))
+  const [activeLaneStatus, activeLaneLabel] = activeEntry
+  const workflowSection = view === 'status' && (!personal || filtered.some(task => !personalIds.has(task.id) && !task.legacy))
+    ? h('section', { className: 'bt-board-section bt-board-workflow', 'aria-label': t('Workflow') },
+      personal ? h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Shared workflow')), h('p', null, t('These statuses reflect the shared task workflow.'))) : null,
+      statusChips,
+      statusCarousel,
+      h('div', { className: 'bt-board-focus-lane' }, renderLane('workflow', activeLaneStatus, t(activeLaneLabel), columns.get(activeLaneStatus), {
+        laneLabel: t(activeLaneLabel),
+        scheduleOnCreate: !personal && ['waiting', 'ready', 'working'].includes(activeLaneStatus),
+        followup: personal || ['reported', 'done', 'unknown'].includes(activeLaneStatus),
+        noCreate: activeLaneStatus === 'cancelled',
+        defaultDraft: activeLaneStatus === 'draft',
+        defaultOwner: personal ? 'user' : scope.kind === 'personal' ? scope.id : '',
+        ownerOnly: scope.kind === 'personal',
+      }))) : null
   if (!visible) return null
   return createPortal(h('div', { className: 'bt-board-backdrop' },
     h('section', { ref: dialog, tabIndex: -1, className: 'bt-board-dialog', role: 'dialog', 'aria-modal': selectedCard || createFor ? 'false' : 'true', 'aria-label': title || t('Task board') },
@@ -3026,13 +3119,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
           view === 'status' && legacyTasks.length ? h('section', { className: 'bt-board-section bt-board-goal-cards', 'aria-label': t('Goal cards') },
             h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Goal cards')), h('p', null, t('Group goal cards are not workflow tasks and do not count as acceptance.'))),
             h('div', { className: 'bt-board-goal-grid' }, legacyTasks.map((task, index) => card(task, index, legacyTasks, 'legacy', 'goal')))) : null,
-          view === 'status' && (!personal || filtered.some(task => !personalIds.has(task.id) && !task.legacy)) ? h('section', { className: 'bt-board-section', 'aria-label': t('Workflow') },
-            personal ? h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Shared workflow')), h('p', null, t('These statuses reflect the shared task workflow.'))) : null,
-            h(ColumnRail, { label: t('Workflow') }, listed.map(([status, label]) => {
-              const scheduleOnCreate = !personal && ['waiting', 'ready', 'working'].includes(status)
-              const followup = personal || ['reported', 'done', 'unknown'].includes(status)
-              return renderLane('workflow', status, t(label), columns.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === 'cancelled', defaultDraft: status === 'draft', defaultOwner: personal ? 'user' : scope.kind === 'personal' ? scope.id : '', ownerOnly: scope.kind === 'personal' })
-            }))) : null,
+          workflowSection,
           view === 'type' ? typeSection : null,
           view === 'release' && releaseSupported ? releaseSection : null,
           view === 'archive' ? archiveSection : null,
@@ -3144,6 +3231,32 @@ export const TASK_BOARD_CSS = `
 .bt-board-activity-by,.bt-board-activity-row time{color:var(--bt-ink-2);font-size:11px;line-height:16px;white-space:nowrap}
 .bt-board-activity-row time{margin-left:auto}
 .bt-board-rail{min-width:0}
+.bt-board-workflow{display:flex;flex-direction:column;flex:1;min-height:0}
+.bt-status-chips{display:flex;align-items:center;gap:4px;overflow-x:auto;scrollbar-width:none;padding:0 0 8px;flex:none}
+.bt-status-chips::-webkit-scrollbar{display:none}
+.bt-status-chip{display:inline-flex;align-items:center;gap:6px;flex:none;height:28px;padding:0 10px;border:.5px solid transparent;border-radius:999px;background:transparent;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:16px;cursor:pointer;transition:background-color .12s,color .12s,border-color .12s}
+.bt-status-chip:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.bt-status-chip-active{border-color:var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font-weight:500}
+.bt-status-chip-count{color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-status-carousel{position:relative;flex:none;height:152px;margin:0 0 10px;perspective:1100px;overflow:hidden;border-radius:18px;background:linear-gradient(180deg,color-mix(in srgb,var(--bt-ink) 5%,var(--bt-main)),transparent 78%)}
+.bt-status-card{position:absolute;left:50%;top:16px;width:min(360px,48vw);height:120px;box-sizing:border-box;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px 16px;border:.5px solid var(--bt-line-2);border-radius:16px;background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;overflow:hidden;transition:transform .38s cubic-bezier(.2,.8,.2,1),opacity .3s ease,box-shadow .3s ease,border-color .2s ease;will-change:transform,opacity}
+.bt-status-card[data-offset="0"]{transform:translateX(-50%) translateZ(0);z-index:3;border-color:color-mix(in srgb,var(--bt-accent) 55%,var(--bt-line-2));box-shadow:0 0 0 1px color-mix(in srgb,var(--bt-accent) 45%,transparent),0 18px 44px -20px color-mix(in srgb,var(--bt-accent) 65%,transparent),0 10px 24px rgba(0,0,0,.12)}
+.bt-status-card[data-offset="-1"]{transform:translateX(calc(-50% - clamp(150px,23vw,270px))) rotateY(15deg) scale(.8);opacity:.62;z-index:2}
+.bt-status-card[data-offset="1"]{transform:translateX(calc(-50% + clamp(150px,23vw,270px))) rotateY(-15deg) scale(.8);opacity:.62;z-index:2;align-items:flex-end;text-align:right}
+.bt-status-card[data-offset="-2"],.bt-status-card[data-offset="2"]{opacity:0;pointer-events:none;z-index:1}
+.bt-status-card[data-offset="-2"]{transform:translateX(calc(-50% - clamp(300px,46vw,540px))) rotateY(18deg) scale(.6)}
+.bt-status-card[data-offset="2"]{transform:translateX(calc(-50% + clamp(300px,46vw,540px))) rotateY(-18deg) scale(.6)}
+.bt-status-card-dot{width:10px;height:10px;flex:none}
+.bt-status-card-active .bt-status-card-dot{box-shadow:0 0 0 4px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
+.bt-status-card strong{max-width:100%;font-size:17px;line-height:24px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-status-card small{max-width:100%;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-board-focus-lane{display:flex;flex:1;min-height:0;justify-content:center}
+.bt-board-focus-lane>.bt-board-lane{flex:1 1 auto;width:100%;max-width:1020px;min-height:0;max-height:100%}
+.bt-board-focus-lane .bt-board-lane-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));align-content:start}
+.bt-board-focus-lane .bt-board-drop-line{grid-column:1/-1}
+.bt-board-focus-lane .bt-board-lane-collapse{display:none}
+@media(max-width:700px){.bt-status-carousel{height:138px}.bt-status-card{width:min(320px,74vw);height:108px;padding:12px 14px}.bt-status-card[data-offset="-1"]{transform:translateX(calc(-50% - clamp(48px,16vw,110px))) rotateY(13deg) scale(.78)}.bt-status-card[data-offset="1"]{transform:translateX(calc(-50% + clamp(48px,16vw,110px))) rotateY(-13deg) scale(.78)}.bt-board-focus-lane .bt-board-lane-cards{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.bt-status-card{transition:none}}
 .bt-board-rail{position:relative}
 .bt-board-rail::after{content:"";position:absolute;top:0;right:-1px;bottom:14px;width:26px;pointer-events:none;background:linear-gradient(to right,transparent,var(--dsw-alias-bg-base,var(--bt-main)))}
 .bt-board-columns{scroll-snap-type:x proximity}
