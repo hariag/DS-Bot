@@ -70,3 +70,19 @@ test('a card cover id is exposed in the board projection and defaults to null', 
   assert.equal(view.tasks.find(task => task.id === 'covered').coverImageId, 'image-1')
   assert.equal(view.tasks.find(task => task.id === 'plain').coverImageId, null)
 })
+
+test('progress and parent links follow direct room visibility and stay out of shared projections', () => {
+  const family = [
+    {...tasks[0], id:'feature', owner:'two', reviewer:'user', type:'feature'},
+    {...tasks[0], id:'item', owner:'one', reviewer:'two', parentTaskId:'feature', status:'working',
+      progress:{summary:'Verified target',next:'Review result',actor:'one',at:100},
+      shares:[{id:'share',taskId:'item',targetRoomId:'b',fields:['status']}]},
+  ]
+  const view = (scope,principal) => boardList({scope,principal,rooms,bots,tasks:family,verifyShare:()=>true}).tasks
+  const direct = view({kind:'room',id:'a'}, {kind:'bot',id:'two'}).find(task => task.id === 'item')
+  assert.equal(direct.parentTaskId,'feature'); assert.deepEqual(direct.progress,family[1].progress)
+  const personal = view({kind:'personal',id:'one'}, {kind:'bot',id:'one'})
+  assert.equal(personal[0].parentTaskId,undefined)
+  const shared = view({kind:'room',id:'b'}, {kind:'user'})[0]
+  assert.equal(shared.parentTaskId,undefined); assert.equal(shared.progress,undefined); assert.equal(shared.comments,undefined)
+})

@@ -1,3 +1,6 @@
+import { discoverWork } from './board-discovery.mjs'
+import { legacyGoalCards, linkGoalCards } from './legacy-goal.js'
+import { prepareBoardIntake, isManualBoardTask } from './board-intake.mjs'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -5,13 +8,13 @@ import { isDeepStrictEqual } from 'node:util'
 const own = (value, key) => value != null && Object.hasOwn(value, key) ? value[key] : undefined
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const refused = () => new Error('Task is unavailable or the action is not authorized')
-const actions = new Set(['start', 'report', 'review', 'block', 'unblock'])
-const proposalUpdateFields = ['description', 'type', 'labels', 'dueDate', 'dueComplete', 'checklist']
+const actions = new Set(['start', 'progress', 'report', 'review', 'block', 'unblock'])
+const proposalUpdateFields = ['description', 'type', 'stage', 'labels', 'dueDate', 'dueComplete', 'checklist']
 const taskTypes = new Set(['requirement','design','feature','development','test','deployment','operations','bugfix','ui','ux','other'])
 
 // This service is private to the host. The caller supplies a trusted runtime
 // and store, never a Bot name or actor claimed by a model/tool argument.
-export function createBotWorkflow({ rt, store, verifyBinding = () => false, verifyShare = () => false, wake = () => {}, onError = () => {} }) {
+export function createBotWorkflow({ rt, store, verifyBinding = () => false, verifyShare = () => false, goalReply, pendingGoalCard, wake = () => {}, onError = () => {} }) {
   if (!rt || !store || typeof verifyBinding !== 'function' || typeof verifyShare !== 'function') throw new TypeError('Workflow dependencies required')
   const scope = new AsyncLocalStorage()
 
@@ -38,6 +41,22 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return id(roomId) ? rt.roomOf?.(roomId) : undefined
   }
   const member = (room, actor) => !!room && Array.isArray(room.members) && room.members.includes(actor) && rt.botOf?.(actor)?.private !== true
+
+  const selectRoom = (caller, roomId) => {
+    if (roomId === undefined) return caller
+    if (!id(roomId) || (caller.roomId && caller.roomId !== roomId) || !member(rt.roomOf?.(roomId), caller.actor)) throw refused()
+    return { ...caller, roomId }
+  }
+  const goalCards = caller => linkGoalCards(legacyGoalCards({
+    scope:caller.roomId ? {kind:'room', id:caller.roomId} : {kind:'personal', id:caller.actor},
+    principal:{kind:'bot', id:caller.actor}, rooms:rt.state?.rooms, bots:rt.state?.bots, pendingCard:pendingGoalCard,
+  }), store.list().filter(task => direct(task, caller)))
+  const intakeAllowed = (caller, task) => {
+    const room = rt.roomOf?.(caller.roomId)
+    const participant = actor => actor === 'user' || (rt.botOf?.(actor) && member(room, actor))
+    return room && task.scope === `room:${room.id}` && member(room, caller.actor)
+      && participant(task.owner) && participant(task.reviewer)
+  }
 
   // Only a verified, durable user grant may expose an immutable, minimal
   // snapshot in a different room. A freeform task field is never authority.
@@ -70,14 +89,14 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   const canMutate = (task, caller, action) => {
     if (!direct(task, caller) || (!actions.has(action) && action !== 'propose')) return false
     if (action === 'propose') return task.stale !== true && !task.archivedAt && (caller.actor === task.owner || caller.actor === task.reviewer)
-    if (!task.authority || task.stale === true) return false
+    if ((!task.authority && !isManualBoardTask(task)) || task.stale === true || task.archivedAt) return false
     if (task.scope.startsWith('room:')) {
       const room = roomFor(task)
       // A bound group task is eligible only when the durable binding has been
       // verified and its current goal still allows the affected work.
       if (verifyBinding(task, room) !== true || rt.goalDispatchBlocked?.(room, caller.actor) !== false) return false
     }
-    if (action === 'start' || action === 'report') return caller.actor === task.owner
+    if (action === 'start' || action === 'progress' || action === 'report') return caller.actor === task.owner
     if (action === 'review') return caller.actor === task.reviewer && caller.actor !== task.owner
     if (action === 'block') return caller.actor === task.owner || caller.actor === task.reviewer
     if (action === 'unblock') return task.blocked?.owner === caller.actor
@@ -102,10 +121,14 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       before: filter(task.change.before), after: filter(task.change.after) }
   }
   const projectDirect = (task, caller) => {
+    const parent = task.parentTaskId ? store.get(task.parentTaskId) : undefined
+    const releaseId = task.parentTaskId
+      ? (parent?.scope === task.scope && direct(parent, caller) ? parent.releaseId : undefined)
+      : task.releaseId
     const dependencies = (Array.isArray(task.dependencies) ? task.dependencies : []).filter(depId => visibleDependency(caller, depId))
     const change = changeView(task, caller)
     return {
-      id: task.id, revision: task.revision, title: task.title, status: task.status,
+      id: task.id, scope:task.scope, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer, acceptance: task.acceptance, dependencies,
       // Card content the owner works with, so a show after a handoff or a part switch
       // does not lose what the dispatch prompt carried once.
@@ -118,6 +141,14 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
         ? task.checklist.filter(item => item && typeof item.text === 'string').map(item => ({ text:item.text, checked:item.checked === true }))
         : [],
       ...(task.authority ? { authority: task.authority } : {}),
+      ...(task.intake ? { intake:task.intake } : {}),
+      ...(task.parentTaskId ? { parentTaskId:task.parentTaskId } : {}),
+      ...(releaseId ? { releaseId } : {}),
+      ...(task.progress ? { progress:task.progress } : {}),
+      ...(task.stage ? { stage:task.stage } : {}),
+      ...(task.review ? { review:task.review } : {}),
+      ...(task.nextAction ? { nextAction:task.nextAction } : {}),
+      ...(task.comments?.length ? { replies:task.comments.slice(-12), moreReplies:task.comments.length > 12 } : {}),
       ...(task.blocked ? { blocked: task.blocked } : {}),
       ...(task.evidence ? { evidence: task.evidence } : {}),
       ...(task.stale ? { stale: true } : {}),
@@ -130,9 +161,14 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   // session and task permissions are re-read inside the write transaction.
   function authorize(input) {
     const pending = scope.getStore()
+    if (input.type === 'intake-create' && pending?.action === 'intake-create') {
+      const caller = selectRoom(identity(pending.exec), pending.roomId)
+      return sameIdentity(caller, pending.caller) && input.actor === caller.actor
+        && input.task?.id === pending.taskId && intakeAllowed(caller, input.task)
+    }
     if (!pending || input?.actor !== pending.caller.actor || !(input?.type === pending.action || (pending.action === 'propose' && input?.type === 'proposal')) || input?.task?.id !== pending.taskId) return false
     let caller
-    try { caller = identity(pending.exec) } catch { return false }
+    try { caller = selectRoom(identity(pending.exec), pending.roomId) } catch { return false }
     if (!sameIdentity(caller, pending.caller)) return false
     if (pending.create) {
       const target = input.task
@@ -141,14 +177,29 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       return caller.roomId === undefined && pending.scope === `personal:${caller.actor}`
     }
     const current = store.get(pending.taskId)
-    return current?.revision === pending.revision && canMutate(current, caller, pending.action)
+    // store.command checks exact replays before the CAS for new writes. Proposals
+    // instead carry the base revision in their separate journal entry.
+    return canMutate(current, caller, pending.action) && (pending.action !== 'propose' || current.revision === pending.revision)
   }
 
   async function invoke(exec, args) {
-    const caller = identity(exec)
+    const caller = selectRoom(identity(exec), args?.roomId)
+    if (args?.action === 'list') return discoverWork({
+      caller, args, store, direct, sharedProjection, goals:goalCards(caller),
+    })
+    if (args?.action === 'register') {
+      if (!caller.roomId || !id(args.taskId) || !id(args.operationId) || !args.change?.value) throw refused()
+      const request = prepareBoardIntake({actor:caller.actor, scope:`room:${caller.roomId}`, taskId:args.taskId,
+        operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:args.change.value})
+      if (!intakeAllowed(caller, request.task)) throw refused()
+      const existing = store.get(args.taskId)
+      if (existing && !direct(existing, caller)) throw refused()
+      const task = scope.run({exec, caller, roomId:args.roomId, taskId:args.taskId, action:'intake-create'}, () => store.create(request))
+      return {task:projectDirect(task, caller)}
+    }
     if (args?.action === 'plan') {
       if (!id(args.releaseId) || typeof args.requirement !== 'string' || typeof rt.boardPlanRelease !== 'function') throw refused()
-      return { plan: await rt.boardPlanRelease({ caller, releaseId:args.releaseId, requirement:args.requirement, operationId:args.operationId }) }
+      return { plan: await rt.boardPlanRelease({ caller, releaseId:args.releaseId, cardType:args.change?.value?.type, requirement:args.requirement, operationId:args.operationId }) }
     }
     if (args?.action === 'propose' && args.change?.kind === 'create') {
       const value = args.change.value
@@ -176,12 +227,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (existing) {
         // One operation id means one exact logical request. An identical retry receives the
         // recorded proposal; a changed request must not silently receive it.
-        const same = existing.kind === 'create' && existing.scope === targetScope
+        const same = existing.proposer === caller.actor && existing.kind === 'create' && existing.scope === targetScope
           && isDeepStrictEqual(existing.command, proposal.command) && (existing.note ?? '') === (proposal.note ?? '')
         if (!same) throw Object.assign(new Error('operation id conflict'), { code: 'bot/invalid' })
         return { proposal: existing }
       }
-      const context = { exec, caller, taskId, revision:0, action:'propose', create:true, scope:targetScope }
+      const context = { exec, caller, roomId:args.roomId, taskId, revision:0, action:'propose', create:true, scope:targetScope }
       const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor:caller.actor, proposal }))
       return { proposal: saved }
     }
@@ -193,9 +244,24 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     }
     if (!args || !id(args.taskId) || typeof args.action !== 'string') throw refused()
     const task = store.get(args.taskId)
+    if (!task && args.taskId.startsWith('legacy-')) {
+      const goal = goalCards(caller).find(card => card.id === args.taskId)
+      if (goal && ['reply','operation'].includes(args.action)) {
+        if (!goalReply || goal.owner !== caller.actor || !id(args.operationId) || !member(rt.roomOf(goal.originRoomId), caller.actor)) throw refused()
+        return goalReply({kind:'room',id:goal.originRoomId}, caller.actor, {taskId:goal.id, operationId:args.operationId,
+          expectedRevision:args.expectedRevision, expectedBoardRevision:args.expectedBoardRevision, value:{text:args.note}}, args.action === 'operation')
+      }
+      if (goal && args.action === 'show') return {task:{id:goal.id, revision:goal.revision, title:goal.title, owner:goal.owner, status:goal.legacy.originalStatus,
+        scope:`room:${goal.originRoomId}`, acceptance:goal.acceptance, description:goal.description,
+        goalNote:goal.goalNote, parentTaskId:goal.parentTaskId, releaseId:goal.releaseId, legacy:goal.legacy, replies:goal.comments.slice(-12)}}
+    }
     if (!task) throw refused()
     if (args.action === 'show') {
-      if (direct(task, caller)) return { task: projectDirect(task, caller) }
+      if (direct(task, caller)) {
+        const openChanges = store.list().filter(other => other.change?.sourceTaskId === task.id && direct(other, caller)
+          && !other.archivedAt && !['cancelled','done'].includes(other.status))
+        return { task:{...projectDirect(task, caller), ...(openChanges.length ? {openChangeRequests:openChanges.map(({id, status}) => ({id, status}))} : {})} }
+      }
       const projection = sharedProjection(task, caller)
       if (!projection) throw refused()
       return { task: projection }
@@ -241,25 +307,27 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       }
       const existing = store.listProposals(task.scope).find(item => item.id === proposalId)
       if (existing) {
-        const same = existing.kind === change.kind && existing.taskId === task.id && existing.scope === task.scope
+        const same = existing.proposer === caller.actor && existing.kind === change.kind && existing.taskId === task.id && existing.scope === task.scope
           && isDeepStrictEqual(existing.command, command)
           && isDeepStrictEqual(existing.before, before) && isDeepStrictEqual(existing.after, proposal.after)
           && (existing.note ?? '') === (proposal.note ?? '')
         if (!same) throw Object.assign(new Error('operation id conflict'), { code: 'bot/invalid' })
         return { proposal: existing }
       }
-      const context = { exec, caller, taskId: task.id, revision: task.revision, action: 'propose' }
+      const context = { exec, caller, roomId:args.roomId, taskId: task.id, revision: task.revision, action: 'propose' }
       const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor: caller.actor, proposal }))
       return { proposal: saved }
     }
     if (!actions.has(args.action) || !id(args.operationId) || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1 || !canMutate(task, caller, args.action)) throw refused()
-    const context = { exec, caller, taskId: task.id, revision: args.expectedRevision, action: args.action }
+    const context = { exec, caller, roomId:args.roomId, taskId: task.id, revision: args.expectedRevision, action: args.action }
     const command = { operationId: args.operationId, taskId: task.id, expectedRevision: args.expectedRevision,
-      actor: caller.actor, type: args.action, ...(args.value === undefined ? {} : { value: args.value }) }
+      actor: caller.actor, type: args.action, ...(args.action === 'start' ? {sessionId:caller.sid} : {}), ...(args.value === undefined ? {} : { value: args.value }) }
     const result = scope.run(context, () => store.command(command))
     // The transaction creates the durable next action. A lost notification
     // is recovered by scanning that journal; never replay a claimed input.
-    try { await wake() } catch (error) { onError(error) }
+    if (args.action !== 'progress' && !isManualBoardTask(result)) {
+      try { await wake() } catch (error) { onError(error) }
+    }
     return { task: projectDirect(result, caller) }
   }
 

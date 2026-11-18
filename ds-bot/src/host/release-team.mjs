@@ -4,7 +4,7 @@
 const ROLE = (key, label, required, instructions) => ({ key, label, required, instructions })
 
 export const RELEASE_ROLES = [
-  ROLE('projectManager', 'Project Manager', true, 'Own the release outcome. You are the group admin: assign work, keep the board and release gates current, and report to the user.'),
+  ROLE('projectManager', 'Project Manager', true, 'Coordinate this release within the existing group, maintain its task board and gates, and report verified outcomes to the user.'),
   ROLE('productManager', 'Product Manager', true, 'Turn the requirement into acceptance criteria and a feature breakdown. Keep scope explicit.'),
   ROLE('architect', 'Architect', true, 'Own the technical design, interfaces, dependency order and review of technical risks.'),
   ROLE('uiDesigner', 'UI Designer', false, 'Own the user interface design and visual acceptance.'),
@@ -70,14 +70,14 @@ export function releaseTeamView({ bots = {}, projectManagerId, roles = {} }) {
   }
 }
 
-export function lifecyclePlan({ release, requirement, roles = {} }) {
+export function lifecyclePlan({ release, requirement, roles = {}, cardType = 'feature' }) {
   const owner = key => roles[key]
   const pm = roles.projectManager
   const items = []
   const add = (key, type, title, ownerRole, reviewerRole, dependencies = []) => {
     const ownerId = owner(ownerRole)
     const reviewerId = reviewerRole === 'projectManager' ? pm : owner(reviewerRole)
-    if (!ownerId || !reviewerId || ownerId === reviewerId) return
+    if (!ownerId || !reviewerId || ownerId === reviewerId) throw new Error(`Release task ${key} needs an owner and independent reviewer`)
     items.push({ key, type, title, owner: ownerId, reviewer: reviewerId, dependencies })
   }
   add('requirement', 'requirement', `Requirement and acceptance criteria: ${requirement}`, 'productManager', 'projectManager')
@@ -90,11 +90,16 @@ export function lifecyclePlan({ release, requirement, roles = {} }) {
   add('review', 'test', `Independent code and evidence review: ${requirement}`, 'reviewer', 'projectManager', ['test-run'])
   add('deploy', 'deployment', `Deployment to the target environment: ${requirement}`, 'ops', 'projectManager', ['review'])
   add('operations', 'operations', `Production smoke, observability and rollback check: ${requirement}`, 'ops', 'projectManager', ['deploy'])
-  add('summary', 'other', `Project summary meeting and release report: ${requirement}`, 'projectManager', 'productManager', ['operations'])
+  add('summary', cardType, requirement, 'projectManager', 'productManager', ['operations'])
+  const deliveryEvidence = {
+    deploy:'Identify the built artifact and target environment. Verify that the deployed version is reachable.',
+    operations:'Record the observed version, user-facing smoke result and rollback readiness.',
+    summary:'Reconcile all completed items, independent reviews, deliverable location and remaining release gates.',
+  }
   return items.map(item => ({
     ...item,
     title: item.title.slice(0, 200),
-    acceptance: `Acceptance for ${item.key}: evidence is recorded on this card and independently reviewed; ${release.name} ${release.version} must stay deployable.`,
+    acceptance: `Record evidence on this task for independent review of ${release.name} ${release.version}.${deliveryEvidence[item.key] ? ' ' + deliveryEvidence[item.key] : ''}`,
   }))
 }
 
@@ -132,40 +137,10 @@ export function buildReleaseReport(release, items, bots = {}) {
     '',
     '## 总结',
     '',
-    gates.summary?.evidence || '项目总结会已完成，发布门禁与发布项已核对。',
+    gates.summary?.evidence || '待补充总结证据。',
     '',
   ]
   const markdown = lines.join('\n')
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escape(release.name)} ${escape(release.version ?? '')}</title><style>body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:960px;margin:40px auto;padding:0 20px;color:#141414}table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}code{background:#f4f4f4;padding:1px 4px;border-radius:4px}</style></head><body><pre style="white-space:pre-wrap;font:inherit">${escape(markdown)}</pre></body></html>`
   return { markdown, html }
-}
-
-export function releaseTeamNotice(release, team, bots = {}) {
-  const pm = bots[team.projectManagerId]?.name ?? 'Project Manager'
-  const lines = [
-    `Release ${release.name}${release.version ? ' ' + release.version : ''}.`,
-    `${pm} is the group admin and project manager. Every member reports to the PM and records work on the release board.`,
-    'The board is the task authority: use board_task show/start/report/review, keep acceptance evidence, and do not edit another role’s card without a confirmed board change.',
-  ]
-  return lines.join('\n')
-}
-
-export async function createReleaseGroup(rt, { release, team, boardRoomId }) {
-  if (typeof rt.createRoom !== 'function') throw new Error('Group creation is unavailable')
-  const bots = rt.state?.bots ?? {}
-  const room = await rt.createRoom({
-    members: team.members,
-    name: `Release ${release.name}${release.version ? ' · ' + release.version : ''}`,
-    admin: team.projectManagerId,
-    mode: 'admin',
-    createdBy: 'user',
-    notice: releaseTeamNotice(release, team, bots),
-  })
-  // Release tasks keep their original board scope. Add the release roles to a
-  // room board so those roles can act on the tasks they own; a personal board
-  // already lets an assigned Bot act through its board task scope.
-  if (typeof boardRoomId === 'string' && boardRoomId && boardRoomId !== room.id && typeof rt.updateRoom === 'function') {
-    await rt.updateRoom(boardRoomId, { add: team.members }).catch(error => rt.warn?.('ds-bot: release roles not added to the board room: %s', error))
-  }
-  return room
 }

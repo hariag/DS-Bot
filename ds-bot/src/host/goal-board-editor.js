@@ -158,7 +158,7 @@ export function createGoalBoardEditor(rt) {
     if(!card.legacy.useOverlay && (boardRevision!==undefined||position!==undefined))throw invalid('Card stage changed; refresh the board')
     return {card,room,goal,stage,task:tasks[0]}
   }
-  const mutateOverlay=(scope,payload,kind,images,target)=>{
+  const mutateOverlay=(scope,payload,kind,images,target,actor='user')=>{
     const {card,room,goal,stage,task}=target
     if(!card.legacy.useOverlay)throw invalid('Card stage changed; refresh the board')
     const table=goal.boardCards
@@ -182,7 +182,7 @@ export function createGoalBoardEditor(rt) {
     } else if(kind==='comment') {
       if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>key!=='text')||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw invalid('Invalid card comment')
       if(card.comments.length>=100)throw invalid('Card comment limit reached')
-      const comment={id:payload.operationId,author:'user',text:value.text.trim(),at:now}
+      const comment={id:payload.operationId,author:actor,text:value.text.trim(),at:now}
       next.comments=[...(next.comments??[]),comment];before=null;after=comment
     } else if(kind==='attach') {
       if(!Array.isArray(images)||!images.length||images.length>10)throw invalid('Choose 1 to 10 images')
@@ -195,7 +195,7 @@ export function createGoalBoardEditor(rt) {
       if(!validId(id)||!image||(next.hiddenImages??[]).includes(id))throw invalid('Image is unavailable')
       next.hiddenImages=[...(next.hiddenImages??[]),id];before=image;after=null
     } else throw invalid('Unsupported historical card action')
-    const event={operationId:payload.operationId,at:now,actor:'user',kind,...(reason?{reason}:{}),before,after}
+    const event={operationId:payload.operationId,at:now,actor,kind,...(reason?{reason}:{}),before,after}
     next.audit=[...next.audit,event]
     if(Buffer.byteLength(JSON.stringify(next.audit))>MAX_CARD_AUDIT_BYTES)throw invalid('Card history is full; preserve it before making more changes')
     next.revision+=1
@@ -299,5 +299,18 @@ export function createGoalBoardEditor(rt) {
     if(!reference)throw invalid('Image is unavailable')
     return {taskId,reference}
   }
-  return {operation,execute,cancel,prior,mutate,lookup,imageReference,pendingCard}
+  const botReply = (scope, actor, payload, checkOnly) => {
+    const operationId = 'goal:reply:' + hash([actor,payload.taskId,payload.operationId])
+    // Keep a retry bound to its original actor, card and the two revisions read.
+    if (checkOnly) return operation(scope,operationId)
+    const request = {actor,payload:{...payload,operationId,expectedPosition:'current'}}
+    return execute(scope,operationId,request,() => {
+      const target = lookup(scope,payload.taskId,payload.expectedRevision,payload.expectedBoardRevision,'current')
+      const {card,room} = target
+      if (!card.legacy.current || card.legacy.goalStatus !== 'active' || card.owner !== actor || !room.members?.includes(actor)
+        || rt.botOf?.(actor)?.private === true || rt.goalDispatchBlocked?.(room,actor) !== false) throw invalid('Goal item is unavailable')
+      return mutateOverlay(scope,request.payload,'comment',undefined,target,actor)
+    })
+  }
+  return {operation,execute,cancel,prior,mutate,lookup,imageReference,pendingCard,botReply}
 }

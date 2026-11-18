@@ -4,6 +4,7 @@ import { lstatSync, openSync, closeSync, readSync, fsyncSync, constants } from '
 import { dirname, isAbsolute } from 'node:path'
 import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectorySync } from './directory-sync.mjs'
+import { isFeatureCard, isManualBoardTask, isUnassignedItemDraft } from './board-intake.mjs'
 
 // The caller must authenticate actors and authorize every command and query.
 // This module is an isolated task journal: it does not send messages or prove
@@ -107,10 +108,15 @@ const dueDateIsValid = value => {
   return match[4] === undefined || (Number(match[4]) <= 23 && Number(match[5]) <= 59)
 }
 const applyCardDetails = (target, value) => {
-  keysOnly(value, ['description', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
+  keysOnly(value, ['description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
   if (Object.hasOwn(value, 'type')) {
     if (!validTaskType(value.type)) throw new Error('invalid card details')
     target.type = value.type
+  }
+  if (Object.hasOwn(value, 'stage')) {
+    if (typeof value.stage !== 'string' || /[\r\n]/.test(value.stage) || Buffer.byteLength(value.stage.trim()) > 120) throw new Error('invalid task stage')
+    if (value.stage.trim()) target.stage = value.stage.trim()
+    else delete target.stage
   }
   if (Object.hasOwn(value, 'description')) {
     if (typeof value.description !== 'string' || Buffer.byteLength(value.description) > 8192) throw new Error('invalid card details')
@@ -149,7 +155,7 @@ const applyCardDetails = (target, value) => {
 }
 
 /** Open a private task journal. The containing directory must be private. */
-export function openTaskStore(path, { authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyReceipt = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
+export function openTaskStore(path, { authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
   if (!isPrivateDirectory(dirname(path), dir)) throw new Error('database directory must be private')
@@ -268,7 +274,7 @@ const gatesPassed = release => {
 const releaseIsDone = release => {
     if (!release || release.status !== 'running' || !gatesPassed(release)) return false
     const items = releaseItems(release.id)
-    return items.length > 0 && items.every(task => task.status === 'done' && task.stale !== true)
+    return items.length > 0 && items.every(task => task.status === 'done' && task.stale !== true && !unfinishedItems.get(task.id) && (!task.goalItemIds?.length || verifyGoalItems(task) === true))
   }
   const startReleaseTx = release => {
     if (!release || !['draft','queued'].includes(release.status)) throw new Error('release is not startable')
@@ -277,8 +283,12 @@ const releaseIsDone = release => {
     if (!items.length) throw new Error('release has no items')
     const nextRelease = { ...release, revision: release.revision + 1, status:'running', startedAt: Date.now(), updatedAt: Date.now() }
     saveRelease(release, nextRelease)
-    for (const task of items) {
-      if (!['draft','proposed','waiting','ready'].includes(task.status) || task.blocked || task.stale) continue
+    const parents = new Set(items.map(task => task.id))
+    // Human-planned items enter the normal receipt-based workflow when this release
+    // is explicitly started. Chat-tracked items continue in their existing sessions.
+    const executableItems = getAll().filter(task => parents.has(task.parentTaskId) && !isManualBoardTask(task))
+    for (const task of [...items, ...executableItems]) {
+      if (isUnassignedItemDraft(task) || !['draft','proposed','waiting','ready'].includes(task.status) || task.blocked || task.stale) continue
       let next = { ...task, revision: task.revision + 1, authority: { kind:'personal', reference:boardRegistrationReference({ id:task.id, revision:task.revision + 1 }) } }
       if (next.status === 'draft' || next.status === 'proposed') next.status = 'waiting'
       save(task, next)
@@ -351,9 +361,21 @@ const releaseIsDone = release => {
     }
     if (!audit) throw new Error('missing audit context')
     addHistory.run(audit.operationId, audit.actor, before.id, JSON.stringify(before), JSON.stringify(after))
+    if (after.parentTaskId && before.status === 'done' && !before.stale && !before.blocked
+      && (after.status !== 'done' || after.stale || after.blocked)) {
+      const parent = getTask(after.parentTaskId)
+      if (parent && !parent.stale && ['reported','done'].includes(parent.status)) {
+        db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(parent.id)
+        db.prepare("UPDATE actions SET state='uncertain',receipt=COALESCE(receipt,'item acceptance changed') WHERE task_id=? AND state IN ('claimed','accepted')").run(parent.id)
+        save(parent, { ...parent, revision:parent.revision + 1, stale:true,
+          blocked:{ reason:'item acceptance changed', condition:'revalidate items and card', owner:parent.reviewer } })
+      }
+    }
   }
   const addAction = db.prepare("INSERT OR IGNORE INTO actions(id,task_id,revision,kind,actor,state) VALUES(?,?,?,?,?,'pending')")
-  const action = (task, kind, actor) => addAction.run(actionId(task.id, task.actionRevision, kind), task.id, task.actionRevision, kind, actor)
+  const action = (task, kind, actor) => {
+    if (!isManualBoardTask(task)) addAction.run(actionId(task.id, task.actionRevision, kind), task.id, task.actionRevision, kind, actor)
+  }
   let poisoned = false, inTransaction = false
   const tx = fn => {
     if (poisoned) throw new Error('task store requires reconciliation')
@@ -406,8 +428,16 @@ const releaseIsDone = release => {
     }
   }
   const dependenciesDone = task => task.dependencies.every(id => { const dep = getTask(id); return dep?.status === 'done' && dep.stale !== true && validDependency(task, dep) })
+  const unfinishedItems = db.prepare("SELECT 1 FROM tasks WHERE json_extract(body,'$.parentTaskId')=? AND (json_extract(body,'$.status')!='done' OR json_extract(body,'$.stale')=1 OR json_type(body,'$.blocked')='object') LIMIT 1")
+  const hasItems = db.prepare("SELECT 1 FROM tasks WHERE json_extract(body,'$.parentTaskId')=? LIMIT 1")
+  const parentOpen = parent => !!parent && !parent.archivedAt && !parent.blocked && !parent.stale && !['reported','done','cancelled'].includes(parent.status)
+  const itemContextOpen = task => {
+    if (!task.parentTaskId) return true
+    const parent = getTask(task.parentTaskId)
+    return parentOpen(parent) && (!parent.releaseId || getRelease(parent.releaseId)?.status === 'running')
+  }
   const ready = task => {
-    if (task.status !== 'waiting' || task.blocked || task.stale || !dependenciesDone(task)) return task
+    if (isManualBoardTask(task) || task.status !== 'waiting' || task.blocked || task.stale || !dependenciesDone(task)) return task
     const next = { ...task, revision: task.revision + 1, actionRevision: task.revision + 1, status: 'ready' }; save(task, next); action(next, 'execute', next.owner); return next
   }
   const unresolved = id => db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain') LIMIT 1").get(id)
@@ -446,7 +476,7 @@ const releaseIsDone = release => {
     list() { return getAll() },
     listSchedule() {
       const releases = new Map(getAllReleases().map(release => [release.id, release]))
-      return getAll().filter(task => !task.archivedAt && (!task.releaseId || releases.get(task.releaseId)?.status === 'running')).sort((left, right) => {
+      return getAll().filter(task => !task.archivedAt && itemContextOpen(task) && (!task.releaseId || releases.get(task.releaseId)?.status === 'running')).sort((left, right) => {
         const a = left.releaseId ? releases.get(left.releaseId) : undefined
         const b = right.releaseId ? releases.get(right.releaseId) : undefined
         const priority = item => item?.status === 'running' ? 0 : 1
@@ -533,7 +563,7 @@ const releaseIsDone = release => {
         if (!['draft','queued'].includes(release.status)) throw new Error('release is not editable')
         const task = getTask(taskId)
         if (!task || task.revision !== expectedTaskRevision) throw new Error('task revision conflict')
-        if (task.scope !== release.scope || ['done','cancelled'].includes(task.status)) throw new Error('release task unavailable')
+        if (task.parentTaskId || task.scope !== release.scope || ['done','cancelled'].includes(task.status)) throw new Error('release task unavailable')
         const next = { ...task, revision: task.revision + 1, releaseId, releasePosition: releasePositionAfter(releaseId, afterId, taskId) }
         save(task, next); return next
       })
@@ -629,7 +659,7 @@ const releaseIsDone = release => {
           const next = { ...old, revision: old.revision + 1, status:'failed', failure:reason, updatedAt: Date.now() }
           saveRelease(old, next); return next
         }
-        if (!items.every(task => task.status === 'done' && task.stale !== true) || !gatesPassed(old)) return old
+        if (!releaseIsDone(old)) return old
         const published = { ...old, revision: old.revision + 1, status:'published', publishedAt: Date.now(), updatedAt: Date.now() }
         saveRelease(old, published)
         const nextQueued = releaseOrder(old.scope).find(item => item.status === 'queued')
@@ -783,7 +813,7 @@ const releaseIsDone = release => {
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
     history(id) {
       const rows = db.prepare('SELECT before,after FROM history WHERE task_id=? ORDER BY sequence DESC LIMIT 51').all(requireId(id, 'task id'))
-      const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId']
+      const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'progress']
       const project = value => {
         if (!value) return null
         const record = JSON.parse(value), result = { revision:record.revision }
@@ -792,25 +822,53 @@ const releaseIsDone = release => {
       }
       return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after) })) }
     },
-    create({ operationId, actor, task }) {
+    create({ operationId, actor, task, intake }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
-      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress','description','dueDate','dueComplete','labels','checklist','coverImageId','type','draft'])
+      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress','description','stage','dueDate','dueComplete','labels','checklist','coverImageId','type','draft','parentTaskId'])
       const payload = { type: 'create', actor, task }
-      return transact(operationId, actor, payload, () => ({ type: 'create', actor, task }), () => {
-        const id = requireId(task.id, 'task id'), owner = requireId(task.owner, 'owner'), reviewer = requireId(task.reviewer, 'reviewer')
-        if (owner === reviewer) throw new Error('reviewer must be independent')
+      if (intake !== undefined) {
+        stable(intake); keysOnly(intake, ['parentTaskId','releaseId'])
+        if (actor === 'user' || actor === 'scheduler' || !task.scope?.startsWith('room:') || task.scope.length <= 5) throw new Error('invalid task intake')
+        keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','description','type'])
+        if (Object.hasOwn(intake, 'parentTaskId')) requireId(intake.parentTaskId, 'parent task id')
+        else if (!isFeatureCard(task)) throw new Error('top-level card must be a feature or bugfix')
+        payload.type = 'intake-create'
+        payload.intake = intake
+      }
+      if (task.parentTaskId !== undefined && actor !== 'user') throw new Error('invalid parent task')
+      const parentTaskId = intake?.parentTaskId ?? task.parentTaskId
+      const releaseId = intake?.releaseId
+      if (parentTaskId !== undefined) requireId(parentTaskId, 'parent task id')
+      if (releaseId !== undefined) requireId(releaseId, 'release id')
+      return transact(operationId, actor, payload, () => ({ type:payload.type, actor, task, ...(parentTaskId ? { parentTaskId } : {}), ...(releaseId ? { releaseId } : {}) }), () => {
+        const id = requireId(task.id, 'task id'), {owner,reviewer} = task
+        if (!(actor === 'user' && isUnassignedItemDraft(task))) {
+          requireId(owner, 'owner'); requireId(reviewer, 'reviewer')
+          if (owner === reviewer) throw new Error('reviewer must be independent')
+        }
         if (task.personalProgress !== undefined && (actor !== 'user' || task.scope !== 'personal:user' || owner !== 'user' || !['todo','doing','finished'].includes(task.personalProgress))) throw new Error('invalid personal progress')
         string(task.title, 'title'); string(task.acceptance, 'acceptance'); requireId(task.scope, 'scope')
         if (getTask(id)) throw new Error('task id exists')
+        if (parentTaskId) {
+          const parent = getTask(parentTaskId)
+          if (!task.scope.startsWith('room:') || !isFeatureCard(parent) || parent.scope !== task.scope || !parentOpen(parent)) throw new Error('parent card unavailable')
+          if (releaseId && parent.releaseId !== releaseId) throw new Error('item inherits its parent release')
+          if (parent.releaseId && !['draft','queued','running'].includes(getRelease(parent.releaseId)?.status)) throw new Error('release unavailable')
+        } else if (releaseId) {
+          const release = getRelease(releaseId)
+          if (release?.scope !== task.scope || !['draft','queued'].includes(release.status)) throw new Error('release unavailable')
+        }
         if (db.prepare('SELECT count(*) AS n FROM tasks').get().n >= MAX_TASKS) throw new Error('task limit reached')
         const dependencies = task.dependencies ?? [], dependencyGrants = task.dependencyGrants ?? []; checkGraph(id, dependencies)
         checkBindings({ scope:task.scope, owner, reviewer }, dependencies, dependencyGrants)
         const card = {}
-        applyCardDetails(card, Object.fromEntries(['description','dueDate','dueComplete','labels','checklist','coverImageId','type']
+        applyCardDetails(card, Object.fromEntries(['description','stage','dueDate','dueComplete','labels','checklist','coverImageId','type']
           .filter(key => Object.hasOwn(task, key)).map(key => [key, task[key]])))
         if (task.draft !== undefined && typeof task.draft !== 'boolean') throw new Error('invalid draft state')
         const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: task.draft === true ? 'draft' : 'proposed', type: 'other', authority: null, evidence: null, blocked: null, stale: false, position: appendPosition(task.scope),
-          ...card, ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}) }
+          ...card, ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}),
+          ...(intake !== undefined ? { intake:{ kind:'chat', actor, at:Date.now() } } : {}), ...(parentTaskId ? { parentTaskId } : {}),
+          ...(releaseId && !parentTaskId ? { releaseId, releasePosition:releasePositionAfter(releaseId, null, id) } : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
       })
@@ -845,15 +903,19 @@ const releaseIsDone = release => {
         const change = { sourceTaskId:taskId, sourceRevision:old.revision, before, after }
         const duplicate = getAll().some(item => item.change?.sourceTaskId === taskId && item.change?.sourceRevision === old.revision && stable(item.change.after) === stable(after))
         if (duplicate) throw new Error('change proposal already exists')
-        const record = { id, title:after.title, owner:after.owner, reviewer:after.reviewer, scope:old.scope,
+        // Keep an active feature's change request with its source item. For a
+        // closed feature, follow-up work gets its own card and retains the source link.
+        const parent = old.parentTaskId && getTask(old.parentTaskId)
+        const attachToParent = parent && parentOpen(parent)
+        const record = { id, ...(attachToParent ? {parentTaskId:parent.id} : {}), title:after.title, owner:after.owner, reviewer:after.reviewer, scope:old.scope,
           acceptance:after.acceptance, description:after.description, dependencies, dependencyGrants:grants, attachments:[], shares:[], revision:1,
-          actionRevision:null, status:'waiting', type:after.type ?? old.type ?? 'other', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false,
+          actionRevision:null, status:'waiting', type:parent && !attachToParent ? parent.type : after.type ?? old.type ?? 'other', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false,
           position:appendPosition(old.scope), change }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return ready(record)
       })
     },
-    command({ operationId, taskId, expectedRevision, actor, type, value }) {
+    command({ operationId, taskId, expectedRevision, actor, type, value, sessionId }) {
       requireId(taskId, 'task id'); requireId(actor, 'actor')
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
       const payload = { type, taskId, expectedRevision, actor, ...(value !== undefined ? { value } : {}) }; stable(payload)
@@ -861,7 +923,15 @@ const releaseIsDone = release => {
         const old = getTask(taskId); if (!old) throw new Error('unknown task')
         if (old.revision !== expectedRevision) throw new Error('revision conflict')
         if (old.change && ['edit','card-details'].includes(type)) throw new Error('change proposal is immutable')
+        const manual = isManualBoardTask(old)
+        if (['start','progress','report','review'].includes(type)) {
+          if (old.archivedAt) throw new Error('card is archived')
+          if (!itemContextOpen(old)) throw new Error('parent card or release unavailable')
+          if (manual && old.releaseId && getRelease(old.releaseId)?.status !== 'running') throw new Error('release is not running')
+          if ((type === 'report' || type === 'review' && value?.result === 'pass') && !old.parentTaskId && (unfinishedItems.get(old.id) || (old.goalItemIds?.length && verifyGoalItems(old) !== true))) throw new Error('finish and review all items before completing the card')
+        }
         let next = { ...old, revision: old.revision + 1 }
+        let reply
         switch (type) {
           case 'personal-progress':
             // A personal reminder is separate from the verified workflow and
@@ -884,8 +954,9 @@ const releaseIsDone = release => {
           case 'card-details': {
             // Card presentation is distinct from acceptance and workflow.
             // An item ticked here never completes a task or a dependency.
-            keysOnly(value, ['description', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
+            keysOnly(value, ['description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
             if (!Object.keys(value).length) throw new Error('invalid card details')
+            if (value.type !== undefined && !old.parentTaskId && (old.intake || old.goalItemIds?.length || hasItems.get(old.id)) && !isFeatureCard({ type:value.type })) throw new Error('top-level card must be a feature or bugfix')
             applyCardDetails(next, value)
             break
           }
@@ -906,7 +977,7 @@ const releaseIsDone = release => {
             keysOnly(value,['text'])
             if(actor!=='user'||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw new Error('invalid card comment')
             const comments=Array.isArray(old.comments)?old.comments:[]
-            if(comments.length>=100)throw new Error('card comment limit reached')
+            if(comments.filter(comment => !comment.workflowAction).length>=100)throw new Error('card comment limit reached')
             next.comments=[...comments,{id:operationId,author:'user',text:value.text.trim(),at:Date.now()}]
             break
           }
@@ -915,7 +986,7 @@ const releaseIsDone = release => {
             if (actor !== 'user' || typeof value.text !== 'string' || !value.text.trim() || Buffer.byteLength(value.text) > 2048) throw new Error('invalid card comment')
             requireId(value.commentId, 'comment id')
             const comments = Array.isArray(old.comments) ? old.comments : []
-            const index = comments.findIndex(comment => comment?.id === value.commentId)
+            const index = comments.findIndex(comment => comment?.id === value.commentId && !comment.workflowAction)
             if (index === -1) throw new Error('unknown card comment')
             next.comments = comments.map((comment, at) => at === index ? { ...comment, text: value.text.trim() } : comment)
             break
@@ -925,12 +996,12 @@ const releaseIsDone = release => {
             if (actor !== 'user') throw new Error('invalid card comment')
             requireId(value.commentId, 'comment id')
             const comments = Array.isArray(old.comments) ? old.comments : []
-            if (!comments.some(comment => comment?.id === value.commentId)) throw new Error('unknown card comment')
+            if (!comments.some(comment => comment?.id === value.commentId && !comment.workflowAction)) throw new Error('unknown card comment')
             next.comments = comments.filter(comment => comment?.id !== value.commentId)
             break
           }
           case 'submit':
-            if (actor !== 'user' || old.status !== 'draft') throw new Error('invalid state')
+            if (actor !== 'user' || old.status !== 'draft' || isUnassignedItemDraft(old)) throw new Error('invalid state')
             next.status = 'proposed'; break
           case 'cancel': {
             if (actor !== 'user' || old.status === 'done' || old.status === 'cancelled') throw new Error('invalid state')
@@ -944,8 +1015,9 @@ const releaseIsDone = release => {
           }
           case 'restore':
             if (actor !== 'user' || old.status !== 'cancelled') throw new Error('invalid state')
-            next.status = 'proposed'; next.actionRevision = null; next.authority = null; next.blocked = null; next.stale = false; break
+            next.status = old.owner === null ? 'draft' : 'proposed'; next.actionRevision = null; next.authority = null; next.blocked = null; next.stale = false; break
           case 'release-assign': {
+            if (old.parentTaskId) throw new Error('item inherits its parent release')
             if (actor !== 'user' || !value || typeof value !== 'object' || !Object.hasOwn(value, 'releaseId')) throw new Error('invalid release assignment')
             keysOnly(value, ['releaseId', 'releasePosition'])
             const releaseId = value.releaseId
@@ -994,10 +1066,31 @@ const releaseIsDone = release => {
               next.status = 'proposed'; next.authority = null; next.actionRevision = null
             } else throw new Error('task is not scheduled')
             break
+          case 'link-goal-items': {
+            keysOnly(value, ['itemIds'])
+            if (actor !== 'user' || !old.scope.startsWith('room:') || !isFeatureCard(old) || !parentOpen(old)
+              || !Array.isArray(value.itemIds) || !value.itemIds.length || value.itemIds.length > 100
+              || value.itemIds.some(id => typeof id !== 'string' || !/^legacy-[a-f0-9]{64}$/.test(id))) throw new Error('invalid goal item links')
+            const requested = new Set(value.itemIds)
+            if (getAll().some(row => row.id !== old.id && row.goalItemIds?.some(id => requested.has(id)))) throw new Error('goal item already belongs to a card')
+            next.goalItemIds = [...new Set([...(old.goalItemIds ?? []), ...requested])]
+            break
+          }
           case 'start':
-            if (old.status !== 'ready' || old.stale || old.blocked || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot start')
-            if (!db.prepare("SELECT 1 FROM actions WHERE task_id=? AND revision=? AND kind='execute' AND state='accepted'").get(old.id, old.actionRevision)) throw new Error('verified action receipt required')
-            next.status = 'working'; break
+            if (!(manual ? ['proposed','waiting'].includes(old.status) : old.status === 'ready') || old.stale || old.blocked || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot start')
+            if (!manual && !db.prepare("SELECT 1 FROM actions WHERE task_id=? AND revision=? AND kind='execute' AND state='accepted'").get(old.id, old.actionRevision)) throw new Error('verified action receipt required')
+            if (sessionId !== undefined) next.workSessionId = requireId(sessionId, 'work session')
+            next.status = 'working'; delete next.progress; reply = {}; break
+          case 'progress': {
+            if ((!old.authority && !manual) || old.status !== 'working' || old.stale || old.blocked || old.archivedAt || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot update task progress')
+            keysOnly(value, ['summary','next'])
+            const summary = string(value.summary, 'progress summary').trim()
+            const nextStep = string(value.next, 'next step').trim()
+            if (Buffer.byteLength(summary) > 1024 || Buffer.byteLength(nextStep) > 1024) throw new Error('task progress too long')
+            if (old.progress?.summary === summary && old.progress?.next === nextStep) return old
+            reply = { text:summary, next:nextStep }
+            break
+          }
           case 'report':
             if (old.status !== 'working' || old.stale || old.blocked || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot report')
             keysOnly(value, ['kind','evidence','targetCommit','targetBlob','acceptanceBlob','environment'])
@@ -1009,7 +1102,9 @@ const releaseIsDone = release => {
             } else throw new Error('invalid evidence kind')
             next.evidence = JSON.parse(JSON.stringify(value))
             if (verifyEvidence(old, value, actor, 'report') !== true) throw new Error('report evidence unverified')
-            finishAction(old.id, 'execute'); next.status = 'reported'; next.actionRevision = next.revision; break
+            if (!manual) { finishAction(old.id, 'execute'); next.actionRevision = next.revision }
+            next.status = 'reported'
+            reply = { text:value.evidence, environment:value.environment }; break
           case 'archive':
             if (actor !== 'user') throw new Error('archive is not authorized')
             if (old.archivedAt) throw new Error('task is already archived')
@@ -1030,17 +1125,26 @@ const releaseIsDone = release => {
             if (old.status !== 'reported' || old.stale || old.blocked || actor !== old.reviewer || actor === old.owner || !dependenciesDone(old)) throw new Error('cannot review')
             keysOnly(value, ['evidence','result']); string(value.evidence, 'review evidence'); if (!['pass', 'rework'].includes(value.result)) throw new Error('invalid review')
             if (verifyEvidence(old, value, actor, 'review') !== true) throw new Error('review evidence unverified')
-            finishAction(old.id, 'review')
-            next.review = { result: value.result, evidence: value.evidence, actor }; next.status = value.result === 'pass' ? 'done' : 'waiting'; break
+            if (!manual) finishAction(old.id, 'review')
+            next.review = { result: value.result, evidence: value.evidence, actor }; next.status = value.result === 'pass' ? 'done' : 'waiting'
+            reply = { text:value.evidence, result:value.result }; break
           case 'block':
-            if (['done', 'proposed'].includes(old.status)) throw new Error('cannot block')
-            if (unresolved(old.id)) throw new Error('action outcome unresolved')
+            if (old.status === 'done' || (old.status === 'proposed' && !manual) || (manual && (old.status === 'cancelled' || old.archivedAt))) throw new Error('cannot block')
+            // The working owner may block the execution they already accepted. An
+            // unknown delivery or any other in-flight action still needs reconciliation.
+            if (unresolved(old.id)) {
+              const acceptedExecution = old.status === 'working' && actor === old.owner ? actionId(old.id, old.actionRevision, 'execute') : ''
+              if (db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain') AND NOT (id=? AND state='accepted') LIMIT 1").get(old.id, acceptedExecution)) throw new Error('action outcome unresolved')
+            }
             keysOnly(value, ['reason','condition','owner'])
             db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(old.id)
             if (old.status === 'ready') next.status = 'waiting'
-            next.blocked = { reason: string(value?.reason, 'reason'), condition: string(value?.condition, 'condition'), owner: requireId(value?.owner, 'block owner') }; break
+            next.blocked = { reason: string(value?.reason, 'reason'), condition: string(value?.condition, 'condition'), owner: requireId(value?.owner, 'block owner') }
+            if (stable(old.blocked ?? null) === stable(next.blocked)) return old
+            reply = { text:next.blocked.reason, condition:next.blocked.condition, blockOwner:next.blocked.owner }; break
           case 'unblock':
-            if (!old.blocked || old.stale) throw new Error('not blocked or evidence stale'); next.blocked = null; if (old.status === 'reported') next.actionRevision = next.revision; break
+            if (!old.blocked || old.stale) throw new Error('not blocked or evidence stale'); next.blocked = null; if (!manual && old.status === 'reported') next.actionRevision = next.revision
+            reply = {}; break
           case 'dependencies':
             if (!['proposed', 'waiting'].includes(old.status)) throw new Error('cannot change dependencies in active task')
             checkGraph(taskId, value); checkBindings(old, value, []); next.dependencies = value; next.dependencyGrants = []; break
@@ -1050,24 +1154,26 @@ const releaseIsDone = release => {
             next.stale = true; next.blocked = { reason: value.reason, condition: 'independent evidence revalidation', owner: old.reviewer }; break
           case 'revalidate':
             keysOnly(value, ['evidence']); string(value.evidence, 'revalidation evidence')
-            if (!old.stale || actor !== old.reviewer || unresolved(old.id) || !dependenciesDone(old) || verifyEvidence(old, value, actor, 'revalidate') !== true) throw new Error('cannot revalidate')
-            next.stale = false; next.blocked = null; if (old.status === 'reported') next.actionRevision = next.revision; break
+            if (!old.stale || actor !== old.reviewer || unresolved(old.id) || !dependenciesDone(old) || unfinishedItems.get(old.id) || verifyEvidence(old, value, actor, 'revalidate') !== true) throw new Error('cannot revalidate')
+            next.stale = false; next.blocked = null; if (!manual && old.status === 'reported') next.actionRevision = next.revision; break
           case 'edit': {
             keysOnly(value, ['title','owner','reviewer','acceptance','dependencies','dependencyGrants'])
             const fields = Object.keys(value)
             if (!fields.length) throw new Error('empty edit')
             const significant = fields.some(k => k !== 'title' && stable(value[k]) !== stable(old[k]))
-            if (significant && (!['proposed','waiting','ready'].includes(old.status) || old.evidence || (old.stale && old.status !== 'waiting') || unresolved(old.id))) throw new Error('responsibility or acceptance change requires separate reconciliation')
+            if (significant && (!['draft','proposed','waiting','ready'].includes(old.status) || old.evidence || (old.stale && old.status !== 'waiting') || unresolved(old.id))) throw new Error('responsibility or acceptance change requires separate reconciliation')
             if (Object.hasOwn(value, 'title')) next.title = string(value.title, 'title')
-            if (Object.hasOwn(value, 'owner')) next.owner = requireId(value.owner, 'owner')
-            if (Object.hasOwn(value, 'reviewer')) next.reviewer = requireId(value.reviewer, 'reviewer')
-            if (next.owner === next.reviewer) throw new Error('reviewer must be independent')
+            if (!isUnassignedItemDraft({...next,...value})) {
+              if (Object.hasOwn(value, 'owner')) next.owner = requireId(value.owner, 'owner')
+              if (Object.hasOwn(value, 'reviewer')) next.reviewer = requireId(value.reviewer, 'reviewer')
+              if (next.owner === next.reviewer) throw new Error('reviewer must be independent')
+            } else { next.owner = null; next.reviewer = null }
             if (Object.hasOwn(value, 'acceptance')) next.acceptance = string(value.acceptance, 'acceptance')
             if (Object.hasOwn(value, 'dependencies') || Object.hasOwn(value, 'dependencyGrants')) {
               const dependencies = value.dependencies ?? old.dependencies, grants = value.dependencyGrants ?? old.dependencyGrants ?? []
               checkGraph(taskId, dependencies); checkBindings(next, dependencies, grants); next.dependencies = dependencies; next.dependencyGrants = grants
             }
-            if (significant && old.status !== 'proposed') {
+            if (significant && !['draft','proposed'].includes(old.status)) {
               db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(old.id)
               next.status = 'proposed'; next.authority = null; next.actionRevision = null; next.blocked = null; next.stale = false
             }
@@ -1116,6 +1222,18 @@ const releaseIsDone = release => {
             next.shares = shares.map(share => share.id === value.shareId ? { ...share, revoked:true } : share); break
           }
           default: throw new Error('unknown command')
+        }
+        if (reply) {
+          const at = Date.now()
+          if (type === 'progress') next.progress = { summary:reply.text, next:reply.next, actor, at }
+          // Keep the latest workflow replies on the card without using the human comment quota.
+          const comments = [...(old.comments ?? [])]
+          if (comments.filter(item => item.workflowAction).length >= 50) {
+            const oldestMilestone = comments.findIndex(item => item.workflowAction === 'progress')
+            comments.splice(oldestMilestone >= 0 ? oldestMilestone : comments.findIndex(item => item.workflowAction), 1)
+          }
+          comments.push({ id:operationId, author:actor, at, workflowAction:type, ...reply })
+          next.comments = comments
         }
         if(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','reorder','personal-progress','attach','remove-image','share','unshare','submit','cancel','restore','release-assign'].includes(type)) {
           const activity=Array.isArray(old.boardActivity)?old.boardActivity:[]
@@ -1187,7 +1305,7 @@ const releaseIsDone = release => {
           return { ...row, targetId:row.actor, claimedNow:false }
         }
         if (row.state !== 'pending') throw new Error('action unavailable')
-        if (task.actionRevision !== row.revision || task.blocked || task.stale || (row.kind === 'execute' && (task.status !== 'ready' || !dependenciesDone(task))) || (row.kind === 'review' && task.status !== 'reported')) throw new Error('action stale or blocked')
+        if (!itemContextOpen(task) || task.actionRevision !== row.revision || task.blocked || task.stale || (row.kind === 'execute' && (task.status !== 'ready' || !dependenciesDone(task))) || (row.kind === 'review' && task.status !== 'reported')) throw new Error('action stale or blocked')
         if (intent.targetBotId !== row.actor || verifyAdmission(task, row, intent) !== true) throw new Error('admission intent unverified')
         db.prepare('INSERT INTO admission_intents(action_id,admission_id,message_id,target_bot_id,target_session_id,task_revision,action_revision,payload_hash,payload) VALUES(?,?,?,?,?,?,?,?,?)').run(id, intent.admissionId, intent.messageId, intent.targetBotId, intent.targetSessionId, task.revision, row.revision, payloadHash, payload)
         db.prepare("UPDATE actions SET state='claimed' WHERE id=? AND state='pending'").run(id)

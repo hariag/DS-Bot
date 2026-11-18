@@ -125,7 +125,7 @@ async function request(endpoint,payload){
   if(state.mode==='phase2'&&endpoint==='board-command'){
    const type=payload.type,value=payload.value??{};
    if(type==='create'){
-    state.phase2Tasks.push({id:payload.taskId,title:value.title,type:value.type||'feature',owner:value.owner,reviewer:value.reviewer,acceptance:value.acceptance,dependencies:value.dependencies??[],revision:1,status:value.draft?'draft':'proposed',comments:[],...(value.description?{description:value.description}:{})});
+    state.phase2Tasks.push({id:payload.taskId,title:value.title,type:value.type||'feature',owner:value.owner,reviewer:value.reviewer,acceptance:value.acceptance,dependencies:value.dependencies??[],revision:1,status:value.draft?'draft':'proposed',comments:[],...(value.description?{description:value.description}:{}),...(value.parentTaskId?{parentTaskId:value.parentTaskId}:{})});
     return {};
    }
    const task=state.phase2Tasks.find(item=>item.id===payload.taskId);
@@ -133,6 +133,7 @@ async function request(endpoint,payload){
    if(type==='card-details'){
     if(value.type)task.type=value.type;
     if('description' in value)task.description=value.description;
+    if('stage' in value)task.stage=value.stage;
    }
    if(type==='submit'||type==='restore')task.status='proposed';
    if(type==='cancel')task.status='cancelled';
@@ -209,7 +210,7 @@ globalThis.renderFixture=(scope,mode='normal',fresh=false)=>{state.scope=scope;s
  const refreshGoal=async()=>{state.calls.push({endpoint:'refresh-goal',scope});if(mode==='periodic-refresh-fail')throw Error('offline');const current=mode==='periodic-changed'?{...state.currentGoal,revision:2}:state.currentGoal;return {roomsById:{[scope.id]:{goal:current}}}};
  const currentRoomGoal=id=>id===scope.id?state.currentGoal:undefined;
  const resolveReview=async(goalId,reviewId)=>{state.calls.push({endpoint:'review-resolve',scope,payload:{goalId,reviewId}});if(mode==='periodic-error')throw Object.assign(Error('stale'),{code:'bot/stale'});if(mode==='periodic-network')throw Error('offline')};
- root.render(h(TaskBoard,{...(fresh?{key:'board-'+(state.renderSeq=(state.renderSeq??0)+1)}:{}),scope,title:'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,currentRoomGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
+ root.render(h(TaskBoard,{...(fresh?{key:'board-'+(state.renderSeq=(state.renderSeq??0)+1)}:{}),scope,title:scope.id==='hierarchy'?'November delivery':'Board',goal,initialReview:mode.startsWith('periodic'),refreshGoal,currentRoomGoal,resolveReview,close:()=>{state.closed=(state.closed??0)+1},request}))};
 globalThis.clearFixture=()=>ReactDOM.flushSync(()=>root.render(null));
 `
 const bundle = await build({ stdin: { contents: entry, resolveDir: dirname(boardEntry), sourcefile: 'board-globalThis.fixture.js' },
@@ -248,7 +249,7 @@ async function approveChange(page, dialog) {
 
 const browser = await chromium.launch({ ...(chrome ? { executablePath: chrome } : {}), headless: true,
   args: ['--no-sandbox', '--disable-background-networking'] })
-try {
+async function runBrowserCases() {
   const page = await browser.newPage()
   page.setDefaultTimeout(5000)
   const errors = []
@@ -265,6 +266,82 @@ try {
   }
   const workflowLane = status => page.locator('.bt-board-focus-lane .bt-board-lane[data-stage="' + status + '"]')
   const statusChip = status => page.locator('.bt-status-chip[data-status="' + status + '"]')
+
+  // A room board renders an execution item in its feature and opens the same
+  // full card for the owner or human. Reading the hierarchy needs no extra fetch.
+  await page.evaluate(() => {
+    globalThis.initPhase2()
+    const parent = globalThis.fixture.phase2Tasks[0]
+    globalThis.fixture.phase2Tasks.push({...parent,id:'I1',title:'Verify the retry',type:'test',owner:'b',reviewer:'a',
+      parentTaskId:parent.id,status:'working',progress:{summary:'Retry covered',next:'Run the offline case'},
+      comments:[{id:'milestone',workflowAction:'progress',author:'b',at:1700000000000,text:'Retry covered',next:'Run the offline case'}]})
+    globalThis.fixture.phase2Tasks.push({id:'legacy-I2',parentTaskId:parent.id,title:'Existing goal item',owner:'a',revision:1,
+      status:'legacy-done',legacy:{originalStatus:'done',position:'previous',goalStatus:'active'}})
+    globalThis.renderFixture({kind:'room',id:'hierarchy'},'phase2',true)
+  })
+  await focusStatus('proposed')
+  const parentCard = page.locator('article[data-task-id="T1"]')
+  const itemLink = parentCard.locator('[data-item-id="I1"]')
+  await itemLink.waitFor()
+  assert.equal(await page.locator('article[data-task-id="I1"]').count(),0)
+  assert.match(await itemLink.innerText(),/Verify the retry/)
+  assert.match(await itemLink.innerText(),/Bob/)
+  assert.match(await itemLink.innerText(),/Run the offline case/)
+  const boardReads = () => page.evaluate(() => globalThis.fixture.calls.filter(call => call.endpoint === 'board-list').length)
+  await parentCard.locator('[data-item-id="legacy-I2"]').click()
+  const goalDialog = page.getByRole('dialog',{name:'Existing goal item',exact:true})
+  await goalDialog.getByRole('button',{name:'Close card'}).click()
+  assert.equal(await page.locator('article[data-task-id="legacy-I2"]').count(),0)
+  const readsBefore = await boardReads()
+  await itemLink.click()
+  const itemDialog = page.getByRole('dialog',{name:'Verify the retry',exact:true})
+  await itemDialog.waitFor()
+  assert.match(await itemDialog.locator('.bt-card-comments').innerText(),/Retry covered/)
+  assert.equal(await itemDialog.locator('.bt-comment').getByRole('button',{name:'Edit',exact:true}).count(),0)
+  await itemDialog.locator('[data-item-id="T1"]').click()
+  const featureDialog = page.getByRole('dialog',{name:'Phase task',exact:true})
+  await featureDialog.getByRole('button',{name:'Create task item'}).click()
+  const createItem = page.getByRole('dialog',{name:'Create task item',exact:true})
+  assert.equal(await boardReads(),readsBefore)
+  await createItem.getByLabel('Title',{exact:true}).fill('Exercise the offline case')
+  await createItem.getByLabel('Task type').selectOption('test')
+  await createItem.getByLabel('Owner',{exact:true}).selectOption('a')
+  await createItem.getByLabel('Independent reviewer').selectOption('b')
+  await createItem.getByLabel('Acceptance criteria').fill('Retry succeeds after reconnect')
+  await createItem.getByRole('button',{name:'Create card',exact:true}).click()
+  await featureDialog.waitFor()
+  const itemValue = await page.evaluate(() => globalThis.fixture.calls.find(call => call.endpoint === 'board-command' && call.payload.type === 'create').payload.value)
+  assert.equal(itemValue.parentTaskId,'T1'); assert.equal(itemValue.type,'test')
+  await featureDialog.getByRole('button',{name:'Close card'}).click()
+  await itemLink.waitFor()
+  assert.equal(await parentCard.locator('[data-item-id]').count(),3)
+  await itemLink.click()
+  const stageEditor = itemDialog.locator('.bt-card-stage')
+  await stageEditor.getByRole('button',{name:'Set work stage'}).click()
+  await stageEditor.getByLabel('Work stage').fill('Release verification')
+  await stageEditor.getByRole('button',{name:'Save'}).click()
+  const stageConfirmation = itemDialog.getByRole('alertdialog')
+  assert.match(await stageConfirmation.innerText(), /Release verification/)
+  await stageConfirmation.getByRole('button',{name:'Confirm',exact:true}).click()
+  await stageEditor.getByText('Release verification',{exact:true}).waitFor()
+  await itemDialog.getByRole('button',{name:'Close card'}).click()
+  assert.match(await itemLink.innerText(),/Release verification/)
+  const beforeVersions = await boardReads()
+  await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
+  const major = page.getByRole('region',{name:'Major version',exact:true})
+  assert.match(await major.innerText(), /November delivery/)
+  assert.match(await major.innerText(), /1 feature or bugfix cards · 3 task items/)
+  const releases = major.getByRole('listitem')
+  assert.equal(await releases.count(),2)
+  assert.match(await releases.first().innerText(),/Release one[\s\S]*1.0[\s\S]*Draft/)
+  assert.match(await releases.nth(1).innerText(),/Release two[\s\S]*2.0[\s\S]*Queued/)
+  await releases.nth(1).getByRole('button').click()
+  await page.getByRole('dialog',{name:'Release details: Release two'}).waitFor()
+  assert.equal(await boardReads(),beforeVersions)
+
+  assert.deepEqual(errors,[])
+  if (process.argv.includes('--hierarchy')) return
+  await page.evaluate(() => globalThis.clearFixture())
 
   await page.evaluate(() => globalThis.renderFixture({ kind:'personal', id:'user' }, 'monitor'))
   await page.getByText('Remote code changes (31)', { exact:true }).click()
@@ -1179,7 +1256,7 @@ try {
   const typeCreateDialog=page.locator('.bt-create-modal')
   await typeCreateDialog.waitFor()
   await typeCreateDialog.getByLabel('Title').fill('Typed card')
-  await typeCreateDialog.getByLabel('Task type').selectOption('test')
+  await typeCreateDialog.getByLabel('Task type').selectOption('bugfix')
   await typeCreateDialog.getByLabel('Owner').selectOption('a')
   await typeCreateDialog.getByLabel('Independent reviewer').selectOption('b')
   await typeCreateDialog.getByLabel('Acceptance criteria').fill('Type evidence')
@@ -1187,13 +1264,13 @@ try {
   await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Typed card'))
   const typedCreate=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='create'&&call.payload.value.title==='Typed card'))
   const typedId=typedCreate.payload.taskId
-  assert.equal(typedCreate.payload.value.type,'test','create sends the selected task type')
+  assert.equal(typedCreate.payload.value.type,'bugfix','create sends the selected task type')
   await typeCreateDialog.waitFor({state:'detached'})
   const typedCard=page.locator('article.bt-board-card').filter({hasText:'Typed card'})
   await typedCard.waitFor()
-  assert.equal(await typedCard.locator('.bt-board-type-test').innerText(),'Test','the card shows its type chip')
+  assert.equal(await typedCard.locator('.bt-board-type-bugfix').innerText(),'Bugfix','the card shows its type chip')
 
-  await page.getByLabel('Filter by type').selectOption('test')
+  await page.getByLabel('Filter by type').selectOption('bugfix')
   await page.waitForFunction(()=>document.querySelectorAll('article.bt-board-card').length===1)
   assert.equal(await page.getByText('Phase task',{exact:true}).count(),0,'the type filter hides other types')
   await typedCard.waitFor()
@@ -1203,22 +1280,22 @@ try {
   const typeSection=page.locator('.bt-board-section[aria-label="Task types"]')
   await typeSection.waitFor()
   await exerciseColumns(page, typeSection)
-  const testLane=typeSection.locator('.bt-board-lane[aria-label="Test"]')
+  const bugfixLane=typeSection.locator('.bt-board-lane[aria-label="Bugfix"]')
   const featureLane=typeSection.locator('.bt-board-lane[aria-label="Feature"]')
-  await testLane.locator('[data-task-id="'+typedId+'"]').waitFor()
+  await bugfixLane.locator('[data-task-id="'+typedId+'"]').waitFor()
   const typeCommandCount=async()=>page.evaluate(id=>globalThis.fixture.calls.filter(call=>call.endpoint==='board-command'&&call.payload.type==='card-details'&&call.payload.taskId===id).length,typedId)
   assert.equal(await typeCommandCount(),0,'no type change is sent before the board confirmation')
-  await testLane.locator('[data-task-id="'+typedId+'"]').dragTo(featureLane)
+  await bugfixLane.locator('[data-task-id="'+typedId+'"]').dragTo(featureLane)
   const boardConfirm=page.locator('.bt-board-confirm')
   await boardConfirm.waitFor()
-  assert.match(await boardConfirm.innerText(),/Type[\s\S]*Test[\s\S]*Feature/,'the board confirmation shows the before and after type')
+  assert.match(await boardConfirm.innerText(),/Type[\s\S]*Bugfix[\s\S]*Feature/,'the board confirmation shows the before and after type')
   await boardConfirm.getByRole('button',{name:'Cancel',exact:true}).click()
   await boardConfirm.waitFor({state:'detached'})
   assert.equal(await typeCommandCount(),0,'cancelling the board confirmation sends no command')
-  await testLane.locator('[data-task-id="'+typedId+'"]').waitFor()
+  await bugfixLane.locator('[data-task-id="'+typedId+'"]').waitFor()
   assert.equal(await featureLane.locator('[data-task-id="'+typedId+'"]').count(),0,'cancelling leaves the card in its original type lane')
 
-  await testLane.locator('[data-task-id="'+typedId+'"]').dragTo(featureLane)
+  await bugfixLane.locator('[data-task-id="'+typedId+'"]').dragTo(featureLane)
   await boardConfirm.waitFor()
   await boardConfirm.getByRole('button',{name:'Confirm',exact:true}).click()
   await boardConfirm.waitFor({state:'detached'})
@@ -1422,4 +1499,5 @@ try {
 
   assert.deepEqual(errors, [])
   console.log('PASS ' + assertions + ' assertions: board images, legacy cards, description/labels/due/checklist/comments, attachments and covers, quick add, personal progress, group scheduling, sharing, explicit cancellation, late response, reopen, scoped rendering and conflicts, task types, draft/cancelled, releases and proposals')
-} finally { console.log('ASSERTIONS executed=' + assertions + ' failed=' + assertionFailures); await browser.close() }
+}
+try { await runBrowserCases() } finally { console.log('ASSERTIONS executed=' + assertions + ' failed=' + assertionFailures); await browser.close() }

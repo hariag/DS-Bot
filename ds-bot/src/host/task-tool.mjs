@@ -4,21 +4,27 @@ export function installTaskTool(rt, workflow, defineTool) {
   if (!Array.isArray(rt?.teamTools) || typeof workflow?.invoke !== 'function' || typeof defineTool !== 'function') throw new TypeError('Task tool dependencies required')
   const tool = defineTool({
     name: 'board_task',
-    description: 'Inspect or update your authorized task. Show the task first. Use one stable operation_id for one exact logical update; if the outcome is unknown, call operation with that same ID before doing anything again. Only the real owner may start or report, and only its independent reviewer may review. The host checks actor, scope and required evidence fields; the independent reviewer checks whether the evidence meets acceptance. A report is not an acceptance. Respect paused goals, existing work, dependencies, authorization, and the 30-step turn budget.',
+    description: 'Find work with list. Register actionable instructions on the group board before executing. Register feature or bugfix cards and their task items with stable IDs. Registration records work without dispatch. Show the original card before any update. Use one stable operation_id for one exact logical update; if the outcome is unknown, call operation with that same ID before doing anything again. Only the real owner may start or report, and only its independent reviewer may review. The host checks actor, scope and required evidence fields; the independent reviewer checks whether the evidence meets acceptance. A report is not an acceptance. Respect paused goals, existing work, dependencies, authorization, and the 30-step turn budget.',
     parameters: {
-      action: { type:'string', required:true, enum:['show','operation','start','report','review','block','unblock','propose','proposal','plan'], description:'Task action; plan asks the host to create the release lifecycle task chain' },
+      action: { type:'string', required:true, enum:['list','register','show','operation','reply','start','progress','report','review','block','unblock','propose','proposal','plan'], description:'Task action; plan asks the host to create the release lifecycle task chain' },
       task_id: { type:'string', description:'Stable task ID (required for task actions, not for plan)' },
-      release_id: { type:'string', description:'Release ID for plan' },
+      room_id: { type:'string', description:'Group board for project work discussed in a private chat. A group session is restricted to its own room.' },
+      parent_task_id: { type:'string', description:'Parent feature or bugfix for a task item; use with list to see its items.' },
+      query: { type:'string', description:'Filter list by stable ID or case-insensitive text; searches completed work as well.' },
+      cursor: { type:'string', description:'Continue the same list with its nextCursor.' },
+      release_id: { type:'string', description:'Small release ID for plan or registration in the current group' },
       requirement: { type:'string', description:'Requirement text for plan' },
       operation_id: { type:'string', description:'Stable ID for this exact update, or the original ID when checking operation' },
       expected_revision: { type:'integer', description:'Exact task revision from show for a state update' },
+      expected_board_revision: { type:'integer', description:'For a group-goal reply, use legacy.boardRevision from show along with expected_revision.' },
       proposal_id: { type:'string', description:'Proposal ID returned by propose, when checking a proposal' },
-      note: { type:'string', description:'Short explanation shown to the user with a proposal' },
+      note: { type:'string', description:'Reply text on the original group-goal item, or a short explanation for a proposal' },
       change: { type:'object', additionalProperties:false, properties: {
         kind: { type:'string', enum:['create','update','status','release'] },
         value: { type:'object', additionalProperties:true, description:'create: card fields (title, owner, reviewer, acceptance, description, type, labels, dueDate, dueComplete, checklist, dependencies, draft). update: description, type, labels, dueDate, dueComplete, checklist. status: {type: submit|cancel|restore, reason?}. release: {releaseId}.' },
-      }, description:'A proposed content, status or release change; the user confirms or rejects it in the board Changes panel before it applies. Query it with action proposal.' },
+      }, description:'For register, supply value with title, owner, independent reviewer, acceptance, type and optional description. For propose, a proposed content, status or release change; the user confirms or rejects it in the board Changes panel before it applies. Query it with action proposal.' },
       value: { type:'object', additionalProperties:false, properties: {
+        summary:{ type:'string' }, next:{ type:'string' },
         kind: { type:'string', enum:['git','personal'] }, evidence: { type:'string' },
         targetCommit: { type:'string' }, targetBlob: { type:'string' }, acceptanceBlob: { type:'string' }, environment: { type:'string' },
         result: { type:'string', enum:['pass','rework'] }, reason: { type:'string' }, condition: { type:'string' }, owner: { type:'string' },
@@ -26,7 +32,8 @@ export function installTaskTool(rt, workflow, defineTool) {
     },
     output: { schema:{ type:'string' }, render:(_args, value) => [{ type:'text', text:String(value) }] },
     async execute(args, exec) {
-      const result = await workflow.invoke(exec, { action:args.action, taskId:args.task_id,
+      const result = await workflow.invoke(exec, { action:args.action, taskId:args.task_id, roomId:args.room_id,
+        expectedBoardRevision:args.expected_board_revision, query:args.query, cursor:args.cursor, parentTaskId:args.parent_task_id,
         ...(args.release_id === undefined ? {} : { releaseId:args.release_id }),
         ...(args.requirement === undefined ? {} : { requirement:args.requirement }),
         ...(args.operation_id === undefined ? {} : { operationId:args.operation_id }),
