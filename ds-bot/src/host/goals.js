@@ -817,7 +817,8 @@ export function install(rt) {
     })
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
     if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
-    if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
+    if (goal.reviewAttempt?.terminalFailure) lines.push(`Periodic review ${goal.reviewAttempt.id} failed before administrator tools. Future reviews wait for the room's pending work to settle.`)
+    else if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
     const observed = blockedReviewReads.get(goal.reviewAttempt)
     if (observed) lines.push(`Read-only host observation at ${new Date(observed.at).toISOString()} (revision ${observed.revision}): ${observed.open} unfinished task(s); current owner checks missing for ${observed.missing.join(', ') || 'none'}. The original review remains unresolved.`)
     if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(`Periodic owner review still needs: ${missingFor(room).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
@@ -931,17 +932,20 @@ export function install(rt) {
   const confirmedReviewResolutions = new WeakMap()
   const durableReviewResolutions = async (room,goal) => {
     const entries = goal.reviewResolutions
-    if (entries === undefined) return
-    if (!Array.isArray(entries)) throw new Error('Review decision history is unavailable')
+    const failure = goal.reviewAttempt?.terminalFailure
+    if (entries === undefined && failure === undefined) return
+    if (entries !== undefined && !Array.isArray(entries)) throw new Error('Review decision history is unavailable')
     rt.requireHomeLock()
     const lease = rt.homeLockVersion(), confirmed = confirmedReviewResolutions.get(goal)
-    if (confirmed?.entries === entries && confirmed.lease === lease) return
+    if (confirmed?.lease === lease && confirmed.entries === entries && confirmed.failure === failure) return
     const file = await open(rt.statePath, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await file.stat()
       if (!before.isFile()) throw new Error('Review decision journal is unavailable')
       const saved = JSON.parse(await file.readFile('utf8'))?.rooms?.[room.id]?.goal
-      if (saved?.id !== goal.id || JSON.stringify(saved.reviewResolutions) !== JSON.stringify(entries)) throw new Error('Review decision was not saved')
+      if (saved?.id !== goal.id || JSON.stringify(saved.reviewResolutions) !== JSON.stringify(entries)
+        || JSON.stringify(saved.reviewAttempt?.terminalFailure) !== JSON.stringify(failure)
+        || (failure && saved.reviewAttempt?.id !== goal.reviewAttempt?.id)) throw new Error('Review decision was not saved')
       await file.sync()
       await syncDirectory(dirname(rt.statePath))
       const afterFile = await file.stat(), after = await lstat(rt.statePath)
@@ -949,8 +953,8 @@ export function install(rt) {
       if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
         || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterFile.size || before.mtimeMs !== afterFile.mtimeMs
         || rt.homeLockVersion() !== lease || rt.roomOf(room.id) !== room || room.goal !== goal
-        || goal.reviewResolutions !== entries) throw new Error('Review decision changed during confirmation')
-      confirmedReviewResolutions.set(goal,{entries,lease})
+        || goal.reviewResolutions !== entries || goal.reviewAttempt?.terminalFailure !== failure) throw new Error('Review decision changed during confirmation')
+      confirmedReviewResolutions.set(goal,{entries,lease,failure})
     } finally { await file.close() }
   }
   async function goalControl(roomId, body = {}, provenFailure) {
@@ -959,16 +963,23 @@ export function install(rt) {
     const goal = room.goal
     if (goal === undefined || goal.id !== String(body.goalId ?? '')) return { error: 'The goal has changed. Look again.', code: 'bot/stale' }
     const action = String(body.action ?? '')
-    if (action === 'review-resolve') {
+    if (action === 'review-resolve' || action === 'review-record-failure') {
+      const recordOnly = action === 'review-record-failure'
       const attempt = goal.reviewAttempt
       const allowFuture = body.decision === 'allow-future'
-      const evidence = allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
+      const originalFailureEvidence = 'The original root turn only relayed this inspection. The administrator failed before any tool call. Owner checks remain unverified.'
+      const evidence = recordOnly || provenFailure ? originalFailureEvidence : allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
       if (body.confirmed !== true || (!allowFuture && (evidence.length < 8 || evidence.length > TEXT_MAX))) return { error: 'Confirm the decision before continuing.', code: 'bot/invalid' }
       const resolutions = goal.reviewResolutions ?? []
       if (!Array.isArray(resolutions) || resolutions.length >= 10000) return { error:'Review decision history is unavailable or full.', code:'bot/refused' }
       const resolutionKey = JSON.stringify([room.id,goal.id,body.reviewId])
       if (pendingReviewResolutions.has(resolutionKey)) return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' }
-      if (resolutions.some(item => item?.id === body.reviewId)) {
+      const settled = resolutions.find(item => item?.id === body.reviewId)
+      if (settled) {
+        if (recordOnly && !['root', 'admin'].every(side => {
+          const saved = settled.attempt?.terminalFailure?.[side] ?? settled[side], supplied = body[side]
+          return saved && supplied && ['sessionId', 'seq', 'end', 'turn'].every(key => supplied[key] === saved[key])
+        })) return { error: 'The recorded native coordinates differ.', code: 'bot/stale' }
         if (attempt?.id === body.reviewId) return { error:'Review identity was reused; inspect it before continuing.', code:'bot/stale' }
         try { await durableReviewResolutions(room,goal); return {} } catch { return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' } }
       }
@@ -980,10 +991,56 @@ export function install(rt) {
       // to this same admin in this same room. Never infer ownership by name.
       const sessionsMatch = () => room.admin === attempt.adminId && room.members.includes(attempt.adminId)
         && rt.sessionOfRoom(room) === attempt.rootSessionId && room.sessions?.[attempt.adminId] === currentAdminSession
-        && (currentAdminSession === attempt.adminSessionId || (!allowFuture && attempt.inspectOnly === true && attempt.state === 'uncertain'
+        && (currentAdminSession === attempt.adminSessionId || (!allowFuture && attempt.inspectOnly === true && (attempt.state === 'uncertain' || attempt.terminalFailure)
           && typeof currentAdminSession === 'string' && typeof attempt.adminSessionId === 'string'
           && room.segments?.[attempt.adminId]?.some(part => part.sessionId === attempt.adminSessionId)))
       if (!sessionsMatch()) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
+      if (recordOnly) {
+        if (allowFuture || attempt.inspectOnly !== true || attempt.state !== 'uncertain' || attempt.saveOutcomeUnknown === true
+          || stopsPending.has(room.id) || reviewInputs.get(attempt)?.ambiguous) return { error: 'Only an active, uncertain inspection can record its original failure.', code: 'bot/stale' }
+        const inputs = {}
+        for (const [side, sessionId] of [['root', attempt.rootSessionId], ['admin', attempt.adminSessionId]]) {
+          const input = body[side]
+          if (!input || typeof sessionId !== 'string' || input.sessionId !== sessionId || ![input.seq,input.end,input.turn].every(Number.isSafeInteger)
+            || input.seq < 0 || input.turn < 0 || input.end <= input.seq || input.end - input.seq > 48) {
+            return { error: 'Original inspection session and turn coordinates are required.', code: 'bot/invalid' }
+          }
+          inputs[side] = { sessionId, seq: input.seq, end: input.end, turn: input.turn }
+        }
+        const recorded = attempt.terminalFailure
+        if (recorded) {
+          if (!['root','admin'].every(side => JSON.stringify(recorded[side]) === JSON.stringify(inputs[side]))) return { error: 'The recorded native coordinates differ.', code: 'bot/stale' }
+          await durableReviewResolutions(room,goal)
+          return {}
+        }
+        const verified = (await Promise.all(['root', 'admin'].map(side => verifyInspectionTurn(room, attempt, side, inputs[side])))).every(Boolean)
+        if (provenFailure && reviewInputs.get(attempt) === provenFailure) provenFailure.proven = verified
+        if (!verified || reviewInputs.get(attempt)?.ambiguous || rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt
+          || !sessionsMatch() || !reviewEligible(goal) || stopsPending.has(room.id) || attempt.state !== 'uncertain'
+          || attempt.saveOutcomeUnknown === true || attempt.terminalFailure || (provenFailure && reviewInputs.get(attempt) !== provenFailure)
+          || pendingReviewResolutions.has(resolutionKey)) {
+          return { error: 'The original inspection failure could not be verified.', code: 'bot/stale' }
+        }
+        rt.requireHomeLock()
+        const now = Date.now(), wasAutomatic = automaticIdle(goal)
+        // Keep the original admission fence intact. Only the ordinary quiet-room
+        // resolver can retire it, after existing deliveries have settled.
+        attempt.terminalFailure = { ...inputs, at: now }
+        goal.revision += 1
+        if (wasAutomatic) goal.idleRevision = goal.revision
+        goal.updatedAt = now
+        goal.events = [...(goal.events ?? []), { kind: 'review-failure-recorded', by: provenFailure ? 'host' : 'user', at: now, reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
+        await rt.save({ required: true })
+        await durableReviewResolutions(room,goal)
+        return {}
+      }
+      if (allowFuture && attempt.terminalFailure) return { error: 'The original inspection already has a verified outcome.', code: 'bot/stale' }
+      const previousFailure = attempt.terminalFailure
+      const roomBusy = () => [...rt.roomProgress.values()].some(round => round.roomId === room.id)
+        || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
+        || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0
+      const busy = { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
+      if (roomBusy()) return busy
       const ids = [...new Set([attempt.rootSessionId, attempt.adminSessionId, currentAdminSession].filter(id => id !== undefined))]
       const agents = await Promise.all(ids.map(id => rt.resolveAgent(id)))
       const quietAgent = agent => Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
@@ -991,10 +1048,9 @@ export function install(rt) {
         && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
         && rt.waitsForApproval?.(agent.session.id) !== true
       if (rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt || !reviewEligible(goal)
-        || stopsPending.has(room.id) || (provenFailure && (reviewInputs.get(attempt) !== provenFailure || provenFailure.proven !== true || provenFailure.ambiguous))
-        || !sessionsMatch() || !agents.every((agent, i) => agent?.session?.id === ids[i] && quietAgent(agent)) || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
-        || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
-        || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
+        || stopsPending.has(room.id) || attempt.terminalFailure !== previousFailure || (provenFailure && attempt.terminalFailure !== provenFailure
+          && (reviewInputs.get(attempt) !== provenFailure || provenFailure.proven !== true || provenFailure.ambiguous))
+        || !sessionsMatch() || !agents.every((agent, i) => agent?.session?.id === ids[i] && quietAgent(agent)) || roomBusy()) return busy
       rt.requireHomeLock()
       const wasAutomatic = automaticIdle(goal)
       const now = Date.now()
@@ -1079,7 +1135,7 @@ export function install(rt) {
   const reviewEligible = goal => goal?.status === 'active' && (goal.idle !== true || automaticIdle(goal) || inspectionOnlyIdle(goal))
   const goalReviewAllowed = (room, id) => reviewEligible(room?.goal)
     && !stopsPending.has(room.id)
-    && room.goal.reviewAttempt?.saveOutcomeUnknown !== true
+    && !room.goal.reviewAttempt?.terminalFailure && room.goal.reviewAttempt?.saveOutcomeUnknown !== true
     && room.goal.reviewAttempt?.id === id && ['admitting', 'uncertain'].includes(room.goal.reviewAttempt.state)
     && (!inspectionOnlyIdle(room.goal) || room.goal.reviewAttempt.inspectOnly === true)
     && room.goal.reviewAttempt.adminId === room.admin && room.members.includes(room.admin)
@@ -1099,7 +1155,7 @@ export function install(rt) {
 
   async function goalReviewBind(room, id, sessionId) {
     const attempt = room?.goal?.reviewAttempt
-    if (!reviewEligible(room?.goal) || attempt?.id !== id || !['admitting', 'uncertain'].includes(attempt.state)
+    if (!reviewEligible(room?.goal) || attempt?.id !== id || attempt.terminalFailure || !['admitting', 'uncertain'].includes(attempt.state)
       || attempt.adminId !== room.admin || !room.members.includes(room.admin)
       || attempt.rootSessionId !== rt.sessionOfRoom(room) || room.sessions?.[room.admin] !== sessionId) return false
     if (attempt.adminSessionId !== undefined) return attempt.adminSessionId === sessionId
@@ -1176,7 +1232,7 @@ export function install(rt) {
   // let the ordinary round-end driver or the next timer make a fresh check.
   async function goalReviewNotOpened(room, id) {
     const goal = room?.goal
-    if (goal?.reviewAttempt?.id !== id) return
+    if (goal?.reviewAttempt?.id !== id || goal.reviewAttempt.terminalFailure) return
     const autoIdle = automaticIdle(goal)
     delete goal.reviewAttempt
     goal.revision += 1
@@ -1197,9 +1253,9 @@ export function install(rt) {
     for (const room of Object.values(rt.state.rooms ?? {})) {
       if (pendingReviewRooms.has(room.id)) continue
       const goal = room.goal
-      if (goal?.reviewResolutions !== undefined) { try { await durableReviewResolutions(room,goal) } catch { continue } }
+      if (goal?.reviewResolutions !== undefined || goal?.reviewAttempt?.terminalFailure) { try { await durableReviewResolutions(room,goal) } catch { continue } }
       const attempt = goal?.reviewAttempt
-      if (attempt && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
+      if (attempt && !attempt.terminalFailure && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS && !reviewNotified.has(attempt.id)) {
         reviewNotified.add(attempt.id)
         rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${attempt.id} for ${room.name} is still unresolved; inspect its original work before recovery.` })
       }
@@ -1211,21 +1267,22 @@ export function install(rt) {
             open: openReviewTasks(goal).length, missing: missingFor(room).map(task => task.id) })
         }
       }
-      const inputs = reviewInputs.get(attempt)
+      const recorded = attempt?.terminalFailure
+      const inputs = recorded ?? reviewInputs.get(attempt)
       if (attempt?.state === 'uncertain' && attempt.inspectOnly === true && reviewEligible(goal) && !stopsPending.has(room.id)
         && inputs?.proven !== false && !(inputs?.retryAt > now) && inputs?.root?.end !== undefined && inputs.admin?.end !== undefined && !inputs.ambiguous && !reviewing.has(room.id)) {
         reviewing.add(room.id)
         jobs.push((async () => {
           try {
-            if (inputs.proven === undefined) {
-              const results = await Promise.all(['root', 'admin'].map(side => verifyInspectionTurn(room, attempt, side, inputs[side])))
-              inputs.proven = results.every(Boolean)
+            const request = { goalId: goal.id, reviewId: attempt.id, confirmed: true }
+            if (!recorded) {
+              const result = await goalControl(room.id, { ...request, action: 'review-record-failure', root: inputs.root, admin: inputs.admin }, inputs)
+              if (result.error) return
             }
-            if (!inputs.proven || inputs.ambiguous || room.goal !== goal || goal.reviewAttempt !== attempt) return
-            await goalControl(room.id, { goalId: goal.id, action: 'review-resolve', reviewId: attempt.id, confirmed: true,
-              evidence: 'The original root turn only relayed this inspection. The original administrator turn ended in error before any tool call. Owner checks remain unverified.' }, inputs)
+            if (inputs.ambiguous || room.goal !== goal || goal.reviewAttempt !== attempt || !attempt.terminalFailure) return
+            await goalControl(room.id, { ...request, action: 'review-resolve' }, attempt.terminalFailure)
           } catch (error) {
-            inputs.retryAt = now + GOAL_REVIEW_INTERVAL_MS
+            if (!recorded) inputs.retryAt = now + GOAL_REVIEW_INTERVAL_MS
             rt.warn('ds-bot: original inspection evidence for %s could not be confirmed: %s', attempt.id, error)
           } finally { reviewing.delete(room.id) }
         })())
@@ -1348,7 +1405,7 @@ export function install(rt) {
   async function goalDrive(room, round) {
     if (pendingReviewRooms.has(room.id)) return
     const goal = room.goal
-    if (goal?.reviewResolutions !== undefined) { try { await durableReviewResolutions(room,goal) } catch { return } }
+    if (goal?.reviewResolutions !== undefined || goal?.reviewAttempt?.terminalFailure) { try { await durableReviewResolutions(room,goal) } catch { return } }
     const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
     if (round.goalReviewId && goalReviewAllowed(room, round.goalReviewId)) {
       const slot = round.slots.find(item => item.id === admin?.id)
