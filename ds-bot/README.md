@@ -238,7 +238,7 @@ The chats themselves are dsh Sessions and are not in `bot/`: they are in `~/.dsh
 
 ## Development
 
-You need Node 24, pnpm and a deepseek-harness checkout with its dependencies installed, next to this repository (`../deepseek-harness`, or set `DSH_HARNESS`). The Desktop test bench also needs `xvfb-run` and `ffmpeg`. Web screenshots need Chrome or Chromium (`CHROME_BIN`; by default `google-chrome` or `chromium`).
+You need Node 24 and npm. `npm run harness` installs the official DeepSeek Harness packages from npm into `dev/harness/`; `npm test`, the linter and the board/lifecycle benches use them, so no checkout is needed for those. The Linux dev benches, the screenshots and the Desktop test bench read a DeepSeek Harness source checkout next to this repository (`../deepseek-harness`, or set `DSH_HARNESS`); use the official `deepseek-ai/deepseek-harness` repository, not a personal fork. The Desktop test bench also needs `xvfb-run` and `ffmpeg`. Web screenshots need Chrome or Chromium (`CHROME_BIN`; by default `google-chrome` or `chromium`).
 
 ```sh
 npm ci                                   # esbuild, for the client build

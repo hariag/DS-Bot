@@ -81,7 +81,7 @@ You need:
 
 - Node.js `22.19` or later (or `24` and later).
 - Git.
-- For the test bench only: pnpm `11` and a checkout of DeepSeek Harness at the DSH version that the plugin is tested with.
+- For the Linux dev benches, the screenshots and the desktop bench only: pnpm `11` and a checkout of the official DeepSeek Harness at the DSH version that the plugin is tested with.
 
 ```sh
 git clone https://github.com/Fei2411/DS-Bot.git ds-bot-repo
@@ -94,7 +94,7 @@ npm ci
 npm run harness
 ```
 
-For the test bench, add the DeepSeek Harness checkout next to the plugin folder (this folder is ignored by Git):
+For the Linux dev benches, the screenshots and the desktop bench, add the official DeepSeek Harness checkout next to the plugin folder (this folder is ignored by Git). The unit tests, the linter and the board/lifecycle benches use the official packages `npm run harness` installs in `dev/harness/`, so they need no checkout:
 
 ```sh
 cd ..
@@ -104,6 +104,8 @@ git -C deepseek-harness checkout dsh-v0.2.2-rc.1
 ```
 
 If your DeepSeek Harness checkout is somewhere else, set `DSH_HARNESS` to its path. `DSH_HARNESS` also takes the place of `dev/harness/` for the unit tests and the linter.
+
+Only the official `deepseek-ai/deepseek-harness` repository is supported. A personal fork may carry patches the published release does not; the plugin has to run on the official packages.
 
 The `@deepseek-ai/*` packages are peer dependencies: in a real install, the DSH profile supplies them. `ds-bot/.npmrc` keeps npm from installing them into the plugin folder.
 

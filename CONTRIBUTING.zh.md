@@ -81,7 +81,7 @@
 
 - Node.js `22.19` 或更高（或 `24` 及以上）。
 - Git。
-- 仅测试台需要：pnpm `11`，以及插件测试所用 DSH 版本的 DeepSeek Harness 源码。
+- 仅 Linux 开发测试台、截图和桌面测试台需要：pnpm `11`，以及插件测试所用 DSH 版本的官方 DeepSeek Harness 源码。
 
 ```sh
 git clone https://github.com/Fei2411/DS-Bot.git ds-bot-repo
@@ -94,7 +94,7 @@ npm ci
 npm run harness
 ```
 
-测试台需要把 DeepSeek Harness 源码放在插件目录旁边（这个目录被 Git 忽略）：
+Linux 开发测试台、截图和桌面测试台需要把官方 DeepSeek Harness 源码放在插件目录旁边（这个目录被 Git 忽略）。单元测试、lint 和看板/生命周期测试台使用 `npm run harness` 从 npm 装进 `dev/harness/` 的官方包，不需要源码：
 
 ```sh
 cd ..
@@ -104,6 +104,8 @@ git -C deepseek-harness checkout dsh-v0.2.2-rc.1
 ```
 
 如果 DeepSeek Harness 源码放在别处，把 `DSH_HARNESS` 设为它的路径。`DSH_HARNESS` 也会代替 `dev/harness/`，供单元测试和 lint 使用。
+
+只支持官方 `deepseek-ai/deepseek-harness` 仓库。个人 fork 可能带有官方版本没有的补丁；插件必须能在官方包上运行。
 
 `@deepseek-ai/*` 包是 peer 依赖：真实安装时由 DSH 的 profile 提供。`ds-bot/.npmrc` 阻止 npm 把它们装进插件目录。
 

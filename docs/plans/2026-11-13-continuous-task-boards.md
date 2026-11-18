@@ -55,7 +55,7 @@ Remaining checks:
 - The `agent initiator scope is disposed` trace was not present in the available journal window and was not independently reproduced. Keep it open for targeted diagnosis if it recurs; do not claim this deployment fixed its root cause.
 - Do not use or restart 10.10.0.180; its 8888 proxy must remain available.
 
-The board host tests are part of `npm test` in `ds-bot/`. The separate browser fixture runs with `npm run test:board:browser` after installing the plugin's development dependencies and setting `DSH_HARNESS` to a local Harness checkout. Set `CHROME_PATH` if Chrome is not at its default executable path. Both use synthetic data; neither should use a real user's DSH data.
+The board host tests are part of `npm test` in `ds-bot/`. The separate browser fixture runs with `npm run test:board:browser` after installing the plugin's development dependencies (`npm ci && npm run harness`, which installs the official DSH packages from npm) and pointing `BOARD_REACT_DIR` at a `node_modules` directory that holds React 18 with UMD builds; an official DeepSeek Harness source checkout can supply React and Playwright instead. Set `CHROME_PATH` if Chrome is not at its default executable path. Both use synthetic data; neither should use a real user's DSH data.
 
 ### UI follow-up — 2026-11-15
 

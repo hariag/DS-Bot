@@ -64,6 +64,9 @@ jobs:
           - { os: ubuntu-latest, node: 24, dsh: 0.2.2-rc.1 }
           - { os: ubuntu-latest, node: 22, dsh: 0.2.2-rc.1 }
           - { os: ubuntu-latest, node: 24, dsh: 0.2.0-rc.2 }
+          # The official next release: keeps the plugin compatible with the packages
+          # the official DeepSeek Harness publishes ahead of the latest tag.
+          - { os: ubuntu-latest, node: 24, dsh: 0.2.2-rc.4 }
     defaults:
       run:
         shell: bash
