@@ -8,6 +8,7 @@ import { afterRound } from './relay-rows.js'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
+import { GOAL_REVIEW_INTERVAL_MS } from '../src/host/goals.js'
 import { privateTempDir } from './private-temp.mjs'
 
 const cleanupByTest = new WeakMap()
@@ -829,6 +830,50 @@ test('only explicit investigated recovery can release an uncertain review', asyn
   assert.equal(host.agentOf('r1').calls.length, 1)
   await host.rt.goalReviewPoll(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 2)
+})
+
+test('an overdue uncertain inspection still observes the local ledger without replaying work', async t => {
+  const host = await start(t), goal = await parkForReview(host), room = host.rt.roomOf('r1')
+  const at = Date.now() - GOAL_REVIEW_INTERVAL_MS
+  goal.reviewAttempt = { id: 'unknown', at, state: 'uncertain', inspectOnly: true, adminId: 'a', rootSessionId: 'r1', adminSessionId: 'ga' }
+  const before = structuredClone(goal), first = at + GOAL_REVIEW_INTERVAL_MS
+  await host.rt.goalReviewPoll(first)
+  const observed = host.rt.goalView(room).blockedReviewObservation
+  assert.equal(observed.reviewId, 'unknown')
+  assert.equal(observed.at, first)
+  assert.equal(observed.revision, goal.revision)
+  assert.deepEqual(observed.missing, goal.stages[goal.current].tasks.filter(t => t.status !== 'done').map(t => t.id))
+  assert.equal(observed.open, observed.missing.length)
+  assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), /Read-only host observation/)
+  await host.rt.goalReviewPoll(first + 1)
+  assert.equal(host.rt.goalView(room).blockedReviewObservation.at, first)
+  await host.rt.goalReviewPoll(first + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(host.rt.goalView(room).blockedReviewObservation.at, first + GOAL_REVIEW_INTERVAL_MS)
+  assert.deepEqual(goal, before)
+  assert.equal(host.agentOf('r1').calls.length, 0)
+  assert.equal(host.agentOf('ga').calls.length, 0)
+})
+
+test('only a verified inspection from this admin’s retained part can be resolved after rollover', async t => {
+  const host = await start(t), g = await parkForReview(host), room = host.rt.roomOf('r1')
+  const original = { id: 'rolled', at: Date.now() - GOAL_REVIEW_INTERVAL_MS, state: 'uncertain', inspectOnly: true,
+    adminId: 'a', rootSessionId: 'r1', adminSessionId: 'previous-admin' }
+  g.reviewAttempt = structuredClone(original)
+  const body = { roomId: 'r1', goalId: g.id, action: 'review-resolve', reviewId: original.id,
+    confirmed: true, evidence: 'Original admin turn ended in error before any tool call.' }
+  room.segments = { b: [{ sessionId: 'previous-admin' }] }
+  assert.ok((await host.call('goal-control', body)).error)
+  room.segments = { a: [{ sessionId: 'previous-admin' }] }
+  assert.ok((await host.call('goal-control', { ...body, decision: 'allow-future' })).error)
+  for (const sid of ['ga', 'previous-admin']) {
+    host.agentOf(sid).inbox.nextStep.push({ id: 'busy' })
+    assert.ok((await host.call('goal-control', body)).error)
+    host.agentOf(sid).inbox.nextStep.length = 0
+  }
+  assert.equal((await host.call('goal-control', body)).ok, true)
+  assert.deepEqual(g.reviewResolutions.at(-1).attempt, original)
+  assert.equal(g.reviewAttempt, undefined)
+  assert.equal(g.lastOwnerReview, undefined)
 })
 
 test('user can allow future inspections without claiming the previous result was checked', async (t) => {
