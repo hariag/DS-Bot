@@ -41953,9 +41953,9 @@ function ReleaseChip({ release, onOpen }) {
   );
 }
 function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled }) {
-  const features = tasks.filter((task) => !task.shared && !task.legacy && !task.parentTaskId && ["feature", "bugfix"].includes(task.type));
+  const features = tasks.filter((task) => !task.archivedAt && !task.shared && !task.legacy && !task.parentTaskId && ["feature", "bugfix"].includes(task.type));
   const parentIds = new Set(features.map((task) => task.id));
-  const itemCount = tasks.filter((task) => parentIds.has(task.parentTaskId)).length;
+  const itemCount = tasks.filter((task) => !task.archivedAt && parentIds.has(task.parentTaskId)).length;
   return (0, import_react54.createElement)(
     "section",
     { className: "bt-major-version", "aria-label": t("Major version") },

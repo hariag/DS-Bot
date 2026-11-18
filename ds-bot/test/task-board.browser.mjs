@@ -279,6 +279,10 @@ async function runBrowserCases() {
       comments:[{id:'milestone',workflowAction:'progress',author:'b',at:1700000000000,text:'Retry covered',next:'Run the offline case'}]})
     globalThis.fixture.phase2Tasks.push({id:'legacy-I2',parentTaskId:parent.id,title:'Existing goal item',owner:'a',revision:1,
       status:'legacy-done',legacy:{originalStatus:'done',position:'previous',goalStatus:'active'}})
+    globalThis.fixture.phase2Tasks.push(
+      {...parent,id:'archived-shell',archivedAt:100,title:'Former feature'},
+      {...parent,id:'archived-child',parentTaskId:parent.id,archivedAt:100,title:'Archived work'},
+      {...parent,id:'hidden-child',parentTaskId:'archived-shell',title:'Archived with its parent'})
     globalThis.renderFixture({kind:'room',id:'hierarchy'},'phase2',true)
   })
   await focusStatus('proposed')
