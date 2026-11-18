@@ -1325,3 +1325,8 @@ test('room cursors refresh an active range without a timer and discard a switche
   assert.equal(timers.size, 0)
   right(); duplicate()
 })
+
+test('goal changes in a completed group call appear in the transcript', () => {
+  const output = shown(call('group_relay', 'goal', { content: { replies: [{ kind: 'goal', event: 'pause' }] } }), { sessionId: 'room' })
+  assert.match(output, /Goal paused/)
+})
