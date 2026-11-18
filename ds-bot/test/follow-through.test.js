@@ -660,7 +660,7 @@ test('moving a pending delivery keeps its recovery note through discard and rest
   const message = first.agentOf('b').calls[0]
   await settle(() => notes(home).queued?.b?.length === 1)
 
-  first.rt.moveQueued('b-next', [message])
+  first.rt.moveQueued('b', 'b-next', [message])
   for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
   await settle(() => notes(home).queued?.['b-next']?.length === 1 && notes(home).queued?.b === undefined)
   assert.equal(notes(home).queued['b-next'][0].args.exchangeId, message.source.exchangeId)
@@ -686,7 +686,7 @@ test('a large forwarded inbox keeps delivery identities through restart without 
   const messages = first.agentOf('b').calls.slice()
   const ids = messages.map(message => message.source.exchangeId)
   await settle(() => notes(home).queued?.b?.length === 235)
-  first.rt.moveQueued('b-next', messages)
+  first.rt.moveQueued('b', 'b-next', messages)
   for (const message of messages) {
     for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ agent: { id: 'b' }, message })
   }
@@ -712,7 +712,7 @@ test('a forwarded delivery taken up before note transfer is not noted again', as
   const message = host.agentOf('b').calls[0]
   await settle(() => notes(home).queued?.b?.length === 1)
   host.emit('b-next', 'user/message', { content: message.content, source: message.source })
-  host.rt.moveQueued('b-next', [message])
+  host.rt.moveQueued('b', 'b-next', [message])
   await settle(() => Object.values(notes(home).queued ?? {}).every(list => list.every(item => item.args.exchangeId !== message.source.exchangeId)))
 })
 
@@ -1298,6 +1298,102 @@ for (const reason of ['completed', 'error', 'interrupted']) {
   })
 }
 
+test('a receipt found in an old part stays held when a later history omits it', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const args = { exchangeId:'seen-once', toId:'b', fromId:'a', role:'request', text:'test' }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{ old:[{ at:1, args }] } }))
+  const first = await start(home, new Map([['old', [{ type:'user/message', data:{ source:args } }]]]))
+  let finished = false
+  first.rt.settleRoomBatches = () => { finished = true }
+  t.mock.timers.tick(3000)
+  await settle(() => finished)
+  await first.stop()
+  const [receipt] = notes(home).queued.b
+  assert.deepEqual(receipt.resumeOrigins, ['old'])
+  assert.equal(receipt.recoveryHold, 'history-seen')
+
+  let reads = 0
+  const next = await start(home, undefined, async () => { reads++; return { events:[] } })
+  finished = false
+  next.rt.settleRoomBatches = () => { finished = true }
+  const notices = []
+  next.rt.noteFailure = entry => notices.push(entry)
+  t.mock.timers.tick(3000)
+  await settle(() => finished)
+  await next.stop()
+  assert.equal(reads, 0)
+  assert.equal(next.agentOf('b').calls.length, 0)
+  assert.equal(notes(home).queued.b[0].recoveryHold, 'history-seen')
+  assert.equal(notices.some(entry => entry.code === 'RESUME_DELIVERY_UNCERTAIN'), false)
+})
+
+test('merging a moved delivery preserves a receipt and live uptake retires it', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const args = { exchangeId:'moved-once', toId:'b', fromId:'a', role:'request', text:'test' }
+  const source = { kind:'bot', exchangeId:args.exchangeId, role:'request', senderSessionId:'a' }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{
+    old:[{ at:1, args, recoveryHold:'history-seen' }], b:[{ at:1, args }]
+  } }))
+  const host = await start(home)
+  host.rt.moveQueued('old', 'b', [{ source }])
+  await settle(() => notes(home).queued.b[0].recoveryHold === 'history-seen')
+  let finished = false
+  host.rt.settleRoomBatches = () => { finished = true }
+  t.mock.timers.tick(3000)
+  await settle(() => finished)
+  assert.equal(host.agentOf('b').calls.length, 0)
+  host.emit('b', 'user/message', { source, content:[] })
+  await settle(() => !notes(home).queued.b)
+  await host.stop()
+})
+
+test('moving a receipt does not suppress other deliveries that share its exchange ID', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const args = { exchangeId:'reused', toId:'b', fromId:'a', role:'request', text:'seen' }
+  const note = other => ({ at:1, args:{ ...args, ...other } })
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{
+    old:[{ ...note({}), recoveryHold:'history-seen' }],
+    b:[note({ role:'reply', text:'other role' })],
+    gb:[note({ roomId:'r1', role:'room', text:'other group' })],
+    a:[note({ toId:'a', fromId:'b', text:'other recipient' })]
+  } }))
+  const host = await start(home)
+  host.rt.moveQueued('old', 'b', [{ source:{ kind:'bot', exchangeId:args.exchangeId, senderSessionId:'a', role:'request' } }])
+  await settle(() => notes(home).queued.b.length === 2)
+  let finished = false
+  host.rt.settleRoomBatches = () => { finished = true }
+  t.mock.timers.tick(3000)
+  await settle(() => finished)
+  assert.deepEqual(host.agentOf('b').calls.map(call => call.source.role), ['reply'])
+  assert.deepEqual(host.agentOf('gb').calls.map(call => call.source.role), ['room'])
+  assert.deepEqual(host.agentOf('a').calls.map(call => call.source.role), ['request'])
+  await host.stop()
+})
+
+test('a stopped group still removes a waiting delivery with a durable receipt', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const args = { exchangeId:'seen-in-group', toId:'b', fromId:'a', role:'room', roomId:'r1', text:'test' }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{ gb:[{ at:1, args, recoveryHold:'history-seen' }] } }))
+  const host = await start(home)
+  const inbox = host.agentOf('gb').inbox
+  const waiting = { id:'msg', source:{ kind:'bot', exchangeId:args.exchangeId } }
+  inbox.nextTurn = [waiting]
+  const removed = []
+  inbox.remove = id => removed.push(id)
+  host.rt.goalRecoveryBlocked = () => true
+  let finished = false
+  host.rt.settleRoomBatches = () => { finished = true }
+  t.mock.timers.tick(3000)
+  await settle(() => finished)
+  await host.stop()
+  assert.deepEqual(removed, ['msg'])
+  assert.equal(notes(home).queued.gb[0].recoveryHold, 'history-seen')
+})
+
 test('a queued delivery with unreadable history is retained and reported', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
@@ -1392,7 +1488,7 @@ test('a moved delivery retains its old history for later restart reconciliation'
   await first.tool('message_bot', { to: 'Writer', message: 'Draft the plan', when: 'queue' }, 'a')
   const message = first.agentOf('b').calls[0]
   await settle(() => notes(home).queued?.b?.length === 1)
-  first.rt.moveQueued('b-next', [message])
+  first.rt.moveQueued('b', 'b-next', [message])
   await settle(() => notes(home).queued?.['b-next']?.length === 1)
   await first.stop()
   assert.deepEqual(notes(home).queued['b-next'][0].resumeOrigins, ['b'])
