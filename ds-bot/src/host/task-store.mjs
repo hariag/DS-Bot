@@ -491,9 +491,11 @@ const releaseIsDone = release => {
         return compareCards(left, right)
       })
     },
-    listReleases(scope) {
+    listReleases(scope, {summary = false} = {}) {
       if (typeof scope !== 'string' || !scope) throw new Error('invalid release scope')
-      return releaseOrder(scope).map(release => ({ ...release, items: releaseItems(release.id).map(task => ({ id:task.id, title:task.title, status:task.status, owner:task.owner, revision:task.revision })) }))
+      const releases = releaseOrder(scope)
+      if (summary) return releases.map(({id, name, version, status}) => ({id, name, version, status}))
+      return releases.map(release => ({ ...release, items: releaseItems(release.id).map(task => ({ id:task.id, title:task.title, status:task.status, owner:task.owner, revision:task.revision })) }))
     },
     getRelease(id) { return getRelease(requireId(id, 'release id')) },
     createRelease({ operationId, actor, release }) {
