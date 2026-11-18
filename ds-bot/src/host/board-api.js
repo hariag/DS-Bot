@@ -51,6 +51,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       if (!writable || task.shared) return [task.id, []]
       if (task.legacy) return [task.id, !task.legacy.ambiguous && !task.legacy.pending && Number.isSafeInteger(task.revision)
         ? [...(task.legacy.current?[{type:'goal-task-edit',label:'Edit goal task'}]:[]),
+          ...(scope.kind === 'room' && task.parentTaskId ? [{type:'move-goal-item',label:'Move to card'}] : []),
           ...(task.legacy.useOverlay?[{type:'goal-history-title',label:'Correct card title'}]:[]),
           {type:'goal-card-details',label:'Edit card details'},{type:'goal-card-comment',label:'Add comment'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
       const source = store.get(task.id), grants = source?.shares?.filter(grant => !grant.revoked) ?? []
@@ -69,6 +70,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       return [task.id, [...(!source?.change ? [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }, {type:'reorder',label:'Reorder card'}] : []),
         ...(source?.status === 'draft' ? [...(isUnassignedItemDraft(source) ? [] : [{type:'submit',label:'Submit'}]),{type:'cancel',label:'Cancel card'}] : source?.status === 'cancelled' ? [{type:'restore',label:'Restore card'}] : source?.status !== 'done' ? [{type:'cancel',label:'Cancel card'}] : []),
         ...(source?.archivedAt ? [{type:'unarchive',label:'Restore from archive'}] : canArchive ? [{type:'archive',label:'Archive card'}] : []),
+        ...(scope.kind === 'room' && source?.parentTaskId && !source.archivedAt && !source.authority && ['draft','proposed'].includes(source.status) ? [{type:'move-item',label:'Move to card'}] : []),
         ...(editableReleases.length && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
         ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []),
         ...(canUnschedule ? [{type:'unschedule',label:'Unschedule'}] : []), {type:'card-comment',label:'Add comment'},
@@ -212,7 +214,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       if (principal?.kind !== 'user') throw fail('Only the instance user can change a task here')
       assertWritable()
       if (!input || !nonempty(input.operationId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw fail('Invalid task command')
-      const { task } = visibleTask(scope, principal, input.taskId)
+      const { board, task } = visibleTask(scope, principal, input.taskId)
       let value = input.value
       if (input.type === 'edit') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid task edit')
@@ -272,9 +274,13 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
           || !value || !['todo', 'doing', 'finished'].includes(value.progress)) throw fail('Personal progress is unavailable')
         if (Object.hasOwn(value, 'afterId') && value.afterId !== null && !nonempty(value.afterId)) throw fail('Personal progress is unavailable')
         value = { progress:value.progress, ...(Object.hasOwn(value, 'afterId') ? {afterId:value.afterId} : {}) }
+      } else if (input.type === 'move-item' || input.type === 'move-goal-item') {
+        if (scope.kind !== 'room' || task.scope !== `room:${scope.id}` || !nonempty(value?.parentTaskId)) throw fail('Invalid item move')
+        if (input.type === 'move-goal-item' && !board.tasks.some(row => row.id === value.itemId && row.parentTaskId === task.id
+          && row.legacy && !row.legacy.ambiguous && !row.legacy.pending)) throw fail('Goal item unavailable')
       } else if (input.type === 'link-goal-items') {
         if (scope.kind !== 'room' || task.scope !== `room:${scope.id}` || !Array.isArray(value?.itemIds) || !value.itemIds.length) throw fail('Invalid goal item links')
-        const visible = new Set(view(scope, principal).tasks.filter(row => row.legacy && row.originRoomId === scope.id && !row.legacy.ambiguous && !row.legacy.pending).map(row => row.id))
+        const visible = new Set(board.tasks.filter(row => row.legacy && row.originRoomId === scope.id && !row.legacy.ambiguous && !row.legacy.pending).map(row => row.id))
         if (value.itemIds.some(id => !visible.has(id))) throw fail('Goal item unavailable')
       } else if (input.type === 'share') {
         if (!value || !nonempty(value.targetRoomId) || !Array.isArray(value.fields)) throw fail('Invalid share request')

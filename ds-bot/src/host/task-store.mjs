@@ -1066,6 +1066,28 @@ const releaseIsDone = release => {
               next.status = 'proposed'; next.authority = null; next.actionRevision = null
             } else throw new Error('task is not scheduled')
             break
+          case 'move-item':
+          case 'move-goal-item': {
+            const legacy = type === 'move-goal-item'
+            keysOnly(value, legacy ? ['itemId','parentTaskId'] : ['parentTaskId'])
+            const source = legacy ? old : getTask(requireId(old.parentTaskId,'parent task id'))
+            const target = getTask(requireId(value.parentTaskId,'parent task id'))
+            const draftCard = card => isFeatureCard(card) && parentOpen(card) && ['draft','proposed'].includes(card.status) && !card.authority
+            if (actor !== 'user' || !old.scope.startsWith('room:') || !draftCard(source) || !draftCard(target)
+              || source.id === target.id || source.scope !== old.scope || target.scope !== old.scope
+              || (source.releaseId ?? null) !== (target.releaseId ?? null)
+              || (source.releaseId && !['draft','queued'].includes(getRelease(source.releaseId)?.status))) throw new Error('item cannot move between these cards')
+            if (legacy) {
+              if (!source.goalItemIds?.includes(value.itemId) || target.goalItemIds?.includes(value.itemId)
+                || (target.goalItemIds?.length ?? 0) >= 100) throw new Error('item cannot move between these cards')
+              next.goalItemIds = source.goalItemIds.filter(id => id !== value.itemId)
+              save(target, {...target, revision:target.revision + 1, goalItemIds:[...(target.goalItemIds ?? []),value.itemId]})
+            } else {
+              if (!parentOpen(old) || !['draft','proposed'].includes(old.status) || old.authority || unresolved(old.id)) throw new Error('item cannot move between these cards')
+              next.parentTaskId = target.id
+            }
+            break
+          }
           case 'link-goal-items': {
             keysOnly(value, ['itemIds'])
             if (actor !== 'user' || !old.scope.startsWith('room:') || !isFeatureCard(old) || !parentOpen(old)
@@ -1235,7 +1257,7 @@ const releaseIsDone = release => {
           comments.push({ id:operationId, author:actor, at, workflowAction:type, ...reply })
           next.comments = comments
         }
-        if(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','reorder','personal-progress','attach','remove-image','share','unshare','submit','cancel','restore','release-assign'].includes(type)) {
+        if(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','move-item','move-goal-item','reorder','personal-progress','attach','remove-image','share','unshare','submit','cancel','restore','release-assign'].includes(type)) {
           const activity=Array.isArray(old.boardActivity)?old.boardActivity:[]
           next.boardActivity=[...activity,{id:operationId,actor,type,at:Date.now()}].slice(-50)
         }

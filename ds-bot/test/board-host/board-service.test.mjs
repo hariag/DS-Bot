@@ -1188,3 +1188,27 @@ test('an unclaimed item stays editable in Draft until a human assigns its owner 
   assert.deepEqual([assigned.owner,assigned.reviewer,assigned.status,assigned.authority],['one','two','draft',null])
   assert.equal((await command({...blocked,operationId:'submit-assigned',expectedRevision:assigned.revision})).status,'proposed')
 })
+
+test('organizing existing items moves their original records atomically inside one release', async t => {
+  const {rt} = goalFixture(t)
+  const board = async () => (await rt.boardCall('board-list',{scope})).tasks
+  const row = async id => (await board()).find(task => task.id === id)
+  const call = payload => rt.boardCall('board-command',{scope,...payload})
+  const make = (id,value) => call({...create,taskId:id,operationId:'make-'+id,value:{...create.value,type:'feature',draft:true,...value}})
+  const source = await make('source',{}), target = await make('target',{type:'bugfix'})
+  const item = await make('item',{parentTaskId:source.id,type:'test',owner:null,reviewer:null})
+  const orig = (await board()).find(x => x.legacy)
+  const bind = await call({taskId:source.id,type:'link-goal-items',expectedRevision:source.revision,operationId:'first-link',value:{itemIds:[orig.id]}})
+  const move = {taskId:item.id,type:'move-item',expectedRevision:item.revision,operationId:'reparent',value:{parentTaskId:target.id}}
+  await call(move); await call(move)
+  assert.deepEqual([(await row(item.id)).parentTaskId,(await row(item.id)).owner,(await row(item.id)).status],[target.id,null,'draft'])
+  const goalMove = {taskId:source.id,type:'move-goal-item',expectedRevision:bind.revision,operationId:'goal-move',value:{itemId:orig.id,parentTaskId:target.id}}
+  await call(goalMove); await call(goalMove)
+  const goal = await row(orig.id)
+  assert.deepEqual([goal.parentTaskId,goal.revision,goal.owner,goal.legacy.originalStatus],[target.id,orig.revision,orig.owner,orig.legacy.originalStatus])
+  assert.equal((await board()).filter(x => x.id === orig.id).length,1)
+  const rel = await rt.boardCall('board-release-create',{scope,operationId:'release-move',release:{id:'rel',name:'Candidate',version:'1.1'}})
+  await rt.boardCall('board-release-assign',{scope,operationId:'assign-source',taskId:source.id,expectedTaskRevision:(await row(source.id)).revision,releaseId:rel.id,expectedReleaseRevision:rel.revision})
+  await assert.rejects(call({...move,operationId:'no-cross-release',expectedRevision:(await row(item.id)).revision,value:{parentTaskId:source.id}}),/cannot move/)
+  assert.equal((await row(item.id)).parentTaskId,target.id)
+})
