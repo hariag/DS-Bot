@@ -339,7 +339,7 @@ export function install(rt) {
       verifyGoalItems: task => {
         const goals = legacyGoalCards({scope:{kind:'room', id:task.scope.slice(5)}, principal, rooms:rt.state.rooms,
           bots:rt.state.bots, pendingCard:id => instance?.goalEditor.pendingCard(id)})
-        const done = new Set(goals.filter(row => row.legacy.originalStatus === 'done' && !row.legacy.ambiguous && !row.legacy.pending).map(row => row.id))
+        const done = new Set(goals.filter(row => row.legacy.originalStatus === 'done' && !row.legacy.retired && !row.legacy.ambiguous && !row.legacy.pending).map(row => row.id))
         return task.goalItemIds.every(id => done.has(id))
       },
       verifyRegistration: (task, value, actor) => {

@@ -20,7 +20,10 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
     const goals=[...(Array.isArray(room.pastGoals)?room.pastGoals:[]),room.goal].filter(Boolean)
     for (const goal of goals) {
       if(typeof goal.id!=='string'||!Number.isSafeInteger(goal.current)||!Array.isArray(goal.stages))continue
-      for (const [stageIndex,stage] of goal.stages.entries()) {
+      const liveStages = goal.stages.map((stage,index) => ({stage,index,retired:false}))
+      const retiredStages = (Array.isArray(goal.retiredGoalTasks) ? goal.retiredGoalTasks : [])
+        .filter(row => row?.stage && row?.task).map(row => ({stage:{...row.stage,tasks:[row.task]},index:-1,retired:true}))
+      for (const {stage,index:stageIndex,retired} of [...liveStages,...retiredStages]) {
         if (!stage || typeof stage.id !== 'string' || !Array.isArray(stage.tasks)) continue
         for (const [taskIndex,task] of stage.tasks.entries()) {
       if (!task || typeof task.id !== 'string' || typeof task.botId !== 'string' || typeof task.task !== 'string') continue
@@ -34,10 +37,13 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
         && (saved.details===undefined || (saved.details && typeof saved.details==='object' && !Array.isArray(saved.details)))
         && ['comments','images','hiddenImages'].every(key=>saved[key]===undefined || Array.isArray(saved[key])))
       const ambiguous=stage.tasks.filter(item=>item?.id===task.id).length!==1
-        || goal.stages.filter(item=>item?.id===stage.id).length!==1 || goals.filter(item=>item?.id===goal.id).length!==1 || !validSaved
+        || (!retired && goal.stages.filter(item=>item?.id===stage.id).length!==1)
+        || (retired && (goal.stages.some(item=>item?.id===stage.id && item.tasks?.some(t=>t?.id===task.id))
+          || retiredStages.filter(item=>item.stage.id===stage.id && item.stage.tasks[0]?.id===task.id).length!==1))
+        || goals.filter(item=>item?.id===goal.id).length!==1 || !validSaved
       const overlay=validSaved && saved ? saved : undefined
-      const isCurrent=goal===room.goal && stageIndex===goal.current && ['active','paused'].includes(goal.status)
-      const position=goal!==room.goal?'archived':stageIndex<goal.current?'previous':stageIndex>goal.current?'future':isCurrent?'current':'closed'
+      const isCurrent=!retired && goal===room.goal && stageIndex===goal.current && ['active','paused'].includes(goal.status)
+      const position=retired || goal!==room.goal?'archived':stageIndex<goal.current?'previous':stageIndex>goal.current?'future':isCurrent?'current':'closed'
       const details={...(task.boardDetails??{}),...(overlay?.details??{})}
       const hidden=Array.isArray(overlay?.hiddenImages)?overlay.hiddenImages:[]
       const images=[...(Array.isArray(task.boardImages)?task.boardImages:[]),...(Array.isArray(overlay?.images)?overlay.images:[])]
@@ -51,7 +57,7 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
         dueDate:typeof details.dueDate==='string'?details.dueDate:null,
         labels:Array.isArray(details.labels)?details.labels:[],
         checklist:Array.isArray(details.checklist)?details.checklist:[],
-        comments:[...(Array.isArray(task.boardComments)?task.boardComments:[]),...(Array.isArray(overlay?.comments)?overlay.comments:[])],
+        comments:[...(Array.isArray(task.boardComments)?task.boardComments:[]),...(Array.isArray(task.goalBoardReplies)?task.goalBoardReplies:[]),...(Array.isArray(overlay?.comments)?overlay.comments:[])].sort((a,b)=>(a.at??0)-(b.at??0)),
         boardActivity:Array.isArray(task.boardActivity)?task.boardActivity:[],
         boardHistory:Array.isArray(overlay?.audit)?overlay.audit:[],
         ...(typeof task.note === 'string' ? { goalNote:task.note } : {}),
@@ -60,7 +66,7 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
           taskId: task.id, originalStatus: task.status, goalStatus: goal.status, goalTitle:goal.title,
           originalTitle:task.task, titleStale:typeof overlay?.title==='string' && overlay.titleSource!==task.task,
           position, boardRevision:overlay?.revision??0, useOverlay:true, pending:!!pending,
-          archived:goal!==room.goal, current:isCurrent, ambiguous },
+          archived:retired || goal!==room.goal, current:isCurrent, ambiguous, ...(retired ? {retired:true} : {}) },
       })
         }
       }
