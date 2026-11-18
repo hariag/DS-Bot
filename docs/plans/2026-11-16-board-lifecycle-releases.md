@@ -175,6 +175,8 @@ board_task {
 4. **回归**：阶段一看板行为保留；`node scripts/build-client.mjs --check` 通过；`npm run lint` 为 96 warnings、0 errors。完整 `npm test`：2879 tests，2860 passed，7 failed，12 skipped；失败仍为本机 Windows 符号链接/ACL、缺少 `link` 构建依赖、connectors/phone/local-agent/env-sanitization 等既有环境用例，未涉及看板路径。
 5. **本轮已验证**：真实 git tag/部署、跨群 Release 属于设计边界（一个 Release 只属于一个 board scope；真实发布由 Bot 外部工具执行）。Bot 创建全新 item 的 proposal 已在 2026-11-17 收尾中实现：`propose` 支持 `change.kind='create'`，用户确认后落卡。
 
+2026-11-18 的双向联动复核见 [Trello 面板与 DS-Bot 双向联动复核](../reviews/2026-11-18-board-bot-linkage-review.md)。
+
 ## 分阶段实现
 
 - A. 数据模型与 host API：type、draft/cancelled、release 表/命令、proposal 表、迁移、board-list 投影、测试。
