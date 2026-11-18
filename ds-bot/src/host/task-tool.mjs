@@ -18,7 +18,7 @@ export function installTaskTool(rt, workflow, defineTool) {
       expected_revision: { type:'integer', description:'Exact task revision from show for a state update' },
       expected_board_revision: { type:'integer', description:'For a group-goal reply, use legacy.boardRevision from show along with expected_revision.' },
       proposal_id: { type:'string', description:'Proposal ID returned by propose, when checking a proposal' },
-      note: { type:'string', description:'Reply text on the original group-goal item, or a short explanation for a proposal' },
+      note: { type:'string', description:'Reply text on the original group-goal item or assigned draft card; a reply records a note without authorizing or scheduling work. Also used to explain a proposal' },
       change: { type:'object', additionalProperties:false, properties: {
         kind: { type:'string', enum:['create','update','status','release'] },
         value: { type:'object', additionalProperties:true, description:'create: card fields (title, owner, reviewer, acceptance, description, type, labels, dueDate, dueComplete, checklist, dependencies, draft). update: description, type, labels, dueDate, dueComplete, checklist. status: {type: submit|cancel|restore, reason?}. release: {releaseId}.' },

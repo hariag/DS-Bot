@@ -1223,7 +1223,7 @@ function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCove
     canUpload ? h(ImageUploader, { task, disabled, onUpload }) : null)
 }
 
-const WORK_REPLY_LABELS = { start:'Work claimed', progress:'Progress', report:'Submitted for independent review', block:'Blocked', unblock:'Blocker cleared' }
+const WORK_REPLY_LABELS = { reply:'Task reply', 'goal-update':'Group goal update', start:'Work claimed', progress:'Progress', report:'Submitted for independent review', block:'Blocked', unblock:'Blocker cleared' }
 function WorkReply({ comment, actors }) {
   const label = comment.workflowAction === 'review'
     ? (comment.result === 'pass' ? 'Independent review passed' : 'Rework requested')

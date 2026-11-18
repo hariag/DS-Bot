@@ -11,6 +11,8 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Task reply': '任务回复',
+  'Group goal update': '群目标更新',
   'Work claimed': '已认领并开始执行',
   'Submitted for independent review': '已提交结果，待独立验收',
   'Independent review passed': '独立验收通过',

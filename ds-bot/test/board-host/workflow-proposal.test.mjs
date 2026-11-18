@@ -26,7 +26,7 @@ function fixture(t) {
   }
   const workflow = createBotWorkflow({ rt, store, verifyBinding:() => true, verifyShare:() => true })
   t.after(() => { try { store.close() } catch {} ; rmSync(home, { recursive:true, force:true }) })
-  return { store, workflow, home }
+  return { store, workflow, home, rt }
 }
 
 const task = { id:'t1', title:'Proposal target', scope:'personal:one', owner:'one', reviewer:'two', acceptance:'review', dependencies:[] }
@@ -145,4 +145,42 @@ test('an archived card cannot receive a Bot proposal', async t => {
   const exec = { agent:{ id:'chat-one' } }
   await assert.rejects(workflow.invoke(exec, { action:'propose', taskId:'t1', operationId:'archived-propose-op',
     change:{ kind:'update', value:{ description:'Late proposal' } } }), /unavailable or the action is not authorized/)
+})
+
+
+test('assigned participants can leave idempotent replies on a draft without authorizing work', async t => {
+  const {store,workflow,rt} = fixture(t)
+  const group = {id:'g',members:['one','two','three'],sessions:{one:'g-one',two:'g-two',three:'g-three'}}
+  rt.state = {rooms:{g:group},bots:{one:{},two:{},three:{}}}
+  rt.botOf = id => ['one','two','three'].includes(id) ? {id,name:id} : undefined
+  rt.roomOf = id => id === 'g' ? group : undefined
+  rt.selfOf = id => ({'g-one':'one','g-two':'two','g-three':'three','other-one':'one'})[id]
+  rt.groupOwners.set('g-one',{roomId:'g'})
+  rt.groupOwners.set('g-two',{roomId:'g'})
+  rt.groupOwners.set('g-three',{roomId:'g'})
+  rt.groupOwners.set('other-one',{roomId:'other'})
+  const user = 'user'
+  const parent = store.create({operationId:'parent',actor:user,task:{id:'f',title:'Feature',scope:'room:g',owner:'one',reviewer:'two',acceptance:'proof',dependencies:[],type:'feature',draft:true}})
+  const release = store.createRelease({operationId:'release',actor:user,release:{id:'r',scope:'room:g',name:'Draft release',version:'pending'}})
+  store.assignRelease({operationId:'assign',actor:user,releaseId:release.id,expectedReleaseRevision:release.revision,taskId:parent.id,expectedTaskRevision:parent.revision})
+  const item = store.create({operationId:'item',actor:user,task:{id:'i',title:'Imported',scope:'room:g',owner:'one',reviewer:'two',acceptance:'proof',dependencies:[],parentTaskId:'f',draft:true}})
+  const exec = {agent:{id:'g-one'}}
+  const req = {action:'reply',taskId:'i',operationId:'reply-1',expectedRevision:item.revision,note:'Reviewing the evidence.'}
+  const result = await workflow.invoke(exec,req)
+  assert.equal(result.task.status,'draft')
+  assert.equal(result.task.replies[0].text,'Reviewing the evidence.')
+  assert.deepEqual(await workflow.invoke(exec,req),result)
+  assert.equal((await workflow.invoke(exec,{action:'operation',taskId:'i',operationId:'reply-1'})).state,'committed')
+  await assert.rejects(workflow.invoke(exec,{...req,note:'A different reply'}), /operation id conflict/)
+  await assert.rejects(workflow.invoke({agent:{id:'other-one'}},{...req,operationId:'cross'}), /authorized/)
+  await assert.rejects(workflow.invoke({agent:{id:'g-three'}},{...req,operationId:'unassigned-member',expectedRevision:result.task.revision}), /authorized/)
+  await assert.rejects(workflow.invoke(exec,{...req,operationId:'stale'}), /revision conflict/)
+  rt.goalDispatchBlocked = () => true
+  await assert.rejects(workflow.invoke(exec,{...req,operationId:'paused',expectedRevision:result.task.revision}), /authorized/)
+  rt.goalDispatchBlocked = () => false
+  const reviewer = await workflow.invoke({agent:{id:'g-two'}},{...req,operationId:'reviewer',expectedRevision:result.task.revision,note:'Review queued.'})
+  assert.equal(reviewer.task.replies.at(-1).author,'two')
+  assert.equal(store.get('i').authority,null)
+  assert.equal(store.get('i').status,'draft')
+  assert.deepEqual(store.listActions('i'),[])
 })

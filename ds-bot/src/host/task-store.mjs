@@ -1098,6 +1098,12 @@ const releaseIsDone = release => {
             next.goalItemIds = [...new Set([...(old.goalItemIds ?? []), ...requested])]
             break
           }
+          case 'reply':
+            keysOnly(value, ['text'])
+            if (actor === 'user' || actor === 'scheduler' || old.status !== 'draft' || old.authority || old.archivedAt || old.stale
+              || !old.scope.startsWith('room:') || (actor !== old.owner && actor !== old.reviewer)
+              || typeof value.text !== 'string' || !value.text.trim() || Buffer.byteLength(value.text) > 2048) throw new Error('invalid card reply')
+            reply = {text:value.text.trim()}; break
           case 'start':
             if (!(manual ? ['proposed','waiting'].includes(old.status) : old.status === 'ready') || old.stale || old.blocked || actor !== old.owner || !dependenciesDone(old)) throw new Error('cannot start')
             if (!manual && !db.prepare("SELECT 1 FROM actions WHERE task_id=? AND revision=? AND kind='execute' AND state='accepted'").get(old.id, old.actionRevision)) throw new Error('verified action receipt required')

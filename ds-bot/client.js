@@ -12340,6 +12340,8 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Task reply": "任务回复",
+  "Group goal update": "群目标更新",
   "Work claimed": "已认领并开始执行",
   "Submitted for independent review": "已提交结果，待独立验收",
   "Independent review passed": "独立验收通过",
@@ -40824,7 +40826,7 @@ function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCove
     canUpload ? (0, import_react54.createElement)(ImageUploader, { task, disabled, onUpload }) : null
   );
 }
-var WORK_REPLY_LABELS = { start: "Work claimed", progress: "Progress", report: "Submitted for independent review", block: "Blocked", unblock: "Blocker cleared" };
+var WORK_REPLY_LABELS = { reply: "Task reply", "goal-update": "Group goal update", start: "Work claimed", progress: "Progress", report: "Submitted for independent review", block: "Blocked", unblock: "Blocker cleared" };
 function WorkReply({ comment, actors }) {
   const label = comment.workflowAction === "review" ? comment.result === "pass" ? "Independent review passed" : "Rework requested" : WORK_REPLY_LABELS[comment.workflowAction];
   return (0, import_react54.createElement)(
