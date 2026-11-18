@@ -162,39 +162,6 @@ const zh = {
 function lane(stage) {
   return page.locator('.bt-board-lane[data-stage="' + stage + '"], .bt-board-column[data-stage="' + stage + '"]').first()
 }
-function statusChip(status) {
-  return page.locator('.bt-status-chip[data-status="' + status + '"]')
-}
-async function focusStatus(status) {
-  await statusChip(status).click()
-  await page.waitForFunction(value => document.querySelector('.bt-board-focus-lane .bt-board-lane')?.getAttribute('data-stage') === value, status)
-}
-async function focusCard(taskId) {
-  if (!(await page.locator('.bt-status-chip').count())) {
-    const statusTab = page.getByRole('button', { name: /^(Status|状态)$/ }).first()
-    if (await statusTab.count()) await statusTab.click()
-    await page.locator('.bt-status-chip').first().waitFor({ state: 'visible', timeout: 10_000 })
-  }
-  const task = (await boardList()).tasks.find(item => item.id === taskId)
-  if (!task) throw new StepError('card is missing from board-list', { taskId })
-  await focusStatus(task.status === 'ready' ? 'waiting' : task.status)
-  const centerId = () => page.locator('.bt-card-slot[data-offset="0"] .bt-board-card').getAttribute('data-task-id').catch(() => null)
-  for (let index = 0; index < 30; index += 1) {
-    if (await centerId() === taskId) return
-    const previous = page.locator('.bt-card-stage-arrow-left')
-    if (await previous.isDisabled().catch(() => true)) break
-    await previous.click()
-    await page.waitForTimeout(120)
-  }
-  for (let index = 0; index < 30; index += 1) {
-    if (await centerId() === taskId) return
-    const next = page.locator('.bt-card-stage-arrow-right')
-    if (await next.isDisabled().catch(() => true)) break
-    await next.click()
-    await page.waitForTimeout(120)
-  }
-  if (await centerId() !== taskId) throw new StepError('card is not reachable in the status carousel', { taskId })
-}
 
 async function ensureBoard() {
   // Wait for the DS-Bot client to replace the stock sidebar before asking for
@@ -238,10 +205,9 @@ async function ensureBoard() {
 
 async function openCard(taskId) {
   await ensureBoard()
-  await focusCard(taskId)
   const card = page.locator('.bt-board-card[data-task-id="' + taskId + '"]').first()
   await card.waitFor({ state: 'visible', timeout: 15_000 })
-  await card.locator('.bt-board-card-summary').click()
+  await card.click()
   const dialog = page.locator('.bt-card-modal[role="dialog"]').first()
   await dialog.waitFor({ state: 'visible', timeout: 10_000 })
   return dialog
@@ -279,7 +245,6 @@ async function selectLabelValue(container, label, optionText) {
 
 async function createCard({ title, ownerName, reviewerName, acceptance, description = '' }) {
   await ensureBoard()
-  await focusStatus('proposed')
   const proposed = lane('proposed')
   const add = proposed.getByRole('button', { name: zh.addCard })
   if (await add.count()) await add.first().click()
@@ -302,9 +267,7 @@ async function createCard({ title, ownerName, reviewerName, acceptance, descript
   }
   if (await dialog.count()) await fill(dialog)
   else await fill(proposed.locator('form.bt-board-create').first())
-  const created = await waitFor('card ' + title + ' in the board API', async () => taskByTitle(title), 25_000)
-  if (created) await focusCard(created.id)
-  return created
+  return waitFor('card ' + title + ' in the board API', async () => taskByTitle(title), 25_000)
 }
 
 async function readSchedulerErrors() {
@@ -393,11 +356,11 @@ async function main() {
   let createdTask
   const boardCheck = await step('UI: open the group board from the header and render the workflow lanes', async () => {
     await ensureBoard()
-    const lanes = await page.locator('.bt-status-chip').evaluateAll(els => els.map(el => el.getAttribute('data-status')).filter(Boolean))
+    const lanes = await page.locator('.bt-board-lane, .bt-board-column').evaluateAll(els => els.map(el => el.getAttribute('data-stage')).filter(Boolean))
     const text = await page.locator('.bt-board-dialog').innerText()
     if (/Board directory is not private|看板不可用|Board unavailable/.test(text)) throw new StepError('board is unavailable', { text: text.slice(0, 500) })
-    if (!['draft', 'proposed', 'waiting', 'working', 'reported', 'done', 'cancelled'].every(stage => lanes.includes(stage))) {
-      throw new StepError('workflow statuses are missing', { lanes })
+    if (!['proposed', 'waiting', 'working', 'reported', 'done'].every(stage => lanes.includes(stage))) {
+      throw new StepError('workflow lanes are missing', { lanes })
     }
     return { lanes, screenshot: await shot('board-open') }
   })
@@ -411,14 +374,12 @@ async function main() {
       const typeLanes = await page.locator('.bt-board-lane[data-kind="type"]').evaluateAll(els => els.map(el => el.getAttribute('data-stage')))
       if (!['requirement','design','feature','development','test'].every(type => typeLanes.includes(type))) throw new StepError('type lanes are missing', { typeLanes })
       await page.getByRole('button', { name: /^(Status|状态)$/ }).first().click()
-      await focusStatus('proposed')
       await lane('proposed').waitFor({ state: 'visible', timeout: 10_000 })
       return { typeLanes }
     })
 
     await step('UI: a draft card can be created, submitted, cancelled and restored', async () => {
       const draftTitle = 'E2E draft ' + opts.runId
-      await focusStatus('draft')
       const draftLane = lane('draft')
       await draftLane.getByRole('button', { name: zh.addCard }).last().click()
       const quick = draftLane.locator('.bt-board-quick-add')
@@ -436,12 +397,10 @@ async function main() {
         const current = await taskByTitle(draftTitle)
         return current?.status === 'draft' ? current : undefined
       }, 25_000)
-      await focusCard(draft.id)
       const card = page.locator('.bt-board-card[data-task-id="' + draft.id + '"]').first()
       await card.waitFor({ state: 'visible', timeout: 10_000 })
-      await card.dragTo(statusChip('proposed'), { timeout: 15_000 })
+      await card.dragTo(lane('proposed'), { timeout: 15_000 })
       await waitFor('draft card submitted to Preparing', async () => (await taskByTitle(draftTitle))?.status === 'proposed', 20_000)
-      await focusStatus('proposed')
       await openCard(draft.id)
       const cardDialog = page.locator('.bt-card-modal').first()
       await cardDialog.getByRole('button', { name: zh.cancelCard }).first().click()
@@ -468,7 +427,7 @@ async function main() {
     })
 
     if (create.ok) {
-      await step('reorder: a second card in Preparing starts after the first and the move control reverses the order', async () => {
+      await step('reorder: a second card in Preparing starts after the first and a drag reverses the order', async () => {
         const secondTitle = 'E2E card B ' + opts.runId
         const second = await createCard({ title: secondTitle, ownerName: seed.alice.name, reviewerName: seed.bob.name, acceptance: 'Acceptance B ' + opts.runId })
         if (!second) throw new StepError('second card did not appear in board-list')
@@ -480,16 +439,19 @@ async function main() {
         }
         const before = await orderOf()
         if (before.a === -1 || before.b === -1 || before.a >= before.b) throw new StepError('creation order is not stable', { before: [before.a, before.b] })
-        await focusCard(createdTask.id)
-        await page.locator('.bt-card-stage-controls [data-move="later"]').click()
+        const first = page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"]').first()
+        const secondCard = page.locator('.bt-board-card[data-task-id="' + second.id + '"]').first()
+        await first.dragTo(secondCard, { targetPosition: { x: 100, y: 80 }, timeout: 15_000 })
         const after = await waitFor('first card to come after the second in board-list', async () => {
           const order = await orderOf()
           return order.a !== -1 && order.b !== -1 && order.a > order.b ? order : undefined
         }, 25_000)
         if (!after) throw new StepError('reorder did not persist in board-list')
-        const centered = await page.locator('.bt-card-slot[data-offset="0"] .bt-board-card').getAttribute('data-task-id')
-        if (centered !== second.id) throw new StepError('the reordered card did not stay in focus', { centered, expected: second.id })
-        return { before: 'first before second', after: 'second before first', centered, screenshot: await shot('reordered') }
+        const domOrder = await waitFor('card order in the lane to follow the drag', async () => {
+          const order = await page.locator('.bt-board-lane[data-stage="proposed"] .bt-board-card').evaluateAll(els => els.map(el => el.getAttribute('data-task-id')))
+          return order.indexOf(createdTask.id) !== -1 && order.indexOf(second.id) !== -1 && order.indexOf(createdTask.id) > order.indexOf(second.id) ? order : undefined
+        }, 20_000)
+        return { before: 'first before second', after: 'second before first', domOrder, screenshot: await shot('reordered') }
       })
 
       await step('release: create a release, assign a card and remove it again', async () => {
@@ -522,22 +484,18 @@ async function main() {
         const releaseLanes = await page.locator('.bt-board-lane[data-kind="release"]').count()
         if (releaseLanes < 2) throw new StepError('release lanes are missing', { releaseLanes })
         await page.getByRole('button', { name: /^(Status|状态)$/ }).first().click()
-        await focusStatus('proposed')
         await lane('proposed').waitFor({ state: 'visible', timeout: 10_000 })
         return { releaseLanes, screenshot: await shot('release-view') }
       })
 
       await step('UI: drag the card from Preparing into a dispatch lane', async () => {
-        await focusStatus('proposed')
-        await focusCard(createdTask.id)
         const card = page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"]').first()
-        const target = statusChip('waiting')
+        const target = lane('waiting')
         await card.dragTo(target, { timeout: 15_000 })
         const moved = await waitFor('card to leave proposed / change task status', async () => {
           const current = await api('board-list', { scope: scope() }).then(list => list.tasks.find(item => item.id === createdTask.id))
           return current && current.status !== 'proposed' ? current : undefined
         }, 25_000)
-        await focusStatus(moved.status === 'working' ? 'working' : 'waiting')
         const stage = await waitFor('card to render in a dispatch lane', async () => {
           const current = await page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"]').evaluate(el => el.closest('[data-stage]')?.getAttribute('data-stage')).catch(() => undefined)
           return ['waiting', 'working'].includes(current) ? current : undefined
@@ -742,7 +700,6 @@ async function main() {
           return { imageId, screenshot: await shot('cover-set') }
         })
         const coverImage = page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"] .bt-board-card-cover img').first()
-        await focusCard(createdTask.id)
         await coverImage.waitFor({ state: 'visible', timeout: 10_000 })
         const natural = await coverImage.evaluate(node => ({ width: node.naturalWidth, height: node.naturalHeight }))
         if (!natural.width) throw new StepError('card cover is not decoded', { natural })
@@ -755,8 +712,6 @@ async function main() {
         await ensureBoard()
         const current = await taskByTitle(title)
         if (!current) throw new StepError('card is missing from board-list after reload')
-        await focusStatus(current.status === 'working' ? 'working' : 'waiting')
-        await focusCard(createdTask.id)
         const card = page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"]').first()
         await card.waitFor({ state: 'visible', timeout: 15_000 })
         const stage = await card.evaluate(el => el.closest('[data-stage]')?.getAttribute('data-stage'))
