@@ -43,6 +43,10 @@ test('native room schedules follow the actual room, preserve independent timing 
   const [ui,dev]=[...rows.values()]
   assert.equal(rows.size,2);assert.equal(ui.everySeconds,600);assert.equal(ui.target.sessionId,'ui-part')
   assert.equal(dev.target.sessionId,'dev-part');assert.equal(ui.status,'active')
+  assert.match(ui.prompt,/Stay silent while the group is actively progressing/)
+  assert.match(ui.prompt,/plain-text @Name/)
+  assert.match(ui.prompt,/feedback deadline/)
+  assert.match(ui.prompt,/do not say only “waiting”/)
   assert.equal(mgr.lookup(ui.id,'dev-part'),undefined);assert.equal(mgr.lookup(ui.id,'pm'),undefined)
   assert.equal(mgr.lookup(dev.id,'dev-part').adminId,'pm')
   assert.equal(mgr.ownerOf('unrelated'),undefined)
@@ -80,6 +84,19 @@ test('recover a lost create response on restart, leaving unrelated matching titl
   rows.delete(actual.id);await restarted.reconcile()
   assert.equal(rows.size,2);assert.ok(rows.has(other.id))
   assert.equal(restarted.ownerOf(actual.id),undefined);assert.equal(restarted.known(actual.id),true);assert.notEqual(rt.state.roomSchedules.ui.id,actual.id)
+})
+
+test('upgrade the default room prompt and keep its appended custom instructions',async t=>{
+  const {rt,rows,start}=setup({ui:room});const mgr=start();t.after(()=>rt.close())
+  await mgr.reconcile()
+  const [row]=rows.values(), nextDefault=row.prompt
+  const token=nextDefault.match(/\[DS-Bot room timer ([^\]]+)\]/)?.[1]
+  assert.ok(token)
+  const previous=`The current group administrator checks this group’s board, its assigned owners, outstanding work and deadlines. Follow up through the original task and record verified changes. [DS-Bot room timer ${token}]`
+  const custom=' Keep the signed release milestone.'
+  row.prompt=previous+custom
+  await mgr.refresh();await mgr.reconcile()
+  assert.equal(row.prompt,nextDefault+custom)
 })
 
 test('never create with an unpersisted marker or mutate native schedules while the roster is read-only', async t=>{

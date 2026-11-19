@@ -4,7 +4,21 @@ const EVERY_SECONDS = 10 * 60
 const titleOf = roomId => 'DSBOT-GROUP/' + roomId
 const timing = {kind:'every', every_seconds:EVERY_SECONDS}
 const marker = token => '[DS-Bot room timer ' + token + ']'
-const promptOf = token => 'The current group administrator checks this group’s board, its assigned owners, outstanding work and deadlines. Follow up through the original task and record verified changes. ' + marker(token)
+const previousPromptOf = token => 'The current group administrator checks this group’s board, its assigned owners, outstanding work and deadlines. Follow up through the original task and record verified changes. ' + marker(token)
+const promptOf = token => [
+  'Every 10 minutes, inspect this group’s goal and original task board. Stay silent while the group is actively progressing.',
+  'If the goal is active and incomplete while this group is idle, take a concrete authorized step now; do not say only “waiting” or reply [PASS] because a task is blocked.',
+  'Identify the highest-priority unfinished task, its exact owner, the next action or evidence, and who can clear any blocker. Follow up in the group using a plain-text @Name for the one person who must act; never put the mention in backticks, code, or a link, and never use @all. Include the task ID, requested action/evidence, feedback deadline, and next check. Make at most one effective follow-up per owner for the same task in this cycle and record progress on the original board item.',
+  'For an uncertain handoff, inspect its original receipt and ask the known recipient only to confirm receipt and current status; explicitly do not repeat or restart the work. Do not send another assignment or change its request ID to bypass uncertainty.',
+  'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
+  'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
+].join(' ') + ' ' + marker(token)
+const currentPrompt = (prompt, token) => {
+  const previous = previousPromptOf(token)
+  return prompt === previous || prompt?.startsWith(previous)
+    ? promptOf(token) + prompt.slice(previous.length)
+    : prompt
+}
 const bearsMarker = (row, binding) => row?.prompt?.includes(marker(binding.token)) === true
 const originalTarget = (row, binding) => sessionOf(row) === binding.target || row?.involvedSessionIds?.includes(binding.target) === true
 const sessionOf = row => row?.target?.kind === 'session' ? row.target.sessionId : undefined
@@ -126,7 +140,8 @@ export function createRoomScheduleRegistry(rt, service) {
       if (row.title !== titleOf(roomId)) patch.title = titleOf(roomId)
       if (sessionOf(row) !== target) patch.target = {kind:'session',sessionId:target}
       if (row.kind !== 'every' || row.everySeconds !== EVERY_SECONDS) patch.timing = timing
-      if (binding.restorePrompt && binding.restorePrompt !== row.prompt) patch.prompt = binding.restorePrompt
+      const updatedPrompt = currentPrompt(binding.restorePrompt ?? row.prompt, binding.token)
+      if (updatedPrompt !== row.prompt) patch.prompt = updatedPrompt
       if (binding.restorePaused && row.status !== 'paused') patch.active = false
       else if (row.status === 'ended') patch.active = !binding.paused
       if (Object.keys(patch).length) {
@@ -134,7 +149,7 @@ export function createRoomScheduleRegistry(rt, service) {
         const changed = (await refresh()).find(r => r.id === binding.id)
         if (!changed || sessionOf(changed) !== target || changed.title !== titleOf(roomId)
           || changed.kind !== 'every' || changed.everySeconds !== EVERY_SECONDS || changed.status === 'ended'
-          || binding.restorePaused && changed.status !== 'paused' || binding.restorePrompt && changed.prompt !== binding.restorePrompt) fail('Native room schedule update could not be confirmed')
+          || binding.restorePaused && changed.status !== 'paused' || updatedPrompt !== row.prompt && changed.prompt !== updatedPrompt) fail('Native room schedule update could not be confirmed')
         row = changed
       }
       const customPrompt = row.prompt === promptOf(binding.token) ? undefined : row.prompt
