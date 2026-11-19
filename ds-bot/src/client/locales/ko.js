@@ -887,6 +887,8 @@ export const KO = {
   'Replies from': '그룹 답장:',
   'Reply from': '답장:',
   'Message from': '메시지 발신:',
+  'Unrecorded sender': '발신자 기록 없음',
+  'Unrecorded sender ({reference})': '발신자 기록 없음 ({reference})',
   'Stopped by': '중지한 주체:',
   '{count} messages with': '메시지 {count}개 · 상대:',
   'Routine started': '정기 작업 시작됨',

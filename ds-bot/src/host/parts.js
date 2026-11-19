@@ -1,3 +1,4 @@
+import { peerRole, relaySender } from '../shared/message-sender.js'
 // Parts: making room in a long conversation (a checkpoint in place, or a switch to a
 // fresh Session), the handoff note and package, and earlier pages for the chat view.
 //
@@ -1802,6 +1803,11 @@ export function install(rt) {
   // Earlier parts of a Bot's own chat, newest page first, for the chat to show above
   // the current part as one conversation.
   const EARLIER_PAGE = 60
+  function savedSender(source) {
+    const sender = relaySender(source)
+    const botId = (sender.id && rt.selfOf?.(sender.id)) ?? sender.id
+    return { botId: botId ?? null, name: sender.name ?? null }
+  }
   function displayItems(partId, events, session, seedTurn) {
     const hidden = new Set(state.exchangeTurns[partId] ?? [])
     // Files a turn presented, attached to its closing Bot row so the phone can save
@@ -1910,16 +1916,17 @@ export function install(rt) {
         const file = source.length === undefined ? undefined : content.find(block => block?.type === 'file')?.attachment
         stamp(event, {
           kind: 'post',
-          botId: source.senderSessionId ?? null,
-          name: source.senderName ?? null,
+          ...savedSender(source),
           ...(source.claims === undefined ? {} : { claims: source.claims }),
           ...(source.changes === undefined ? {} : { changes: source.changes }),
           text: textOf(content).replace(/^\[Group post from (?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, ''),
           ...(file ? { file, length: source.length } : {}),
           time: event.time,
         })
-      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
-        stamp(event, { kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
+      } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && (peerRole(source) || source.role === 'report')) {
+        stamp(event, { kind: 'event', role: peerRole(source) ?? source.role, ...savedSender(source),
+          ...(source.taskAction ? { boardTask: true } : {}), ...(typeof source.exchangeId === 'string' ? { exchangeId: source.exchangeId } : {}),
+          roomId: source.roomId ?? null, time: event.time })
       } else if (source?.kind === 'schedule') {
         const prompts = reminderPrompts(textOf(event.data.content))
         stamp(event, { kind: 'event', role: 'schedule', text: prompts.join(' · ').slice(0, 120), time: event.time })

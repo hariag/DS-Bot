@@ -875,6 +875,8 @@ export const JA = {
   "Replies from": "グループ返信:",
   "Reply from": "返信元:",
   "Message from": "メッセージ送信元:",
+  'Unrecorded sender': '送信者の記録なし',
+  'Unrecorded sender ({reference})': '送信者の記録なし（{reference}）',
   "Stopped by": "停止者:",
   "{count} messages with": "{count} 件のやり取り:",
   "Routine started": "定期タスクを開始",
