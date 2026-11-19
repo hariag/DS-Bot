@@ -192,7 +192,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       caller, args, store, direct, sharedProjection, goalCards,
     })
     if (args?.action === 'register') {
-      if (!caller.roomId || !id(args.taskId) || !id(args.operationId) || !args.change?.value) throw refused()
+      const required = []
+      if (!caller.roomId) required.push('room_id for a private chat')
+      if (!id(args.taskId)) required.push('a valid task_id')
+      if (!id(args.operationId)) required.push('a stable operation_id')
+      if (!args.change?.value) required.push('change.value with the card fields')
+      if (required.length) throw new Error(`board_task register requires ${required.join(', ')}`)
       const request = prepareBoardIntake({actor:caller.actor, scope:`room:${caller.roomId}`, taskId:args.taskId,
         operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:args.change.value})
       if (!intakeAllowed(caller, request.task)) throw refused()
