@@ -820,13 +820,25 @@ export function install(rt) {
       held = undefined
     }
     if (!wanted) return
+    const projectEnabled=owns && rt.projectToolAvailable?.(id)===true
+    const offered=def=>(!relayOnly || def.name==='group_relay') && (def.name!=='project_coordination' || projectEnabled)
+    if (!projectEnabled && held?.added?.has('project_coordination')) {
+      const lift=held.toolLifts?.get('project_coordination')
+      if (lift) {
+        lift()
+        held.disposers=held.disposers.filter(dispose=>dispose!==lift)
+        held.toolLifts.delete('project_coordination')
+      }
+      held.added.delete('project_coordination')
+      held.unlisted.delete('project_coordination')
+    }
     // A live Agent can be scoped while the modules that add tools are still installing:
     // loading the plugin again walks the live Agents from the load the memory module
     // starts, and the tools added after it (memory, secrets, connectors) would never
     // join that scope. Register what it is missing, so the next request is whole.
     if (held?.tools === true) {
       for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
-        if (relayOnly && def.name !== 'group_relay') continue
+        if (!offered(def)) continue
         if (held.added?.has(def.name) === true) continue
         try {
           const dispose = agent.ctx.tools.register(def)
@@ -861,7 +873,7 @@ export function install(rt) {
     const failed = []
     const registered = []
     for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
-      if (relayOnly && def.name !== 'group_relay') continue
+      if (!offered(def)) continue
       try {
         const dispose = agent.ctx.tools.register(def)
         if (typeof dispose === 'function') {
