@@ -407,7 +407,11 @@ export function install(rt) {
         effortId = await rt.resolveEffort(effortRef, patch.effort)
       }
     }
-    if (!liveBot(id)) throw new Error('Unknown Bot')
+    const currentBot = liveBot(id)
+    if (!currentBot) throw new Error('Unknown Bot')
+    if (patch.expectedInstructions !== undefined && (currentBot !== bot || patch.expectedInstructions !== (bot.instructions ?? ''))) {
+      throw Object.assign(new Error('Bot instructions changed. Read them again before updating.'), { code: 'bot/stale' })
+    }
     if (patch.name !== undefined) {
       const next = String(patch.name).trim().slice(0, 40)
       const clash = rt.findBot(next)
@@ -417,14 +421,17 @@ export function install(rt) {
       const problem = next === bot.name ? undefined : nameProblem(next)
       if (problem !== undefined) throw new Error(problem)
       bot.name = next
-      const agent = await rt.resolveAgent(rt.chatOf(id))
-      await ctx.sessionTitle.rename(agent.session, next)
-      await followMemberNames(Object.values(state.rooms).filter(room => room.members.includes(id)))
     }
     const roleBefore = bot.role
     const instructionsBefore = bot.instructions
     if (patch.role !== undefined) bot.role = String(patch.role).trim().slice(0, 24)
     if (patch.instructions !== undefined) bot.instructions = String(patch.instructions).trim()
+    if (patch.name !== undefined) {
+      const name = bot.name
+      const agent = await rt.resolveAgent(rt.chatOf(id))
+      await ctx.sessionTitle.rename(agent.session, name)
+      await followMemberNames(Object.values(state.rooms).filter(room => room.members.includes(id)))
+    }
     let modelChanged = false
     if (patch.color !== undefined) {
       if (patch.color === null) delete bot.color
@@ -742,6 +749,9 @@ export function install(rt) {
     const room = rt.roomOf(id)
     if (room === undefined) throw new Error('Unknown group chat')
     const { members, admin, name, notice, permission } = planRoomChange(room, patch, actorId)
+    if (patch.expectedNotice !== undefined && patch.expectedNotice !== (room.notice ?? '')) {
+      throw Object.assign(new Error('Group notice changed. Read it again before updating.'), { code: 'bot/stale' })
+    }
 
     const changes = []
     const names = ids => ids.map(member => liveBot(member)?.name).filter(Boolean).join(', ')

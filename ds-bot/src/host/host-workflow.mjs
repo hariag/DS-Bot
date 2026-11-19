@@ -22,6 +22,7 @@ export function installHostWorkflow(rt, { defineTool, getStore, run, verifyBindi
       if (workflow && workflow.store !== store) throw new Error('Task journal changed while active')
       if (!workflow) workflow = { store, impl:createBotWorkflow({ rt, store, verifyBinding, verifyShare, goalReply, pendingGoalCard, wake, onError }) }
     },
+    conversationKind(actor) { return workflow?.impl.conversationKind(actor) ?? 'private' },
     authorize(input) { return !closed && workflow?.impl.authorize(input) === true },
     close() { closed = true; workflow = undefined },
   }

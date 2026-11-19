@@ -179,6 +179,21 @@ export function install(rt) {
   // A later turn in the same session must not overwrite an older uncertain
   // interruption. Preserve it separately before the first possible snapshot.
   const heldTurns = { ...interrupted.heldTurns }
+  // Linking the original turn or exchange also prevents ordinary Retry and
+  // automatic pre-step continuation from bypassing an interrupted-work hold.
+  const heldInputs = new Map()
+  const indexHeldInput = (sessionId, record) => {
+    if (!record || typeof sessionId !== 'string') return
+    const identities = heldInputs.get(sessionId) ?? new Set()
+    if (Number.isSafeInteger(record.turn)) identities.add(record.turn)
+    if (typeof record.trigger?.exchangeId === 'string') identities.add(record.trigger.exchangeId)
+    heldInputs.set(sessionId, identities)
+  }
+  for (const held of Object.values(heldTurns)) indexHeldInput(held?.sessionId, held?.record)
+  rt.isHeldRecoveryInput = (sessionId, item) => {
+    const identities = heldInputs.get(sessionId)
+    return blocked !== undefined || identities?.has(item.turn) === true || identities?.has(item.exchangeId) === true
+  }
   const heldReason = 'interrupted outcome unknown'
   const retainedAtStartup = new WeakSet()
   const holdTurn = (sessionId, value) => {
@@ -191,6 +206,7 @@ export function install(rt) {
       // provenance has been matched to the current roster.
       unknownQueueGeneration += 1n
       heldTurns[id] = { sessionId, record, reason: heldReason }
+      indexHeldInput(sessionId, record)
       return false
     }
     return value.recoveryHold === heldReason && saved?.reason === heldReason
@@ -307,6 +323,23 @@ export function install(rt) {
       () => { if (recoverySample === work) recoverySample = undefined })
     return boundedRecoveryView(work)
   }
+  const hasSingleOrigin = sessionId => {
+    // A stale or corrupt roster can assign one Session to several places;
+    // the convenience indexes silently choose one and cannot prove origin.
+    let origins = 0
+    for (const candidate of Object.values(rt.state.bots ?? {})) {
+      if (rt.chatOf(candidate.id) === sessionId) origins += 1
+      origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
+    }
+    for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
+    for (const room of Object.values(rt.state.rooms ?? {})) {
+      if (rt.sessionOfRoom(room) === sessionId) origins += 1
+      origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
+      origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
+      for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
+    }
+    return origins === 1
+  }
   // Internal evidence for an explicit user redo. This is not a public view:
   // it contains the original trigger. Callers must first authenticate the user
   // and authorize the board scope, and recheck isCurrent across every await.
@@ -326,21 +359,7 @@ export function install(rt) {
     if (!bot || (record.roomId !== undefined && record.trigger?.roomId !== undefined && record.roomId !== record.trigger.roomId)) return undefined
     const validScope = () => {
       if (rt.botOf(record.botId) !== bot) return false
-      // A stale or corrupt roster can assign one Session to several places;
-      // the convenience indexes silently choose one and cannot prove origin.
-      let origins = 0
-      for (const candidate of Object.values(rt.state.bots ?? {})) {
-        if (rt.chatOf(candidate.id) === sessionId) origins += 1
-        origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
-      }
-      for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
-      for (const room of Object.values(rt.state.rooms ?? {})) {
-        if (rt.sessionOfRoom(room) === sessionId) origins += 1
-        origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
-        origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
-        for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
-      }
-      if (origins !== 1) return false
+      if (!hasSingleOrigin(sessionId)) return false
       const owner = rt.groupOwners.get(sessionId) ?? rt.pastOwners.get(sessionId)
       if (scope.kind === 'room') {
         const room = rt.roomOf(scope.id)
@@ -819,8 +838,26 @@ export function install(rt) {
 
   // Where a queued note goes now: its Session if it still is one, else the
   // current Session of its Bot, or of its group when the message went to one.
-  const sessionFor = (sessionId, args) => (rt.isBotSession(sessionId) ? sessionId
-    : args?.roomId === undefined ? rt.chatOf(args?.toId) : rt.roomOf(args.roomId)?.sessions?.[args.toId])
+  const sessionFor = (sessionId, args) => {
+    if (typeof args?.toId !== 'string') return
+    const currentGroup = rt.groupOwners.get(sessionId)
+    const group = currentGroup ?? rt.pastOwners.get(sessionId)
+    if (group?.botId && group.botId !== args.toId) return
+    // A report's roomId identifies the group being reported on. Its original
+    // private recipient, like any other non-room delivery, keeps its own thread.
+    if (rt.chatOwners.has(sessionId)) {
+      return !currentGroup && rt.chatOwners.get(sessionId) === args.toId && args.role !== 'room' ? sessionId : undefined
+    }
+    const roomId = group?.roomId ?? (args.role === 'room' ? args.roomId : undefined)
+    if (roomId) {
+      if (args.role === 'room' && args.roomId !== undefined && args.roomId !== roomId) return
+      const room = rt.roomOf(roomId), target = room?.sessions?.[args.toId]
+      const owner = rt.groupOwners.get(target)
+      return room?.members?.includes(args.toId) && owner?.botId === args.toId && owner.roomId === roomId ? target : undefined
+    }
+    if (args.role === 'room' || group?.botId !== args.toId) return
+    return threadCurrentOfPart(rt.botOf(args.toId), sessionId)
+  }
 
   const setQueuedRecoveryHold = async (sessionId, args, recoveryHold) => {
     // A part can move while its history is being read. Locate the original note
@@ -861,7 +898,7 @@ export function install(rt) {
     for (const { args, resumeOrigins, recoveryHold, decisions } of fresh) {
       if (decisions?.at(-1)?.choice === 'ignored') { held.add(args.exchangeId); continue }
       const target = sessionFor(sessionId, args)
-      const room = args.roomId && args.role === 'room' ? rt.roomOf(args.roomId) : undefined
+      const room = args.role === 'room' ? rt.roomOf(args.roomId ?? rt.groupOwners.get(target)?.roomId) : undefined
       const blocked = () => room !== undefined && rt.goalRecoveryBlocked?.(room, args.toId) === true
       const previouslySeen = recoveryHold === 'history-seen' || seenBeforeRestart.has(args)
       if (previouslySeen) {
@@ -937,8 +974,8 @@ export function install(rt) {
       // A request that waited through a restart reaches its target late: the work
       // it is for is marked, so the answer that comes back says so.
       if (args.role === 'request' || args.role === 'stopped') rt.lateWork?.(args.exchangeId)
-      await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true }, { beforeAdmission: () => {
-        if (blocked()) throw new Error('Queued group work was stopped before recovery admission')
+      await deliver({ ...args, ...(room ? { roomId:room.id } : {}), sessionId:target, steer:false, resent:true }, { beforeAdmission: () => {
+        if (sessionFor(sessionId,args) !== target || blocked()) throw new Error('Queued work changed destination or was stopped before recovery admission')
       } })
         .then(() => setQueuedRecoveryHold(target, args, undefined))
         .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
@@ -1095,6 +1132,31 @@ export function install(rt) {
     answerSender(rt, sessionId, asker, text, long)
   }
 
+  async function publishCompletedRoomReply(sessionId, record) {
+    if (!record?.roomId || !rt.restoreMissedRoomReply) return false
+    const { recoveryHold: _marker, ...original } = record
+    const key = createHash('sha256').update(JSON.stringify([sessionId, original])).digest('hex')
+    const held = heldTurns[key]
+    const current = () => ownsRecoveryView() && hasSingleOrigin(sessionId) && held && heldTurns[key] === held && !held.decisions?.length
+      && (turns[sessionId] === record || turns[sessionId] === undefined)
+    if (!current()) return false
+    if (!await rt.restoreMissedRoomReply(sessionId, record, current) || !current()) return false
+    // The group ledger now contains the terminal exchange receipt. If the
+    // process stops before this save, the next read accepts that same row.
+    const previous = turns[sessionId]
+    delete heldTurns[key]
+    unknownQueueGeneration += 1n
+    update(sessionId, value => value === record ? undefined : value)
+    try {
+      await persist({ required:true })
+    } catch (error) {
+      heldTurns[key] ??= held
+      if (previous && !turns[sessionId]) turns = { ...turns, [sessionId]:previous }
+      throw error
+    }
+    return true
+  }
+
   async function resumeAll() {
     await rt.load()
     if (rt.readOnly() !== undefined) return
@@ -1132,6 +1194,7 @@ export function install(rt) {
       if (first?.type === 'turn/end') {
         // The turn ended while DS Bot was not watching it: what it did is settled from
         // the Session's durable log.
+        if (await publishCompletedRoomReply(sessionId, record).catch(() => false)) continue
         await reconcileEnded(sessionId, record, first).catch(error => rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error))
         continue
       }
@@ -1156,6 +1219,7 @@ export function install(rt) {
         update(sessionId, current => current ?? record)
         continue
       }
+      if (await publishCompletedRoomReply(sessionId, record).catch(() => false)) continue
       await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
     // What a group's members were asked for and will not pick up is settled now.

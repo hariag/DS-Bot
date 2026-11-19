@@ -318,6 +318,69 @@ test('startup converts interrupted admissions to durable uncertainty exactly onc
   assert.equal(reopened.listActions('restart')[0].state,'uncertain')
 })
 
+test('an owner start in a rotated Session keeps its verified receipt through restarts and human edits', t => {
+  const { store, path, trackStore } = fixture(t)
+  create(store, 'active'); register(store, 'active')
+  const action = accept(store, 'active', 'execute')
+  store.command({ operationId:'rotated-start', taskId:'active', expectedRevision:store.get('active').revision,
+    actor:'owner', type:'start', sessionId:'rotated-session' })
+  command(store, 'active', 'card-details', 'user', {stage:'Confirm new wording'})
+  const current = store.get('active')
+  store.close()
+  const reopened = trackStore(openTaskStore(path, opts))
+  assert.equal(reopened.holdInterruptedAdmissions(), 0)
+  assert.equal(reopened.holdInterruptedAdmissions(), 0)
+  assert.deepEqual(reopened.get('active'), current)
+  assert.equal(reopened.admission(action.id).targetSessionId, 'session-owner')
+  assert.equal(reopened.get('active').workSessionId, 'rotated-session')
+  assert.deepEqual(reopened.listActions('active').map(a => [a.id, a.state, a.receipt]), [[action.id, 'accepted', 'verified']])
+  assert.equal(command(reopened, 'active', 'report', 'owner', evidence).status, 'reported')
+  assert.deepEqual(reopened.listActions('active').map(a => a.state), ['done', 'pending'])
+})
+
+test('legacy restart holds restore only the original verified and acknowledged execution', t => {
+  const { store, path, trackStore } = fixture(t)
+  for (const id of ['started', 'unstarted', 'stopped', 'moved', 'bad-receipt']) {
+    create(store, id); register(store, id); accept(store, id, 'execute')
+    if (id !== 'unstarted') command(store, id, 'start', 'owner')
+  }
+  const stopped = store.listActions('stopped')[0]
+  store.cancelAction({ operationId:'user-stop', actor:'user', actionId:stopped.id, expectedTaskRevision:store.get('stopped').revision,
+    expectedActionState:'accepted', expectedAdmissionId:intentFor(stopped).admissionId, reason:'User stopped work' })
+  store.createRelease({ operationId:'future-release', actor:'user', release:{ id:'v2', scope:'personal:user', name:'Next release', version:'2' } })
+  command(store, 'moved', 'release-assign', 'user', {releaseId:'v2'})
+  // Reproduce the durable rows emitted by the previous startup handler.
+  store.close()
+  const db = new DatabaseSync(path)
+  const reason = 'process restarted; delivery outcome unknown'
+  try {
+    for (const row of db.prepare("SELECT * FROM actions WHERE state='accepted'").all()) {
+      const id = `recovery:${row.id}`, after = { ...row, state:'uncertain', receipt:reason }
+      db.prepare('UPDATE actions SET state=?,receipt=? WHERE id=?').run(after.state, after.receipt, row.id)
+      db.prepare('INSERT INTO admission_decisions VALUES(?,?,?,?,?,?,?,?,?)').run(id, row.id, intentFor(row).admissionId,
+        'scheduler', row.revision, row.state, after.state, reason, new Date().toISOString())
+      db.prepare('INSERT INTO history(operation_id,actor,task_id,before,after) VALUES(?,?,?,?,?)')
+        .run(id, 'scheduler', row.task_id, JSON.stringify(row.task_id === 'bad-receipt' ? {...row, receipt:'another-message'} : row), JSON.stringify(after))
+    }
+  } finally { db.close() }
+  const reopened = trackStore(openTaskStore(path, opts))
+  const versionBefore = reopened.version()
+  assert.equal(reopened.holdInterruptedAdmissions(), 0)
+  assert.equal(reopened.version(), versionBefore + 1)
+  assert.equal(reopened.holdInterruptedAdmissions(), 0)
+  assert.equal(reopened.version(), versionBefore + 1)
+  assert.deepEqual(reopened.listActions('started').map(a => [a.state, a.receipt]), [['accepted', 'verified']])
+  const confirmation = reopened.history('started').entries[0]
+  assert.ok(Number.isFinite(confirmation.deliveryConfirmedAt))
+  assert.deepEqual(Object.keys(confirmation.after), ['revision'])
+  for (const id of ['unstarted', 'stopped', 'moved', 'bad-receipt']) {
+    assert.equal(reopened.listActions(id)[0].state, 'uncertain')
+    assert.ok(reopened.history(id).entries.every(entry => entry.deliveryConfirmedAt === undefined))
+  }
+  assert.equal(reopened.get('stopped').blocked.reason, 'User stopped work')
+  assert.equal(command(reopened, 'started', 'report', 'owner', evidence).status, 'reported')
+})
+
 test('pending cancellation is durable, idempotent and does not claim delivery', t => {
   const { store } = fixture(t); create(store, 'a'); register(store, 'a')
   const action = store.listActions('a')[0], before = store.get('a')

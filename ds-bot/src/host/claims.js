@@ -8,12 +8,14 @@
 // example commands, so treating them as existence promises would misreport real replies.
 import { statSync } from 'node:fs'
 import { fileLinks } from './links.js'
+import { announcesWork } from '../shared/work-claim.js'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 
+export { announcesWork }
+
 const GLOB = /[*?[\]{}]/
 const LINE_COL = /:\d+(?::\d+)?$/
-const CODE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`)/g
 
 const expandHome = path => (path === '~' ? homedir() : path.startsWith('~/') ? resolve(homedir(), path.slice(2)) : path)
 
@@ -59,22 +61,6 @@ export function missingFileRefs(text, base = process.cwd()) {
     missing.push(raw)
   }
   return missing
-}
-
-// English and Chinese phrases that announce work in progress. Within each sentence, only
-// what comes after the last completion phrase counts: "was checking earlier, now completed"
-// is done, whereas "part 1 completed, still exporting part 2" still announces ongoing work.
-const AFTER_DONE = /^[\s\S]*(?:已完成|已经完成|完成了|已导出|已生成|已保存|做好了|搞定|finished|completed|here (?:is|are)\b)/i
-const IN_PROGRESS = /\b(?:i(?:'m| am)|we(?:'re| are)|still|currently)\s+(?:still\s+)?(?:working on|working|running|exporting|generating|building|preparing|processing|checking|investigating|researching|drafting|writing|putting together)\b|\b(?:will|going to|about to)\s+(?:report|send|share|finish|follow up|come back)\b|\b(?:in progress|on it now|working on it)\b|(?:正在|还在|仍在)(?:导出|生成|处理|整理|制作|编写|准备|检查|调查|运行|执行|做|写|搜索|分析)|(?:稍后|待会|马上|一会儿|等下)(?:汇报|回复|发|给你|回来|完成)|进行中|处理中|马上回来/
-
-export function announcesWork(text) {
-  if (typeof text !== 'string') return false
-  const prose = text.split(CODE).filter((_, index) => index % 2 === 0).join(' ').trim()
-  if (prose === '') return false
-  return prose.split(/[\r\n。！？!?；;]+/).some((sentence) => {
-    const tail = sentence.replace(AFTER_DONE, '').trim()
-    return tail !== '' && IN_PROGRESS.test(tail)
-  })
 }
 
 // The marker data for one final reply, or undefined when there is nothing to mark.

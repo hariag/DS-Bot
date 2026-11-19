@@ -1,3 +1,4 @@
+import { peerRole, relaySender } from '../shared/message-sender.js'
 // -------------------------------------------------------------------------
 // Text helpers
 import { dateLocale, t } from './i18n.js'
@@ -175,12 +176,11 @@ export function toolArgs(root) {
 // parts) are not events in the chat, nor is a request handed back after its line was
 // already shown: deferred, resumed after a restart, or retried after a tool call
 // written as text.
-const RELAY_ROLES = new Set(['request', 'reply', 'stopped'])
 export const isRelayContext = (data) => {
   const source = data?.source
   if (source === null || typeof source !== 'object' || source.kind !== 'bot' || source.handoff === true) return false
   if (source.deferred === true || source.resumed === true || source.retried === true) return false
-  return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === 'string'
+  return !!peerRole(source) && !source.taskAction && !!relaySender(source).id
 }
 
 // 'context' chat nodes never reach the flow on DSH 0.2, so a relay spliced into

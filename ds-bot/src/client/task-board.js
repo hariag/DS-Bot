@@ -1,6 +1,7 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { call } from './api.js'
+import { ProjectCoordinationPanel, ProjectEvent } from './project-coordination-panel.js'
 import { dateLocale, hostText, t } from './i18n.js'
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, CopyIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, TrashIcon, ChatsIcon, ClockIcon, TextIcon } from './icons.js'
 import { SPRING_SHAPE } from './motion.js'
@@ -1521,7 +1522,7 @@ function ShareTask({ task, commands, targets, disabled, onCommand }) {
       h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || changed || !target }, t('Share')))) : null)
 }
 
-function TaskHistory({ scope, task, request }) {
+function TaskHistory({ scope, task, request, actors }) {
   const [history, setHistory] = useState(null)
   const [error, setError] = useState('')
   const sequence = useRef(0)
@@ -1536,8 +1537,17 @@ function TaskHistory({ scope, task, request }) {
   return h('details', { className: 'bt-card-history', onToggle: load }, h('summary', null, t('Card revision history')),
     error ? h('p', { role: 'alert', className: 'bt-form-error' }, error) : null,
     !history && !error ? h('p', { className: 'bt-card-muted' }, t('Loading…')) : null,
+    history?.projectEvents?.length ? h('ol',{className:'bt-project-events','aria-label':t('Project coordination')},
+      history.projectEvents.map(row => h(ProjectEvent, {key:row.revision, row, roomId:scope.id,
+        roomName:id => history.projectRooms?.find(room => room.id === id)?.name ?? id,
+        actorName:id => actorName(id,actors)}))) : null,
     history?.truncated ? h('p', { className: 'bt-card-note' }, t('Showing the latest 50 revisions.')) : null,
     (history?.entries ?? []).map(entry => {
+      if (Number.isFinite(entry.deliveryConfirmedAt)) {
+        return h('article', { key:`delivery-${entry.after.revision}` },
+          h('strong', null, t('Delivery confirmed by the owner’s start reply')),
+          h('p', null, formatMoment(entry.deliveryConfirmedAt)))
+      }
       const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null))
       if (!changed.length) return null
       return h('article', { key: entry.after.revision }, h('strong', null, t('Revision') + ' ' + entry.after.revision),
@@ -1782,7 +1792,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
               canUnarchive ? h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: uncertain || busy, onClick: () => void onCommand(task, { type:'unarchive' }) }, t('Restore from archive')) : null,
               canGoalEdit ? h(EditGoalTask, { task, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: 'goal-task-edit' }, value) }) : null,
               canHistoryTitle ? h(EditHistoryTitle, { task, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: 'goal-history-title' }, value) }) : null,
-              !legacy ? h(TaskHistory, { scope, task, request }) : null,
+              !legacy ? h(TaskHistory, { scope, task, request, actors }) : null,
               legacy && Array.isArray(task.boardHistory) && task.boardHistory.length ? h('details', { className: 'bt-card-history' }, h('summary', null, t('Card revision history')),
                 task.boardHistory.map(entry => h('article', { key: entry.operationId }, h('strong', null, (Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString() : '') + ' · ' + t('You') + ' · ' + entry.kind),
                   entry.reason ? h('p', null, entry.reason) : null, h('p', null, t('Before') + ': ' + JSON.stringify(entry.before)), h('p', null, t('After') + ': ' + JSON.stringify(entry.after))))) : null,
@@ -2131,7 +2141,20 @@ function ProposalPanel({ proposals, actors, tasks, releases, disabled, busy, err
 }
 
 /** A server-authorized group or personal board. */
-export function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false }) {
+export function TaskBoard(props) {
+  const [destination, setDestination] = useState(null)
+  const sourceKey = props.scope.kind + ':' + props.scope.id
+  const route = destination?.source === sourceKey ? destination : null
+  if (route?.roomId) return h(ScopedTaskBoard, {
+    key:route.roomId, scope:{kind:'room',id:route.roomId}, title:route.name, request:props.request,
+    initialCardId:route.taskId, close:() => setDestination({source:sourceKey}),
+  })
+  return h(ScopedTaskBoard, { ...props, initialProject:!!route,
+    visitSource:(roomId,name,taskId) => setDestination({source:sourceKey,roomId,name,taskId}),
+  })
+}
+
+function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false, initialCardId, initialProject, visitSource }) {
   const [visible, setVisible] = useState(true)
   const [snapshot, setData] = useState(null)
   const [error, setError] = useState('')
@@ -2297,7 +2320,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
     const previousFocus = document.activeElement
     store.current = pendingStore(scope)
     fetching.current = null; cancelling.current = null
-    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView('status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
+    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView(initialProject ? 'project' : 'status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(initialCardId ? {key,id:initialCardId} : null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
     const operation = store.current?.current ?? ''
     pendingRef.current = operation; setPending(operation)
     void load(epoch)
@@ -3167,7 +3190,7 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
         h('button', { type: 'button', className: 'bt-card-mini', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,
       h('div', { className: 'bt-board-toolbar' },
         h('div', { className: 'bt-board-views', role: 'group', 'aria-label': t('Board view') },
-          [['status', 'Status'], ['type', 'Type'], ...(releaseSupported ? [['release', 'Release']] : []), ...(archivedTasks.length > 0 || canAct ? [['archive', 'Archive']] : []), ['activity', 'Activity']].map(([id, label]) =>
+          [['status', 'Status'], ['type', 'Type'], ...(releaseSupported ? [['release', 'Release']] : []), ...(archivedTasks.length > 0 || canAct ? [['archive', 'Archive']] : []), ['activity', 'Activity'], ...(scope.kind === 'room' ? [['project', 'Project coordination']] : [])].map(([id, label]) =>
             h('button', { key: id, type: 'button', className: 'bt-board-view', 'aria-pressed': view === id, onClick: () => chooseView(id) }, t(label)))),
         h('label', { className: 'bt-board-search' }, h(SearchIcon), h('input', { ref:searchRef, type: 'search', 'aria-label': t('Search tasks'), placeholder: t('Search tasks'), value: search, onChange: event => setSearch(event.target.value) })),
         h('button', { type:'button', className:'bt-board-filter-toggle', 'aria-expanded':filtersOpen, onClick:() => setFiltersOpen(value => !value) }, t('Filters'), hasFilters ? h('span', { className:'bt-board-count' }, '•') : null),
@@ -3236,6 +3259,9 @@ export function TaskBoard({ scope, title, close, request = call, goal, resolveRe
           view === 'release' && releaseSupported ? releaseSection : null,
           view === 'archive' ? archiveSection : null,
           view === 'activity' ? activitySection : null,
+          view === 'project' && scope.kind === 'room' ? h(ProjectCoordinationPanel, {
+            key, scope, request, tasks:data.tasks, releases, actorName:id => actorName(id, actors), openCard, visitSource,
+          }) : null,
           selected && !createFor ? h(TaskCardDialog, { key: selected.id, scope, task: selected, tasks: data.tasks, commands: commandsFor(selected), actors: data.capabilities?.actors,
             targets: data.capabilities?.shareTargets?.[selected.id], uploadEnabled: data.capabilities?.upload === true, uncertain: !canAct, onCommand: run, onUpload: upload, request,
             onCreateItem: createEnabled && scope.kind === 'room' && !selected.shared && !selected.legacy && !selected.parentTaskId && !selected.archivedAt && !selected.blocked && !selected.stale
@@ -3341,6 +3367,8 @@ export const TASK_BOARD_CSS = `
 .bt-board-section-heading{margin:0 0 10px}
 .bt-board-section-heading h3{font-size:13px;line-height:18px;font-weight:600;margin:0}
 .bt-board-section-heading p{font-size:12px;line-height:18px;color:var(--bt-ink-2);margin:3px 0 0}
+.bt-project{padding:12px 16px;overflow:auto;color:var(--bt-ink)}.bt-project>.bt-card-editor-actions:first-child{justify-content:space-between;align-items:center}.bt-project>.bt-card-editor-actions:first-child strong{font-size:16px}.bt-project>.bt-card-editor-actions{justify-content:flex-start}.bt-project>p,.bt-project-events small{color:var(--bt-ink-2)}.bt-project-events li>div{margin:3px 0}.bt-project-events li>strong{display:block}
+.bt-project-editor{max-width:42rem}.bt-project-field{display:grid;gap:4px;margin:8px 0}.bt-project-field input,.bt-project-field textarea,.bt-project-field select{width:100%;box-sizing:border-box;padding:6px;color:inherit;background:var(--bt-main);border:1px solid var(--bt-line);border-radius:6px}.bt-project-parties{display:flex;flex-wrap:wrap;gap:8px;border:1px solid var(--bt-line);margin:10px 0}.bt-project-parties label{display:flex;align-items:center;gap:4px}.bt-project-events{list-style:none;padding:0;margin:12px 0}.bt-project-events li{padding:8px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere;white-space:pre-wrap}
 .bt-board-activity{display:flex;flex-direction:column;border:.5px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card)}
 .bt-board-activity-row{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:0;border-bottom:.5px solid var(--bt-line);background:transparent;color:var(--bt-ink);font:inherit;font-size:13px;line-height:18px;text-align:left}
 .bt-board-activity-row:last-child{border-bottom:0}

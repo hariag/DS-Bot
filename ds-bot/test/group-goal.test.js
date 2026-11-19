@@ -9,7 +9,13 @@ import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 import { GOAL_REVIEW_INTERVAL_MS } from '../src/host/goals.js'
+import { inspectionMessageHash } from '../src/host/inspection-terminal.mjs'
 import { privateTempDir } from './private-temp.mjs'
+
+const passiveScheduleNotice = {
+  source:{ kind:'schedule' },
+  content:[{ type:'text', text:'[SCHEDULE CHANGE]\nThis notice is not a delivery of the task and needs no action.\nschedule_id_json: "schedule-retired"' }],
+}
 
 const cleanupByTest = new WeakMap()
 
@@ -87,7 +93,15 @@ async function start(t, room, services, extraRooms, existingHome) {
       if (listener.length >= 2) listener({ id }, { type, seq: ++seq, data })
     }
   }
-  const tool = (name, args, sessionId, exec = {}) => (rt.teamTools.find(d => d.name === name) ?? ctx.registeredTools.get(name)).execute(args, { agent: { id: sessionId }, ...exec })
+  const rawTool = (name, args, sessionId, exec = {}) => (rt.teamTools.find(d => d.name === name) ?? ctx.registeredTools.get(name)).execute(args, { agent: { id: sessionId }, ...exec })
+  // Normal goal callers copy the version displayed in their prompt or ledger.
+  // Use rawTool to exercise stale versions, omitted fields and legacy callers.
+  const tool = (name, args, sessionId, exec) => {
+    if (name !== 'group_goal' || args.action === 'show') return rawTool(name, args, sessionId, exec)
+    const target = args.room_id || args.group
+    const room = target ? rt.findRooms(target)[0] : rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+    return rawTool(name, { goal_id: room?.goal?.id ?? 'none', expected_revision: room?.goal?.revision ?? 0, ...args }, sessionId, exec)
+  }
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   const begin = (sessionId) => {
     const message = agentOf(sessionId).calls.at(-1)
@@ -124,8 +138,15 @@ async function start(t, room, services, extraRooms, existingHome) {
     const [post] = agentOf('r1').calls.splice(at, 1)
     return { content: post.content, source: post.source }
   }
+  // Model an actual native schedule occurrence in this single-room fixture.
+  rt.testScheduleOccurrence = async (at, roomId = 'r1') => {
+    const room = rt.roomOf(roomId)
+    at ??= Math.max(Date.now(), (room.scheduledReviewOccurrence?.at ?? 0) + GOAL_REVIEW_INTERVAL_MS)
+    const agent = await rt.resolveAgent(rt.sessionOfRoom(room))
+    return rt.runScheduledRoomReview(room, JSON.stringify(['group-schedule', new Date(at).toISOString()]), agent)
+  }
   await tool('list_bots', {}, 'a')
-  return { home, ctx, rt, agentOf, emit, tool, call, begin, finish, round, say, takePost, takeGoal }
+  return { home, ctx, rt, agentOf, emit, tool, rawTool, call, begin, finish, round, say, takePost, takeGoal }
 }
 
 const settle = async (check) => {
@@ -164,7 +185,7 @@ test('an owner check with unknown evidence cannot be marked complete', async (t)
   const host = await start(t)
   await startGoal(host)
   const g = host.rt.roomOf('r1').goal
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(g.ownerReviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('owner-unknown', post)
@@ -225,7 +246,7 @@ test('incomplete owner review continues and a status change invalidates its reco
   const host = await start(t)
   await startGoal(host, { stages: [{ title: 'Draft', acceptance: 'reviewed', tasks: [{ bot: 'Writer', task: 'write' }, { bot: 'Tester', task: 'test' }] }] })
   const g = host.rt.roomOf('r1').goal
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(g.ownerReviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('partial-owner-review', post)
@@ -238,7 +259,7 @@ test('incomplete owner review continues and a status change invalidates its reco
   await settle(() => read() !== undefined)
   assert.ok(g.ownerReview.checks[writer.id])
   assert.equal(g.ownerReview.checks[tester.id], undefined)
-  assert.ok(g.reviewAt - g.updatedAt <= 60_000)
+  assert.equal(g.reviewAt - g.updatedAt, GOAL_REVIEW_INTERVAL_MS)
   await host.tool('group_goal', { action: 'task', bot: 'Writer', status: 'working' }, 'ga')
   assert.equal(g.ownerReview.checks[writer.id].fingerprint === reviewArgs(writer).review_fingerprint, false)
 })
@@ -467,7 +488,7 @@ test('owner check survives restart without falsely completing remaining tasks', 
   const host = await start(t)
   await startGoal(host, { stages: [{ title: 'Draft', acceptance: 'reviewed', tasks: [{ bot: 'Writer', task: 'write' }, { bot: 'Tester', task: 'test' }] }] })
   const g = host.rt.roomOf('r1').goal
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(g.ownerReviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('restart-owner-review', post)
@@ -482,7 +503,7 @@ test('owner check survives restart without falsely completing remaining tasks', 
   const restored = restarted.rt.roomOf('r1').goal
   assert.ok(restored.ownerReview.checks[writer.id])
   assert.equal(restored.ownerReview.checks[tester.id], undefined)
-  await restarted.rt.goalReviewPoll(restored.reviewAt)
+  await restarted.rt.testScheduleOccurrence(restored.reviewAt)
   assert.equal(restarted.agentOf('r1').calls.length, 1)
 })
 
@@ -490,7 +511,7 @@ test('owner review completes only after two bounded turns cover all current task
   const host = await start(t)
   await startGoal(host, { stages: [{ title: 'Draft', acceptance: 'reviewed', tasks: [{ bot: 'Writer', task: 'write' }, { bot: 'Tester', task: 'test' }] }] })
   const g = host.rt.roomOf('r1').goal
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(g.ownerReviewAt)
   const firstPost = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const first = host.round('review-turn-one', firstPost)
@@ -501,7 +522,7 @@ test('owner review completes only after two bounded turns cover all current task
   host.finish('ga', '[PASS]')
   await settle(() => first() !== undefined)
   assert.equal(g.lastOwnerReview, undefined)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const secondPost = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const second = host.round('review-turn-two', secondPost)
@@ -518,7 +539,7 @@ test('owner review completes only after two bounded turns cover all current task
 test('owner check save failure does not claim completion in memory', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.round('failed-owner-save', post)
@@ -567,13 +588,12 @@ test('an automatically idle unfinished goal receives one periodic review without
   assert.equal(g.idleReason, 'admin-pass')
   assert.ok(Number.isFinite(g.reviewAt))
   const root = host.agentOf('r1')
-  await host.rt.goalReviewPoll(g.reviewAt - 1)
   assert.equal(root.calls.length, 0)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(root.calls.length, 1)
   assert.equal(root.calls[0].source.goal, 'nudge')
   assert.ok(root.calls[0].source.reviewId)
-  await host.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(root.calls.length, 1, 'an unresolved review must not be sent twice')
   assert.equal(g.stages[0].tasks[0].status, 'pending')
 })
@@ -581,7 +601,7 @@ test('an automatically idle unfinished goal receives one periodic review without
 test('a completed review without a current admin slot retires without throwing', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const reviewId = g.reviewAttempt.id
   g.reviewAttempt.adminCompleted = true
   await host.rt.goalDrive(host.rt.roomOf('r1'), { goalReviewId: reviewId, slots: [] })
@@ -594,15 +614,15 @@ test('user stop and stale auto evidence do not trigger review; legacy idle only 
   const g = await parkForReview(host)
   const due = g.reviewAt + 1
   g.revision += 1 // an older host may have recorded a stop without updating the new idle provenance
-  await host.rt.goalReviewPoll(due)
+  await host.rt.testScheduleOccurrence(due)
   assert.equal(host.agentOf('r1').calls.length, 0)
   host.rt.goalUserStopped('r1')
-  await host.rt.goalReviewPoll(due + 3_600_000)
+  await host.rt.testScheduleOccurrence(due + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
   assert.equal(g.idleReason, 'user-stop')
   delete g.idleReason
   delete g.idleRevision
-  await host.rt.goalReviewPoll(due + 7_200_000)
+  await host.rt.testScheduleOccurrence(due + 7_200_000)
   assert.equal(host.agentOf('r1').calls.length, 1)
   assert.equal(host.agentOf('r1').calls[0].source.reviewInspect, true)
   assert.equal(g.idle, true)
@@ -621,11 +641,11 @@ test('a live group handoff skips its cycle; an old batch and delivery uncertaint
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'old assignment' }))
   host.ctx.sessionController.resolveAgent = original
   const due = g.ownerReviewAt
-  await host.rt.goalReviewPoll(due)
+  await host.rt.testScheduleOccurrence(due)
   assert.equal(host.takeGoal(), undefined)
-  assert.equal(g.ownerReviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(saved(host).rooms.r1.scheduledReviewOccurrence.outcome, 'busy')
   host.rt.roomWaiters.delete('live-work')
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(due + GOAL_REVIEW_INTERVAL_MS)
   const post = host.takeGoal()
   assert.equal(post.source.reviewInspect, true)
   host.agentOf('r1').inbox.nextTurn.length = 0
@@ -649,7 +669,7 @@ test('ordinary user messages do not override a user stop or ambiguous legacy idl
   host.rt.goalUserMessage('r1')
   assert.equal(g.idle, true)
   assert.equal(g.idleReason, 'user-stop')
-  await host.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
   delete g.idleReason
   delete g.idleRevision
@@ -669,15 +689,15 @@ test('a member stop permits read-only review without restarting the stopped memb
   host.rt.goalUserMessage('r1')
   assert.equal(g.idleReason, 'member-stop')
   const due = g.ownerReviewAt
-  await host.rt.goalReviewPoll(due)
+  await host.rt.testScheduleOccurrence(due)
   assert.equal(host.takeGoal(), undefined)
-  assert.equal(g.ownerReviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(saved(host).rooms.r1.scheduledReviewOccurrence.outcome, 'busy')
   host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'cancelled', cause: { kind: 'user' } } })
   const notice = host.takePost()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const result = host.round('member-stop-notice', notice)
   await settle(() => result() !== undefined)
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(due + GOAL_REVIEW_INTERVAL_MS)
   const post = host.takeGoal()
   assert.equal(post.source.reviewInspect, true)
   assert.equal(host.agentOf('gb').calls.length, 0)
@@ -695,7 +715,7 @@ test('a member stop that finds no running work does not park the goal', async (t
 test('a user stop is fenced before stop waits and is saved before the request returns', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const id = g.reviewAttempt.id
   const originalSave = host.rt.save
   let entered, release
@@ -736,12 +756,11 @@ test('task progress does not postpone the review of every owner', async (t) => {
   await host.tool('group_goal', { action: 'task', bot: 'Writer', status: 'working' }, 'ga')
   g.updatedAt = due + 60_000 // unrelated progress is newer than the fixed review deadline
   assert.equal(g.ownerReviewAt, due)
-  await host.rt.goalReviewPoll(due - 1)
   assert.equal(host.agentOf('r1').calls.length, 0)
-  await host.rt.goalReviewPoll(due)
+  await host.rt.testScheduleOccurrence(due)
   assert.equal(host.agentOf('r1').calls.length, 1)
   const prompt = host.rt.goalBlock(room, host.rt.state.bots.a, { nudge: true })
-  assert.match(prompt, /each distinct owner/)
+  assert.match(prompt, /original cards, items, owners/)
   assert.match(prompt, /do not duplicate an outstanding or uncertain message/i)
   assert.match(prompt, /assigned independent reviewer/)
 })
@@ -756,16 +775,16 @@ test('a busy group skips this review period durably and admits the next idle occ
   const existing = { id: 'already-queued', source: { kind: 'user' } }
   root.inbox.nextTurn.push(existing)
   host.rt.roomProgress.set('busy-round', { roomId: 'r1' })
-  await host.rt.goalReviewPoll(due)
+  await host.rt.testScheduleOccurrence(due)
   assert.deepEqual(root.inbox.nextTurn, [existing])
   assert.equal(root.inbox.nextStep.length, 0)
   assert.equal(g.reviewAttempt, undefined)
-  assert.equal(saved(host).rooms.r1.goal.ownerReviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(saved(host).rooms.r1.scheduledReviewOccurrence.outcome, 'busy')
   host.rt.roomProgress.delete('busy-round')
   root.inbox.nextTurn.length = 0
-  await host.rt.goalReviewPoll(due + 60_000)
+  assert.equal(await host.rt.testScheduleOccurrence(due), 'duplicate')
   assert.equal(root.calls.length, 0)
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(due + GOAL_REVIEW_INTERVAL_MS)
   assert.equal(root.calls.length, 1)
   assert.ok(root.calls[0].source.reviewId)
 })
@@ -781,9 +800,9 @@ test('when work begins during root resolution, skip the occurrence before writin
     if (id === 'r1') root.inbox.nextTurn.push(queued)
     return root
   }
-  await host.rt.goalReviewPoll(due)
+  await host.rt.testScheduleOccurrence(due)
   assert.equal(g.reviewAttempt, undefined)
-  assert.equal(g.reviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+  assert.equal(saved(host).rooms.r1.scheduledReviewOccurrence.outcome, 'busy')
   assert.deepEqual(host.agentOf('r1').inbox.nextTurn, [queued])
 })
 
@@ -791,16 +810,15 @@ test('a review merged behind another opener waits for the next normal period', a
   const host = await start(t)
   const g = await parkForReview(host)
   const room = host.rt.roomOf('r1')
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const first = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const retiredAt = Date.now()
   await host.rt.goalReviewNotOpened(room, first.source.reviewId)
   const next = g.reviewAt
   assert.ok(next >= retiredAt + GOAL_REVIEW_INTERVAL_MS)
-  await host.rt.goalReviewPoll(next - 1)
   assert.equal(host.agentOf('r1').calls.length, 0)
-  await host.rt.goalReviewPoll(next)
+  await host.rt.testScheduleOccurrence(next)
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
@@ -809,18 +827,18 @@ test('a periodic review whose flush fails is never automatically sent again', as
   const g = await parkForReview(host)
   host.ctx.sessions.flush = async () => { throw new Error('disk uncertain') }
   const root = host.agentOf('r1')
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(root.calls.length, 1)
   assert.ok(g.reviewAttempt)
   root.inbox.nextTurn.length = 0 // even an unavailable current inbox cannot establish the result
-  await host.rt.goalReviewPoll(g.reviewAt + 7_200_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 7_200_000)
   assert.equal(root.calls.length, 1)
 })
 
 test('an admin model failure leaves a visible unresolved review without redispatch', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('failed-admin-review', post)
@@ -829,7 +847,7 @@ test('an admin model failure leaves a visible unresolved review without redispat
   host.emit('ga', 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'FAILED', message: 'model failed' } } })
   await settle(() => read() !== undefined)
   await settle(() => g.reviewAttempt?.state === 'uncertain')
-  await host.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
   assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), /awaiting|uncertain/)
 })
@@ -839,7 +857,7 @@ test('a review observed after an uncertain root flush can complete without resen
   const g = await parkForReview(host)
   let first = true
   host.ctx.sessions.flush = async () => { if (first) { first = false; throw new Error('uncertain flush') } }
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(g.reviewAttempt.state, 'uncertain')
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
@@ -855,7 +873,7 @@ test('only explicit investigated recovery can release an uncertain review', asyn
   const host = await start(t)
   const g = await parkForReview(host)
   host.ctx.sessions.flush = async () => { throw new Error('uncertain flush') }
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const reviewId = g.reviewAttempt.id
   host.ctx.sessions.flush = async () => true
   const body = { roomId: 'r1', goalId: g.id, action: 'review-resolve', reviewId, evidence: 'Confirmed no task was dispatched', confirmed: true }
@@ -865,9 +883,8 @@ test('only explicit investigated recovery can release an uncertain review', asyn
   assert.equal((await host.call('goal-control', body)).ok, true)
   assert.equal(g.reviewAttempt, undefined)
   assert.equal(g.events.at(-1).kind, 'review-resolved')
-  await host.rt.goalReviewPoll(g.reviewAt - 1)
   assert.equal(host.agentOf('r1').calls.length, 1)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 2)
 })
 
@@ -876,7 +893,9 @@ test('an overdue uncertain inspection still observes the local ledger without re
   const at = Date.now() - GOAL_REVIEW_INTERVAL_MS
   goal.reviewAttempt = { id: 'unknown', at, state: 'uncertain', inspectOnly: true, adminId: 'a', rootSessionId: 'r1', adminSessionId: 'ga' }
   const before = structuredClone(goal), first = at + GOAL_REVIEW_INTERVAL_MS
-  await host.rt.goalReviewPoll(first)
+  let clock = first
+  t.mock.method(Date, 'now', () => clock)
+  await host.rt.testScheduleOccurrence(first)
   const observed = host.rt.goalView(room).blockedReviewObservation
   assert.equal(observed.reviewId, 'unknown')
   assert.equal(observed.at, first)
@@ -884,9 +903,11 @@ test('an overdue uncertain inspection still observes the local ledger without re
   assert.deepEqual(observed.missing, goal.stages[goal.current].tasks.filter(t => t.status !== 'done').map(t => t.id))
   assert.equal(observed.open, observed.missing.length)
   assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), /Read-only host observation/)
-  await host.rt.goalReviewPoll(first + 1)
+  clock = first + 1
+  await host.rt.testScheduleOccurrence(clock)
   assert.equal(host.rt.goalView(room).blockedReviewObservation.at, first)
-  await host.rt.goalReviewPoll(first + GOAL_REVIEW_INTERVAL_MS)
+  clock = first + GOAL_REVIEW_INTERVAL_MS
+  await host.rt.testScheduleOccurrence(clock)
   assert.equal(host.rt.goalView(room).blockedReviewObservation.at, first + GOAL_REVIEW_INTERVAL_MS)
   assert.deepEqual(goal, before)
   assert.equal(host.agentOf('r1').calls.length, 0)
@@ -935,11 +956,11 @@ for (const scenario of ['clean failure', 'administrator tool', 'foreign inbox in
     host.agentOf('r1').inbox.nextTurn.length = 0
     const previousRootCalls = host.agentOf('r1').calls.length
     if (scenario === 'busy inbox') host.agentOf('ga').inbox.nextTurn.push({ id: 'other' })
-    await host.rt.goalReviewPoll()
+    await host.rt.testScheduleOccurrence()
     if (scenario === 'busy inbox') {
       assert.equal(goal.reviewAttempt, attempt)
       host.agentOf('ga').inbox.nextTurn.length = 0
-      await host.rt.goalReviewPoll()
+      await host.rt.testScheduleOccurrence()
     }
     if (scenario === 'clean failure' || scenario === 'busy inbox') {
       assert.equal(goal.reviewAttempt, undefined)
@@ -1005,21 +1026,30 @@ test('recording an archived inspection verifies both native turns and keeps disp
   await rt.goalReviewFailed(restored, 'ga', id)
   await rt.goalReviewNotOpened(restored, id)
   await rt.goalDrive(restored, { goalReviewId: id, slots: [{ id: 'a', status: 'passed' }] })
-  await rt.goalReviewPoll(Date.now() + GOAL_REVIEW_INTERVAL_MS)
+  await rt.testScheduleOccurrence(Date.now() + GOAL_REVIEW_INTERVAL_MS)
   assert.equal(g.reviewAttempt.id, id)
   assert.equal(g.reviewResolutions, undefined)
   assert.equal(reboot.agentOf('r1').calls.length, 0)
   assert.match(await reboot.tool('group_goal', { action: 'show' }, 'ga'), /failed before administrator tools/)
-  rt.roomBatchPending = () => false
+  // An unknown persisted outcome still fences inspection. A proven failed
+  // admin cannot own a later pending batch addressed only to another member.
+  rt.state.roomBatches = { later:{roomId:'r1', at:Date.now(), pending:['a']} }
+  await rt.testScheduleOccurrence()
+  assert.equal(g.reviewAttempt.id, id)
+  rt.state.roomBatches.later.pending = ['b']
   reboot.agentOf(old).inbox.nextTurn.push({ id: 'older-work' })
-  await rt.goalReviewPoll()
+  await rt.testScheduleOccurrence()
   assert.equal(g.reviewAttempt.id, id)
   reboot.agentOf(old).inbox.nextTurn.length = 0
-  await rt.goalReviewPoll()
+  reboot.agentOf(old).inbox.nextStep.push(passiveScheduleNotice)
+  reboot.agentOf('ga').inbox.nextStep.push(passiveScheduleNotice)
+  reboot.agentOf('r1').inbox.nextStep.push(passiveScheduleNotice)
+  await rt.testScheduleOccurrence()
   assert.equal(g.reviewAttempt, undefined)
   const resolution = saved(reboot).rooms.r1.goal.reviewResolutions.at(-1)
   assert.equal(resolution.decision, 'failed-before-tools')
   assert.deepEqual(resolution.admin, body.admin)
+  assert.deepEqual(rt.state.roomBatches.later.pending, ['b'])
   assert.equal((await reboot.call('goal-control', body)).ok, true)
   assert.ok((await reboot.call('goal-control', { ...body, admin: { ...body.admin, turn: 54 } })).error)
   assert.equal(g.lastOwnerReview, undefined)
@@ -1052,7 +1082,7 @@ test('user can allow future inspections without claiming the previous result was
   const host = await start(t)
   const g = await parkForReview(host)
   host.ctx.sessions.flush = async () => { throw new Error('uncertain flush') }
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   host.ctx.sessions.flush = async () => true
   const original = structuredClone(g.reviewAttempt)
   const body = {roomId:'r1',goalId:g.id,action:'review-resolve',reviewId:original.id,decision:'allow-future',confirmed:true}
@@ -1070,7 +1100,7 @@ test('user can allow future inspections without claiming the previous result was
 test('an unconfirmed inspection decision does not restart periodic work or claim success', async (t) => {
   const host = await start(t), g = await parkForReview(host)
   host.ctx.sessions.flush = async () => { throw new Error('uncertain flush') }
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   host.ctx.sessions.flush = async () => true
   const body = {roomId:'r1',goalId:g.id,action:'review-resolve',reviewId:g.reviewAttempt.id,decision:'allow-future',confirmed:true}
   host.agentOf('r1').inbox.nextTurn.length = 0
@@ -1079,7 +1109,7 @@ test('an unconfirmed inspection decision does not restart periodic work or claim
   try {
     assert.equal((await host.call('goal-control',body)).ok,false)
     assert.equal((await host.call('goal-control',body)).ok,false)
-    await host.rt.goalReviewPoll(Date.now()+3_600_000)
+    await host.rt.testScheduleOccurrence(Date.now()+3_600_000)
     assert.equal(host.agentOf('r1').calls.length,1,'unconfirmed decision must not admit another inspection')
   } finally { host.rt.save = save }
 })
@@ -1087,7 +1117,7 @@ test('an unconfirmed inspection decision does not restart periodic work or claim
 test('review recovery cannot bypass pause or user stop but works after explicit resume', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const body = { roomId: 'r1', goalId: g.id, action: 'review-resolve', reviewId: g.reviewAttempt.id, evidence: 'Confirmed original work outcome', confirmed: true }
   host.agentOf('r1').inbox.nextTurn.length = 0
   assert.equal((await host.call('goal-control', { roomId: 'r1', goalId: g.id, action: 'pause' })).ok, true)
@@ -1098,14 +1128,14 @@ test('review recovery cannot bypass pause or user stop but works after explicit 
   assert.equal((await host.call('goal-control', body)).ok, true)
   assert.equal(g.reviewAttempt, undefined)
   host.rt.goalUserStopped('r1')
-  await host.rt.goalReviewPoll(Date.now() + 3_600_000)
+  await host.rt.testScheduleOccurrence(Date.now() + 3_600_000)
   assert.equal(g.idleReason, 'user-stop')
 })
 
 test('user-stopped uncertain review requires explicit resume before resolution', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const body = { roomId: 'r1', goalId: g.id, action: 'review-resolve', reviewId: g.reviewAttempt.id, evidence: 'Confirmed original work outcome', confirmed: true }
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.rt.goalUserStopped('r1')
@@ -1121,7 +1151,7 @@ test('user-stopped uncertain review requires explicit resume before resolution',
 test('an unresolved periodic review remains held after a runtime restart', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const reviewId = g.reviewAttempt.id
   await host.ctx.dispose()
   const restarted = await start(t, undefined, undefined, undefined, host.home)
@@ -1129,7 +1159,8 @@ test('an unresolved periodic review remains held after a runtime restart', async
   assert.equal(restored.reviewAttempt.id, reviewId)
   const failures = []
   restarted.rt.noteFailure = failure => failures.push(failure)
-  await restarted.rt.goalReviewPoll(restored.reviewAt + 3_600_000)
+  t.mock.method(Date, 'now', () => restored.reviewAt + 3_600_000)
+  await restarted.rt.testScheduleOccurrence(restored.reviewAt + 3_600_000)
   assert.equal(restarted.agentOf('r1').calls.length, 0)
   assert.equal(failures[0]?.code, 'GOAL_REVIEW_UNCERTAIN')
   assert.match(failures[0]?.text, new RegExp(reviewId))
@@ -1139,16 +1170,16 @@ test('a persisted admin completion can rearm after runtime restart', async (t) =
   const host = await start(t)
   const g = await parkForReview(host)
   const firstDue = g.reviewAt
-  await host.rt.goalReviewPoll(firstDue)
+  await host.rt.testScheduleOccurrence(firstDue)
   g.reviewAttempt.adminCompleted = true // persisted completion before round finalization
   await host.rt.save({ required: true })
   await host.ctx.dispose()
   const restarted = await start(t, undefined, undefined, undefined, host.home)
   const restored = restarted.rt.roomOf('r1').goal
-  await restarted.rt.goalReviewPoll(firstDue + 1000)
+  await restarted.rt.testScheduleOccurrence(firstDue + 1000)
   assert.equal(restored.reviewAttempt, undefined)
   assert.equal(restarted.agentOf('r1').calls.length, 0)
-  await restarted.rt.goalReviewPoll(restored.reviewAt)
+  await restarted.rt.testScheduleOccurrence()
   assert.equal(restarted.agentOf('r1').calls.length, 1)
 })
 
@@ -1156,7 +1187,7 @@ test('a real prepared worker delivery blocks completed review recovery after res
   const host = await start(t)
   const g = await parkForReview(host)
   const firstDue = g.reviewAt
-  await host.rt.goalReviewPoll(firstDue)
+  await host.rt.testScheduleOccurrence(firstDue)
   g.reviewAttempt.adminCompleted = true
   await host.rt.save({ required: true })
   const original = host.ctx.sessionController.resolveAgent
@@ -1167,9 +1198,9 @@ test('a real prepared worker delivery blocks completed review recovery after res
   const restarted = await start(t, undefined, undefined, undefined, host.home)
   assert.equal(restarted.rt.unreadOf('gb').length, 1)
   const restored = restarted.rt.roomOf('r1').goal
-  await restarted.rt.goalReviewPoll(firstDue + 1000)
+  await restarted.rt.testScheduleOccurrence(firstDue + 1000)
   assert.ok(restored.reviewAttempt)
-  await restarted.rt.goalReviewPoll(firstDue + 3_600_000)
+  await restarted.rt.testScheduleOccurrence(firstDue + 3_600_000)
   assert.equal(restarted.agentOf('r1').calls.length, 0)
 })
 
@@ -1181,7 +1212,7 @@ test('an unrelated old private recovery note does not block an independent group
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'chat', text: 'old private request' }))
   host.ctx.sessionController.resolveAgent = original
   assert.equal(host.rt.unreadOf('gb').length, 1)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
@@ -1192,7 +1223,7 @@ test('legacy same-room recovery notes permit only inspection and cannot dispatch
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   assert.equal(post.source.reviewInspect, true)
   host.agentOf('r1').inbox.nextTurn.length = 0
@@ -1209,7 +1240,7 @@ test('legacy same-room recovery notes permit only inspection and cannot dispatch
   await settle(() => read() !== undefined)
   assert.equal(host.agentOf('gb').calls.length, 0)
   assert.equal(g.reviewAttempt, undefined)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 1)
   assert.equal(host.agentOf('r1').calls[0].source.reviewInspect, true)
 })
@@ -1225,7 +1256,7 @@ for (const [kind, reply] of [
     host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
     await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
     host.ctx.sessionController.resolveAgent = original
-    await host.rt.goalReviewPoll(g.reviewAt)
+    await host.rt.testScheduleOccurrence(g.reviewAt)
     const post = host.takeGoal()
     host.agentOf('r1').inbox.nextTurn.length = 0
     const read = host.round(`inspect-${kind}`, post)
@@ -1245,7 +1276,7 @@ test('a blocked inspection is not mistaken for a completed review', async (t) =>
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('blocked-inspection', post)
@@ -1254,7 +1285,7 @@ test('a blocked inspection is not mistaken for a completed review', async (t) =>
   host.emit('ga', 'turn/end', { turn: 1, reason: { kind: 'blocked' } })
   await settle(() => read() !== undefined)
   assert.equal(g.reviewAttempt?.state, 'uncertain')
-  await host.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
 })
 
@@ -1265,7 +1296,7 @@ test('confirmed inspection recovery remains read-only while legacy notes remain 
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('blocked-then-resolved', post)
@@ -1276,7 +1307,7 @@ test('confirmed inspection recovery remains read-only while legacy notes remain 
   assert.equal(g.reviewAttempt?.state, 'uncertain')
   const body = { roomId: 'r1', goalId: g.id, action: 'review-resolve', reviewId: g.reviewAttempt.id, evidence: 'Checked that this inspection did not finish', confirmed: true }
   assert.equal((await host.call('goal-control', body)).ok, true)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 1)
   assert.equal(host.agentOf('r1').calls[0].source.reviewInspect, true)
   assert.equal(host.agentOf('gb').calls.length, 0)
@@ -1299,7 +1330,7 @@ test('an admin inspection preserves pending business inputs for a later ordinary
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId:'b', sessionId:'gb', role:'room', roomId:'r1', text:'old assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const rootPost = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const round = host.round('protected-inspection', rootPost)
@@ -1336,7 +1367,7 @@ test('a user request arriving during inspection waits for its own normal round',
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const review = host.round('inspect-first', post)
@@ -1361,7 +1392,7 @@ test('an interrupted inspection remains restricted across persisted restart reco
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.round('inspection-interrupted', post)
@@ -1385,7 +1416,7 @@ test('an interrupted write-capable periodic review is not generically resumed af
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.round('review-interrupted', post)
@@ -1502,7 +1533,7 @@ test('startup reports new interruptions separately from previously retained turn
 test('resume of a paused goal does not dispatch with an unresolved review', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const before = host.agentOf('r1').calls.length
   assert.ok(g.reviewAttempt)
   assert.equal((await host.call('goal-control', { roomId: 'r1', goalId: g.id, action: 'pause' })).ok, true)
@@ -1647,7 +1678,7 @@ test('a sent but unread inspection is held instead of resent after restart', asy
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const reviewId = g.reviewAttempt.id
   await host.rt.deliver({ toId: 'a', sessionId: 'ga', role: 'room', roomId: 'r1', note: 'goal check', reviewId, reviewInspect: true, text: 'inspect goal' })
   await settle(() => {
@@ -1671,7 +1702,7 @@ test('a stopped sent-but-unread inspection is not recovered on restart', async (
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const reviewId = g.reviewAttempt.id
   await host.rt.deliver({ toId: 'a', sessionId: 'ga', role: 'room', roomId: 'r1', note: 'goal check', reviewId, reviewInspect: true, text: 'inspect goal' })
   await settle(() => {
@@ -1705,7 +1736,7 @@ test('an automatically idle goal still becomes due after a runtime restart', asy
   const due = (await parkForReview(host)).reviewAt
   await host.ctx.dispose()
   const restarted = await start(t, undefined, undefined, undefined, host.home)
-  await restarted.rt.goalReviewPoll(due)
+  await restarted.rt.testScheduleOccurrence(due)
   assert.equal(restarted.agentOf('r1').calls.length, 1)
 })
 
@@ -1716,7 +1747,7 @@ test('an old host stop invalidates auto-idle evidence across a runtime restart',
   await host.rt.save({ required: true })
   await host.ctx.dispose()
   const restarted = await start(t, undefined, undefined, undefined, host.home)
-  await restarted.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await restarted.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(restarted.agentOf('r1').calls.length, 0)
 })
 
@@ -1729,7 +1760,7 @@ test('a user stop while a periodic review resolves its target prevents admission
   let started
   const entered = new Promise(resolve => { started = resolve })
   host.ctx.sessionController.resolveAgent = async (id) => { if (id === 'r1') { started(); await gate } return original(id) }
-  const review = host.rt.goalReviewPoll(g.reviewAt)
+  const review = host.rt.testScheduleOccurrence(g.reviewAt)
   await entered
   host.rt.goalUserStopped('r1')
   release()
@@ -1741,7 +1772,7 @@ test('a user stop while a periodic review resolves its target prevents admission
 test('a completed periodic review is delivered to the admin and schedules the next one', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   assert.ok(post.source.reviewId)
   host.agentOf('r1').inbox.nextTurn.length = 0 // the root has consumed the relay
@@ -1753,7 +1784,7 @@ test('a completed periodic review is delivered to the admin and schedules the ne
   assert.equal(g.reviewAttempt, undefined)
   assert.equal(g.idleReason, 'admin-pass')
   assert.ok(g.reviewAt > Date.now())
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
@@ -1761,7 +1792,7 @@ test('a long-running admin review holds its attempt until its actual turn comple
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('long-review', post)
@@ -1772,11 +1803,11 @@ test('a long-running admin review holds its attempt until its actual turn comple
   t.mock.timers.tick(ROOM_WORK_GRACE_MS * 2)
   await settle(() => read() !== undefined)
   assert.ok(g.reviewAttempt)
-  await host.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
   host.finish('ga', '[PASS]')
   await settle(() => g.reviewAttempt === undefined)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence()
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
@@ -1784,7 +1815,7 @@ test('admin completion between the grace timer and round finalization is retaine
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('review-grace-race', post)
@@ -1796,14 +1827,14 @@ test('admin completion between the grace timer and round finalization is retaine
   host.finish('ga', '[PASS]') // synchronously before the round's await continuation
   await settle(() => read() !== undefined)
   assert.equal(g.reviewAttempt, undefined)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
 test('an admin review waiting for approval resumes without duplicate review', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('review-approval', post)
@@ -1813,7 +1844,7 @@ test('an admin review waiting for approval resumes without duplicate review', as
   const approval = host.ctx.listeners.get('approval/request')[0]({ agent: { session: { id: 'ga' } }, toolName: 'pwsh', reason: 'approval', callId: 'k1' }, () => 'from-dsh')
   await settle(() => read() !== undefined)
   assert.ok(g.reviewAttempt)
-  await host.rt.goalReviewPoll(g.reviewAt + 3_600_000)
+  await host.rt.testScheduleOccurrence(g.reviewAt + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
   const [pending] = host.rt.approvalsView()
   assert.equal((await host.call('approval-answer', { id: pending.id, choice: 'allow' })).ok, true)
@@ -1821,14 +1852,14 @@ test('an admin review waiting for approval resumes without duplicate review', as
   host.emit('ga', 'tool/result', { callId: 'k1' })
   host.finish('ga', '[PASS]')
   await settle(() => g.reviewAttempt === undefined)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence()
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
 test('a periodic review can dispatch the work the admin calls out', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('review-dispatch', post)
@@ -1847,7 +1878,7 @@ test('a periodic review creates the administrator first group session safely', a
   const host = await start(t)
   const g = await parkForReview(host)
   delete host.rt.roomOf('r1').sessions.a
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('new-admin-session', post)
@@ -1863,7 +1894,7 @@ test('a user stop during the administrator first session creation prevents revie
   const host = await start(t)
   const g = await parkForReview(host)
   delete host.rt.roomOf('r1').sessions.a
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const original = host.ctx.sessionController.create
@@ -1883,7 +1914,7 @@ test('a user stop during the administrator first session creation prevents revie
 for (const phase of ['running', 'finalizing']) test(`a periodic check delivered to a ${phase} relay never opens a later round`, async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   let release
@@ -1916,7 +1947,7 @@ for (const phase of ['running', 'finalizing']) test(`a periodic check delivered 
 test('a review mixed behind a user post is retired before the normal follow-up check', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.emit('r1', 'user/message', host.say('@Chief decide the new request'))
@@ -1928,15 +1959,13 @@ test('a review mixed behind a user post is retired before the normal follow-up c
   host.finish('ga', '[PASS]')
   await settle(() => read() !== undefined)
   assert.equal(g.reviewAttempt, undefined)
-  assert.equal(host.agentOf('r1').calls.length, 1)
-  assert.equal(host.agentOf('r1').calls[0].source.goal, 'nudge')
-  assert.equal(host.agentOf('r1').calls[0].source.reviewId, undefined)
+  assert.equal(host.agentOf('r1').calls.length, 0)
 })
 
 test('a user post arriving during a skipped patrol save stays in the next relay inbox', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   let saving, release
@@ -1982,7 +2011,7 @@ for (const change of ['admin', 'member', 'root', 'stop', 'message']) {
       return originalSave(...args)
     }
     const due = g.reviewAt
-    const poll = host.rt.goalReviewPoll(due)
+    const poll = host.rt.testScheduleOccurrence(due)
     await saving
     if (change === 'admin') room.admin = 'b'
     if (change === 'member') room.members = ['b', 'c']
@@ -1995,7 +2024,7 @@ for (const change of ['admin', 'member', 'root', 'stop', 'message']) {
     assert.equal(g.reviewAttempt, undefined)
     if (change === 'stop') assert.equal(g.idleReason, 'user-stop')
     if (change === 'message') {
-      assert.equal(g.reviewAt, due + GOAL_REVIEW_INTERVAL_MS)
+      assert.equal(saved(host).rooms.r1.scheduledReviewOccurrence.outcome, 'busy')
       assert.deepEqual(host.rt.roomInbox.get('r1'), [{ text: 'new user request' }])
     }
   })
@@ -2004,7 +2033,7 @@ for (const change of ['admin', 'member', 'root', 'stop', 'message']) {
 test('a stop during admin resolution prevents a queued periodic review from reaching the admin', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   const original = host.ctx.sessionController.resolveAgent
@@ -2027,7 +2056,7 @@ test('a stop during admin resolution prevents a queued periodic review from reac
 test('a periodic review never steers an administrator who became busy after scheduling', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.emit('ga', 'turn/start', { turn: 1 })
@@ -2042,7 +2071,7 @@ test('a periodic review never steers an administrator who became busy after sche
 test('a periodic review does not batch behind an already queued admin message', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post = host.takeGoal()
   host.agentOf('r1').inbox.nextTurn.length = 0
   host.agentOf('ga').inbox.nextTurn.push({ id: 'ordinary-user-input', source: { kind: 'user' } })
@@ -2057,9 +2086,8 @@ test('an active goal stranded without an idle flag gets a periodic check', async
   const host = await start(t)
   await startGoal(host)
   const g = host.rt.roomOf('r1').goal
-  await host.rt.goalReviewPoll(g.updatedAt + 30 * 60 * 1000 - 1)
   assert.equal(host.agentOf('r1').calls.length, 0)
-  await host.rt.goalReviewPoll(g.updatedAt + 30 * 60 * 1000)
+  await host.rt.testScheduleOccurrence(g.updatedAt + 30 * 60 * 1000)
   assert.equal(host.agentOf('r1').calls.length, 1)
 })
 
@@ -2078,8 +2106,9 @@ test('a stalled target resolution in one group does not block another group revi
     if (id === 'r1') { entered(); await gate }
     return original(id)
   }
-  const poll = host.rt.goalReviewPoll(g.reviewAt)
+  const poll = host.rt.testScheduleOccurrence(g.reviewAt)
   await resolving
+  await host.rt.testScheduleOccurrence(g.reviewAt, 'r2')
   await settle(() => host.agentOf('r2').calls.length === 1)
   release()
   await poll
@@ -2184,6 +2213,55 @@ test('only the admin or a Main Bot changes a goal; any member can show it', asyn
     '"Lab" has no admin, and a goal needs one to run it. Set an admin with update_group first.')
   assert.equal(await host.tool('group_goal', { action: 'stop', group: 'Lab', reason: 'r' }, 'c'),
     'Only a Main Bot changes the goal of "Lab".')
+})
+
+test('an explicit group read resolves that group and binds its goal without crossing write boundaries', async t => {
+  const lab = { id: 'r2', name: 'Lab', members: ['a', 'c'], admin: 'a', mode: 'admin', named: true, sessions: { a: 'la' }, log: [], seq: 0, seen: {} }
+  const host = await start(t, {}, undefined, { r2: lab })
+  await startGoal(host)
+  assert.match(await host.tool('group_goal', { action: 'start', title: 'Lab milestone', objective: 'audit', acceptance: 'signed', stages: [{ title: 'Audit', acceptance: 'verified', tasks: [{ bot: 'Tester', task: 'verify' }] }] }, 'la'), /Started/)
+  const ops = host.rt.roomOf('r1').goal, other = host.rt.roomOf('r2').goal
+  const read = await host.tool('group_goal', { action: 'show', group: 'Lab' }, 'ga')
+  assert.match(read, /Goal: Lab milestone/)
+  assert.match(read, new RegExp(`room_id=r2 goal_id=${other.id} expected_revision=${other.revision}`))
+  assert.doesNotMatch(read, /Ship the thing/)
+  assert.match(await host.tool('group_goal', { action: 'show', room_id: 'r2' }, 'ga'), /Lab milestone/)
+  assert.match(await host.rawTool('group_goal', { action: 'pause' }, 'ga'), /show the target group again/i)
+  assert.match(await host.rawTool('group_goal', { action: 'pause', group: ' ' }, 'ga'), /empty/)
+  assert.match(await host.tool('group_goal', { action: 'show', group: 'Ops', room_id: 'r2' }, 'ga'), /different groups/)
+  assert.doesNotMatch(await host.tool('group_goal', { action: 'show', group: 'Lab' }, 'gb'), /Lab milestone/)
+  host.rt.live.set('ga', { info: { reviewId: 'review-r1', roomId: 'r1' } })
+  assert.match(await host.tool('group_goal', { action: 'show', room_id: 'r2' }, 'ga'), /only its assigned group/)
+  host.rt.live.delete('ga')
+  const write = { action: 'pause', room_id: 'r2', goal_id: other.id, expected_revision: other.revision }
+  assert.match(await host.tool('group_goal', write, 'ga'), /from the target group/)
+  assert.equal(ops.status, 'active')
+  assert.equal(other.status, 'active')
+  assert.match(await host.tool('group_goal', { ...write, room_id: 'r1' }, 'ga'), /show the target group again/i)
+  assert.match(await host.tool('group_goal', write, 'la'), /Paused/)
+})
+
+test('a human edit or a replacement goal invalidates explicit and remembered goal revisions', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const initial = { room_id: room.id, goal_id: room.goal.id, expected_revision: room.goal.revision }
+  await host.tool('group_goal', { action: 'show' }, 'ga')
+  assert.equal((await host.call('goal-control', { roomId: room.id, goalId: initial.goal_id, action: 'pause' })).ok, true)
+  const revision = room.goal.revision
+  for (const input of [{}, initial, { goal_id: initial.goal_id }]) {
+    assert.match(await host.rawTool('group_goal', { action: 'resume', ...input }, 'ga'), /show the target group again/i)
+    assert.equal(room.goal.status, 'paused')
+    assert.equal(room.goal.revision, revision)
+  }
+  assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), new RegExp(`expected_revision=${revision}`))
+  assert.match(await host.rawTool('group_goal', { action: 'resume' }, 'ga'), /Resumed/)
+  await host.tool('group_goal', { action: 'stop', reason: 'new release' }, 'ga')
+  await startGoal(host, { title: 'Next release' })
+  assert.notEqual(room.goal.id, initial.goal_id)
+  assert.equal(room.goal.revision, initial.expected_revision)
+  assert.match(await host.tool('group_goal', { action: 'pause', ...initial }, 'ga'), /show the target group again/i)
+  assert.equal(room.goal.status, 'active')
 })
 
 test('repeating current task status or evidence leaves the goal and its evidence timestamp intact', async t => {
@@ -2378,62 +2456,18 @@ test('a group with no admin refuses a goal draft', async (t) => {
   assert.equal(result.error.message, 'This group has no admin. Set one in the group settings first.')
 })
 
-test('an idle round wakes the admin for a goal check; [PASS] waits for the user', async (t) => {
+test('normal group rounds leave the admin alone until the next scheduled occurrence', async t => {
   const host = await start(t)
   await startGoal(host)
-  // A user-message round ends with nothing running: the goal check queues once.
-  const first = host.round('c1', host.say('@Chief go'))
+  const room = host.rt.roomOf('r1')
+  const read = host.round('c1', host.say('@Chief go'))
   await settle(() => host.agentOf('ga').calls.length === 1)
-  host.begin('ga')
-  host.finish('ga', 'on it')
-  await settle(() => first() !== undefined)
-  const nudge = host.takeGoal()
-  assert.ok(nudge !== undefined, 'one goal check was queued')
-  assert.match(text(nudge), /^\[Goal check\]$/)
-  // The check opens a round on the admin alone, with the goal-check line.
-  const check = host.round('c2', nudge)
-  await settle(() => host.agentOf('ga').calls.length === 2)
-  const prompt = text(host.agentOf('ga').calls[1])
-  assert.match(prompt, /goal check/)
-  assert.match(prompt, /Goal check from DS Bot/)
-  host.begin('ga')
-  host.finish('ga', '[PASS]')
-  await settle(() => check() !== undefined)
-  assert.equal(goal(host).idle, true)
-  assert.equal(host.agentOf('r1').calls.filter(call => call.source?.role === 'goal' && call.source.goal === 'nudge').length, 0)
-})
-
-test('two goal checks without progress mark the goal idle; a user message clears it', async (t) => {
-  const host = await start(t)
-  await startGoal(host)
-  const first = host.round('c1', host.say('@Chief go'))
-  await settle(() => host.agentOf('ga').calls.length === 1)
-  host.begin('ga')
-  host.finish('ga', 'on it')
-  await settle(() => first() !== undefined)
-  // The first check: the admin only runs its own tools — that is not progress, so
-  // the next check still queues.
-  const one = host.round('c2', host.takeGoal())
-  await settle(() => host.agentOf('ga').calls.length === 2)
-  host.begin('ga')
-  host.emit('ga', 'tool/call', { callId: 'k1', name: 'list_bots', arguments: '{}' })
-  host.finish('ga', 'waiting on the user')
-  await settle(() => one() !== undefined)
-  assert.equal(goal(host).nudges, 2)
-  // The second check: same, so the goal waits for the user instead.
-  const two = host.round('c3', host.takeGoal())
-  await settle(() => host.agentOf('ga').calls.length === 3)
-  host.begin('ga')
-  host.finish('ga', 'still waiting')
-  await settle(() => two() !== undefined)
-  assert.equal(goal(host).idle, true)
-  // A user message clears the idle wait and the count starts over.
-  const third = host.round('c4', host.say('@Chief new ask'))
-  await settle(() => host.agentOf('ga').calls.length === 4)
-  host.begin('ga')
-  host.finish('ga', '[PASS]')
-  await settle(() => third() !== undefined)
-  assert.deepEqual([goal(host).idle, goal(host).nudges], [undefined, 1])
+  host.begin('ga'); host.finish('ga', 'on it')
+  await settle(() => read() !== undefined)
+  assert.equal(host.takeGoal(), undefined)
+  assert.equal(room.goal.nudges, 0)
+  assert.equal(await host.rt.testScheduleOccurrence(), 'admitted')
+  assert.ok(host.takeGoal()?.source.reviewId)
 })
 
 test('a paused goal and a room at work do not get a goal check', async (t) => {
@@ -2567,6 +2601,7 @@ test('a stale goal check calls nobody; a stale draft is a plain user message', a
   host.begin('ga')
   host.finish('ga', 'on it')
   await settle(() => first() !== undefined)
+  assert.equal(await host.rt.testScheduleOccurrence(), 'admitted')
   const nudge = host.takeGoal()
   assert.ok(nudge !== undefined)
   // The user pauses before the check runs: it opens a round that calls nobody.
@@ -2664,23 +2699,7 @@ test('a batch member that finishes first is reported while its peer still works'
 
 test('a member call while the goal waits brings it back', async (t) => {
   const host = await start(t)
-  await startGoal(host)
-  // Drive the goal to idle: a user round, then two checks the admin passes on.
-  const first = host.round('c1', host.say('@Chief go'))
-  await settle(() => host.agentOf('ga').calls.length === 1)
-  host.begin('ga')
-  host.finish('ga', '[PASS]')
-  await settle(() => first() !== undefined)
-  const one = host.round('c2', host.takeGoal())
-  await settle(() => host.agentOf('ga').calls.length === 2)
-  host.begin('ga')
-  host.finish('ga', 'waiting')
-  await settle(() => one() !== undefined)
-  const two = host.round('c3', host.takeGoal())
-  await settle(() => host.agentOf('ga').calls.length === 3)
-  host.begin('ga')
-  host.finish('ga', 'still waiting')
-  await settle(() => two() !== undefined)
+  await parkForReview(host)
   assert.equal(goal(host).idle, true)
   // The admin's own post calling a member clears the wait through the task hook.
   await host.tool('post_to_group', { group: 'Ops', message: '@Writer write the draft' }, 'a')
@@ -2753,7 +2772,7 @@ test('a room on its second part relays on the current Session and blocks /goal t
   assert.equal(blocked[0].reason.message, 'Bot chats do not run /goal. To give a group a goal, use Set a goal in its + menu.')
 })
 
-test('a member still working at round end wakes the admin when its work settles', async (t) => {
+test('a member finishing after the round does not start another automatic check', async (t) => {
   const host = await start(t)
   await startGoal(host)
   // Member c's group turn is still running when the round ends — no check is queued.
@@ -2768,16 +2787,10 @@ test('a member still working at round end wakes the admin when its work settles'
   await settle(async () => (await host.call('room-progress', { roomId: 'r1' })).value?.length === 0)
   host.emit('gc', 'assistant/message', { message: { content: [{ type: 'text', text: 'done' }] } })
   host.emit('gc', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  await settle(() => host.agentOf('r1').calls.some(call => call.source?.role === 'goal'))
-  const nudge = host.takeGoal()
-  assert.ok(nudge !== undefined)
-  assert.match(text(nudge), /^\[Goal check\]$/)
-  // A second settle with no new work queues nothing while a round is running.
-  host.emit('gc', 'turn/start', { turn: 2 })
-  host.emit('gc', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  await settle(async () => (await host.call('room-progress', { roomId: 'r1' })).value?.length === 0)
-  const left = host.agentOf('r1').calls.filter(call => call.source?.role === 'goal')
-  assert.ok(left.length <= 1, `settles queued ${left.length} extra checks`)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(host.takeGoal(), undefined)
+  // The member's late post is still queued and takes priority.
+  assert.equal(await host.rt.testScheduleOccurrence(), 'busy')
   assert.equal(host.takeGoal(), undefined)
 })
 
@@ -2787,7 +2800,7 @@ test('read-only review asks for show and does not count silent pass as successfu
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
+  await host.rt.testScheduleOccurrence(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('inspect-without-show', post); await settle(() => host.agentOf('ga').calls.length > 0)
   const input = host.begin('ga')
   assert.match(text(input), /first action must be group_goal show/)
@@ -2801,14 +2814,14 @@ test('read-only review asks for show and does not count silent pass as successfu
   assert.ok(g.ownerReviewAt > g.lastInspection.at)
 })
 
-test('seven empty inspections back off persistently, recover on success and reset on a changed task', async (t) => {
+test('success clears failed inspection evidence without creating an extra scheduled turn', async (t) => {
   let host = await start(t)
   let g = await parkForReview(host)
   delete g.idleReason
   delete g.idleRevision
   const run = async (success = false) => {
-    const due = g.ownerReviewAt
-    await host.rt.goalReviewPoll(due)
+    const due = Math.max(g.ownerReviewAt, (host.rt.roomOf('r1').scheduledReviewOccurrence?.at ?? 0) + GOAL_REVIEW_INTERVAL_MS)
+    await host.rt.testScheduleOccurrence(due)
     const post = host.takeGoal()
     assert.equal(post?.source.reviewInspect, true)
     host.agentOf('r1').inbox.nextTurn.length = 0
@@ -2824,7 +2837,7 @@ test('seven empty inspections back off persistently, recover on success and rese
     await run()
     assert.equal(g.lastInspection.status, 'not-generated')
     assert.equal(g.inspectionBackoff.count, i)
-    assert.equal(g.ownerReviewAt - g.lastInspection.at, GOAL_REVIEW_INTERVAL_MS * (i === 1 ? 1 : i === 2 ? 2 : 4))
+    assert.equal(g.ownerReviewAt - g.lastInspection.at, GOAL_REVIEW_INTERVAL_MS)
     assert.match(host.rt.goalLedger(host.rt.roomOf('r1'), host.rt.botOf('a')), new RegExp(`Inspection incomplete ${i} consecutive`))
     if (i === 3) {
       await host.ctx.dispose()
@@ -2840,11 +2853,7 @@ test('seven empty inspections back off persistently, recover on success and rese
   await run()
   await run()
   assert.equal(g.inspectionBackoff.count, 2)
-  const oldDue = g.ownerReviewAt
   g.stages[0].tasks[0].task = 'a substantively changed task'
-  await host.rt.goalReviewPoll(oldDue - GOAL_REVIEW_INTERVAL_MS * 2)
-  assert.equal(g.inspectionBackoff, undefined)
-  assert.ok(g.ownerReviewAt <= oldDue - GOAL_REVIEW_INTERVAL_MS)
   await run()
   assert.equal(g.inspectionBackoff.count, 1)
   await run()
@@ -2863,7 +2872,7 @@ test('read-only review records only a successful show, never owner checks', asyn
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
+  await host.rt.testScheduleOccurrence(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('inspect-with-show', post); await settle(() => host.agentOf('ga').calls.length > 0); host.begin('ga')
   assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), /Goal:/)
   assert.ok(Number.isFinite(g.reviewAttempt?.inspectionLedgerAt))
@@ -2879,7 +2888,7 @@ for (const afterWrite of [false, true]) {
     host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
     await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
     host.ctx.sessionController.resolveAgent = original
-    await host.rt.goalReviewPoll(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
+    await host.rt.testScheduleOccurrence(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
     const read = host.round(`inspect-save-${afterWrite}`, post); await settle(() => host.agentOf('ga').calls.length > 0); host.begin('ga')
     const save = host.rt.save
     host.rt.save = async opts => {
@@ -2894,7 +2903,7 @@ for (const afterWrite of [false, true]) {
     assert.equal(g.lastInspection, undefined); assert.equal(g.lastOwnerReview, undefined)
     if (afterWrite) assert.ok(Number.isFinite(saved(host).rooms.r1.goal.reviewAttempt.inspectionLedgerAt))
     host.finish('ga', '[PASS]'); await settle(() => read() !== undefined)
-    await host.rt.goalReviewPoll(Date.now() + 3_600_000)
+    await host.rt.testScheduleOccurrence(Date.now() + 3_600_000)
     assert.equal(g.reviewAttempt?.saveOutcomeUnknown, true)
     assert.equal(host.agentOf('r1').calls.length, 0); assert.equal(host.agentOf('gb').calls.length, 0)
   })
@@ -2907,7 +2916,7 @@ for (const when of ['during-save', 'after-show']) {
     host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
     await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
     host.ctx.sessionController.resolveAgent = original
-    await host.rt.goalReviewPoll(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
+    await host.rt.testScheduleOccurrence(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
     const read = host.round(`inspect-stale-${when}`, post); await settle(() => host.agentOf('ga').calls.length > 0); host.begin('ga')
     const save = host.rt.save
     if (when === 'during-save') host.rt.save = async opts => {
@@ -2931,14 +2940,14 @@ test('lost idle provenance keeps inspection fenced and cannot claim a generated 
   host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
   await assert.rejects(host.rt.deliver({ toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', text: 'historical assignment' }))
   host.ctx.sessionController.resolveAgent = original
-  await host.rt.goalReviewPoll(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
+  await host.rt.testScheduleOccurrence(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('inspect-invalid-idle', post); await settle(() => host.agentOf('ga').calls.length > 0); host.begin('ga')
   assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), /Goal:/)
   g.revision += 1 // Invalidates idleRevision without asserting who changed it.
   host.finish('ga', '[PASS]'); await settle(() => read() !== undefined)
   assert.equal(g.lastInspection, undefined); assert.ok(g.reviewAttempt)
   assert.equal(g.lastOwnerReview, undefined); assert.equal(host.agentOf('gb').calls.length, 0)
-  await host.rt.goalReviewPoll(Date.now() + 3_600_000)
+  await host.rt.testScheduleOccurrence(Date.now() + 3_600_000)
   assert.equal(host.agentOf('r1').calls.length, 0)
 })
 
@@ -2953,7 +2962,7 @@ test('unresolved delivery restricts its owner while another unique owner can be 
   host.ctx.sessionController.resolveAgent=original
   const writer=g.stages[0].tasks.find(task=>task.botId==='b'),tester=g.stages[0].tasks.find(task=>task.botId==='c')
   tester.status='reported'
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post=host.takeGoal();assert.equal(post.source.reviewInspect,true)
   host.agentOf('r1').inbox.nextTurn.length=0
   const result=host.round('scoped-review',post)
@@ -2993,7 +3002,7 @@ test('scoped inspection can assign independent pending work and request only rev
   host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb')throw Error('unresolved writer delivery');return original(id)}
   await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
   host.ctx.sessionController.resolveAgent=original
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post=host.takeGoal();assert.equal(post.source.reviewInspect,true)
   host.agentOf('r1').inbox.nextTurn.length=0
   const result=host.round('scoped-independent-work',post)
@@ -3043,7 +3052,7 @@ test('a scoped check becomes unresolved if the queue changes while its save is p
   const original=host.ctx.sessionController.resolveAgent
   host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb'||id==='gc')throw Error('held delivery');return original(id)}
   await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post=host.takeGoal();host.agentOf('r1').inbox.nextTurn.length=0
   const result=host.round('queue-save-race',post)
   await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
@@ -3076,7 +3085,7 @@ test('scoped queue version detects ABA and cannot survive host restart', async t
   const original=host.ctx.sessionController.resolveAgent
   host.ctx.sessionController.resolveAgent=async id=>{if(id==='gb'||id==='gc'||id==='gb2')throw Error('held delivery');return original(id)}
   await assert.rejects(host.rt.deliver({toId:'b',sessionId:'gb',role:'room',roomId:'r1',text:'old work'}))
-  await host.rt.goalReviewPoll(g.reviewAt)
+  await host.rt.testScheduleOccurrence(g.reviewAt)
   const post=host.takeGoal();host.agentOf('r1').inbox.nextTurn.length=0
   const result=host.round('queue-aba',post)
   await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
@@ -3157,7 +3166,7 @@ test('an ordinary owner check becomes unresolved when that owner receives uncert
   const host=await start(t)
   await startGoal(host,{stages:[{title:'Draft',acceptance:'reviewed',tasks:[{bot:'Writer',task:'write'},{bot:'Tester',task:'test'}]}]})
   const g=host.rt.roomOf('r1').goal
-  await host.rt.goalReviewPoll(g.ownerReviewAt)
+  await host.rt.testScheduleOccurrence(g.ownerReviewAt)
   const post=host.takeGoal();host.agentOf('r1').inbox.nextTurn.length=0
   const result=host.round('ordinary-check-stale',post)
   await settle(()=>host.agentOf('ga').calls.length>0);host.begin('ga')
@@ -3229,4 +3238,178 @@ test('scheduled messages do not resume an idle goal, while a real user message d
   host.finish('gb', 'working')
   await settle(() => user() !== undefined)
   assert.equal(goal(host).idle, undefined)
+})
+
+for (const scenario of ['operator', 'scheduler', 'native-bound', 'native-input-changed', 'native-relay-changed', 'native-repeated', 'passive-only', 'cold-tail', 'cold-synthetic', 'cold-extra', 'cold original', 'unpersisted terminal', 'wrong turn', 'second delivery in a later part', 'repeat admission', 'unfinished job', 'canceled admission', 'failed admin', 'unrelated input', 'original queue busy', 'changed cut', 'wrong admin', 'paused', 'stopped']) {
+  test(`confirm a completed inspection after administrator rotation: ${scenario}`, async t => {
+    const parts = new Map(), services = {}, host = await start(t, undefined, services)
+    const goal = await parkForReview(host), room = host.rt.roomOf('r1')
+    const attempt = goal.reviewAttempt = { id: 'old-inspection', at: Date.now() - 2 * GOAL_REVIEW_INTERVAL_MS, state: 'admitting',
+      adminId: 'a', rootSessionId: 'r1', adminSessionId: 'old-a', inspectOnly: true }
+    room.segments = { a: [{ sessionId: 'old-a' }, { sessionId: 'later-a' }] }
+    const body = { action: 'review-confirm-terminal', confirmed: true, roomId: room.id, goalId: goal.id, reviewId: attempt.id }
+    for (const [id, role] of [['r1', 'goal'], ['old-a', 'room']]) {
+      const root = role === 'goal'
+      const message = { id: 'm-' + id, role: 'user', content: [], source: { kind: 'bot', form: 'relay', reviewId: attempt.id,
+        roomId: room.id, role, reviewInspect: true, ...(root ? { goalId: goal.id } : {}) } }
+      let admitted = message
+      if (root && scenario.startsWith('native-')) {
+        admitted = { id:message.id, role:'user', source:{ kind:'schedule' }, content:[{ type:'text', text:'[SCHEDULE REMINDER] exact original fixture' }] }
+        attempt.nativeOpening = { id:message.id, inputHash:inspectionMessageHash(admitted), relayHash:inspectionMessageHash(message) }
+        if (scenario === 'native-input-changed') admitted.content[0].text += ' changed'
+        if (scenario === 'native-relay-changed') message.content = [{type:'text',text:'extra'}]
+      }
+      const data = [
+        ['agent/inbox/spliced', { start:0, target:'next-turn', inserted:[admitted] }],
+        ['turn/start', { turn: 7 }],
+        ['agent/inbox/spliced', { start:0, target:'next-turn', inserted:[], removedCount:1,
+          ...(!root && scenario === 'canceled admission' ? { outcome:'canceled' } : {}) }],
+        ...(!root ? [['user/message', { source: { kind: 'bot', form: 'snapshot', role: 'continue' } }]] : []),
+        ['user/message', message],
+        ['user/message', { source: { kind:'time-context', form:'snapshot' } }],
+        ['tool/call', { callId: 'c', name: root ? 'group_relay' : 'bash' }],
+        ...(!root ? [['job/registered', { jobId: 'j' }], ...(scenario === 'unfinished job' ? [] : [['job/settled', { jobId: 'j' }]])] : []),
+        ['tool/result', { message: { role: 'tool', toolCallId: 'c', isError: false } }],
+        ...(!root && scenario === 'unrelated input' ? [['user/message', { source: { kind: 'user' } }]] : []),
+        ['turn/end', { turn: 7, reason: { kind: !root && scenario === 'failed admin' ? 'error' : 'completed' } }],
+      ]
+      const events = data.map(([type, data], seq) => ({ type, data, seq }))
+      parts.set(id, events)
+      body[root ? 'root' : 'admin'] = { sessionId: id, seq: events.find(e => e.data === message).seq, end: events.at(-1).seq, turn: 7 }
+      if (root && scenario === 'native-repeated') events.push({ ...events[0], seq:events.length })
+      if (root && scenario === 'passive-only') events.push({ seq:events.length, type:'agent/inbox/spliced', data:{
+        target:'next-step', start:0, inserted:[{...passiveScheduleNotice, id:'retired-notice'}] } })
+      if (!root && scenario === 'repeat admission') events.push({ ...events[0], seq: events.length })
+    }
+    parts.set('later-a', scenario === 'second delivery in a later part' ? parts.get('old-a') : [])
+    parts.set('ga', [])
+    const stages = structuredClone(goal.stages), counts = [...parts.keys()].map(id => host.agentOf(id).calls.length)
+    const sessions = new Map([...parts].map(([id, events]) => [id, { id, seq: events.length }]))
+    let inspected = 0, disposed = 0
+    const fromTail = ['cold-tail','cold-synthetic','cold-extra'].includes(scenario)
+    const cold = id => (fromTail || ['cold original','unpersisted terminal'].includes(scenario)) && id === 'old-a'
+    host.ctx.sessions.get = id => cold(id) ? undefined : sessions.get(id)
+    services.agents = { get: id => cold(id) ? undefined : host.agentOf(id) }
+    services.sessionProjections = { snapshot: () => ({ asOfSeq: 10, values: { inbox: { 'next-step': [], 'next-turn': [] } } }) }
+    services.sessionPersistence = {
+      stat: async id => ({ header: { id }, revision: 'native-cut' }),
+      open: async (id,mode) => {
+        assert.equal(mode,'read'); assert.equal(id,'old-a')
+        return { header:{id}, inheritedEventCount:0, async close(){}, async read(offset,length) {
+          const last = parts.get(id).at(-1)
+          assert.equal(offset,last.seq); assert.equal(length,2)
+          return {events:scenario === 'cold-synthetic' ? [] : scenario === 'cold-extra' ? [last,{seq:last.seq+1}] : [last]}
+        } }
+      },
+    }
+    services.sessionQuery = { inspectSession: async (id, read) => read(sessions.get(id)), async observeSession(id) {
+      assert.ok(parts.has(id)); inspected++
+      const events = parts.get(id)
+      if (scenario === 'changed cut' && id === 'ga') sessions.get('r1').seq++
+      return { header: { id }, source: cold(id) ? 'prepared' : 'live', inheritedEventCount: 0, cursor: events.length - 1, events,
+        ...(cold(id) ? { revision:'native-cut', ...(fromTail ? {} : { persistedEventCount:events.length - (scenario === 'unpersisted terminal' ? 1 : 0) }) } : {}),
+        [Symbol.dispose]() { disposed++ } }
+    } }
+    if (scenario === 'wrong turn') body.admin.turn++
+    if (scenario === 'wrong admin') room.admin = 'b'
+    if (scenario === 'paused' || scenario === 'stopped') goal.status = scenario
+    if (scenario === 'original queue busy') host.agentOf('old-a').inbox.nextTurn.push({ id: 'waiting' })
+    if (scenario === 'passive-only') host.agentOf('r1').inbox.nextStep.push({...passiveScheduleNotice,id:'retired-notice'})
+    const before = structuredClone(goal)
+    if (scenario === 'scheduler') await host.rt.testScheduleOccurrence()
+    else {
+      const result = await host.call('goal-control', body)
+      assert.equal(result.ok, ['operator','cold original','native-bound','passive-only','cold-tail'].includes(scenario), result.error)
+    }
+    assert.equal(disposed, inspected)
+    assert.deepEqual(goal.stages, stages)
+    assert.deepEqual([...parts.keys()].map(id => host.agentOf(id).calls.length), counts)
+    if (['operator','cold original','scheduler','native-bound','passive-only','cold-tail'].includes(scenario)) {
+      assert.equal(goal.reviewAttempt, undefined)
+      const [resolution] = saved(host).rooms.r1.goal.reviewResolutions
+      assert.equal(resolution.by, scenario === 'scheduler' ? 'host' : 'user')
+      assert.equal(resolution.decision, 'inspection-ended')
+      assert.deepEqual(resolution.root, body.root)
+      assert.deepEqual(resolution.admin, body.admin)
+      assert.deepEqual(resolution.attempt, before.reviewAttempt)
+      assert.ok(goal.ownerReviewAt >= resolution.at + GOAL_REVIEW_INTERVAL_MS)
+      const post = structuredClone(goal)
+      await host.rt.goalDrive(room, { goalReviewId: attempt.id, goalNudge: true, slots: [{ id: 'a', status: 'passed' }] })
+      assert.equal((await host.call('goal-control', body)).ok, true)
+      assert.equal((await host.call('goal-control', { ...body, admin: { ...body.admin, end: body.admin.end + 1 } })).ok, false)
+      assert.deepEqual(goal, post)
+      if (scenario === 'operator') {
+        await host.ctx.dispose()
+        const reboot = await start(t, undefined, {}, {}, host.home)
+        assert.equal((await reboot.call('goal-control', body)).ok, true)
+        assert.deepEqual(saved(reboot).rooms.r1.goal.reviewResolutions, [resolution])
+      }
+    } else assert.deepEqual(goal, before)
+  })
+}
+
+
+test('one native occurrence binds the current group, survives remount and only shows its directions to the original admin', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1'), root = host.agentOf('r1')
+  const key = JSON.stringify(['stable-schedule', new Date().toISOString()])
+  const prompt = 'Check the v4 release and only new reviews against their original cards.'
+  const msg = { id:'native-scheduled', role:'user', source:{kind:'schedule'}, content:[{ type:'text', text:'[SCHEDULE REMINDER]' }] }
+  root.inbox.nextTurn.push(msg)
+  root.inbox.nextStep.push(passiveScheduleNotice)
+  const calls = []
+  const original = host.rt.roomBusyForPatrol
+  host.rt.roomBusyForPatrol = (...args) => { calls.push(args); return original(...args) }
+  const result = await host.rt.runScheduledRoomReview(room, key, root, msg.id, prompt, msg)
+  assert.equal(result.outcome, 'admitted')
+  assert.equal(result.message.id, msg.id)
+  assert.equal(result.message.source.roomId, room.id)
+  assert.equal(result.message.source.reviewId, room.goal.reviewAttempt.id)
+  assert.ok(calls.length >= 2 && calls.every(([r,m,id]) => r === room && m === msg.id && id === 'r1'))
+  const id = room.goal.reviewAttempt.id
+  assert.ok(host.rt.goalBlock(room, host.rt.botOf('a'), { nudge:true, reviewId:id }).includes(prompt))
+  assert.ok(!host.rt.goalBlock(room, host.rt.botOf('b'), { nudge:true, reviewId:id }).includes(prompt))
+  assert.ok(!host.rt.goalBlock(room, host.rt.botOf('a'), { nudge:true, reviewId:'old' }).includes(prompt))
+  assert.equal(await host.rt.runScheduledRoomReview(room, key, root, msg.id, prompt), 'duplicate')
+  // DSH is about to enter the current step with this relay; it must not leave
+  // another waking message in next-turn when that shell closes.
+  assert.equal(root.calls.filter(m => m.source.reviewId === id).length, 0)
+  assert.equal(saved(host).rooms.r1.scheduledReviewOccurrence.reviewId, id)
+  await host.ctx.dispose()
+  const next = await start(t, undefined, undefined, undefined, host.home)
+  assert.equal(await next.rt.runScheduledRoomReview(next.rt.roomOf('r1'), key, next.agentOf('r1')), 'duplicate')
+  assert.equal(next.agentOf('r1').calls.length, 0)
+})
+
+test('a no-goal occurrence authorizes the caller fallback once, and a paused or completed goal stays silent', async t => {
+  const host = await start(t), room = host.rt.roomOf('r1'), root = host.agentOf('r1')
+  const fire = n => host.rt.runScheduledRoomReview(room, JSON.stringify(['room-task', new Date(n).toISOString()]), root)
+  assert.equal(await fire(10), 'no-goal')
+  assert.equal(await fire(10), 'duplicate')
+  assert.equal(await fire(9), 'duplicate')
+  await startGoal(host)
+  room.goal.status = 'paused'
+  assert.equal(await fire(11), 'paused')
+  room.goal.status = 'complete'
+  assert.equal(await fire(12), 'completed')
+  assert.deepEqual(root.calls, [])
+})
+
+test('a native pre-step holding the root cannot block the evidence check on its original review', async t => {
+  const host = await start(t), goal = await parkForReview(host)
+  const room = host.rt.roomOf('r1'), root = host.agentOf('r1')
+  await host.rt.testScheduleOccurrence(goal.reviewAt)
+  const original = goal.reviewAttempt
+  original.adminCompleted = true
+  root.inbox.nextTurn.length = 0
+  const key = JSON.stringify(['same-group', new Date(goal.reviewAt + GOAL_REVIEW_INTERVAL_MS).toISOString()])
+  let finishRoot
+  root.whenIdle = () => new Promise(resolve => { finishRoot = resolve })
+  assert.equal(await host.rt.runScheduledRoomReview(room, key, root, 'schedule-pre-step'), 'pending')
+  assert.equal(goal.reviewAttempt, original)
+  assert.equal(root.calls.length, 1)
+  finishRoot()
+  await settle(() => goal.reviewAttempt === undefined)
+  assert.equal(root.calls.length, 1)
 })

@@ -16,6 +16,7 @@
 // it started, or that is called while still at earlier work, lets the round go on. Its
 // turn keeps running in its group Session, and what it ends with is posted to the group,
 // where the member that asked for it answers.
+import { missedRoomTerminal, readRoomReplyCut, relayRecorded, sameReceipt } from './missed-room-reply.mjs'
 import { randomUUID } from 'node:crypto'
 import { claimsFor } from './claims.js'
 import { readFileSync } from 'node:fs'
@@ -32,6 +33,7 @@ import { GROUP_REF, output } from './tools.js'
 import { searchGroupBook } from './group-search.js'
 import { failureLine } from './turns.js'
 import { parseBook } from './ledger.js'
+import { scheduleChangeId } from './room-schedule-delivery.js'
 
 const ROOM_LOG_MAX = 60
 const ROOM_FIRST_LOOK = 12
@@ -206,7 +208,7 @@ export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
   // protects an in-flight handoff; the historical batch alone cannot prove one.
   for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return true
   const agents = rt.ctx.get?.('agents')
-  const queued = message => ignoreMessageId === undefined || message.id !== ignoreMessageId
+  const queued = message => (ignoreMessageId === undefined || message.id !== ignoreMessageId) && !scheduleChangeId(message)
   const sessions = [rt.sessionOfRoom(room), ...room.members.map(id => room.sessions?.[id])]
   return sessions.some(id => {
     if (!id) return false
@@ -319,9 +321,11 @@ export function install(rt) {
     const record = { ...line, seq: room.seq, time: line.time ?? Date.now() }
     rt.ledger.append(bookOf(room.id), record)
     // The phone link hears every line the chat will draw (mobile.js).
-    rt.roomLineAdded?.(room, record)
+    if (!record.completedRoomReply) rt.roomLineAdded?.(room, record)
     if (!memberLine(record)) return record
     room.log = [...room.log, cutLine(record)].slice(-ROOM_LOG_MAX)
+    // A recovered row is visible in group reads. Do not resend it to external bridges.
+    if (record.completedRoomReply) return record
     for (const listener of roomLineListeners) {
       try { listener(room, record) } catch (error) { rt.warn('ds-bot: room line listener failed: %s', error) }
     }
@@ -369,8 +373,73 @@ export function install(rt) {
       if (next !== undefined) end = next - 1
     }
     // Not the messages the group's own Session shows itself.
-    const rows = rt.ledger.range(bookOf(roomId), from, end).filter(record => record.session !== true).map(rowOf).filter(Boolean)
+    let visibleEnd = end
+    if (Number.isSafeInteger(to)) {
+      const book = bookOf(roomId)
+      while (true) {
+        const receipt = rt.ledger.record(book, visibleEnd + 1)?.completedRoomReply
+        if (!receipt || receipt.after !== to || receipt.from !== from || (anchor && receipt.anchor !== anchor)) break
+        visibleEnd += 1
+      }
+    }
+    const rows = rt.ledger.range(bookOf(roomId), from, visibleEnd).filter(record => record.session !== true).map(rowOf).filter(Boolean)
     return { rows, open: end === undefined }
+  }
+  // Publish an already-completed member answer as a row of its original
+  // closed relay. Posting a new native prompt here would open another round.
+  rt.restoreMissedRoomReply = async (sessionId, record, isCurrent) => {
+    const room = rt.roomOf(record.roomId), bot = rt.botOf(record.botId)
+    if (!room || !bot) return false
+    const book = bookOf(room.id), lease = rt.homeLockVersion()
+    const current = () => {
+      const owner = rt.groupOwners.get(sessionId)
+      return isCurrent() && lease !== undefined && rt.homeLockVersion() === lease
+        && rt.roomOf(room.id) === room && rt.botOf(bot.id) === bot && owner?.botId === bot.id && owner.roomId === room.id
+        && room.members.includes(bot.id) && room.sessions?.[bot.id] === sessionId && !roomBusyForPatrol(rt, room)
+        && !batchesOf(room.id, bot.id).length
+    }
+    if (!current()) return false
+    const memberCut = await readRoomReplyCut(rt.ctx, sessionId)
+    const result = memberCut && missedRoomTerminal(memberCut.events, record)
+    if (!result || !current()) return false
+    const text = stripOwnName(bot.name, result.text)
+    const mentions = mentionsIn(text, room.members.map(rt.botOf).filter(Boolean))
+    if (isPass(text) || mentions.all || mentions.found.some(peer => peer.id !== bot.id)) return false
+    const roomCut = await readRoomReplyCut(rt.ctx, rt.sessionOfRoom(room))
+    if (!roomCut) return false
+    await rt.ledger.flushRequired(book)
+    if (!current() || !memberCut.current() || !roomCut.current()) return false
+    rt.requireHomeLock()
+    ensureRoomLog(room)
+    const entry = rt.ledger.open(book)
+    if (!entry.complete || entry.torn) return false
+    const records = entry.records
+    const proof = { ...result, memberSessionId:sessionId }
+    const existing = records.filter(row => row.completedRoomReply?.exchangeId === result.exchangeId)
+    if (existing.length) {
+      if (existing.length !== 1 || existing[0].botId !== bot.id || existing[0].text !== text
+        || !sameReceipt(existing[0].completedRoomReply, proof)) return false
+      await rt.save({ required:true })
+      return true
+    }
+    const lastAnchor = records.findLast(row => row.event === 'anchor')
+    const closed = records.findLast(row => row.event === 'round')
+    if (!lastAnchor || !closed || closed.stopped || closed.from !== lastAnchor.from || closed.to !== room.seq
+      || records.at(-1) !== closed || !Array.isArray(closed.failed) || closed.failed.length || !Array.isArray(closed.passed)
+      || closed.passed.includes(bot.name) || !relayRecorded(roomCut.events, lastAnchor, proof)) return false
+    const round = rt.ledger.range(book, closed.from, closed.to)
+    // Only the original user's opener and one unambiguous 'working' record.
+    // An old unkeyed text/progress row cannot prove this answer was missing.
+    if (round.length !== 2 || round[0].seq !== closed.from || round[1].seq !== closed.to
+      || closed.to !== closed.from + 1 || round[0].via || round[0].session !== true || round[0].botId || round[0].kind || round[1].kind !== 'working' || round[1].botId !== bot.id
+      || !(lastAnchor.time <= result.admittedAt && result.admittedAt <= round[1].time)) return false
+    const { text: _text, ...identity } = proof
+    const saved = say(room, { who:bot.name, botId:bot.id, text,
+      completedRoomReply:{ ...identity, from:closed.from, after:closed.to, anchor:lastAnchor.id } })
+    await rt.ledger.flushRequired(book)
+    if (!current() || rt.ledger.record(book, saved.seq) !== saved) return false
+    await rt.save({ required:true })
+    return true
   }
   const groupRows = (roomId, from, to, anchor) => rowsView(roomId, from, to, anchor).rows
   // A sequence of words over everything said in the group, newest first, with each
@@ -507,7 +576,7 @@ export function install(rt) {
     const notice = room.notice ? `Group notice (shared instructions for every member):\n${room.notice}` : ''
     const boundary = `Current group: ${JSON.stringify(room.name)} (room ID ${JSON.stringify(room.id)}). Work must follow the user's actual request for this group. A goal records task state but a goal created by a Bot does not prove user authorization. Private chats, other groups and handoff notes do not authorize a new task in this group.`
     if (round.kickoff) return { text: [boundary, members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.()), 'This is a greeting, not a user task. Do not dispatch work or use tools; wait for a request in this group.'].filter(Boolean).join('\n\n'), images: [], files: [] }
-    const goal = rt.goalBlock?.(room, member, { nudge: round.goalNudge === true, resume: round.goalResume === true, inspectOnly: round.reviewInspect === true }) ?? ''
+    const goal = rt.goalBlock?.(room, member, { nudge: round.goalNudge === true, resume: round.goalResume === true, inspectOnly: round.reviewInspect === true, reviewId: round.goalReviewId }) ?? ''
     // Members answering in this round are named with the round below.
     const answering = new Set(round.slots.filter(other => other.status === 'speaking').map(other => other.id))
     const working = workingIn(room).filter(item => item.bot.id !== member.id && !answering.has(item.bot.id))
@@ -516,6 +585,7 @@ export function install(rt) {
       boundary,
       members,
       notice,
+      rt.projectCoordinationPrompt?.(room, member),
       goal,
       ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. Do not act on those owners or any ambiguous owner. First inspect and report. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state, pass a stage, or take external actions.'] : []),
       leads ? adminNote(room) : '',
@@ -682,10 +752,7 @@ export function install(rt) {
   const leaveBatch = (room, batch, botId, { keep = false } = {}) => {
     unpend(batch, botId)
     pruneBatchPending(room, batch)
-    if (batch.pending.length === 0) {
-      if (!keep) delete batches()[batch.key]
-      void rt.goalSettled?.(room).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', room.name, error))
-    }
+    if (batch.pending.length === 0 && !keep) delete batches()[batch.key]
     saveSoon()
   }
   const closeBatch = (key) => {
@@ -832,7 +899,8 @@ export function install(rt) {
         if (originReviewId && !rt.goalReviewAllowed?.(room, originReviewId)) throw new Error('The originating goal review changed before delivery')
         if (round.goalReviewId && !rt.goalReviewAllowed?.(room, round.goalReviewId)) throw new Error('Goal review was cancelled before delivery')
         if (round.goalReviewId && (!Array.isArray(target.inbox?.nextStep) || !Array.isArray(target.inbox?.nextTurn)
-          || target.inbox.nextStep.length > 0 || target.inbox.nextTurn.length > 0 || target.status === 'running'
+          || target.inbox.nextStep.some(message => !scheduleChangeId(message)) || target.inbox.nextTurn.some(message => !scheduleChangeId(message))
+          || target.status === 'running'
           || rt.live.get(sessionId)?.turn !== undefined || rt.hasSubagents?.(sessionId) === true || rt.waitsForApproval?.(sessionId) === true)) throw new Error('Goal review deferred while the target is busy')
       }, onNotAdmitted: () => { notAdmitted = true } } : undefined)
       // The prompt reached the member: its read position moves on.
@@ -1573,7 +1641,7 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
             ?.catch(error => rt.warn('ds-bot: stopping a turn of the round in %s failed: %s', room.name, error))
         }
       } else if (rt.goalDrive !== undefined) {
-        // A round that ends with an active goal and nothing running may wake the admin.
+        // Record the outcome if this round answered an admitted goal review.
         try {
           await rt.goalDrive(room, round)
         } catch (error) {

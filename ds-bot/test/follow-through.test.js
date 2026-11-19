@@ -227,6 +227,21 @@ const run = (host, sessionId, turn, message) => {
   host.emit(sessionId, 'user/message', { content: message.content, source: message.source })
 }
 
+test('a private board assignment ends in the owner chat without a phantom peer reply', async t => {
+  const host = await start(freshHome(t))
+  const request = host.rt.prepareBoardTaskMessage({
+    toId: 'b', sessionId: 'b', text: 'Review the card', messageId: 'board-input',
+    exchangeId: 'board-exchange', actionId: 'execute-card', taskRevision: 4, actionRevision: 4,
+  })
+  const deliver = t.mock.method(host.rt, 'deliver', async () => {})
+  run(host, 'b', 1, request)
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'I recorded my result on the card.' }] } })
+  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  assert.equal(deliver.mock.callCount(), 0)
+  assert.equal(host.rt.workOf(request.source), undefined)
+  assert.deepEqual(host.rt.state.exchangeTurns.b ?? [], [])
+})
+
 // Starts a round in 'r1' and opens Writer's turn in 'gb'.
 async function openRoomTurn(t, host) {
   let result
@@ -743,6 +758,26 @@ test('waking an inbox retains its delivery note while removing and resending', a
   assert.equal(notes(home).queued.b[0].args.exchangeId, message.source.exchangeId)
   discard()
   await settle(() => notes(home).queued?.b === undefined)
+})
+
+test('a saved group delivery with no room field follows the original group and never the private chat', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  const home = freshHome(t), team = seed()
+  team.rooms.r1.segments = { b:[{sessionId:'old-gb'}] }
+  writeFileSync(join(home,'state.json'), JSON.stringify(team))
+  const args = {exchangeId:'group-input',toId:'b',role:'room',fromId:'a',text:'Continue in the original group'}
+  writeFileSync(join(home,'inflight.json'), JSON.stringify({turns:{},queued:{
+    'old-gb':[{args,at:1}],
+    'missing-group':[{args:{...args,exchangeId:'unknown-origin'},at:2}],
+    b:[{args:{...args,exchangeId:'private-mismatch',roomId:'r1'},at:3}],
+  }}))
+  const host = await start(home,new Map([['old-gb',[]],['gb',[]],['missing-group',[]],['b',[]]]))
+  t.mock.timers.tick(3000)
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  const [message] = host.agentOf('gb').calls
+  assert.deepEqual([message.source.exchangeId,message.source.roomId],['group-input','r1'])
+  assert.equal(host.agentOf('b').calls.length,0)
+  assert.equal(host.agentOf('missing-group').calls.length,0)
 })
 
 test('a queued request kept over a restart is sent again however old, and the asker is told it was late', async (t) => {
@@ -1315,6 +1350,9 @@ for (const reason of ['completed', 'error', 'interrupted']) {
 test('a receipt found in an old part stays held when a later history omits it', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
+  const team = seed()
+  team.bots.b.segments = [{sessionId:'old'}]
+  writeFileSync(join(home,'state.json'),JSON.stringify(team))
   const args = { exchangeId:'seen-once', toId:'b', fromId:'a', role:'request', text:'test' }
   writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{ old:[{ at:1, args }] } }))
   const first = await start(home, new Map([['old', [{ type:'user/message', data:{ source:args } }]]]))

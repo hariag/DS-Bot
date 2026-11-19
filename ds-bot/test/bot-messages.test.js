@@ -1938,3 +1938,17 @@ test('a deferred later result follows a switched background openPart instead of 
   assert.equal(callsOf(agents, 'b-fg').length, 0)
   assert.ok(callsOf(agents, 's1').some(([, msg]) => textOf(msg?.content).includes('background reviewed')))
 })
+
+test('saved relays preserve the stable sender and distinguish scheduled board work', () => {
+  const rt = earlierParts([])
+  rt.selfOf = id => id === 'old-group-part' ? 'b2' : undefined
+  const record = (seq, source) => ({ type:'user/message', seq, time:seq, data:{ source:{ kind:'bot', ...source }, content:[] } })
+  const rows = rt.displayItems('b1', [
+    record(1, { form:'relay', sender:{ sessionId:'old-group-part', name:'Writer' }, exchangeId:'peer-1' }),
+    record(2, { role:'request', senderName:'You', taskAction:{id:'board-action'} }),
+    record(3, { form:'snapshot', sections:[] }), record(4, { role:'kickoff', roomId:'group' }),
+  ])
+  assert.deepEqual(rows.map(row => [row.role, row.botId, row.name, row.exchangeId, row.boardTask]), [
+    ['request','b2','Writer','peer-1',undefined], ['request',null,'You',undefined,true],
+  ])
+})

@@ -1,6 +1,7 @@
+import { installProjectCoordination, projectRolesChanged } from './project-coordination.mjs'
 import { isManualBoardTask } from './board-intake.mjs'
 import { legacyGoalCards } from './legacy-goal.js'
-import { mkdirSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, lstatSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
@@ -12,6 +13,7 @@ import { readBoardImage } from './board-images.js'
 import { buildReleaseReport, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isDeepStrictEqual } from 'node:util'
+import { OWNER_REPORT_FIELDS, REVIEW_FIELDS } from './task-tool.mjs'
 import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
 import { createGoalBoardEditor } from './goal-board-editor.js'
@@ -253,6 +255,7 @@ export function install(rt) {
     if (task.scope.startsWith('room:')) return rt.roomOf(task.scope.slice(5))?.members?.includes(actor) === true
     return task.scope.slice(9) === task.owner
   }
+  const taskRoomId = task => task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
   const goalAllows = (task, actor) => {
     if (!task.scope.startsWith('room:')) return true
     const room = rt.roomOf(task.scope.slice(5))
@@ -284,10 +287,12 @@ export function install(rt) {
     ]
     if (task.change) detail.push(`Requirement change from ${task.change.sourceTaskId} revision ${task.change.sourceRevision}. The original task remains unchanged.`,
       `Before: ${JSON.stringify(task.change.before)}`, `After: ${JSON.stringify(task.change.after)}`,
-      'Compare the two revisions, inspect the current implementation and any queued or in-flight work, adjust what is needed or explicitly reassign it, then report evidence with board_task report. Do not silently rewrite the source task.')
+      action.kind === 'review'
+        ? 'Independently compare the before and after requirements with the owner’s reported changes and observed results.'
+        : 'Compare the two revisions, inspect the current implementation and any queued or in-flight work, adjust what is needed or explicitly reassign it, then report evidence with board_task report. Do not silently rewrite the source task.')
     if (action.kind === 'review') detail.push(`Owner report: ${JSON.stringify(task.evidence)}`,
-      'Independently compare the report with the acceptance criteria. Do not repeat the owner’s work. Use board_task review with evidence and pass or rework.')
-    else detail.push('Use board_task show first. As the assigned owner, use board_task start, do only this task and its stated dependencies, then report evidence with board_task report. Respect this task’s scope, all authorization limits and the 30-step turn budget.')
+      'Independently compare the report with the acceptance criteria. Do not repeat the owner’s work.', REVIEW_FIELDS)
+    else detail.push('Use board_task show first. As the assigned owner, use board_task start and do only this task and its stated dependencies. Respect this task’s scope, all authorization limits and the 30-step turn budget.', OWNER_REPORT_FIELDS)
     return detail.join('\n')
   }
   const botWorkflowEvidence = (task, value, actor, phase) => currentBinding(task) && goalAllows(task, actor)
@@ -332,7 +337,8 @@ export function install(rt) {
     }
     const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
-      assertWriteLock: writable,
+      assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
+      onProjectEvent:projectChanged,
       authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
@@ -368,7 +374,7 @@ export function install(rt) {
         if (!allowedAction(task, action) || typeof rt.prepareBoardTaskMessage !== 'function') return false
         try {
           const source = intent?.payload?.source
-          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId,
+          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId, roomId:taskRoomId(task),
             text:taskPrompt(task, action), messageId:intent.messageId, exchangeId:source?.exchangeId,
             actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
           return intent.targetBotId === action.actor && isDeepStrictEqual(expected, intent.payload)
@@ -398,11 +404,12 @@ export function install(rt) {
       },
       prepare: async (action, task) => {
         if (!allowedAction(task, action)) return undefined
-        const sessionId = rt.chatOf(action.actor)
+        const roomId = taskRoomId(task)
+        const sessionId = roomId ? await rt.ensureGroupTaskSession(roomId, action.actor) : rt.chatOf(action.actor)
         if (typeof sessionId !== 'string' || !sessionId || busySession(sessionId, action.id)) return undefined
         if (!allowedAction(store.get(task.id), action)) return undefined
         const messageId = randomUUID(), exchangeId = randomUUID()
-        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, text:taskPrompt(task, action),
+        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, roomId, text:taskPrompt(task, action),
           messageId, exchangeId, actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
         return { admissionId:`board:${action.id}:${randomUUID()}`, messageId, targetBotId:action.actor, targetSessionId:sessionId, payload }
       },
@@ -412,11 +419,12 @@ export function install(rt) {
         let committed = false
         const sameMessage = (agent, message) => agent?.id === intent.targetSessionId && isDeepStrictEqual(message, intent.payload)
         const result = await rt.deliver({ toId:action.actor, fromName:'You', sessionId:intent.targetSessionId,
-          role:'request', note:'task from Trello', text:taskPrompt(task, action),
+          role:source.role, roomId:source.roomId, note:'task from Trello', text:taskPrompt(task, action),
           exchangeId:source.exchangeId, taskAction:source.taskAction }, {
           preparedMessage:intent.payload,
           beforeAdmission: (agent, message) => {
-            if (!sameMessage(agent, message) || !revalidateNow()) throw new Error('Task authorization changed before DSH admission')
+            const target = source.roomId ? rt.roomOf(source.roomId)?.sessions?.[action.actor] : rt.chatOf(action.actor)
+            if (target !== intent.targetSessionId || !sameMessage(agent, message) || !revalidateNow()) throw new Error('Task authorization changed before DSH admission')
           },
           afterAdmission: (agent, message) => {
             if (!sameMessage(agent, message)) throw new Error('DSH admitted a different task message')
@@ -497,6 +505,26 @@ export function install(rt) {
         }})
     } catch (error) { if (!changedTurn) throw error }
   }
+  // A human project decision can supersede an already-running Bot's plan.
+  // Point only affected, active group sessions at the durable change. Idle
+  // groups pick it up in their next turn without creating a new task or poll.
+  async function steerProjectChange(event) {
+    if (event.actor !== 'user' || event.kind === 'binding') return
+    for (const roomId of event.audience) {
+      if (event.kind==='task' && roomId===event.originRoomId && !event.changedFields.some(field=>field.startsWith('release.'))) continue
+      const room=rt.roomOf(roomId)
+      if (!room) continue
+      const targets=new Set([room.admin,event.owner,event.reviewer].filter(Boolean))
+      for (const actor of targets) {
+        const recipient=activeBoardRecipient(actor,roomId,room.sessions?.[actor],true)
+        if (!recipient) continue
+        const text='A human updated shared project '+JSON.stringify(event.projectId)+' at revision '+event.revision
+          +'. Read project_coordination show with this revision before continuing affected work, then acknowledge it in this group. Keep the original task and owner.'
+        const id=createHash('sha256').update(JSON.stringify([event.projectId,event.revision,roomId,actor])).digest('hex')
+        await steerBoardUpdate(recipient,text,'project:'+id)
+      }
+    }
+  }
   const notifyWorkingBot = async (taskId, change, operationId) => {
     const task = service().store.get(taskId)
     if (!task || !['working','reported','cancelled'].includes(task.status)) return
@@ -535,10 +563,27 @@ export function install(rt) {
     if (committedHere && releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
   }
+  const previouslyBound=existsSync(join(rt.home,'board-v1','project-coordination.sqlite'))
+  let toolSyncPending=false
+  function projectChanged(event) {
+    if (!toolSyncPending && projectRolesChanged(event)) {
+      toolSyncPending=true
+      queueMicrotask(()=>{toolSyncPending=false;if (!closing && !rt.stopping) rt.syncScopedTools?.()})
+    }
+    void steerProjectChange(event).catch(error=>rt.warn?.('ds-bot: shared project update: %s',error?.message || error))
+  }
+  const project = installProjectCoordination(rt,{defineTool,store:()=>service().store,run,
+    availableStore:()=>instance?.store ?? (previouslyBound && !closing && !rt.stopping && !rt.readOnly() ? service().store : undefined)})
+
+  rt.projectCoordinationPrompt = project.prompt
   let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
     const { api, store, goalEditor } = service(), scope = payload.scope
     switch (endpoint) {
+      case 'board-project':
+      case 'board-project-bind':
+      case 'board-project-decide':
+        return project.userCall(endpoint,payload)
       case 'board-redo-preview':
       case 'board-redo-confirm':
         api.list(scope, principal)

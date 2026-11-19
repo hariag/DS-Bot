@@ -18,7 +18,10 @@ const bundle = await readFile(bundlePath, 'utf8')
 const start = bundle.indexOf('var OWN_QUEUE_KINDS', bundle.indexOf('// src/client/queue-dock.js'))
 const end = bundle.indexOf('// src/client/approval-notices.js', start)
 assert.ok(start >= 0 && end > start, 'production QueueDock section not found')
-const production = bundle.slice(start, end)
+const groupStart = bundle.indexOf('// src/client/inbox-groups.js')
+const groupEnd = bundle.indexOf('\n// ', groupStart + 3)
+assert.ok(groupStart >= 0 && groupEnd > groupStart && groupEnd <= start, 'production inbox grouping section not found')
+const production = bundle.slice(groupStart, groupEnd) + '\n' + bundle.slice(start, end)
 const reactBinding = production.match(/\bimport_react\d+\b/)?.[0]
 assert.ok(reactBinding, 'production React binding not found')
 const icons = [...new Set(production.match(/\b[A-Za-z][A-Za-z0-9]*Icon\b/g) ?? [])]
@@ -40,9 +43,8 @@ try {
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: `
     var ${reactBinding}=window.React;
-    var t=(s,params={})=>({'Bot private {n}':'Bot 私聊 {n} 条','Group {n}':'群聊 {n} 条','Bot private messages waiting; count unavailable':'Bot 私聊有待处理消息（数量待确认）','Group messages waiting; count unavailable':'群聊有待处理消息（数量待确认）','Next step':'当前回合下一步','Next turn':'下一回合'}[s]??s).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
-    const originalT=t, queueZh=${JSON.stringify(DICTIONARY.zh)};
-    t=(key,params={})=>globalThis.fixtureLocalized ? (queueZh[key]??key).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??'')) : originalT(key,params);
+    const queueZh=${JSON.stringify(DICTIONARY.zh)};
+    var t=(key,params={})=>(queueZh[key]??key).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
     for(const name of ${JSON.stringify(icons)}) globalThis[name]=()=>React.createElement('span',{'aria-hidden':true},'·');
     ${production}
     const style=document.createElement('style');style.textContent=QUEUE_CSS;document.head.append(style);
@@ -50,11 +52,17 @@ try {
     globalThis.fixtureGroup=[];
     globalThis.fixtureSession='';
     globalThis.fixtureErrors=[];
+    // The live-row tests exercise the immediate view while its passive read is in flight.
+    // Later cases resolve or reject each captured request in a controlled order.
+    globalThis.fixtureReads=[];
+    globalThis.fixtureInspect=(cursor,signal)=>new Promise((resolve,reject)=>{
+      globalThis.fixtureReads.push({cursor,signal,resolve,reject});
+    });
     const props={
       useSession:select=>select({pendingSubmissions:[],running:true,subagent:null}),
       useProjection:()=>globalThis.fixtureInbox,
-      useRoster:select=>select(globalThis.fixtureSession.startsWith('room-') ? {roomsById:{[globalThis.fixtureSession]:{id:'room'}}} : {byId:{[globalThis.fixtureSession]:{id:'bot'}}}),
-      useWork:select=>select({groupQueues:{bot:globalThis.fixtureGroup}}),
+      useRoster:select=>select(globalThis.fixtureSession.startsWith('room-') ? {roomsById:{[globalThis.fixtureSession]:{id:'room',name:'开发群'}}} : {byId:{[globalThis.fixtureSession]:{id:'bot'}},rooms:[{id:'r1',name:'研发群',members:['bot']},{id:'r2',name:'开发群',members:['bot']}]}),
+      useWork:select=>select({groupQueues:{bot:globalThis.fixtureGroup},earlierPrivateQueues:{bot:globalThis.fixtureEarlierPrivate??[]}}),
       updateQueue:()=>{throw Error('fixture must not mutate queue')},
       loadImage:async()=>'',renderFactorySlot:undefined,
       actions:{reportError:error=>globalThis.fixtureErrors.push(String(error))}
@@ -65,37 +73,59 @@ try {
   const bot = (id, text, role = 'reply') => ({ id, source: { kind: 'bot', form: 'relay', role, senderName: '测试 Bot', exchangeId: `exchange-${id}` }, content: [{ type: 'text', text }] })
   const user = { id: 'user-1', source: { kind: 'user', rpcId: 'fixture-request' }, content: [{ type: 'text', text: '用户消息测试' }] }
   const fixture = async (inbox, sessionId = 'fixture-session-a') => page.evaluate(({ inbox: value, sessionId: id }) => globalThis.renderFixture(value, id), { inbox, sessionId })
-  const head = page.locator('[data-bot-queue-head]')
-  const list = page.locator('[data-bot-queue-list]')
-  const rows = page.locator('[data-bot-queue-row]')
+  const inspect = page.locator('[data-inbox-inspection]')
+  const head = inspect.locator('button[aria-expanded]')
+  async function expectHeader(count) {
+    const title = 'Bot 收件箱 ' + count + ' 条'
+    const visible = await head.evaluate(button => Array.from(button.children)
+      .filter(part => part.getAttribute('aria-hidden') !== 'true').map(part => part.innerText).join(' '))
+    assert.equal(visible.replace(/\s+/g, ' ').trim(), title)
+    assert.equal(await inspect.getByRole('button', {name:title, exact:true}).count(), 1)
+  }
+  const list = inspect.locator('[data-bot-queue-list]').first()
+  const rows = inspect.locator('[data-bot-queue-row]')
+  const group = id => inspect.locator(`section[data-bot-inbox-group="${id}"]`)
+  const countOf = async id => (await group(id).getByRole('heading', {level:3}).innerText()).replace(/\s+/g, ' ').trim()
+  const sectionFor = text => inspect.locator('[data-bot-inbox-group]').filter({has:page.getByText(text, {exact:true})})
+  const show = async () => {
+    if (await head.getAttribute('aria-expanded') === 'false') await head.click()
+  }
 
   // A single Bot entry must still present a collapsed, manually expandable section.
   await fixture({ 'next-turn': [bot('one', '第一条 Bot 消息')], 'next-step': [] })
   await head.waitFor({ state: 'visible' })
+  assert.equal(await inspect.count(), 1)
+  assert.equal(await page.locator('[data-bot-queue-dock]').count(), 0, 'one Bot inbox, with no separate private queue panel')
+  assert.equal(await page.evaluate(() => globalThis.fixtureReads.length), 0, 'a collapsed inbox must not poll')
   assert.equal(await head.getAttribute('aria-expanded'), 'false', 'single Bot entry must default collapsed')
   assert.equal(await list.isVisible(), false)
+  await expectHeader(1)
   await head.click()
   assert.equal(await head.getAttribute('aria-expanded'), 'true')
   assert.equal(await rows.count(), 1)
+  await expectHeader(1)
   assert.match(await list.innerText(), /第一条 Bot 消息/)
   await head.click()
   assert.equal(await head.getAttribute('aria-expanded'), 'false')
   assert.equal(await list.isVisible(), false)
 
   await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [], 'next-step': [] }, 'fixture-session-a', [{ id: 'g1', roomId: 'r1', roomName: '研发群', senderName: '架构师', text: '需要决策' }]))
-  assert.match(await head.innerText(), /群聊 1 条/)
-  assert.equal((await head.innerText()).includes('私聊 0'), false)
+  await expectHeader(1)
   await head.click()
-  assert.match(await list.innerText(), /研发群/)
-  assert.match(await list.innerText(), /需要决策/)
+  const development = sectionFor('需要决策')
+  assert.equal(await development.count(), 1)
+  assert.match(await development.innerText(), /研发群/)
+  assert.match(await countOf('r1'), /研发群.*1\s*条/)
   await head.click()
   await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [], 'next-step': [] }, 'fixture-session-a', [{ id: 'unknown', roomId: 'r1', roomName: '研发群', unavailable: true }]))
-  assert.equal(await head.count(), 0, 'unknown-only queue must not create a count')
-  await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [{ id: 'known', source: { kind: 'bot', role: 'reply' }, content: [{ type: 'text', text: 'private' }] }], 'next-step': [] }, 'fixture-session-a', [{ id: 'unknown', roomId: 'r1', roomName: '研发群', unavailable: true }]))
-  assert.match(await head.innerText(), /私聊 1 条/)
-  assert.equal((await head.innerText()).includes('+?'), false)
+  await expectHeader(0)
+  await show()
+  assert.match(await countOf('r1'), /研发群.*已见 0 条/, 'unread does not establish positive mail')
   await head.click()
-  assert.match(await list.innerText(), /Group inbox unavailable/)
+  await page.evaluate(() => globalThis.renderFixture({ 'next-turn': [{ id: 'known', source: { kind: 'bot', role: 'reply' }, content: [{ type: 'text', text: 'private' }] }], 'next-step': [] }, 'fixture-session-a', [{ id: 'unknown', roomId: 'r1', roomName: '研发群', unavailable: true }]))
+  await head.click()
+  assert.match(await sectionFor('private').innerText(), /私聊/)
+  assert.doesNotMatch(await inspect.innerText(), /群收件箱暂不可读取|数量待确认|\+\?/)
   await head.click()
 
   // User and Bot queues must be independent. Show both Bot placements without tool context.
@@ -113,6 +143,8 @@ try {
   assert.match(await list.innerText(), /fixture\.txt/)
   assert.ok((await list.textContent()).includes(longText), 'long message must be available in full')
   assert.equal(await rows.locator('button').count(), 0, 'Bot rows must be read-only')
+  assert.doesNotMatch(await inspect.innerText(), /用户消息测试/)
+  assert.equal(await inspect.getByRole('button', {name:DICTIONARY.zh['Edit queued message']}).count(), 0)
 
   // A long Bot message scrolls internally and does not prevent reaching later entries.
   await fixture({ 'next-step': [file], 'next-turn': [bot('after', '后续 Bot 消息')] })
@@ -129,9 +161,11 @@ try {
   // Switching session binds expansion to that session and never retains other message content.
   await fixture({ 'next-turn': [bot('other', '另一会话内容')], 'next-step': [] }, 'fixture-session-b')
   assert.equal(await head.getAttribute('aria-expanded'), 'false', 'new session must default collapsed')
+  await expectHeader(1)
   assert.equal(await list.isVisible(), false)
   await fixture({ 'next-turn': [user, file], 'next-step': [bot('step', '插入当前回合')] })
   assert.equal(await head.getAttribute('aria-expanded'), 'false', 'A → B → A must reset the original session expansion')
+  await expectHeader(2)
   await fixture({ 'next-turn': [bot('other', '另一会话内容')], 'next-step': [] }, 'fixture-session-b')
   assert.equal(await head.getAttribute('aria-expanded'), 'false')
   await head.click()
@@ -143,17 +177,18 @@ try {
   await head.click()
 
   // Existing user controls stay separate; real-time changes must update the count and rows.
-  assert.ok(await page.locator('[data-queue-dock] button[aria-label="Edit queued message"]').count() > 0)
+  assert.equal(await page.locator('[data-queue-dock]').getByRole('button', {name:DICTIONARY.zh['Edit queued message']}).count(), 1)
   await fixture({ 'next-turn': [user, bot('new', '实时新增')], 'next-step': [] })
   assert.equal(await rows.count(), 1)
   assert.match(await list.innerText(), /实时新增/)
   await fixture({ 'next-turn': [user], 'next-step': [] })
-  assert.equal(await head.count(), 0, 'empty Bot queue should not leave a stale count')
+  assert.equal(await head.count(), 1, 'the read action still opens an empty inbox')
+  await expectHeader(0)
   assert.match(await page.locator('[data-queue-dock]').innerText(), /用户消息测试/)
 
   // Bot text is untrusted and must remain literal, never create executable markup.
   await fixture({ 'next-turn': [bot('escaped', '<img src=x onerror=alert(1)>')], 'next-step': [] })
-  await head.click()
+  await show()
   assert.match(await list.textContent(), /<img src=x onerror=alert\(1\)>/)
   assert.equal(await list.locator('img').count(), 0)
 
@@ -200,7 +235,7 @@ try {
   await fixture({ 'next-turn': [user, bot('dark', '深色主题 Bot 文本')], 'next-step': [] })
   if (await head.getAttribute('aria-expanded') === 'false') await head.click()
   const darkContrast = await page.evaluate(() => {
-    const panel = document.querySelector('[data-bot-queue-dock]')
+    const panel = document.querySelector('[data-inbox-inspection]')
     const background = getComputedStyle(panel, '::before').backgroundColor
     function rgba(s) { const p = s.match(/[\d.]+/g)?.map(Number) ?? []; return [p[0], p[1], p[2], p[3] ?? 1] }
     const bg = rgba(background)
@@ -226,20 +261,18 @@ try {
   // The real Chinese labels and passive transport are exercised without sending
   // a message to a Session. A placeholder alone must offer an actionable read.
   await page.evaluate(() => {
-    globalThis.fixtureLocalized = true
     globalThis.fixtureReads = []
-    globalThis.fixtureInspect = (cursor, signal) => new Promise((resolve, reject) =>
-      globalThis.fixtureReads.push({cursor, signal, resolve, reject}))
+    globalThis.fixtureEarlierPrivate = [{id:'unknown-private',unavailable:true}]
     globalThis.renderFixture({'next-turn':[], 'next-step':[]}, 'inspect-a',
-      [{id:'unknown', roomId:'group', roomName:'研发群', unavailable:true}])
+      [{id:'unknown', roomId:'r1', roomName:'研发群', unavailable:true}, {id:'unknown', roomId:'r2', roomName:'开发群', unavailable:true}])
   })
-  const inspect = page.locator('[data-inbox-inspection]')
-  const readInbox = inspect.getByRole('button', {name:'查看 Bot 收件箱'})
+  const readInbox = head
+  await expectHeader(0)
   const completedAt = Date.UTC(2026, 10, 19, 0, 0)
-  const known = {sessionId:'current-private', kind:'private', earlier:false, status:'ready',
-    rows:[{id:'ack', senderName:'成员 A', text:'保留的收件信息'}]}
-  const pending = {sessionId:'earlier-hidden', kind:'group', roomName:'研发群', earlier:true, status:'unavailable', rows:[]}
-  const empty = {sessionId:'current-group', kind:'group', roomName:'开发群', earlier:false, status:'ready', rows:[]}
+  const known = {sessionId:'open-private', kind:'private', earlier:false, status:'ready',
+    rows:[{id:'ack', messageId:'ack', exchangeId:'exchange-ack', senderName:'成员 A', text:'保留的收件信息'}]}
+  const pending = {sessionId:'earlier-hidden', kind:'group', roomId:'r1', roomName:'研发群', earlier:true, status:'unavailable', rows:[]}
+  const empty = {sessionId:'current-group', kind:'group', roomId:'r2', roomName:'开发群', earlier:false, status:'ready', rows:[]}
   const firstRead = {readAt:completedAt,total:5,nextCursor:'second',sources:[known,pending,empty]}
   const finishRead = value => page.evaluate(result => globalThis.fixtureReads.at(-1).resolve(result), value)
   assert.equal(await readInbox.count(), 1)
@@ -247,13 +280,17 @@ try {
   assert.doesNotMatch(await page.locator('body').innerText(), /群收件箱暂不可读取/)
   await readInbox.click()
   await finishRead(firstRead)
-  await inspect.getByText('保留的收件信息').waitFor()
+  await group('private').getByText('保留的收件信息', {exact:true}).waitFor()
+  await expectHeader(1)
+  assert.match(await countOf('private'), /Bot 私聊.*已见 1 条/)
+  assert.match(await countOf('r1'), /研发群.*已见 0 条/)
+  assert.match(await countOf('r2'), /开发群.*已见 0 条/)
   assert.match(await inspect.innerText(), /已检查 3 \/ 5 个收件箱/)
   assert.match(await inspect.innerText(), /历史会话/)
   assert.match(await inspect.innerText(), /当前会话/)
   assert.match(await inspect.innerText(), /读取时无 Bot 往来消息/)
   assert.match(await inspect.innerText(), /此次未能读取这个收件箱/)
-  assert.equal(await inspect.locator('.bt-inbox-snapshot>time').getAttribute('datetime'), new Date(completedAt).toISOString())
+  assert.ok(await group('private').locator(`time[datetime="${new Date(completedAt).toISOString()}"]`).count() > 0)
   await inspect.getByRole('button', {name:'继续读取'}).click()
   assert.equal(await page.evaluate(() => globalThis.fixtureReads.at(-1).cursor), 'second')
   await finishRead({readAt:completedAt+1000,total:5,nextCursor:null,sources:[
@@ -261,37 +298,113 @@ try {
   await inspect.getByText('找不到该会话').waitFor()
   assert.match(await inspect.innerText(), /已检查 5 \/ 5 个收件箱/)
   assert.match(await inspect.innerText(), /该会话需要迁移/)
-  assert.equal(await inspect.locator('.bt-inbox-snapshot>time').count(), 2)
+  assert.ok(await group('r1').locator(`time[datetime="${new Date(completedAt+1000).toISOString()}"]`).count() > 0)
+  assert.ok(await group('private').locator(`time[datetime="${new Date(completedAt).toISOString()}"]`).count() > 0)
   assert.match(await inspect.innerText(), /11112222/)
-  assert.equal(await inspect.locator('.bt-inbox-part-date').getAttribute('datetime'), new Date(completedAt-86400000).toISOString())
+  assert.equal(await group('r1').locator(`time[datetime="${new Date(completedAt-86400000).toISOString()}"]`).count(), 1)
   assert.match(await inspect.innerText(), /33334444/)
-  await inspect.locator('.bt-inbox-snapshot').first().getByRole('button', {name:'重试本页'}).click()
-  await finishRead({...firstRead, sources:[known,{...pending,status:'ready'},empty]})
+  await inspect.locator('.bt-inbox-snapshot').filter({
+    has:page.locator(`time[datetime="${new Date(completedAt).toISOString()}"]`),
+  }).getByRole('button', {name:'重试本页'}).click()
+  const newMail = {id:'ack-2', messageId:'ack-2', exchangeId:'exchange-ack-2', senderName:'成员 A', text:'新到的收件信息'}
+  await finishRead({...firstRead, sources:[{...known, rows:[...known.rows,newMail]},{...pending,status:'ready'},empty]})
   await inspect.getByText('本次未发现 Bot 往来消息的历史收件箱：1 个').waitFor()
-  assert.equal(await inspect.locator('.bt-inbox-snapshot').first().getByRole('button', {name:'重试本页'}).count(), 0)
-  assert.equal(await inspect.locator('.bt-inbox-snapshot>time').count(), 2)
+  await expectHeader(2)
+  assert.equal(await group('r1').getByText('此次未能读取这个收件箱', {exact:true}).count(), 0)
+  assert.ok(await group('r1').locator(`time[datetime="${new Date(completedAt+1000).toISOString()}"]`).count() > 0)
+  assert.ok(await group('private').locator(`time[datetime="${new Date(completedAt).toISOString()}"]`).count() > 0)
   assert.match(await inspect.innerText(), /已检查 5 \/ 5 个收件箱/)
   assert.match(await inspect.innerText(), /该会话需要迁移/)
   await inspect.getByRole('button', {name:'重新读取收件箱'}).click()
   await page.evaluate(() => globalThis.fixtureReads.at(-1).reject(new Error('offline')))
   await inspect.getByText('此次读取失败，可以重试。').waitFor()
   assert.match(await inspect.innerText(), /保留的收件信息/)
+  await expectHeader(2)
   await inspect.getByRole('button', {name:'重试本次读取'}).click()
   await finishRead({readAt:completedAt+2000,total:1,nextCursor:null,sources:[empty]})
   await inspect.getByText('已检查 1 / 1 个收件箱').waitFor()
   assert.doesNotMatch(await inspect.innerText(), /保留的收件信息/)
+  assert.match(await countOf('r2'), /^开发群\s*0 条$/)
+  await expectHeader(0)
   await inspect.getByRole('button', {name:'重新读取收件箱'}).click()
   await page.evaluate(() => globalThis.renderFixture({'next-turn':[], 'next-step':[]}, 'room-inspect-b', []))
   assert.equal(await page.evaluate(() => globalThis.fixtureReads.at(-1).signal.aborted), true)
   await finishRead(firstRead)
   assert.equal(await readInbox.getAttribute('aria-expanded'), 'false')
+  await expectHeader(0)
   assert.doesNotMatch(await inspect.innerText(), /保留的收件信息/)
   await readInbox.click()
-  await finishRead({readAt:completedAt,total:1,nextCursor:null,sources:[{...empty,kind:'post'}]})
+  await finishRead({readAt:completedAt,total:1,nextCursor:null,sources:[{...empty,roomId:'room',kind:'post'}]})
   await inspect.getByText('读取时无 Bot 往来消息').waitFor()
 
+  // Live mail and passive samples describe the same underlying deliveries.
+  // Render each original once, keeping the full live preview and strict group boundaries.
+  const batch = {
+    inbox:{'next-step':[], 'next-turn':[bot('m1','私聊原文')]},
+    group:[{id:'m2',messageId:'m2',exchangeId:'x2',sessionId:'s-r1',roomId:'r1',roomName:'研发群',senderName:'成员 B',text:'群来源的消息'},
+      {id:'unknown',roomId:'r1',roomName:'研发群',unavailable:true},{id:'unknown',roomId:'r2',roomName:'开发群',unavailable:true}],
+  }
+  const readCount = () => page.evaluate(() => globalThis.fixtureReads.length)
+  const beforeJoined = await readCount()
+  await page.evaluate(({inbox,group}) => globalThis.renderFixture(inbox,'joined-bot',group),batch)
+  await expectHeader(2)
+  assert.equal(await head.getAttribute('aria-expanded'),'false')
+  assert.equal(await readCount(), beforeJoined)
+  await show()
+  const joinedFirst = {readAt:completedAt,total:4,nextCursor:'more',sources:[
+    {...known,sessionId:'joined-bot',rows:[{id:'m1',messageId:'m1',exchangeId:'exchange-m1',senderName:'测试 Bot',text:'私聊原文'}]},
+    {...empty,roomId:'r1',roomName:'研发群',sessionId:'s-r1',rows:[{id:'m2',messageId:'m2',exchangeId:'x2',senderName:'成员 B',text:'群来源的消息'}]},
+    {...empty,sessionId:'s-r2',rows:[{id:'m3',messageId:'m3',exchangeId:'x3',senderName:'成员 C',text:'另一群的消息'}]},
+  ]}
+  await finishRead(joinedFirst)
+  await group('r2').getByText('另一群的消息',{exact:true}).waitFor()
+  await expectHeader(3)
+  for (const [id,title,text] of [['private','Bot 私聊','私聊原文'],['r1','研发群','群来源的消息'],['r2','开发群','另一群的消息']]) {
+    assert.equal(await group(id).getByText(text,{exact:true}).count(),1)
+    assert.equal(await inspect.getByText(text,{exact:true}).count(),1)
+    assert.match(await countOf(id),new RegExp(title+'\\s*已见 1 条$'))
+  }
+  await inspect.getByRole('button',{name:'继续读取'}).click()
+  await finishRead({readAt:completedAt+1000,total:4,nextCursor:null,sources:[{
+    ...empty,earlier:true,roomId:'r1',roomName:'研发群',sessionId:'s-r1-old',
+    rows:[{id:'m4',messageId:'m4',exchangeId:'x4',senderName:'成员 B',text:'此前群内的任务'}],
+  }]})
+  await group('r1').getByText('此前群内的任务',{exact:true}).waitFor()
+  await expectHeader(4)
+  for (const [id,title,n] of [['private','Bot 私聊',1],['r1','研发群',2],['r2','开发群',1]]) {
+    assert.match(await countOf(id),new RegExp(title+'\\s*'+n+' 条$'))
+  }
+  // The collapsed header keeps sampled groups and accepts a live private change.
+  const afterPaging = await readCount()
+  await head.click()
+  await expectHeader(4)
+  batch.inbox['next-turn'].push(bot('m5','折叠时到达的私聊'))
+  await page.evaluate(({inbox,group}) => globalThis.renderFixture(inbox,'joined-bot',group),batch)
+  await expectHeader(5)
+  assert.equal(await list.isVisible(),false)
+  assert.equal(await readCount(), afterPaging)
+  await show()
+  assert.equal(await group('private').locator('[data-bot-queue-row]').count(),2)
+  assert.equal(await rows.count(),5)
+  await expectHeader(5)
+  assert.equal(await readCount(), afterPaging + 1, 'reopening refreshes only the first page')
+  assert.equal(await page.evaluate(() => globalThis.fixtureReads.at(-1).cursor ?? null),null)
+  await finishRead({...joinedFirst,readAt:completedAt+2000})
+  await group('private').locator(`time[datetime="${new Date(completedAt+2000).toISOString()}"]`).waitFor()
+  await expectHeader(5)
+  assert.equal(await group('r1').getByText('此前群内的任务',{exact:true}).count(),1, 'a matching refreshed range keeps later pages')
+  assert.equal(await readCount(), afterPaging + 1, 'later pages are not fetched on reopen')
+  await head.click()
+  await show()
+  await finishRead({...joinedFirst,readAt:completedAt+3000,total:5,nextCursor:'rotated'})
+  await group('private').locator(`time[datetime="${new Date(completedAt+3000).toISOString()}"]`).waitFor()
+  await expectHeader(4)
+  assert.equal(await group('r1').getByText('此前群内的任务',{exact:true}).count(),0, 'changed scope clears the previous tail')
+  await inspect.getByRole('button',{name:'继续读取'}).click()
+  assert.equal(await page.evaluate(() => globalThis.fixtureReads.at(-1).cursor),'rotated')
+  assert.equal(await page.locator('[data-bot-queue-dock]').count(),0)
   assert.deepEqual(failures, [])
-  console.log('PASS: real production QueueDock; default collapse, toggle, mixed queues, placements, attachments, bounded long text, session switch, updates, safe text, read-only actions, narrow and dark layouts.')
+  console.log('PASS: production Chinese Bot inbox, collapsed and expanded header totals, private and group counts, live/snapshot deduplication, pagination, retries, session isolation, read-only messages, and narrow/dark queue layouts.')
   await context.close()
 } finally {
   try {

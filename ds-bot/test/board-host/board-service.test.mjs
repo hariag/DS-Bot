@@ -146,7 +146,8 @@ test('a scheduled task enters the real DSH Session once with a revision-bound me
   while(!deliveries.length&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
   assert.equal(deliveries.length,1)
   const {sessionId,message}=deliveries[0]
-  assert.equal(sessionId,'chat-one');assert.equal(message.role,'user')
+  assert.equal(sessionId,'group-one');assert.equal(message.role,'user')
+  assert.equal(message.source.roomId,'group');assert.equal(message.source.role,'room')
   assert.equal(message.source.taskAction.id.length,64);assert.equal(message.source.taskAction.taskRevision,scheduled.revision)
   assert.equal(message.source.taskAction.actionRevision,scheduled.actionRevision)
   assert.match(message.content[0].text,/Independent evidence/)
@@ -156,6 +157,53 @@ test('a scheduled task enters the real DSH Session once with a revision-bound me
     error => assert.match(error.message,/not ready to schedule|schedulable/i))
   await new Promise(resolve=>setTimeout(resolve,30))
   assert.equal(deliveries.length,1)
+})
+
+test('scheduled owner and reviewer receive their exact evidence fields and can correct a rejected report', async t => {
+  const {rt, deliveries} = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const ready = await rt.boardCall('board-command', { scope, taskId:card.id, type:'schedule', expectedRevision:card.revision, operationId:'schedule-evidence' })
+  await settle(async () => deliveries.length === 1)
+  assert.match(deliveries[0].message.content[0].text, /report, send value exactly as \{"kind":"personal","environment":".+?","evidence":"/)
+  const tool = rt.teamTools.find(item => item.name === 'board_task')
+  const call = async (sessionId, args) => JSON.parse(await tool.execute({ task_id:card.id, ...args }, { agent:{ id:sessionId } }))
+  const {task:working} = await call('group-one', { action:'start', operation_id:'owner-start', expected_revision:ready.revision })
+  const report = { action:'report', operation_id:'owner-report', expected_revision:working.revision }
+  const personal = {kind:'personal', environment:'repository checkout', evidence:'Compared the original and updated objects'}
+  await assert.rejects(call('group-one', {...report, operation_id:'owner-extra', value:{...personal, result:'pass'}}),
+    /invalid fields.*Unexpected value fields result.*"kind":"personal"/)
+  await assert.rejects(call('group-two', {...report, operation_id:'wrong-owner', value:{...personal, result:'pass'}}),
+    /not authorized$/)
+  const oid = 'a'.repeat(40)
+  await assert.rejects(call('group-one', {...report, operation_id:'git-report', value:{
+    ...personal, kind:'git', targetCommit:oid, targetBlob:oid, acceptanceBlob:oid,
+  }}), /report evidence unverified.*"kind":"personal"/)
+  const {task:reported} = await call('group-one', {...report, value:personal})
+  assert.equal(reported.status, 'reported')
+  await settle(async () => deliveries.length === 2)
+  assert.equal(deliveries[1].sessionId, 'group-two')
+  assert.match(deliveries[1].message.content[0].text, /review, send value exactly as \{"result":"pass","evidence":".+?"\}.*"rework"/)
+  const review = { action:'review', operation_id:'reviewer-review', expected_revision:reported.revision }
+  const decision = { result:'pass', evidence:'Independently verified the acceptance criteria' }
+  await assert.rejects(call('group-two', {...review, operation_id:'review-extra', value:{...decision, environment:'fixture'}}),
+    /invalid fields.*Unexpected value fields environment.*"result":"pass"/)
+  const {task:done} = await call('group-two', {...review, value:decision})
+  assert.equal(done.status, 'done')
+
+  const change = await rt.boardCall('board-command', { scope, taskId:card.id, type:'card-details',
+    expectedRevision:done.revision, operationId:'changed-description', value:{description:'Cover a new case'} })
+  const changePrompt = sessionId => settle(async () => deliveries.find(entry => entry.sessionId === sessionId
+    && entry.message.source?.taskAction && entry.message.content[0].text.includes('Task ID: '+change.id+' (revision '))?.message.content[0].text)
+  const ownerPrompt = await changePrompt('group-one')
+  assert.match(ownerPrompt, /Before:.*\nAfter:.*Cover a new case/)
+  assert.match(ownerPrompt, /adjust what is needed or explicitly reassign it/)
+  const {task:startedChange} = await call('group-one', { task_id:change.id, action:'start', operation_id:'changed-start', expected_revision:change.revision })
+  await call('group-one', { task_id:change.id, action:'report', operation_id:'changed-report', expected_revision:startedChange.revision, value:personal })
+  const reviewerPrompt = await changePrompt('group-two')
+  assert.match(reviewerPrompt, /Before:.*\nAfter:.*Cover a new case/)
+  assert.match(reviewerPrompt, /Independently compare the before and after requirements/)
+  assert.match(reviewerPrompt, /board_task review/)
+  assert.doesNotMatch(reviewerPrompt, /adjust what is needed|board_task report/)
 })
 
 test('a personal Bot task can be created and delivered to its private Session', async t => {
@@ -1190,6 +1238,10 @@ test('a chat instruction becomes a scoped board card, with child work, human ste
   assert.ok(current.replies.some(reply => reply.text === edit.value.text))
   assert.ok(current.replies.some(reply => reply.text === idleEdit.value.text))
   const progress = {action:'progress',task_id:item.id,operation_id:'lookup-progress',expected_revision:working.revision,value:{summary:'Lookup implemented',next:'Check empty query'}}
+  const incomplete = {action:'progress',task_id:item.id,expected_revision:current.revision,value:progress.value}
+  await assert.rejects(call('chat-one',incomplete), /progress requires a stable operation_id/)
+  await assert.rejects(call('chat-two',incomplete), /unavailable or the action is not authorized/)
+  await assert.rejects(call('chat-one',{...incomplete,task_id:'does-not-exist'}), /unavailable or the action is not authorized/)
   await assert.rejects(call('chat-one',progress), /revision/)
   const advanced = (await call('chat-one',{...progress,expected_revision:current.revision})).task
   const report = (await call('chat-one',{action:'report',task_id:item.id,operation_id:'lookup-result',expected_revision:advanced.revision,
@@ -1219,7 +1271,12 @@ test('organizing a goal item keeps the original editable task and its actual sta
   const rows = (await rt.boardCall('board-list',{scope})).tasks.filter(t=>t.id===row.id)
   assert.deepEqual(rows.map(r=>[r.parentTaskId,r.legacy.originalStatus]), [[parent.id,'reported']])
   const tool = rt.teamTools.find(tool=>tool.name==='board_task')
-  const list = async () => JSON.parse(await tool.execute({action:'list',room_id:'group',parent_task_id:parent.id},{agent:{id:'chat-one'}}))
+  const query = async args => JSON.parse(await tool.execute(args, {agent:{id:'chat-one'}}))
+  const {itemsQuery} = await query({action:'show',task_id:parent.id})
+  const list = () => query(itemsQuery)
+  const goal = await query({action:'show',task_id:row.id,room_id:'group'})
+  assert.equal(goal.task.roomId, 'group')
+  assert.equal(goal.itemsQuery, undefined)
   assert.deepEqual((await list()).items.map(r=>[r.kind,r.goalTaskId,r.parentTaskId,r.status]), [['group_goal','check',parent.id,'reported']])
   const release = await rt.boardCall('board-release-create',{scope,operationId:'create-minor',release:{id:'minor',name:'Verify release',version:'1.1'}})
   const latestParent = (await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===parent.id)

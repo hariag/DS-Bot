@@ -208,7 +208,7 @@ export function install(rt) {
       const goal = rt.goalView?.(rt.roomOf(room.id)) ?? (room.goal?.ownerReview?.checks ? {
         ...room.goal, ownerReview: { ...room.goal.ownerReview, checks: Object.fromEntries(Object.entries(room.goal.ownerReview.checks).map(([id, check]) => [id, check?.scopedQueueVersion === undefined ? check : { ...check, unresolved: true }])) },
       } : room.goal)
-      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), memberSessions: sessions ?? {}, ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -351,7 +351,7 @@ export function install(rt) {
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-const READS = new Set(['queue-inspect', 'board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff'])
+const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -436,6 +436,9 @@ const READS = new Set(['queue-inspect', 'board-list', 'board-release-list', 'boa
         case 'legacy-review-finding':
         case 'legacy-review-decision':
           return ok(await rt.legacyReviewCall(endpoint, body))
+        case 'board-project':
+        case 'board-project-bind':
+        case 'board-project-decide':
         case 'board-list':
         case 'board-release-list':
         case 'board-release-create':
@@ -619,7 +622,7 @@ const READS = new Set(['queue-inspect', 'board-list', 'board-release-list', 'boa
           await rt.load()
           const bot = rt.botOf(String(body.botId ?? ''))
           if (bot === undefined) return fail('Unknown Bot', 'bot/not-found')
-          await rt.resumeBot(bot)
+          await rt.resumeBot(bot, body.sessionId, body.turn)
           return ok(true)
         }
         // The avatar library: photos the user imported once, kept beside the team.
@@ -658,6 +661,7 @@ const READS = new Set(['queue-inspect', 'board-list', 'board-release-list', 'boa
           const { room, changes } = await rt.updateRoom(body.id, {
             name: body.name,
             notice: body.notice,
+            expectedNotice: body.expectedNotice,
             mode: body.mode,
             admin: body.admin,
             members: Array.isArray(body.members) ? body.members : undefined,

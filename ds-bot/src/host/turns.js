@@ -8,6 +8,7 @@ import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, LATE_ANSWER, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { cleanText } from './diagnostics.js'
 import { absoluteLinks } from './links.js'
+import { answersLocally } from './handoffs.js'
 import { splitRef, textOf } from './text.js'
 import { threadCurrentOfPart } from './threads.js'
 import { viaOf } from '../shared/im-platforms.js'
@@ -483,9 +484,6 @@ export function install(rt) {
     void rt.save().catch(() => {})
   }
 
-  // A request whose audience is the user is answered in the recipient's own chat: that
-  // turn stays visible there and its reply is not routed back to the sender.
-  const answersUser = info => info.role === 'request' && info.audience === 'user'
   // Roles whose turn owes the sender a reply: a 'stopped' notice asks the Bot to
   // acknowledge, exactly like a request.
   const expectsReply = info => info.role === 'request' || info.role === 'stopped'
@@ -528,7 +526,7 @@ export function install(rt) {
         held.push(...[...(agent?.inbox?.nextStep ?? []), ...(agent?.inbox?.nextTurn ?? [])].map(message => message.source))
       }
       for (const source of held) {
-        if (source?.kind === SOURCE_KIND && expectsReply(source) && !answersUser(source)) waiting.set(source.exchangeId, [id, source])
+        if (source?.kind === SOURCE_KIND && expectsReply(source) && !answersLocally(source)) waiting.set(source.exchangeId, [id, source])
       }
       live.delete(id)
       setActivity(id, undefined)
@@ -549,7 +547,7 @@ export function install(rt) {
       entry.joined = info.joined.filter(item => item?.info !== undefined && item.info !== null)
     }
     if (rt.groupOwners.has(sessionId)) return
-    if ((expectsReply(info) && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
+    if ((expectsReply(info) && !answersLocally(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
       markExchangeTurn(sessionId, entry.turn)
     }
   }
@@ -796,19 +794,35 @@ export function install(rt) {
 
   // Retry sends a failed greeting again; other failed inputs stay in their original
   // Session and are tracked by event sequence until a completed turn settles them.
-  async function resumeBot(bot) {
-    if (await rt.releaseKickoff(bot)) return
+  async function resumeBot(bot, requestedSession, turn) {
     await rt.load?.()
-    if (rt.greetingOut?.(bot.id)) return
-    const candidates = new Set([
-      rt.chatOf(bot.id),
-      ...(rt.groupSessionsOf?.(bot.id) ?? []),
-      ...(Array.isArray(bot.segments) ? bot.segments.map(segment => segment.sessionId) : []),
-    ].filter(sessionId => typeof sessionId === 'string'))
+    const own = rt.chatOf(bot.id)
+    const groupOf = id => rt.groupOwners.get(id)?.roomId
+    const current = id => {
+      const roomId = groupOf(id)
+      if (roomId !== undefined) {
+        const room = rt.roomOf(roomId)
+        return rt.groupOwners.get(id).botId === bot.id && room?.sessions?.[bot.id] === id && room.members.includes(bot.id)
+      }
+      return id === own || rt.chatOwners.get(id) === bot.id
+    }
+    const target = requestedSession ?? bot.blocked?.sessionId
+    if (target !== undefined && (typeof target !== 'string' || !target || !current(target))) throw new Error('Open the current conversation to retry its failed work.')
+    if (turn !== undefined && (!Number.isSafeInteger(turn) || requestedSession === undefined ||
+      !(bot.failures?.[target]?.turn === turn || (bot.blocked?.sessionId === target && bot.blocked.turn === turn)))) {
+      throw new Error('This failure has changed. Open the current conversation to check its status.')
+    }
+    const groupSessions = rt.groupSessionsOf?.(bot.id) ?? []
+    if (target === own || (target === undefined && !groupSessions.length)) {
+      if (await rt.releaseKickoff(bot) || rt.greetingOut?.(bot.id)) return
+    }
+    const candidates = target === undefined
+      ? new Set([own, ...groupSessions, ...(bot.openParts ?? []).map(part => part.sessionId)].filter(current))
+      : new Set([target])
     for (const sessionId of candidates) await reconcilePending(sessionId)
     const sessions = Object.entries(state.pendingInputs ?? {})
-      .filter(([, items]) => Array.isArray(items) && items.some(item => item.ownerId === bot.id))
-      .sort((a, b) => Math.min(...a[1].map(item => item.seq)) - Math.min(...b[1].map(item => item.seq)))
+      .filter(([id, items]) => candidates.has(id) && Array.isArray(items) && items.some(item => item.ownerId === bot.id))
+    if (sessions.length > 1) throw new Error('Several conversations have outstanding work. Retry in the original conversation.')
     if (sessions.length > 0) {
       for (const [sessionId] of sessions) {
         await reconcilePending(sessionId)
@@ -817,6 +831,7 @@ export function install(rt) {
         const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
         if (agent === undefined) continue
         if (agent.status === 'running') continue
+        if (items.some(item => rt.isHeldRecoveryInput?.(sessionId,item))) throw new Error('The interrupted turn has an unknown outcome. Check its original result in the task board recovery records.')
         const ids = items.map(item => item.id)
         const queuedRecovery = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .some(message => Array.isArray(message?.source?.recoveryIds) && message.source.recoveryIds.some(id => ids.includes(id)))
@@ -838,6 +853,9 @@ export function install(rt) {
           // A turn known to have failed may be retried with a new key.
           delete state.pendingRecovery[sessionId]
         }
+        if (!current(sessionId)) throw new Error('The original conversation changed before retry.')
+        const roomId = groupOf(sessionId)
+        if (roomId && rt.goalRecoveryBlocked?.(rt.roomOf(roomId), bot.id)) throw new Error('Resume the stopped group work in its original group.')
         const recoveryIds = ids
         const recoveryKey = randomUUID()
         state.pendingRecovery ??= {}
@@ -845,7 +863,13 @@ export function install(rt) {
         // Do not send unless the recovery key can survive this process stopping.
         await rt.save({ required: true })
         try {
-          await rt.deliver({ toId: bot.id, sessionId, role: 'continue', recoveryIds, recoveryKey, text: RECOVERY_TEXT })
+          await rt.deliver({ toId: bot.id, sessionId, roomId, role: 'continue', recoveryIds, recoveryKey, text: RECOVERY_TEXT }, {
+            beforeAdmission: () => {
+              if (!current(sessionId) || groupOf(sessionId) !== roomId || (roomId && rt.goalRecoveryBlocked?.(rt.roomOf(roomId), bot.id))) {
+                throw new Error('The original conversation changed before retry.')
+              }
+            },
+          })
         } catch (error) {
           // followup may already have run when its subsequent Session flush fails.
           // Retain the durable marker rather than creating a new recovery identity.
@@ -856,13 +880,8 @@ export function install(rt) {
       }
       return
     }
-    if (live.get(rt.chatOf(bot.id))?.turn !== undefined) return
-    const code = bot.blocked?.code
-    await rt.deliver({
-      toId: bot.id,
-      role: 'continue',
-      text: `Your last turn failed${code ? ` (${code})` : ''} and the user has fixed it. Answer the user's last unanswered message.`,
-    })
+    if (live.get(target ?? own)?.turn !== undefined) return
+    throw new Error('No outstanding input was found for this retry. Check the original conversation and its recovery records.')
   }
 
   const businessInput = source => source?.reviewInspect !== true && (source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === 'schedule'
@@ -982,7 +1001,7 @@ export function install(rt) {
     }
     await reconcilePending(agent.id, signal)
     if (signal.aborted) return decision
-    const pending = state.pendingInputs?.[agent.id] ?? []
+    const pending = (state.pendingInputs?.[agent.id] ?? []).filter(item => !rt.isHeldRecoveryInput?.(agent.id,item))
     const inStep = decision.messages.flatMap(message => Array.isArray(message?.source?.recoveryIds)
       ? message.source.recoveryIds.filter(value => typeof value === 'string') : [])
     entry.recoveryIds = [...new Set([...(entry.recoveryIds ?? []), ...inStep])]
@@ -996,9 +1015,10 @@ export function install(rt) {
     }
     entry.recoveryStepHandled = true
     entry.turnRecoveryKey = randomUUID()
+    const recoveryRoom = rt.groupOwners.get(agent.id)?.roomId
     const recovery = createUserMessage({
       content: [{ type: 'text', text: RECOVERY_TEXT }],
-      source: { kind: SOURCE_KIND, form: 'snapshot', role: 'continue', recoveryIds, recoveryKey: entry.turnRecoveryKey },
+      source: { kind: SOURCE_KIND, form: 'snapshot', role: 'continue', ...(recoveryRoom ? {roomId:recoveryRoom} : {}), recoveryIds, recoveryKey: entry.turnRecoveryKey },
     })
     return { ...decision, messages: [recovery, ...decision.messages] }
   })
@@ -1024,7 +1044,6 @@ export function install(rt) {
       && !stoppedSubagentParents.has(parentId) && !stoppedSubagents.has(info.id)) {
       noteSubagentFailure(parentId, info.id, { stopReason: info.stopReason, helper, closing: textOf(info?.lastAssistantMessage) })
     }
-    void rt.goalSettled?.(rt.roomOf(owner.roomId)).catch(error => rt.warn('ds-bot: goal settle failed: %s', error))
   })
 
   const laterTarget = (id) => {
@@ -1130,7 +1149,7 @@ export function install(rt) {
           // place, the same as a request that joins a running turn.
           if (carry.info !== undefined && claimedPending !== undefined
             && claimedPending.exchangeId !== carry.info.exchangeId
-            && (expectsReply(claimedPending) || claimedPending.role === 'room') && !answersUser(claimedPending)) {
+            && (expectsReply(claimedPending) || claimedPending.role === 'room') && !answersLocally(claimedPending)) {
             entry.joined = [...carry.joined, { info: claimedPending, text: claimedPendingText }]
           }
         }
@@ -1162,7 +1181,6 @@ export function install(rt) {
           // child active and preserves its label until it actually settles.
           if (source.kind === 'subagent-settled' && childId !== undefined) {
             noteSubagentEnd(childId)
-            if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle failed: %s', error))
           }
           if (stoppedSubagentParents.has(id) || (childId !== undefined && stoppedSubagents.has(childId))) {
             entry.suppressedSubagent = true
@@ -1260,7 +1278,7 @@ export function install(rt) {
             // A result for other work than this turn's informs it, and comes back in a
             // turn of its own once this one ends, which goes on with that work.
             entry.later = [...(entry.later ?? []), { info: source, text: textOf(event.data.content).replace(/^\[(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, '') }]
-          } else if ((expectsReply(source) || source.role === 'room') && !answersUser(source)
+          } else if ((expectsReply(source) || source.role === 'room') && !answersLocally(source)
             && source.exchangeId !== entry.info?.exchangeId
             && !(entry.joined ?? []).some(joined => joined.info.exchangeId === source.exchangeId)) {
             // A request that lands inside a running turn steers that work but is
@@ -1516,7 +1534,7 @@ export function install(rt) {
         // the turn's text (or a stopped-before-answer line), or nothing.
         const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
         const answer = (source, reply) => {
-          if (!expectsReply(source) || answersUser(source)) return
+          if (!expectsReply(source) || answersLocally(source)) return
           if (failure !== undefined) {
             // The sender was told a reply comes later; without this it would wait forever.
             tellSender(id, source, `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`)
@@ -1593,7 +1611,6 @@ export function install(rt) {
         } else if (watched && !retry && info?.role === 'room' && info.reviewId && (inspectIncomplete || reason?.kind !== 'completed')) {
           void rt.goalReviewFailed?.(rt.roomOf(info.roomId), id, info.reviewId).catch(error => rt.warn('ds-bot: goal review failure in %s could not be recorded: %s', id, error))
         }
-        if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', id, error))
         break
       }
     }

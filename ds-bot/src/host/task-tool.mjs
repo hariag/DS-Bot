@@ -1,14 +1,29 @@
+export const OWNER_REPORT_FIELDS = 'For board_task report, send value exactly as {"kind":"personal","environment":"where you checked","evidence":"what you checked and observed"}. Include relevant Git commit and blob IDs in the evidence text.'
+export const REVIEW_FIELDS = 'For board_task review, send value exactly as {"result":"pass","evidence":"your independent findings"}. Use "pass" only after independently verifying the acceptance criteria. Use "rework" and identify the gap if they are unmet.'
+
+function evidenceFieldError(args, error) {
+  const report = args.action === 'report'
+  if (!report && args.action !== 'review') return error
+  const invalid = ['invalid fields','invalid evidence','invalid environment','invalid evidence kind','invalid evidence identity',
+    'invalid personal evidence','invalid review evidence','invalid review'].includes(error?.message)
+  if (!invalid && !(report && args.value?.kind === 'git' && error?.message === 'report evidence unverified')) return error
+  const allowed = report ? ['kind','environment','evidence'] : ['result','evidence']
+  const unexpected = Object.keys(args.value ?? {}).filter(key => !allowed.includes(key) && /^[a-zA-Z][a-zA-Z0-9_]{0,32}$/.test(key)).slice(0,5)
+  const hint = report ? OWNER_REPORT_FIELDS : REVIEW_FIELDS
+  return new Error([error.message, unexpected.length ? 'Unexpected value fields '+unexpected.join(', ') : '', hint].filter(Boolean).join('. '), {cause:error})
+}
+
 // Registration is kept separate from the journal; the host supplies the real
 // DSH defineTool and the workflow instance backed by its current writer lock.
 export function installTaskTool(rt, workflow, defineTool) {
   if (!Array.isArray(rt?.teamTools) || typeof workflow?.invoke !== 'function' || typeof defineTool !== 'function') throw new TypeError('Task tool dependencies required')
   const tool = defineTool({
     name: 'board_task',
-    description: 'Find work with list. Register actionable instructions on the group board before executing. For register, supply both task_id and operation_id, plus room_id in private chat. Registration records work without dispatch. Show the original card before any update. Use one stable operation_id for one exact logical update; if the outcome is unknown, call operation with that same ID before doing anything again. Only the real owner may start or report, and only its independent reviewer may review. The host checks actor, scope and required evidence fields; the independent reviewer checks whether the evidence meets acceptance. A report is not an acceptance. Respect paused goals, existing work, dependencies, authorization, and the 30-step turn budget.',
+    description: 'Find work with list. Register actionable instructions on the group board before executing. For register, supply both task_id and operation_id, plus room_id in private chat. Registration records work without dispatch. Show the original card before any update. For a group card, pass its returned itemsQuery to board_task to read one page of child items, including linked group-goal items. Finish and independently review the items before reporting the parent. A working owner records partial results or a pending dependency on the original card with progress. Use one stable operation_id for one exact logical update; if the outcome is unknown, call operation with that same ID before doing anything again. Only the real owner may start or report, and only its independent reviewer may review. The host checks actor, scope and required evidence fields; the independent reviewer checks whether the evidence meets acceptance. A report is not an acceptance. Respect paused goals, existing work, dependencies, authorization, and the 30-step turn budget.',
     parameters: {
       action: { type:'string', required:true, enum:['list','register','show','operation','reply','start','progress','report','review','block','unblock','propose','proposal','plan'], description:'Task action; plan asks the host to create the release lifecycle task chain' },
       task_id: { type:'string', description:'Stable task ID (required for task actions, not for plan)' },
-      room_id: { type:'string', description:'Group board for project work discussed in a private chat. A group session is restricted to its own room.' },
+      room_id: { type:'string', description:'Exact group ID. Copy task.roomId from show; scope includes a room: prefix and cannot be used as room_id. A group session is restricted to its own room.' },
       parent_task_id: { type:'string', description:'Parent feature or bugfix for a task item; use with list to see its items.' },
       query: { type:'string', description:'Filter list by stable ID or case-insensitive text; searches completed work as well.' },
       kind: { type:'string', enum:['card','item','group_goal','shared','proposal','release'], description:'List one type of record. Use release to find minor releases by name, version or ID in the selected group.' },
@@ -16,7 +31,7 @@ export function installTaskTool(rt, workflow, defineTool) {
       cursor: { type:'string', description:'Continue the same list with its nextCursor.' },
       release_id: { type:'string', description:'Minor release ID in the selected group. Use with list to include its cards and items, including completed work, or with plan or register.' },
       requirement: { type:'string', description:'Requirement text for plan' },
-      operation_id: { type:'string', description:'Stable ID for this exact update, or the original ID when checking operation' },
+      operation_id: { type:'string', description:'Required for start, progress, report, review, reply, block, unblock and register. Use a stable ID for this exact update, or the original ID when checking operation.' },
       expected_revision: { type:'integer', description:'Exact task revision from show for a state update' },
       expected_board_revision: { type:'integer', description:'For a group-goal reply, use legacy.boardRevision from show along with expected_revision.' },
       proposal_id: { type:'string', description:'Proposal ID returned by propose, when checking a proposal' },
@@ -27,14 +42,14 @@ export function installTaskTool(rt, workflow, defineTool) {
       }, description:'For register, supply value with title, owner, independent reviewer, acceptance, type and optional description. For propose, a proposed content, status or release change; the user confirms or rejects it in the board Changes panel before it applies. Query it with action proposal.' },
       value: { type:'object', additionalProperties:false, properties: {
         summary:{ type:'string' }, next:{ type:'string' },
-        kind: { type:'string', enum:['git','personal'] }, evidence: { type:'string' },
+        kind: { type:'string', enum:['git','personal'], description:'The installed Bot report verifier accepts personal evidence for group and personal cards.' }, evidence: { type:'string' },
         targetCommit: { type:'string' }, targetBlob: { type:'string' }, acceptanceBlob: { type:'string' }, environment: { type:'string' },
         result: { type:'string', enum:['pass','rework'] }, reason: { type:'string' }, condition: { type:'string' }, owner: { type:'string' },
-      }, description:'Structured evidence or blocker fields required by the action' },
+      }, description:'progress requires exactly {summary, next}: record the result or pending dependency and who does what next. block requires {reason, condition, owner}. '+OWNER_REPORT_FIELDS+' '+REVIEW_FIELDS },
     },
     output: { schema:{ type:'string' }, render:(_args, value) => [{ type:'text', text:String(value) }] },
     async execute(args, exec) {
-      const result = await workflow.invoke(exec, { action:args.action, taskId:args.task_id, roomId:args.room_id,
+      const input = { action:args.action, taskId:args.task_id, roomId:args.room_id,
         expectedBoardRevision:args.expected_board_revision, query:args.query, cursor:args.cursor, parentTaskId:args.parent_task_id,
         kind:args.kind, mine:args.mine,
         ...(args.release_id === undefined ? {} : { releaseId:args.release_id }),
@@ -44,8 +59,9 @@ export function installTaskTool(rt, workflow, defineTool) {
         ...(args.proposal_id === undefined ? {} : { proposalId:args.proposal_id }),
         ...(args.note === undefined ? {} : { note:args.note }),
         ...(args.change === undefined ? {} : { change:args.change }),
-        ...(args.value === undefined ? {} : { value:args.value }) })
-      return JSON.stringify(result)
+        ...(args.value === undefined ? {} : { value:args.value }) }
+      try { return JSON.stringify(await workflow.invoke(exec, input)) }
+      catch (error) { throw evidenceFieldError(args, error) }
     },
   })
   rt.teamTools.push(tool)

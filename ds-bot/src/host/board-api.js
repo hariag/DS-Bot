@@ -146,7 +146,9 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     history(scope, principal, taskId) {
       if (principal?.kind !== 'user') throw fail('Task history is unavailable')
       visibleTask(scope, principal, taskId)
-      return store.history(taskId)
+      const history=store.history(taskId)
+      const events=scope.kind==='room' ? store.projectCoordination?.taskHistory(scope.id,taskId) : undefined
+      return events?.length ? {...history, projectEvents:events, projectRooms:[...new Set(events.flatMap(e=>e.audience))].map(id=>({id,name:roster().rooms[id]?.name || id}))} : history
     },
     operation(scope, principal, operationId) {
       if (!nonempty(operationId)) throw fail('Invalid operation ID')

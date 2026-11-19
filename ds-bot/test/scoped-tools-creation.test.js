@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
+import { privateTempDir } from './private-temp.mjs'
 import { TEAM_TOOLS } from '../src/host/constants.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -41,7 +42,7 @@ const TEAM = {
 
 let rt
 const start = (team = TEAM, services = {}, globals = [], shared = {}) => {
-  const home = shared.home ?? mkdtempSync(join(tmpdir(), 'ds-bot-scoped-'))
+  const home = shared.home ?? privateTempDir(join(tmpdir(), 'ds-bot-scoped-'))
   if (shared.home === undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   // `scoped` and `restricted` model each Session's own tool layer, and
   // `liveAgents` the DSH registry: shared across two runtimes they keep a
@@ -322,12 +323,11 @@ test('a fresh part Session has the scoped tools before its first step', async (t
   const moved = await host.tool('update_bot', { work_dir: project }, 'b')
   assert.equal(String(moved).includes('From your next step on'), true)
   // The next step sees the folder change and switches to a fresh part.
-  const preStep = host.ctx.listeners.get('agent/pre-step').find(fn => fn.name === 'followRunModeStep')
-  assert.ok(preStep, 'the run-mode pre-step listener is registered')
-  const answer = await preStep(
-    { agent: host.agentOf('b'), messages: [{ role: 'user', content: [{ type: 'text', text: 'go on' }], source: { kind: 'user' } }], step: 2, signal: AbortSignal.timeout(60_000) },
-    async () => 'next',
+const payload = { agent: host.agentOf('b'), messages: [{ role: 'user', content: [{ type: 'text', text: 'go on' }], source: { kind: 'user' } }], step: 2, signal: AbortSignal.timeout(60_000) }
+  const preStep = host.ctx.listeners.get('agent/pre-step').reduceRight(
+    (next, listener) => () => listener(payload, next), async () => ({kind:'continue',messages:payload.messages}),
   )
+  const answer = await preStep()
   assert.deepEqual(answer, { kind: 'reject' })
   await until(() => hasShowView(host, 's1'), 5000)
   assert.ok(denied(host, 's1'), 'the blocking question tool is denied in the fresh part')
@@ -358,6 +358,31 @@ test("a deleted Bot's Session keeps none of the scope when it is adopted as a pl
   assert.equal((await host.call('agent-adopt', { agentId: agent.id, sessionId: 'b' })).ok, true)
   assert.deepEqual(scopedNames(host, 'b'), [])
   assert.equal(host.restricted.some(entry => entry.sessionId === 'b'), false)
+})
+
+test('project tools reach only live bound room sessions and responsible private sessions', async t => {
+  const team={...TEAM,rooms:{r1:{...TEAM.rooms.r1,sessions:{b:'sb'}}}}
+  const host=start(team)
+  t.after(host.stop)
+  await host.call('state',{})
+  const ids=['a','b','r1','sb','plain1']
+  for (const id of ids) await host.agentCreated(id)
+  const offered=id=>scopedNames(host,id).includes('project_coordination')
+  assert.deepEqual(ids.map(offered),[false,false,false,false,false])
+  const scope={kind:'room',id:'r1'}
+  const bind=await host.call('board-project-bind',{scope,projectId:'project',name:'Project',coordinatorRoomId:'r1',roomIds:['r1'],expectedRevision:0,operationId:'bind'})
+  assert.equal(bind.ok,true,JSON.stringify(bind))
+  // The ordinary Writer can read the project in its group session; its unrelated private chat stays small.
+  assert.deepEqual(ids.map(offered),[true,false,false,true,false])
+  const create=await host.call('board-command',{scope,type:'create',taskId:'feature',operationId:'create',value:{
+    title:'Shared feature',owner:'b',reviewer:'a',acceptance:'Review result',type:'feature',dependencies:[]}})
+  assert.equal(create.ok,true,JSON.stringify(create))
+  const linked=await host.call('board-project-decide',{scope,roomIds:['r1'],operationId:'link',resource:'master/feature',
+    summary:'One source card',expectedRevision:1,taskId:'feature'})
+  assert.equal(linked.ok,true,JSON.stringify(linked)); assert.equal(offered('b'),true)
+  const cancelled=await host.call('board-command',{scope,type:'cancel',taskId:'feature',operationId:'end',expectedRevision:1,value:{reason:'Stopped'}})
+  assert.equal(cancelled.ok,true,JSON.stringify(cancelled))
+  assert.deepEqual(ids.map(offered),[true,false,false,true,false])
 })
 
 test('a member who leaves the group loses the scoped tools', async (t) => {

@@ -130,7 +130,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     const releaseId = boardReleaseId(task, parent, caller, direct)
     const dependencies = (Array.isArray(task.dependencies) ? task.dependencies : []).filter(depId => visibleDependency(caller, depId))
     const change = changeView(task, caller)
+    const linked = store.projectCoordination?.existingLink(task.id) || store.projectCoordination?.existingLink(task.parentTaskId)
     return {
+      ...(linked ? {projectRead:{action:'show',room_id:linked.originRoomId,revision:linked.revision}} : {}),
       id: task.id, scope:task.scope, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer, acceptance: task.acceptance, dependencies,
       // Card content the owner works with, so a show after a handoff or a part switch
@@ -201,7 +203,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
         operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:args.change.value})
       if (!intakeAllowed(caller, request.task)) throw refused()
       const existing = store.get(args.taskId)
-      if (existing && !direct(existing, caller)) throw refused()
+      if (existing && !direct(existing, caller)) {
+        const link = store.projectCoordination?.existingLink(existing.id)
+        if (!link?.audience.includes(caller.roomId)) throw refused()
+        return {alreadyRegistered:true, task:{id:existing.id, roomId:link.originRoomId, revision:existing.revision, status:existing.status},
+          next:'Use the original project task and its assigned owner. No new task or delivery was created.'}
+      }
       const task = scope.run({exec, caller, roomId:args.roomId, taskId:args.taskId, action:'intake-create'}, () => store.create(request))
       return {task:projectDirect(task, caller)}
     }
@@ -260,7 +267,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
           expectedRevision:args.expectedRevision, expectedBoardRevision:args.expectedBoardRevision, value:{text:args.note}}, args.action === 'operation')
       }
       if (goal && args.action === 'show') return {task:{id:goal.id, revision:goal.revision, title:goal.title, owner:goal.owner, status:goal.legacy.originalStatus,
-        scope:`room:${goal.originRoomId}`, acceptance:goal.acceptance, description:goal.description,
+        scope:`room:${goal.originRoomId}`, roomId:goal.originRoomId, acceptance:goal.acceptance, description:goal.description,
         labels:goal.labels.filter(label => typeof label === 'string'), dueDate:goal.dueDate,
         checklist:goal.checklist.filter(item => item && typeof item.text === 'string').map(item => ({text:item.text, checked:item.checked === true})),
         goalNote:goal.goalNote, goalEvents:goal.goalEvents, parentTaskId:goal.parentTaskId, releaseId:goal.releaseId, legacy:goal.legacy,
@@ -271,7 +278,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (direct(task, caller)) {
         const openChanges = store.list().filter(other => other.change?.sourceTaskId === task.id && direct(other, caller)
           && !other.archivedAt && !['cancelled','done'].includes(other.status))
-        return { task:{...projectDirect(task, caller), ...(openChanges.length ? {openChangeRequests:openChanges.map(({id, status}) => ({id, status}))} : {})} }
+        const roomId = roomFor(task)?.id
+        return {
+          task:{...projectDirect(task, caller), ...(roomId ? {roomId} : {}),
+            ...(openChanges.length ? {openChangeRequests:openChanges.map(({id, status}) => ({id, status}))} : {})},
+          ...(roomId && !task.parentTaskId ? {itemsQuery:{action:'list', room_id:roomId, parent_task_id:task.id}} : {}),
+        }
       }
       const projection = sharedProjection(task, caller)
       if (!projection) throw refused()
@@ -329,7 +341,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       const saved = scope.run(context, () => store.createProposal({ operationId: args.operationId ? `proposal:${args.operationId}` : `proposal:${proposalId}`, actor: caller.actor, proposal }))
       return { proposal: saved }
     }
-    if (!actions.has(args.action) || !id(args.operationId) || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1 || !canMutate(task, caller, args.action)) throw refused()
+    if (!actions.has(args.action) || !canMutate(task, caller, args.action)) throw refused()
+    if (!id(args.operationId)) throw new Error(`${args.action} requires a stable operation_id for this exact update`)
+    if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1) throw new Error(`${args.action} requires expected_revision from the current card`)
     const context = { exec, caller, roomId:args.roomId, taskId: task.id, revision: args.expectedRevision, action: args.action }
     const command = { operationId: args.operationId, taskId: task.id, expectedRevision: args.expectedRevision,
       actor: caller.actor, type: args.action, ...(args.action === 'start' ? {sessionId:caller.sid} : {}),
@@ -343,5 +357,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return { task: projectDirect(result, caller) }
   }
 
-  return { invoke, authorize }
+  function conversationKind(actor) {
+    const caller=scope.getStore()?.caller, group=rt.groupOwners?.get(caller?.sid)
+    return caller?.actor===actor && group?.botId===actor && rt.roomOf(group.roomId)?.sessions?.[actor]===caller.sid ? 'group' : 'private'
+  }
+  return { invoke, authorize, conversationKind }
 }
