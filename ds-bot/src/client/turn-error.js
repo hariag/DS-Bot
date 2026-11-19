@@ -157,7 +157,9 @@ export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions 
   const roster = useRoster(value => value)
   const failRow = node?.data ?? {}
   useLayoutEffect(() => { actions.noteTurnVisible?.(sessionId, failRow.turn) }, [actions, sessionId, failRow.turn])
-  const bot = roster.byId?.[sessionId]
+  const room = roster.rooms?.find(room => Object.values(room.memberSessions ?? {}).includes(sessionId))
+  const member = room && Object.keys(room.memberSessions).find(id => room.memberSessions[id] === sessionId)
+  const bot = roster.byId?.[member ?? sessionId]
   // The host corrects a failure DSH classified from the status alone (a 403 content
   // audit arrives as AUTH) and keeps the upstream message and request id. Its record
   // for this part and turn wins over the row's for the copy and Technical details.
@@ -180,7 +182,7 @@ export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions 
   const bound = block !== undefined && block.sessionId === sessionId && block.turn === data.turn
   const legacyMatch = block?.sessionId === undefined && host?.requestId && host.requestId === block?.requestId
   const blocked = block?.code === data.code && (bound || legacyMatch) ? block : undefined
-  const current = bot !== undefined && currentPart(bot) === sessionId && !later && !(latest?.turn > data.turn)
+  const current = bot !== undefined && (member !== undefined || currentPart(bot) === sessionId) && !later && !(latest?.turn > data.turn)
   const provider = data.provider ?? blocked?.provider
   const status = data.status ?? blocked?.status
   const text = failureText(data.code, {
@@ -242,7 +244,7 @@ export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions 
   const resume = () => {
     setRetry('busy')
     setError('')
-    void Promise.resolve(actions.resume(bot.id))
+    void Promise.resolve(actions.resume(bot.id, sessionId, data.turn))
       .then(() => setRetry('sent'), (failure) => { setRetry('idle'); setError(hostText(failure?.message ?? String(failure))) })
   }
   const button = (fix, primary) => {

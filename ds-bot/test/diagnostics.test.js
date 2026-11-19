@@ -444,8 +444,33 @@ test('Retry adds no turn while a greeting is on its way or a turn runs in the Bo
   await rt.resumeBot(rt.bots.b)
   assert.equal(delivered.length, 0)
   emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  await rt.resumeBot(rt.bots.b)
-  assert.deepEqual(delivered.map(args => args.role), ['continue'])
+  await assert.rejects(rt.resumeBot(rt.bots.b), /No outstanding input/)
+  assert.equal(delivered.length, 0)
+})
+
+test('retrying a failed group member stays in that group and leaves other pending inputs alone', async () => {
+  const { rt, delivered } = turnsHost()
+  rt.chatOf = id => id
+  rt.releaseKickoff = async () => false
+  rt.groupSessionsOf = () => ['gb', 'gb2']
+  rt.groupOwners.set('gb', { botId:'b', roomId:'room1' })
+  rt.groupOwners.set('gb2', { botId:'b', roomId:'room2' })
+  rt.roomOf = id => ({ id, members:['b'], sessions:{ b:id === 'room1' ? 'gb' : 'gb2' } })
+  rt.resolveAgent = async () => ({status:'idle', inbox:{nextStep:[],nextTurn:[]}})
+  rt.bots.b.failures = { gb:{turn:3} }
+  rt.state.pendingInputs = { gb:[{ownerId:'b',id:'gb:9',seq:9}], gb2:[{ownerId:'b',id:'gb2:10',seq:10}], b:[{ownerId:'b',id:'b:11',seq:11}] }
+  await assert.rejects(rt.resumeBot(rt.bots.b), /original conversation/)
+  await assert.rejects(rt.resumeBot(rt.bots.b,'gb',2), /failure has changed/)
+  rt.isHeldRecoveryInput = (sid,item) => sid === 'gb' && item.id === 'gb:9'
+  await assert.rejects(rt.resumeBot(rt.bots.b,'gb',3), /unknown outcome/)
+  rt.isHeldRecoveryInput = () => false
+  await rt.resumeBot(rt.bots.b,'gb',3)
+  assert.deepEqual(delivered.map(msg=>[msg.sessionId,msg.roomId,msg.recoveryIds]), [['gb','room1',['gb:9']]])
+  assert.deepEqual(Object.keys(rt.state.pendingRecovery), ['gb'])
+  delete rt.state.pendingInputs.gb
+  await assert.rejects(rt.resumeBot(rt.bots.b,'gb',3), /No outstanding input/)
+  await assert.rejects(rt.resumeBot(rt.bots.b,'retired',3), /current conversation/)
+  assert.equal(delivered.length,1)
 })
 
 // #637: the route a refused turn ran on is read from the Session's request header,

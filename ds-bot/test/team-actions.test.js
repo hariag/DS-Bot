@@ -34,10 +34,10 @@ test('every window reaches the host model providers, and key changes read the te
   assert.equal(pulls(), 4)
 })
 
-test('Retry after a failed turn asks the host to resume the Bot, with nothing but its id', async () => {
+test('Retry sends the failed Bot, Session and turn to the host', async () => {
   const { actions, sent, pulls } = bench()
-  await actions.resume('chief')
-  assert.deepEqual(sent, [['resume', { botId: 'chief' }]])
+  await actions.resume('chief','member-session',3)
+  assert.deepEqual(sent, [['resume', { botId: 'chief', sessionId:'member-session', turn:3 }]])
   assert.equal(pulls(), 1)
 })
 
