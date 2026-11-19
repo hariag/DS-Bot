@@ -14626,6 +14626,8 @@ var ZH = {
   "Cancel card": "取消卡片",
   "Restore card": "恢复卡片",
   "Draft cards are not scheduled.": "起草中的卡片不会进入调度。",
+  "This task item needs an owner and an independent reviewer before it can be submitted.": "此任务项需要先指定负责人和独立验收人，才能提交。",
+  "Set owner and reviewer": "设置负责人和验收人",
   "Save as draft": "保存为起草",
   "Draft cards stay in Draft until they are submitted.": "起草中的卡片会留在起草列，提交后才会进入流程。",
   "Draft cards stay in Draft until they are submitted. A draft can be saved with only a title; owner, reviewer and acceptance can be added later.": "起草中的卡片会留在起草列，提交后才会进入流程。起草只需标题即可保存，负责人、验收人和验收条件可以稍后补充。",
@@ -41017,7 +41019,7 @@ function SideSection({ title, action, children, className = "" }) {
     children
   );
 }
-function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
+function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice, onOpenMore }) {
   const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress);
   const canSubmit = commandOf(commands, "submit") && task.status === "draft";
   const canCancel = commandOf(commands, "cancel") && !["done", "cancelled"].includes(task.status);
@@ -41038,6 +41040,12 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
       (0, import_react54.createElement)("strong", null, progress ? t(progress[1]) : stageLabelOf(task))
     ),
     task.status === "draft" ? (0, import_react54.createElement)("p", { className: "bt-card-note" }, t("Draft cards are not scheduled.")) : null,
+    task.status === "draft" && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer) ? (0, import_react54.createElement)(
+      "div",
+      { className: "bt-card-note" },
+      (0, import_react54.createElement)("p", null, t("This task item needs an owner and an independent reviewer before it can be submitted.")),
+      onOpenMore ? (0, import_react54.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: onOpenMore }, t("Set owner and reviewer")) : null
+    ) : null,
     task.status === "cancelled" ? (0, import_react54.createElement)("p", { className: "bt-card-note" }, t("Cancelled cards are not scheduled and can be restored.")) : null,
     task.dispatchState === "uncertain" ? (0, import_react54.createElement)("p", { className: "bt-card-warning", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
     canMove ? (0, import_react54.createElement)("label", { className: "bt-field" }, (0, import_react54.createElement)("span", null, t("Personal progress")), (0, import_react54.createElement)("select", { value: task.personalProgress, disabled, "aria-label": t("Move personal task"), onChange: (event) => void onCommand(task, { type: "personal-progress" }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => (0, import_react54.createElement)("option", { key: id, value: id }, t(label))))) : null,
@@ -41621,6 +41629,14 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
     else if (result !== "cancelled") setTitleError(t("The title could not be saved."));
   };
   const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value);
+  const openTaskEditor = () => {
+    const more = modal.current?.querySelector(".bt-card-more");
+    if (!more) return;
+    more.open = true;
+    const edit = more.querySelector(".bt-card-more-body button");
+    edit?.click();
+    more.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
   const relatedTasks = (0, import_react54.createElement)(RelatedTasks, {
     task,
     tasks,
@@ -41765,7 +41781,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         (0, import_react54.createElement)(
           "aside",
           { className: "bt-card-side" },
-          (0, import_react54.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          (0, import_react54.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand, onOpenMore: canEdit ? openTaskEditor : void 0 }),
           (0, import_react54.createElement)(PeopleBlock, { task, actors }),
           !legacy ? (0, import_react54.createElement)(CardTextEditor, { task, field: "stage", editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }) : null,
           (0, import_react54.createElement)(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),

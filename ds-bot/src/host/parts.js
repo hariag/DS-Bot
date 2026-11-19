@@ -1469,7 +1469,7 @@ export function install(rt) {
   // Runs first: an earlier part hands its input on, a part past the hard line makes
   // room before the step (condensed in place, or it stops and goes on in a fresh
   // part), and the backend's own pre-step listener sees the wrapper.
-  ctx.on('agent/pre-step', async (payload, next) => {
+  ctx.on('agent/pre-step', async function followRunModeStep(payload, next) {
     await rt.load()
     const { agent } = payload
     const inspection = rt.live.get(agent.id)?.info?.reviewInspect === true ? rt.live.get(agent.id).info

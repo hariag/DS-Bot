@@ -2264,6 +2264,8 @@ const ZH = {
   'Cancel card': '取消卡片',
   'Restore card': '恢复卡片',
   'Draft cards are not scheduled.': '起草中的卡片不会进入调度。',
+  'This task item needs an owner and an independent reviewer before it can be submitted.': '此任务项需要先指定负责人和独立验收人，才能提交。',
+  'Set owner and reviewer': '设置负责人和验收人',
   'Save as draft': '保存为起草',
   'Draft cards stay in Draft until they are submitted.': '起草中的卡片会留在起草列，提交后才会进入流程。',
   'Draft cards stay in Draft until they are submitted. A draft can be saved with only a title; owner, reviewer and acceptance can be added later.': '起草中的卡片会留在起草列，提交后才会进入流程。起草只需标题即可保存，负责人、验收人和验收条件可以稍后补充。',

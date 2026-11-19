@@ -128,7 +128,7 @@ test('fast-forward updates a real Git checkout to the fetched upstream commit', 
   assert.equal(readFileSync(join(root, 'version.txt'), 'utf8').replaceAll('\r\n', '\n'), 'two\n')
 })
 
-test('check_commit verifies the sole parent and exact NUL-safe path set without changing a detached checkout', async t => {
+test('check_commit verifies the sole parent and exact NUL-safe path set without changing a detached checkout', { skip: process.platform === 'win32' ? 'Windows filenames cannot contain a newline' : false }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'repo-check-commit-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()

@@ -6,10 +6,13 @@
 ## 第一轮：自动化门禁
 
 - `build-client --check`、lint：通过。
-- 完整 `npm test`：3508 tests，3490 passed，3 failed。
-  - `test/install.test.js`「apply registers listeners and effects in a fixed order」：真实的过期断言。最新代码新增了 `on session/event`、`on agent-preset/selected`、`cancel Fanttec quota retries`、`schedule/changed`、`schedule/resolve-agent` 等注册；更新期望顺序后 9/9 通过。
+- 完整 `npm test`（合并最新 `main` 后）：3565 tests，3546 passed，3 failed，16 skipped。
+  - `test/install.test.js`「apply registers listeners and effects in a fixed order」：真实的过期断言。最新代码新增了 `on session/event`、`on agent-preset/selected`、`cancel Fanttec quota retries`、`schedule/changed`、`schedule/resolve-agent`、`on agent/pre-step (prepend)` 等注册；更新期望顺序后 9/9 通过。
+  - 合并最新 main 后 `run-mode` / `switch-keeps-input` / `work-dir` / `scoped-tools-creation` 共 42 个子测试失败：不是产品回归，而是测试用 `ctx.listeners.get('agent/pre-step').at(-1)` 假定“最后一个注册的 pre-step 就是 run-mode/目录监听器”；新增的 pre-step 注册改变了顺序。给 `parts.js` 的监听器命名 `followRunModeStep`，相关测试按名字取监听器后 157 tests、156 passed、0 failed（1 skipped）。
+  - `test/repository-sync.test.js` 的 NUL-safe 路径测试在 Windows 上无法创建带换行的文件名；标记 `skip`（Windows 文件系统限制），其余 8/8 通过。
   - `test/connectors-gateway.test.js`、`test/local-agents-mcp-races.test.js`：Node 24.14 + Windows `--test-force-exit` 的 libuv `UV_HANDLE_CLOSING` 环境断言；去掉 force-exit 后两文件 9/9 通过。
-  - `test/roster.test.js` 的一条时序断言在整套并发下偶发失败；单独运行 65/65 通过，属已知套件负载时序，不是代码回归。
+  - `test/connectors-gateway-egress.test.js` 在整套并发下偶发 body-timeout 时序失败；单独运行 16/16 通过。
+  - `test/roster.test.js` 的一条时序断言在整套并发下偶发失败；单独运行 65/65 通过。
 
 ## 第二轮：Host / 领域审核
 
@@ -32,7 +35,8 @@
 2. **发布 revision 变化时团队表单静默消失**：保留表单，显示“发布已变化，请关闭并重新打开”并禁用保存/自动填充；不再丢失已选内容。
 3. **保存请求挂起时对话框无法关闭**：Escape/背景/✕/取消不再被 `saving` 锁死；请求继续在后台由 operation fence 处理，关闭后可回到详情并用 Check action 核查。
 4. **创建发布在响应丢失后重试会重复创建**：发布创建对话框保留同一 `operationId` 和 release id；失败后先查 `board-operation`，已提交则直接加载，明确拒绝则清空后重试，未知则保留同一操作供用户重试。
-5. 复核后保持不动的两项：
+5. **未指派的起草任务项没有提交入口**：任务项在 `owner/reviewer` 都为空时按设计不能提交（`isUnassignedItemDraft`），但界面只留下「取消卡片」，用户不知道该先指派。现在状态区会说明原因，并提供「设置负责人和验收人」按钮，直接打开 More actions → Edit task；指派后出现提交入口。
+6. 复核后保持不动的两项：
    - 「中断的工作」默认不显示数量，是 PR #51 为延迟采样做的性能取舍；展开时才拉取完整恢复记录。
    - board 级错误与恢复读取错误共用同一错误槽；要彻底区分需要新增轻量恢复摘要接口，本轮未改协议。
 
@@ -42,5 +46,5 @@
 - Board e2e：**22/22 passed**，run `20261119013717`。
 - Lifecycle e2e：PASS，11 done，发布报告生成并发布。
 - Host + i18n：290 tests，288 passed（2 skipped），0 failed。
-- 完整测试套件（合并最新 main 后）：见提交说明。
+- 完整测试套件：3565 tests，3546 passed，3 failed，16 skipped；3 个失败均为上述环境/并发时序问题，单独运行均通过。
 - `build-client --check`、lint：通过（0 errors）。

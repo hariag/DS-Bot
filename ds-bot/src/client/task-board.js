@@ -1311,7 +1311,7 @@ function SideSection({ title, action, children, className = '' }) {
     children)
 }
 
-function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
+function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice, onOpenMore }) {
   const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress)
   const canSubmit = commandOf(commands, 'submit') && task.status === 'draft'
   const canCancel = commandOf(commands, 'cancel') && !['done','cancelled'].includes(task.status)
@@ -1327,6 +1327,10 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
       h('span', { className: 'bt-board-stage-dot bt-board-stage-dot-' + (task.status || 'unknown'), 'aria-hidden': true }),
       h('strong', null, progress ? t(progress[1]) : stageLabelOf(task))),
     task.status === 'draft' ? h('p', { className: 'bt-card-note' }, t('Draft cards are not scheduled.')) : null,
+    task.status === 'draft' && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer)
+      ? h('div', { className: 'bt-card-note' },
+        h('p', null, t('This task item needs an owner and an independent reviewer before it can be submitted.')),
+        onOpenMore ? h('button', { type:'button', className:'bt-card-mini', disabled, onClick:onOpenMore }, t('Set owner and reviewer')) : null) : null,
     task.status === 'cancelled' ? h('p', { className: 'bt-card-note' }, t('Cancelled cards are not scheduled and can be restored.')) : null,
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
@@ -1690,6 +1694,14 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
     else if (result !== 'cancelled') setTitleError(t('The title could not be saved.'))
   }
   const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value)
+  const openTaskEditor = () => {
+    const more = modal.current?.querySelector('.bt-card-more')
+    if (!more) return
+    more.open = true
+    const edit = more.querySelector('.bt-card-more-body button')
+    edit?.click()
+    more.scrollIntoView({ block:'center', behavior:'smooth' })
+  }
   const relatedTasks = h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
     onMove: !uncertain && !busy && commandOf(commands, legacy ? 'move-goal-item' : 'move-item')
       ? (parent, parentTaskId) => onCommand(legacy ? parent : task, { type: legacy ? 'move-goal-item' : 'move-item' },
@@ -1751,7 +1763,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(CommentsEditor, { task, actors, canPost: canComment, canEdit: canEditComment, canDelete: canDeleteComment, disabled: uncertain || busy, postType: commentType, onCommand }),
           h(ActivitySection, { task })),
         h('aside', { className: 'bt-card-side' },
-          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand, onOpenMore: canEdit ? openTaskEditor : undefined }),
           h(PeopleBlock, { task, actors }),
           !legacy ? h(CardTextEditor, { task, field:'stage', editable:canDetails, disabled:uncertain || busy, onSave:detailsSave }) : null,
           h(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
