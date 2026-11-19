@@ -3,6 +3,7 @@ import { readFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import assert from 'node:assert/strict'
+import { DICTIONARY } from '../src/client/i18n.js'
 import { harnessRequire, playwrightOf, reactDirOf } from './harness-root.mjs'
 
 const plugin = resolve(import.meta.dirname, '..')
@@ -40,6 +41,8 @@ try {
   await page.addScriptTag({ content: `
     var ${reactBinding}=window.React;
     var t=(s,params={})=>({'Bot private {n}':'Bot 私聊 {n} 条','Group {n}':'群聊 {n} 条','Bot private messages waiting; count unavailable':'Bot 私聊有待处理消息（数量待确认）','Group messages waiting; count unavailable':'群聊有待处理消息（数量待确认）','Next step':'当前回合下一步','Next turn':'下一回合'}[s]??s).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??''));
+    const originalT=t, queueZh=${JSON.stringify(DICTIONARY.zh)};
+    t=(key,params={})=>globalThis.fixtureLocalized ? (queueZh[key]??key).replace(/\\{(\\w+)\\}/g,(_,k)=>String(params[k]??'')) : originalT(key,params);
     for(const name of ${JSON.stringify(icons)}) globalThis[name]=()=>React.createElement('span',{'aria-hidden':true},'·');
     ${production}
     const style=document.createElement('style');style.textContent=QUEUE_CSS;document.head.append(style);
@@ -50,14 +53,14 @@ try {
     const props={
       useSession:select=>select({pendingSubmissions:[],running:true,subagent:null}),
       useProjection:()=>globalThis.fixtureInbox,
-      useRoster:select=>select({byId:{[globalThis.fixtureSession]:{id:'bot'}}}),
+      useRoster:select=>select(globalThis.fixtureSession.startsWith('room-') ? {roomsById:{[globalThis.fixtureSession]:{id:'room'}}} : {byId:{[globalThis.fixtureSession]:{id:'bot'}}}),
       useWork:select=>select({groupQueues:{bot:globalThis.fixtureGroup}}),
       updateQueue:()=>{throw Error('fixture must not mutate queue')},
       loadImage:async()=>'',renderFactorySlot:undefined,
       actions:{reportError:error=>globalThis.fixtureErrors.push(String(error))}
     };
     const root=ReactDOM.createRoot(document.getElementById('root'));
-    globalThis.renderFixture=(inbox,sessionId,group=[])=>{globalThis.fixtureInbox=inbox;globalThis.fixtureSession=sessionId;globalThis.fixtureGroup=group;ReactDOM.flushSync(()=>root.render(React.createElement(QueueDock,{...props,sessionId})))};
+    globalThis.renderFixture=(inbox,sessionId,group=[])=>{globalThis.fixtureInbox=inbox;globalThis.fixtureSession=sessionId;globalThis.fixtureGroup=group;ReactDOM.flushSync(()=>root.render(React.createElement(QueueDock,{...props,sessionId,inspectQueue:globalThis.fixtureInspect})))};
   ` })
   const bot = (id, text, role = 'reply') => ({ id, source: { kind: 'bot', form: 'relay', role, senderName: '测试 Bot', exchangeId: `exchange-${id}` }, content: [{ type: 'text', text }] })
   const user = { id: 'user-1', source: { kind: 'user', rpcId: 'fixture-request' }, content: [{ type: 'text', text: '用户消息测试' }] }
@@ -220,6 +223,74 @@ try {
   await page.screenshot({ path: join(work, 'queue-dark.png'), fullPage: true })
   assert.deepEqual(failures, [], 'browser must not throw')
   assert.deepEqual(await page.evaluate(() => globalThis.fixtureErrors), [])
+  // The real Chinese labels and passive transport are exercised without sending
+  // a message to a Session. A placeholder alone must offer an actionable read.
+  await page.evaluate(() => {
+    globalThis.fixtureLocalized = true
+    globalThis.fixtureReads = []
+    globalThis.fixtureInspect = (cursor, signal) => new Promise((resolve, reject) =>
+      globalThis.fixtureReads.push({cursor, signal, resolve, reject}))
+    globalThis.renderFixture({'next-turn':[], 'next-step':[]}, 'inspect-a',
+      [{id:'unknown', roomId:'group', roomName:'研发群', unavailable:true}])
+  })
+  const inspect = page.locator('[data-inbox-inspection]')
+  const readInbox = inspect.getByRole('button', {name:'查看 Bot 收件箱'})
+  const completedAt = Date.UTC(2026, 10, 19, 0, 0)
+  const known = {sessionId:'current-private', kind:'private', earlier:false, status:'ready',
+    rows:[{id:'ack', senderName:'成员 A', text:'保留的收件信息'}]}
+  const pending = {sessionId:'earlier-hidden', kind:'group', roomName:'研发群', earlier:true, status:'unavailable', rows:[]}
+  const empty = {sessionId:'current-group', kind:'group', roomName:'开发群', earlier:false, status:'ready', rows:[]}
+  const firstRead = {readAt:completedAt,total:5,nextCursor:'second',sources:[known,pending,empty]}
+  const finishRead = value => page.evaluate(result => globalThis.fixtureReads.at(-1).resolve(result), value)
+  assert.equal(await readInbox.count(), 1)
+  assert.equal(await page.evaluate(() => globalThis.fixtureReads.length), 0)
+  assert.doesNotMatch(await page.locator('body').innerText(), /群收件箱暂不可读取/)
+  await readInbox.click()
+  await finishRead(firstRead)
+  await inspect.getByText('保留的收件信息').waitFor()
+  assert.match(await inspect.innerText(), /已检查 3 \/ 5 个收件箱/)
+  assert.match(await inspect.innerText(), /历史会话/)
+  assert.match(await inspect.innerText(), /当前会话/)
+  assert.match(await inspect.innerText(), /读取时无 Bot 往来消息/)
+  assert.match(await inspect.innerText(), /此次未能读取这个收件箱/)
+  assert.equal(await inspect.locator('.bt-inbox-snapshot>time').getAttribute('datetime'), new Date(completedAt).toISOString())
+  await inspect.getByRole('button', {name:'继续读取'}).click()
+  assert.equal(await page.evaluate(() => globalThis.fixtureReads.at(-1).cursor), 'second')
+  await finishRead({readAt:completedAt+1000,total:5,nextCursor:null,sources:[
+    {...pending,sessionId:'session-00000000-11112222',endedAt:completedAt-86400000,status:'missing'}, {...pending,sessionId:'session-00000000-33334444',status:'migration'}]})
+  await inspect.getByText('找不到该会话').waitFor()
+  assert.match(await inspect.innerText(), /已检查 5 \/ 5 个收件箱/)
+  assert.match(await inspect.innerText(), /该会话需要迁移/)
+  assert.equal(await inspect.locator('.bt-inbox-snapshot>time').count(), 2)
+  assert.match(await inspect.innerText(), /11112222/)
+  assert.equal(await inspect.locator('.bt-inbox-part-date').getAttribute('datetime'), new Date(completedAt-86400000).toISOString())
+  assert.match(await inspect.innerText(), /33334444/)
+  await inspect.locator('.bt-inbox-snapshot').first().getByRole('button', {name:'重试本页'}).click()
+  await finishRead({...firstRead, sources:[known,{...pending,status:'ready'},empty]})
+  await inspect.getByText('本次未发现 Bot 往来消息的历史收件箱：1 个').waitFor()
+  assert.equal(await inspect.locator('.bt-inbox-snapshot').first().getByRole('button', {name:'重试本页'}).count(), 0)
+  assert.equal(await inspect.locator('.bt-inbox-snapshot>time').count(), 2)
+  assert.match(await inspect.innerText(), /已检查 5 \/ 5 个收件箱/)
+  assert.match(await inspect.innerText(), /该会话需要迁移/)
+  await inspect.getByRole('button', {name:'重新读取收件箱'}).click()
+  await page.evaluate(() => globalThis.fixtureReads.at(-1).reject(new Error('offline')))
+  await inspect.getByText('此次读取失败，可以重试。').waitFor()
+  assert.match(await inspect.innerText(), /保留的收件信息/)
+  await inspect.getByRole('button', {name:'重试本次读取'}).click()
+  await finishRead({readAt:completedAt+2000,total:1,nextCursor:null,sources:[empty]})
+  await inspect.getByText('已检查 1 / 1 个收件箱').waitFor()
+  assert.doesNotMatch(await inspect.innerText(), /保留的收件信息/)
+  await inspect.getByRole('button', {name:'重新读取收件箱'}).click()
+  await page.evaluate(() => globalThis.renderFixture({'next-turn':[], 'next-step':[]}, 'room-inspect-b', []))
+  assert.equal(await page.evaluate(() => globalThis.fixtureReads.at(-1).signal.aborted), true)
+  await finishRead(firstRead)
+  assert.equal(await readInbox.getAttribute('aria-expanded'), 'false')
+  assert.doesNotMatch(await inspect.innerText(), /保留的收件信息/)
+  await readInbox.click()
+  await finishRead({readAt:completedAt,total:1,nextCursor:null,sources:[{...empty,kind:'post'}]})
+  await inspect.getByText('读取时无 Bot 往来消息').waitFor()
+
+  assert.deepEqual(failures, [])
   console.log('PASS: real production QueueDock; default collapse, toggle, mixed queues, placements, attachments, bounded long text, session switch, updates, safe text, read-only actions, narrow and dark layouts.')
   await context.close()
 } finally {

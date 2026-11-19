@@ -993,6 +993,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
   const queueFace = (sessionId) => ({
     ...face(),
     sessionId,
+    inspectQueue: (cursor, signal) => call('queue-inspect', {sessionId, ...(cursor ? {cursor} : {})}, signal),
     updateQueue: async (itemId, action) => (await ctx.sessions.binding(sessionId)?.session?.updateQueue(itemId, action)) ?? { ok: false },
     loadImage: (attachment) => ctx.uiConversation.imageUrl(sessionId, attachment),
   })
