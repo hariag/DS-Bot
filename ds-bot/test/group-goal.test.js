@@ -87,7 +87,15 @@ async function start(t, room, services, extraRooms, existingHome) {
       if (listener.length >= 2) listener({ id }, { type, seq: ++seq, data })
     }
   }
-  const tool = (name, args, sessionId, exec = {}) => (rt.teamTools.find(d => d.name === name) ?? ctx.registeredTools.get(name)).execute(args, { agent: { id: sessionId }, ...exec })
+  const rawTool = (name, args, sessionId, exec = {}) => (rt.teamTools.find(d => d.name === name) ?? ctx.registeredTools.get(name)).execute(args, { agent: { id: sessionId }, ...exec })
+  // Normal goal callers copy the version displayed in their prompt or ledger.
+  // Use rawTool to exercise stale versions, omitted fields and legacy callers.
+  const tool = (name, args, sessionId, exec) => {
+    if (name !== 'group_goal' || args.action === 'show') return rawTool(name, args, sessionId, exec)
+    const target = args.room_id || args.group
+    const room = target ? rt.findRooms(target)[0] : rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+    return rawTool(name, { goal_id: room?.goal?.id ?? 'none', expected_revision: room?.goal?.revision ?? 0, ...args }, sessionId, exec)
+  }
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   const begin = (sessionId) => {
     const message = agentOf(sessionId).calls.at(-1)
@@ -125,7 +133,7 @@ async function start(t, room, services, extraRooms, existingHome) {
     return { content: post.content, source: post.source }
   }
   await tool('list_bots', {}, 'a')
-  return { home, ctx, rt, agentOf, emit, tool, call, begin, finish, round, say, takePost, takeGoal }
+  return { home, ctx, rt, agentOf, emit, tool, rawTool, call, begin, finish, round, say, takePost, takeGoal }
 }
 
 const settle = async (check) => {
@@ -2184,6 +2192,55 @@ test('only the admin or a Main Bot changes a goal; any member can show it', asyn
     '"Lab" has no admin, and a goal needs one to run it. Set an admin with update_group first.')
   assert.equal(await host.tool('group_goal', { action: 'stop', group: 'Lab', reason: 'r' }, 'c'),
     'Only a Main Bot changes the goal of "Lab".')
+})
+
+test('an explicit group read resolves that group and binds its goal without crossing write boundaries', async t => {
+  const lab = { id: 'r2', name: 'Lab', members: ['a', 'c'], admin: 'a', mode: 'admin', named: true, sessions: { a: 'la' }, log: [], seq: 0, seen: {} }
+  const host = await start(t, {}, undefined, { r2: lab })
+  await startGoal(host)
+  assert.match(await host.tool('group_goal', { action: 'start', title: 'Lab milestone', objective: 'audit', acceptance: 'signed', stages: [{ title: 'Audit', acceptance: 'verified', tasks: [{ bot: 'Tester', task: 'verify' }] }] }, 'la'), /Started/)
+  const ops = host.rt.roomOf('r1').goal, other = host.rt.roomOf('r2').goal
+  const read = await host.tool('group_goal', { action: 'show', group: 'Lab' }, 'ga')
+  assert.match(read, /Goal: Lab milestone/)
+  assert.match(read, new RegExp(`room_id=r2 goal_id=${other.id} expected_revision=${other.revision}`))
+  assert.doesNotMatch(read, /Ship the thing/)
+  assert.match(await host.tool('group_goal', { action: 'show', room_id: 'r2' }, 'ga'), /Lab milestone/)
+  assert.match(await host.rawTool('group_goal', { action: 'pause' }, 'ga'), /show the target group again/i)
+  assert.match(await host.rawTool('group_goal', { action: 'pause', group: ' ' }, 'ga'), /empty/)
+  assert.match(await host.tool('group_goal', { action: 'show', group: 'Ops', room_id: 'r2' }, 'ga'), /different groups/)
+  assert.doesNotMatch(await host.tool('group_goal', { action: 'show', group: 'Lab' }, 'gb'), /Lab milestone/)
+  host.rt.live.set('ga', { info: { reviewId: 'review-r1', roomId: 'r1' } })
+  assert.match(await host.tool('group_goal', { action: 'show', room_id: 'r2' }, 'ga'), /only its assigned group/)
+  host.rt.live.delete('ga')
+  const write = { action: 'pause', room_id: 'r2', goal_id: other.id, expected_revision: other.revision }
+  assert.match(await host.tool('group_goal', write, 'ga'), /from the target group/)
+  assert.equal(ops.status, 'active')
+  assert.equal(other.status, 'active')
+  assert.match(await host.tool('group_goal', { ...write, room_id: 'r1' }, 'ga'), /show the target group again/i)
+  assert.match(await host.tool('group_goal', write, 'la'), /Paused/)
+})
+
+test('a human edit or a replacement goal invalidates explicit and remembered goal revisions', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const initial = { room_id: room.id, goal_id: room.goal.id, expected_revision: room.goal.revision }
+  await host.tool('group_goal', { action: 'show' }, 'ga')
+  assert.equal((await host.call('goal-control', { roomId: room.id, goalId: initial.goal_id, action: 'pause' })).ok, true)
+  const revision = room.goal.revision
+  for (const input of [{}, initial, { goal_id: initial.goal_id }]) {
+    assert.match(await host.rawTool('group_goal', { action: 'resume', ...input }, 'ga'), /show the target group again/i)
+    assert.equal(room.goal.status, 'paused')
+    assert.equal(room.goal.revision, revision)
+  }
+  assert.match(await host.tool('group_goal', { action: 'show' }, 'ga'), new RegExp(`expected_revision=${revision}`))
+  assert.match(await host.rawTool('group_goal', { action: 'resume' }, 'ga'), /Resumed/)
+  await host.tool('group_goal', { action: 'stop', reason: 'new release' }, 'ga')
+  await startGoal(host, { title: 'Next release' })
+  assert.notEqual(room.goal.id, initial.goal_id)
+  assert.equal(room.goal.revision, initial.expected_revision)
+  assert.match(await host.tool('group_goal', { action: 'pause', ...initial }, 'ga'), /show the target group again/i)
+  assert.equal(room.goal.status, 'active')
 })
 
 test('repeating current task status or evidence leaves the goal and its evidence timestamp intact', async t => {
