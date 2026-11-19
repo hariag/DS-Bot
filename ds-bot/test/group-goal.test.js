@@ -2182,6 +2182,47 @@ test('members see their own task note in show and prompt without another member 
   assert.doesNotMatch(testerPrompt, /writer-only evidence/)
 })
 
+test('a goal ledger opens the original board item in its room and keeps its identity across stage changes', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const show = sid => host.tool('group_goal', {action:'show'}, sid)
+  const itemId = text => {
+    const refs = [...text.matchAll(/board_task\.task_id=(legacy-[a-f0-9]{64})/g)]
+    assert.equal(refs.length, 1)
+    return refs[0][1]
+  }
+  const read = async (id, sid='gb') => JSON.parse(await host.tool('board_task', {action:'show', room_id:'r1', task_id:id}, sid)).task
+  const original = itemId(await show('gb'))
+  assert.equal(itemId(await show('ga')), original)
+  assert.equal(itemId(host.rt.goalBlock(host.rt.roomOf('r1'), host.rt.botOf('b'))), original)
+  assert.doesNotMatch(await show('gc'), /board_task\.task_id=/)
+  const card = await read(original)
+  assert.equal(card.owner, 'b')
+  assert.equal(card.scope, 'room:r1')
+  assert.equal(card.title, 'write the draft')
+  await host.tool('board_task', {action:'reply', task_id:original, operation_id:'one-board-reply',
+    expected_revision:card.revision, expected_board_revision:card.legacy.boardRevision, note:'Checking the draft'}, 'gb')
+  assert.ok((await read(original)).replies.some(reply => reply.text === 'Checking the draft'))
+  const scope = {kind:'room', id:'r1'}
+  const parent = await host.rt.boardCall('board-command', {scope, operationId:'create-feature', taskId:'feature-draft',
+    type:'create', value:{type:'feature',title:'Draft review',owner:'b',reviewer:'c',acceptance:'Reviewed',dependencies:[]}})
+  const organized = await host.rt.boardCall('board-command', {scope, operationId:'link-original', taskId:parent.id,
+    type:'link-goal-items', expectedRevision:parent.revision, value:{itemIds:[original]}})
+  const minor = await host.rt.boardCall('board-release-create', {scope, operationId:'new-minor',
+    release:{id:'build-12',name:'November',version:'1.2'}})
+  await host.rt.boardCall('board-release-assign', {scope, operationId:'assign-minor', taskId:parent.id,
+    releaseId:minor.id, expectedReleaseRevision:minor.revision, expectedTaskRevision:organized.revision})
+  await host.tool('group_goal', {action:'pass', evidence:'Reviewed draft'}, 'ga')
+  const current = itemId(await show('gc'))
+  assert.notEqual(current, original)
+  assert.equal((await read(current, 'gc')).owner, 'c')
+  const previous = await read(original)
+  assert.equal(previous.legacy.position, 'previous')
+  assert.equal(previous.parentTaskId, parent.id)
+  assert.equal(previous.releaseId, minor.id)
+  assert.ok(previous.replies.some(reply => reply.text === 'Checking the draft'))
+})
+
 test('a Main Bot who is a member can explicitly show the full group ledger as backup', async (t) => {
   const host = await start(t, { admin: 'b' })
   await startGoal(host, { stages: [{ title: 'Draft', acceptance: 'reviewed', tasks: [{ bot: 'Writer', task: 'write' }, { bot: 'Tester', task: 'test' }] }] })

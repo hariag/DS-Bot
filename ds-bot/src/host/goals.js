@@ -12,6 +12,7 @@ import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
 import { GOAL_IDLE_NUDGES, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
+import { currentGoalBoardTaskId } from './legacy-goal.js'
 import { syncDirectory } from './directory-sync.mjs'
 
 const TITLE_MAX = 80
@@ -820,8 +821,13 @@ export function install(rt) {
   const memberNames = room => room.members.map(id => rt.botOf(id)?.name).filter(Boolean)
   const nameOf = id => rt.botOf(id)?.name ?? 'a member'
 
-  // The admin's ledger: the whole goal, for the prompt block and the tool's answer.
-  function ledgerLines(room, goal) {
+  function boardLocator(room, goal, stage, task) {
+    const id = currentGoalBoardTaskId(room, goal, stage, task)
+    return id ? ` board_task.task_id=${id}` : ''
+  }
+
+  // The full ledger is returned on demand. The routine admin prompt omits per-item board IDs.
+  function ledgerLines(room, goal, { board = true } = {}) {
     const lines = [`Goal: ${goal.title}`, `Objective: ${goal.objective}`, `Done when: ${goal.acceptance}`]
     if (goal.constraints.length > 0) lines.push('Rules:', ...goal.constraints.map(rule => `- ${rule}`))
     lines.push('Stages:')
@@ -830,10 +836,13 @@ export function install(rt) {
       if (stage.status === 'passed') lines.push(`[passed] ${n}. ${stage.title}`)
       else if (index === goal.current) {
         lines.push(`[current] ${n}. ${stage.title} — done when: ${stage.acceptance}`)
-        for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${TASK_LABEL[task.status] ?? 'status unknown'}]${taskNoteText(task) || taskStatusTimeText(task)} (stage ${stage.id}, task ${task.id}, review fingerprint ${reviewFingerprint(task)})`)
+        for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${TASK_LABEL[task.status] ?? 'status unknown'}]${taskNoteText(task) || taskStatusTimeText(task)} (stage ${stage.id}, task ${task.id}, review fingerprint ${reviewFingerprint(task)})${board ? boardLocator(room, goal, stage, task) : ''}`)
         if (stage.reworks > 0) lines.push(`  Sent back ${stage.reworks} ${stage.reworks === 1 ? 'time' : 'times'}. Latest feedback: ${stage.feedback ?? ''}`)
       } else lines.push(`[next] ${n}. ${stage.title}: ${[...new Set(stage.tasks.map(task => nameOf(task.botId)))].join(', ')}`)
     })
+    if (goal.stages[goal.current]?.tasks.length) lines.push(board
+      ? `Use board_task show in room_id=${room.id} for the original item, its feature/bugfix parent and minor release when assigned.`
+      : 'group_goal show gives the original board_task ID for each current task.')
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
     if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
     if (goal.inspectionBackoff?.fingerprint === inspectionFingerprint(goal, false) && Number.isSafeInteger(goal.inspectionBackoff.count) && goal.inspectionBackoff.count > 0 && Number.isFinite(goal.ownerReviewAt)) lines.push(`Inspection incomplete ${goal.inspectionBackoff.count} consecutive time(s): no current goal ledger was generated. Next inspection is scheduled for ${new Date(goal.ownerReviewAt).toISOString()}; owner checks remain pending.`)
@@ -858,7 +867,8 @@ export function install(rt) {
       lines.push(`Current stage ${goal.current + 1} "${stage.title}", done when: ${stage.acceptance}`)
       const tasks = stage.tasks.filter(task => task.botId === member.id)
       if (tasks.length === 0) lines.push('You have no task in this stage.')
-      else for (const task of tasks) lines.push(`Your task in it: ${task.task} (${TASK_LABEL[task.status] ?? 'status unknown'}).${taskNoteText(task) || taskStatusTimeText(task)}`)
+      else for (const task of tasks) lines.push(`Your task in it: ${task.task} (${TASK_LABEL[task.status] ?? 'status unknown'}).${taskNoteText(task) || taskStatusTimeText(task)}${boardLocator(room, goal, stage, task)}`)
+      if (tasks.length) lines.push(`Use board_task show in room_id=${room.id} to read the original item and its current instructions. Record progress or evidence on that item under the existing workflow.`)
     }
     lines.push('Work toward this group goal and any other active goals explicitly requested by the user, within your assigned role and scope. A new request does not cancel an earlier goal unless the user clearly changes, pauses, or cancels it. When you finish your task, end your reply with the evidence: the files you changed, the commands you ran and what they printed.')
     if (goal.status === 'paused') lines.push('This group goal is paused: finish only work already underway for it and start no new work on this goal. Follow separate user requests within their authorization.')
@@ -878,7 +888,7 @@ export function install(rt) {
         : ['<group_goal status="drafting">', `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`, '</group_goal>'].join('\n')
     } else if (isAdmin) {
       const scoped=inspectOnly && (goal.stages?.[goal.current]?.tasks ?? []).some(task=>scopedReviewTask(room,task.id)!==undefined)
-      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal), inspectOnly ? (scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY) : dutyOf(goal), '</group_goal>'].join('\n')
+      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal, { board: false }), inspectOnly ? (scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY) : dutyOf(goal), '</group_goal>'].join('\n')
     } else {
       const view = memberLines(room, goal, member)
       block = [`<group_goal status="${goal.status}" stage="${view.stage}">`, ...view.lines, '</group_goal>'].join('\n')
