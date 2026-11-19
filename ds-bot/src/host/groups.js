@@ -587,7 +587,7 @@ export function install(rt) {
       notice,
       rt.projectCoordinationPrompt?.(room, member),
       goal,
-      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. Do not act on those owners or any ambiguous owner. First inspect and report. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state, pass a stage, or take external actions.'] : []),
+      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. First inspect the original handoff and task. Do not reassign, restart or repeat work for an uncertain recipient, and do not guess an ambiguous owner. If the original recipient is uniquely identified, you may make one status-only group reply with plain-text @Name and the task ID, asking whether that original handoff was received and what its current status/next evidence is; explicitly say not to repeat the work. For a known reported task, ask only for its exact missing evidence. Include a response deadline and next check, do not put @Name in backticks/code and never use @all. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state or pass a stage.'] : []),
       leads ? adminNote(room) : '',
       earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
       owed.length ? `Results of the work you asked for that the lines here leave out (oldest first):\n${owed.map(result => (result.line
