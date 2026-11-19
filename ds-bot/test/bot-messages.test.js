@@ -149,7 +149,7 @@ test('message_bot when "queue" waits for the current work, and reply_to "user" a
 
   emit('b', 'turn/start', { turn: 1 })
   const queued = await tool('message_bot', { to: 'Writer', message: 'later', when: 'queue' }, 'a')
-  assert.equal(queued, 'Queued for Writer: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it. Writer now: working in its own chat for less than a minute, for the user; own chat pending inputs: unavailable.')
+  assert.equal(queued, 'Queued for Writer behind the work running at delivery. Its reply will arrive later as a new message; do not wait for it. Writer now: working in its own chat for less than a minute, for the user; own chat pending inputs: unavailable.')
   assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['followup'])
 
   const toUser = await tool('message_bot', { to: 'Writer', message: 'tell them', reply_to: 'user', when: 'now' }, 'a')
@@ -376,6 +376,41 @@ test('status counts live private and group inboxes and marks unavailable session
   assert.doesNotMatch(other[writerLine + 1], /group pending inputs/)
   agents.delete('gb')
   assert.match(await tool('list_bots', {}, 'a'), /group pending inputs: 0 in 0 available session\(s\); 1 group session\(s\) unavailable/)
+})
+
+test('a named private handoff reports the post-delivery queue and checks only its own live request', async t => {
+  const seed = team({ group: true })
+  seed.bots.c = { id: 'c', name: 'Tester', sessionId: 'c', createdAt: 3 }
+  const { rt, ctx, agents, agentOf, emit, tool, stop } = await start(seed)
+  t.after(stop)
+  const get = ctx.get
+  ctx.get = name => name === 'agents' ? agents : get(name)
+  const writer = agentOf('b')
+  writer.followup = message => writer.inbox.nextTurn.push(message)
+  emit('b', 'turn/start', { turn: 1 })
+  const args = { to: 'Writer', message: 'private task body', request_id: 'fix-release' }
+  const receipt = await tool('message_bot', args, 'a')
+  assert.match(receipt, /^Queued for Writer.*own chat pending inputs: 1/)
+  assert.match(receipt, /use list_bots with bot and request_id/)
+  const query = { bot: 'Writer', request_id: args.request_id }
+  const inspect = (session = 'a', scope = query) => tool('list_bots', scope, session)
+  const pending = await inspect()
+  assert.match(pending, /queued for a later turn/)
+  assert.doesNotMatch(pending, /private task body/)
+  assert.match(await inspect('c'), /No matching private handoff can be verified/)
+  assert.match(await inspect('gb'), /sending Bot’s own chat/)
+  assert.match(await inspect('a', { ...query, bot: 'Tester' }), /No matching private handoff can be verified/)
+  const message = writer.inbox.nextTurn.shift()
+  writer.inbox.nextTurn.push({ source: { ...message.source, exchangeId: 'unrelated' } })
+  assert.match(await inspect(), /delivery was recorded.*processing and result are unconfirmed/)
+  emit('b', 'user/message', { content: message.content, source: message.source })
+  assert.match(await inspect(), /read in a running turn/)
+  agentOf('a').inbox.nextTurn.push({ source: { kind: SOURCE_KIND, role: 'reply', senderSessionId: 'b', replyTo: message.source.exchangeId } })
+  assert.match(await inspect(), /reply from Writer to this request was returned/)
+  assert.equal(await tool('message_bot', args, 'a'), receipt)
+  assert.deepEqual(writer.inbox.nextTurn.map(item => item.source.exchangeId), ['unrelated'])
+  rt.state.bots.b.private = true
+  assert.match(await inspect(), /No matching private handoff can be verified/)
 })
 
 test('message receipts include group pending counts only for an authorized viewer', async (t) => {
