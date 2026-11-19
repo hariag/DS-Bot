@@ -75,11 +75,15 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'effect ds-bot: group rounds',
     'effect ds-bot: group step lines',
     'on llm/stream',
+    // Task identity/session events are registered before the periodic review hook.
+    'on session/event',
     'tools guard',
     'effect ds-bot: periodic goal review',
     'on agent/created',
     'on agent/disposed',
     'on commands/change',
+    // Selecting an agent preset re-applies the command shield.
+    'on agent-preset/selected',
     'effect ds-bot: command shield cleanup',
     'on approval/request (prepend)',
     'on agent/inbox/discarded',

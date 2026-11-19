@@ -2217,6 +2217,7 @@ const ZH = {
   'Create release': '创建发布',
   'Configure release team': '配置发布团队',
   'Save release team': '保存发布团队',
+  'The release changed. Close and reopen this dialog to configure the team.': '发布已变化，请关闭并重新打开此对话框后再配置团队。',
   'New release': '新建发布',
   'Destination card': '目标卡片',
   'Choose a feature or bugfix': '选择功能或缺陷卡',
