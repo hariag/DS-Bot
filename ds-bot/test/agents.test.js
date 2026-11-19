@@ -264,7 +264,7 @@ test('a Bot Session gets the team tools in its own scope; a DSH Agent Session ge
   })
   await flush()
   assert.deepEqual(scoped.filter(entry => entry.sessionId === 'm1').map(entry => entry.name).sort(),
-    [...TEAM_TOOLS].filter(name => name !== 'read_browser').sort())
+    [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'project_coordination').sort())
   assert.equal(restricted.length, 0)
   // An Agent Session is a plain dsh conversation: nothing is scoped onto it and
   // nothing is masked, because the team tools never reach the global layer.
