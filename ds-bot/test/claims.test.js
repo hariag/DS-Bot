@@ -63,6 +63,7 @@ test('a reply announcing work in progress is recognised per sentence, and code o
     '还在处理附件，马上回来。',
     '第一部分已完成，第二部分正在导出，稍后汇报。',
     "I'm still exporting the deck. I'll report back shortly.",
+    "I am going to report back shortly.",
     'Working on it — will share the file when done.',
     `Started on the long report. ${'Context. '.repeat(40)}正在整理第 12 页，稍后发你。`,
   ]) assert.equal(announcesWork(said), true, said)
@@ -74,6 +75,22 @@ test('a reply announcing work in progress is recognised per sentence, and code o
     '```js\nconsole.log("正在导出，稍后汇报")\n```',
     '',
   ]) assert.equal(announcesWork(said), false, said)
+})
+
+test('only the replying Bot’s own progress or follow-up counts as a work claim', () => {
+  const external = '起跑前发现客户正在持有门禁锁，实际 runner 和 Playwright 进程仍在运行。'
+  const unknown = '不能据此判断现在仍在运行或直接判那次门禁作废。'
+  for (const text of [
+    external, unknown, '等待客户释放锁后再启动，本轮不启动测试。',
+    '待客户释放锁后，我会马上汇报。', '客户的任务进行中。', '`runner` 仍在运行。',
+    'The customer is still running the tests.', 'Once the lock is released, I will report back.',
+  ]) assert.equal(claimsFor({ text }), undefined, text)
+  for (const text of [
+    external + '我正在检查本轮的材料。', unknown + '稍后汇报。',
+    '客户仍在运行测试，我正在写报告。', '正在整理证据。', '还在执行测试。',
+    'The client is still running tests, but I am preparing the report.',
+    '等待客户解锁后再测试，但我正在整理证据。',
+  ]) assert.deepEqual(claimsFor({ text }), { inProgress: true }, text)
 })
 
 test('the marker combines missing linked files with work that is not running, unless a peer was called', (t) => {

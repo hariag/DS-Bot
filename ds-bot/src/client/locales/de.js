@@ -1,6 +1,7 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  'Delivery confirmed by the owner’s start reply': 'Zustellung durch die Startmeldung der zuständigen Person bestätigt',
   'A new reply is waiting': "Eine neue Antwort wartet auf dich",
   'Opening…': 'Wird geöffnet…',
   'Still opening…': 'Wird noch geöffnet…',
@@ -833,8 +834,8 @@ export const DE = {
   'Today {time}': 'Heute {time}',
   'Yesterday {time}': 'Gestern {time}',
   'Ran for {duration}': 'Laufzeit {duration}',
-  "No background work detected": "Keine Hintergrundarbeit erkannt",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot hat für diese Antwort keinen Werkzeugaufruf und keine aktive Hintergrundaufgabe aufgezeichnet.",
+  "No execution recorded for this reply": "Keine Ausführung für diese Antwort verzeichnet",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "Als dieser Bot antwortete, waren für diesen Durchgang weder ein Werkzeugaufruf noch ein laufender Auftrag, ein aktiver Subagent oder eine Übergabe an ein Gruppenmitglied verzeichnet.",
   'File not found: {path}': 'Datei nicht gefunden: {path}',
   '{tokens} tok · Cache hit {hit}%': '{tokens} tok · Cache-Treffer {hit}%',
   '1 turn': '1 Durchgang',

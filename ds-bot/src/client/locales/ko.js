@@ -1,6 +1,7 @@
 // Korean (ko) localization for DS Bot client and DSH settings namespaces.
 
 export const KO = {
+  'Delivery confirmed by the owner’s start reply': '담당자의 작업 시작 답글로 전달을 확인했습니다',
   'A new reply is waiting': "새 답변이 도착했습니다",
   'Opening…': '여는 중…',
   'Still opening…': '아직 여는 중…',
@@ -833,8 +834,8 @@ export const KO = {
   'Today {time}': '오늘 {time}',
   'Yesterday {time}': '어제 {time}',
   'Ran for {duration}': '{duration} 동안 실행됨',
-  "No background work detected": "백그라운드 작업이 감지되지 않음",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot에 이 답변의 도구 호출이나 실행 중인 백그라운드 작업이 기록되어 있지 않습니다.",
+  "No execution recorded for this reply": "이 답변에 해당하는 실행 기록이 없습니다",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "이 Bot이 답변할 당시 해당 차례에는 도구 호출, 실행 중인 작업, 활성 하위 에이전트 또는 그룹 구성원에게 인계한 기록이 없었습니다.",
   'File not found: {path}': '파일을 찾을 수 없음: {path}',
   '{tokens} tok · Cache hit {hit}%': '{tokens} tok · 캐시 적중 {hit}%',
   '1 turn': '1턴',

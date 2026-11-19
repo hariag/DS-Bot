@@ -1,6 +1,7 @@
 // Japanese (ja) localization for DS Bot client and DSH settings namespaces.
 
 export const JA = {
+  'Delivery confirmed by the owner’s start reply': '担当者の作業開始の返信により配信を確認しました',
   'A new reply is waiting': "新しい返信があります",
   "Opening…": "開いています…",
   "Still opening…": "まだ開いています…",
@@ -823,8 +824,8 @@ export const JA = {
   "Today {time}": "今日 {time}",
   "Yesterday {time}": "昨日 {time}",
   "Ran for {duration}": "実行時間 {duration}",
-  "No background work detected": "バックグラウンドの作業を検出できませんでした",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot には、この返信のツール呼び出しや実行中のバックグラウンドタスクの記録がありません。",
+  "No execution recorded for this reply": "この返信に対応する実行記録はありません",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "この Bot が返信した時点で、このターンのツール呼び出し、実行中のジョブ、稼働中のサブエージェント、グループメンバーへの引き継ぎは記録されていませんでした。",
   'File not found: {path}': 'ファイルが見つかりません：{path}',
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · キャッシュヒット {hit}%",
   "1 turn": "1 ターン",

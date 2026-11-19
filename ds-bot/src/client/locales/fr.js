@@ -1,6 +1,7 @@
 // French (fr) localization for DS Bot client and DSH settings namespaces.
 
 export const FR = {
+  'Delivery confirmed by the owner’s start reply': 'Remise confirmée par le message de prise en charge du responsable',
   'A new reply is waiting': "Une nouvelle réponse vous attend",
   "Opening…": "Ouverture…",
   "Still opening…": "Toujours en cours d’ouverture…",
@@ -823,8 +824,8 @@ export const FR = {
   "Today {time}": "Aujourd’hui {time}",
   "Yesterday {time}": "Hier {time}",
   "Ran for {duration}": "Exécuté pendant {duration}",
-  "No background work detected": "Aucune tâche en arrière-plan détectée",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot n’a enregistré aucun appel d’outil ni aucune tâche active en arrière-plan pour cette réponse.",
+  "No execution recorded for this reply": "Aucune exécution enregistrée pour cette réponse",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "Lorsque ce Bot a répondu, aucun appel d’outil, travail en cours, sous-agent actif ou relais à un membre du groupe n’était enregistré pour ce tour.",
   'File not found: {path}': 'Fichier introuvable : {path}',
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache {hit} %",
   "1 turn": "1 tour",

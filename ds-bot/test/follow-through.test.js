@@ -227,6 +227,21 @@ const run = (host, sessionId, turn, message) => {
   host.emit(sessionId, 'user/message', { content: message.content, source: message.source })
 }
 
+test('a private board assignment ends in the owner chat without a phantom peer reply', async t => {
+  const host = await start(freshHome(t))
+  const request = host.rt.prepareBoardTaskMessage({
+    toId: 'b', sessionId: 'b', text: 'Review the card', messageId: 'board-input',
+    exchangeId: 'board-exchange', actionId: 'execute-card', taskRevision: 4, actionRevision: 4,
+  })
+  const deliver = t.mock.method(host.rt, 'deliver', async () => {})
+  run(host, 'b', 1, request)
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: 'I recorded my result on the card.' }] } })
+  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  assert.equal(deliver.mock.callCount(), 0)
+  assert.equal(host.rt.workOf(request.source), undefined)
+  assert.deepEqual(host.rt.state.exchangeTurns.b ?? [], [])
+})
+
 // Starts a round in 'r1' and opens Writer's turn in 'gb'.
 async function openRoomTurn(t, host) {
   let result

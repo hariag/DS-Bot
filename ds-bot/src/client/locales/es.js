@@ -1,6 +1,7 @@
 // Spanish (es) localization for DS Bot client and DSH settings namespaces.
 
 export const ES = {
+  'Delivery confirmed by the owner’s start reply': 'Entrega confirmada por el mensaje de inicio del responsable',
   'A new reply is waiting': "Tienes una nueva respuesta",
   'Opening…': 'Abriendo…',
   'Still opening…': 'Sigue abriendo…',
@@ -833,8 +834,8 @@ export const ES = {
   'Today {time}': 'Hoy {time}',
   'Yesterday {time}': 'Ayer {time}',
   'Ran for {duration}': 'Duración: {duration}',
-  "No background work detected": "No se detectó trabajo en segundo plano",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot no ha registrado llamadas a herramientas ni tareas activas en segundo plano para esta respuesta.",
+  "No execution recorded for this reply": "No se registró ninguna ejecución para esta respuesta",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "Al responder el Bot, no constaban llamadas a herramientas, trabajos en curso, subagentes activos ni traspasos a otro miembro del grupo en ese turno.",
   'File not found: {path}': 'No se encuentra el archivo: {path}',
   '{tokens} tok · Cache hit {hit}%': '{tokens} tok · Acierto de caché {hit}%',
   '1 turn': '1 turno',

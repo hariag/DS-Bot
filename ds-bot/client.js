@@ -140,6 +140,7 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
+  "Delivery confirmed by the owner’s start reply": "担当者の作業開始の返信により配信を確認しました",
   "A new reply is waiting": "新しい返信があります",
   "Opening…": "開いています…",
   "Still opening…": "まだ開いています…",
@@ -962,8 +963,8 @@ var JA = {
   "Today {time}": "今日 {time}",
   "Yesterday {time}": "昨日 {time}",
   "Ran for {duration}": "実行時間 {duration}",
-  "No background work detected": "バックグラウンドの作業を検出できませんでした",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot には、この返信のツール呼び出しや実行中のバックグラウンドタスクの記録がありません。",
+  "No execution recorded for this reply": "この返信に対応する実行記録はありません",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "この Bot が返信した時点で、このターンのツール呼び出し、実行中のジョブ、稼働中のサブエージェント、グループメンバーへの引き継ぎは記録されていませんでした。",
   "File not found: {path}": "ファイルが見つかりません：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · キャッシュヒット {hit}%",
   "1 turn": "1 ターン",
@@ -2558,6 +2559,7 @@ var DSH_JA = {
 
 // src/client/locales/ko.js
 var KO = {
+  "Delivery confirmed by the owner’s start reply": "담당자의 작업 시작 답글로 전달을 확인했습니다",
   "A new reply is waiting": "새 답변이 도착했습니다",
   "Opening…": "여는 중…",
   "Still opening…": "아직 여는 중…",
@@ -3408,8 +3410,8 @@ var KO = {
   "Today {time}": "오늘 {time}",
   "Yesterday {time}": "어제 {time}",
   "Ran for {duration}": "{duration} 동안 실행됨",
-  "No background work detected": "백그라운드 작업이 감지되지 않음",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot에 이 답변의 도구 호출이나 실행 중인 백그라운드 작업이 기록되어 있지 않습니다.",
+  "No execution recorded for this reply": "이 답변에 해당하는 실행 기록이 없습니다",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "이 Bot이 답변할 당시 해당 차례에는 도구 호출, 실행 중인 작업, 활성 하위 에이전트 또는 그룹 구성원에게 인계한 기록이 없었습니다.",
   "File not found: {path}": "파일을 찾을 수 없음: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 캐시 적중 {hit}%",
   "1 turn": "1턴",
@@ -5021,6 +5023,7 @@ var DSH_KO = {
 
 // src/client/locales/es.js
 var ES = {
+  "Delivery confirmed by the owner’s start reply": "Entrega confirmada por el mensaje de inicio del responsable",
   "A new reply is waiting": "Tienes una nueva respuesta",
   "Opening…": "Abriendo…",
   "Still opening…": "Sigue abriendo…",
@@ -5871,8 +5874,8 @@ var ES = {
   "Today {time}": "Hoy {time}",
   "Yesterday {time}": "Ayer {time}",
   "Ran for {duration}": "Duración: {duration}",
-  "No background work detected": "No se detectó trabajo en segundo plano",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot no ha registrado llamadas a herramientas ni tareas activas en segundo plano para esta respuesta.",
+  "No execution recorded for this reply": "No se registró ninguna ejecución para esta respuesta",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "Al responder el Bot, no constaban llamadas a herramientas, trabajos en curso, subagentes activos ni traspasos a otro miembro del grupo en ese turno.",
   "File not found: {path}": "No se encuentra el archivo: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Acierto de caché {hit}%",
   "1 turn": "1 turno",
@@ -7484,6 +7487,7 @@ var DSH_ES = {
 
 // src/client/locales/fr.js
 var FR = {
+  "Delivery confirmed by the owner’s start reply": "Remise confirmée par le message de prise en charge du responsable",
   "A new reply is waiting": "Une nouvelle réponse vous attend",
   "Opening…": "Ouverture…",
   "Still opening…": "Toujours en cours d’ouverture…",
@@ -8306,8 +8310,8 @@ var FR = {
   "Today {time}": "Aujourd’hui {time}",
   "Yesterday {time}": "Hier {time}",
   "Ran for {duration}": "Exécuté pendant {duration}",
-  "No background work detected": "Aucune tâche en arrière-plan détectée",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot n’a enregistré aucun appel d’outil ni aucune tâche active en arrière-plan pour cette réponse.",
+  "No execution recorded for this reply": "Aucune exécution enregistrée pour cette réponse",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "Lorsque ce Bot a répondu, aucun appel d’outil, travail en cours, sous-agent actif ou relais à un membre du groupe n’était enregistré pour ce tour.",
   "File not found: {path}": "Fichier introuvable : {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache {hit} %",
   "1 turn": "1 tour",
@@ -9902,6 +9906,7 @@ var DSH_FR = {
 
 // src/client/locales/de.js
 var DE = {
+  "Delivery confirmed by the owner’s start reply": "Zustellung durch die Startmeldung der zuständigen Person bestätigt",
   "A new reply is waiting": "Eine neue Antwort wartet auf dich",
   "Opening…": "Wird geöffnet…",
   "Still opening…": "Wird noch geöffnet…",
@@ -10752,8 +10757,8 @@ var DE = {
   "Today {time}": "Heute {time}",
   "Yesterday {time}": "Gestern {time}",
   "Ran for {duration}": "Laufzeit {duration}",
-  "No background work detected": "Keine Hintergrundarbeit erkannt",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot hat für diese Antwort keinen Werkzeugaufruf und keine aktive Hintergrundaufgabe aufgezeichnet.",
+  "No execution recorded for this reply": "Keine Ausführung für diese Antwort verzeichnet",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "Als dieser Bot antwortete, waren für diesen Durchgang weder ein Werkzeugaufruf noch ein laufender Auftrag, ein aktiver Subagent oder eine Übergabe an ein Gruppenmitglied verzeichnet.",
   "File not found: {path}": "Datei nicht gefunden: {path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · Cache-Treffer {hit}%",
   "1 turn": "1 Durchgang",
@@ -12366,6 +12371,7 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Delivery confirmed by the owner’s start reply": "已按负责人的开工回复核实派发",
   "Task reply": "任务回复",
   "Group goal update": "群目标更新",
   "Work claimed": "已认领并开始执行",
@@ -13774,8 +13780,8 @@ var ZH = {
   "Today {time}": "今天 {time}",
   "Yesterday {time}": "昨天 {time}",
   "Ran for {duration}": "本次用时 {duration}",
-  "No background work detected": "未检测到后台任务",
-  "DS Bot has no recorded tool call or active background task for this reply.": "DS Bot 未记录到这条回复的工具调用或正在运行的后台任务。",
+  "No execution recorded for this reply": "本条回复未记录到执行动作",
+  "When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.": "回复发出时，系统未记录该 Bot 在本轮调用工具，也未发现其会话有后台作业、活跃的子智能体或向群成员交接的记录。",
   "File not found: {path}": "文件不存在：{path}",
   "{tokens} tok · Cache hit {hit}%": "{tokens} tok · 缓存命中 {hit}%",
   "1 turn": "1 轮",
@@ -28003,6 +28009,27 @@ var reasoningText = (step) => step.blocks.filter((block) => block.kind === "reas
 var stepReasoning = (step) => reasoningText(step).split("\n").filter((line) => !isActivity(line)).join("\n").trim();
 var stepActivity = (step) => reasoningText(step).split("\n").filter(isActivity).map((line) => line.slice(ACTIVITY.length).trim()).filter(Boolean);
 
+// src/shared/work-claim.js
+var CODE = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`/g;
+var AFTER_DONE = /^[\s\S]*(?:已完成|已经完成|完成了|已导出|已生成|已保存|做好了|搞定|finished|completed|here (?:is|are)\b)/i;
+var CONDITION = /^(?:如果|假如|若|一旦|(?:待|等).*(?:后|再)|(?:if|once|when|unless|after)\b)/i;
+var ZH_CLAIM = /^(?:(?:我(?:们)?(?:这边)?|本轮我)\s*)?(?:(?:目前|现在)\s*)?(?:(?:正在|还在|仍在)(?:导出|生成|处理|整理|制作|编写|准备|检查|调查|运行|执行|做|写|搜索|分析)|(?:会)?(?:稍后|待会|马上|一会儿|等下)(?:汇报|回复|发|给你|回来|完成)|进行中|处理中)/;
+var EN_CLAIM = /^(?:(?:(?:i(?:'m| am)|we(?:'re| are))\s+(?:(?:still|currently)\s+)?|(?:still|currently)\s+)(?:working|running|exporting|generating|building|preparing|processing|checking|investigating|researching|drafting|writing|putting together)|(?:(?:i|we)(?:'ll| will)|will|(?:(?:i(?:'m| am)|we(?:'re| are))\s+)?(?:going to|about to))\s+(?:report|send|share|finish|follow up|come back)|in progress|on it now|working on it)\b/i;
+function announcesWork(text) {
+  if (typeof text !== "string") return false;
+  return text.replace(CODE, "[code]").split(/(?<=[。.!?！？;；])|[\r\n]+/).some((sentence) => {
+    if (/[?？]\s*$/.test(sentence)) return false;
+    return sentence.replace(AFTER_DONE, "").split(/(?:但是|不过|但)(?=我)|\b(?:but|however)\b/i).some((statement) => {
+      for (const part of statement.split(/[，,]/)) {
+        const clause = part.trim().replace(/^[-*]\s+/, "");
+        if (CONDITION.test(clause)) return false;
+        if (ZH_CLAIM.test(clause) || EN_CLAIM.test(clause)) return true;
+      }
+      return false;
+    });
+  });
+}
+
 // src/shared/group-replies.js
 function relayRange(text) {
   try {
@@ -29407,14 +29434,14 @@ function scheduleGroupChains(flow) {
     if (flow.isConnected !== false) syncGroupChains(flow);
   });
 }
-function claimLines(claims) {
+function claimLines(claims, finalText) {
   if (claims === void 0 || claims === null) return [];
   const lines = [];
-  if (claims.inProgress === true) {
+  if (claims.inProgress === true && (finalText === void 0 || announcesWork(finalText))) {
     lines.push({
       kind: "inProgress",
-      text: t("No background work detected"),
-      detail: t("DS Bot has no recorded tool call or active background task for this reply.")
+      text: t("No execution recorded for this reply"),
+      detail: t("When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.")
     });
   }
   for (const path2 of claims.missingFiles ?? []) lines.push({ kind: "file", text: t("File not found: {path}", { path: path2 }) });
@@ -29452,7 +29479,7 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionI
     ),
     (0, import_react34.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: quoteSession, msgKey, useUi, lead: flat ? null : lead, whole, textInteractionSource: true }),
     changes === void 0 ? null : (0, import_react34.createElement)(ChangesCard, { changes, actions }),
-    claimLines(claims).map((line) => (0, import_react34.createElement)("div", { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: "status", title: line.detail ?? void 0 }, line.text))
+    claimLines(claims, whole ? void 0 : texts2.at(-1)).map((line) => (0, import_react34.createElement)("div", { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: "status", title: line.detail ?? void 0 }, line.text))
   );
 }
 function GroupEvent({ prefix, room: room2, name, roster, actions }) {
@@ -41372,6 +41399,14 @@ function TaskHistory({ scope, task, request }) {
     !history && !error ? (0, import_react54.createElement)("p", { className: "bt-card-muted" }, t("Loading…")) : null,
     history?.truncated ? (0, import_react54.createElement)("p", { className: "bt-card-note" }, t("Showing the latest 50 revisions.")) : null,
     (history?.entries ?? []).map((entry) => {
+      if (Number.isFinite(entry.deliveryConfirmedAt)) {
+        return (0, import_react54.createElement)(
+          "article",
+          { key: `delivery-${entry.after.revision}` },
+          (0, import_react54.createElement)("strong", null, t("Delivery confirmed by the owner’s start reply")),
+          (0, import_react54.createElement)("p", null, formatMoment(entry.deliveryConfirmedAt))
+        );
+      }
       const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null));
       if (!changed.length) return null;
       return (0, import_react54.createElement)(
