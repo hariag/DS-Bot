@@ -1416,6 +1416,42 @@ test('an interrupted ordinary turn is retained without replay through two restar
   assert.equal(third.agentOf('gb').calls.length, 0)
 })
 
+test('startup reports new interruptions separately from previously retained turns', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const host = await start(t)
+  await host.ctx.dispose()
+  const reason = 'interrupted outcome unknown'
+  const record = { botId:'a', roomId:'r1', turn:1, since:1 }
+  const id = createHash('sha256').update(JSON.stringify(['ga', record])).digest('hex')
+  const held = { sessionId:'ga', record, reason, decisions:[{ action:'ignored' }] }
+  const file = join(host.home, 'inflight.json')
+  writeFileSync(file, JSON.stringify({
+    turns:{
+      ga:{ ...record, recoveryHold:reason },
+      gb:{ ...record, botId:'b' },
+      gc:{ ...record, botId:'c', recoveryHold:reason },
+    },
+    queued:{},
+    heldTurns:{ [id]:held },
+  }))
+  const restarted = await start(t, undefined, undefined, undefined, host.home)
+  const notices = []
+  let settled = false
+  restarted.rt.noteFailure = note => notices.push(note)
+  restarted.rt.settleRoomBatches = async () => { settled = true }
+  t.mock.timers.tick(4000)
+  await settle(() => settled)
+  assert.deepEqual(notices.filter(note => note.code === 'RESUME_UNCERTAIN_HOLD').map(note => note.sessionId).sort(), ['gb','gc'])
+  assert.equal(notices.filter(note => note.code === 'RESUME_HELD_RECORDS').length, 1)
+  const saved = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(Object.keys(saved.heldTurns).length, 3)
+  assert.deepEqual(saved.heldTurns[id], held)
+  for (const session of ['ga','gb','gc']) {
+    assert.equal(saved.turns[session].recoveryHold, reason)
+    assert.equal(restarted.agentOf(session).calls.length, 0)
+  }
+})
+
 test('resume of a paused goal does not dispatch with an unresolved review', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
