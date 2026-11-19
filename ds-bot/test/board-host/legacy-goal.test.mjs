@@ -58,3 +58,15 @@ test('a current goal locator is omitted for ambiguous originals and invalid boar
     assert.ok(project().every(card => card.id !== id), conflict)
   }
 })
+
+test('the original goal item can still be located after a stage transition', () => {
+  const room = { id:'first', members:['one', 'two'], goal:structuredClone(goal) }
+  const stage = room.goal.stages[0], task = stage.tasks[0]
+  const first = currentGoalBoardTaskId(room, room.goal, stage, task)
+  room.goal.stages.push({id:'s2', tasks:[]})
+  room.goal.current = 1
+  assert.equal(currentGoalBoardTaskId(room, room.goal, stage, task), first)
+  assert.equal(currentGoalBoardTaskId(room, room.goal, stage, {...task}), undefined)
+  const cards = legacyGoalCards({scope:{kind:'room', id:room.id}, principal:user, rooms:{first:room}, bots})
+  assert.equal(cards.find(card => card.id === first)?.legacy.current, false)
+})
