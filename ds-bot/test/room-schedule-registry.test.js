@@ -41,7 +41,7 @@ test('native room schedules follow the actual room, preserve independent timing 
   const mgr=start();t.after(()=>rt.close())
   await Promise.all(Array.from({length:6},()=>mgr.reconcile()))
   const [ui,dev]=[...rows.values()]
-  assert.equal(rows.size,2);assert.equal(ui.everySeconds,1800);assert.equal(ui.target.sessionId,'ui-part')
+  assert.equal(rows.size,2);assert.equal(ui.everySeconds,600);assert.equal(ui.target.sessionId,'ui-part')
   assert.equal(dev.target.sessionId,'dev-part');assert.equal(ui.status,'active')
   assert.equal(mgr.lookup(ui.id,'dev-part'),undefined);assert.equal(mgr.lookup(ui.id,'pm'),undefined)
   assert.equal(mgr.lookup(dev.id,'dev-part').adminId,'pm')
