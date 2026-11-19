@@ -87,7 +87,7 @@ test('team deliveries in the queue never draw as the user’s own rows (#663)', 
 test('a single collapsed inbox keeps Bot mail out of the user queue', () => {
   const {rows, texts} = collect(dock([row('b1', 'bot', 'reply')]))
   assert.equal(rows.length, 0)
-  assert.deepEqual(texts, ['Bot inbox'])
+  assert.deepEqual(texts, ['Bot inbox (1)'])
 })
 
 test('private mail and named member groups have independent counts', () => {
@@ -101,7 +101,7 @@ test('private mail and named member groups have independent counts', () => {
     assert.equal(texts[texts.indexOf(name) + 1], count)
   }
   assert.ok(texts.includes('Writer') && texts.includes('Please decide'))
-  assert.equal(texts.filter(text => text === 'Bot inbox').length, 1)
+  assert.equal(texts.filter(text => text === 'Bot inbox (2)').length, 1)
 })
 
 test('a missing private projection and an empty complete projection have distinct counts', () => {
@@ -148,7 +148,7 @@ test('expanded Bot mail shows both placements without edit or delete controls', 
 })
 
 test('an empty Bot inbox remains accessible without adding a user queue', () => {
-  assert.deepEqual(collect(dock([])).texts, ['Bot inbox'])
+  assert.deepEqual(collect(dock([])).texts, ['Bot inbox (0)'])
 })
 
 test('the count names only the user’s queued sends', () => {
@@ -159,6 +159,7 @@ test('the count names only the user’s queued sends', () => {
   ])
   const { texts } = collect(tree)
   assert.ok(texts.includes('2 queued messages'))
+  assert.ok(texts.includes('Bot inbox (1)'))
 })
 
 test('a user send still in flight shows as sending', () => {
