@@ -23,7 +23,8 @@ const uniqueId = (rows, id) => rows.filter(row => row?.id === id).length === 1
 export function currentGoalBoardTaskId(room, goal, stage, task) {
   if (typeof room.id !== 'string' || typeof goal.id !== 'string' || typeof stage.id !== 'string'
     || typeof task.id !== 'string' || typeof task.botId !== 'string' || typeof task.task !== 'string'
-    || !Number.isSafeInteger(goal.current) || goal !== room.goal || goal.stages[goal.current] !== stage
+    || !Number.isSafeInteger(goal.current) || goal !== room.goal || !Array.isArray(goal.stages) || !goal.stages.includes(stage)
+    || !Array.isArray(stage.tasks) || !stage.tasks.includes(task)
     || !uniqueId(goal.stages, stage.id)
     || !uniqueId(stage.tasks, task.id)
     || (Array.isArray(room.pastGoals) && room.pastGoals.some(other => other?.id === goal.id))) return undefined
