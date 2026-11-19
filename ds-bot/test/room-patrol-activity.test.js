@@ -40,3 +40,14 @@ test('ignoring a patrol’s own opening turn and message still sees other pendin
   queue.push({ id: 'human' }); assert.equal(busy('patrol', 'ga'), true); queue.pop()
   rt.waitsForApproval = id => id === 'ga'; assert.equal(busy('patrol', 'ga'), true)
 })
+
+test('passive native schedule changes in an idle group do not count as queued work', () => {
+  const { agents, busy } = fixture()
+  const change = {id:'notice', source:{kind:'schedule'}, content:[{type:'text',text:
+    '[SCHEDULE CHANGE]\nThis notice is not a delivery of the task and needs no action.\nchange: updated\nschedule_id_json: "owned"'}]}
+  const queued = [change]
+  agents.set('relay', {inbox:{nextStep:queued}})
+  assert.equal(busy(), false)
+  queued.push({...change,source:{kind:'user'}})
+  assert.equal(busy(), true)
+})

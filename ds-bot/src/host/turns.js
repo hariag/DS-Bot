@@ -1044,7 +1044,6 @@ export function install(rt) {
       && !stoppedSubagentParents.has(parentId) && !stoppedSubagents.has(info.id)) {
       noteSubagentFailure(parentId, info.id, { stopReason: info.stopReason, helper, closing: textOf(info?.lastAssistantMessage) })
     }
-    void rt.goalSettled?.(rt.roomOf(owner.roomId)).catch(error => rt.warn('ds-bot: goal settle failed: %s', error))
   })
 
   const laterTarget = (id) => {
@@ -1182,7 +1181,6 @@ export function install(rt) {
           // child active and preserves its label until it actually settles.
           if (source.kind === 'subagent-settled' && childId !== undefined) {
             noteSubagentEnd(childId)
-            if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle failed: %s', error))
           }
           if (stoppedSubagentParents.has(id) || (childId !== undefined && stoppedSubagents.has(childId))) {
             entry.suppressedSubagent = true
@@ -1613,7 +1611,6 @@ export function install(rt) {
         } else if (watched && !retry && info?.role === 'room' && info.reviewId && (inspectIncomplete || reason?.kind !== 'completed')) {
           void rt.goalReviewFailed?.(rt.roomOf(info.roomId), id, info.reviewId).catch(error => rt.warn('ds-bot: goal review failure in %s could not be recorded: %s', id, error))
         }
-        if (rt.groupOwners.has(id)) void rt.goalSettled?.(rt.roomOf(rt.groupOwners.get(id).roomId)).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', id, error))
         break
       }
     }
