@@ -176,19 +176,25 @@ export function install(rt) {
   // A later turn in the same session must not overwrite an older uncertain
   // interruption. Preserve it separately before the first possible snapshot.
   const heldTurns = { ...interrupted.heldTurns }
+  const heldReason = 'interrupted outcome unknown'
+  const retainedAtStartup = new WeakSet()
   const holdTurn = (sessionId, value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interrupted turn; inspect recovery notes')
     const { recoveryHold: _, ...record } = value
     const id = createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex')
-    if (heldTurns[id] === undefined) {
+    const saved = heldTurns[id]
+    if (saved === undefined) {
       // A newly held turn can invalidate checks for any room until its exact
       // provenance has been matched to the current roster.
       unknownQueueGeneration += 1n
-      heldTurns[id] = { sessionId, record, reason: 'interrupted outcome unknown' }
+      heldTurns[id] = { sessionId, record, reason: heldReason }
+      return false
     }
+    return value.recoveryHold === heldReason && saved?.reason === heldReason
+      && saved.sessionId === sessionId && JSON.stringify(saved.record) === JSON.stringify(record)
   }
   for (const [sessionId, value] of Object.entries(interrupted.turns)) {
-    try { holdTurn(sessionId, value) } catch {
+    try { if (holdTurn(sessionId, value)) retainedAtStartup.add(value) } catch {
       blocked = 'invalid interrupted turn'
       rt.warn('ds-bot: invalid interrupted turn for %s; the original recovery notes are preserved for inspection', sessionId)
     }
@@ -791,14 +797,20 @@ export function install(rt) {
   async function resumeTurn(sessionId, record) {
     // A restart does not prove whether an external effect happened. Keep the
     // original trigger and do not generate a second, unrelated exchange ID.
-    holdTurn(sessionId, record)
-    update(sessionId, current => current === undefined || current === record
-      ? { ...record, recoveryHold: 'interrupted outcome unknown' } : current)
+    const retained = retainedAtStartup.has(record)
+    // Both the marker and the matching archive were already on disk. The
+    // startup summary covers this hold. A review may still need reconciliation.
+    if (retained && !record.trigger?.reviewId) return
+    if (!retained) {
+      holdTurn(sessionId, record)
+      update(sessionId, current => current === undefined || current === record
+        ? { ...record, recoveryHold: heldReason } : current)
+    }
     await persist({ required: true })
     if (record.trigger?.reviewId) {
       await rt.goalReviewFailed?.(rt.roomOf(record.roomId), sessionId, record.trigger.reviewId)
     }
-rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
+    if (!retained) rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
   }
   rt.holdInterruptedTurn = resumeTurn
 
