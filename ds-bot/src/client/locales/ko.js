@@ -1,6 +1,7 @@
 // Korean (ko) localization for DS Bot client and DSH settings namespaces.
 
 export const KO = {
+  'Delivery confirmed by the owner’s start reply': '담당자의 작업 시작 답글로 전달을 확인했습니다',
   'A new reply is waiting': "새 답변이 도착했습니다",
   'Opening…': '여는 중…',
   'Still opening…': '아직 여는 중…',

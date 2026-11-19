@@ -1,6 +1,7 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  'Delivery confirmed by the owner’s start reply': 'Zustellung durch die Startmeldung der zuständigen Person bestätigt',
   'A new reply is waiting': "Eine neue Antwort wartet auf dich",
   'Opening…': 'Wird geöffnet…',
   'Still opening…': 'Wird noch geöffnet…',

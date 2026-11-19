@@ -12,6 +12,7 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  'Delivery confirmed by the owner’s start reply': '已按负责人的开工回复核实派发',
   'Task reply': '任务回复',
   'Group goal update': '群目标更新',
   'Work claimed': '已认领并开始执行',

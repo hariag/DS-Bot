@@ -1,6 +1,7 @@
 // Japanese (ja) localization for DS Bot client and DSH settings namespaces.
 
 export const JA = {
+  'Delivery confirmed by the owner’s start reply': '担当者の作業開始の返信により配信を確認しました',
   'A new reply is waiting': "新しい返信があります",
   "Opening…": "開いています…",
   "Still opening…": "まだ開いています…",
