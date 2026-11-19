@@ -911,7 +911,7 @@ const ZH = {
   '{n} queued messages': '{n} 条排队消息',
   '{n} Bot messages waiting': '{n} 条 Bot 消息待处理',
   'Bot private {private} + group {group}': 'Bot 私聊 {private} 条 + 群聊 {group} 条',
-  "Bot inbox": "Bot 收件箱",
+  "Bot inbox ({n})": "Bot 收件箱 {n} 条",
   "Last successful read: {time}": "上次成功读取于 {time}",
   "Bot private inbox": "Bot 私聊",
   "{n} seen": "已见 {n} 条",

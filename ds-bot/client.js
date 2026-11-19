@@ -13263,7 +13263,7 @@ var ZH = {
   "{n} queued messages": "{n} 条排队消息",
   "{n} Bot messages waiting": "{n} 条 Bot 消息待处理",
   "Bot private {private} + group {group}": "Bot 私聊 {private} 条 + 群聊 {group} 条",
-  "Bot inbox": "Bot 收件箱",
+  "Bot inbox ({n})": "Bot 收件箱 {n} 条",
   "Last successful read: {time}": "上次成功读取于 {time}",
   "Bot private inbox": "Bot 私聊",
   "{n} seen": "已见 {n} 条",
@@ -51988,11 +51988,12 @@ function liveMessage({ row, placement }, sessionId) {
     exchangeId: row.source?.exchangeId,
     placement,
     senderName: row.source?.senderName,
-    text: row.content.filter((block) => block.type === "text").map((block) => block.text).join("\n"),
-    files: queueAttachments(row.content)
+    content: row.content
   };
 }
 function InboxMessage({ item, loadImage }) {
+  const text = item.content ? item.content.filter((block) => block.type === "text").map((block) => block.text).join("\n") : item.text;
+  const files = item.content ? queueAttachments(item.content) : EMPTY_QUEUE;
   const placement = item.placement === "next-step" ? t("Next step") : item.placement === "next-turn" ? t("Next turn") : "";
   return (0, import_react75.createElement)(
     "div",
@@ -52003,12 +52004,12 @@ function InboxMessage({ item, loadImage }) {
       (0, import_react75.createElement)("span", { className: "bt-bot-queue-sender" }, item.senderName || t("Bot")),
       (placement || item.earlier) && (0, import_react75.createElement)("span", { className: "bt-bot-queue-placement" }, placement || t("Earlier conversation"))
     ),
-    item.files?.length > 0 ? (0, import_react75.createElement)(
+    files.length > 0 ? (0, import_react75.createElement)(
       "span",
       { className: "bt-queue-attachments bt-bot-queue-attachments" },
-      item.files.map(({ type, attachment }, index) => type === "image" ? (0, import_react75.createElement)(QueueThumb, { key: index, attachment, loadImage, label: t("Queued image") }) : (0, import_react75.createElement)(QueueFile, { key: index, attachment, label: t("Queued file {name}", { name: attachment.name }) }))
+      files.map(({ type, attachment }, index) => type === "image" ? (0, import_react75.createElement)(QueueThumb, { key: index, attachment, loadImage, label: t("Queued image") }) : (0, import_react75.createElement)(QueueFile, { key: index, attachment, label: t("Queued file {name}", { name: attachment.name }) }))
     ) : item.attachments > 0 && (0, import_react75.createElement)("div", null, t("Attachments: {n}", { n: item.attachments })),
-    item.text && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, item.text)
+    text && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, text)
   );
 }
 function InboxSection({ group, loadImage, roomPendingTitle }) {
@@ -52050,7 +52051,7 @@ function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
   const [busy, setBusy] = (0, import_react75.useState)(false);
   const [failure, setFailure] = (0, import_react75.useState)(null);
   const committedGroups = (0, import_react75.useRef)(EMPTY_QUEUE);
-  const liveGroups = (0, import_react75.useMemo)(() => open ? stampInboxGroups(getLiveGroups(), committedGroups.current) : EMPTY_QUEUE, [getLiveGroups, open]);
+  const liveGroups = (0, import_react75.useMemo)(() => stampInboxGroups(getLiveGroups(), committedGroups.current), [getLiveGroups]);
   (0, import_react75.useLayoutEffect)(() => {
     committedGroups.current = liveGroups;
   }, [liveGroups]);
@@ -52059,7 +52060,6 @@ function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
   (0, import_react75.useEffect)(() => () => pending.current?.abort(), []);
   async function load(cursor, replaceFrom = null) {
     if (pending.current) return;
-    const beforeRead = open ? liveGroups : stampInboxGroups(getLiveGroups(), committedGroups.current);
     const request = new AbortController();
     pending.current = request;
     setBusy(true);
@@ -52067,11 +52067,11 @@ function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
     try {
       const page = await read(cursor, request.signal);
       if (!request.signal.aborted) setPages((prior) => {
-        const sample = { page, cursor, liveGroups: beforeRead };
+        const sample = { page, cursor, liveGroups };
         if (replaceFrom === null) return cursor ? [...prior, sample] : [sample];
         const original = prior[replaceFrom].page;
         const sameRange = page.nextCursor === original.nextCursor && page.total === original.total;
-        const updated = { page: keepInboxPageOnRetry(original, page), cursor, liveGroups: beforeRead };
+        const updated = { page: keepInboxPageOnRetry(original, page), cursor, liveGroups };
         return [...prior.slice(0, replaceFrom), updated, ...sameRange ? prior.slice(replaceFrom + 1) : []];
       });
     } catch (error) {
@@ -52084,11 +52084,8 @@ function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
     }
   }
   function toggle() {
-    if (!open && read) void load();
-    if (open) {
-      setPages([]);
-      setFailure(null);
-    }
+    if (!open && read) void load(void 0, pages.length ? 0 : null);
+    if (open) setFailure(null);
     if (open && pending.current) {
       pending.current.abort();
       pending.current = null;
@@ -52098,7 +52095,8 @@ function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
   }
   const last = pages.at(-1)?.page;
   const sourcesRead = pages.reduce((count, sample) => count + sample.page.sources.length, 0);
-  const groups = (0, import_react75.useMemo)(() => open ? inboxGroups(liveGroups, pages) : EMPTY_QUEUE, [liveGroups, pages, open]);
+  const groups = (0, import_react75.useMemo)(() => inboxGroups(liveGroups, pages), [liveGroups, pages]);
+  const total = groups.reduce((sum, group) => sum + group.rows.length, 0);
   return (0, import_react75.createElement)(
     "div",
     { className: "bt-queue-panel bt-inbox-inspection", "data-inbox-inspection": "" },
@@ -52106,7 +52104,7 @@ function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
       "button",
       { type: "button", className: "bt-queue-head", "aria-controls": panelId, "aria-expanded": open, onClick: toggle },
       (0, import_react75.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react75.createElement)(QueueIcon)),
-      (0, import_react75.createElement)("span", { className: "bt-queue-count" }, t("Bot inbox")),
+      (0, import_react75.createElement)("span", { className: "bt-queue-count" }, t("Bot inbox ({n})", { n: total })),
       (0, import_react75.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, open ? (0, import_react75.createElement)(ChevronDownIcon) : (0, import_react75.createElement)(ChevronUpIcon))
     ),
     open && (0, import_react75.createElement)(
