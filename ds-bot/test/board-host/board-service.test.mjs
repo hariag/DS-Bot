@@ -182,6 +182,21 @@ test('scheduled owner and reviewer receive their exact evidence fields and can c
     /invalid fields.*Unexpected value fields environment.*"result":"pass"/)
   const {task:done} = await call('group-two', {...review, value:decision})
   assert.equal(done.status, 'done')
+
+  const change = await rt.boardCall('board-command', { scope, taskId:card.id, type:'card-details',
+    expectedRevision:done.revision, operationId:'changed-description', value:{description:'Cover a new case'} })
+  const changePrompt = sessionId => settle(async () => deliveries.find(entry => entry.sessionId === sessionId
+    && entry.message.source?.taskAction && entry.message.content[0].text.includes('Task ID: '+change.id+' (revision '))?.message.content[0].text)
+  const ownerPrompt = await changePrompt('group-one')
+  assert.match(ownerPrompt, /Before:.*\nAfter:.*Cover a new case/)
+  assert.match(ownerPrompt, /adjust what is needed or explicitly reassign it/)
+  const {task:startedChange} = await call('group-one', { task_id:change.id, action:'start', operation_id:'changed-start', expected_revision:change.revision })
+  await call('group-one', { task_id:change.id, action:'report', operation_id:'changed-report', expected_revision:startedChange.revision, value:personal })
+  const reviewerPrompt = await changePrompt('group-two')
+  assert.match(reviewerPrompt, /Before:.*\nAfter:.*Cover a new case/)
+  assert.match(reviewerPrompt, /Independently compare the before and after requirements/)
+  assert.match(reviewerPrompt, /board_task review/)
+  assert.doesNotMatch(reviewerPrompt, /adjust what is needed|board_task report/)
 })
 
 test('a personal Bot task can be created and delivered to its private Session', async t => {
