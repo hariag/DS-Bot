@@ -13276,6 +13276,27 @@ var ZH = {
   "Counts exclude items in transfer and may include control events.": "不含转移中的项；可能包含控制事件。",
   "Attachments: {n}": "附件：{n}",
   "Group posts awaiting dispatch: {n}": "群聊待派发消息：{n} 条",
+  "Read Bot inboxes": "查看 Bot 收件箱",
+  "Ended {time}": "结束于 {time}",
+  "Bot inbox snapshot at {time}": "Bot 收件箱采样时间：{time}",
+  "Earlier inboxes sampled without Bot messages: {n}": "本次未发现 Bot 往来消息的历史收件箱：{n} 个",
+  "Checked {read} of {total} inboxes": "已检查 {read} / {total} 个收件箱",
+  "Session not found": "找不到该会话",
+  "Session needs migration": "该会话需要迁移",
+  "Could not read this inbox": "此次未能读取这个收件箱",
+  "Session identity could not be confirmed": "无法确认该收件箱的会话归属",
+  "Private inbox": "私聊收件箱",
+  "Group inbox": "群收件箱",
+  "Current conversation": "当前会话",
+  "Reading inboxes…": "正在读取收件箱…",
+  "Inbox scope changed. Start a new read.": "收件箱范围已变化，请从头读取。",
+  "Inbox read failed. You can retry.": "此次读取失败，可以重试。",
+  "Read from the start": "从头读取",
+  "Retry this page": "重试本页",
+  "No Bot messages at the time of this read": "读取时无 Bot 往来消息",
+  "Retry this read": "重试本次读取",
+  "Read next inboxes": "继续读取",
+  "Refresh inbox snapshots": "重新读取收件箱",
   "Group inbox unavailable": "群收件箱暂不可读取",
   "Private inbox unavailable": "私聊收件箱暂不可读取",
   "Earlier conversation": "历史会话",
@@ -51756,7 +51777,119 @@ function combineRoomPosts(projection, host, sessionId, available) {
   if (sessions.size > 1 && rows2.some((item) => !item.exchangeId)) uncertain = true;
   return { rows: rows2, uncertain };
 }
-function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, loadImage, renderFactorySlot, actions }) {
+var sourceStatusLabel = {
+  missing: "Session not found",
+  migration: "Session needs migration",
+  unavailable: "Could not read this inbox",
+  ambiguous: "Session identity could not be confirmed"
+};
+function InboxSnapshotPage({ page, retry, busy }) {
+  const time = new Date(page.readAt);
+  const empty = page.sources.filter((source) => source.earlier && source.status === "ready" && !source.rows.length).length;
+  return (0, import_react75.createElement)(
+    "section",
+    { className: "bt-inbox-snapshot" },
+    (0, import_react75.createElement)("time", { dateTime: time.toISOString() }, t("Bot inbox snapshot at {time}", { time: time.toLocaleString() })),
+    empty > 0 && (0, import_react75.createElement)("div", null, t("Earlier inboxes sampled without Bot messages: {n}", { n: empty })),
+    page.sources.filter((source) => !source.earlier || source.status !== "ready" || source.rows.length > 0).map((source) => (0, import_react75.createElement)(
+      "div",
+      { key: source.sessionId, className: "bt-bot-queue-row" },
+      (0, import_react75.createElement)(
+        "div",
+        { className: "bt-bot-queue-meta", title: source.sessionId },
+        (0, import_react75.createElement)("strong", null, source.roomName || t(source.kind === "private" ? "Private inbox" : "Group inbox")),
+        (0, import_react75.createElement)("span", null, t(source.earlier ? "Earlier conversation" : "Current conversation")),
+        source.earlier && Number.isFinite(source.endedAt) && (0, import_react75.createElement)(
+          "time",
+          { className: "bt-inbox-part-date", dateTime: new Date(source.endedAt).toISOString() },
+          t("Ended {time}", { time: new Date(source.endedAt).toLocaleString() })
+        ),
+        source.earlier && (0, import_react75.createElement)("code", null, source.sessionId.slice(-8))
+      ),
+      source.status === "ready" && !source.rows.length && (0, import_react75.createElement)("div", null, t("No Bot messages at the time of this read")),
+      source.status !== "ready" && (0, import_react75.createElement)("div", null, t(sourceStatusLabel[source.status] ?? "Could not read this inbox")),
+      source.rows.map((row) => (0, import_react75.createElement)(
+        "div",
+        { key: row.id, className: "bt-inbox-sample-message" },
+        row.senderName && (0, import_react75.createElement)("strong", null, row.senderName),
+        row.text && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, row.text),
+        row.attachments > 0 && (0, import_react75.createElement)("span", null, t("Attachments: {n}", { n: row.attachments }))
+      ))
+    )),
+    page.sources.some((source) => source.status !== "ready") && (0, import_react75.createElement)("button", { className: "bt-inbox-retry", type: "button", disabled: busy, onClick: retry }, t("Retry this page"))
+  );
+}
+function InboxInspection({ read }) {
+  const [open, setOpen] = (0, import_react75.useState)(false);
+  const [pages, setPages] = (0, import_react75.useState)([]);
+  const [busy, setBusy] = (0, import_react75.useState)(false);
+  const [failure, setFailure] = (0, import_react75.useState)(null);
+  const pending = (0, import_react75.useRef)(null);
+  const panelId = (0, import_react75.useId)();
+  (0, import_react75.useEffect)(() => () => pending.current?.abort(), []);
+  async function load(cursor, replaceFrom = null) {
+    if (pending.current) return;
+    const request = new AbortController();
+    pending.current = request;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const page = await read(cursor, request.signal);
+      if (!request.signal.aborted) setPages((prior) => {
+        const sample = { page, cursor };
+        if (replaceFrom === null) return cursor ? [...prior, sample] : [sample];
+        const original = prior[replaceFrom].page;
+        const sameRange = page.nextCursor === original.nextCursor && page.total === original.total;
+        return [...prior.slice(0, replaceFrom), sample, ...sameRange ? prior.slice(replaceFrom + 1) : []];
+      });
+    } catch (error) {
+      if (!request.signal.aborted) setFailure({ cursor, replaceFrom, restart: error?.code === "bot/invalid" });
+    } finally {
+      if (pending.current === request) {
+        pending.current = null;
+        if (!request.signal.aborted) setBusy(false);
+      }
+    }
+  }
+  function toggle() {
+    if (!open && !pages.length) void load();
+    if (open && pending.current) {
+      pending.current.abort();
+      pending.current = null;
+      setBusy(false);
+    }
+    setOpen(!open);
+  }
+  const last = pages.at(-1)?.page;
+  const sourcesRead = pages.reduce((count, sample) => count + sample.page.sources.length, 0);
+  return (0, import_react75.createElement)(
+    "div",
+    { className: "bt-queue-panel bt-inbox-inspection", "data-inbox-inspection": "" },
+    (0, import_react75.createElement)(
+      "button",
+      { type: "button", className: "bt-queue-head", "aria-controls": panelId, "aria-expanded": open, onClick: toggle },
+      (0, import_react75.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react75.createElement)(QueueIcon)),
+      (0, import_react75.createElement)("span", { className: "bt-queue-count" }, t("Read Bot inboxes")),
+      (0, import_react75.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, open ? (0, import_react75.createElement)(ChevronUpIcon) : (0, import_react75.createElement)(ChevronDownIcon))
+    ),
+    open && (0, import_react75.createElement)(
+      "div",
+      { id: panelId, className: "bt-inbox-inspection-body" },
+      last && (0, import_react75.createElement)("div", { className: "bt-inbox-sample-count" }, t("Checked {read} of {total} inboxes", { read: sourcesRead, total: last.total })),
+      pages.map(({ page, cursor }, i) => (0, import_react75.createElement)(InboxSnapshotPage, { key: i, page, busy, retry: () => load(cursor, i) })),
+      busy && (0, import_react75.createElement)("div", { role: "status" }, t("Reading inboxes…")),
+      failure && (0, import_react75.createElement)("div", { role: "status" }, t(failure.restart ? "Inbox scope changed. Start a new read." : "Inbox read failed. You can retry.")),
+      (0, import_react75.createElement)(
+        "div",
+        { className: "bt-inbox-inspect-actions" },
+        failure && (0, import_react75.createElement)("button", { type: "button", disabled: busy, onClick: () => failure.restart ? load() : load(failure.cursor, failure.replaceFrom) }, t(failure.restart ? "Read from the start" : "Retry this read")),
+        !failure && last?.nextCursor && (0, import_react75.createElement)("button", { type: "button", disabled: busy, onClick: () => load(last.nextCursor) }, t("Read next inboxes")),
+        last && !failure && (0, import_react75.createElement)("button", { type: "button", disabled: busy, onClick: () => load() }, t("Refresh inbox snapshots"))
+      )
+    )
+  );
+}
+function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, inspectQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.("inbox");
   const botId = useRoster?.((roster) => roster.byId?.[sessionId]?.id) ?? null;
   const roomId = useRoster?.((roster) => roster.roomsById?.[sessionId]?.id) ?? null;
@@ -51830,7 +51963,8 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
     if (rowCount === 0 && !collapsed) setCollapsed(true);
     if (editing !== null && (!queueMutable || !queue.some((row) => row.id === editing.id))) setEditing(null);
   }, [collapsed, editing, queue, queueMutable, rowCount]);
-  if (rowCount === 0 && botTitle === "" && (!isRoom || roomTitle === "")) return null;
+  const canInspect = typeof inspectQueue === "function" && (isRoom || botId !== null);
+  if (!canInspect && rowCount === 0 && botTitle === "" && (!isRoom || roomTitle === "")) return null;
   const interactionActive = queueMutable && (editing !== null || busy !== null);
   const expanded = !collapsed || interactionActive;
   const listVisible = rowCount === 1 || expanded;
@@ -51928,8 +52062,8 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
             text !== "" && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, text)
           );
         }),
-        !botCollapsed && privateUnknown && !inboxAvailable && (0, import_react75.createElement)("li", { className: "bt-bot-queue-row" }, t("Private inbox unavailable")),
-        !botCollapsed && earlierPrivate.map((item) => (0, import_react75.createElement)(
+        !botCollapsed && !canInspect && privateUnknown && !inboxAvailable && (0, import_react75.createElement)("li", { className: "bt-bot-queue-row" }, t("Private inbox unavailable")),
+        !botCollapsed && earlierPrivate.filter((item) => !canInspect || !item.unavailable).map((item) => (0, import_react75.createElement)(
           "li",
           { key: item.id, className: "bt-bot-queue-row", "data-bot-earlier-private-queue-row": "" },
           (0, import_react75.createElement)(
@@ -51940,7 +52074,7 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
           ),
           item.text && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, item.text)
         )),
-        !botCollapsed && groupQueue.map((item) => (0, import_react75.createElement)(
+        !botCollapsed && groupQueue.filter((item) => !canInspect || !item.unavailable).map((item) => (0, import_react75.createElement)(
           "li",
           { key: `${item.roomId}:${item.id}`, className: "bt-bot-queue-row", "data-bot-group-queue-row": "" },
           (0, import_react75.createElement)(
@@ -51953,6 +52087,7 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
         ))
       )
     ),
+    canInspect && (0, import_react75.createElement)(InboxInspection, { key: sessionId, read: inspectQueue }),
     rowCount > 0 && (0, import_react75.createElement)(
       "div",
       { className: "bt-queue-panel" },
@@ -52033,6 +52168,11 @@ var QUEUE_CSS = `
 .bt-queue-panel:before{z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--bt-main));backdrop-filter:var(--dsw-menu-backdrop-filter,none);content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-panel:after{border:.5px solid var(--bt-line-2);border-bottom:none;border-radius:inherit;content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-head{box-sizing:border-box;width:100%;height:36px;border:0;border-radius:var(--dsw-radius-md,10px);background:none;color:var(--bt-ink);text-align:left;font:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 12px}
+.bt-inbox-inspection-body{max-height:clamp(140px,32vh,320px);overflow:auto;padding:5px 12px 10px;line-height:1.5;font-size:12px;color:var(--bt-ink-2)}
+.bt-inbox-snapshot{margin-top:6px}.bt-inbox-snapshot>time{display:block;color:var(--bt-ink-3)}
+.bt-inbox-snapshot .bt-bot-queue-row{padding:6px 0}.bt-inbox-sample-message+.bt-inbox-sample-message{margin-top:5px}
+.bt-inbox-inspect-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.bt-inbox-inspect-actions button,.bt-inbox-retry{border:1px solid var(--bt-line);border-radius:6px;padding:3px 8px;font:inherit;background:var(--bt-main);color:var(--bt-ink);cursor:pointer}
 .bt-queue-head:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-queue-head:disabled{cursor:default}
 .bt-queue-lead{color:var(--bt-ink-3);flex:none;display:grid;place-items:center}
@@ -53365,6 +53505,7 @@ function apply(ctx) {
   const queueFace = (sessionId) => ({
     ...face(),
     sessionId,
+    inspectQueue: (cursor, signal) => call("queue-inspect", { sessionId, ...cursor ? { cursor } : {} }, signal),
     updateQueue: async (itemId, action) => await ctx.sessions.binding(sessionId)?.session?.updateQueue(itemId, action) ?? { ok: false },
     loadImage: (attachment) => ctx.uiConversation.imageUrl(sessionId, attachment)
   });
