@@ -68,7 +68,7 @@ function hostSchedule() {
     async create({ title, prompt, timing, target }) {
       const id = `schedule-${next++}`
       const [selector] = Object.keys(timing).filter(key => key !== 'kind')
-      tasks.set(id, { record: { id, kind: timing.kind, title, prompt, scheduledAt: timing.at ?? '2030-01-01T01:00:00.000Z' }, timing: timing[selector], target, status: 'active' })
+      tasks.set(id, { record: { id, kind: timing.kind, title, prompt, everySeconds:timing.every_seconds, scheduledAt: timing.at ?? '2030-01-01T01:00:00.000Z' }, timing: timing[selector], target, status: 'active' })
       return { id }
     },
     async catalog() {
@@ -186,33 +186,39 @@ test('on DSH 0.2.2 tasks target the Bot’s current part, list by target, delete
   const schedule = hostSchedule()
   const { ctx, home, call, rt } = setup({ schedule })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.reconcileRoomSchedules()
+  const initial = (await call('schedules', {})).value.tasks
+  assert.equal(initial.length,1)
+  assert.equal(initial[0].roomId,'g1')
   const made = await call('schedule-create', { target: 'w1', title: 'Briefing', prompt: 'Sum up the day', when: { kind: 'daily', time: '09:00', timeZone: 'Asia/Shanghai' } })
   assert.equal(made.ok, true, JSON.stringify(made))
-  const [created] = [...schedule.tasks.values()]
+  const created = [...schedule.tasks.values()].find(entry => entry.record.title === 'Briefing')
+  const writerId = created.record.id
   assert.deepEqual(created.target, { kind: 'session', sessionId: 'w2' })
   assert.equal(created.record.kind, 'daily')
   assert.deepEqual(created.timing, { time: '09:00:00', time_zone: 'Asia/Shanghai' })
   await call('schedule-create', { target: 'm1', title: 'Ping', prompt: 'Check', when: { kind: 'every', minutes: 30 } })
-  assert.deepEqual([...schedule.tasks.values()].at(-1).timing, 1800)
+  const ping = [...schedule.tasks.values()].find(entry => entry.record.title === 'Ping')
+  assert.equal(ping.timing, 1800)
 
   schedule.tasks.set('schedule-paused', { record: { id: 'schedule-paused', kind: 'rrule', title: 'Held', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'session', sessionId: 'w2' }, status: 'paused' })
   schedule.tasks.set('schedule-ended', { record: { id: 'schedule-ended', kind: 'at', title: 'Done', prompt: 'x', scheduledAt: '2020-01-01T00:00:00.000Z' }, target: { kind: 'session', sessionId: 'w2' }, status: 'ended' })
   schedule.tasks.set('schedule-new', { record: { id: 'schedule-new', kind: 'at', title: 'Elsewhere', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'new_once' }, status: 'active' })
   const listed = (await call('schedules', {})).value
   assert.deepEqual(listed.tasks.map(task => [task.title, task.botId, task.sessionId, task.state]), [
-    ['Briefing', 'w1', 'w2', 'scheduled'], ['Ping', 'm1', 'm1', 'scheduled'], ['Held', 'w1', 'w2', 'paused'], ['Done', 'w1', 'w2', 'finished'],
+    ['DSBOT-GROUP/g1', undefined, 'g1', 'scheduled'], ['Briefing', 'w1', 'w2', 'scheduled'], ['Ping', 'm1', 'm1', 'scheduled'], ['Held', 'w1', 'w2', 'paused'], ['Done', 'w1', 'w2', 'finished'],
   ])
 
   await rt.moveSchedules('w2', 's9')
-  assert.deepEqual(schedule.edits.map(edit => [edit.id, edit.patch?.target?.sessionId]), [['schedule-1', 's9'], ['schedule-paused', 's9']])
+  assert.deepEqual(schedule.edits.map(edit => [edit.id, edit.patch?.target?.sessionId]), [[writerId, 's9'], ['schedule-paused', 's9']])
   assert.deepEqual(schedule.tasks.get('schedule-ended').target, { kind: 'session', sessionId: 'w2' })
 
-  assert.match((await call('schedule-delete', { sessionId: 'w2', id: 'schedule-1' })).error.message, /No such task/)
+  assert.match((await call('schedule-delete', { sessionId: 'w2', id: writerId })).error.message, /No such task/)
   assert.match((await call('schedule-delete', { sessionId: 'm1', id: 'schedule-new' })).error.message, /No such task/)
-  const removed = await call('schedule-delete', { sessionId: 'm1', id: 'schedule-2' })
+  const removed = await call('schedule-delete', { sessionId: 'm1', id: ping.record.id })
   assert.equal(removed.ok, true, JSON.stringify(removed))
-  assert.equal(schedule.tasks.has('schedule-2'), false)
-  assert.deepEqual(schedule.edits.at(-1), { id: 'schedule-2', action: 'delete' })
+  assert.equal(schedule.tasks.has(ping.record.id), false)
+  assert.deepEqual(schedule.edits.at(-1), { id: ping.record.id, action: 'delete' })
 })
 
 // DSH 0.2.2's task ids are Host-wide, so schedule_edit could reach another Bot's task.
@@ -220,7 +226,7 @@ test('on DSH 0.2.2 a Bot reads and changes only the tasks of its own chat', asyn
   const schedule = hostSchedule()
   const { ctx, home, rt } = setup({ schedule })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  await rt.load()
+  await rt.reconcileRoomSchedules()
   schedule.tasks.set('own', { record: { id: 'own', kind: 'at', title: 'Mine', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'session', sessionId: 'w1' }, status: 'active' })
   schedule.tasks.set('chief', { record: { id: 'chief', kind: 'at', title: 'Chief', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'session', sessionId: 'm1' }, status: 'active' })
   schedule.tasks.set('elsewhere', { record: { id: 'elsewhere', kind: 'at', title: 'New', prompt: 'x', scheduledAt: '2030-01-01T00:00:00.000Z' }, target: { kind: 'new_once' }, status: 'active' })
@@ -253,11 +259,11 @@ test('on DSH 0.2.2 a Bot reads and changes only the tasks of its own chat', asyn
     }).then(result => ({ result, args: exec.arguments }))
   }
   const second = await run('w2', { active: true, limit: 1, offset: 1 })
-  assert.deepEqual(asked.at(-1), { active: true, limit: 1, offset: 3 })
+  assert.deepEqual(asked.at(-1), { active: true, limit: 1, offset: 4 })
   assert.deepEqual(second.args, { active: true, limit: 1, offset: 1 })
   assert.deepEqual(second.result.value, { items: [{ id: 'own2', title: 'Mine too', target: { kind: 'session', sessionId: 'w2' } }], shown: 1, total: 2, limit: 1, offset: 1 })
   const both = await run('w2', {})
-  assert.deepEqual(asked.at(-1), { limit: 4, offset: 0 })
+  assert.deepEqual(asked.at(-1), { limit: 4, offset: 1 })
   assert.deepEqual(both.result.value.items.map(task => task.id), ['own', 'own2'])
   assert.deepEqual((await run('w2', { offset: 5 })).result.value, { items: [], shown: 0, total: 2, limit: 100, offset: 5 })
   // A page out of DSH's range goes to DSH as asked, and what comes back is still narrowed.
@@ -266,7 +272,7 @@ test('on DSH 0.2.2 a Bot reads and changes only the tasks of its own chat', asyn
   assert.deepEqual(wide.result.value.items.map(task => task.id), ['own', 'own2'])
   assert.equal(wide.result.value.total, 2)
   assert.deepEqual((await run('m1', {})).result.value.items.map(task => task.id), ['chief'])
-  assert.equal((await run('outside', {})).result.value.items.length, 4)
+  assert.equal((await run('outside', {})).result.value.items.length, 5)
 })
 
 test('a failed task move can resume without losing identical remaining tasks', async (t) => {
@@ -291,4 +297,31 @@ test('a failed task move can resume without losing identical remaining tasks', a
   await rt.moveSchedules('w2', 's9')
   assert.equal(on('s9').length, 2)
   assert.equal(on('w2').length, 0)
+})
+
+test('startup provisions each group and saved roster changes reconcile the native binding without a settings visit', async t=>{
+  const schedule=hostSchedule()
+  const {ctx,rt,home,call}=setup({schedule})
+  t.after(async()=>{await ctx.dispose();rmSync(home,{recursive:true,force:true,maxRetries:5})})
+  async function settle(check) {
+    const end=Date.now()+3000
+    for (;;) {
+      if (check()) return
+      if (Date.now()>end) throw Error('Room schedule was not reconciled')
+      await new Promise(resolve=>setTimeout(resolve,10))
+    }
+  }
+  await settle(()=>rt.state.roomSchedules?.g1?.id)
+  const first=rt.state.roomSchedules.g1.id
+  assert.equal(rt.managedRoomSchedule(first,'g1')?.adminId,'m1')
+  const denied=await call('schedule-delete',{id:first,sessionId:'g1'})
+  assert.equal(denied.ok,false);assert.match(denied.error.message,/Pause it/)
+  const room={...rt.state.rooms.g1,id:'another-room',name:'Second room'}
+  rt.state.rooms[room.id]=room;await rt.save({required:true})
+  await settle(()=>rt.state.roomSchedules[room.id]?.id)
+  const second=rt.state.roomSchedules[room.id].id
+  assert.notEqual(first,second)
+  delete rt.state.rooms[room.id];await rt.save({required:true})
+  await settle(()=>!schedule.tasks.has(second))
+  assert.ok(schedule.tasks.has(first))
 })

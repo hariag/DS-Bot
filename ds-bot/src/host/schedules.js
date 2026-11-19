@@ -6,7 +6,8 @@
 // the group like a message from the user (see reminderText). DSH 0.2.0 mounts the service only with its Automation tasks bundle on, so
 // the service is optional and every endpoint reports whether it is there.
 
-import { installScheduledPatrol } from './scheduled-patrol.js'
+import { installRoomScheduleDelivery } from './room-schedule-delivery.js'
+import { createRoomScheduleRegistry } from './room-schedule-registry.mjs'
 
 const MAX_TITLE = 120
 // A time input reports HH:mm, or HH:mm:ss when the browser's picker shows seconds.
@@ -92,13 +93,19 @@ function selectorOf(when) {
 export function install(rt) {
   const { ctx } = rt
   let service = null
-  const catalogChanged = installScheduledPatrol(rt, () => service)
+  const registry = createRoomScheduleRegistry(rt, () => service)
+  rt.managedRoomSchedule = registry.lookup
+  rt.isManagedRoomScheduleId = registry.known
+  rt.refreshRoomScheduleBindings = registry.refresh
+  rt.reconcileRoomSchedules = registry.reconcile
+  installRoomScheduleDelivery(rt)
+  ctx.on('schedule/changed', () => { registry.schedule() })
 
   const attach = (sub) => {
     const own = sub.schedule
     service = own
-    catalogChanged()
-    sub.effect(() => () => { if (service === own) { service = null; catalogChanged() } }, 'ds-bot: schedule service')
+    registry.schedule()
+    sub.effect(() => () => { if (service === own) service = null }, 'ds-bot: schedule service')
   }
   if (typeof ctx.inject === 'function') ctx.inject(['schedule'], attach)
   else if (ctx.get?.('schedule') !== undefined) attach({ schedule: ctx.get('schedule'), effect: (execute, label) => ctx.effect(execute, label) })
@@ -157,7 +164,9 @@ export function install(rt) {
         // Ids are Host-wide here, so the task must still deliver to the team Session named.
         const entry = (await service.catalog()).find(task => task.id === body.id)
         if (entry === undefined || sessionOf(entry) !== body.sessionId) throw invalid('No such task')
-        await service.edit({ id: body.id, action: 'delete' })
+        if (registry.ownerOf(body.id)) throw invalid('This recurring check belongs to its group. Pause it in Automation to suspend it.')
+        const result = await service.edit({ id: body.id, action:'delete', ...(entry.updatedAt ? {expectedUpdatedAt:entry.updatedAt} : {}) })
+        if (result?.code === 'schedule_conflict') throw invalid('The task changed. Refresh it before deleting it.')
       } else {
         await service.delete({ sessionId: body.sessionId, id: body.id })
       }
