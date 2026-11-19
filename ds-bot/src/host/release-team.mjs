@@ -64,6 +64,10 @@ export function resolveReleaseTeam({ bots = {}, projectManagerId, roles = {}, ex
   byRole.set('projectManager', pm)
   const missing = RELEASE_ROLES.filter(role => role.required && !byRole.has(role.key)).map(role => role.label)
   if (missing.length) throw invalidReleaseTeam(`Missing release roles: ${missing.join(', ')}`)
+  const reviewer = byRole.get('reviewer')
+  if (reviewer && [...byRole.entries()].some(([key, id]) => key !== 'reviewer' && id === reviewer)) {
+    throw invalidReleaseTeam('The independent reviewer must be a Bot that did not fill another release role')
+  }
   const members = [...new Set([pm, ...byRole.values()])]
   return { projectManagerId: pm, roles: Object.fromEntries(byRole), members }
 }

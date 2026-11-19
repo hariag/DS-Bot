@@ -243,6 +243,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     if (a !== undefined && a !== b) return a < b ? -1 : 1
     return compareCards(left, right)
   })
+  const releaseMembershipEditable = task => !task?.releaseId || ['draft','queued'].includes(getRelease(task.releaseId)?.status)
   const releaseOrder = scope => getAllReleases().filter(release => release.scope === scope).sort((left, right) => left.position < right.position ? -1 : left.position > right.position ? 1 : 0)
   const releasePositionAfter = (releaseId, afterId, exceptId) => {
     const items = releaseItems(releaseId).filter(task => task.id !== exceptId)
@@ -438,7 +439,7 @@ const releaseIsDone = release => {
     return parentOpen(parent) && (!parent.releaseId || getRelease(parent.releaseId)?.status === 'running')
   }
   const ready = task => {
-    if (isManualBoardTask(task) || task.status !== 'waiting' || task.blocked || task.stale || !dependenciesDone(task)) return task
+    if (isManualBoardTask(task) || task.archivedAt || task.status !== 'waiting' || task.blocked || task.stale || !dependenciesDone(task)) return task
     const next = { ...task, revision: task.revision + 1, actionRevision: task.revision + 1, status: 'ready' }; save(task, next); action(next, 'execute', next.owner); return next
   }
   const unresolved = id => db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain') LIMIT 1").get(id)
@@ -585,6 +586,7 @@ const releaseIsDone = release => {
         const task = getTask(taskId)
         if (!task || task.revision !== expectedTaskRevision) throw new Error('task revision conflict')
         if (task.parentTaskId || task.scope !== release.scope || ['done','cancelled'].includes(task.status)) throw new Error('release task unavailable')
+        if (!releaseMembershipEditable(task)) throw new Error('release is not editable')
         const next = { ...task, revision: task.revision + 1, releaseId, releasePosition: releasePositionAfter(releaseId, afterId, taskId) }
         save(task, next); return next
       })
@@ -638,13 +640,17 @@ const releaseIsDone = release => {
         if (!release || release.revision !== expectedRevision) throw new Error('release revision conflict')
         if (!['draft','queued','running'].includes(release.status)) throw new Error('release is not cancellable')
         const items = releaseItems(release.id)
-        if (release.status === 'running' && items.some(task => ['working','reported'].includes(task.status) || unresolved(task.id))) throw new Error('release has active work')
+        const itemIds = new Set(items.map(task => task.id))
+        const childItems = getAll().filter(task => itemIds.has(task.parentTaskId))
+        const affected = [...new Map([...items, ...childItems].map(task => [task.id, task])).values()]
+        if (release.status === 'running' && affected.some(task => ['working','reported'].includes(task.status) || unresolved(task.id))) throw new Error('release has active work')
         const next = { ...release, revision: release.revision + 1, status:'cancelled', updatedAt: Date.now() }
         saveRelease(release, next)
-        for (const task of items) {
+        for (const task of affected) {
           if (['done','cancelled'].includes(task.status)) continue
           db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(task.id)
-          save(task, { ...task, revision: task.revision + 1, status:'proposed', actionRevision:null, authority:null, blocked:null, stale:false, releaseId:null, releasePosition:null })
+          save(task, { ...task, revision: task.revision + 1, status:'proposed', actionRevision:null, authority:null, blocked:null, stale:false, evidence:null,
+            ...(task.releaseId === release.id ? { releaseId:null, releasePosition:null } : {}) })
         }
         return next
       })
@@ -1036,13 +1042,14 @@ const releaseIsDone = release => {
           }
           case 'restore':
             if (actor !== 'user' || old.status !== 'cancelled') throw new Error('invalid state')
-            next.status = old.owner === null ? 'draft' : 'proposed'; next.actionRevision = null; next.authority = null; next.blocked = null; next.stale = false; break
+            next.status = old.owner === null ? 'draft' : 'proposed'; next.actionRevision = null; next.authority = null; next.blocked = null; next.stale = false; next.evidence = null; break
           case 'release-assign': {
             if (old.parentTaskId) throw new Error('item inherits its parent release')
             if (actor !== 'user' || !value || typeof value !== 'object' || !Object.hasOwn(value, 'releaseId')) throw new Error('invalid release assignment')
             keysOnly(value, ['releaseId', 'releasePosition'])
             const releaseId = value.releaseId
             if (releaseId !== null && !validId(releaseId)) throw new Error('invalid release assignment')
+            if (!releaseMembershipEditable(old)) throw new Error('release is not editable')
             if (releaseId !== null) {
               const release = getRelease(releaseId)
               if (!release || release.scope !== old.scope || !['draft','queued'].includes(release.status) || old.status === 'done' || old.status === 'cancelled') throw new Error('release unavailable')

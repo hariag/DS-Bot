@@ -20,8 +20,9 @@ test('release suggestions use exact English or Chinese roles and preserve explic
   assert.equal(roleForBot({role:'客户', name:'测试工程师助理'}), undefined)
   assert.equal(roleForBot({role:'测试工程师', name:'独立验收人'})?.key, 'tester')
   assert.equal(roleForBot({role:'独立验收人'})?.key, 'reviewer')
-  const manual = resolveReleaseTeam({ bots, roles:{ reviewer:'test' } })
-  assert.equal(manual.roles.reviewer, 'test')
+  const manual = resolveReleaseTeam({ bots, roles:{ reviewer:'review' } })
+  assert.equal(manual.roles.reviewer, 'review')
+  assert.throws(() => resolveReleaseTeam({ bots, roles:{ reviewer:'test' } }), /independent reviewer/)
 })
 
 test('release team resolves required roles, keeps the manager as admin member and rejects missing roles', () => {
