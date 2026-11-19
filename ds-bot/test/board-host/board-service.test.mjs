@@ -139,7 +139,8 @@ test('a scheduled task enters the real DSH Session once with a revision-bound me
   while(!deliveries.length&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
   assert.equal(deliveries.length,1)
   const {sessionId,message}=deliveries[0]
-  assert.equal(sessionId,'chat-one');assert.equal(message.role,'user')
+  assert.equal(sessionId,'group-one');assert.equal(message.role,'user')
+  assert.equal(message.source.roomId,'group');assert.equal(message.source.role,'room')
   assert.equal(message.source.taskAction.id.length,64);assert.equal(message.source.taskAction.taskRevision,scheduled.revision)
   assert.equal(message.source.taskAction.actionRevision,scheduled.actionRevision)
   assert.match(message.content[0].text,/Independent evidence/)
