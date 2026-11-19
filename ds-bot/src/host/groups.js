@@ -516,6 +516,7 @@ export function install(rt) {
       boundary,
       members,
       notice,
+      rt.projectCoordinationPrompt?.(room, member),
       goal,
       ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. Do not act on those owners or any ambiguous owner. First inspect and report. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state, pass a stage, or take external actions.'] : []),
       leads ? adminNote(room) : '',

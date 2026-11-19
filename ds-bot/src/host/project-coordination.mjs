@@ -10,9 +10,6 @@ const validId = value => typeof value === 'string' && value.trim().length > 0 &&
 const text = (value, limit) => typeof value === 'string' && value.trim().length > 0 && value.length <= limit
 const roomIds = value => Array.isArray(value) && value.length > 0 && value.length <= 64 && value.every(validId) && new Set(value).size === value.length
 const PAGE = 20
-
-export const projectRolesChanged = event => event.kind==='binding' || event.kind==='decision' && !!event.taskId
-  || !!event.changedFields?.some(field=>['created','owner','reviewer','parentTaskId','archivedAt','status'].includes(field))
 const tables = [
   'CREATE TABLE p.projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, coordinator TEXT NOT NULL, revision INTEGER NOT NULL)',
   'CREATE TABLE p.rooms (room TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(id))',
@@ -32,7 +29,7 @@ const tables = [
 export function projectJournal(db, taskPath, { tx, assertWriteLock, getTask, getRelease, conversationKind, onCommit }) {
   const path = join(dirname(taskPath), 'project-coordination.sqlite')
   let attached = false, identity
-  let updates = [], taskParticipants
+  let updates = []
   const stat = () => lstatSync(path, {throwIfNoEntry:false})
   function open(create) {
     if (attached) return true
@@ -267,63 +264,20 @@ export function projectJournal(db, taskPath, { tx, assertWriteLock, getTask, get
         }
     }
   }
-  // Tool scoping runs on every roster save and model assembly. Cache only the
-  // board-side roster; live group membership is checked independently per session.
-  function privateRooms() {
-    if (taskParticipants) return taskParticipants
-    const map=new Map()
-    if (attached) {
-      for (const row of db.prepare('SELECT room FROM p.rooms').all()) map.set(row.room,new Set())
-      const rows=db.prepare(`SELECT t.body FROM main.tasks t WHERE
-        EXISTS (SELECT 1 FROM p.links l WHERE l.task IN (t.id,json_extract(t.body,'$.parentTaskId'),json_extract(t.body,'$.change.sourceTaskId')))`).all()
-      for (const row of rows) {
-        const task=JSON.parse(row.body)
-        if (task.archivedAt || ['done','cancelled'].includes(task.status) || !task.scope?.startsWith('room:')) continue
-        const roles=map.get(task.scope.slice(5))
-        if (roles) { roles.add(task.owner); roles.add(task.reviewer) }
-      }
-    }
-    taskParticipants=map
-    return map
-  }
   function assertIdentity() {
     if (!attached && !open(false)) return
     const now=stat()
     if(!now || now.dev!==identity.dev || now.ino!==identity.ino || !isPrivateFile(path,now)) throw new Error('Project journal identity changed')
   }
-  return {bind,decide,view,pending,privateRooms,taskHistory,acknowledge,requireAcknowledged,taskChanged,releaseChanged,existingLink,assertIdentity,
-    begin(){updates=[]},committed(){
-      const events=updates;updates=[]
-      if (events.some(projectRolesChanged)) taskParticipants=undefined
-      for(const event of events) onCommit?.(event)
-    }}
+  return {bind,decide,view,pending,taskHistory,acknowledge,requireAcknowledged,taskChanged,releaseChanged,existingLink,assertIdentity,
+    begin(){updates=[]},committed(){const events=updates;updates=[];for(const event of events) onCommit?.(event)}}
 }
 
-export function installProjectCoordination(rt, {defineTool, store, run, availableStore=store}) {
+export function installProjectCoordination(rt, {defineTool, store, run}) {
   const registry = () => store().projectCoordination
   const rooms = () => Object.values(rt.state.rooms ?? {})
   const roomInfo = id => ({id,name:rt.roomOf(id)?.name || id})
   const isMember = (room,actor) => !!room && room.members?.includes(actor) && !!rt.botOf(actor) && rt.botOf(actor).private !== true
-  function available(sid, roomId) {
-    const actor=rt.selfOf(sid)
-    if (!actor) return false
-    const binding=rt.groupOwners?.get(sid)
-    const scope=availableStore()?.projectCoordination.privateRooms()
-    if (!scope?.size) return false
-    if (binding) {
-      const room=rt.roomOf(binding.roomId)
-      return binding.botId===actor && isMember(room,actor) && room.sessions?.[actor]===sid
-        && scope.has(room.id) && (roomId===undefined || room.id===roomId)
-    }
-    if (rt.chatOf?.(actor)!==sid && rt.chatOwners?.get(sid)!==actor) return false
-    for (const [id,roles] of scope) {
-      if (roomId!==undefined && roomId!==id) continue
-      const room=rt.roomOf(id)
-      if (isMember(room,actor) && (rt.isAdminOf?.(room,actor) || roles.has(actor))) return true
-    }
-    return false
-  }
-  rt.projectToolAvailable=available
   function view(room,actor,args) {
     const response=registry().view(room.id,actor,args)
     if (response.project) {
@@ -352,7 +306,7 @@ export function installProjectCoordination(rt, {defineTool, store, run, availabl
   }
   function prompt(room,member) {
     if(!isMember(room,member.id)) return ''
-    const state=availableStore()?.projectCoordination.pending(room.id,member.id,!!rt.isAdminOf?.(room,member.id))
+    const state=registry().pending(room.id,member.id,!!rt.isAdminOf?.(room,member.id))
     if(!state) return ''
     let header='Shared project '+JSON.stringify(state.id)+', current revision '+state.revision+'. This group owns its own release. Check the original task and project decision before shared work; keep one task ID and return progress, blockers and receipts on that task.'
     if (state.policies.length) header+=' Current decisions: '+state.policies.map(e=>JSON.stringify({revision:e.revision,resource:e.resource,summary:e.summary.slice(0,240)})).join(' ')
@@ -384,7 +338,7 @@ export function installProjectCoordination(rt, {defineTool, store, run, availabl
       if (!source && (!actor || (rt.chatOf?.(actor)!==sid && rt.chatOwners?.get(sid)!==actor))) invalid('Project coordination requires an identified session')
       if (source && args.room_id!==undefined && args.room_id!==source) invalid('Open the target group to coordinate its work')
       const room=rt.roomOf(source ?? args.room_id)
-      if (!isMember(room,actor) || !available(sid,room.id)) invalid('Project coordination is unavailable in this group')
+      if (!isMember(room,actor)) invalid('Project coordination is unavailable in this group')
       if (args.action==='show') {
         const data=view(room,actor,{operationId:args.operation_id,beforeRevision:args.revision===undefined?args.before_revision:args.revision+1})
         if(args.revision!==undefined) data.events=data.events.filter(e=>e.revision===args.revision)
