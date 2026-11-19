@@ -125,16 +125,19 @@ const triggerOf = info => ({
   ...(info.groupKickoff === true ? { groupKickoff: true } : {}),
 })
 
+// Keep the last committed bytes for comparison under the home lock. Decode only to parse JSON.
+const sameBytes = (a, b) => a === b || (a !== undefined && b !== undefined && a.equals(b))
+
 const readNotes = (file) => {
   let raw
   try {
-    raw = readFileSync(file, 'utf8')
+    raw = readFileSync(file)
   } catch (error) {
     return error?.code === 'ENOENT' ? { turns: {}, queued: {}, heldTurns: {}, raw: undefined }
       : { turns: {}, queued: {}, heldTurns: {}, blocked: error?.code ?? error?.name ?? 'read error' }
   }
   try {
-    const parsed = JSON.parse(raw)
+    const parsed = JSON.parse(raw.toString('utf8'))
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
     if (!object(parsed) || (parsed.turns !== undefined && !object(parsed.turns)) || (parsed.queued !== undefined && !object(parsed.queued)) || (parsed.heldTurns !== undefined && !object(parsed.heldTurns))) throw new Error('invalid notes')
     return { turns: parsed.turns ?? {}, queued: parsed.queued ?? {}, heldTurns: parsed.heldTurns ?? {}, raw }
@@ -264,7 +267,7 @@ export function install(rt) {
       for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
         if (before[key] !== after[key] || after[key] !== entry[key]) return { ok:false }
       }
-      return { ok:true, raw:buffer.subarray(0, length).toString('utf8') }
+      return { ok:true, raw:buffer.subarray(0, length) }
     } catch (error) {
       return error?.code === 'ENOENT' && !handle ? { ok:true, raw:undefined } : { ok:false }
     } finally { await handle?.close().catch(() => {}) }
@@ -276,11 +279,11 @@ export function install(rt) {
     if (writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
     const saved = expected
     const disk = await readRecoveryForView()
-    if (!disk.ok || disk.raw !== saved || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    if (!disk.ok || !sameBytes(disk.raw, saved) || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
     // Startup copies interrupted turns into memory before the first file
     // replacement. Do not show those new holds as a saved snapshot until
     // the visible recovery file contains exactly the same held records.
-    const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw)
+    const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw.toString('utf8'))
     const savedHolds = parsed?.heldTurns ?? {}
     const savedQueued = parsed?.queued ?? {}
     if (!savedHolds || typeof savedHolds !== 'object' || Array.isArray(savedHolds)
@@ -357,7 +360,7 @@ export function install(rt) {
     try {
       handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
       const before = await handle.stat({ bigint:true })
-      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || await handle.readFile('utf8') !== saved || !validMemory()) return undefined
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || !sameBytes(await handle.readFile(), saved) || !validMemory()) return undefined
       await handle.sync()
       await syncDirectory(dirname(file))
       const after = await handle.stat({ bigint:true }), path = await lstat(file, { bigint:true })
@@ -398,8 +401,8 @@ export function install(rt) {
       await pendingWrite
       if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
       const saved = expected, disk = await readRecoveryForView()
-      if (!disk.ok || disk.raw !== saved || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
-      const raw = disk.raw === undefined ? {} : JSON.parse(disk.raw)
+      if (!disk.ok || !sameBytes(disk.raw, saved) || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const raw = disk.raw === undefined ? {} : JSON.parse(disk.raw.toString('utf8'))
       const parsed = { queued: raw.queued ?? {}, turns: raw.turns ?? {}, heldTurns: raw.heldTurns ?? {} }
       const observed = observeRecoveryRecords({ workId, inflight: parsed })
       const ids = collectRecoveryOrigins({ workId, inflight: parsed })
@@ -418,8 +421,8 @@ export function install(rt) {
       await pendingWrite
       if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
       const saved=expected,disk=await readRecoveryForView()
-      if(!disk.ok || disk.raw!==saved || expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
-      const raw=disk.raw===undefined?{}:JSON.parse(disk.raw)
+      if(!disk.ok || !sameBytes(disk.raw, saved) || expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
+      const raw=disk.raw===undefined?{}:JSON.parse(disk.raw.toString('utf8'))
       const result=collectRecoveryCandidates({queued:raw.queued??{},turns:raw.turns??{},heldTurns:raw.heldTurns??{}})
       if(expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
       return result
@@ -443,16 +446,16 @@ export function install(rt) {
     const run = writing.then(async () => {
       due = false
       if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}).`)
-      const snapshot = JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) })
+      const snapshot = Buffer.from(JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) }), 'utf8')
       const check = () => {
         rt.requireHomeLock()
         let actual
-        try { actual = readFileSync(file, 'utf8') } catch (error) { if (error?.code !== 'ENOENT') throw error }
-        if (actual !== expected) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
+        try { actual = readFileSync(file) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+        if (!sameBytes(actual, expected)) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
       }
       // An already committed snapshot still needs its ownership and disk proof:
       // a retry must observe an outside edit even when its desired bytes match.
-      if (snapshot === expected) { check(); return }
+      if (sameBytes(snapshot, expected)) { check(); return }
       await mkdir(home, { recursive: true })
       await writeNotesAtomically(file, snapshot, check)
       expected = snapshot
