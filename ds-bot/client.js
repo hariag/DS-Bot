@@ -140,6 +140,7 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
+  "Delivery confirmed by the owner’s start reply": "担当者の作業開始の返信により配信を確認しました",
   "A new reply is waiting": "新しい返信があります",
   "Opening…": "開いています…",
   "Still opening…": "まだ開いています…",
@@ -2556,6 +2557,7 @@ var DSH_JA = {
 
 // src/client/locales/ko.js
 var KO = {
+  "Delivery confirmed by the owner’s start reply": "담당자의 작업 시작 답글로 전달을 확인했습니다",
   "A new reply is waiting": "새 답변이 도착했습니다",
   "Opening…": "여는 중…",
   "Still opening…": "아직 여는 중…",
@@ -5017,6 +5019,7 @@ var DSH_KO = {
 
 // src/client/locales/es.js
 var ES = {
+  "Delivery confirmed by the owner’s start reply": "Entrega confirmada por el mensaje de inicio del responsable",
   "A new reply is waiting": "Tienes una nueva respuesta",
   "Opening…": "Abriendo…",
   "Still opening…": "Sigue abriendo…",
@@ -7478,6 +7481,7 @@ var DSH_ES = {
 
 // src/client/locales/fr.js
 var FR = {
+  "Delivery confirmed by the owner’s start reply": "Remise confirmée par le message de prise en charge du responsable",
   "A new reply is waiting": "Une nouvelle réponse vous attend",
   "Opening…": "Ouverture…",
   "Still opening…": "Toujours en cours d’ouverture…",
@@ -9894,6 +9898,7 @@ var DSH_FR = {
 
 // src/client/locales/de.js
 var DE = {
+  "Delivery confirmed by the owner’s start reply": "Zustellung durch die Startmeldung der zuständigen Person bestätigt",
   "A new reply is waiting": "Eine neue Antwort wartet auf dich",
   "Opening…": "Wird geöffnet…",
   "Still opening…": "Wird noch geöffnet…",
@@ -12356,6 +12361,7 @@ var DSH_DE = {
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Delivery confirmed by the owner’s start reply": "已按负责人的开工回复核实派发",
   "Task reply": "任务回复",
   "Group goal update": "群目标更新",
   "Work claimed": "已认领并开始执行",
@@ -41351,6 +41357,14 @@ function TaskHistory({ scope, task, request }) {
     !history && !error ? (0, import_react54.createElement)("p", { className: "bt-card-muted" }, t("Loading…")) : null,
     history?.truncated ? (0, import_react54.createElement)("p", { className: "bt-card-note" }, t("Showing the latest 50 revisions.")) : null,
     (history?.entries ?? []).map((entry) => {
+      if (Number.isFinite(entry.deliveryConfirmedAt)) {
+        return (0, import_react54.createElement)(
+          "article",
+          { key: `delivery-${entry.after.revision}` },
+          (0, import_react54.createElement)("strong", null, t("Delivery confirmed by the owner’s start reply")),
+          (0, import_react54.createElement)("p", null, formatMoment(entry.deliveryConfirmedAt))
+        );
+      }
       const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null));
       if (!changed.length) return null;
       return (0, import_react54.createElement)(
