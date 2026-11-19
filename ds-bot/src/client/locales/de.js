@@ -1,6 +1,21 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  "Project coordination": "Projektkoordination",
+  "Coordinating group": "Koordinierende Gruppe",
+  "Participating groups": "Beteiligte Gruppen",
+  "This group has no shared project yet.": "Diese Gruppe ist noch keinem gemeinsamen Projekt zugeordnet.",
+  "Record a decision": "Entscheidung erfassen",
+  "Link project groups": "Projektgruppen verknüpfen",
+  "Project ID": "Projekt-ID",
+  "Selected groups can read shared decisions and linked task updates.": "Ausgewählte Gruppen sehen gemeinsame Entscheidungen und Änderungen an verknüpften Aufgaben.",
+  "Shared resource": "Gemeinsame Ressource",
+  "Decision": "Entscheidung",
+  "Linked task": "Verknüpfte Aufgabe",
+  "Use reviewed revision {revision}": "Geprüfte Revision {revision} übernehmen",
+  "Acknowledged by {group}": "Von {group} bestätigt",
+  "Awaiting acknowledgement from {group}": "Bestätigung von {group} steht aus",
+  "No receipt found. Review the current revision before retrying.": "Kein Beleg gefunden. Vor erneutem Versuch die aktuelle Revision prüfen.",
   'Delivery confirmed by the owner’s start reply': 'Zustellung durch die Startmeldung der zuständigen Person bestätigt',
   'A new reply is waiting': "Eine neue Antwort wartet auf dich",
   'Opening…': 'Wird geöffnet…',

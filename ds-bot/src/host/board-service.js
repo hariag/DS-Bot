@@ -1,6 +1,7 @@
+import { installProjectCoordination, projectRolesChanged } from './project-coordination.mjs'
 import { isManualBoardTask } from './board-intake.mjs'
 import { legacyGoalCards } from './legacy-goal.js'
-import { mkdirSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, lstatSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
@@ -332,7 +333,8 @@ export function install(rt) {
     }
     const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
-      assertWriteLock: writable,
+      assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
+      onProjectEvent:projectChanged,
       authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
@@ -497,6 +499,26 @@ export function install(rt) {
         }})
     } catch (error) { if (!changedTurn) throw error }
   }
+  // A human project decision can supersede an already-running Bot's plan.
+  // Point only affected, active group sessions at the durable change. Idle
+  // groups pick it up in their next turn without creating a new task or poll.
+  async function steerProjectChange(event) {
+    if (event.actor !== 'user' || event.kind === 'binding') return
+    for (const roomId of event.audience) {
+      if (event.kind==='task' && roomId===event.originRoomId && !event.changedFields.some(field=>field.startsWith('release.'))) continue
+      const room=rt.roomOf(roomId)
+      if (!room) continue
+      const targets=new Set([room.admin,event.owner,event.reviewer].filter(Boolean))
+      for (const actor of targets) {
+        const recipient=activeBoardRecipient(actor,roomId,room.sessions?.[actor],true)
+        if (!recipient) continue
+        const text='A human updated shared project '+JSON.stringify(event.projectId)+' at revision '+event.revision
+          +'. Read project_coordination show with this revision before continuing affected work, then acknowledge it in this group. Keep the original task and owner.'
+        const id=createHash('sha256').update(JSON.stringify([event.projectId,event.revision,roomId,actor])).digest('hex')
+        await steerBoardUpdate(recipient,text,'project:'+id)
+      }
+    }
+  }
   const notifyWorkingBot = async (taskId, change, operationId) => {
     const task = service().store.get(taskId)
     if (!task || !['working','reported','cancelled'].includes(task.status)) return
@@ -535,10 +557,27 @@ export function install(rt) {
     if (committedHere && releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
   }
+  const previouslyBound=existsSync(join(rt.home,'board-v1','project-coordination.sqlite'))
+  let toolSyncPending=false
+  function projectChanged(event) {
+    if (!toolSyncPending && projectRolesChanged(event)) {
+      toolSyncPending=true
+      queueMicrotask(()=>{toolSyncPending=false;if (!closing && !rt.stopping) rt.syncScopedTools?.()})
+    }
+    void steerProjectChange(event).catch(error=>rt.warn?.('ds-bot: shared project update: %s',error?.message || error))
+  }
+  const project = installProjectCoordination(rt,{defineTool,store:()=>service().store,run,
+    availableStore:()=>instance?.store ?? (previouslyBound && !closing && !rt.stopping && !rt.readOnly() ? service().store : undefined)})
+
+  rt.projectCoordinationPrompt = project.prompt
   let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
     const { api, store, goalEditor } = service(), scope = payload.scope
     switch (endpoint) {
+      case 'board-project':
+      case 'board-project-bind':
+      case 'board-project-decide':
+        return project.userCall(endpoint,payload)
       case 'board-redo-preview':
       case 'board-redo-confirm':
         api.list(scope, principal)

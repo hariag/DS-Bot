@@ -130,7 +130,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     const releaseId = boardReleaseId(task, parent, caller, direct)
     const dependencies = (Array.isArray(task.dependencies) ? task.dependencies : []).filter(depId => visibleDependency(caller, depId))
     const change = changeView(task, caller)
+    const linked = store.projectCoordination?.existingLink(task.id) || store.projectCoordination?.existingLink(task.parentTaskId)
     return {
+      ...(linked ? {projectRead:{action:'show',room_id:linked.originRoomId,revision:linked.revision}} : {}),
       id: task.id, scope:task.scope, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer, acceptance: task.acceptance, dependencies,
       // Card content the owner works with, so a show after a handoff or a part switch
@@ -201,7 +203,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
         operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:args.change.value})
       if (!intakeAllowed(caller, request.task)) throw refused()
       const existing = store.get(args.taskId)
-      if (existing && !direct(existing, caller)) throw refused()
+      if (existing && !direct(existing, caller)) {
+        const link = store.projectCoordination?.existingLink(existing.id)
+        if (!link?.audience.includes(caller.roomId)) throw refused()
+        return {alreadyRegistered:true, task:{id:existing.id, roomId:link.originRoomId, revision:existing.revision, status:existing.status},
+          next:'Use the original project task and its assigned owner. No new task or delivery was created.'}
+      }
       const task = scope.run({exec, caller, roomId:args.roomId, taskId:args.taskId, action:'intake-create'}, () => store.create(request))
       return {task:projectDirect(task, caller)}
     }
@@ -350,5 +357,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return { task: projectDirect(result, caller) }
   }
 
-  return { invoke, authorize }
+  function conversationKind(actor) {
+    const caller=scope.getStore()?.caller, group=rt.groupOwners?.get(caller?.sid)
+    return caller?.actor===actor && group?.botId===actor && rt.roomOf(group.roomId)?.sessions?.[actor]===caller.sid ? 'group' : 'private'
+  }
+  return { invoke, authorize, conversationKind }
 }

@@ -630,6 +630,10 @@ export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () =>
 
 export function install(rt) {
   const { ctx } = rt
+  // A legacy caller can use its last returned ledger while the exact goal is current.
+  // Keep one observation per Bot and originating room (or its private chat).
+  const goalReads = new WeakMap()
+  const goalBinding = room => `room_id=${room.id} goal_id=${room.goal?.id ?? 'none'} expected_revision=${room.goal?.revision ?? 0}`
   let reviewDisposed = false
   const reviewing = new Set()
   const reviewNotified = new Set()
@@ -896,7 +900,7 @@ export function install(rt) {
     if (goal.status !== 'drafting') block += '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
     if (isAdmin && nudge && !inspectOnly) block += `\n${NUDGE_LINE}\nFor each current unfinished task you actually checked, call group_goal review-check with its task ID and exact review fingerprint from show plus the requested structured fields and evidence. Unknown or unverified facts must be marked unknown and review_complete false; only set review_complete true when the required check is actually finished. The runtime records your assertion and will continue missing or changed tasks in another turn; it does not verify the truth of your evidence.`
     if (isAdmin && resume) block += `\n${RESUME_LINE}`
-    return block
+    return `${block}\nCurrent goal binding: ${goalBinding(room)}. Use these fields for changes; read the goal again when they change.`
   }
 
   // The tool's answer: the ledger as the caller sees it, without the block's tags.
@@ -1574,23 +1578,26 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'group_goal',
-    description: "Set and run one group goal. Show an existing goal before changing it; independent goals are tracked separately. Start only when no active or paused group goal exists. Revise constraints replaces the full list; revise stages rebuilds current and later stages and loses notes, rework feedback and IDs, while show omits complete future task details. Update one status with task; before replacing stages, retrieve and preserve complete definitions and evidence, or do not rebuild. Register at most one aggregated task per Bot per stage. Pass marks every current-stage task done: first verify every task to be marked done is actually complete and all acceptance evidence is valid; handle inapplicable tasks by a documented scope decision and safe stage reconciliation, not a false done. Rework with bot targets one member; first verify the member has a task in the current stage and preserve evidence and notes. Targeted rework clears affected task notes; without bot it resets the whole stage and clears all task notes. Pause or resume only on explicit user request. Stop may stop other members working in the group; use only for an explicit request to stop the whole goal. Keep current user authorization and applicable rules.",
+    description: "Track independent goals separately. Show the target before changes. Copy room_id, goal_id and expected_revision. On conflict re-read and reconcile. Read authorized groups, write in the target group. Start only without an active/paused goal. Pass marks all current-stage tasks done. Verify each completion and its evidence or reconcile scope first. Pause/resume need explicit user direction. Stop requires a request to stop the whole goal and may halt members. Review-check cites sources and marks unknowns.",
     parameters: {
-      group: { type: 'string', description: 'Exact group chat name from list_bots; leave out inside that group' },
-      action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop', 'review-check'], description: 'What to do' },
-      review_task: { type: 'string', description: 'review-check: current task ID from show' },
-      review_fingerprint: { type: 'string', description: 'review-check: exact current task review fingerprint from show' },
-      review_assignment: { type: 'string', description: 'review-check: received, queued, or unknown and source' },
-      review_progress: { type: 'string', description: 'review-check: work arrangement and progress, or unknown' },
-      review_dependencies: { type: 'string', description: 'review-check: dependencies and blockers, or unknown' },
-      review_next: { type: 'string', description: 'review-check: next action and responsible person, or unknown' },
-      review_deadline: { type: 'string', description: 'review-check: response/check time, or unknown' },
-      review_complete: { type: 'boolean', description: 'review-check: true only if the actual task/owner check is complete; false for unknown or incomplete checks' },
-      title: { type: 'string', description: 'Short title, up to 80 characters' },
-      brief: { type: 'string', description: 'draft: what the user wants, in their words' },
-      objective: { type: 'string', description: 'start, revise: the one outcome the group must reach' },
-      acceptance: { type: 'string', description: 'start, revise: how to check the whole goal is done: commands or tests to run, files or results to look at, and the evidence to show' },
-      constraints: { type: 'array', items: { type: 'string' }, description: 'start, revise: rules every member keeps, including the user\'s corrections. Replaces the list' },
+      group: { type: 'string', description: 'Exact name from list_bots. Must match room_id if both supplied.' },
+      room_id: { type: 'string', description: 'Exact target group ID. Defaults to this group.' },
+      goal_id: { type: 'string', description: 'From show. Use none for an empty room.' },
+      expected_revision: { type: 'integer', description: 'From the same goal ledger.' },
+      action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop', 'review-check'] },
+      review_task: { type: 'string', description: 'Task ID from show.' },
+      review_fingerprint: { type: 'string', description: 'Exact task fingerprint from show.' },
+      review_assignment: { type: 'string', description: 'Received/queued/unknown and source.' },
+      review_progress: { type: 'string', description: 'Arrangement and progress.' },
+      review_dependencies: { type: 'string', description: 'Dependencies and blockers.' },
+      review_next: { type: 'string', description: 'Next action and owner.' },
+      review_deadline: { type: 'string', description: 'Response/check time.' },
+      review_complete: { type: 'boolean', description: 'True only for a completed, verified owner check.' },
+      title: { type: 'string', description: 'Up to 80 characters.' },
+      brief: { type: 'string', description: 'Draft: user request.' },
+      objective: { type: 'string', description: 'Start/revise: group outcome.' },
+      acceptance: { type: 'string', description: 'Start/revise: checks and required evidence.' },
+      constraints: { type: 'array', items: { type: 'string' }, description: 'Start/revise: full replacement, including user corrections.' },
       stages: {
         type: 'array',
         items: {
@@ -1614,32 +1621,42 @@ export function install(rt) {
             },
           },
         },
-        description: 'start: every stage, in order. revise: replaces the current stage and every stage after it; passed stages stay. Each stage has a title, a check and at most one aggregated task per member by exact name; track separately required acceptance items on the project board',
+        description: 'Start with ordered stages. Revise rebuilds current/future stages, losing IDs, notes and rework feedback. Show omits full future definitions. Preserve definitions and evidence first. One aggregated task per exact Bot name per stage. Track separate acceptance items on the board.',
       },
-      bot: { type: 'string', description: "task: the member whose task changes. rework: name the affected member and first confirm they have a task in the current stage; the tool does not verify this. Targeted rework clears that member's affected task notes; omitting bot resets the entire current stage and clears all task notes. If a member has multiple tasks, all of that member's tasks are reset." },
-      stage: { type: 'integer', description: 'task: stage number, 1 for the first; the current stage when left out' },
-      status: { type: 'string', enum: ['pending', 'working', 'reported', 'done'], description: 'task: the task\'s new status' },
-      note: { type: 'string', description: 'task: where the task stands, in a few words' },
-      evidence: { type: 'string', description: 'pass, complete: what shows it is done: test output, changed files, check results' },
-      reason: { type: 'string', description: 'revise, rework, stop: why' },
-      summary: { type: 'string', description: 'complete: what the group delivered, for the user' },
+      bot: { type: 'string', description: 'Task member. Before rework, verify this member has a current task. It resets all their tasks and notes, or the entire stage if omitted. Preserve evidence first.' },
+      stage: { type: 'integer', description: '1-based task stage, defaults to current.' },
+      status: { type: 'string', enum: ['pending', 'working', 'reported', 'done'] },
+      note: { type: 'string', description: 'Task: brief progress.' },
+      evidence: { type: 'string', description: 'Pass/complete/review-check: verified results.' },
+      reason: { type: 'string', description: 'Revise/rework/stop.' },
+      summary: { type: 'string', description: 'Complete: delivery for the user.' },
     },
     output,
     async execute(args, exec) {
       await rt.load()
-      const self = rt.selfOf(exec.agent?.id)
+      const sessionId = exec.agent?.id
+      const self = rt.selfOf(sessionId)
       const member = rt.botOf(self)
       if (member === undefined) return 'Only Bots on the team can use group_goal.'
       const action = String(args.action ?? '')
-      let room = rt.roomOf(rt.groupOwners.get(exec.agent?.id)?.roomId)
-      if (room === undefined) {
-        if (String(args.group ?? '').trim() === '') return required('group', action)
-        const picked = rt.pickRoom(args.group, self)
-        if (picked.error !== undefined) return picked.error
-        room = picked.room
+      const origin = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+      if (rt.pastOwners.has(sessionId) || (origin && !origin.members.includes(self))) return 'This group session is no longer current. Open the target group again.'
+      const group = args.group?.trim(), roomId = args.room_id?.trim()
+      if ((args.group !== undefined && !group) || (args.room_id !== undefined && !roomId)) return 'The supplied group or room_id is empty. Use an exact group or omit it inside that group.'
+      let room = origin
+      if (roomId || group) {
+        const selected = rt.pickRoom(roomId || group, self)
+        if (selected.error !== undefined) return selected.error
+        room = selected.room
+        if (roomId && (room.id !== roomId || (group && rt.pickRoom(group, self).room?.id !== room.id))) return 'room_id and group select different groups. Check the target with list_bots.'
       }
+      if (!room) return required('group', action)
+      if (origin && origin !== room && !room.members.includes(self)) return 'Cross-group goal reads require membership in the target group.'
+      const review = rt.live.get(sessionId)?.info
+      if (review?.reviewId && review.roomId !== room.id) return 'This scheduled goal review can inspect only its assigned group.'
       const admin = room.members.map(rt.botOf).filter(Boolean).find(bot => rt.isAdminOf(room, bot.id))
       const change = action !== 'show'
+      if (change && origin && origin !== room) return `Open "${room.name}" (room_id=${room.id}) and make this change from the target group. Neither goal was changed.`
       if (change && !rt.isMain(self) && !rt.isAdminOf(room, self)) {
         return admin !== undefined
           ? `Only ${admin.name}, the admin of "${room.name}", or a Main Bot changes its goal. Tell the admin in the group.`
@@ -1647,6 +1664,25 @@ export function install(rt) {
       }
       if ((action === 'draft' || action === 'start') && admin === undefined) {
         return `"${room.name}" has no admin, and a goal needs one to run it. Set an admin with update_group first.`
+      }
+      const caller = origin ?? member
+      const last = goalReads.get(caller)?.get(self)
+      const hasVersion = args.goal_id !== undefined || args.expected_revision !== undefined
+      const matches = hasVersion
+        ? args.goal_id === (room.goal?.id ?? 'none') && args.expected_revision === (room.goal?.revision ?? 0)
+        : last?.sessionId === sessionId && last.binding === goalBinding(room)
+      if (change && (hasVersion || room.goal || room.pastGoals?.length || last) && !matches) {
+        return `Goal binding is missing or stale for room_id=${room.id}. Show the target group again, reconcile its current instructions, and use its goal_id and expected_revision.`
+      }
+      const observedLedger = options => {
+        const binding = goalBinding(room)
+        let reads = goalReads.get(caller)
+        if (!reads) {
+          reads = new Map()
+          goalReads.set(caller, reads)
+        }
+        reads.set(self, { sessionId, binding })
+        return `${binding}\n${goalLedger(room, member, options)}`
       }
       const of = memberOf(room)
       const names = memberNames(room)
@@ -1656,7 +1692,7 @@ export function install(rt) {
       switch (action) {
         case 'show': {
           const fingerprint = inspectionFingerprint(room.goal)
-          const ledger = goalLedger(room, member, { showBackup: true })
+          const ledger = observedLedger({ showBackup: true })
           const info = rt.live.get(exec.agent?.id)?.info
           const attempt = room.goal?.reviewAttempt
           if (info?.reviewInspect === true && info.reviewId && rt.isAdminOf(room, self)
@@ -1768,11 +1804,11 @@ export function install(rt) {
           return `Unknown action ${action}.`
       }
       if (result.error !== undefined) return result.error
-      if (result.unchanged) return goalLedger(room, member)
+      if (result.unchanged) return observedLedger()
       if (result.reply !== undefined) announce(room, result.reply)
       await rt.save()
       if (post !== undefined) await post()
-      const ledger = goalLedger(room, member)
+      const ledger = observedLedger()
       return next === '' ? ledger : `${ledger}\n${next}`
     },
   }))
