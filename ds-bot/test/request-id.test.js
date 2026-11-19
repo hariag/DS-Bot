@@ -121,7 +121,7 @@ test('a request with an id is delivered once, and a repeat gives the first recei
   t.after(async () => { await stop(); cleanup(home) })
 
   const first = await tool('message_bot', { to: 'Writer', message: 'do the thing', request_id: 'r-1' }, 'a')
-  assert.equal(first, 'Delivered to Writer. Its reply will arrive later as a new message; do not wait for it. Writer now: idle; own chat pending inputs: unavailable.')
+  assert.equal(first, 'Delivered to Writer. Its reply will arrive later as a new message; do not wait for it. Writer now: idle; own chat pending inputs: unavailable. To check this handoff, use list_bots with bot and request_id. Repeating message_bot returns this original receipt.')
   assert.equal(agents.get('b').calls.length, 1)
 
   const again = await tool('message_bot', { to: 'Writer', message: 'do the thing', request_id: 'r-1' }, 'a')
@@ -155,6 +155,7 @@ test('implicit timing can replay an old steering receipt but cannot silently cha
   rt.state.requests[old.key] = { fingerprint: old.print, outcome: 'delivered', receipt: 'original delivery' }
   const call = (id, timing = {}) => run.tool('message_bot', { to: 'Writer', message: payload.message, request_id: id, ...timing }, 'a')
   assert.equal(await call('before-upgrade'), 'original delivery')
+  assert.match(await run.tool('list_bots', { bot: 'Writer', request_id: 'before-upgrade' }, 'a'), /No matching private handoff can be verified/)
   assert.equal(freshSends(agentOf('b')).length, 0)
   const normal = await call('new')
   assert.equal(await call('new', { when: 'queue' }), normal)
@@ -166,6 +167,7 @@ test('implicit timing can replay an old steering receipt but cannot silently cha
   run = await boot(home)
   assert.equal(await call('before-upgrade'), 'original delivery')
   assert.equal(await call('new'), normal)
+  assert.match(await run.tool('list_bots', { bot: 'Writer', request_id: 'new' }, 'a'), /delivery was recorded.*processing and result are unconfirmed/)
   await assert.rejects(call('explicit'), /different request/)
   assert.equal(freshSends(run.agentOf('b')).length, 0)
 })
