@@ -12,6 +12,9 @@ import { LATE_ANSWER, SOURCE_KIND, TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
 import { isOpenPart, ownChatSessions } from './threads.js'
 
+// Board assignments and release notices have no asking Bot. Their answers stay in the recipient's chat.
+export const answersLocally = info => info.role === 'request' && (info.audience === 'user' || !info.senderSessionId)
+
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
   return count < 1 ? 'for less than a minute' : `for ${count} min`
@@ -102,7 +105,7 @@ export function install(rt) {
   // The work a turn does: the request it answers, or the work a result that came back
   // (or a turn picked up again) goes on with.
   const workOf = info => (info === undefined ? undefined
-    : info.role === 'request' && info.audience !== 'user' ? info.exchangeId : info.work)
+    : info.role === 'request' && !answersLocally(info) ? info.exchangeId : info.work)
 
   // `parent`: the work the sender was doing when it sent this one. `child`: the
   // session id of the subagent a run of this work belongs to — the run, not the
