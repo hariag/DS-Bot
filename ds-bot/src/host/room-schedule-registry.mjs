@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-const EVERY_SECONDS = 30 * 60
+const EVERY_SECONDS = 10 * 60
 const titleOf = roomId => 'DSBOT-GROUP/' + roomId
 const timing = {kind:'every', every_seconds:EVERY_SECONDS}
 const marker = token => '[DS-Bot room timer ' + token + ']'
