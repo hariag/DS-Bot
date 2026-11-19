@@ -19,6 +19,7 @@ import { mdLabels, t } from './i18n.js'
 import { call } from './api.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning, thinkingStep, opensReply, stepActivity } from './turn-reasoning.js'
+import { announcesWork } from '../shared/work-claim.js'
 import { parseReplies, relayRange, stackReplies } from '../shared/group-replies.js'
 import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
 import { ReplyGuide } from './reading.js'
@@ -385,14 +386,16 @@ function scheduleGroupChains(flow) {
 // bubble to the head of the name row, so the text below runs the whole width.
 // The host's checks on a final reply, as lines under it. A marker only tells the
 // reader; it never asks the Bot to do anything again.
-export function claimLines(claims) {
+export function claimLines(claims, finalText) {
   if (claims === undefined || claims === null) return []
   const lines = []
-  if (claims.inProgress === true) {
+  // Older saved replies also marked descriptions of other workers. Keep the
+  // recorded signal when a long reply is available only as a partial preview.
+  if (claims.inProgress === true && (finalText === undefined || announcesWork(finalText))) {
     lines.push({
       kind: 'inProgress',
-      text: t('No background work detected'),
-      detail: t('DS Bot has no recorded tool call or active background task for this reply.'),
+      text: t('No execution recorded for this reply'),
+      detail: t('When this Bot replied, no tool call, running job, active subagent or group handoff was recorded for its turn.'),
     })
   }
   for (const path of claims.missingFiles ?? []) lines.push({ kind: 'file', text: t('File not found: {path}', { path }) })
@@ -423,7 +426,7 @@ export function GroupMessage({ bot, text, texts = [text], room, sessionId, roste
       took ? h('span', { className: 'bt-group-took', title: t('Ran for {duration}', { duration: took }) }, took) : null),
     h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: quoteSession, msgKey, useUi, lead: flat ? null : lead, whole, textInteractionSource: true }),
     changes === undefined ? null : h(ChangesCard, { changes, actions }),
-    claimLines(claims).map(line => h('div', { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: 'status', title: line.detail ?? undefined }, line.text)))
+    claimLines(claims, whole ? undefined : texts.at(-1)).map(line => h('div', { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: 'status', title: line.detail ?? undefined }, line.text)))
 }
 
 // A centered event line that names a group chat and opens it.

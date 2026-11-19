@@ -134,16 +134,26 @@ test('consecutive group messages from the same Bot chain together, and cards or 
 
 test('a final reply with a missing file and no work running draws both markers', () => {
   const claims = { inProgress: true, missingFiles: ['./out/report.pptx'] }
-  assert.deepEqual([...claimLines(claims)].map(line => String(line.text)), ['No background work detected', 'File not found: ./out/report.pptx'])
+  assert.deepEqual([...claimLines(claims)].map(line => String(line.text)), ['No execution recorded for this reply', 'File not found: ./out/report.pptx'])
   assert.equal(claimLines(undefined).length, 0)
   const tree = GroupMessage({
     bot: { id: 'b', name: 'Writer' }, text: '正在导出，稍后汇报。', room: { id: 'r1' }, roster: { prefs: {} }, actions: { openSession() {} }, claims,
   })
   const markers = tree.children.filter(child => String(child?.props?.className ?? '').startsWith('bt-claim'))
   assert.deepEqual([...markers].map(child => [String(child.props.className), [...child.children].join('')]), [
-    ['bt-claim bt-claim-inProgress', 'No background work detected'],
+    ['bt-claim bt-claim-inProgress', 'No execution recorded for this reply'],
     ['bt-claim bt-claim-file', 'File not found: ./out/report.pptx'],
   ])
+})
+
+test('historical warnings apply to the final text only and leave independent file markers visible', () => {
+  const claims = { inProgress: true, missingFiles: ['./missing.md'] }
+  const props = { bot: { id: 'b', name: 'Writer' }, room: { id: 'g' }, roster: { prefs: {} }, actions: {}, claims }
+  const texts = ['正在整理证据。', '客户的 Playwright 进程仍在运行。本轮不启动测试。']
+  const kinds = tree => tree.children.filter(el => el?.props?.role === 'status').map(el => el.props.className).join(' ')
+  assert.equal(kinds(GroupMessage({ ...props, texts })), 'bt-claim bt-claim-file')
+  assert.match(kinds(GroupMessage({ ...props, texts: texts.toReversed() })), /bt-claim-inProgress/)
+  assert.match(kinds(GroupMessage({ ...props, text: '见附件', whole: { length: 50000 } })), /bt-claim-inProgress/)
 })
 
 test('a group post carries claims both live and in earlier chat rows', () => {
