@@ -15800,7 +15800,7 @@ function teamActions({ call: call2, after, partFor, roster, ui: ui2, live, cards
     saveProviderModels: (body) => call2("provider-models-save", body),
     removeProvider: (provider) => after(call2("provider-remove", { provider })),
     // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
-    resume: (botId) => after(call2("resume", { botId })),
+    resume: (botId, sessionId, turn) => after(call2("resume", { botId, sessionId, turn })),
     folders: () => call2("folders"),
     folderPick: () => call2("folder-pick"),
     folderList: (path2) => call2("folder-list", { path: path2 ?? "" }),
@@ -46718,7 +46718,9 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   (0, import_react60.useLayoutEffect)(() => {
     actions.noteTurnVisible?.(sessionId, failRow.turn);
   }, [actions, sessionId, failRow.turn]);
-  const bot = roster.byId?.[sessionId];
+  const room2 = roster.rooms?.find((room3) => Object.values(room3.memberSessions ?? {}).includes(sessionId));
+  const member = room2 && Object.keys(room2.memberSessions).find((id) => room2.memberSessions[id] === sessionId);
+  const bot = roster.byId?.[member ?? sessionId];
   const latest = bot?.failures?.[sessionId];
   const host = latest !== void 0 && latest.turn === failRow.turn ? latest : void 0;
   const data = host === void 0 ? failRow : { ...failRow, ...host };
@@ -46734,7 +46736,7 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const bound2 = block !== void 0 && block.sessionId === sessionId && block.turn === data.turn;
   const legacyMatch = block?.sessionId === void 0 && host?.requestId && host.requestId === block?.requestId;
   const blocked = block?.code === data.code && (bound2 || legacyMatch) ? block : void 0;
-  const current2 = bot !== void 0 && currentPart(bot) === sessionId && !later && !(latest?.turn > data.turn);
+  const current2 = bot !== void 0 && (member !== void 0 || currentPart(bot) === sessionId) && !later && !(latest?.turn > data.turn);
   const provider = data.provider ?? blocked?.provider;
   const status = data.status ?? blocked?.status;
   const text = failureText2(data.code, {
@@ -46809,7 +46811,7 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const resume = () => {
     setRetry("busy");
     setError("");
-    void Promise.resolve(actions.resume(bot.id)).then(() => setRetry("sent"), (failure) => {
+    void Promise.resolve(actions.resume(bot.id, sessionId, data.turn)).then(() => setRetry("sent"), (failure) => {
       setRetry("idle");
       setError(hostText(failure?.message ?? String(failure)));
     });
