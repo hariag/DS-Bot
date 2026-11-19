@@ -446,21 +446,67 @@ const releaseIsDone = release => {
     const changes = db.prepare("UPDATE actions SET state='done' WHERE task_id=? AND kind=? AND state='accepted'").run(id, kind).changes
     if (changes !== 1) throw new Error('verified action receipt required')
   }
+  // A committed owner start acknowledges this execution even if DSH has since rotated
+  // the Session. Preserve the current card and its workflow gates; never re-admit input.
+  const ownerStart = db.prepare(`SELECT operation_id, after FROM history
+    WHERE task_id=? AND actor=? AND json_extract(before,'$.status')='ready'
+      AND json_extract(after,'$.status')='working' AND json_extract(after,'$.actionRevision')=?
+    ORDER BY sequence DESC LIMIT 1`)
+  const acknowledgedStart = (row, intent, task) => {
+    if (row.kind !== 'execute' || task?.status !== 'working' || task.owner !== row.actor || task.actionRevision !== row.revision
+      || !intent || intent.target_bot_id !== row.actor || intent.action_revision !== row.revision) return undefined
+    const start = ownerStart.get(row.task_id, row.actor, row.revision)
+    if (!start) return undefined
+    const original = JSON.parse(start.after)
+    if (original.id !== task.id || original.owner !== task.owner || original.reviewer !== task.reviewer || original.scope !== task.scope
+      || original.releaseId !== task.releaseId || original.parentTaskId !== task.parentTaskId) return undefined
+    return start.operation_id
+  }
   return {
     close() { db.close() },
     holdInterruptedAdmissions() {
       return tx(() => {
-        const rows = db.prepare("SELECT * FROM actions WHERE state IN ('claimed','accepted') ORDER BY rowid").all()
+        const reason = 'process restarted; delivery outcome unknown'
+        const rows = db.prepare("SELECT * FROM actions WHERE state IN ('claimed','accepted') OR (state='uncertain' AND receipt=?) ORDER BY rowid").all(reason)
+        let held = 0
         for (const row of rows) {
-          const intent = db.prepare('SELECT admission_id FROM admission_intents WHERE action_id=?').get(row.id)
-          const reason = 'process restarted; delivery outcome unknown'
-          const changed = db.prepare("UPDATE actions SET state='uncertain',receipt=? WHERE id=? AND state=?").run(reason, row.id, row.state).changes
+          const intent = db.prepare('SELECT admission_id,target_bot_id,action_revision FROM admission_intents WHERE action_id=?').get(row.id)
+          const task = getTask(row.task_id)
+          const start = row.state !== 'claimed' && acknowledgedStart(row, intent, task)
+          if (row.state === 'accepted' && start) continue
+          let operationId, outcome, receipt, decision
+          if (row.state === 'uncertain') {
+            if (!start || task.blocked || task.stale || task.archivedAt) continue
+            // Only the old startup handler discarded a receipt under this exact decision.
+            // User cancellations, invalidations and failed admissions keep their holds.
+            const previous = db.prepare(`SELECT h.before FROM admission_decisions d JOIN history h
+              ON h.operation_id=d.operation_id AND h.task_id=? AND h.actor=d.actor
+              JOIN history received ON received.task_id=h.task_id AND received.operation_id='action:'||d.action_id||':accepted'
+                AND received.sequence<h.sequence AND json_extract(received.after,'$.receipt')=json_extract(h.before,'$.receipt')
+              WHERE d.operation_id=? AND d.action_id=? AND d.admission_id=? AND d.task_revision=? AND d.actor='scheduler'
+                AND d.previous_state='accepted' AND d.outcome='uncertain' AND d.reason=?
+                AND NOT EXISTS (SELECT 1 FROM admission_decisions newer WHERE newer.action_id=d.action_id AND newer.rowid>d.rowid)
+                AND json_extract(h.before,'$.id')=d.action_id AND json_extract(h.before,'$.state')='accepted'`)
+              .get(row.task_id, `recovery:${row.id}`, row.id, intent.admission_id, row.revision, reason)
+            if (!previous) continue
+            receipt = JSON.parse(previous.before).receipt
+            if (typeof receipt !== 'string' || !receipt) continue
+            operationId = `owner-start-confirmed:${row.id}`
+            outcome = 'accepted'
+            decision = `Delivery confirmed by owner start ${start}`
+          } else {
+            operationId = `recovery-hold:${row.id}:${task.revision}`
+            outcome = 'uncertain'
+            receipt = decision = reason
+            held++
+          }
+          const changed = db.prepare('UPDATE actions SET state=?,receipt=? WHERE id=? AND state=?').run(outcome, receipt, row.id, row.state).changes
           if (changed !== 1) throw new Error('action recovery conflict')
           db.prepare('INSERT INTO admission_decisions(operation_id,action_id,admission_id,actor,task_revision,previous_state,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
-            .run(`recovery:${row.id}`, row.id, intent?.admission_id ?? null, 'scheduler', row.revision, row.state, 'uncertain', reason, new Date().toISOString())
-          addHistory.run(`recovery:${row.id}`, 'scheduler', row.task_id, JSON.stringify(row), JSON.stringify({ ...row, state:'uncertain', receipt:reason }))
+            .run(operationId, row.id, intent?.admission_id ?? null, 'scheduler', task.revision, row.state, outcome, decision, new Date().toISOString())
+          addHistory.run(operationId, 'scheduler', row.task_id, JSON.stringify(row), JSON.stringify({ ...row, state:outcome, receipt }))
         }
-        return rows.length
+        return held
       })
     },
     limits() { return { tasks:MAX_TASKS, dependencies:100 } },
@@ -833,7 +879,10 @@ const releaseIsDone = release => {
     },
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
     history(id) {
-      const rows = db.prepare('SELECT before,after FROM history WHERE task_id=? ORDER BY sequence DESC LIMIT 51').all(requireId(id, 'task id'))
+      const rows = db.prepare(`SELECT h.before,h.after,d.created_at AS confirmed_at FROM history h LEFT JOIN admission_decisions d
+        ON d.operation_id=h.operation_id AND d.actor=h.actor AND d.operation_id='owner-start-confirmed:'||d.action_id
+          AND d.previous_state='uncertain' AND d.outcome='accepted' AND d.actor='scheduler'
+        WHERE h.task_id=? ORDER BY h.sequence DESC LIMIT 51`).all(requireId(id, 'task id'))
       const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'progress']
       const project = value => {
         if (!value) return null
@@ -841,7 +890,8 @@ const releaseIsDone = release => {
         for (const field of fields) if (Object.hasOwn(record, field)) result[field] = record[field]
         return result
       }
-      return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after) })) }
+      return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after),
+        ...(row.confirmed_at ? { deliveryConfirmedAt:Date.parse(row.confirmed_at) } : {}) })) }
     },
     create({ operationId, actor, task, intake }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')

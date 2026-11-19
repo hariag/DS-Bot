@@ -1534,6 +1534,11 @@ function TaskHistory({ scope, task, request }) {
     !history && !error ? h('p', { className: 'bt-card-muted' }, t('Loading…')) : null,
     history?.truncated ? h('p', { className: 'bt-card-note' }, t('Showing the latest 50 revisions.')) : null,
     (history?.entries ?? []).map(entry => {
+      if (Number.isFinite(entry.deliveryConfirmedAt)) {
+        return h('article', { key:`delivery-${entry.after.revision}` },
+          h('strong', null, t('Delivery confirmed by the owner’s start reply')),
+          h('p', null, formatMoment(entry.deliveryConfirmedAt)))
+      }
       const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null))
       if (!changed.length) return null
       return h('article', { key: entry.after.revision }, h('strong', null, t('Revision') + ' ' + entry.after.revision),
