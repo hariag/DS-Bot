@@ -1,3 +1,18 @@
+export const OWNER_REPORT_FIELDS = 'For board_task report, send value exactly as {"kind":"personal","environment":"where you checked","evidence":"what you checked and observed"}. Include relevant Git commit and blob IDs in the evidence text.'
+export const REVIEW_FIELDS = 'For board_task review, send value exactly as {"result":"pass","evidence":"your independent findings"}. Use "pass" only after independently verifying the acceptance criteria. Use "rework" and identify the gap if they are unmet.'
+
+function evidenceFieldError(args, error) {
+  const report = args.action === 'report'
+  if (!report && args.action !== 'review') return error
+  const invalid = ['invalid fields','invalid evidence','invalid environment','invalid evidence kind','invalid evidence identity',
+    'invalid personal evidence','invalid review evidence','invalid review'].includes(error?.message)
+  if (!invalid && !(report && args.value?.kind === 'git' && error?.message === 'report evidence unverified')) return error
+  const allowed = report ? ['kind','environment','evidence'] : ['result','evidence']
+  const unexpected = Object.keys(args.value ?? {}).filter(key => !allowed.includes(key) && /^[a-zA-Z][a-zA-Z0-9_]{0,32}$/.test(key)).slice(0,5)
+  const hint = report ? OWNER_REPORT_FIELDS : REVIEW_FIELDS
+  return new Error([error.message, unexpected.length ? 'Unexpected value fields '+unexpected.join(', ') : '', hint].filter(Boolean).join('. '), {cause:error})
+}
+
 // Registration is kept separate from the journal; the host supplies the real
 // DSH defineTool and the workflow instance backed by its current writer lock.
 export function installTaskTool(rt, workflow, defineTool) {
@@ -27,14 +42,14 @@ export function installTaskTool(rt, workflow, defineTool) {
       }, description:'For register, supply value with title, owner, independent reviewer, acceptance, type and optional description. For propose, a proposed content, status or release change; the user confirms or rejects it in the board Changes panel before it applies. Query it with action proposal.' },
       value: { type:'object', additionalProperties:false, properties: {
         summary:{ type:'string' }, next:{ type:'string' },
-        kind: { type:'string', enum:['git','personal'] }, evidence: { type:'string' },
+        kind: { type:'string', enum:['git','personal'], description:'The installed Bot report verifier accepts personal evidence for group and personal cards.' }, evidence: { type:'string' },
         targetCommit: { type:'string' }, targetBlob: { type:'string' }, acceptanceBlob: { type:'string' }, environment: { type:'string' },
         result: { type:'string', enum:['pass','rework'] }, reason: { type:'string' }, condition: { type:'string' }, owner: { type:'string' },
-      }, description:'progress requires exactly {summary, next}: record the result or pending dependency and who does what next. block requires {reason, condition, owner}. report requires acceptance evidence.' },
+      }, description:'progress requires exactly {summary, next}: record the result or pending dependency and who does what next. block requires {reason, condition, owner}. '+OWNER_REPORT_FIELDS+' '+REVIEW_FIELDS },
     },
     output: { schema:{ type:'string' }, render:(_args, value) => [{ type:'text', text:String(value) }] },
     async execute(args, exec) {
-      const result = await workflow.invoke(exec, { action:args.action, taskId:args.task_id, roomId:args.room_id,
+      const input = { action:args.action, taskId:args.task_id, roomId:args.room_id,
         expectedBoardRevision:args.expected_board_revision, query:args.query, cursor:args.cursor, parentTaskId:args.parent_task_id,
         kind:args.kind, mine:args.mine,
         ...(args.release_id === undefined ? {} : { releaseId:args.release_id }),
@@ -44,8 +59,9 @@ export function installTaskTool(rt, workflow, defineTool) {
         ...(args.proposal_id === undefined ? {} : { proposalId:args.proposal_id }),
         ...(args.note === undefined ? {} : { note:args.note }),
         ...(args.change === undefined ? {} : { change:args.change }),
-        ...(args.value === undefined ? {} : { value:args.value }) })
-      return JSON.stringify(result)
+        ...(args.value === undefined ? {} : { value:args.value }) }
+      try { return JSON.stringify(await workflow.invoke(exec, input)) }
+      catch (error) { throw evidenceFieldError(args, error) }
     },
   })
   rt.teamTools.push(tool)
