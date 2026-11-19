@@ -5,11 +5,13 @@ import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session } from '@deepseek-ai/dsh-session'
-import { apply } from '../index.js'
+import { createRuntime } from '../index.js'
 import { SOURCE_KIND } from '../src/host/constants.js'
 import { dshHomeOf } from '../src/host/folders.js'
 import { escapeRegExp } from '../src/host/text.js'
 import { fakeApproval, fakeContext } from './fake-ctx.js'
+
+let rt
 
 // A Main Bot and a Bot, with the Bot in the group Ops through its group Session 'gb'.
 const TEAM = {
@@ -92,6 +94,7 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM, 
         cwds.set(sessionId, options.cwd ?? registry.get(options.workspaceId)?.path)
         return { sessionId }
       },
+      prompt: async () => { if (ctx.__promptError !== undefined) throw ctx.__promptError; return { accepted: true } },
       resolveAgent: async sessionId => ({ agent: agentOf(sessionId) }),
       selectModel: async () => {},
       page: async () => ({ records: [], hasMore: false }),
@@ -105,14 +108,18 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM, 
     route = options
     return register(options)
   }
-  apply(ctx, { home })
+  rt = createRuntime(ctx, { home })
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', {
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
-  const tool = (name, args, sessionId) => ctx.registeredTools.get(name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
-  // Runs the parts check, registered last; 'next' means the step goes on.
-  const preStep = (sessionId, messages = [], step = 1) => ctx.listeners.get('agent/pre-step').at(-1)(
-    { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
+  const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
+  // Runs the named run-mode/folder pre-step listener; 'next' means the step goes on.
+  const preStep = (sessionId, messages = [], step = 1) => {
+    const listener = ctx.listeners.get('agent/pre-step').find(fn => fn.name === 'followRunModeStep')
+    assert.ok(listener, 'the run-mode pre-step listener is registered')
+    return listener(
+      { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
+  }
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   // Waits until the Bot's own chat runs in `dir` and its move has finished.
   const workingIn = async (botId, dir) => {
@@ -231,6 +238,26 @@ test('an idle Bot\'s own chat moves to its new folder at once, and back', async 
   assert.match(handoffOf(agentOf('s2')), new RegExp(`because your working folder changed to ${escapeRegExp(team)}\\.`))
 })
 
+// #1501: a Bot's own chat may keep a part live in the background. Changing its folder
+// moves every part: a background part left behind would keep working in the old one.
+test('a background part moves to the new folder with the rest of the chat', async (t) => {
+  const saved = { ...TEAM, bots: { ...TEAM.bots, b: { ...TEAM.bots.b, openParts: [{ sessionId: 'b-bg', segments: [] }] } } }
+  const { call, created, agentOf, project, state, stop } = await start({ team: saved })
+  t.after(stop)
+  assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
+  // Both threads move on to a fresh part made in the new folder.
+  await until(() => state().bots.b.sessionId.startsWith('s') && state().bots.b.openParts[0].sessionId.startsWith('s'))
+  await settle()
+  assert.deepEqual(created.map(options => options.cwd), [project, project])
+  const writer = state().bots.b
+  assert.deepEqual([writer.sessionId, writer.openParts[0].sessionId].sort(), ['s1', 's2'])
+  // Each thread keeps its own chain: the old foreground part and the old background one.
+  assert.deepEqual(writer.segments.map(segment => segment.sessionId), ['b'])
+  assert.deepEqual(writer.openParts[0].segments.map(segment => segment.sessionId), ['b-bg'])
+  assert.equal(agentOf(writer.sessionId).session.header.cwd, project)
+  assert.equal(agentOf(writer.openParts[0].sessionId).session.header.cwd, project)
+})
+
 test('a running Bot moves at its next step and carries that step\'s input along', async (t) => {
   const { requests, services } = approvalServices('allowed-once')
   const { tool, preStep, agentOf, created, project, state, stop } = await start({ services })
@@ -244,7 +271,7 @@ test('a running Bot moves at its next step and carries that step\'s input along'
   assert.deepEqual(created, [])
 
   const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Now build it' }], source: { kind: 'user' } }
-  assert.deepEqual(await preStep('b', [input]), { kind: 'reject' })
+  assert.deepEqual(await preStep('b', [input]), { kind: 'enter', messages: [] })
   await until(() => state().bots.b.sessionId === 's1')
   assert.deepEqual(created, [{ cwd: project }])
   await until(() => agentOf('s1').calls.length >= 2)
@@ -298,7 +325,7 @@ test('a group\'s folder holds for every member there; only the user or a Main Bo
   assert.equal(await preStep('b'), 'next')
   assert.equal(await preStep('gb', [], 2), 'next')
   assert.deepEqual(created, [{ cwd: project }])
-  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  assert.deepEqual(await preStep('gb'), { kind: 'enter', messages: [] })
   await until(() => state().rooms.r1.sessions.b === 's2')
   assert.deepEqual(created, [{ cwd: project }, { cwd: project }])
   assert.equal(state().bots.b.sessionId, 'b')
@@ -349,7 +376,7 @@ test('a group\'s permissions hold for every member there in place of its own, un
   // own Session moved for the folder first.
   await call('update-room', { id: 'r1', workDir: project })
   await until(() => state().rooms.r1.sessionId === 's1')
-  assert.deepEqual(await preStep('gb'), { kind: 'reject' })
+  assert.deepEqual(await preStep('gb'), { kind: 'enter', messages: [] })
   await until(() => state().rooms.r1.sessions.b === 's2')
   assert.equal(presetOf.get('s2'), 'read-only')
 
@@ -569,7 +596,7 @@ test('a Bot whose folder is gone changes to the team folder before DSH checks it
   // of the change is about the old part, so it stays behind.
   const notice = { id: 'm0', role: 'user', content: [{ type: 'text', text: 'The working directory is now the team folder.' }], source: { kind: 'working-directory' } }
   const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Still there?' }], source: { kind: 'user' } }
-  assert.deepEqual(await preStep('s1', [notice, input]), { kind: 'reject' })
+  assert.deepEqual(await preStep('s1', [notice, input]), { kind: 'enter', messages: [] })
   await until(() => state().bots.b.sessionId === 's2')
   assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
   await until(() => agentOf('s2').calls.length >= 2)
@@ -593,7 +620,7 @@ test('a team copied from another DSH_HOME moves on to a fresh part in the folder
     rmSync(root, { recursive: true, force: true })
   })
   const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Hello again' }], source: { kind: 'user' } }
-  assert.deepEqual(await preStep('b', [input]), { kind: 'reject' })
+  assert.deepEqual(await preStep('b', [input]), { kind: 'enter', messages: [] })
   await until(() => state().bots.b.sessionId === 's1')
   assert.equal(state().workspaceId, 'w-new')
   assert.deepEqual(created, [{ workspaceId: 'w-new' }])
@@ -611,12 +638,191 @@ test('the user moves the team workspace, and Bots without a folder of their own 
   assert.equal(state().workspaceId, 'w-new')
   assert.equal(existsSync(team), true)
   const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Hello again' }], source: { kind: 'user' } }
-  assert.deepEqual(await preStep('b', [input]), { kind: 'reject' })
+  assert.deepEqual(await preStep('b', [input]), { kind: 'enter', messages: [] })
   await until(() => state().bots.b.sessionId !== 'b')
   assert.equal(agentOf(state().bots.b.sessionId).session.header.cwd, moved)
   assert.deepEqual(created.at(-1), { workspaceId: 'w-new' })
   // A Bot with a folder of its own stays where it works.
   assert.equal(state().bots.a.workDir, project)
+})
+
+// #424: DSH's prompt admission wraps any unexpected failure as 'session/agent-busy'
+// with the cause in details.reason. For a Session this team owns the reason reaches
+// the user and the diagnostics log — on the same error, so the gateway still sees a
+// RemoteError and passes its code and details on instead of 'gateway/internal'.
+test('a prompt rejected with a hidden reason shows the reason and logs it', async (t) => {
+  const { ctx, call, stop } = await start()
+  t.after(stop)
+  ctx.__promptError = Object.assign(new Error('prompt rejected'), {
+    code: 'session/agent-busy',
+    isDSHRemoteError: true,
+    details: { reason: 'Error: Could not load the "sharp" module', rest: 1 },
+  })
+  const failure = await ctx.sessionController.prompt({ sessionId: 'r1', content: [] }).then(() => undefined, error => error)
+  assert.equal(failure, ctx.__promptError)
+  assert.match(failure.message, /prompt rejected — Error: Could not load the "sharp" module/)
+  assert.equal(failure.code, 'session/agent-busy')
+  assert.deepEqual(failure.details, { reason: 'Error: Could not load the "sharp" module', rest: 1 })
+  const log = (await call('diagnostics-log', {})).value
+  assert.match(log, /sharp/)
+})
+
+// #424: the hidden reason can name a local path or carry a token; what reaches the
+// user is cleaned like the diagnostics, not the raw reason.
+test('a rejected prompt reason reaches the user cleaned of paths and tokens', async (t) => {
+  const { ctx, call, stop } = await start()
+  t.after(stop)
+  ctx.__promptError = Object.assign(new Error('prompt rejected'), {
+    code: 'session/attachment-invalid',
+    isDSHRemoteError: true,
+    details: { reason: `Cannot read ${join(homedir(), 'key.pem')} or https://hook.example/in?token=t0ken123` },
+  })
+  const failure = await ctx.sessionController.prompt({ sessionId: 'r1', content: [] }).then(() => undefined, error => error)
+  assert.equal(failure.code, 'session/attachment-invalid')
+  assert.ok(!failure.message.includes('t0ken123'), failure.message)
+  assert.ok(!failure.message.includes(homedir()), failure.message)
+  assert.match(failure.message, /token=\[hidden\]/)
+  assert.equal(failure.details.reason, `Cannot read ~${join(homedir(), 'key.pem').slice(homedir().length)} or https://hook.example/in?token=[hidden]`)
+  const log = (await call('diagnostics-log', {})).value
+  assert.ok(!log.includes('t0ken123'), log)
+})
+
+// #710: the group's own Session only relays and has no fresh part to move to; it
+// follows the team workspace in place, so a moved and deleted workspace no longer
+// fails every round.
+test("a group chat's own Session follows the team workspace it was made in", async (t) => {
+  const { sets, service } = folderService()
+  const { ctx, root, call, agentOf, team, stop } = await start({ services: { workingDirectory: service } })
+  t.after(stop)
+  const moved = join(root, 'moved')
+  assert.deepEqual((await call('team-workspace', { path: moved })).value, { team: moved })
+  rmSync(team, { recursive: true, force: true })
+  assert.equal(await assemble(ctx, agentOf('r1')), true)
+  assert.deepEqual(sets, [['r1', moved]])
+  // Already in the current team workspace: nothing changes.
+  assert.equal(await assemble(ctx, agentOf('r1')), true)
+  assert.deepEqual(sets, [['r1', moved]])
+})
+
+// #710: the group's own Session sits in the team workspace; when that folder itself is
+// deleted it is made again, as for any other Session.
+test("a group chat's own Session makes a deleted team workspace again", async (t) => {
+  const { sets, service } = folderService()
+  const { ctx, agentOf, team, stop } = await start({ services: { workingDirectory: service } })
+  t.after(stop)
+  rmSync(team, { recursive: true, force: true })
+  assert.equal(await assemble(ctx, agentOf('r1')), true)
+  assert.equal(existsSync(team), true)
+  assert.deepEqual(sets, [])
+})
+
+// #710: a member whose group's folder went away works on in the team workspace, and
+// the group is told once, not on every round.
+test('a group whose folder is gone works on in the team workspace and is told once', async (t) => {
+  const { sets, service } = folderService()
+  const { ctx, call, agentOf, team, project, state, stop } = await start({ services: { workingDirectory: service } })
+  t.after(stop)
+  assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
+  agentOf('gb').session.header.cwd = project
+  rmSync(project, { recursive: true, force: true })
+  assert.equal(await assemble(ctx, agentOf('gb')), true)
+  assert.deepEqual(sets, [['gb', team]])
+  const notice = () => (state().rooms.r1.log ?? []).filter(line => line.kind === 'notice' && line.reason === 'folder')
+  assert.equal(notice().length, 1)
+  assert.equal(notice()[0].path, project)
+  assert.equal(await assemble(ctx, agentOf('gb')), true)
+  assert.equal(notice().length, 1)
+  // Clearing or setting the folder clears the mark.
+  assert.equal((await call('update-room', { id: 'r1', workDir: '' })).ok, true)
+  assert.equal(state().rooms.r1.folderNotice, undefined)
+})
+
+// #710: a member still in the team workspace when the group's folder went away needs
+// no correction, but the group is still told once.
+test("a member that never reached the group's folder still brings the one-time notice", async (t) => {
+  const { sets, service } = folderService()
+  const { ctx, call, agentOf, project, state, stop } = await start({ services: { workingDirectory: service } })
+  t.after(stop)
+  assert.equal((await call('update-room', { id: 'r1', workDir: project })).ok, true)
+  rmSync(project, { recursive: true, force: true })
+  // 'gb' was made in the team workspace and never moved to the group's folder.
+  assert.equal(await assemble(ctx, agentOf('gb')), true)
+  assert.deepEqual(sets, [])
+  const notice = () => (state().rooms.r1.log ?? []).filter(line => line.kind === 'notice' && line.reason === 'folder')
+  assert.equal(notice().length, 1)
+  assert.equal(notice()[0].path, project)
+  assert.equal(await assemble(ctx, agentOf('gb')), true)
+  assert.equal(notice().length, 1)
+})
+
+// #710: a Session made for a folder that is registered as a workspace joins it, so it
+// does not stay ungrouped.
+test('a Bot whose working folder is a registered workspace joins it', async (t) => {
+  const { ctx, call, project, state, created, stop } = await start()
+  t.after(stop)
+  await ctx.workspaceRegistry.create(project)
+  assert.equal((await call('update-bot', { id: 'b', workDir: project })).ok, true)
+  await until(() => state().bots.b.sessionId === 's1')
+  assert.deepEqual(created.at(-1), { workspaceId: 'w-new' })
+})
+
+// #710: a notice past the limit is refused, not silently cut.
+test('a group notice past the limit is refused, not cut', async (t) => {
+  const { call, tool, state, stop } = await start()
+  t.after(stop)
+  const long = 'x'.repeat(2001)
+  assert.match((await call('update-room', { id: 'r1', notice: long })).error?.message, /at most 2000 characters/)
+  assert.match(await tool('update_group', { group: 'r1', notice: long }, 'a'), /at most 2000 characters/)
+  assert.match(await tool('create_group', { members: ['Writer'], notice: long }, 'a'), /at most 2000 characters/)
+  assert.equal(state().rooms.r1.notice ?? '', '')
+})
+
+// The handoff note takes a while; the move waits in `runMaintenance` until the test releases it.
+const holdMove = (agent) => {
+  const run = agent.runMaintenance
+  let release
+  const held = new Promise(resolve => { release = resolve })
+  agent.runMaintenance = async (job) => { await held; return run.call(agent, job) }
+  return release
+}
+
+test('a folder move that a first message starts is flagged in the work view until the part moves on', async (t) => {
+  const { root, agentOf, call, state, preStep, stop } = await start()
+  t.after(stop)
+  const moved = join(root, 'moved')
+  await call('team-workspace', { path: moved })
+  const release = holdMove(agentOf('b'))
+  const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Hello again' }], source: { kind: 'user' } }
+  assert.deepEqual(await preStep('b', [input]), { kind: 'enter', messages: [] })
+  const work = (await call('state', {})).value.work.bots.b
+  assert.deepEqual([work.switching, work.folder], [true, true])
+  release()
+  await until(() => state().bots.b.sessionId === 's1')
+  await until(() => agentOf('s1').calls.length >= 2)
+  assert.deepEqual(agentOf('s1').calls.map(([kind, message]) => [kind, message.source.role ?? textOf(message)]), [['followup', 'handoff'], ['followup', 'Hello again']])
+})
+
+test('input that arrives while a switch runs ends its turn as completed and goes on to the new part', async (t) => {
+  const { root, agentOf, call, state, preStep, stop } = await start()
+  t.after(stop)
+  await call('team-workspace', { path: join(root, 'moved') })
+  const release = holdMove(agentOf('b'))
+  const said = text => ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+  assert.deepEqual(await preStep('b', [said('Hello again')]), { kind: 'enter', messages: [] })
+  assert.deepEqual(await preStep('b', [said('and one more')]), { kind: 'enter', messages: [] })
+  release()
+  await until(() => state().bots.b.sessionId === 's1')
+  await until(() => agentOf('s1').calls.length >= 3)
+  assert.deepEqual(agentOf('s1').calls.map(([kind, message]) => [kind, message.source.role ?? textOf(message)]), [['followup', 'handoff'], ['followup', 'Hello again'], ['followup', 'and one more']])
+})
+
+test('a switch that starts mid-turn still rejects its step, the only way DSH ends a step there', async (t) => {
+  const { root, state, call, preStep, stop } = await start()
+  t.after(stop)
+  await call('team-workspace', { path: join(root, 'moved') })
+  const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Hello again' }], source: { kind: 'user' } }
+  assert.deepEqual(await preStep('b', [input], 2), { kind: 'reject' })
+  await until(() => state().bots.b.sessionId === 's1')
 })
 
 test('the team workspace holds no DeepSeek Harness data, apart from the plugin\'s own default', async (t) => {
@@ -819,7 +1025,7 @@ test('a Bot that changes to a folder outside its working folder makes it its wor
   assert.equal(state().bots.b.workDir, project)
 
   const input = { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Now build it' }], source: { kind: 'user' } }
-  assert.deepEqual(await preStep('b', [input]), { kind: 'reject' })
+  assert.deepEqual(await preStep('b', [input]), { kind: 'enter', messages: [] })
   await until(() => state().bots.b.sessionId === 's1')
   assert.deepEqual(created, [{ cwd: project }])
   await until(() => handoffOf(agentOf('s1')) !== undefined)

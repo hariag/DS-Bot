@@ -1,7 +1,6 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { call } from './api.js'
-import { ProjectCoordinationPanel, ProjectEvent } from './project-coordination-panel.js'
 import { dateLocale, hostText, t } from './i18n.js'
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, CopyIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, TrashIcon, ChatsIcon, ClockIcon, TextIcon } from './icons.js'
 import { SPRING_SHAPE } from './motion.js'
@@ -159,7 +158,7 @@ function RemoteChanges({ monitor }) {
 
 const snapshotTime = value => Number.isSafeInteger(value) && value >= 0 && value <= 8_640_000_000_000_000
   ? new Date(value).toISOString() : t('Unknown')
-const shortIdentity = value => typeof value !== 'string' ? t('Unknown') : value.length > 32 ? `${value.slice(0, 20)}…{value.slice(-8)}` : value
+const shortIdentity = value => typeof value !== 'string' ? t('Unknown') : value.length > 32 ? `${value.slice(0, 20)}…${value.slice(-8)}` : value
 const matchesRecovery = (needle, values) => !needle || values.some(value => textValue(value).toLocaleLowerCase().includes(needle))
 
 function recoveryGroups(rows, idOf, nameOf) {
@@ -287,8 +286,8 @@ function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   const renderDeliveries = list => h('div', { className:'bt-recovery-deliveries' }, recoveryGroups(list, item => item.recipientId, item => item.recipientName).map(group => h('section', { key:group.id, className:'bt-recovery-group' },
     h('div', { className:'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:decideDelivery })))))
-  const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('section', { key: group.id, className: 'bt-recovery-group' },
-    h('div', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
+  const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('details', { key: group.id, className: 'bt-recovery-group', open: group.rows.length <= 4 ? true : undefined },
+    h('summary', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
     group.rows.map(item => h(HeldRecord, { key:item.recoveryId, item, scope, request, busy, decide })))))
   return h('details', panel,
     h('summary', { className: 'bt-recovery-summary' }, icon,
@@ -890,7 +889,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
       task.shared ? h('span', { className: 'bt-board-chip' }, t('Shared task · read only')) : null),
     h('span', { className: 'bt-board-card-foot' },
       h('span', { className: 'bt-board-card-owner' }, h(MemberAvatar, { name: owner || t('You'), size: 22, muted: !owner || owner === t('You') }), h('span', null, owner || t('Unknown'))))),
-  items?.length ? h('details', { className:'bt-board-items', open:true },
+  items?.length ? h('details', { className:'bt-board-items' },
     h('summary', null, t('Task items'), ' · ', items.filter(item => item.status === 'done' || item.legacy?.originalStatus === 'done').length, '/', items.length),
     h('div', {className:'bt-board-item-list'}, items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen })))) : null)
 }
@@ -1312,7 +1311,7 @@ function SideSection({ title, action, children, className = '' }) {
     children)
 }
 
-function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
+function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice, onOpenMore }) {
   const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress)
   const canSubmit = commandOf(commands, 'submit') && task.status === 'draft'
   const canCancel = commandOf(commands, 'cancel') && !['done','cancelled'].includes(task.status)
@@ -1328,6 +1327,10 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
       h('span', { className: 'bt-board-stage-dot bt-board-stage-dot-' + (task.status || 'unknown'), 'aria-hidden': true }),
       h('strong', null, progress ? t(progress[1]) : stageLabelOf(task))),
     task.status === 'draft' ? h('p', { className: 'bt-card-note' }, t('Draft cards are not scheduled.')) : null,
+    task.status === 'draft' && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer)
+      ? h('div', { className: 'bt-card-note' },
+        h('p', null, t('This task item needs an owner and an independent reviewer before it can be submitted.')),
+        onOpenMore ? h('button', { type:'button', className:'bt-card-mini', disabled, onClick:onOpenMore }, t('Set owner and reviewer')) : null) : null,
     task.status === 'cancelled' ? h('p', { className: 'bt-card-note' }, t('Cancelled cards are not scheduled and can be restored.')) : null,
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
@@ -1408,7 +1411,7 @@ function RelatedTasks({ task, tasks, actors, onOpen, onCreateItem, onMove }) {
     && ['feature','bugfix'].includes(card.type) && card.id !== parent.id && (card.releaseId ?? null) === (parent.releaseId ?? null)) : []
   if (!parent && !children.length && !onCreateItem) return null
   const link = item => h(TaskItemLink, { key:item.id, item, actors, onOpen })
-  return h('div', { className:'bt-card-side-block' },
+  return h('div', { className:'bt-card-related bt-card-side-block' },
     parent ? h('h3', null, t('Parent card')) : null, parent ? link(parent) : null,
     candidates.length ? h('div', {className:'bt-field'},
       h('select', {value:destination,'aria-label':t('Destination card'),onChange:event => setDestination(event.target.value)},
@@ -1518,7 +1521,7 @@ function ShareTask({ task, commands, targets, disabled, onCommand }) {
       h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || changed || !target }, t('Share')))) : null)
 }
 
-function TaskHistory({ scope, task, request, actors }) {
+function TaskHistory({ scope, task, request }) {
   const [history, setHistory] = useState(null)
   const [error, setError] = useState('')
   const sequence = useRef(0)
@@ -1533,17 +1536,8 @@ function TaskHistory({ scope, task, request, actors }) {
   return h('details', { className: 'bt-card-history', onToggle: load }, h('summary', null, t('Card revision history')),
     error ? h('p', { role: 'alert', className: 'bt-form-error' }, error) : null,
     !history && !error ? h('p', { className: 'bt-card-muted' }, t('Loading…')) : null,
-    history?.projectEvents?.length ? h('ol',{className:'bt-project-events','aria-label':t('Project coordination')},
-      history.projectEvents.map(row => h(ProjectEvent, {key:row.revision, row, roomId:scope.id,
-        roomName:id => history.projectRooms?.find(room => room.id === id)?.name ?? id,
-        actorName:id => actorName(id,actors)}))) : null,
     history?.truncated ? h('p', { className: 'bt-card-note' }, t('Showing the latest 50 revisions.')) : null,
     (history?.entries ?? []).map(entry => {
-      if (Number.isFinite(entry.deliveryConfirmedAt)) {
-        return h('article', { key:`delivery-${entry.after.revision}` },
-          h('strong', null, t('Delivery confirmed by the owner’s start reply')),
-          h('p', null, formatMoment(entry.deliveryConfirmedAt)))
-      }
       const changed = Object.entries(fields).filter(([key]) => JSON.stringify(entry.before?.[key] ?? null) !== JSON.stringify(entry.after?.[key] ?? null))
       if (!changed.length) return null
       return h('article', { key: entry.after.revision }, h('strong', null, t('Revision') + ' ' + entry.after.revision),
@@ -1700,6 +1694,18 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
     else if (result !== 'cancelled') setTitleError(t('The title could not be saved.'))
   }
   const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value)
+  const openTaskEditor = () => {
+    const more = modal.current?.querySelector('.bt-card-more')
+    if (!more) return
+    more.open = true
+    const edit = more.querySelector('.bt-card-more-body button')
+    edit?.click()
+    more.scrollIntoView({ block:'center', behavior:'smooth' })
+  }
+  const relatedTasks = h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
+    onMove: !uncertain && !busy && commandOf(commands, legacy ? 'move-goal-item' : 'move-item')
+      ? (parent, parentTaskId) => onCommand(legacy ? parent : task, { type: legacy ? 'move-goal-item' : 'move-item' },
+        legacy ? { itemId: task.id, parentTaskId } : { parentTaskId }) : undefined })
   return h('div', { className: 'bt-card-modal-backdrop', onMouseDown: event => { if (event.target === event.currentTarget) onClose() } },
     h('section', { ref: modal, className: 'bt-card-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': textValue(task.title) || task.id, tabIndex: -1, onWheel: event => event.stopPropagation() },
       h('header', { className: 'bt-card-modal-header' },
@@ -1748,6 +1754,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(ChangeBlock, { task }),
           h(CardTextEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(ChecklistEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: (target, value) => detailsSave(target, value) }),
+          relatedTasks,
           h(AttachmentsEditor, { scope, task, request, canUpload, canRemove: canRemoveImage, canCover: !legacy && canDetails, disabled: uncertain || busy, onUpload, onRemove: imageId => onCommand(task, { type: removeType }, { imageId }), onCover: imageId => detailsSave(task, { coverImageId: imageId }), onOpenImage: (image, url) => {
             if (!url) return
             if (typeof image.mediaType === 'string' && image.mediaType.startsWith('image/')) setLightbox({ url, name: textValue(image.name) })
@@ -1756,17 +1763,13 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(CommentsEditor, { task, actors, canPost: canComment, canEdit: canEditComment, canDelete: canDeleteComment, disabled: uncertain || busy, postType: commentType, onCommand }),
           h(ActivitySection, { task })),
         h('aside', { className: 'bt-card-side' },
-          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand, onOpenMore: canEdit ? openTaskEditor : undefined }),
           h(PeopleBlock, { task, actors }),
           !legacy ? h(CardTextEditor, { task, field:'stage', editable:canDetails, disabled:uncertain || busy, onSave:detailsSave }) : null,
           h(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
           h(LabelsEditor, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DependenciesBlock, { task, tasks }),
-          h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
-            onMove: !uncertain && !busy && commandOf(commands,legacy ? 'move-goal-item' : 'move-item')
-              ? (parent,parentTaskId) => onCommand(legacy ? parent : task,{type:legacy ? 'move-goal-item' : 'move-item'},
-                legacy ? {itemId:task.id,parentTaskId} : {parentTaskId}) : undefined }),
           h(FactsBlock, { task }),
           h('div', { className: 'bt-card-side-block' }, h(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
           !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle
@@ -1779,7 +1782,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
               canUnarchive ? h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: uncertain || busy, onClick: () => void onCommand(task, { type:'unarchive' }) }, t('Restore from archive')) : null,
               canGoalEdit ? h(EditGoalTask, { task, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: 'goal-task-edit' }, value) }) : null,
               canHistoryTitle ? h(EditHistoryTitle, { task, disabled: uncertain || busy, onEdit: (target, value) => confirmCommand(target, { type: 'goal-history-title' }, value) }) : null,
-              !legacy ? h(TaskHistory, { scope, task, request, actors }) : null,
+              !legacy ? h(TaskHistory, { scope, task, request }) : null,
               legacy && Array.isArray(task.boardHistory) && task.boardHistory.length ? h('details', { className: 'bt-card-history' }, h('summary', null, t('Card revision history')),
                 task.boardHistory.map(entry => h('article', { key: entry.operationId }, h('strong', null, (Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString() : '') + ' · ' + t('You') + ' · ' + entry.kind),
                   entry.reason ? h('p', null, entry.reason) : null, h('p', null, t('Before') + ': ' + JSON.stringify(entry.before)), h('p', null, t('After') + ': ' + JSON.stringify(entry.after))))) : null,
@@ -2128,20 +2131,7 @@ function ProposalPanel({ proposals, actors, tasks, releases, disabled, busy, err
 }
 
 /** A server-authorized group or personal board. */
-export function TaskBoard(props) {
-  const [destination, setDestination] = useState(null)
-  const sourceKey = props.scope.kind + ':' + props.scope.id
-  const route = destination?.source === sourceKey ? destination : null
-  if (route?.roomId) return h(ScopedTaskBoard, {
-    key:route.roomId, scope:{kind:'room',id:route.roomId}, title:route.name, request:props.request,
-    initialCardId:route.taskId, close:() => setDestination({source:sourceKey}),
-  })
-  return h(ScopedTaskBoard, { ...props, initialProject:!!route,
-    visitSource:(roomId,name,taskId) => setDestination({source:sourceKey,roomId,name,taskId}),
-  })
-}
-
-function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false, initialCardId, initialProject, visitSource }) {
+export function TaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false }) {
   const [visible, setVisible] = useState(true)
   const [snapshot, setData] = useState(null)
   const [error, setError] = useState('')
@@ -2307,7 +2297,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     const previousFocus = document.activeElement
     store.current = pendingStore(scope)
     fetching.current = null; cancelling.current = null
-    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView(initialProject ? 'project' : 'status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(initialCardId ? {key,id:initialCardId} : null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
+    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView('status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
     const operation = store.current?.current ?? ''
     pendingRef.current = operation; setPending(operation)
     void load(epoch)
@@ -3177,7 +3167,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         h('button', { type: 'button', className: 'bt-card-mini', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,
       h('div', { className: 'bt-board-toolbar' },
         h('div', { className: 'bt-board-views', role: 'group', 'aria-label': t('Board view') },
-          [['status', 'Status'], ['type', 'Type'], ...(releaseSupported ? [['release', 'Release']] : []), ...(archivedTasks.length > 0 || canAct ? [['archive', 'Archive']] : []), ['activity', 'Activity'], ...(scope.kind === 'room' ? [['project', 'Project coordination']] : [])].map(([id, label]) =>
+          [['status', 'Status'], ['type', 'Type'], ...(releaseSupported ? [['release', 'Release']] : []), ...(archivedTasks.length > 0 || canAct ? [['archive', 'Archive']] : []), ['activity', 'Activity']].map(([id, label]) =>
             h('button', { key: id, type: 'button', className: 'bt-board-view', 'aria-pressed': view === id, onClick: () => chooseView(id) }, t(label)))),
         h('label', { className: 'bt-board-search' }, h(SearchIcon), h('input', { ref:searchRef, type: 'search', 'aria-label': t('Search tasks'), placeholder: t('Search tasks'), value: search, onChange: event => setSearch(event.target.value) })),
         h('button', { type:'button', className:'bt-board-filter-toggle', 'aria-expanded':filtersOpen, onClick:() => setFiltersOpen(value => !value) }, t('Filters'), hasFilters ? h('span', { className:'bt-board-count' }, '•') : null),
@@ -3246,9 +3236,6 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           view === 'release' && releaseSupported ? releaseSection : null,
           view === 'archive' ? archiveSection : null,
           view === 'activity' ? activitySection : null,
-          view === 'project' && scope.kind === 'room' ? h(ProjectCoordinationPanel, {
-            key, scope, request, tasks:data.tasks, releases, actorName:id => actorName(id, actors), openCard, visitSource,
-          }) : null,
           selected && !createFor ? h(TaskCardDialog, { key: selected.id, scope, task: selected, tasks: data.tasks, commands: commandsFor(selected), actors: data.capabilities?.actors,
             targets: data.capabilities?.shareTargets?.[selected.id], uploadEnabled: data.capabilities?.upload === true, uncertain: !canAct, onCommand: run, onUpload: upload, request,
             onCreateItem: createEnabled && scope.kind === 'room' && !selected.shared && !selected.legacy && !selected.parentTaskId && !selected.archivedAt && !selected.blocked && !selected.stale
@@ -3290,7 +3277,7 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-icon{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:8px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));font-size:18px}.bt-recovery-count,.bt-recovery-badge{flex:none;padding:3px 7px;border-radius:8px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font-size:11px}.bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
 .bt-recovery-body{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}.bt-recovery-intro{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;color:var(--bt-ink-2);font-size:12px;line-height:1.5}.bt-recovery-intro p{margin:0;max-width:680px}.bt-recovery-intro>span{font-size:11px}.bt-recovery-warning{margin:0;padding:9px 11px;border-radius:8px;background:var(--bt-hover);color:var(--bt-ink);font-size:12px;line-height:1.5}
 .bt-recovery-search{display:block;max-width:360px}.bt-board-dialog .bt-recovery-search input{box-sizing:border-box;width:100%;padding:8px 10px;background:var(--bt-main);border:1px solid var(--bt-line-2);border-radius:8px;font:inherit;font-size:12px;color:var(--bt-ink)}.bt-recovery-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.bt-recovery-empty{margin:0;padding:14px;color:var(--bt-ink-2);font-size:12px;line-height:1.5;background:var(--bt-sidebar);border-radius:8px}
-.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
+.bt-recovery-groups,.bt-recovery-work-groups{display:flex;flex-direction:column;gap:10px;min-width:0;max-height:250px;overflow:auto}.bt-recovery-group,.bt-recovery-work-group{min-width:0}.bt-recovery-group>summary{list-style:none;cursor:pointer}.bt-recovery-group>summary::-webkit-details-marker{display:none}.bt-recovery-group>summary::before{content:'▸';display:inline-block;width:12px;color:var(--bt-ink-3)}.bt-recovery-group[open]>summary::before{content:'▾'}.bt-recovery-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px;color:var(--bt-ink-2);font-size:11px}.bt-recovery-group-title span{font-variant-numeric:tabular-nums}
 .bt-recovery-record{display:block;border:1px solid var(--bt-line);border-radius:8px;padding:0;margin-top:5px;background:var(--bt-main)}.bt-recovery-record-summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;padding:10px}.bt-recovery-record-id{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.bt-recovery-record-time{font-size:11px;color:var(--bt-ink-2);white-space:nowrap}.bt-recovery-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;min-width:0}.bt-recovery-record>.bt-recovery-facts{padding:0 10px 12px}.bt-recovery-facts .bt-board-fact{min-width:0;overflow-wrap:anywhere}
 .bt-recovery-delivery-section{display:grid;gap:8px;min-width:0;padding-top:12px;border-top:1px solid var(--bt-line)}.bt-recovery-deliveries{display:flex;flex-direction:column;gap:8px;max-height:250px;overflow:auto;min-width:0}.bt-recovery-delivery{display:grid;gap:8px;min-width:0;padding:10px;border:1px solid var(--bt-line);border-radius:8px;background:var(--bt-main)}.bt-recovery-delivery-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.bt-recovery-delivery-heading strong{min-width:0;overflow-wrap:anywhere;font-size:12px}
 .bt-recovery-workspace{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:14px;align-items:start;min-width:0}.bt-recovery-work-list,.bt-recovery-detail{display:flex;flex-direction:column;gap:10px;min-width:0}.bt-recovery-work-list{padding:10px;background:var(--bt-sidebar);border-radius:8px}.bt-recovery-list-header{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}.bt-recovery-work-choice{display:block;width:100%;text-align:left;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.bt-recovery-work-choice[aria-pressed=true]{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));border-color:var(--bt-accent)}
@@ -3354,8 +3341,6 @@ export const TASK_BOARD_CSS = `
 .bt-board-section-heading{margin:0 0 10px}
 .bt-board-section-heading h3{font-size:13px;line-height:18px;font-weight:600;margin:0}
 .bt-board-section-heading p{font-size:12px;line-height:18px;color:var(--bt-ink-2);margin:3px 0 0}
-.bt-project{padding:12px 16px;overflow:auto;color:var(--bt-ink)}.bt-project>.bt-card-editor-actions:first-child{justify-content:space-between;align-items:center}.bt-project>.bt-card-editor-actions:first-child strong{font-size:16px}.bt-project>.bt-card-editor-actions{justify-content:flex-start}.bt-project>p,.bt-project-events small{color:var(--bt-ink-2)}.bt-project-events li>div{margin:3px 0}.bt-project-events li>strong{display:block}
-.bt-project-editor{max-width:42rem}.bt-project-field{display:grid;gap:4px;margin:8px 0}.bt-project-field input,.bt-project-field textarea,.bt-project-field select{width:100%;box-sizing:border-box;padding:6px;color:inherit;background:var(--bt-main);border:1px solid var(--bt-line);border-radius:6px}.bt-project-parties{display:flex;flex-wrap:wrap;gap:8px;border:1px solid var(--bt-line);margin:10px 0}.bt-project-parties label{display:flex;align-items:center;gap:4px}.bt-project-events{list-style:none;padding:0;margin:12px 0}.bt-project-events li{padding:8px 0;border-top:1px solid var(--bt-line);overflow-wrap:anywhere;white-space:pre-wrap}
 .bt-board-activity{display:flex;flex-direction:column;border:.5px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card)}
 .bt-board-activity-row{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:0;border-bottom:.5px solid var(--bt-line);background:transparent;color:var(--bt-ink);font:inherit;font-size:13px;line-height:18px;text-align:left}
 .bt-board-activity-row:last-child{border-bottom:0}
@@ -3471,7 +3456,7 @@ export const TASK_BOARD_CSS = `
 .bt-board-toast[hidden]{display:none}
 .bt-board-toast-action{margin-left:10px;padding:2px 8px;border:1px solid color-mix(in srgb,var(--bt-card) 35%,transparent);border-radius:999px;background:transparent;color:inherit;font:inherit;font-weight:600}
 .bt-card-modal-backdrop{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-3,rgba(0,0,0,.32));overscroll-behavior:contain}
-.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(920px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-size:13px;line-height:18px}
+.bt-card-modal{box-sizing:border-box;display:flex;flex-direction:column;width:min(1080px,100%);max-height:calc(100vh - 48px);overflow:hidden;background:var(--bt-main);color:var(--bt-ink);border:0.5px solid var(--bt-line-2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.24);font-size:13px;line-height:18px}
 .bt-create-modal{width:min(680px,100%)}
 .bt-card-modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex:none;padding:20px 24px 16px;border-bottom:1px solid var(--bt-line)}
 .bt-card-modal-heading{min-width:0;flex:1}
@@ -3485,7 +3470,7 @@ export const TASK_BOARD_CSS = `
 .bt-card-title-form input{min-width:240px;flex:1;font-size:15px;line-height:20px;font-weight:600;padding:6px 8px}
 .bt-card-banner{padding:8px 24px;background:var(--bt-hover);font-size:12px;line-height:18px;border-bottom:1px solid var(--bt-line)}
 .bt-card-banner-error{background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-card));color:var(--bt-ink)}
-.bt-card-modal-body{display:grid;grid-template-columns:minmax(0,1fr) 272px;min-height:0;overflow-y:auto}
+.bt-card-modal-body{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-height:0;overflow-y:auto}
 .bt-card-main{display:flex;flex-direction:column;gap:20px;min-width:0;padding:20px 24px 28px}
 .bt-card-side{display:flex;flex-direction:column;gap:18px;min-width:0;padding:20px;border-left:1px solid var(--bt-line);background:var(--dsw-alias-bg-module-platform,var(--bt-sidebar))}
 .bt-card-section{display:flex;flex-direction:column;gap:8px;min-width:0}
@@ -3536,6 +3521,9 @@ export const TASK_BOARD_CSS = `
 .bt-comment-compose{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea{width:100%;min-height:64px;resize:vertical}
 .bt-card-side-block{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bt-card-related{padding-top:12px;border-top:1px solid var(--bt-line)}
+.bt-card-related h3{margin:8px 0 2px;font-size:12px;line-height:18px;font-weight:600;color:var(--bt-ink-2)}
+.bt-card-related .bt-card-related-link{padding:5px 0}
 .bt-card-side-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .bt-card-side-head h4{margin:0;font-size:11px;line-height:16px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--bt-ink-2)}
 .bt-card-status{display:flex;align-items:center;gap:8px;font-size:13px;line-height:18px}
@@ -3629,6 +3617,9 @@ export const TASK_BOARD_CSS = `
 .bt-recovery-panel[open]{flex:1 0 100%;border-radius:12px;background:var(--bt-card)}
 .bt-recovery-panel[open]>.bt-recovery-summary{border-bottom:1px solid var(--bt-line)}
 .bt-recovery-body{padding:12px;max-height:none;overflow:visible}
+/* Recovery diagnostics scroll inside their own panel so the task lanes stay visible. */
+.bt-board-review-tools:has(.bt-recovery-panel[open]){max-height:min(52vh,520px);overflow:auto}
+.bt-recovery-body{max-height:min(42vh,440px);overflow:auto;overscroll-behavior:contain}
 .bt-recovery-groups,.bt-recovery-work-groups,.bt-recovery-deliveries{max-height:none;overflow:visible}
 .bt-board-error,.bt-board-pending{padding:8px 20px;background:color-mix(in srgb,var(--bt-danger) 8%,var(--bt-main));font-size:12px;line-height:18px}
 .bt-board-legacy-note{padding:7px 20px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-main));font-size:12px;line-height:18px}
@@ -3645,6 +3636,8 @@ export const TASK_BOARD_CSS = `
 .bt-board-columns{flex:1;min-height:0;height:auto;align-items:stretch;gap:12px;padding:0 0 2px;overflow-x:auto;overflow-y:hidden}
 .bt-board-columns-personal .bt-board-lane{flex:1 0 260px;max-width:420px;min-height:180px}
 .bt-board-lane{flex:0 0 clamp(220px,18vw,288px);min-height:220px;max-height:100%;padding:8px;border:.5px solid var(--bt-line);border-radius:12px;background:var(--bt-card);transition:background-color .12s,border-color .12s}
+.bt-board-lane[data-kind="workflow"]{flex:1 1 0;min-width:200px;max-width:380px}
+.bt-board-lane[data-kind="workflow"]:not(:has(.bt-board-card)){flex:0 1 200px;min-width:180px}
 .bt-board-lane-drop{border-color:color-mix(in srgb,var(--bt-accent) 46%,transparent);background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-card))}
 .bt-board-lane-head{padding:1px 4px 6px}
 .bt-board-lane-title h3{font-size:13px;line-height:18px;font-weight:600}
@@ -3675,7 +3668,7 @@ export const TASK_BOARD_CSS = `
 .bt-card-modal-header h2{font-size:17px;line-height:24px;font-weight:500}
 .bt-card-eyebrow{font-size:11px;line-height:16px;margin-bottom:2px}
 .bt-card-submeta{margin-top:4px}
-.bt-card-modal-body{grid-template-columns:minmax(0,1fr) 280px}
+.bt-card-modal-body{grid-template-columns:minmax(0,1fr) 320px}
 .bt-card-main{gap:18px;padding:18px 22px 26px}
 .bt-card-side{gap:16px;padding:18px;border-left:.5px solid var(--bt-line);background:var(--bt-sidebar)}
 .bt-card-section{gap:8px}
@@ -3735,7 +3728,7 @@ export const TASK_BOARD_CSS = `
   .bt-card-mobile-bar .bt-board-card-owner{font-size:12px;line-height:16px;min-width:0;flex:1}
   .bt-card-mobile-bar .bt-card-mini{margin-left:auto;background:var(--bt-hover)}
 }
-@media(max-width:700px){.bt-board-header{padding:12px 16px}.bt-board-capacity{display:none}.bt-board-toolbar{padding:8px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:12px 16px 16px;gap:12px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,288px);max-width:none}.bt-card-modal-header{padding:14px 16px 12px}.bt-card-main{padding:16px}.bt-card-side{padding:16px}.bt-create-form{padding:16px}}
+@media(max-width:700px){.bt-board-header{padding:12px 16px}.bt-board-capacity{display:none}.bt-board-toolbar{padding:8px 16px}.bt-board-review-tools{padding:8px 16px}.bt-board-content{padding:12px 16px 16px;gap:12px}.bt-board-lane,.bt-board-columns-personal .bt-board-lane{flex:0 0 min(84vw,288px);max-width:none}.bt-board-lane[data-kind="workflow"],.bt-board-lane[data-kind="workflow"]:not(:has(.bt-board-card)){flex:0 0 min(84vw,288px);min-width:0;max-width:none}.bt-card-modal-header{padding:14px 16px 12px}.bt-card-main{padding:16px}.bt-card-side{padding:16px}.bt-create-form{padding:16px}}
 @media(prefers-reduced-motion:reduce){.bt-board-backdrop,.bt-board-dialog,.bt-card-modal-backdrop,.bt-card-modal,.bt-board-filter-scrim{animation:none!important}.bt-board-lane,.bt-board-card{transition:none}}
 
 /* Phase 2: task types, lifecycle lanes, releases and confirmations. */

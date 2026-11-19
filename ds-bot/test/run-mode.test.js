@@ -182,8 +182,12 @@ async function start(t, { saved = team() } = {}) {
   }))).json()
   const tool = (name, args, sessionId) => rt.teamTools.find(def => def.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
   // `modelSelection`: where the step is about to go, as DSH captured it for the step.
-  const preStep = (sessionId, messages = [], step = 1, modelSelection) => ctx.listeners.get('agent/pre-step').at(-1)(
-    { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000), ...(modelSelection === undefined ? {} : { modelSelection }) }, async () => 'next')
+  const preStep = (sessionId, messages = [], step = 1, modelSelection) => {
+    const listener = ctx.listeners.get('agent/pre-step').find(fn => fn.name === 'followRunModeStep')
+    assert.ok(listener, 'the run-mode pre-step listener is registered')
+    return listener(
+      { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000), ...(modelSelection === undefined ? {} : { modelSelection }) }, async () => 'next')
+  }
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   const handoffOf = sessionId => agentOf(sessionId).calls.filter(([kind, message]) => kind === 'followup' && message.source?.role === 'handoff').map(([, message]) => textOf(message)).at(-1)
   const startCount = () => (existsSync(starts) ? readFileSync(starts, 'utf8').trim().split('\n').length : 0)
