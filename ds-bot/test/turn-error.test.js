@@ -98,16 +98,16 @@ const models = [
 // the failed one; `account` is the shell account snapshot's view, which a test may change
 // between renders; `asked` marks the failed turn, or the turns listed, as ones another
 // Bot asked for.
-function cell({ code, message = '', turn = 3, blocked, model = models[0].ref, later = false, signIn = true, account, sessionId = 'chief-part', bot: botPatch = {}, catalog = models, defaultModel = null, asked = false } = {}) {
+function cell({ code, message = '', turn = 3, blocked, model = models[0].ref, later = false, signIn = true, account, sessionId = 'chief-part', bot: botPatch = {}, catalog = models, defaultModel = null, asked = false, rooms = [] } = {}) {
   slots.clear()
   effects.length = 0
   const calls = []
   const bot = { id: 'chief', name: 'Chief', model, sessionId: 'chief-part', blocked: blocked && { sessionId, turn, ...blocked }, ...botPatch }
   const byId = Object.fromEntries([...(bot.parts ?? []), 'chief-part', 'chief'].map(id => [id, bot]))
-  const roster = { ready: true, byId, roomsById: {}, models: catalog, defaultModel, exchangeTurns: asked ? { [sessionId]: asked === true ? [turn] : asked } : {} }
+  const roster = { ready: true, byId, rooms, roomsById: {}, models: catalog, defaultModel, exchangeTurns: asked ? { [sessionId]: asked === true ? [turn] : asked } : {} }
   const ops = account ? { hooks: { account: { subscribe: () => () => {}, getSnapshot: () => ({ view: account }) } } } : {}
   const actions = {
-    resume: async (id) => { calls.push(['resume', id]); if (actions.failResume) throw new Error(actions.failResume) },
+    resume: async (...args) => { calls.push(['resume', ...args]); if (actions.failResume) throw new Error(actions.failResume) },
     updateBot: async (id, patch) => { calls.push(['updateBot', id, { ...patch }]); if (actions.failUpdate) throw new Error(actions.failUpdate) },
     signIn: () => calls.push(['signIn']),
     canSignIn: () => signIn,
@@ -180,6 +180,15 @@ test('without the host key endpoint, Enter API key goes to the shell key editor 
   assert.deepEqual(side.calls, [['onboarding', 'deepseek-official']])
 })
 
+test('a current group member retries the failed turn in that group', async () => {
+  const side = cell({code:'SERVER',sessionId:'group-member',rooms:[{id:'group',memberSessions:{chief:'group-member'}}]})
+  const retry = side.buttons(side.render()).find(button => button.label === 'Retry')
+  assert.ok(retry)
+  retry.node.props.onClick()
+  await tick()
+  assert.deepEqual(side.calls,[['resume','chief','group-member',3]])
+})
+
 test('once the host no longer holds the failure, Retry leads and asks the Bot to go on once', async () => {
   const side = cell({ code: 'MISSING_CREDENTIAL' })
   const list = side.buttons(side.render())
@@ -190,7 +199,7 @@ test('once the host no longer holds the failure, Retry leads and asks the Bot to
   const [again] = side.buttons(side.render())
   assert.equal(again.label, 'Retrying…')
   assert.equal(again.node.props.disabled, true)
-  assert.deepEqual(side.calls, [['resume', 'chief']])
+  assert.deepEqual(side.calls, [['resume', 'chief', 'chief-part', 3]])
 })
 
 test('a failed retry says why and can be tried again', async () => {

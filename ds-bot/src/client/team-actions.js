@@ -146,7 +146,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     saveProviderModels: body => call('provider-models-save', body),
     removeProvider: provider => after(call('provider-remove', { provider })),
     // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
-    resume: botId => after(call('resume', { botId })),
+    resume: (botId, sessionId, turn) => after(call('resume', { botId, sessionId, turn })),
     folders: () => call('folders'),
     folderPick: () => call('folder-pick'),
     folderList: path => call('folder-list', { path: path ?? '' }),

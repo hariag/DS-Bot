@@ -208,7 +208,7 @@ export function install(rt) {
       const goal = rt.goalView?.(rt.roomOf(room.id)) ?? (room.goal?.ownerReview?.checks ? {
         ...room.goal, ownerReview: { ...room.goal.ownerReview, checks: Object.fromEntries(Object.entries(room.goal.ownerReview.checks).map(([id, check]) => [id, check?.scopedQueueVersion === undefined ? check : { ...check, unresolved: true }])) },
       } : room.goal)
-      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), memberSessions: sessions ?? {}, ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -622,7 +622,7 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           await rt.load()
           const bot = rt.botOf(String(body.botId ?? ''))
           if (bot === undefined) return fail('Unknown Bot', 'bot/not-found')
-          await rt.resumeBot(bot)
+          await rt.resumeBot(bot, body.sessionId, body.turn)
           return ok(true)
         }
         // The avatar library: photos the user imported once, kept beside the team.
