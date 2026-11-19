@@ -52,10 +52,11 @@ const proposal = { operationId: 'op1', taskId: 'task1', title: 'Build', acceptan
 
 test('listing a board uses its task snapshot and only checks actions needed by the visible rows', () => {
   const f = fixture()
-  const row = {scope:'room:room', title:'Work', owner:'one', reviewer:'two', actionRevision:2}
+  const row = {scope:'room:room', title:'Work', owner:'one', reviewer:'two', actionRevision:null}
   for (const status of ['draft','proposed','waiting','ready','working','reported','done','cancelled']) {
-    f.rows.push({...row, id:status, status})
+    f.rows.push({...row, id:status, status, ...(['ready','working','reported'].includes(status) ? {actionRevision:2} : {})})
   }
+  f.rows.push({...row, id:'proposed-live', status:'proposed', actionRevision:2})
   f.rows.push({...row, id:'other', scope:'room:other', status:'working'})
   let lists = 0
   const actionReads = []
@@ -65,16 +66,18 @@ test('listing a board uses its task snapshot and only checks actions needed by t
     actionReads.push(id)
     if (id === 'waiting') return [{revision:1, kind:'execute', state:'pending'}]
     if (id === 'reported') return [{revision:2, kind:'execute', state:'accepted'}, {revision:2, kind:'review', state:'uncertain'}]
+    if (id === 'proposed-live') return [{revision:2, kind:'execute', state:'pending'}]
     return [{revision:2, kind:'execute', state:'claimed'}]
   }
   f.store.listProposals = () => [{id:'p', taskId:'draft', status:'pending'}]
   const view = f.api.list(room, user)
   assert.equal(lists, 1)
-  assert.deepEqual(actionReads.sort(), ['proposed','ready','reported','waiting','working'])
+  assert.deepEqual(actionReads.sort(), ['proposed','proposed-live','ready','reported','waiting','working'])
   assert.equal(view.proposals[0].taskTitle, row.title)
   assert.equal(view.tasks.find(task => task.id === 'reported').dispatchState, 'uncertain')
   assert.equal(view.tasks.find(task => task.id === 'ready').dispatchState, 'claimed')
-  assert.equal(view.capabilities.commands.proposed.some(item => item.type === 'schedule'), false)
+  assert.equal(view.capabilities.commands.proposed.some(item => item.type === 'schedule'), true)
+  assert.equal(view.capabilities.commands['proposed-live'].some(item => item.type === 'schedule'), false)
   assert.equal(view.capabilities.commands.waiting.some(item => item.type === 'schedule'), true)
 
   actionReads.length = 0

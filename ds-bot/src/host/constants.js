@@ -77,7 +77,7 @@ export const TEAM_TOOLS = [
   'request_secret', 'list_secrets', 'group_relay', 'read_own_chat',
   'read_group_chat', 'remember', 'forget', 'recall', 'read_browser',
   'list_capabilities', 'save_capability', 'delete_capability',
-'attach_capability', 'detach_capability', 'group_goal', 'board_task', 'group_task', 'list_connectors', 'request_connector',
+'attach_capability', 'detach_capability', 'group_goal', 'board_task', 'group_task', 'project_coordination', 'list_connectors', 'request_connector',
   'sync_shared_repository',
 ]
 // A member still at work this long after its first tool call lets the round go on; it
