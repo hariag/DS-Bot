@@ -12,6 +12,21 @@ import { DSH_DE, HOST_ERRORS_DE, DE } from './locales/de.js'
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  "Project coordination": "跨群协作",
+  "Coordinating group": "协调群",
+  "Participating groups": "参与群",
+  "This group has no shared project yet.": "此群尚未关联共享项目。",
+  "Record a decision": "登记项目决定",
+  "Link project groups": "关联项目群",
+  "Project ID": "项目 ID",
+  "Selected groups can read shared decisions and linked task updates.": "所选群可以查看共享决定及关联任务的更新。",
+  "Shared resource": "共享资源",
+  "Decision": "决定内容",
+  "Linked task": "关联任务",
+  "Use reviewed revision {revision}": "已核对，采用修订 {revision}",
+  "Acknowledged by {group}": "{group} 已确认",
+  "Awaiting acknowledgement from {group}": "等待 {group} 确认",
+  "No receipt found. Review the current revision before retrying.": "没有查到操作回执。重试前请核对当前修订。",
   'Delivery confirmed by the owner’s start reply': '已按负责人的开工回复核实派发',
   'Task reply': '任务回复',
   'Group goal update': '群目标更新',

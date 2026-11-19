@@ -33,7 +33,7 @@ const shim = {
   setup(b) {
     b.onResolve({ filter: /^(react|react-dom|\.\/api\.js|\.\/i18n\.js)$/ }, x => ({ path: x.path, namespace: 'fixture' }))
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, x => {
-      if (x.path === 'react') return { contents: 'export const {createElement,useEffect,useLayoutEffect,useRef,useState}=globalThis.React' }
+      if (x.path === 'react') return { contents: 'export const {createElement,useCallback,useEffect,useLayoutEffect,useRef,useState}=globalThis.React' }
       if (x.path === 'react-dom') return { contents: 'export const {createPortal,flushSync}=globalThis.ReactDOM' }
       if (x.path.endsWith('i18n.js')) return { contents: 'export const hostText=x=>x;export const dateLocale=()=>"en-US";export const t=(x,v={})=>x.replace(/\\{(\\w+)\\}/g,(_,k)=>String(v[k]??""))' }
       return { contents: 'export const call=()=>{throw Error("request injection required")}' }
@@ -61,6 +61,22 @@ function phase2Commands(task){const commands=[...(task.fixtureCommands??[]),{typ
 globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
+ if(endpoint==='board-project'){
+  const availableRooms=[{id:'g1',name:'Development'},{id:'g2',name:'UX'}];
+  return structuredClone({project:state.project??null,availableRooms,events:state.projectEvents??[],receipt:state.projectReceipt?.operationId===payload.operationId ? state.projectReceipt:null});
+ }
+ if(endpoint==='board-project-bind'){
+  state.project={id:payload.projectId,name:payload.name,revision:1,coordinatorRoomId:payload.scope.id,rooms:[{id:'g1',name:'Development'},{id:'g2',name:'UX'}]};
+  return {operationId:payload.operationId,revision:1,projectId:payload.projectId};
+ }
+ if(endpoint==='board-project-decide'){
+  if(state.project.revision!==payload.expectedRevision)throw Object.assign(Error('stale project revision'),{code:'bot/invalid'});
+  state.project.revision++;
+  state.projectReceipt={operationId:payload.operationId,revision:state.project.revision,projectId:state.project.id};
+  state.projectEvents=[{...payload,revision:state.project.revision,createdAt:1700000000000,actor:'user',originRoomId:payload.scope.id,audience:payload.roomIds,acknowledgements:[]}];
+  if(state.dropProjectReply){state.dropProjectReply=false;throw Error('response lost')}
+  return state.projectReceipt;
+ }
  if(endpoint==='board-list'){
   if(state.mode==='phase2'){
    const tasks=state.phase2Tasks.map(task=>({...task}));
@@ -275,6 +291,40 @@ async function runBrowserCases() {
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
 
+  await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'}, 'normal', true))
+  await page.getByRole('button',{name:'Project coordination',exact:true}).click()
+  const coordination = page.getByRole('region',{name:'Project coordination'})
+  await coordination.getByRole('button',{name:'Link project groups'}).click()
+  await coordination.getByLabel('Project ID').fill('engineering')
+  await coordination.getByLabel('Name',{exact:true}).fill('Engineering')
+  await coordination.getByLabel('UX',{exact:true}).check()
+  await coordination.getByRole('button',{name:'Save',exact:true}).click()
+  await coordination.getByRole('button',{name:'Record a decision'}).click()
+  await coordination.getByLabel('Shared resource').fill('docs/tasks')
+  await coordination.getByLabel('Decision',{exact:true}).fill('Preserve earlier revisions')
+  await page.evaluate(() => { globalThis.fixture.project.revision++; globalThis.fixture.dropProjectReply=true })
+  await coordination.getByRole('button',{name:'Save',exact:true}).click()
+  await coordination.getByText('stale project revision').waitFor()
+  assert.equal(await coordination.getByRole('button',{name:'Save',exact:true}).isDisabled(),true)
+  await coordination.getByRole('button',{name:'Use reviewed revision 2'}).click()
+  await coordination.getByRole('button',{name:'Save',exact:true}).click()
+  await coordination.getByRole('button',{name:'Check action'}).click()
+  await coordination.getByRole('listitem').getByText(/Preserve earlier revisions/).waitFor()
+  assert.equal(await page.evaluate(()=>globalThis.fixture.calls.filter(c=>c.endpoint==='board-project-decide').length),2)
+  assert.equal(await coordination.getByRole('button',{name:'Check action'}).count(),0)
+  if (process.env.BOARD_PROJECT_SCREENSHOT) await coordination.screenshot({path:process.env.BOARD_PROJECT_SCREENSHOT})
+
+  await page.evaluate(() => {
+    globalThis.fixture.projectEvents[0].taskId='T1'
+    globalThis.renderFixture({kind:'room',id:'g2'},'normal',true)
+  })
+  await page.getByRole('button',{name:'Project coordination',exact:true}).click()
+  await coordination.getByText('Awaiting acknowledgement from Development · Awaiting acknowledgement from UX').waitFor()
+  await coordination.getByRole('listitem').getByRole('button').click()
+  await page.locator('.bt-card-dialog, .bt-card-modal').first().waitFor()
+  assert.equal(await page.evaluate(()=>globalThis.fixture.calls.filter(c=>c.endpoint==='board-list').at(-1).payload.scope.id),'g1','opens the original group board')
+
+  assert.deepEqual(errors,[])
   const openCardItems = async card => {
     const details = card.locator('.bt-board-items')
     await details.waitFor()
