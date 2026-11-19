@@ -37,6 +37,9 @@ test('existing Bot identities share the board workflow across their private and 
       assert.ok(own.includes(`board_task ${action}`), action)
     }
     assert.match(own, /parent_task_id/)
+    assert.match(own, /task\.roomId as room_id/)
+    assert.match(own, /itemsQuery from show and follow nextCursor/)
+    assert.match(own, /board_task progress, operation_id, expected_revision/)
     assert.match(own, /expected_revision/)
   }
   assert.match(prompt('worker'), /Check files\./)

@@ -1177,6 +1177,10 @@ test('a chat instruction becomes a scoped board card, with child work, human ste
   assert.ok(current.replies.some(reply => reply.text === edit.value.text))
   assert.ok(current.replies.some(reply => reply.text === idleEdit.value.text))
   const progress = {action:'progress',task_id:item.id,operation_id:'lookup-progress',expected_revision:working.revision,value:{summary:'Lookup implemented',next:'Check empty query'}}
+  const incomplete = {action:'progress',task_id:item.id,expected_revision:current.revision,value:progress.value}
+  await assert.rejects(call('chat-one',incomplete), /progress requires a stable operation_id/)
+  await assert.rejects(call('chat-two',incomplete), /unavailable or the action is not authorized/)
+  await assert.rejects(call('chat-one',{...incomplete,task_id:'does-not-exist'}), /unavailable or the action is not authorized/)
   await assert.rejects(call('chat-one',progress), /revision/)
   const advanced = (await call('chat-one',{...progress,expected_revision:current.revision})).task
   const report = (await call('chat-one',{action:'report',task_id:item.id,operation_id:'lookup-result',expected_revision:advanced.revision,
@@ -1206,7 +1210,12 @@ test('organizing a goal item keeps the original editable task and its actual sta
   const rows = (await rt.boardCall('board-list',{scope})).tasks.filter(t=>t.id===row.id)
   assert.deepEqual(rows.map(r=>[r.parentTaskId,r.legacy.originalStatus]), [[parent.id,'reported']])
   const tool = rt.teamTools.find(tool=>tool.name==='board_task')
-  const list = async () => JSON.parse(await tool.execute({action:'list',room_id:'group',parent_task_id:parent.id},{agent:{id:'chat-one'}}))
+  const query = async args => JSON.parse(await tool.execute(args, {agent:{id:'chat-one'}}))
+  const {itemsQuery} = await query({action:'show',task_id:parent.id})
+  const list = () => query(itemsQuery)
+  const goal = await query({action:'show',task_id:row.id,room_id:'group'})
+  assert.equal(goal.task.roomId, 'group')
+  assert.equal(goal.itemsQuery, undefined)
   assert.deepEqual((await list()).items.map(r=>[r.kind,r.goalTaskId,r.parentTaskId,r.status]), [['group_goal','check',parent.id,'reported']])
   const release = await rt.boardCall('board-release-create',{scope,operationId:'create-minor',release:{id:'minor',name:'Verify release',version:'1.1'}})
   const latestParent = (await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===parent.id)
