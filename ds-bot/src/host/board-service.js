@@ -254,6 +254,7 @@ export function install(rt) {
     if (task.scope.startsWith('room:')) return rt.roomOf(task.scope.slice(5))?.members?.includes(actor) === true
     return task.scope.slice(9) === task.owner
   }
+  const taskRoomId = task => task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
   const goalAllows = (task, actor) => {
     if (!task.scope.startsWith('room:')) return true
     const room = rt.roomOf(task.scope.slice(5))
@@ -370,7 +371,7 @@ export function install(rt) {
         if (!allowedAction(task, action) || typeof rt.prepareBoardTaskMessage !== 'function') return false
         try {
           const source = intent?.payload?.source
-          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId,
+          const expected = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId:intent.targetSessionId, roomId:taskRoomId(task),
             text:taskPrompt(task, action), messageId:intent.messageId, exchangeId:source?.exchangeId,
             actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
           return intent.targetBotId === action.actor && isDeepStrictEqual(expected, intent.payload)
@@ -400,11 +401,12 @@ export function install(rt) {
       },
       prepare: async (action, task) => {
         if (!allowedAction(task, action)) return undefined
-        const sessionId = rt.chatOf(action.actor)
+        const roomId = taskRoomId(task)
+        const sessionId = roomId ? await rt.ensureGroupTaskSession(roomId, action.actor) : rt.chatOf(action.actor)
         if (typeof sessionId !== 'string' || !sessionId || busySession(sessionId, action.id)) return undefined
         if (!allowedAction(store.get(task.id), action)) return undefined
         const messageId = randomUUID(), exchangeId = randomUUID()
-        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, text:taskPrompt(task, action),
+        const payload = rt.prepareBoardTaskMessage({ toId:action.actor, sessionId, roomId, text:taskPrompt(task, action),
           messageId, exchangeId, actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
         return { admissionId:`board:${action.id}:${randomUUID()}`, messageId, targetBotId:action.actor, targetSessionId:sessionId, payload }
       },
@@ -414,11 +416,12 @@ export function install(rt) {
         let committed = false
         const sameMessage = (agent, message) => agent?.id === intent.targetSessionId && isDeepStrictEqual(message, intent.payload)
         const result = await rt.deliver({ toId:action.actor, fromName:'You', sessionId:intent.targetSessionId,
-          role:'request', note:'task from Trello', text:taskPrompt(task, action),
+          role:source.role, roomId:source.roomId, note:'task from Trello', text:taskPrompt(task, action),
           exchangeId:source.exchangeId, taskAction:source.taskAction }, {
           preparedMessage:intent.payload,
           beforeAdmission: (agent, message) => {
-            if (!sameMessage(agent, message) || !revalidateNow()) throw new Error('Task authorization changed before DSH admission')
+            const target = source.roomId ? rt.roomOf(source.roomId)?.sessions?.[action.actor] : rt.chatOf(action.actor)
+            if (target !== intent.targetSessionId || !sameMessage(agent, message) || !revalidateNow()) throw new Error('Task authorization changed before DSH admission')
           },
           afterAdmission: (agent, message) => {
             if (!sameMessage(agent, message)) throw new Error('DSH admitted a different task message')
