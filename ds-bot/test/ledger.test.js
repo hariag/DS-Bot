@@ -265,3 +265,16 @@ test('a read-only window follows same-sized ledger replacements', async t => {
   assert.notEqual(rt.ledger.cursor(book).epoch, initial.epoch)
   assert.equal(rt.ledger.lastSeq(book), 2)
 })
+
+test('publishing a missed terminal row invalidates cached closed ranges only for its room', async t => {
+  const { rt } = host(t)
+  rt.ledger.append('group-a', { seq:1, text:'In progress' })
+  const before = rt.ledger.cursor('group-a').epoch
+  const other = rt.ledger.cursor('group-b')
+  rt.ledger.append('group-a', { seq:2, text:'Working' })
+  assert.equal(rt.ledger.cursor('group-a').epoch, before)
+  rt.ledger.append('group-a', { seq:3, text:'Result', completedRoomReply:{ after:2 } })
+  assert.notEqual(rt.ledger.cursor('group-a').epoch, before)
+  assert.deepEqual(rt.ledger.cursor('group-b'), other)
+  await rt.ledger.flushRequired('group-a')
+})

@@ -23,14 +23,15 @@ export const bookFile = (book) => {
 }
 
 // Records oldest first. A line cut by an interruption is not a record.
-export const parseBook = (text) => {
+export const parseBook = (text, invalid) => {
   const records = []
   for (const row of String(text ?? '').split('\n')) {
     if (row === '') continue
     try {
       const record = JSON.parse(row)
       if (record !== null && typeof record === 'object') records.push(record)
-    } catch { /* half-written */ }
+      else invalid?.()
+    } catch { invalid?.() }
   }
   return records
 }
@@ -128,7 +129,8 @@ export function install(rt) {
       }
     }
     let size = text === undefined ? -1 : Buffer.byteLength(text)
-    let records = text === undefined ? [] : parseBook(text)
+    let complete = !readFailed
+    let records = text === undefined ? [] : parseBook(text, () => { complete = false })
     if (text === undefined && !readFailed) {
       const prefix = book.slice(0, book.indexOf('-') + 1)
       const imported = importers.get(prefix)?.(book)
@@ -149,7 +151,7 @@ export function install(rt) {
     }
     // An interruption can leave the last line without its end; the next record starts on a
     // line of its own, or it would join the cut one and be lost with it.
-    const entry = { records, size, disk, readOnly: reading, torn: text !== undefined && text !== '' && !text.endsWith('\n') }
+    const entry = { records, complete, size, disk, readOnly: reading, torn: text !== undefined && text !== '' && !text.endsWith('\n') }
     reindex(entry)
     books.set(book, entry)
     return entry
@@ -160,7 +162,8 @@ export function install(rt) {
     const entry = open(book)
     entry.records.push(record)
     addToIndex(entry, record)
-    changed(book)
+    // A terminal recovery extends an already closed group range; invalidate its settled UI reads.
+    changed(book, book.startsWith('group-') && record.completedRoomReply !== undefined)
     if (!writes()) { skippedWrites.add(book); return record }
     const line = `${entry.torn ? '\n' : ''}${JSON.stringify(record)}\n`
     entry.torn = false
