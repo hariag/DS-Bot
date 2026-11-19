@@ -152,6 +152,38 @@ test('a scheduled task enters the real DSH Session once with a revision-bound me
   assert.equal(deliveries.length,1)
 })
 
+test('scheduled owner and reviewer receive their exact evidence fields and can correct a rejected report', async t => {
+  const {rt, deliveries} = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const ready = await rt.boardCall('board-command', { scope, taskId:card.id, type:'schedule', expectedRevision:card.revision, operationId:'schedule-evidence' })
+  await settle(async () => deliveries.length === 1)
+  assert.match(deliveries[0].message.content[0].text, /report, send value exactly as \{"kind":"personal","environment":".+?","evidence":"/)
+  const tool = rt.teamTools.find(item => item.name === 'board_task')
+  const call = async (sessionId, args) => JSON.parse(await tool.execute({ task_id:card.id, ...args }, { agent:{ id:sessionId } }))
+  const {task:working} = await call('group-one', { action:'start', operation_id:'owner-start', expected_revision:ready.revision })
+  const report = { action:'report', operation_id:'owner-report', expected_revision:working.revision }
+  const personal = {kind:'personal', environment:'repository checkout', evidence:'Compared the original and updated objects'}
+  await assert.rejects(call('group-one', {...report, operation_id:'owner-extra', value:{...personal, result:'pass'}}),
+    /invalid fields.*Unexpected value fields result.*"kind":"personal"/)
+  await assert.rejects(call('group-two', {...report, operation_id:'wrong-owner', value:{...personal, result:'pass'}}),
+    /not authorized$/)
+  const oid = 'a'.repeat(40)
+  await assert.rejects(call('group-one', {...report, operation_id:'git-report', value:{
+    ...personal, kind:'git', targetCommit:oid, targetBlob:oid, acceptanceBlob:oid,
+  }}), /report evidence unverified.*"kind":"personal"/)
+  const {task:reported} = await call('group-one', {...report, value:personal})
+  assert.equal(reported.status, 'reported')
+  await settle(async () => deliveries.length === 2)
+  assert.equal(deliveries[1].sessionId, 'group-two')
+  assert.match(deliveries[1].message.content[0].text, /review, send value exactly as \{"result":"pass","evidence":".+?"\}.*"rework"/)
+  const review = { action:'review', operation_id:'reviewer-review', expected_revision:reported.revision }
+  const decision = { result:'pass', evidence:'Independently verified the acceptance criteria' }
+  await assert.rejects(call('group-two', {...review, operation_id:'review-extra', value:{...decision, environment:'fixture'}}),
+    /invalid fields.*Unexpected value fields environment.*"result":"pass"/)
+  const {task:done} = await call('group-two', {...review, value:decision})
+  assert.equal(done.status, 'done')
+})
+
 test('a personal Bot task can be created and delivered to its private Session', async t => {
   const {rt,deliveries}=fixture(t),scope={kind:'personal',id:'one'}
   const created=await rt.boardCall('board-command',{scope,operationId:'personal-scheduled-create',taskId:'personal-scheduled',type:'create',value:{
