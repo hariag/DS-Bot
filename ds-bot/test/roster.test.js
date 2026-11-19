@@ -343,6 +343,31 @@ test('an opt-in web roster reuses bot instructions across team saves and refresh
   assert.equal(indexRoster(changed, first).byId[id].instructions, '')
 })
 
+test('conditional instructions and notice updates preserve the winning edit and reject stale patches', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  const main = (await call('state', {})).value.mainBotId
+  const bot = (await call('create-bot', { name: 'Writer', instructions: 'role' })).value
+  const room = (await call('create-room', { name: 'Docs', members: [main, bot.id] })).value
+  for (const [endpoint, id, field, expected, initial, name] of [
+    ['update-bot', bot.id, 'instructions', 'expectedInstructions', 'role', 'Writer'],
+    ['update-room', room.id, 'notice', 'expectedNotice', '', 'Docs'],
+  ]) {
+    const updates = ['first', 'second'].map(value => call(endpoint, { id, [field]: value, [expected]: initial }))
+    const results = await Promise.all(updates)
+    assert.equal(results.filter(result => result.ok).length, 1)
+    assert.equal(results.find(result => !result.ok).error.code, 'bot/stale')
+    const winner = results[0].ok ? 'first' : 'second'
+    const stale = await call(endpoint, { id, name: 'Wrong', [field]: 'stale', [expected]: initial })
+    assert.equal(stale.error.code, 'bot/stale')
+    const team = (await call('state', {})).value
+    const entry = [...team.bots, ...team.rooms].find(item => item.id === id)
+    assert.equal(entry.name, name)
+    assert.equal(entry[field], winner)
+    assert.equal((await call(endpoint, { id, [field]: 'legacy' })).ok, true)
+  }
+})
+
 test('web roster cursor survives private saves but invalidates on a visible change', async t => {
   const { call, stop } = start()
   t.after(stop)
