@@ -36,6 +36,8 @@ test('existing Bot identities share the board workflow across their private and 
     for (const action of ['list', 'show', 'register', 'start', 'progress', 'report', 'review', 'block']) {
       assert.ok(own.includes(`board_task ${action}`), action)
     }
+    assert.match(own, /stable operation_id for this exact registration/)
+    assert.match(own, /version is labeled provisional or awaits assignment/)
     assert.match(own, /parent_task_id/)
     assert.match(own, /expected_revision/)
   }
